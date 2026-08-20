@@ -553,8 +553,9 @@ _EDGE_SWEEP_OPS = sorted(
 #   tolerance-shaped. Root-caused to sfpu_sqrt_custom, not to erfinv: for +inf its
 #   fast-inverse-sqrt seed squares to a denormal, SFPMAD flushes that to +0, and the next
 #   multiply is 0 * -inf = NaN. Fixed by excluding non-finite input from the iteration, so
-#   sqrt_custom(+inf) = +inf and every consumer inherits the repair. See
-#   FIX_PLAN_52930_sqrt_custom_infinity.md.
+#   sqrt_custom(+inf) = +inf and every consumer inherits the repair. The guard is defaulted
+#   on and opted out of only by asin/acos, whose argument is provably in [0, 0.5]; see
+#   ckernel_sfpu_sqrt_custom.h and https://github.com/tenstorrent/tt-metal/issues/52930.
 _EDGE_KNOWN_DIVERGENCES = {
     MathOperation.Sign: (
         (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
@@ -565,6 +566,28 @@ _EDGE_KNOWN_DIVERGENCES = {
         (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
     ),
 }
+
+# Erfinv's +/-1 divergence is closed by the sqrt_custom(+inf) fix, and that is measured on
+# Wormhole silicon. Blackhole was compile-verified only -- no BH hardware on the host the fix
+# was developed on -- so its two fp32-dest cells (the only ones that could ever show the
+# divergence, and the only ones _skip_bh_unless_fp32 lets through at dest_acc=Yes) keep the
+# previous non-strict cover until a BH run exists. Without this, a still-diverging BH turns a
+# tolerant xfail into a bare nightly assertion failure. Delete this table once BH has run
+# test_eltwise_unary_sfpu_edges for Erfinv on silicon -- it is a placeholder for a missing
+# measurement, not a recorded one.
+_EDGE_BLACKHOLE_UNVERIFIED_DIVERGENCES = {
+    MathOperation.Erfinv: (
+        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.Yes),
+        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
+    ),
+}
+
+_EDGE_BLACKHOLE_UNVERIFIED_REASON = (
+    "erfinv(+/-1) is repaired by the sqrt_custom(+inf) fix, verified on Wormhole silicon. "
+    "Blackhole is compile-verified only, so this cell keeps the pre-fix non-strict xfail "
+    "until a BH silicon run replaces it. An XPASS here is the expected outcome and is the "
+    "signal to drop the entry."
+)
 
 
 # The cat-B divergences, derived rather than listed: each op diverges on exactly the
@@ -625,12 +648,14 @@ _EDGE_DIVERGENCE_REASON = {
     MathOperation.SqrtCustom: "sqrt_custom(-inf) returns -inf; IEEE and the golden give "
     "NaN. The non-finite guard added with the sqrt_custom(+inf) fix passes non-finite input "
     "straight through rather than synthesising a NaN, which is right for +inf and NaN and "
-    "wrong for -inf -- a deliberate limit of the minimal fix, kept out of it because "
-    "returning NaN for negative input is a behaviour change for every consumer (asin/acos "
-    "reach sqrt_custom with a negative argument whenever |v| > 1). Before the fix this "
-    "combination returned +inf, which agreed with the golden by accident: the golden's NaN "
-    "is itself narrowed to inf on a bf16 output. See FIX_PLAN_52930_sqrt_custom_infinity.md "
-    "section 5, and section 10 for the negative-input issue this should be folded into.",
+    "wrong for -inf -- a deliberate limit of the minimal fix. The constraint is erfinv, not "
+    "asin/acos: asin/acos seed quiet_NaN() and commit the range-reduced value only under "
+    "v_if(abs(val) <= 1.0f), so a NaN out of sqrt_custom on their |v| > 1 lanes is never "
+    "observable. erfinv's NR undershoot drives tmp + intermediate_result non-positive for "
+    "small in-domain x -- erfinv(1e-6) already reads 0x00000000 -- so a negative-to-NaN "
+    "guard would regress an ordinary input to NaN. Before the fix this combination returned "
+    "+inf, which agreed with the golden by accident: the golden's NaN is itself narrowed to "
+    "inf on a bf16 output. See https://github.com/tenstorrent/tt-metal/issues/52930.",
     MathOperation.Sqrt: "sqrt(-0) returns NaN; IEEE and the golden give -0. Scoped to the "
     "unpack-to-dest combinations, the only ones where a real -0.0 reaches the LREG — at "
     "dest_acc=No the kernel is handed +0.0 and agrees, so the probe is not sent there.",
@@ -752,6 +777,15 @@ def test_eltwise_unary_sfpu_edges(
             pytest.mark.xfail(reason=_EDGE_DIVERGENCE_REASON[mathop], strict=False)
         )
 
+    if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE and (
+        formats.input_format,
+        formats.output_format,
+        dest_acc,
+    ) in _EDGE_BLACKHOLE_UNVERIFIED_DIVERGENCES.get(mathop, ()):
+        request.node.add_marker(
+            pytest.mark.xfail(reason=_EDGE_BLACKHOLE_UNVERIFIED_REASON, strict=False)
+        )
+
     spec_A = edge_spec(
         mathop,
         formats.input_format,
@@ -781,6 +815,112 @@ def test_eltwise_unary_sfpu_edges(
         spec_A=spec_A,
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# sqrt_custom(+inf): the strict regression assertion, deliberately outside the edge sweep
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The sweep cannot carry this one. edge_values() puts +inf and -inf in the same SqrtCustom
+# tensor, and _EDGE_KNOWN_DIVERGENCES marks the whole parametrized invocation non-strict XFAIL
+# for the sqrt_custom(-inf) divergence. A return to sqrt_custom(+inf) = NaN would be absorbed
+# by that marker and never fail CI -- and keeping +inf is the entire point of the fix. Until
+# the sweep can record a divergence against a single probe rather than a whole combination,
+# the repaired value is asserted here on its own.
+#
+# ONE COMBINATION, AND IT IS THE ONLY ONE THAT CAN SHOW A REGRESSION:
+#
+#   Float32 -> Float32 at dest_acc=Yes. The probe has to survive in both directions, and each
+#   direction eliminates the alternatives. Inbound: specials_safe() rejects a 16-bit input into
+#   a 32-bit dest (breaker 2), so +inf only reaches the LREG intact from a 32-bit input.
+#   Outbound: the pre-fix result was NaN, and a bf16 output narrows NaN to inf on the way to L1
+#   -- which is exactly how this defect stayed hidden on six of the eight combinations. Run
+#   anywhere else and the assertion passes whether the kernel is fixed or not.
+@pytest.mark.nightly
+def test_sqrt_custom_infinity_regression(request):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+
+    # Quasar still carries the pre-fix kernel (its ckernel_sfpu_sqrt_custom.h guards only
+    # val != 0.0f), so it is expected to fail here rather than silently not being covered.
+    # Non-strict: fixing Quasar should XPASS and prompt removing this, not error.
+    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
+        request.node.add_marker(
+            pytest.mark.xfail(
+                reason="Quasar's sfpu_sqrt_custom has not had the non-finite guard applied; "
+                "sqrt_custom(+inf) is still NaN there. See tt-metal issue #52930.",
+                strict=False,
+            )
+        )
+
+    # If this ever goes False the pipeline stopped delivering +inf and the assertion below
+    # would pass vacuously -- fail loudly instead of quietly testing nothing.
+    assert specials_safe(formats.input_format, formats.output_format, dest_acc), (
+        "Float32 -> Float32 at dest_acc=Yes no longer carries specials; re-derive the "
+        "combination this regression test runs on before editing it."
+    )
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    # A finite control alongside the probe: if the guard is ever widened to pass everything
+    # through, sqrt_custom(4.0) stops being 2.0 and this catches it in the same run.
+    src_A = torch.full((num_elements,), 4.0, dtype=torch.float32)
+    src_A[0] = float("inf")
+    src_B = torch.zeros(num_elements, dtype=torch.float32)
+    tile_cnt = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=MathOperation.SqrtCustom),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+
+    res = torch.tensor(configuration.run().result, dtype=torch.float32)
+
+    assert res[0] == float("inf"), (
+        f"sqrt_custom(+inf) returned {res[0]!r}, expected +inf. This is the defect the "
+        "non-finite guard in ckernel_sfpu_sqrt_custom.h exists to prevent: the "
+        "fast-inverse-sqrt seed squares to a denormal, SFPMAD flushes it to +0, and the "
+        "next multiply is 0 * -inf = NaN. Every consumer inherits it -- erfinv(+/-1) is "
+        "how it was originally found. See tt-metal issue #52930."
+    )
+    assert torch.all(res[1:] == 2.0), (
+        "sqrt_custom(4.0) is no longer 2.0 on the lanes around the probe. The non-finite "
+        "guard is supposed to divert only zero and the 255-exponent lanes; a finite lane "
+        "reaching the pass-through path means the predicate has been widened."
     )
 
 

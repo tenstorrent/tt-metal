@@ -1981,9 +1981,9 @@ SPECIALS_READY_OPS: Dict[MathOperation, str] = {
     MathOperation.Rsqrt: "IEEE: rsqrt(+inf) = +0, rsqrt(-inf) = NaN, rsqrt(NaN) = NaN, "
     "rsqrt(+/-0) = +/-inf. Same -0 divergence as Sqrt and the same unpack-to-dest scoping.",
     MathOperation.SqrtCustom: "IEEE: sqrt(+inf) = +inf, sqrt(NaN) = NaN, sqrt(+/-0) = +/-0. "
-    "Enrolled with the sqrt_custom(+inf) fix (FIX_PLAN_52930_sqrt_custom_infinity.md): the "
-    "op was absent from this table, which is why +inf was never driven at it and the defect "
-    "had to be found through erfinv instead. sqrt(-inf) returns -inf where IEEE gives NaN -- "
+    "Enrolled with the sqrt_custom(+inf) fix (tt-metal issue #52930): the op was absent from "
+    "this table, which is why +inf was never driven at it and the defect had to be found "
+    "through erfinv instead. sqrt(-inf) returns -inf where IEEE gives NaN -- "
     "the guard passes non-finite input through rather than synthesising a NaN, which is a "
     "deliberate limit of the minimal fix and is xfailed per combination rather than hidden "
     "in the golden.",
