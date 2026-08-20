@@ -20,6 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
 from helpers.perf.core import (
     PerfConfig,
@@ -27,9 +28,16 @@ from helpers.perf.core import (
     combine_perf_reports,
     postprocess_tile_loop,
 )
-from helpers.perf.schema import MARKER, MEAN, STD, assert_unique_columns, stat_column
+from helpers.perf.schema import (
+    MARKER,
+    MEAN,
+    STD,
+    PerfSchemaError,
+    assert_unique_columns,
+    stat_column,
+)
 from helpers.perf.wide_schema import DB_SCHEMA, DROPPED_COLUMNS, OUTPUT_SCHEMA
-from helpers.profiler import Profiler, ProfilerData
+from helpers.profiler import Profiler, ProfilerData, _stats_l1_to_l1
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import APPROX_MODE, LOOP_FACTOR, TILE_COUNT
 
@@ -129,6 +137,96 @@ def test_single_row_per_config():
 
 _MARKERS = (("INIT", 0), ("TILE_LOOP", 1))
 _THREADS = ("unpack", "math", "pack")
+
+
+def _parallel_events(zones) -> pd.DataFrame:
+    rows = []
+    for thread, start, end in zones:
+        for event_type, timestamp in (("ZONE_START", start), ("ZONE_END", end)):
+            rows.append(
+                {
+                    "thread": thread,
+                    "type": event_type,
+                    MARKER: "TILE_LOOP",
+                    "timestamp": timestamp,
+                    "data": 0,
+                    "marker_id": 1,
+                    "file": "perf.cpp",
+                    "line": 1,
+                    "run_index": 0,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_l1_to_l1_four_trisc_aggregates_component_and_envelope_durations():
+    data = ProfilerData(
+        _parallel_events(
+            [
+                ("unpack", 100, 105),
+                ("pack", 155, 160),
+                ("sfpu", 110, 150),
+            ]
+        )
+    )
+
+    result = _stats_l1_to_l1(data)
+    prefix = PerfRunType.L1_TO_L1.name
+    fpu = result.loc[0, stat_column(f"{prefix}[FPU]", MEAN)]
+    sfpu = result.loc[0, stat_column(f"{prefix}[SFPU]", MEAN)]
+    overall = result.loc[0, stat_column(prefix, MEAN)]
+
+    assert fpu == 60
+    assert sfpu == 40
+    assert overall == 60
+
+
+def test_l1_to_l1_three_trisc_keeps_unpack_to_pack_duration():
+    # A stub SFPU KERNEL zone must not switch L1_TO_L1 onto the 4-TRISC path.
+    data = ProfilerData(
+        pd.concat(
+            [
+                _parallel_events(
+                    [
+                        ("unpack", 100, 105),
+                        ("pack", 155, 160),
+                    ]
+                ),
+                _parallel_events(
+                    [
+                        ("unpack", 10, 15),
+                        ("pack", 50, 55),
+                        ("sfpu", 90, 200),
+                    ]
+                ).assign(**{MARKER: "KERNEL"}),
+            ],
+            ignore_index=True,
+        )
+    )
+
+    result = _stats_l1_to_l1(data)
+    prefix = PerfRunType.L1_TO_L1.name
+    tile_loop = result[result[MARKER] == "TILE_LOOP"].iloc[0]
+    assert tile_loop[stat_column(prefix, MEAN)] == 60
+    assert stat_column(f"{prefix}[FPU]", MEAN) not in result.columns
+
+
+def test_l1_to_l1_four_trisc_rejects_mismatched_zone_counts():
+    data = ProfilerData(
+        _parallel_events(
+            [
+                ("unpack", 100, 105),
+                ("unpack", 200, 205),
+                ("pack", 155, 160),
+                ("sfpu", 110, 150),
+            ]
+        )
+    )
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="must be present and paired"
+    ):
+        _stats_l1_to_l1(data)
 
 
 def _one_run_events(seed: int) -> pd.DataFrame:
@@ -244,6 +342,40 @@ def test_run_single_run_drops_empty_std(monkeypatch):
     assert stat_column("MATH_ISOLATE", STD) not in frame.columns
 
 
+def test_run_rejects_empty_stats_for_requested_run_type(monkeypatch):
+    monkeypatch.setitem(
+        Profiler.STATS_FUNCTION,
+        PerfRunType.MATH_ISOLATE,
+        lambda data: pd.DataFrame(),
+    )
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError,
+        match="no timing statistics for requested run type MATH_ISOLATE",
+    ):
+        _run_hw_free(monkeypatch, [PerfRunType.MATH_ISOLATE], run_count=1)
+
+
+def test_run_rejects_negative_mean_timing(monkeypatch):
+    mean_column = stat_column("MATH_ISOLATE", MEAN)
+    monkeypatch.setitem(
+        Profiler.STATS_FUNCTION,
+        PerfRunType.MATH_ISOLATE,
+        lambda data: pd.DataFrame(
+            {
+                MARKER: ["INIT", "TILE_LOOP"],
+                mean_column: [-1.0, -2.0],
+            }
+        ),
+    )
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError,
+        match="negative mean timing values.*MATH_ISOLATE",
+    ):
+        _run_hw_free(monkeypatch, [PerfRunType.MATH_ISOLATE], run_count=1)
+
+
 def test_postprocess_tile_loop_derives_per_tile_from_raw():
     # Public per-tile derivation used downstream on the RAW (Parquet/CSV) table.
     raw = pd.DataFrame(
@@ -308,3 +440,34 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     assert set(df["arch"]) == {"wormhole"}
     assert set(df["commit_sha"]) == {"testsha"}
     assert set(df["pipeline"]) == {"nightly"}
+
+
+def test_combine_perf_reports_raises_on_unknown_parquet_columns(tmp_path, monkeypatch):
+    # Schema drift must fail the session, not drop columns and continue. CSV is
+    # already written by the time Parquet conversion runs.
+    workers = tmp_path / "workers"
+    workers.mkdir()
+    root = tmp_path / "root"
+    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", workers)
+    monkeypatch.setattr(TestConfig, "LLK_ROOT", root)
+    monkeypatch.setenv("CHIP_ARCH", "wormhole")
+    monkeypatch.setenv("GITHUB_SHA", "testsha")
+    monkeypatch.setenv("GITHUB_RUN_ID", "testrun")
+
+    pd.DataFrame(
+        {
+            "marker": ["INIT", "TILE_LOOP"],
+            "tile_cnt": [4, 4],
+            "loop_factor": [1, 1],
+            stat_column("MATH_ISOLATE", MEAN): [10.0, 20.0],
+            "made_up_col": [1, 2],
+        }
+    ).to_csv(workers / "perf_x.gw0.csv", index=False)
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        PerfSchemaError, match="made_up_col"
+    ):
+        combine_perf_reports()
+
+    assert (root / "perf_data" / "perf_x" / "perf_x.csv").exists()
+    assert not (root / "perf_data" / "testrun.parquet").exists()

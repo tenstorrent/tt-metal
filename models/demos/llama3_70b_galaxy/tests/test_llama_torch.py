@@ -6,8 +6,7 @@ import torch
 # import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_common import HostEmbedding
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 
 from loguru import logger
 
@@ -18,13 +17,14 @@ def test_llama_torch_inference(ensure_gc):
 
     model_args = TtModelArgs(mesh_device=None)
     state_dict = model_args.load_state_dict()
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.create_tokenizer()
 
     prompts = ["1 2 3 4 "] * model_args.max_batch_size
-    encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
+    encoded_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in prompts]
 
-    reference_model = Transformer(model_args)
+    reference_model = model_args.reference_transformer()
     reference_model.load_state_dict(state_dict)
+    ref_dtype = get_ref_model_dype(reference_model, model_args.model_name)
 
     # Embedding on host
     embd = HostEmbedding(model_args)
@@ -48,7 +48,7 @@ def test_llama_torch_inference(ensure_gc):
 
         start_pos = generation_start_pos + i
 
-        ref_output = reference_model(pt_decode_input, start_pos)
+        ref_output = reference_model(pt_decode_input.to(ref_dtype), start_pos)
 
         # While in "prefill" mode, use the prompt tokens as the output
         if i in range(len(encoded_prompts[0])):

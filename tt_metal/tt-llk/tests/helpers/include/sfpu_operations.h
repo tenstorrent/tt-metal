@@ -725,7 +725,15 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     // _int_maxmin_scalar / _int_shift_amount). The two sides must move together, so
     // keep them named on both to avoid a silent golden desync.
     constexpr std::uint32_t MAXMIN_SCALAR = 1000u;
-    constexpr std::uint32_t SHIFT_AMOUNT  = 3u;
+    // Shift amount for the unary shift ops. Overridable from params.h via the SFPU_SHIFT_AMOUNT
+    // template parameter so the Python side can sweep it; a test that does not set it keeps the
+    // original fixed 3. The golden reads the same value through UnarySFPUGolden's shift_amount
+    // argument, so the two sides move together.
+#ifdef SFPU_SHIFT_AMOUNT
+    constexpr std::uint32_t SHIFT_AMOUNT = SFPU_SHIFT_AMOUNT;
+#else
+    constexpr std::uint32_t SHIFT_AMOUNT = 3u;
+#endif
     // Integer scalar that unary_eq/unary_ne (Int32) compare against via metal
     // calculate_comp_unary_int. Shared with the golden (golden_generators.py:
     // _unary_comp_int_scalar); the two sides must move together.

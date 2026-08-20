@@ -22,7 +22,7 @@ on:
       timeout_minutes:
         description: "Timeout in minutes for each per-architecture job"
         required: false
-        default: 120
+        default: 180
         type: number
       workers:
         description: "Number of xdist workers per run"
@@ -54,7 +54,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        architecture: [blackhole, wormhole]
+        architecture: [blackhole, wormhole, quasar]
     container:
       image: ${{ inputs.docker_image }}
     steps:
@@ -88,6 +88,7 @@ jobs:
         continue-on-error: true
         env:
           TTSIM_CACHE_DIR: ${{ github.workspace }}/ttsim-cache
+          CHIP_ARCH: ${{ matrix.architecture }}
         run: |
           ./run_ttsim_regression.sh \
             --architecture ${{ matrix.architecture }} \

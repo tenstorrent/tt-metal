@@ -48,8 +48,8 @@ void kernel_main() {
     constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t slice_step = get_compile_time_arg_val(6);
-    // Zero selects the runtime geometry used by selected-slot/prefix gathers. Fixed-shape
-    // bank-owned schedules bake their stripe width and keep the iterator arithmetic constexpr.
+    // The maximum per-rank output slot is structural even for selected-prefix gathers, so its
+    // stripe width stays baked and keeps the iterator arithmetic constexpr.
     constexpr uint32_t static_output_chunks_per_stripe = get_compile_time_arg_val(7);
     constexpr auto input_tensor_args = TensorAccessorArgs<8>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();

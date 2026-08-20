@@ -172,6 +172,10 @@
 #include "api/compute/eltwise_unary/hardmish.h"
 #endif
 
+#if SFPU_OP_SOFTCAP_INCLUDE
+#include "api/compute/eltwise_unary/softcap.h"
+#endif
+
 #if SFPU_OP_LGAMMA_INCLUDE
 #include "api/compute/eltwise_unary/lgamma.h"
 #endif
@@ -198,6 +202,10 @@
 
 #if SFPU_OP_BINARY_DIV_INCLUDE
 #include "api/compute/eltwise_binary_sfpu.h"
+#endif
+
+#if SFPU_OP_BINARY_ATAN2_INCLUDE
+#include "api/compute/atan2.h"
 #endif
 
 #if SFPU_OP_BINARY_ADD_INT_INCLUDE

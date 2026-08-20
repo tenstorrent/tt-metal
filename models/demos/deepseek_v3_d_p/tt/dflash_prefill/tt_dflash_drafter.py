@@ -24,14 +24,15 @@ SHARDING (sequence-parallel):
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Tuple, Union
+
+import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import (
-    DFlashDrafterConfig,
-    build_drafter_rope_hf_config,
-)
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import build_drafter_rope_hf_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
+from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 
 WEIGHT_DTYPE = ttnn.bfloat8_b  # fc / k_proj / v_proj projection weights
@@ -55,8 +56,9 @@ class TtDFlashDrafter:
         tp_axis: int = 1,
         max_seq_len: Optional[int] = None,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
-        fc_mode: str = "sliced",
+        topology: Union[ttnn.Topology, Tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear,
+        owned_target_layer_ids: Optional[tuple] = None,
+        build_kv_tail: bool = True,
     ):
         self.mesh_device = mesh_device
         self.config = config
@@ -65,13 +67,20 @@ class TtDFlashDrafter:
         self.tp_factor = mesh_device.shape[tp_axis]
         self.sp_factor = mesh_device.shape[sp_axis]
         self.num_links = num_links
-        self.topology = topology
-        # FC context projection mode:
-        #   "sliced" — stream fc_slice_i @ h_i and accumulate at tap time
-        #   "concat" — store the raw tapped hiddens, then at write time concat them and do one fc matmul
-        #              (fc(concat) == Σ fc_slice_i @ h_i).
-        assert fc_mode in ("sliced", "concat"), f"fc_mode must be 'sliced' or 'concat', got {fc_mode!r}"
-        self.fc_mode = fc_mode
+        # `topology` may arrive per-axis (2-tuple) from the runner; all of this drafter's ccl ops run along
+        # tp_axis, so collapse to that axis's scalar. Tests pass a scalar directly (isinstance guard).
+        self.topology = topology[tp_axis] if isinstance(topology, tuple) else topology
+        # Pipeline distribution: each rank taps only the target layers it owns (default = ALL, for single-rank),
+        # and only the KV-tail rank (build_kv_tail) builds hidden_norm + the per-draft-layer k/v tail.
+        self.owned_target_layer_ids = (
+            tuple(owned_target_layer_ids) if owned_target_layer_ids is not None else tuple(config.target_layer_ids)
+        )
+        self._owned_set = set(self.owned_target_layer_ids)
+        assert self._owned_set <= set(config.target_layer_ids), (
+            f"owned_target_layer_ids {self.owned_target_layer_ids} must be a subset of "
+            f"config.target_layer_ids {tuple(config.target_layer_ids)}"
+        )
+        self.build_kv_tail = build_kv_tail
         # Prefill builds drafter KV for the FULL chunk the verifier hands it (e.g. 5120 tokens), so the
         # cache is sized to max_seq_len — NOT capped at 4k.
         self.cache_seq = max_seq_len if max_seq_len is not None else config.context_len
@@ -102,12 +111,19 @@ class TtDFlashDrafter:
 
         self._load_weights(state_dict)
         self._rope_cos = self._rope_sin = None
-        self._rope_end = 0
-        self._ensure_rope(self.cache_seq)
+        self._rope_key: Optional[Tuple[int, int]] = None  # (kv_actual_global, chunk_local) of the device table
+        self._cos_host = self._sin_host = None
+        # rope feeds the per-draft-layer K path, which only the tail rank runs. The HOST table is natural
+        # order over the whole cache and is built once; the per-chunk DEVICE table is a permutation of it
+        # keyed by the write offset, which is not known until forward().
+        if self.build_kv_tail:
+            self._build_host_rope(self.cache_seq)
         # K/V caches are owned by the CALLER (see allocate_dflash_kv_cache) and passed into
-        # write_kv_cache — the drafter does not hold them, mirroring the MLA prefill model's kvpe_cache.
-        self._reduced_accum: Optional[ttnn.Tensor] = None  # "sliced": running TP-partial FC sum
-        self._taps: list = [None] * len(config.target_layer_ids)  # "concat": stored raw taps
+        # forward() — the drafter does not hold them, mirroring the MLA prefill model's kvpe_cache.
+        self._reduced_accum: Optional[ttnn.Tensor] = None  # running TP-partial FC sum (Σ fc_slice_i @ h_i)
+        # Partial forwarded from upstream pipeline ranks (import_partial), already reduce_scattered to
+        # [1,1,seq,H/tp]; summed into this rank's finalized partial. None on rank 0 / single-rank.
+        self._running_sharded: Optional[ttnn.Tensor] = None
 
     # ------------------------------------------------------------------ setup
     def _mesh_mappers(self):
@@ -153,42 +169,27 @@ class TtDFlashDrafter:
                 mesh_mapper=replicate,
             )
 
-        # FC context projection. Two layouts (see fc_mode):
-        #   "sliced": n [H(out), H(in)] blocks, each row-parallel (input H sharded on TP), accumulated at
-        #             tap time. fc(concat) == Σ_i fc_slice_i @ h_i.
-        #   "concat": the FULL fc [H, n*H], pre-PERMUTED on the input (n*H) axis so a contiguous
-        #             row-parallel TP shard lines up with the on-device grouped concat of the taps. On
-        #             device tap i is [.., H/tp] (its hidden TP-shard); concatenating the n taps on the
-        #             feature dim yields, per device, [h_0[shard_d]|...|h_{n-1}[shard_d]] — a GROUPED (not
-        #             contiguous) slice of the n*H input. Permuting fc's columns into shard-major-then-layer
-        #             order makes the standard contiguous row-parallel shard match.
-        n = len(cfg.target_layer_ids)
-        self.fc_slices = None
-        self.fc_perm = None
-        if self.fc_mode == "sliced":
-            self.fc_slices = []
-            fc_full = state_dict["fc.weight"]  # [H, n*H]
-            for idx in range(n):
-                sl = fc_full[:, idx * H : (idx + 1) * H]  # [H(out), H(in)]
-                self.fc_slices.append(_linear_w(sl, mapper_row))
-        else:  # "concat"
-            assert H % self.tp_factor == 0, f"hidden {H} must be divisible by tp {self.tp_factor} for concat fc"
-            W = state_dict["fc.weight"]  # [H(out), n*H(in)]; in = concat over target layers of H
-            hs = H // self.tp_factor
-            # Column order so a contiguous TP block d == {layer*H + [d*hs:(d+1)*hs] for all layers}.
-            perm = [
-                layer * H + col
-                for d in range(self.tp_factor)
-                for layer in range(n)
-                for col in range(d * hs, (d + 1) * hs)
-            ]
-            fc_perm_w = W[:, perm].contiguous()  # [H(out), n*H(in)] permuted
-            self.fc_perm = _linear_w(fc_perm_w, mapper_row)
+        # FC context projection, one row-parallel block per target layer: fc(concat[h_1..h_n]) == Σ_i fc_slice_i
+        # @ h_i, so it accumulates at tap time. Build only this rank's owned blocks (columns keyed by target id).
+        all_targets = list(cfg.target_layer_ids)
+        fc_full = state_dict["fc.weight"]  # [H, n*H]
+        self.fc_slices = {}  # global_layer_idx -> device tensor [H(in), H(out)]
+        for global_idx in self.owned_target_layer_ids:
+            pos = all_targets.index(global_idx)  # this layer's column block within the full fc
+            sl = fc_full[:, pos * H : (pos + 1) * H]  # [H(out), H(in)]
+            self.fc_slices[global_idx] = _linear_w(sl, mapper_row)
+
+        # The tail (hidden_norm + per-draft-layer k/v/norm/rope) runs ONLY on the build_kv_tail rank; non-tail
+        # ranks accumulate + forward the FC partial and skip materializing these tensors.
+        if not self.build_kv_tail:
+            self.hidden_norm = None
+            self.k_proj, self.v_proj, self.k_norm = [], [], []
+            return
 
         # hidden_norm spans the full H=7168 → it MUST be the DISTRIBUTED (TP-sharded) norm, exactly
         # like the model's attn_norm/ffn_norm. A plain ttnn.rms_norm over the replicated 7168 forces
         # one core to hold 7168-wide (224-tile) CBs and overflows L1. cluster_axis=tp_axis matches the
-        # H/tp shard it consumes (see write_kv_cache: reduce_scatter -> norm -> all_gather).
+        # H/tp shard it consumes (see forward(): reduce_scatter -> norm -> all_gather).
         self.hidden_norm = TtDistributedRmsNorm(
             mesh_device=self.mesh_device,
             emb_dim=cfg.hidden_size,
@@ -210,22 +211,50 @@ class TtDFlashDrafter:
             self.k_norm.append(_norm_w(kn))
         assert kv_dim == cfg.num_key_value_heads * D
 
-    def _ensure_rope(self, end: int) -> None:
-        """Build (memoized) drafter deepseek_yarn cos/sin covering positions [0, end). Called ONCE from
-        __init__ with end=cache_seq so it stays OUT of the write_kv_cache hot path; memoized, so it does
-        NOT rebuild per call (would only rebuild if a longer range were later requested). yarn inv_freq
-        is position-independent, so growing the table never changes the
-        values at existing positions. HALF-SPLIT (interleave=False) to match Qwen3 rotate_half +
-        ttnn.experimental.rotary_embedding_hf; full head_dim (128) rotated (unlike the MLA 64-dim pe).
-        ``end`` is the GLOBAL sequence length and the table is SP-sharded on seq, so each SP chip gets
-        exactly its absolute-position window [r*end/sp, (r+1)*end/sp) — no on-device offset/slice."""
-        if self._rope_cos is not None and self._rope_end >= end:
-            return
+    def _build_host_rope(self, end: int) -> None:
+        """Build the NATURAL-order host deepseek_yarn cos/sin covering positions [0, end), once, from
+        __init__ (end=cache_seq). HALF-SPLIT (interleave=False) to match Qwen3 rotate_half +
+        ``ttnn.experimental.rotary_embedding_hf``; full head_dim (128) rotated, unlike the MLA 64-dim pe.
+
+        Kept on the HOST because the device table is a *permutation* of this one keyed by the chunk's write
+        offset (see :meth:`_ensure_chunk_rope`), and that offset does not exist at construction time."""
         hf = build_drafter_rope_hf_config(self.config, max_seq_len=end)
         cos, sin = get_cos_sin_matrix(hf, interleave=False)  # [1, 1, end, head_dim]
-        cos, sin = cos[..., :end, :], sin[..., :end, :]
+        self._cos_host, self._sin_host = cos[..., :end, :], sin[..., :end, :]
+
+    def _ensure_chunk_rope(self, kv_actual_global: int, chunk_local: int) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Device cos/sin for ONE chunk written at global offset ``kv_actual_global``, laid out so a plain
+        SP shard hands each chip the absolute positions its own rows will carry.
+
+        ``update_padded_kv_cache`` scatters a chunk block-cyclically: chip c's local row ``lr`` ends up
+        holding global position ``(lr // chunk_local) * chunk_global + c * chunk_local + (lr % chunk_local)``.
+        So the rope rows this chunk needs are NOT ``[kv_actual_global, kv_actual_global + chunk_global)`` in
+        natural order — they are that range permuted by the writer's staircase.
+        :func:`rotated_chip_positions` is that staircase (it mirrors the writer kernel exactly), so gathering
+        the host table by it, chip-major, gives a ``[1, 1, chunk_global, head_dim]`` table whose SP shard c is
+        precisely chip c's positions in local-row order. ``rotary_embedding_hf`` then reads rows
+        ``[0, chunk_local)`` of each chip's shard and applies the right absolute positions — no indexed rope
+        op and no on-device offset needed.
+
+        Memoized on ``(kv_actual_global, chunk_local)``: the permutation depends on BOTH, so the old
+        "rebuild only if a longer range is requested" test was unsound — a longer table is not a superset of
+        a shorter one once the rows are permuted."""
+        key = (kv_actual_global, chunk_local)
+        if self._rope_cos is not None and self._rope_key == key:
+            return self._rope_cos, self._rope_sin
+        assert self._cos_host is not None, "host rope table not built (build_kv_tail=False?)"
+        sp = self.sp_factor
+        chunk_global = sp * chunk_local
+        positions = rotated_chip_positions(kv_actual_global, sp, chunk_local)
+        idx = torch.tensor([p for chip_rows in positions for p in chip_rows], dtype=torch.long)
+        assert idx.numel() == chunk_global, f"gathered {idx.numel()} rope rows, expected {chunk_global}"
+        assert int(idx.max()) < self._cos_host.shape[2], (
+            f"chunk at kv_actual_global={kv_actual_global} needs rope position {int(idx.max())}, but the host "
+            f"table only covers [0, {self._cos_host.shape[2]}) — construct with a larger max_seq_len"
+        )
+        cos, sin = self._cos_host[:, :, idx, :], self._sin_host[:, :, idx, :]
         shard = [None, None]
-        shard[self.sp_axis] = 2  # SP-shard the global table on seq → per-chip absolute-position window
+        shard[self.sp_axis] = 2  # SP-shard the chunk table on seq → chip c gets its own rotated positions
         mapper = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard)
         if self._rope_cos is not None:
             ttnn.deallocate(self._rope_cos)
@@ -236,18 +265,18 @@ class TtDFlashDrafter:
         self._rope_sin = ttnn.from_torch(
             sin, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ROPE_DTYPE, mesh_mapper=mapper
         )
-        self._rope_end = end
+        self._rope_key = key
+        return self._rope_cos, self._rope_sin
 
     def reset(self):
-        """Clear the FC accumulator (sliced) / stored taps (concat) — call at the start of each prefill
+        """Clear the FC accumulator + any imported upstream partial — call at the start of each prefill
         sequence/chunk."""
         if self._reduced_accum is not None:
             ttnn.deallocate(self._reduced_accum)
         self._reduced_accum = None
-        for i, t in enumerate(self._taps):
-            if t is not None:
-                ttnn.deallocate(t)
-                self._taps[i] = None
+        if self._running_sharded is not None:
+            ttnn.deallocate(self._running_sharded)
+        self._running_sharded = None
 
     def is_target_layer(self, global_layer_idx: int) -> bool:
         return global_layer_idx in self.config.target_layer_ids
@@ -257,24 +286,16 @@ class TtDFlashDrafter:
         [1, 1, seq, hidden/tp], TP-sharded on hidden and SP-sharded on seq (each chip taps only its own
         slice — NO SP-gather).
 
-        fc_mode="sliced": stream the FC-slice matmul and accumulate the (still TP-partial) sum; the TP
-            cross-TP combine is deferred to write_kv_cache's reduce_scatter (local sum-then-scatter == scatter-then-sum).
-        fc_mode="concat": store the raw tap for a single fc(concat) at write time."""
-        if not self.is_target_layer(global_layer_idx):
-            return
-        idx = self.config.target_layer_ids.index(global_layer_idx)
-        if self.fc_mode == "concat":
-            # The drafter TAKES OWNERSHIP of the tensor (deallocated in write_kv_cache()/reset()); the
-            # caller must not free it. The integration hook hands over a fresh (SP-gathered) tensor, so no
-            # clone is needed. TODO: if a caller passes a tensor it will mutate/reuse (e.g. the
-            # raw loop `h`), clone before storing.
-            if self._taps[idx] is not None:
-                ttnn.deallocate(self._taps[idx])
-            self._taps[idx] = hidden_states
+        Streams the FC-slice matmul and accumulates the (still TP-partial) sum; the cross-TP combine is
+        deferred to _finalize_sharded_partial's reduce_scatter (local sum-then-scatter == scatter-then-sum).
+        The caller RETAINS ownership of ``hidden_states`` — this only reads it for the matmul (does not
+        store or free it). Silently skips a target layer this rank does not own (its fc block lives on
+        another pipeline rank)."""
+        if global_layer_idx not in self._owned_set:
             return
         partial = ttnn.linear(
             hidden_states,
-            self.fc_slices[idx],
+            self.fc_slices[global_layer_idx],
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             # TODO: add a tuned program_config.
@@ -286,6 +307,53 @@ class TtDFlashDrafter:
             ttnn.deallocate(self._reduced_accum)
             ttnn.deallocate(partial)
             self._reduced_accum = summed
+
+    def import_partial(self, sharded: ttnn.Tensor) -> None:
+        """Seed the running partial with the upstream rank's finalized sharded partial [1,1,seq,H/tp]
+        (from its export_partial). The drafter takes ownership (freed in _finalize_sharded_partial/reset).
+        Non-first pipeline ranks call this once per chunk, before the tap phase."""
+        assert self._running_sharded is None, "import_partial called twice without reset()"
+        self._running_sharded = sharded
+
+    def _finalize_sharded_partial(self) -> ttnn.Tensor:
+        """Combine this rank's accumulated row-parallel FC partials across TP (reduce_scatter → the thin
+        [1,1,seq,H/tp] shard, matching the hidden layout) and add any partial forwarded from upstream ranks.
+        Correct by linearity: Σ_r reduce_scatter(A_r) == reduce_scatter(Σ_r A_r). Consumes _reduced_accum
+        and _running_sharded; returns the summed sharded partial (full H when tp==1)."""
+        if self._reduced_accum is None:
+            # This rank owns no target layer this chunk — pass the upstream partial straight through.
+            assert self._running_sharded is not None, "_finalize: this rank neither tapped nor imported a partial"
+            out = self._running_sharded
+            self._running_sharded = None
+            return out
+        reduced_partial = self._reduced_accum
+        self._reduced_accum = None
+        # reduce_scatter SUMS the row-parallel partials across TP AND scatters on hidden in ONE op → the
+        # [1,1,seq,H/tp] shard the distributed hidden_norm wants. Matches MLA o_proj/q_a_proj + MoE tt_reduce.
+        if self.tp_factor > 1:
+            reduced = ttnn.reduce_scatter(
+                reduced_partial,
+                dim=-1,
+                cluster_axis=self.tp_axis,
+                num_links=self.num_links,
+                topology=self.topology,
+            )  # [1,1,seq,H/tp] — summed FC output, TP-sharded on hidden
+            ttnn.deallocate(reduced_partial)
+        else:
+            reduced = reduced_partial  # tp==1: the partial IS the full sum; hidden_norm handles full H
+        if self._running_sharded is not None:
+            summed = ttnn.add(reduced, self._running_sharded)  # += upstream ranks' partial (same layout)
+            ttnn.deallocate(reduced)
+            ttnn.deallocate(self._running_sharded)
+            self._running_sharded = None
+            reduced = summed
+        return reduced
+
+    def export_partial(self) -> ttnn.Tensor:
+        """Non-tail ranks: return this rank's finalized sharded partial [1,1,seq,H/tp] to forward to the
+        next pipeline rank (packed alongside the hidden over the D2D handoff). Consumes the FC accumulator
+        + imported partial; the CALLER owns the returned tensor."""
+        return self._finalize_sharded_partial()
 
     def _split_heads(self, proj: ttnn.Tensor) -> ttnn.Tensor:
         """[1, 1, seq, kv_heads_local*head_dim] -> [1, kv_heads_local, seq, head_dim].
@@ -303,66 +371,76 @@ class TtDFlashDrafter:
         )
         return heads
 
-    def write_kv_cache(self, k_cache: ttnn.Tensor, v_cache: ttnn.Tensor, positions_start: int = 0) -> None:
+    def forward(
+        self,
+        k_cache: ttnn.Tensor,
+        v_cache: ttnn.Tensor,
+        kv_actual_global: int = 0,
+        *,
+        slot_idx: int = 0,
+    ) -> None:
         """Finalize into the caller-owned ``k_cache``/``v_cache`` (allocate via
-        ``allocate_dflash_kv_cache``): build the TP-partial FC output (mode-dependent), TP-reduce it,
+        ``allocate_dflash_kv_cache``): consume the accumulated TP-partial FC output, TP-reduce it,
         hidden_norm, then per draft layer project/norm/rope K and project V, writing each into its cache
         slot. The caches are passed in (not owned by the drafter) so the runner drives their lifecycle +
-        dtype, exactly like the MLA prefill model takes ``kvpe_cache`` in ``forward()``. ``positions_start``
-        offsets rope for the last-4k window (Phase 3); Phase 1 uses 0. Caller must have supplied
-        seq-contiguous taps."""
+        dtype, exactly like the MLA prefill model takes ``kvpe_cache`` in ``forward()``.
+
+        ``kv_actual_global`` is the chunk's absolute KV offset in **GLOBAL** tokens (the same unit and the
+        same argument the MLA path passes to ``update_padded_kv_cache``; cf. ``mla.py``'s chunked-prefill
+        write), so chunk c of a sequence passes ``c * chunk_global`` and a multi-turn resume passes the
+        reused prefix length. It must be tile-aligned — align DOWN to the previous 32 and replay the ≤31
+        dropped tokens rather than rounding up, since sub-tile offsets are rejected outright and the kernel's
+        tile-granular staircase and the host mirror disagree off-tile.
+
+        ``slot_idx`` selects which user's cache slot to fill; the cache is user-major
+        (``slot_idx * num_hidden_layers + layer_idx``), as ``allocate_dflash_kv_cache`` lays it out.
+
+        The taps for this chunk need NOT be seq-contiguous: token ids entering the transformer are already
+        block-cyclic-gathered, so each chip's tap slice is exactly the rows its cache shard will hold, and
+        the rope table is permuted to match (see :meth:`_ensure_chunk_rope`)."""
+        assert self.build_kv_tail, (
+            "forward() on a non-tail drafter (build_kv_tail=False); non-tail ranks forward the partial "
+            "via export_partial instead"
+        )
         cfg = self.config
         # Sanity-check the un-sharded cache dims (layer/head_dim are not seq/SP-sharded, so .shape is
-        # unambiguous here); the seq (dim 2) capacity is checked per-chip below against cache_seq.
-        assert k_cache.shape[0] == cfg.num_hidden_layers and v_cache.shape[0] == cfg.num_hidden_layers, (
-            f"kv cache layer dim {k_cache.shape[0]}/{v_cache.shape[0]} != num_hidden_layers "
-            f"{cfg.num_hidden_layers} (allocate with allocate_dflash_kv_cache)"
-        )
+        # unambiguous here); the seq (dim 2) capacity is checked in GLOBAL tokens below.
+        # dim0 is num_users * num_hidden_layers (user-major), so derive the slot count from it.
+        for name, cache in (("k", k_cache), ("v", v_cache)):
+            assert cache.shape[0] % cfg.num_hidden_layers == 0, (
+                f"{name}_cache batch dim {cache.shape[0]} is not a multiple of num_hidden_layers "
+                f"{cfg.num_hidden_layers} (allocate with allocate_dflash_kv_cache)"
+            )
+        num_slots = k_cache.shape[0] // cfg.num_hidden_layers
+        assert (
+            v_cache.shape[0] // cfg.num_hidden_layers == num_slots
+        ), f"k/v caches disagree on slot count ({num_slots} vs {v_cache.shape[0] // cfg.num_hidden_layers})"
+        assert 0 <= slot_idx < num_slots, f"slot_idx {slot_idx} out of range [0, {num_slots})"
         assert (
             k_cache.shape[-1] == cfg.head_dim and v_cache.shape[-1] == cfg.head_dim
         ), f"kv cache head_dim {k_cache.shape[-1]}/{v_cache.shape[-1]} != {cfg.head_dim}"
-        if self.fc_mode == "concat":
-            missing = [cfg.target_layer_ids[i] for i, t in enumerate(self._taps) if t is None]
-            assert not missing, f"write_kv_cache: missing taps for target layers {missing}"
-            # ONE fc over the concatenated taps. Per device each tap is [1,1,seq,H/tp] (its hidden
-            # TP-shard); concat on the feature dim gives [1,1,seq,n*H/tp] laid out [h_0[shard_d]|...] per
-            # device. fc_perm was pre-permuted so a contiguous row-parallel shard matches → [1,1,seq,H]
-            # TP-partial (== Σ fc_slice_i @ h_i).
-            cat = ttnn.concat(list(self._taps), dim=3)
-            for i, t in enumerate(self._taps):
-                ttnn.deallocate(t)
-                self._taps[i] = None
-            reduced_partial = ttnn.linear(
-                cat,
-                self.fc_perm,
-                compute_kernel_config=self.default_compute_kernel_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            ttnn.deallocate(cat)
-        else:  # "sliced"
-            assert self._reduced_accum is not None, "write_kv_cache called before any tap()"
-            reduced_partial = self._reduced_accum
-            self._reduced_accum = None
-        # Combine the row-parallel FC partials across TP: reduce_scatter SUMS them AND scatters on hidden
-        # in ONE op → exactly the [1,1,seq,H/tp] shard the distributed hidden_norm wants (no
-        # all_gather→replicate→mesh_partition round-trip). Matches MLA o_proj/q_a_proj + MoE tt_reduce.
-        if self.tp_factor > 1:
-            reduced = ttnn.reduce_scatter(
-                reduced_partial,
-                dim=-1,
-                cluster_axis=self.tp_axis,
-                num_links=self.num_links,
-                topology=self.topology,
-            )  # [1,1,seq,H/tp] — summed FC output, TP-sharded on hidden
-            ttnn.deallocate(reduced_partial)
-        else:
-            reduced = reduced_partial  # tp==1: the partial IS the full sum; hidden_norm handles full H
-        seq = reduced.shape[2]  # PER-CHIP seq (dim2, unchanged by the hidden scatter)
-        per_chip_cap = self.cache_seq // self.sp_factor
-        assert positions_start + seq <= per_chip_cap, (
-            f"positions_start+seq ({positions_start + seq}) exceeds per-chip cache depth ({per_chip_cap}); "
-            f"construct with max_seq_len >= the chunk length (the cache is sized to the full chunk; "
-            f"the 4k window is applied at migration, not here)"
+        # Combine this rank's accumulated FC partials across TP and add any upstream partial (import_partial).
+        reduced = self._finalize_sharded_partial()  # [1,1,seq,H/tp] (or full H when tp==1)
+        seq = reduced.shape[2]  # PER-CHIP seq (dim2, unchanged by the hidden scatter) == chunk_local
+        chunk_global = seq * self.sp_factor
+        # Mirror the MLA chunked-prefill write's guards (cf. mla.py). NOTE the units: kv_actual_global and
+        # cache_seq are GLOBAL token counts while `seq` is per-chip — comparing a global offset against a
+        # per-chip capacity is an sp_factor-sized error that shows up as a spurious capacity failure.
+        assert chunk_global % (ttnn.TILE_SIZE * self.sp_factor) == 0, (
+            f"chunk_global ({chunk_global}) must be a multiple of TILE_SIZE * sp "
+            f"({ttnn.TILE_SIZE * self.sp_factor})"
+        )
+        assert (
+            kv_actual_global % ttnn.TILE_SIZE == 0
+        ), f"kv_actual_global ({kv_actual_global}) must be tile-aligned (a multiple of {ttnn.TILE_SIZE})"
+        assert kv_actual_global + chunk_global <= self.cache_seq, (
+            f"kv_actual_global ({kv_actual_global}) + chunk_global ({chunk_global}) exceeds the global cache "
+            f"depth ({self.cache_seq}); construct with a larger max_seq_len (windowing happens at migration)"
+        )
+        assert self.cache_seq % chunk_global == 0, (
+            f"cache_seq ({self.cache_seq}) must be a whole number of chunk_global ({chunk_global}) blocks; "
+            "update_padded_kv_cache tiles the per-user cache block-cyclically in chunk_global-sized blocks, "
+            "so a depth that is not a multiple would corrupt the layout"
         )
 
         # Distributed hidden_norm on the [1,1,seq,H/tp] shard (stats all-gathered internally → correct
@@ -376,12 +454,19 @@ class TtDFlashDrafter:
             ttnn.deallocate(target_hidden)
             target_hidden = gathered  # [1,1,seq,H] replicated on TP
 
-        # RoPE cos/sin: the __init__-built table is SP-sharded over the GLOBAL seq, so this chip already
-        # holds its absolute-position window [r*cache_seq/sp, …); use it directly — no per-call build/slice.
-        # TODO: chunked prefill at arbitrary offsets (positions_start>0) needs an indexed rope op
-        # that takes the offset on-device (like MLA's rotary_embedding_indexed).
-        assert positions_start == 0, "chunked offset not yet supported"
-        cos, sin = self._rope_cos, self._rope_sin
+        # RoPE cos/sin for exactly this chunk's rotated positions, SP-sharded so each chip reads rows
+        # [0, seq) of its own shard. Memoized on (kv_actual_global, chunk_local).
+        cos, sin = self._ensure_chunk_rope(kv_actual_global, chunk_local=seq)
+        # rotary_embedding_hf guards cos_seq_len >= seq, NOT ==, so a wrong-length table would silently
+        # apply rows [0, seq) instead of failing. Check equality -- but in PER-CHIP units: .shape on a
+        # mesh-sharded tensor is the local shard (cf. mla.py:1378 `seq_len_local = q.shape[2]`), and the
+        # table is SP-sharded on dim 2, so its logical chunk_global rows arrive here as chunk_local. This
+        # still catches the failure mode it is here for: a full-depth table shards to cache_seq/sp >= seq
+        # per chip, which would rope rows [0, seq) of the wrong aligned 5k chunk.
+        assert cos.shape[2] == seq, (
+            f"rope table per-chip seq {cos.shape[2]} != chunk_local {seq} (global {chunk_global}); "
+            f"rotary_embedding_hf would silently rope the wrong positions"
+        )
 
         for i in range(cfg.num_hidden_layers):
             k = ttnn.linear(
@@ -409,12 +494,10 @@ class TtDFlashDrafter:
             k = ttnn.experimental.rotary_embedding_hf(
                 k, cos, sin, is_decode_mode=False, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
             )
-            # Write into cache slot `i` (layer as the fill "user" dim). The cache is bf8 (align w/ the
-            # decode KV cache) while k/v leave the projections in bf16; fill_cache_for_user_ needs the
-            # source dtype to match the cache, so typecast down first — TILE both sides, so no relayout
-            # (mirrors MLA _to_cache_format, mla.py:964). Keyed off *_cache.dtype so a bf16-cache caller
-            # (override) still works. TODO: the migration writer + SP-sharded-seq fill replace this
-            # seq-replicated fill_cache_for_user_.
+            # The cache is bf8 (align w/ the decode KV cache) while k/v leave the projections in bf16;
+            # update_padded_kv_cache FATALs unless cache and input dtypes match exactly, so typecast down
+            # first — TILE both sides, so no relayout (mirrors MLA _to_cache_format). Keyed off *_cache.dtype
+            # so a bf16-cache caller (override) still works.
             if k.dtype != k_cache.dtype:
                 k_cast = ttnn.typecast(k, k_cache.dtype)
                 ttnn.deallocate(k)
@@ -423,8 +506,21 @@ class TtDFlashDrafter:
                 v_cast = ttnn.typecast(v, v_cache.dtype)
                 ttnn.deallocate(v)
                 v = v_cast
-            ttnn.kv_cache.fill_cache_for_user_(k_cache, k, i)
-            ttnn.kv_cache.fill_cache_for_user_(v_cache, v, i)
+            # Write this chunk into slot `slot_idx`, draft layer `i`. update_padded_kv_cache derives each
+            # chip's local write offset on-device from kv_actual_global (the same call the MLA chunked-prefill
+            # path makes) and is mesh-aware, unlike fill_cache_for_user_, whose program factory names out
+            # mesh_dispatch_coordinate and so cannot express the per-chip staircase at all.
+            # ALWAYS keyword args: the two nanobind overloads order the scalars differently.
+            for cache, tensor in ((k_cache, k), (v_cache, v)):
+                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                    cache,
+                    tensor,
+                    slot_idx=slot_idx,
+                    layer_idx=i,
+                    num_layers=cfg.num_hidden_layers,
+                    kv_actual_global=kv_actual_global,
+                    cluster_axis=self.sp_axis,
+                )
             ttnn.deallocate(k)
             ttnn.deallocate(v)
         ttnn.deallocate(target_hidden)

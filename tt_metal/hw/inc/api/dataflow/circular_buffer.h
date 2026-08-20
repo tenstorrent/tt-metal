@@ -138,11 +138,11 @@ public:
         uint32_t addr = iface.fifo_limit - iface.fifo_size;
         uint32_t num_bytes = iface.fifo_size;
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK, addr, num_bytes);
-        return Lock([this, addr, num_bytes]() {
+        return Lock([addr, num_bytes]() {
             RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_UNLOCK, addr, num_bytes);
         });
 #else
-        return Lock([this]() {});
+        return Lock([]() {});
 #endif
     }
 

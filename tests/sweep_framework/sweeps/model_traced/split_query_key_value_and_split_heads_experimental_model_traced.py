@@ -171,7 +171,9 @@ def run(
     q, k, v = ttnn.experimental.split_query_key_value_and_split_heads(input_tensor, grid_size, **op_kwargs)
 
     # Convert Q output to torch for comparison
-    output_tensor = mesh_tensor_to_torch(q, device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(
+        q, device if is_mesh_device else None, scatter_placement=input_a_tensor_placement if is_mesh_device else None
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     # Check PCC
