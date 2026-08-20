@@ -47,7 +47,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>  // for CompileProgram (JIT trigger)
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgsConfig / ArgConfig::RuntimePageSize
-#include "impl/context/metal_context.hpp"                // for rtoptions (kernel-assert flavor overrides)
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -4421,46 +4420,13 @@ TEST_F(ProgramSpecTestGen1, DifferentCompileTimeVarargCountProducesDifferentKern
 //   1. an in-range index still folds in a constant expression (the accessor stays constexpr), and
 //   2. an out-of-range index in a constant expression is still rejected at build time.
 //
-// Fixture note: the flag must be flipped BEFORE the device opens. JitBuildState assembles its -D
-// defines in its constructor (jit_build/build.cpp) and those states are built at device open, so
-// setting the option from a test body -- after mesh_device_ exists -- would never reach the
-// compiler and the test would pass while exercising nothing.
-//
-// Watcher note: assert.h is `#if WATCHER_ENABLED ... #elif LIGHTWEIGHT_KERNEL_ASSERTS`, and the
-// watcher flavor expands to a plain function call that compiles fine under C++17. Watcher is
-// forced off so that running this suite under TT_METAL_WATCHER does not silently exercise the
-// wrong branch and go green.
-class ProgramSpecTestGen1LightweightAsserts : public ProgramSpecTestGen1 {
-protected:
-    void SetUp() override {
-        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-        prev_lightweight_kernel_asserts_ = rtoptions.get_lightweight_kernel_asserts();
-        prev_watcher_enabled_ = rtoptions.get_watcher_enabled();
-        rtoptions.set_lightweight_kernel_asserts(true);
-        rtoptions.set_watcher_enabled(false);
-        // Device opens here; the JIT build state picks up -DLIGHTWEIGHT_KERNEL_ASSERTS.
-        ProgramSpecTestGen1::SetUp();
-    }
-    void TearDown() override {
-        ProgramSpecTestGen1::TearDown();
-        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-        rtoptions.set_lightweight_kernel_asserts(prev_lightweight_kernel_asserts_);
-        rtoptions.set_watcher_enabled(prev_watcher_enabled_);
-    }
+// Lightweight (hacky) simulation of assertion-on environment to verify vararg CTA work with assertion.
 
-private:
-    bool prev_lightweight_kernel_asserts_ = false;
-    bool prev_watcher_enabled_ = false;
-};
-
-// In-range index, asserts on: the bounds check must not cost the accessor its constexpr-ness.
-// Before the fix this failed to build with
-//   error: 'asm' in 'constexpr' function only available with '-std=c++20'
-// for every Metal 2.0 kernel, regardless of the index used.
-TEST_F(ProgramSpecTestGen1LightweightAsserts, InRangeCompileTimeVarargCompilesWithAssertsEnabled) {
+TEST_F(ProgramSpecTestGen1, InRangeCompileTimeVarargCompilesWithAssertsEnabled) {
     NodeCoord node{0, 0};
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.compiler_options.defines = {{"LIGHTWEIGHT_KERNEL_ASSERTS", "1"}, {"FORCE_WATCHER_OFF", "1"}};
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
     // Constant-evaluated: proves the accessor is still usable in a constant expression while the
@@ -4489,10 +4455,11 @@ void kernel_main() {
 // Out-of-range index in a constant expression, asserts on: must still fail the build. Constant
 // evaluation reaches the non-constexpr out-of-range report, which is not a constant expression --
 // so this is a clean build failure rather than a read past kernel_compile_time_args.
-TEST_F(ProgramSpecTestGen1LightweightAsserts, OutOfRangeCompileTimeVarargFailsToCompileWithAssertsEnabled) {
+TEST_F(ProgramSpecTestGen1, OutOfRangeCompileTimeVarargFailsToCompileWithAssertsEnabled) {
     NodeCoord node{0, 0};
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.compiler_options.defines = {{"LIGHTWEIGHT_KERNEL_ASSERTS", "1"}, {"FORCE_WATCHER_OFF", "1"}};
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
     // Only 1 vararg is baked, so index 1 is out of range. Should not compile.
