@@ -60,9 +60,6 @@ Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order
   PREFILL_DFLASH_PCC             per-(layer, head) bar for that drafter check (default 0.88). Both feed
                                  dflash_kv_table_pcc_check in deepseek_v3_d_p/tt/dflash_prefill/
                                  dflash_kv_validation.py; unset golden => the drafter half is skipped.
-  PREFILL_DFLASH_ROPE_CONVENTION drafter stored-K rope convention, "interleaved" (default) or "half_split";
-                                 the half-split golden K is reindexed to match. MUST equal the runner's
-                                 DFlashDrafterConfig.rope_convention (this process cannot read that config).
   PREFILL_SEND_SHUTDOWN          "1" to close the stream with an all -1 sentinel so the runner exits
                                  gracefully after the run (sent after the KV read; default 0). PR #48718.
 Scope — this module drives the RUNNER and nothing else: push, ack-drain, optional golden PCC. It issues no
@@ -1036,11 +1033,6 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
         return False
 
     dflash_threshold = float(os.environ.get("PREFILL_DFLASH_PCC", "0.88"))
-    # The drafter's STORED-K rope convention (default "interleaved", the meta-rope branch default): the
-    # golden trace is half-split, so the gate reindexes golden K to match the device's convention. The
-    # producer runs out-of-process from the runner, so it cannot read the drafter config object — the
-    # convention rides this env var and MUST match the runner's DFlashDrafterConfig.rope_convention.
-    dflash_rope_convention = os.environ.get("PREFILL_DFLASH_ROPE_CONVENTION", "interleaved")
     # Under DFlash the table also carries the drafter's context caches (extra dflash_* configs); PCC them
     # via the deepseek gate. The import + read closure are built only when those configs are present, so a
     # non-DFlash run neither imports the deepseek module nor measures anything.
@@ -1075,7 +1067,7 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
                 real_len,
                 read_config_slice=read_dflash_slice,
                 threshold=dflash_threshold,
-                rope_convention=dflash_rope_convention,
+                rope_convention="interleaved",  # the only convention this branch's drafter implements
             )
             if dflash_pcc is not None:
                 min_dflash_overall = dflash_pcc if min_dflash_overall is None else min(min_dflash_overall, dflash_pcc)

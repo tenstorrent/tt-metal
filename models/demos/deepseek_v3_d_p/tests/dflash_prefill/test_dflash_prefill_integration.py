@@ -142,6 +142,7 @@ def test_dflash_prefill_integration(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         max_seq_len=isl_total,
+        chunk_size=isl_total,
         num_links=num_links,
         topology=topology,
     )

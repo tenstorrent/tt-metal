@@ -287,6 +287,7 @@ class TtPrefillRuntime:
             sp_axis=self.config.sp_axis,
             tp_axis=self.config.tp_axis,
             max_seq_len=dflash_seq,
+            chunk_size=self.config.chunk_size,
             num_links=self.config.num_links,
             topology=self.config.topology,
             owned_target_layer_ids=owned,

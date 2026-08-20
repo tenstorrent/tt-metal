@@ -137,6 +137,7 @@ def test_dflash_pcc(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         max_seq_len=ctx_len,
+        chunk_size=chunk_global,
         num_links=num_links,
         topology=topology,
     )
@@ -265,6 +266,7 @@ def test_dflash_multiturn_pcc(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         max_seq_len=cache_seq,
+        chunk_size=chunk_global,
         num_links=num_links,
         topology=topology,
     )

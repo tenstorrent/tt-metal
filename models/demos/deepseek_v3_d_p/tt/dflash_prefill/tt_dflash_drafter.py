@@ -53,6 +53,7 @@ class TtDFlashDrafter:
         sp_axis: int = 0,
         tp_axis: int = 1,
         max_seq_len: Optional[int] = None,
+        chunk_size: Optional[int] = None,
         num_links: int = 1,
         topology: Union[ttnn.Topology, Tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear,
         owned_target_layer_ids: Optional[tuple] = None,
@@ -82,6 +83,9 @@ class TtDFlashDrafter:
         # Prefill builds drafter KV for the FULL chunk the verifier hands it (e.g. 5120 tokens), so the
         # cache is sized to max_seq_len — NOT capped at 4k.
         self.cache_seq = max_seq_len if max_seq_len is not None else config.context_len
+        # Global chunk width (block-cyclic period the KV writer + rope table use); fixed for a run. Only the
+        # KV-tail rank needs it (to build the rope table once, below); non-tail ranks may leave it None.
+        self.chunk_size = chunk_size
 
         assert (
             self.cache_seq % self.sp_factor == 0
@@ -111,11 +115,17 @@ class TtDFlashDrafter:
             )
         self._load_weights(state_dict)
         # Whole-cache INTERLEAVED indexed rope table (cos/sin block-cyclic-reordered + SP-sharded, trans_mat
-        # replicated), built ONCE on the first forward when chunk_global becomes known and reused across all
-        # chunks/requests/turns — only kv_actual_global varies (the op derives each chunk's per-chip shard
-        # offset on-device). Memoized on chunk_global (invariant across a run); None until built / non-tail.
+        # replicated), built ONCE here and reused for every chunk/request/turn — only kv_actual_global varies
+        # (rotary_embedding_indexed derives each chunk's per-chip shard offset on-device). Mirrors the verifier
+        # transformer, which builds its indexed table once in __init__ from the same fixed chunk_size
+        # (tt_prefill_transformer.py). Only the KV-tail rank ropes, so only it builds the table.
         self._rope: Optional[dict] = None
-        self._rope_chunk_global: Optional[int] = None
+        if self.build_kv_tail:
+            assert self.chunk_size is not None, "chunk_size is required to build the drafter rope table (KV-tail rank)"
+            hf = build_drafter_rope_hf_config(self.config, max_seq_len=self.cache_seq)
+            self._rope = RotarySetup(hf, self.mesh_device, sp_axis=self.sp_axis).get_rope_tensors_indexed(
+                cache_seq_len_global=self.cache_seq, chunk_size_global=self.chunk_size
+            )
         # K/V caches are owned by the CALLER (see allocate_dflash_kv_cache) and passed into
         # forward() — the drafter does not hold them, mirroring the MLA prefill model's kvpe_cache.
         self._reduced_accum: Optional[ttnn.Tensor] = None  # running TP-partial FC sum (Σ fc_slice_i @ h_i)
@@ -221,30 +231,6 @@ class TtDFlashDrafter:
             self.v_proj.append(_linear_w(vw, mapper_col))
             self.k_norm.append(_norm_w(kn))
         assert kv_dim == cfg.num_key_value_heads * D
-
-    def _ensure_rope_table(self, chunk_global: int) -> None:
-        """Build the whole-cache INTERLEAVED indexed rope table once (memoized on ``chunk_global``) via the
-        same ``RotarySetup`` helper the verifier's MLA path uses.
-
-        ``get_rope_tensors_indexed`` block-cyclic-reorders the cos/sin by the per-chip chunk and SP-shards
-        them, so device ``c``'s contiguous shard holds -- in local-cache-row order -- the rope values for
-        every global position it can ever carry; ``rotary_embedding_indexed`` then derives each chunk's start
-        row in that shard ON-DEVICE from a single ``kv_actual_global`` runtime arg (the same ``update_idxt``
-        math the per-chip KV-cache writer uses). So the SAME tensors serve every chunk/request/turn and only
-        ``kv_actual_global`` varies -- no per-chunk host gather, and every tile-aligned offset (including
-        mid-band multi-turn resumes) is handled with no host mirror.
-
-        ``chunk_global`` is invariant across a run (the verifier hands the drafter a fixed chunk width), so a
-        single build suffices. ``get_rope_tensors_indexed`` re-asserts its layout constraints
-        (``cache_seq <= max_seq_len``; ``chunk_global % (TILE*sp) == 0``; ``cache_seq % chunk_global == 0``),
-        which the drafter's forward guards already satisfy."""
-        if self._rope is not None and self._rope_chunk_global == chunk_global:
-            return
-        hf = build_drafter_rope_hf_config(self.config, max_seq_len=self.cache_seq)
-        self._rope = RotarySetup(hf, self.mesh_device, sp_axis=self.sp_axis).get_rope_tensors_indexed(
-            cache_seq_len_global=self.cache_seq, chunk_size_global=chunk_global
-        )
-        self._rope_chunk_global = chunk_global
 
     def reset(self):
         """Clear the FC accumulator + any imported upstream partial — call at the start of each prefill
@@ -375,8 +361,8 @@ class TtDFlashDrafter:
 
         The taps for this chunk need NOT be seq-contiguous: token ids entering the transformer are already
         block-cyclic-gathered, so each chip's tap slice is exactly the rows its cache shard will hold, and
-        the interleaved indexed rope op derives each chip's shard offset on-device (see
-        :meth:`_ensure_rope_table`)."""
+        the interleaved indexed rope op derives each chip's shard offset on-device from the whole-cache table
+        built once in ``__init__``."""
         assert self.build_kv_tail, (
             "forward() on a non-tail drafter (build_kv_tail=False); non-tail ranks forward the partial "
             "via export_partial instead"
@@ -433,11 +419,12 @@ class TtDFlashDrafter:
             ttnn.deallocate(target_hidden)
             target_hidden = gathered  # [1,1,seq,H] replicated on TP
 
-        # Whole-cache INTERLEAVED indexed rope table (SP-sharded cos/sin + replicated trans_mat), built once
-        # and reused for every chunk/request/turn; the indexed op reads kv_actual_global at call time. The
-        # per-chip shard already covers cache_seq/sp >= chunk_local rows, so there is no per-chunk length to
-        # guard here (unlike the deleted half-split path).
-        self._ensure_rope_table(chunk_global)
+        # The rope table was built once in __init__ for a fixed chunk_size (the block-cyclic period the writer
+        # uses); the verifier feeds that same chunk width every call, so fail loudly on any mismatch rather
+        # than silently roping with a table whose period disagrees with the write.
+        assert (
+            chunk_global == self.chunk_size
+        ), f"chunk_global ({chunk_global}) != chunk_size the rope table was built for ({self.chunk_size})"
 
         for i in range(cfg.num_hidden_layers):
             k = ttnn.linear(
