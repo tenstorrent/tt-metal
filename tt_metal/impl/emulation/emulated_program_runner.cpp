@@ -18,6 +18,7 @@
 #endif
 
 #include <bit>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <cerrno>
@@ -3380,10 +3381,22 @@ static void __emule_fabric_deliver_ops(
             uint64_t sem_addr = *reinterpret_cast<const uint64_t*>(h + 8);
             uint32_t val = *reinterpret_cast<const uint32_t*>(h + 16);
             uint8_t* d = __emule_fabric_resolve_remote(dst_chip, noc_address);
-            if (d != nullptr && payload != nullptr && size > 0) {
+            const bool has_payload = payload != nullptr && size > 0;
+            if (d != nullptr && has_payload) {
                 std::memcpy(d, payload, size);
                 std::atomic_thread_fence(std::memory_order_release);
                 __emule_fiber_wake(d);
+            }
+            // The increment is this op's readiness signal. Raising it when the payload half did not
+            // land hands the consumer stale bytes it believes are fresh, so refuse and say so; the
+            // consumer then waits, which is diagnosable, instead of reading the wrong data.
+            if (has_payload && d == nullptr) {
+                std::fprintf(
+                    stderr,
+                    "[EMULE_FABRIC] WARNING: fused write+inc on chip %u could not resolve its data "
+                    "address; withholding the semaphore increment rather than signalling stale bytes.\n",
+                    static_cast<unsigned>(dst_chip));
+                break;
             }
             uint8_t* s = __emule_fabric_resolve_remote(dst_chip, sem_addr);
             if (s != nullptr) {
@@ -3432,8 +3445,21 @@ static void __emule_fabric_deliver_ops(
             std::atomic_thread_fence(std::memory_order_release);
             break;
         }
-        default:
-            break;  // 5/6 native multicast send-types: emule expresses multicast via the target list above
+        default: {
+            // emule expresses multicast through the target list above, so 5-8 are expected to arrive
+            // already fanned out. If one reaches here the op itself is unimplemented and every target
+            // delivery would be a silent no-op — report once per type rather than dropping the write.
+            static std::array<std::atomic<bool>, 256> reported{};
+            const auto idx = static_cast<size_t>(noc_send_type) & 0xFFu;
+            if (!reported[idx].exchange(true, std::memory_order_relaxed)) {
+                std::fprintf(
+                    stderr,
+                    "[EMULE_FABRIC] WARNING: fabric send type %u has no delivery op — the addressed "
+                    "peer will never observe this write.\n",
+                    static_cast<unsigned>(noc_send_type));
+            }
+            break;
+        }
     }
 }
 
@@ -4130,6 +4156,11 @@ static void ensure_peer_wait_driver(
 
 static bool emule_run_suspended() { return g_emule_host_wait || g_emule_peer_wait; }
 
+// A PeerWait is itself reason to pump: the scheduler already concluded a peer may still deliver, and
+// a cross-process delivery cannot wake this process's scheduler by itself. The peer trigger is gated
+// on there being no host-fed waiter, so this can never be a run waiting on host input.
+static bool emule_run_needs_peer_pump();
+
 static bool emule_run_has_peer_fed_waiter() {
     return emule_run_suspended() &&
            tt::tt_metal::emule_fiber::FiberScheduler::instance().has_peer_fed_waiter();
@@ -4140,6 +4171,10 @@ static void resume_emule_run() {
     g_emule_host_wait = false;
     g_emule_peer_wait = false;
     notify_peer_wait_driver();
+}
+
+static bool emule_run_needs_peer_pump() {
+    return g_emule_peer_wait.load(std::memory_order_acquire) || emule_run_has_peer_fed_waiter();
 }
 
 static void suspend_emule_run(tt::tt_metal::emule_fiber::RunOutcome outcome) {
@@ -4793,18 +4828,23 @@ private:
 
     void run() {
         uint64_t sequence = 0;
+        uint64_t progress = 0;
         std::chrono::steady_clock::time_point deadline;
         while (!stopping()) {
-            if (!emule_run_has_peer_fed_waiter()) {
+            if (!emule_run_needs_peer_pump()) {
                 std::unique_lock<std::mutex> lk(wait_mu_);
-                cv_.wait(lk, [this] { return stop_ || emule_run_has_peer_fed_waiter(); });
+                cv_.wait(lk, [this] { return stop_ || emule_run_needs_peer_pump(); });
                 if (stop_) {
                     return;
                 }
             }
             const uint64_t current_sequence = g_emule_run_sequence.load(std::memory_order_acquire);
-            if (sequence != current_sequence) {
+            // Refresh on DELIVERIES too, not just on a new run: a deadline set once per dispatch is a
+            // lifetime cap, and a healthy run that keeps taking peer data is abandoned for being slow.
+            const uint64_t current_progress = emule_rank_state().delivery_sum();
+            if (sequence != current_sequence || progress != current_progress) {
                 sequence = current_sequence;
+                progress = current_progress;
                 deadline = std::chrono::steady_clock::now() + peer_driver_timeout();
             }
 
@@ -4813,7 +4853,7 @@ private:
                 back_off();
                 continue;
             }
-            if (!emule_run_has_peer_fed_waiter() ||
+            if (!emule_run_needs_peer_pump() ||
                 sequence != g_emule_run_sequence.load(std::memory_order_acquire)) {
                 continue;
             }
@@ -4827,7 +4867,7 @@ private:
                 abandon_locked(
                     "peer-wait deadline expired",
                     fmt::format(
-                        "EMULE fiber engine: peer-wait driver exceeded its {}s wall-clock deadline "
+                        "EMULE fiber engine: peer-wait driver saw no cross-rank delivery for {}s "
                         "(TT_EMULE_PEER_DRIVER_TIMEOUT_SEC).",
                         peer_driver_timeout().count()));
                 continue;
