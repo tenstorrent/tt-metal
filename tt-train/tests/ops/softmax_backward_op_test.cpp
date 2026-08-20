@@ -229,13 +229,6 @@ TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_LongRows) {
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_ManyShortRows) {
-    if (GetParam().dtype == ttnn::DataType::BFLOAT16) {
-        // TODO: fails with name "many_short_rows_non_streaming_5_tiles".
-        // Also fails for bf16 with max_abs_diff=0.72139114141464233
-        // Tracking: https://github.com/tenstorrent/tt-metal/issues/41944
-        GTEST_SKIP() << "Skipping many-short-rows shape for unsupported bf16 dtype ";
-        return;
-    }
     constexpr SoftmaxBackwardCase test_case{
         .name = "many_short_rows_non_streaming",
         .n = 1,
