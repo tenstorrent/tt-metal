@@ -550,9 +550,11 @@ _EDGE_SWEEP_OPS = sorted(
 #
 #   rsqrt_compat at 0 returned 1.7014118e38 instead of inf on all 8 combinations, while
 #   plain Rsqrt over the same probe did not diverge. Root-caused to _reciprocal_compat_,
-#   whose exponent-difference arithmetic (126 - exexp(0) = 253) has no pole guard, and
-#   fixed by routing the legacy-compat path through sfpu_reciprocal_iter, which handles
-#   both poles by construction. See FIX_PLAN_52930_reciprocal_compat_pole.md.
+#   whose exponent-difference arithmetic (126 - exexp(0) = 254) has no pole guard, and
+#   fixed by adding that guard in place. The kernel is otherwise untouched, so every
+#   non-pole value stays bit-identical -- deliberately, because eight production
+#   normalization kernels select this path by name to match a model baseline. See
+#   FIX_PLAN_52930_reciprocal_compat_pole.md.
 _EDGE_KNOWN_DIVERGENCES = {
     MathOperation.Sign: (
         (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),

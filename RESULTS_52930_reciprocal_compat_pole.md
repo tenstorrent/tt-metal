@@ -1,16 +1,34 @@
-# Result — `RsqrtCompat(0)`: both fix options built and measured, Option A wins
+# Result — `RsqrtCompat(0)`: both fix options built and measured
+
+> **Correction, 2026-08-20 — this document's conclusion was reversed on review.**
+> It concludes that Option A wins and is in the tree. **The branch ships Option B.** The
+> performance and accuracy measurements below are sound and are kept as the A-vs-B bake-off
+> record; what was wrong is §5, the answer to "who depends on the legacy bit pattern". That
+> search looked for the phrase *bit-identical* and found only the Blackhole sampling file. It
+> missed eight production normalization kernels that hard-code `rsqrt_tile<true>` and say so as
+> *matches baseline* — including `dit_layernorm_fused_compute.cpp:267`, which states outright
+> that "the non-legacy default diverges on low-variance rows". Option A would have changed those
+> baselines silently. See `MEASUREMENTS_52930_reciprocal_compat_pole_vs_main.md` §8 for the full
+> list and the reasoning, and for the shipped Option B figures.
+>
+> Read every "Option A is in the tree" statement below as "Option A was measured and withdrawn".
 
 **Plan:** [FIX_PLAN_52930_reciprocal_compat_pole.md](FIX_PLAN_52930_reciprocal_compat_pole.md) (finding 4 of
 [ISSUE_52930_INVESTIGATION.md](ISSUE_52930_INVESTIGATION.md)).
 **Question asked:** build both options, check each works functionally, and keep the one with the lower
 performance penalty, measured as `MATH_ISOLATE` cycles in `perf_eltwise_unary_sfpu.py`.
 
-**Answer in one line:** both fix the pole; **Option A is not a penalty at all — it is 26–39 % faster on
-`RsqrtCompat` and 43–53 % faster on the public `recip()` default**, where Option B costs 4.6–8.3 %. Accuracy
-improves on every path that changed and regresses on no value anywhere — the legacy reciprocal was 610× less
-accurate than its replacement on the fp32 pipeline (§4). Option A is in the tree. The plan's blocking question
-("who depends on the legacy bit pattern") now has a named answer, and it is *not* any of the paths Option A
-touches — see §5.
+**Answer in one line, as originally written:** both fix the pole; **Option A is not a penalty at all — it is
+26–39 % faster on `RsqrtCompat` and 43–53 % faster on the public `recip()` default**, where Option B costs
+4.6–8.3 %. Accuracy improves on every path that changed and regresses on no value anywhere — the legacy
+reciprocal was 610× less accurate than its replacement on the fp32 pipeline (§4).
+
+**Answer as it stands after review:** the performance and accuracy comparison holds, and **Option B ships
+anyway**, because the plan's blocking question was answered wrongly here. §5 named one dependent and concluded
+Option A touched none; there are eight more, and Option A touches all of them. Option B's measured cost on the
+shipped branch is **+5.7 … +11.1 % on `RsqrtCompat` and +10.5 … +13.2 % on the public `recip()` default** — a
+flat +128 cycles per tile — which is higher than the 4.6–8.3 % quoted below because the shipped guard also
+handles `-0.0`. Bit-exactness is preserved everywhere except the two poles.
 
 | | Wormhole n300, silicon | |
 |---|---|---|
@@ -260,7 +278,16 @@ construction — the same instruction sequence, the same values, the same cycles
 It is the one consumer keeping `_reciprocal_compat_` alive, for the reason in §5. No Blackhole silicon on
 this host, so this is source-level verification plus a clean compile, not a hardware run.
 
-## 5. The blocking question the plan raised, answered
+## 5. The blocking question the plan raised, answered — INCORRECTLY
+
+> **This section is the error.** Its conclusion — that no path Option A touches has a legacy
+> dependency — is false. It searched for the phrase *bit-identical*, which appears in exactly one
+> file, and concluded from a one-file hit that the contract was unclaimed elsewhere. Eight
+> production normalization kernels hard-code `rsqrt_tile<true>` and record the dependency in
+> different words ("matches baseline", "the non-legacy default diverges on low-variance rows").
+> The section is kept verbatim below because the Blackhole sampling analysis in it is correct and
+> still applies; only its scope conclusion is wrong. The full caller list is in
+> `MEASUREMENTS_52930_reciprocal_compat_pole_vs_main.md` §8.
 
 The plan says Option A is "only viable once someone can say who depends on the legacy bit pattern", and
 that it is blocked on that. Searching the tree, exactly one place states the dependency, and it is explicit:
@@ -273,6 +300,10 @@ that it is blocked on that. Searching the tree, exactly one place states the dep
 
 That file also documents the sign divergence as deliberate ("the legacy path must stay bit-identical for
 blaze, so the divergence is documented rather than fixed") and constrains its callers to `in > 0`.
+
+**Option A would not have touched it** (and Option B, as shipped, guards it — the guard lives inside `_reciprocal_compat_` itself, and is unreachable within sampling's documented `in > 0` domain, so blaze's bit pattern is unchanged on every input it may legally pass).
+
+The original text follows.
 
 **Option A as shipped does not touch it.** `sampling_recip_value<true>` still calls `_reciprocal_compat_`,
 byte for byte, so blaze's contract holds. The consequence to be explicit about: `_reciprocal_compat_`

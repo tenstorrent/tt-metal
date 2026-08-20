@@ -9,7 +9,16 @@ Fix committed as `21557a33763`. Companion prose/methodology:
 `MATH_ISOLATE` figures are per-tile `TILE_LOOP` cycles. Measurement noise across 3 repeats was
 < 0.1 cycles out of ~2250, so every delta below is far outside noise.
 
-## 1. Headline — the four affected paths
+> **Correction, 2026-08-20.** This record measures **Option A**, which was withdrawn on review;
+> the branch ships **Option B**, the in-place pole guard. The measurements below are sound and are
+> kept as the A-vs-B comparison, but the "Regression?" column answers a question about a change
+> that is no longer being made. For what the branch actually does to accuracy and performance, see
+> [MEASUREMENTS_52930_reciprocal_compat_pole_vs_main.md](MEASUREMENTS_52930_reciprocal_compat_pole_vs_main.md);
+> §8 there explains the reversal. In one line: Option B changes no value except the two poles, and
+> costs a flat +128 cycles per tile (+5.7 … +13.2 % depending on the kernel) instead of Option A's
+> 25–53 % saving.
+
+## 1. Headline — the four affected paths, under Option A (withdrawn)
 
 | # | Path | Values | Accuracy (max rel err) | `MATH_ISOLATE` | Regression? |
 |---|---|---|---|---|---|
