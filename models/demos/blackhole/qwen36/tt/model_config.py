@@ -427,6 +427,10 @@ class Qwen36ModelArgs(ModelArgs):
         self.act_shard_hidden = tpc.create_activation_shard_config(self.dim)
         self.act_shard_gdn_value = tpc.create_activation_shard_config(self.gdn_value_dim_tp)
         self.act_shard_attn_out = tpc.create_activation_shard_config(self.attn_out_dim_tp)
+        # Decode token embedding: width-sharded L1 on dim_tp, 32 cores (8x4). Interleaved embedding
+        # is 1 core / ~21us at B=32 (token-tile split); this layout is 3.0us and the pre-norm
+        # all-gather consumes it directly (test_embedding_decode_sweep.py). None outside wh_9b_n300.
+        self.emb_decode_memcfg = tpc.create_activation_shard_config(self.dim // tp) if tpc.wh_9b_n300(self) else None
 
         # KV-cache height shard for paged_update_cache (one user per core).
         _B = max(1, self.max_batch_size)
@@ -511,14 +515,81 @@ class Qwen36ModelArgs(ModelArgs):
         # the rotary copies its output shard spec from its input, so it structurally works, and
         # test_attention_tp.py passes on it at PCC 1.00000. It is still WRONG: on
         # test_model_tp.py::test_model_tp_decode_batched (B=8, the batched-vs-B1-oracle contract)
-        # the worst per-user step-1 PCC went 0.9436 (baseline) -> 0.870 with the shifted grid, while
-        # this natural grid measures 0.9456, i.e. baseline to within noise. Step 0 is clean and only
-        # step 1 degrades, which points at what got WRITTEN to the KV cache on step 0 rather than at
-        # the rotation itself -- the same family as the documented NaN footgun above, where
-        # nlp_create_qkv_heads_decode silently mis-writes a non-(0,0)-origin grid. Do not re-apply
-        # this without a per-user KV-cache-contents check on a non-(0,0)-origin grid; the +1 reshard
-        # it saves is not worth re-opening that.
+        # the worst per-user PCC at the first decode step went 0.9436 (baseline) -> 0.870 with the
+        # shifted grid, while this natural grid measures 0.9456, i.e. baseline to within noise.
+        #
+        # ROOT CAUSE (2026-08-20 -- the "KV-cache write corruption" reading above is WRONG; K was
+        # never the problem). The real mechanism, bisected and then reproduced standalone:
+        #
+        #   ttnn's paged_scaled_dot_product_attention_decode IGNORES THE SHARD-GRID ORIGIN of a
+        #   height-sharded q. It enumerates batch->core as {i % grid_x, i / grid_x} from absolute
+        #   core (0,0) (sdpa_decode_program_factory.cpp ~183 and ~301-315 -- the body of the
+        #   origin-discarding grid_to_cores(num_cores,x,y,row_wise) overload, core_coord.cpp
+        #   ~498-517, inlined), and q's shard grid is only ever queried for num_cores()/shape, never
+        #   bounding_box().start_coord. There is no assert: the one grid-related check is commented
+        #   out (sdpa_decode_device_operation.cpp ~361). So q on rows 1.. is read from rows 0..
+        #
+        # Since this grid is shared by Q AND K, aiming it at the shifted half does not just relocate
+        # K -- it drags Q onto row 1, and Q goes from the rotary straight into SDPA still sharded
+        # (attention/tp.py:856 -> :945, nothing in between). That, not the cache write, is the bug.
+        #
+        # EVIDENCE (three files, each eliminating one candidate):
+        #   * test_rope_shifted_grid_bisect_qk.py -- real TPAttention, B=8, worst per-user PCC vs a
+        #     B=1 oracle: natural Q+K 1.000000; shifted Q+K badly broken (0.03-0.14, and WHICH user is
+        #     worst moves -- the value depends on what was last freed at the L1 address SDPA wrongly
+        #     reads, so do not treat any single figure as canonical); shifted Q+K with **Q alone**
+        #     moved back to the natural grid before SDPA 1.000000. It also reads back Q and K as they
+        #     leave the rotary: both BIT-EXACT (max|diff| = 0) against the natural run in the failing
+        #     variant -- so the rotary is innocent and SDPA is handed correct data.
+        #   * test_sdpa_decode_sharded_q_origin.py -- standalone, no model: natural-grid q PCC
+        #     1.000000, shifted-grid q PCC 0.0855-0.1093, across all 8 combinations of {bf16, bfp8}
+        #     cache x {uniform, per-user} positions x call order. Not dtype- or position-dependent.
+        # Two candidates were checked and CLEARED along the way, so nobody re-treads them: the rotary
+        # itself (its output is bit-exact on either grid, per the capture above) and program-cache
+        # state (results are bit-identical across warm/cold/warm caches). An early "which decode step
+        # breaks flips between runs" observation was an ARTEFACT of the same stale-address mechanism:
+        # freeing a natural-grid q leaves a correct copy at the address SDPA wrongly reads, so the
+        # failure can masquerade as passing depending on allocation order -- which is also why a first
+        # standalone probe wrongly exonerated SDPA. See that file's docstring for how to avoid the trap.
+        #
+        # WHY THE RESHARD STAYS ANYWAY. paged_fused_update_cache needs K and V on DISJOINT grids, and
+        # both K (from the rotary) and V (from the head split) naturally arrive on the natural grid --
+        # so exactly one of them must always move. The shifted rope grid is the only arrangement that
+        # makes BOTH free, and it needs Q's placement fixed, for which the options are:
+        #   (i)  move Q back to the natural grid after the rotary -- costs the op it saves (net zero;
+        #        this is exactly the measured-clean `shifted_k_only` variant above);
+        #   (ii) pass the q grid as SDPAProgramConfig.sub_core_grids (the one origin-aware path) --
+        #        correct, but it confines SDPA to the B cores q lives on, and SDPA is ~76us on the
+        #        full grid, so this loses far more than the ~0.6-1us Reshard it saves;
+        #   (iii) fix the ttnn kernel -- a C++ change, out of scope here.
+        # Dropping the fused write instead (two paged_update_cache calls, both on the natural grid, no
+        # reshard at all) is the same program count and measured slower overall (18.3us fused + ~1us
+        # reshard vs 20.3us unfused). So the shipped arrangement is a local optimum: KEEP IT.
+        #
+        # The guard below is what makes that safe rather than lucky.
         self.rope_k_shard_cfg = self.kv_update_shard_cfg
+        # LOAD-BEARING, NOT COSMETIC: the decode rotary's grid becomes the grid of the q that reaches
+        # SDPA, and per the root-cause note above SDPA silently misreads a q whose grid does not start
+        # at (0,0). kv_update_shard_cfg is origin-anchored today (built from a ttnn.CoreGrid, i.e.
+        # rooted at (0,0)), so this holds -- but it is derived from max_batch_size, and nothing else in
+        # the type system ties the two together. Fail loudly rather than serve quietly-wrong tokens.
+        #
+        # SCOPED TO THE PERMUTED-ROPE PATH, deliberately: rope_k_shard_cfg is only ever READ when
+        # rope_permuted_enabled is on (attention/tp.py::_rope_decode returns via
+        # apply_partial_rope_decode before touching it otherwise), and that flag is itself gated to
+        # wh_9b_n300 + rope_head_dim < head_dim (tp_common.rope_permuted_enabled). _init_tp_config,
+        # by contrast, runs for EVERY TP config (27B on T3K/P150x4 included), so asserting
+        # unconditionally here would police a precondition those configs never rely on -- and could
+        # fail a model that does not even take this code path. Same scoping rule as every other decode
+        # change in this file.
+        if self.rope_permuted_enabled:
+            _rope_q_origin = self.rope_k_shard_cfg.shard_spec.grid.bounding_box().start
+            assert (_rope_q_origin.x, _rope_q_origin.y) == (0, 0), (
+                f"rope_k_shard_cfg must start at core (0,0) -- got {_rope_q_origin}. This grid is the "
+                "grid of the q handed to paged_scaled_dot_product_attention_decode, which ignores the "
+                "shard origin and reads from absolute (0,0) outward (silently, no assert). See the "
+                "root-cause note above and tests/perf/test_sdpa_decode_sharded_q_origin.py."
+            )
 
         # Attention projection weights (QKV in-proj + wo out-proj) stay bfloat8_b. bfp4 is faster
         # there -- these decode matmuls are DRAM-bandwidth-bound, so a narrower weight dtype is a real
