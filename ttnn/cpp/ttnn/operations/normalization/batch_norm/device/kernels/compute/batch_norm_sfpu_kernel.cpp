@@ -18,6 +18,7 @@ void kernel_main() {
     uint32_t tile_start = get_arg(args::tile_start);
     constexpr bool weight_has_value = get_arg(args::weight_has_value) == 1;
     constexpr bool bias_has_value = get_arg(args::bias_has_value) == 1;
+    constexpr bool needs_output_typecast = get_arg(args::needs_output_typecast) == 1;
 
     if (num_tiles == 0) {
         return;
@@ -25,12 +26,6 @@ void kernel_main() {
 
     constexpr uint32_t tc_in_fmt = get_arg(args::tc_in_fmt);
     constexpr uint32_t tc_out_fmt = get_arg(args::tc_out_fmt);
-#ifdef NEEDS_OUTPUT_TYPECAST
-    constexpr bool needs_output_typecast = true;
-#else
-    constexpr bool needs_output_typecast = false;
-#endif
-
     // The batch mean is the broadcast operand of the subtraction; the input tiles are the other one.
     compute_kernel_hw_startup(dfb::input, dfb::batch_mean, dfb::out);
 

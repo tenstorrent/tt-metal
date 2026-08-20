@@ -21,6 +21,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
@@ -40,43 +41,43 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t dfb_inp_id = tt::CBIndex::c_0;
-    constexpr uint32_t dfb_stats_id = tt::CBIndex::c_1;
+    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
+    constexpr uint32_t cb_stats = tt::CBIndex::c_1;
 
-    constexpr uint32_t dfb_eps_id = tt::CBIndex::c_4;
-    constexpr uint32_t dfb_reduce_id = tt::CBIndex::c_5;
+    constexpr uint32_t cb_eps_idx = tt::CBIndex::c_4;
+    constexpr uint32_t cb_reduce_idx = tt::CBIndex::c_5;
 
-    constexpr uint32_t dfb_out_id = tt::CBIndex::c_14;
+    constexpr uint32_t cb_out_idx = tt::CBIndex::c_14;
 
-    constexpr uint32_t dfb_recip_sqrt_var_id = tt::CBIndex::c_10;  // 1/sqrt(var+eps)
-    constexpr uint32_t dfb_x_normed_id =
+    constexpr uint32_t cb_recip_sqrt_var_idx = tt::CBIndex::c_10;  // 1/sqrt(var+eps)
+    constexpr uint32_t cb_x_normed_idx =
         tt::CBIndex::c_12;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
 
-    constexpr uint32_t dfb_var_id = tt::CBIndex::c_8;  // E(x**2) - E(x)**2 or E(x**2)
-    constexpr uint32_t dfb_norm_x_input_id = dfb_inp_id;
+    constexpr uint32_t cb_var_idx = tt::CBIndex::c_8;  // E(x**2) - E(x)**2 or E(x**2)
+    constexpr uint32_t cb_norm_x_input_idx = cb_inp;
 
-    constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_2;
-    constexpr uint32_t dfb_beta_id = tt::CBIndex::c_3;
-    constexpr uint32_t dfb_times_gamma_out_id = (do_gamma && do_beta) ? tt::CBIndex::c_13 : dfb_out_id;
+    constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_2;
+    constexpr uint32_t cb_beta_idx = tt::CBIndex::c_3;
+    constexpr uint32_t cb_times_gamma_out_idx = (do_gamma && do_beta) ? tt::CBIndex::c_13 : cb_out_idx;
 
-    DataflowBuffer dfb_reduce(dfb_reduce_id);
-    DataflowBuffer dfb_eps(dfb_eps_id);
-    DataflowBuffer dfb_gamma(dfb_gamma_id);
-    DataflowBuffer dfb_beta(dfb_beta_id);
+    CircularBuffer cb_reduce(cb_reduce_idx);
+    CircularBuffer cb_eps(cb_eps_idx);
+    CircularBuffer cb_gamma(cb_gamma_idx);
+    CircularBuffer cb_beta(cb_beta_idx);
 
-    compute_kernel_hw_startup(dfb_inp_id, dfb_inp_id, dfb_var_id);
+    compute_kernel_hw_startup(cb_inp, cb_inp, cb_var_idx);
 
-    dfb_reduce.wait_front(1);  // comes from the reader
-    dfb_eps.wait_front(1);     // comes from the reader
+    cb_reduce.wait_front(1);  // comes from the reader
+    cb_eps.wait_front(1);     // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         /*
          * Reduce stats input.
-         * dfb_stats_id = [sum(x0**2), sum(x1**2), ...]
-         * RMSNorm reduces sum(x**2) directly into dfb_var_id for rsqrt computation.
-         * Uses auto-batched STREAMING mode - library handles DFB lifecycle.
+         * cb_stats = [sum(x0**2), sum(x1**2), ...]
+         * RMSNorm reduces sum(x**2) directly into cb_var_idx for rsqrt computation.
+         * Uses auto-batched STREAMING mode - library handles CB lifecycle.
          */
-        ckl::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, dfb_stats_id, dfb_reduce_id, dfb_var_id>(
+        ckl::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_stats, cb_reduce_idx, cb_var_idx>(
             ckl::ReduceInputBlockShape::row(stats_tiles_cols));
 
         // 1/sqrt(var + eps)
@@ -84,66 +85,66 @@ void kernel_main() {
             ckl::IterationShape::tiles(onetile),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
-                ckl::input(dfb_var_id),
-                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
+                ckl::input(cb_var_idx),
+                ckl::input(cb_eps_idx, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
             ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(dfb_recip_sqrt_var_id)>{});
+            ckl::PackTile<ckl::output(cb_recip_sqrt_var_idx)>{});
 
         // X * 1/sqrt(E[X**2] + eps), followed by optional gamma and beta.
-        constexpr uint32_t normed_output_dfb_id = do_gamma ? dfb_x_normed_id : dfb_out_id;
+        constexpr uint32_t normed_output_cb_idx = do_gamma ? cb_x_normed_idx : cb_out_idx;
 
         ckl::mul<
             ckl::input(
-                dfb_norm_x_input_id,
+                cb_norm_x_input_idx,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block),
-            ckl::input(dfb_recip_sqrt_var_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-            ckl::output(normed_output_dfb_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+            ckl::input(cb_recip_sqrt_var_idx, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::output(normed_output_cb_idx, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
 
         if constexpr (do_gamma) {
             // x_normed * gamma
             ckl::mul<
                 ckl::input(
-                    dfb_x_normed_id,
+                    cb_x_normed_idx,
                     ckl::WaitPolicy::PerBlockSize,
                     ckl::PopPolicy::PerBlockSize,
                     ckl::InputTileMapping::Block),
                 ckl::input(
-                    dfb_gamma_id,
+                    cb_gamma_idx,
                     ckl::BroadcastDim::Row,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::None,
                     ckl::InputTileMapping::Block),
-                ckl::output(dfb_times_gamma_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                ckl::output(cb_times_gamma_out_idx, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                 ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
 
             if constexpr (do_beta) {
                 // x_normed * gamma + beta
                 ckl::add<
                     ckl::input(
-                        dfb_times_gamma_out_id,
+                        cb_times_gamma_out_idx,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
                         ckl::InputTileMapping::Block),
                     ckl::input(
-                        dfb_beta_id,
+                        cb_beta_idx,
                         ckl::BroadcastDim::Row,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::None,
                         ckl::InputTileMapping::Block),
-                    ckl::output(dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                    ckl::output(cb_out_idx, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                     ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
             }
         }
     }
-    dfb_eps.pop_front(1);
-    dfb_reduce.pop_front(1);
+    cb_eps.pop_front(1);
+    cb_reduce.pop_front(1);
     if constexpr (do_gamma) {
-        dfb_gamma.pop_front(Wt);
+        cb_gamma.pop_front(Wt);
     }
     if constexpr (do_beta) {
-        dfb_beta.pop_front(Wt);
+        cb_beta.pop_front(Wt);
     }
 }

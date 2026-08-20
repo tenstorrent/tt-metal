@@ -28,18 +28,18 @@
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    constexpr uint32_t input_dfb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t stats_dfb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t weight_dfb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t reduce_scalar_dfb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t epsilon_dfb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t reduce_result_dfb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t intermediate_dfb_id = get_compile_time_arg_val(6);
-    constexpr uint32_t output_dfb_id = get_compile_time_arg_val(7);
-    constexpr uint32_t transformation_mat_dfb_id = get_compile_time_arg_val(8);
-    constexpr uint32_t rope_cos_dfb_id = get_compile_time_arg_val(9);
-    constexpr uint32_t rope_sin_dfb_id = get_compile_time_arg_val(10);
-    constexpr uint32_t rotated_input_dfb_id = get_compile_time_arg_val(11);
+    constexpr uint32_t input_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t stats_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t weight_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t reduce_scalar_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t epsilon_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t reduce_result_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t intermediate_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t output_cb = get_compile_time_arg_val(7);
+    constexpr uint32_t transformation_mat_cb = get_compile_time_arg_val(8);
+    constexpr uint32_t rope_cos_cb = get_compile_time_arg_val(9);
+    constexpr uint32_t rope_sin_cb = get_compile_time_arg_val(10);
+    constexpr uint32_t rotated_input_cb = get_compile_time_arg_val(11);
     constexpr uint32_t num_tile_cols = get_compile_time_arg_val(12);
     constexpr uint32_t block_size = get_compile_time_arg_val(13);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(14);
@@ -50,35 +50,35 @@ void kernel_main() {
 
     const uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
 
-    DataflowBuffer dfb_reduce_scalar(reduce_scalar_dfb_id);
-    DataflowBuffer dfb_epsilon(epsilon_dfb_id);
-    DataflowBuffer dfb_transformation_mat(transformation_mat_dfb_id);
-    DataflowBuffer dfb_reduce_result(reduce_result_dfb_id);
-    DataflowBuffer dfb_weight(weight_dfb_id);
-    DataflowBuffer dfb_intermediate(intermediate_dfb_id);
-    DataflowBuffer dfb_rotated_input(rotated_input_dfb_id);
-    DataflowBuffer dfb_rope_cos(rope_cos_dfb_id);
-    DataflowBuffer dfb_rope_sin(rope_sin_dfb_id);
+    CircularBuffer cb_reduce_scalar(reduce_scalar_cb);
+    CircularBuffer cb_epsilon(epsilon_cb);
+    CircularBuffer cb_transformation_mat(transformation_mat_cb);
+    CircularBuffer cb_reduce_result(reduce_result_cb);
+    CircularBuffer cb_weight(weight_cb);
+    CircularBuffer cb_intermediate(intermediate_cb);
+    CircularBuffer cb_rotated_input(rotated_input_cb);
+    CircularBuffer cb_rope_cos(rope_cos_cb);
+    CircularBuffer cb_rope_sin(rope_sin_cb);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_dfb_id, transformation_mat_dfb_id, rotated_input_dfb_id);
-    matmul_init(intermediate_dfb_id, transformation_mat_dfb_id);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+    matmul_init(intermediate_cb, transformation_mat_cb);
 
-    compute_kernel_hw_startup(input_dfb_id, input_dfb_id, input_dfb_id);
+    compute_kernel_hw_startup(input_cb, input_cb, input_cb);
 
-    dfb_reduce_scalar.wait_front(1);  // comes from the reader
-    dfb_epsilon.wait_front(1);        // comes from the reader
+    cb_reduce_scalar.wait_front(1);  // comes from the reader
+    cb_epsilon.wait_front(1);        // comes from the reader
     if constexpr (fuse_rope) {
-        dfb_transformation_mat.wait_front(1);
+        cb_transformation_mat.wait_front(1);
     }
 
     /**
-     * If there is a weight to apply (or if ROPE is fused), the result of x * RMS must be stored in an intermediate DFB.
-     * Otherwise, the result can be written directly to the output DFB.
-     * When applying the weight, the result of x * weight must be stored in an intermediate DFB if ROPE is fused,
-     * otherwise it can be written directly to the output DFB.
+     * If there is a weight to apply (or if ROPE is fused), the result of x * RMS must be stored in an intermediate CB.
+     * Otherwise, the result can be written directly to the output CB.
+     * When applying the weight, the result of x * weight must be stored in an intermediate CB if ROPE is fused,
+     * otherwise it can be written directly to the output CB.
      */
-    constexpr uint32_t mul_rms_result_dfb_id = (fuse_rope || has_weight) ? intermediate_dfb_id : output_dfb_id;
-    constexpr uint32_t mul_weight_result_dfb_id = fuse_rope ? intermediate_dfb_id : output_dfb_id;
+    constexpr uint32_t mul_rms_result_cb = (fuse_rope || has_weight) ? intermediate_cb : output_cb;
+    constexpr uint32_t mul_weight_result_cb = fuse_rope ? intermediate_cb : output_cb;
 
     for (uint32_t tile_row = 0; tile_row < num_tile_rows_to_process; tile_row++) {
         // ROPE tracking variables
@@ -87,10 +87,10 @@ void kernel_main() {
 
         /*
          * Reduce stats input.
-         * dfb_stats_id = [sum(x0**2), sum(x1**2), ...]
-         * Uses auto-batched STREAMING mode - library handles DFB lifecycle
+         * stats_cb = [sum(x0**2), sum(x1**2), ...]
+         * Uses auto-batched STREAMING mode - library handles CB lifecycle
          */
-        ckl::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, stats_dfb_id, reduce_scalar_dfb_id, reduce_result_dfb_id>(
+        ckl::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, stats_cb, reduce_scalar_cb, reduce_result_cb>(
             ckl::ReduceInputBlockShape::row(stats_tiles_cols));
 
         // 1/sqrt(mean_squared + eps)
@@ -98,21 +98,21 @@ void kernel_main() {
             ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
-                ckl::input(reduce_result_dfb_id),
-                ckl::input(epsilon_dfb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
+                ckl::input(reduce_result_cb),
+                ckl::input(epsilon_cb, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
             ckl::Rsqrt<ckl::Approx::Exact, use_legacy_rsqrt ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(reduce_result_dfb_id)>{});
+            ckl::PackTile<ckl::output(reduce_result_cb)>{});
 
         /*
          * norm x
          * RMSNorm: X * 1/sqrt(E[X**2] + eps)
          */
-        dfb_reduce_result.wait_front(1);
+        cb_reduce_result.wait_front(1);
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
             ckl::mul<
-                ckl::input(input_dfb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
-                ckl::input(reduce_result_dfb_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                ckl::output(mul_rms_result_dfb_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+                ckl::input(input_cb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::input(reduce_result_cb, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                ckl::output(mul_rms_result_cb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
                 ckl::IterationShape::tiles(block_size).block_size(block_size));
 
             /**
@@ -120,24 +120,24 @@ void kernel_main() {
              */
             if constexpr (has_weight) {
                 // cumulative wait
-                dfb_weight.wait_front(col_tile + block_size);
+                cb_weight.wait_front(col_tile + block_size);
                 /**
                  * The compute loop must be written like this because if rope is fused,
-                 * mul_weight_result_dfb_id == mul_rms_result_dfb_id
+                 * mul_weight_result_cb == mul_rms_result_cb
                  * and so this is an in-place operation.
-                 * If rope is not fused, mul_weight_result_dfb_id == output_dfb_id
+                 * If rope is not fused, mul_weight_result_cb == output_cb
                  */
                 ckl::eltwise_chain(
                     ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size),
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
                         ckl::input(
-                            mul_rms_result_dfb_id,
+                            mul_rms_result_cb,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
                             ckl::InputTileMapping::Block),
                         ckl::input(
-                            weight_dfb_id,
+                            weight_cb,
                             ckl::BroadcastDim::Row,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
@@ -145,7 +145,7 @@ void kernel_main() {
                             ckl::DataFormatReconfig::Enabled,
                             ckl::TileAddressing::Offset)>{0u, col_tile},
                     ckl::PackTile<ckl::output(
-                        mul_weight_result_dfb_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                        mul_weight_result_cb, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }
 
             /**
@@ -153,36 +153,36 @@ void kernel_main() {
              */
             if constexpr (fuse_rope) {
                 /**
-                 * Rotate the input, write to rotated_input_dfb_id
+                 * Rotate the input, write to rotated_input_cb
                  */
-                reconfig_data_format(transformation_mat_dfb_id, intermediate_dfb_id);
-                pack_reconfig_data_format(rotated_input_dfb_id);
-                matmul_init(intermediate_dfb_id, transformation_mat_dfb_id);
-                dfb_intermediate.wait_front(block_size);
-                dfb_rotated_input.reserve_back(block_size);
+                reconfig_data_format(transformation_mat_cb, intermediate_cb);
+                pack_reconfig_data_format(rotated_input_cb);
+                matmul_init(intermediate_cb, transformation_mat_cb);
+                cb_intermediate.wait_front(block_size);
+                cb_rotated_input.reserve_back(block_size);
                 tile_regs_acquire();
                 tile_regs_wait();
 
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                    matmul_tiles(intermediate_dfb_id, transformation_mat_dfb_id, i, 0, i);
-                    pack_tile(i, rotated_input_dfb_id);
+                    matmul_tiles(intermediate_cb, transformation_mat_cb, i, 0, i);
+                    pack_tile(i, rotated_input_cb);
                 }
 
                 tile_regs_commit();
                 tile_regs_release();
-                dfb_rotated_input.push_back(block_size);
+                cb_rotated_input.push_back(block_size);
 
                 /**
-                 * Write x * cos in-place to mul_rms_result_dfb_id (intermediate_dfb_id)
+                 * Write x * cos in-place to mul_rms_result_cb (intermediate_cb)
                  */
-                reconfig_data_format(intermediate_dfb_id, rope_cos_dfb_id);
-                pack_reconfig_data_format(intermediate_dfb_id);
-                mul_init(intermediate_dfb_id, rope_cos_dfb_id);
-                dfb_rope_cos.wait_front(head_dim_tiles);
+                reconfig_data_format(intermediate_cb, rope_cos_cb);
+                pack_reconfig_data_format(intermediate_cb);
+                mul_init(intermediate_cb, rope_cos_cb);
+                cb_rope_cos.wait_front(head_dim_tiles);
 
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                    mul_tiles(intermediate_dfb_id, rope_cos_dfb_id, i, rope_cos_tile_in_head, i);
+                    mul_tiles(intermediate_cb, rope_cos_cb, i, rope_cos_tile_in_head, i);
                     rope_cos_tile_in_head++;
                     if (rope_cos_tile_in_head == head_dim_tiles) {
                         // Stride heads, reset the index
@@ -190,28 +190,28 @@ void kernel_main() {
                     }
                 }
                 tile_regs_commit();
-                // Write in-place to intermediate_dfb_id
-                dfb_intermediate.pop_front(block_size);
-                dfb_intermediate.reserve_back(block_size);
+                // Write in-place to intermediate_cb
+                cb_intermediate.pop_front(block_size);
+                cb_intermediate.reserve_back(block_size);
                 tile_regs_wait();
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                    pack_tile(i, intermediate_dfb_id);
+                    pack_tile(i, intermediate_cb);
                 }
                 tile_regs_release();
-                dfb_intermediate.push_back(block_size);
+                cb_intermediate.push_back(block_size);
 
                 /**
-                 * Write x_rotated * sin in-place to rotated_input_dfb_id
+                 * Write x_rotated * sin in-place to rotated_input_cb
                  */
-                reconfig_data_format(rotated_input_dfb_id, rope_sin_dfb_id);
-                pack_reconfig_data_format(rotated_input_dfb_id);
-                mul_init(rotated_input_dfb_id, rope_sin_dfb_id);
-                dfb_rope_sin.wait_front(head_dim_tiles);
-                dfb_rotated_input.wait_front(block_size);
+                reconfig_data_format(rotated_input_cb, rope_sin_cb);
+                pack_reconfig_data_format(rotated_input_cb);
+                mul_init(rotated_input_cb, rope_sin_cb);
+                cb_rope_sin.wait_front(head_dim_tiles);
+                cb_rotated_input.wait_front(block_size);
 
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                    mul_tiles(rotated_input_dfb_id, rope_sin_dfb_id, i, rope_sin_tile_in_head, i);
+                    mul_tiles(rotated_input_cb, rope_sin_cb, i, rope_sin_tile_in_head, i);
                     rope_sin_tile_in_head++;
                     if (rope_sin_tile_in_head == head_dim_tiles) {
                         // Stride heads, reset the index
@@ -219,53 +219,50 @@ void kernel_main() {
                     }
                 }
                 tile_regs_commit();
-                // Write in-place to rotated_input_dfb_id
-                dfb_rotated_input.pop_front(block_size);
-                dfb_rotated_input.reserve_back(block_size);
+                // Write in-place to rotated_input_cb
+                cb_rotated_input.pop_front(block_size);
+                cb_rotated_input.reserve_back(block_size);
                 tile_regs_wait();
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                    pack_tile(i, rotated_input_dfb_id);
+                    pack_tile(i, rotated_input_cb);
                 }
                 tile_regs_release();
-                dfb_rotated_input.push_back(block_size);
+                cb_rotated_input.push_back(block_size);
 
                 /**
-                 * Write cos_interim + sin_interim to output_dfb_id
+                 * Write cos_interim + sin_interim to output_cb
                  */
                 ckl::add<
                     ckl::input(
-                        intermediate_dfb_id,
-                        ckl::WaitPolicy::Upfront,
-                        ckl::PopPolicy::AtEnd,
-                        ckl::InputTileMapping::Block),
+                        intermediate_cb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
                     ckl::input(
-                        rotated_input_dfb_id,
+                        rotated_input_cb,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::AtEnd,
                         ckl::InputTileMapping::Block),
-                    ckl::output(output_dfb_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+                    ckl::output(output_cb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
                     ckl::IterationShape::tiles(block_size).block_size(block_size));
 
                 // Reconfigure for mul_bcast_col
-                reconfig_data_format(input_dfb_id, reduce_result_dfb_id);
-                pack_reconfig_data_format(mul_rms_result_dfb_id);
-                mul_bcast_cols_init(input_dfb_id, reduce_result_dfb_id);
+                reconfig_data_format(input_cb, reduce_result_cb);
+                pack_reconfig_data_format(mul_rms_result_cb);
+                mul_bcast_cols_init(input_cb, reduce_result_cb);
             }
         }
-        dfb_reduce_result.pop_front(1);
+        cb_reduce_result.pop_front(1);
 
         if constexpr (fuse_rope) {
-            // We have processed an entire row, so free up the rope cos/sin DFBs
-            dfb_rope_cos.pop_front(head_dim_tiles);
-            dfb_rope_sin.pop_front(head_dim_tiles);
+            // We have processed an entire row, so free up the rope cos/sin CBs
+            cb_rope_cos.pop_front(head_dim_tiles);
+            cb_rope_sin.pop_front(head_dim_tiles);
         }
     }
-    dfb_epsilon.pop_front(1);
-    dfb_reduce_scalar.pop_front(1);
+    cb_epsilon.pop_front(1);
+    cb_reduce_scalar.pop_front(1);
     if constexpr (has_weight) {
-        dfb_weight.pop_front(num_tile_cols);
+        cb_weight.pop_front(num_tile_cols);
     }
     if constexpr (fuse_rope) {
-        dfb_transformation_mat.pop_front(1);
+        cb_transformation_mat.pop_front(1);
     }
 }

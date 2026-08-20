@@ -36,16 +36,8 @@ void kernel_main() {
         dfb_mask_w_obj.wait_front(onetile);  // comes from the reader
     }
 
-#ifdef MINUS_INF
-    constexpr bool minus_inf = true;
-#else
-    constexpr bool minus_inf = false;
-#endif
-#ifdef IS_ZERO
-    constexpr bool is_zero = true;
-#else
-    constexpr bool is_zero = false;
-#endif
+    constexpr bool is_zero = get_arg(args::is_zero) != 0;
+    constexpr bool minus_inf = get_arg(args::minus_inf) != 0;
     using MaskOp =
         std::conditional_t<minus_inf, ckl::MaskPosInf<ckl::Dst::D0>, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>>;
     // Compute-private intermediates (dfb::val, dfb::cal, dfb::reduce): this kernel is their only toucher, so each is
@@ -70,13 +62,16 @@ void kernel_main() {
             if (col_idx == 0) {
                 ckl::copy<ckl::input(dfb::val), ckl::output(dfb::cal)>(ckl::IterationShape::tiles(onetile));
             } else {
-#ifdef IS_ZERO
-                ckl::add<ckl::input(dfb::val), ckl::input(dfb::cal), ckl::output(dfb::cal)>(
-                    ckl::IterationShape::tiles(onetile));
-#else
-                ckl::binary_sfpu<ckl::BinaryMax<>, ckl::input(dfb::val), ckl::input(dfb::cal), ckl::output(dfb::cal)>(
-                    ckl::IterationShape::tiles(onetile));
-#endif
+                if constexpr (is_zero) {
+                    ckl::add<ckl::input(dfb::val), ckl::input(dfb::cal), ckl::output(dfb::cal)>(
+                        ckl::IterationShape::tiles(onetile));
+                } else {
+                    ckl::binary_sfpu<
+                        ckl::BinaryMax<>,
+                        ckl::input(dfb::val),
+                        ckl::input(dfb::cal),
+                        ckl::output(dfb::cal)>(ckl::IterationShape::tiles(onetile));
+                }
             }
         }
 
