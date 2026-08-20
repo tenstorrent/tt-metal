@@ -350,9 +350,6 @@ jobs:
           fi
           if [[ "$run_blackhole" == "true" ]]; then
             bh_skus+=(
-              "bh_p100"
-              "bh_p100_perf"
-              "bh_p100a_civ2_viommu"
               "bh_p150b_civ2_viommu"
               "bh_p150b_civ2"
               "bh_p150"
