@@ -5,23 +5,11 @@
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-namespace {
-
-void check_device_tensor(const Tensor& tensor, const char* name, DataType dtype) {
-    TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE && tensor.buffer() != nullptr,
-        "prepare_chunk_recurrence: {} must be an allocated device tensor",
-        name);
-    TT_FATAL(tensor.layout() == Layout::TILE, "prepare_chunk_recurrence: {} must use TILE layout", name);
-    TT_FATAL(tensor.dtype() == dtype, "prepare_chunk_recurrence: {} has wrong dtype", name);
-    TT_FATAL(!tensor.is_sharded(), "prepare_chunk_recurrence: {} must use interleaved memory", name);
-}
-
-}  // namespace
 
 PrepareChunkRecurrenceOperation::program_factory_t PrepareChunkRecurrenceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
@@ -30,25 +18,49 @@ PrepareChunkRecurrenceOperation::program_factory_t PrepareChunkRecurrenceOperati
 
 void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    check_device_tensor(in.q, "q", DataType::BFLOAT16);
-    check_device_tensor(in.k, "k", DataType::BFLOAT16);
-    check_device_tensor(in.v, "v", DataType::BFLOAT16);
-    check_device_tensor(in.g, "g", DataType::BFLOAT16);
-    check_device_tensor(in.beta, "beta", DataType::FLOAT32);
-    check_device_tensor(in.eye, "eye", DataType::FLOAT32);
-    check_device_tensor(in.tril, "tril", DataType::FLOAT32);
-    check_device_tensor(in.ones, "ones", DataType::FLOAT32);
-
-    TT_FATAL(
-        in.q.device() == in.k.device() && in.q.device() == in.v.device() && in.q.device() == in.g.device() &&
-            in.q.device() == in.beta.device() && in.q.device() == in.eye.device() &&
-            in.q.device() == in.tril.device() && in.q.device() == in.ones.device(),
-        "prepare_chunk_recurrence: all inputs must be on the same device");
-    TT_FATAL(!attrs.output_mem_config.is_sharded(), "prepare_chunk_recurrence: output memory must be interleaved");
-    TT_FATAL(
-        !attrs.compute_kernel_config.packer_l1_acc,
-        "prepare_chunk_recurrence: packer_l1_acc=true is unsupported because the compute kernel does not accumulate "
-        "through L1");
+    using namespace kda_factory_detail;
+    constexpr std::string_view operation_name = "prepare_chunk_recurrence";
+    check_allocated_device_tensor(in.q, operation_name, "q");
+    check_layout(in.q, Layout::TILE, operation_name, "q");
+    check_dtype(in.q, DataType::BFLOAT16, operation_name, "q");
+    check_interleaved(in.q, operation_name, "q");
+    check_allocated_device_tensor(in.k, operation_name, "k");
+    check_layout(in.k, Layout::TILE, operation_name, "k");
+    check_dtype(in.k, DataType::BFLOAT16, operation_name, "k");
+    check_interleaved(in.k, operation_name, "k");
+    check_allocated_device_tensor(in.v, operation_name, "v");
+    check_layout(in.v, Layout::TILE, operation_name, "v");
+    check_dtype(in.v, DataType::BFLOAT16, operation_name, "v");
+    check_interleaved(in.v, operation_name, "v");
+    check_allocated_device_tensor(in.g, operation_name, "g");
+    check_layout(in.g, Layout::TILE, operation_name, "g");
+    check_dtype(in.g, DataType::BFLOAT16, operation_name, "g");
+    check_interleaved(in.g, operation_name, "g");
+    check_allocated_device_tensor(in.beta, operation_name, "beta");
+    check_layout(in.beta, Layout::TILE, operation_name, "beta");
+    check_dtype(in.beta, DataType::FLOAT32, operation_name, "beta");
+    check_interleaved(in.beta, operation_name, "beta");
+    check_allocated_device_tensor(in.eye, operation_name, "eye");
+    check_layout(in.eye, Layout::TILE, operation_name, "eye");
+    check_dtype(in.eye, DataType::FLOAT32, operation_name, "eye");
+    check_interleaved(in.eye, operation_name, "eye");
+    check_allocated_device_tensor(in.tril, operation_name, "tril");
+    check_layout(in.tril, Layout::TILE, operation_name, "tril");
+    check_dtype(in.tril, DataType::FLOAT32, operation_name, "tril");
+    check_interleaved(in.tril, operation_name, "tril");
+    check_allocated_device_tensor(in.ones, operation_name, "ones");
+    check_layout(in.ones, Layout::TILE, operation_name, "ones");
+    check_dtype(in.ones, DataType::FLOAT32, operation_name, "ones");
+    check_interleaved(in.ones, operation_name, "ones");
+    check_same_device(in.q, in.k, operation_name, "k");
+    check_same_device(in.q, in.v, operation_name, "v");
+    check_same_device(in.q, in.g, operation_name, "g");
+    check_same_device(in.q, in.beta, operation_name, "beta");
+    check_same_device(in.q, in.eye, operation_name, "eye");
+    check_same_device(in.q, in.tril, operation_name, "tril");
+    check_same_device(in.q, in.ones, operation_name, "ones");
+    check_output_interleaved(attrs.output_mem_config, operation_name);
+    check_compute_config(attrs.compute_kernel_config, operation_name);
 
     const auto& q_shape = in.q.logical_shape();
     const auto& k_shape = in.k.logical_shape();
