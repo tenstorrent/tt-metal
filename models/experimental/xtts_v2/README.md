@@ -23,7 +23,7 @@ All four neural blocks run on device; the text/audio front-end and token samplin
 | 1 | Conditioning encoder + Perceiver resampler → `gpt_cond_latent` `[1,32,1024]` | device | fp32 | > 0.999 |
 | 2 | ResNet speaker encoder → d-vector `[1,512,1]` | device | bf16 | > 0.99 |
 | 3 | GPT decoder (30 layers): one-shot parallel **prefill** + Metal-Traced KV-cached **decode** | device | bf16 | > 0.999 |
-| 4 | HiFi-GAN vocoder → waveform, at one of 4 bucketed lengths | device | fp32 | > 0.99 |
+| 4 | HiFi-GAN vocoder → waveform, at one of 7 bucketed lengths | device | fp32 | > 0.99 |
 
 The GPT decode step and the vocoder are captured as Metal Traces at warmup and replayed (no
 host dispatch overhead) — the decode step for every token of every request, the vocoder once
@@ -109,12 +109,12 @@ Measured on Wormhole N150 (warm, program cache + trace in place):
 |---|---|---|
 | `compute_voice` | ~2–6 s | once per speaker (Blocks 1+2); the first clip of a new length pays one-time conv compiles |
 | GPT prefill | ~18–30 ms | one-shot (18 ms @ 61-token prompt; ~30 ms @ ≈425) |
-| GPT decode | ~10 ms/token | traced; each token = 46.4 ms of audio → **~4.7x real-time** decode |
-| HiFi-GAN vocoder | 0.18–0.71 s | traced, per length bucket: 0.18 s ≤ 7 s of audio … 0.71 s ≤ 28 s |
+| GPT decode | ~9 ms/token | traced, tuned matmul configs; each token = 46.4 ms of audio → **~5x real-time** decode |
+| HiFi-GAN vocoder | 0.09–0.71 s | traced, per length bucket: 0.09 s ≤ 3.5 s of audio … 0.71 s ≤ 28 s |
 
-End to end at seed 0, with a 5.4 s reference clip: 3.16 s of audio in 0.87 s (**3.6x
-real-time**), 10.26 s in 2.60 s (**4.0x**), 27.07 s in 6.79 s (**4.0x**). One-time warmup
-(program compiles + trace captures) takes ~22 s with a hot kernel JIT cache, longer on a
+End to end at seed 0, with a 5.4 s reference clip: 2.31 s of audio in 0.56 s (**4.1x
+real-time**), 10.77 s in 2.53 s (**4.3x**), 25.63 s in 6.08 s (**4.2x**). One-time warmup
+(program compiles + trace captures) takes ~27 s with a hot kernel JIT cache, longer on a
 first-ever run when kernels build from scratch.
 
 ## Known limitations
@@ -123,7 +123,11 @@ first-ever run when kernels build from scratch.
   tables (abbreviations, symbols, ordinals, number expansion) are transcribed only for
   `en` — extend `frontend.py` for other languages.
 - **Model hard caps:** text ≤ 402 GPT tokens per utterance; audio ≤ 605 codes ≈ ~28 s of
-  speech per utterance.
+  speech per utterance. Text needing more than that is cut off **mid-sentence** — the model
+  stops wherever it has got to, and the rest is never spoken. Chunk long input by sentence.
+- **Repeated input degenerates.** The same sentence several times over makes the model lose
+  its place: measured near-silence and then nonsense partway through a 27 s utterance, while
+  varied prose of the same length is clean. Lowering the repetition penalty only moves it.
 - Sampling is stochastic (coqui defaults: temperature 0.75, top-k 50, top-p 0.85,
   repetition penalty 10); fix `seed` for reproducible output.
 - **Reference-clip quality drives output quality.** Use a clean, mono clip of **~6 s**
