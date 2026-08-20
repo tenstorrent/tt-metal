@@ -2103,7 +2103,13 @@ void kernel_main() {
             } else {
                 const uint32_t frames_now = frames - frames_at_sweep_start;
                 if (frames_now != 0) {
-                    const uint32_t mean_fill = static_cast<uint32_t>((total_words - words_at_sweep_start) / frames_now);
+                    // One sweep's words fit 32 bits with huge margin (<= grid x live capacity, ~300K);
+                    // dividing the u64 directly drags the 956 B __udivdi3 soft-div into a code region
+                    // with less than that in total headroom.
+                    static_assert(
+                        static_cast<uint64_t>(kMaxCores) * kNumRisc * kRingWords <= 0xFFFFFFFFull,
+                        "a sweep's word delta no longer fits the 32-bit fill division");
+                    const uint32_t mean_fill = static_cast<uint32_t>(total_words - words_at_sweep_start) / frames_now;
                     if (mean_fill < kFillTarget) {
                         // Under-full: wait longer. STEEPER THAN IT LOOKS, and deliberately tuned by constants
                         // rather than by adding a branch -- `gap >> 1` is the same instruction as `gap >> 2`

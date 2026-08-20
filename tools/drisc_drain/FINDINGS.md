@@ -6047,3 +6047,15 @@ Final-state confirmation (post raw-fallback, 57f8b10815b): the three classic com
 shipped build -- matmul 20/20 median +10.79% (the N+59 zone-density footprint), ResNet non-trace
 230/230 median +0.80%, ResNet trace 233/233 median +0.26%; tails match the N+62 jitter distributions.
 Sparse workloads select packed, as designed; nothing moved.
+
+## §N+64 — DRISC code-region overflow at max instrumentation: one u64 division cost a 956 B soft-div (bh-18, 2026-08-20)
+
+The flagged N+58 risk was real: DRISC_ZONES=1 + DRISC_ZONE_DETAIL=1 + NOC_FOOTPRINT overflowed the
+11,264 B code region by 888 B (graceful: drainer refuses to load, capture empty, run exits 0). ELF
+autopsy (debug-line histogram) first CLEARED the packed-gather code -- it is compile-time absent from
+the filler ELF that overflowed -- then found the real hog: the pacing controller's mean-fill division
+divided a u64 by a u32, dragging the 956 B __udivdi3 soft-division routine into every drainer build.
+One sweep's word delta is bounded by grid x live capacity (~300 K, static_asserted), so a u32 cast on
+the numerator is exact; the soft-div is gone, the max config fits with ~180 B of headroom, and no
+inlining changed anywhere. Lesson for this code region: a single 64-bit divide costs more text than
+any feature; the FAILED-TO-LOAD message now says so.

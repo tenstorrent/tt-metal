@@ -2214,8 +2214,9 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 d,
                 elf_too_big ? " (drain kernel ELF EXCEEDS THE DRISC CODE REGION)" : "",
                 elf_too_big ? " Reduce drain-kernel code or disable a feature: "
-                              "TT_METAL_PERF_DEBUG_DRISC_ZONES and TT_METAL_PERF_DEBUG_NOC_FOOTPRINT together "
-                              "are within 32 B of the limit."
+                              "TT_METAL_PERF_DEBUG_DRISC_ZONES=1 with DRISC_ZONE_DETAIL=1 plus "
+                              "TT_METAL_PERF_DEBUG_NOC_FOOTPRINT is the largest config (~180 B of headroom); "
+                              "a u64 division anywhere in the kernel costs a 956 B soft-div."
                             : "",
                 what);
             ctx.drain_program[d].reset();
