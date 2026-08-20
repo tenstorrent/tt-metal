@@ -4,6 +4,7 @@
 #include "kda_factory_utils.hpp"
 
 #include <algorithm>
+#include <enchantum/enchantum.hpp>
 #include <set>
 
 #include <tt_stl/assert.hpp>
@@ -29,7 +30,7 @@ void check_layout(
         "{}: {} must use {} layout, got {}",
         operation_name,
         tensor_name,
-        required_layout,
+        enchantum::to_string(required_layout),
         tensor.layout());
 }
 
@@ -43,7 +44,7 @@ void check_dtype(
         "{}: {} must be {}, got {}",
         operation_name,
         tensor_name,
-        required_dtype,
+        enchantum::to_string(required_dtype),
         tensor.dtype());
 }
 
