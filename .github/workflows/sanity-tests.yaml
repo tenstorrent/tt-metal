@@ -327,22 +327,42 @@ jobs:
           # intersects whichever list it's given against each test's own `skus:` map, so handing
           # a wider list than a given tests yaml needs is safe -- SKUs the yaml doesn't reference
           # simply produce no matrix rows for that impl.
+          #
+          # Both lists include every wh_*/bh_* SKU in .github/sku_config.yaml except:
+          #   - Galaxy SKUs (wh_galaxy*, bh_galaxy*) -- a separate pipeline (galaxy-sanity.yaml).
+          #   - bh_sc* -- exabox multihost SKUs, used by shield/scaleout, not sanity.
+          #   - cpu_medium -- not a wh/bh hardware SKU.
+          #   - *_prio SKUs -- merge_group-only aliases; sku_config.yaml itself says not to
+          #     list these in a tests yaml's skus map.
           if [[ "$run_wormhole" == "true" ]]; then
             wh_skus+=(
-              "wh_n300_civ2"
               "wh_llmbox"
+              "wh_llmbox_perf"
+              "wh_n150"
+              "wh_n300"
+              "wh_n150_civ2"
+              "wh_n300_civ2"
               "wh_llmbox_civ2"
               "wh_llmbox_civ2_viommu"
-              "wh_llmbox_perf"
+              "wh_n300_perf"
             )
             sanity_skus+=("${wh_skus[@]}")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
             bh_skus+=(
-              "bh_p150b_civ2"
+              "bh_p100"
+              "bh_p100_perf"
+              "bh_p100a_civ2_viommu"
               "bh_p150b_civ2_viommu"
-              "bh_quietbox_2"
+              "bh_p150b_civ2"
+              "bh_p150"
+              "bh_p150_perf"
+              "bh_loudbox"
               "bh_p300"
+              "bh_p300_viommu"
+              "bh_loudbox_civ2_viommu"
+              "bh_quietbox_2"
+              "bh_quietbox_2_iommu"
             )
             sanity_skus+=("${bh_skus[@]}")
           fi
