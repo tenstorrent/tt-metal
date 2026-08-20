@@ -3,13 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Smoke tests for ttnn matmul: one test per program factory under
-// ttnn/cpp/ttnn/operations/matmul/, plus tests for the front-end code paths
-// that pick between factories (auto-dispatch routing, bias fuse-vs-post-process,
+// ttnn/cpp/ttnn/operations/matmul/device/factory/ -- with one documented
+// exclusion, listed below -- plus tests for the front-end code paths that pick
+// between factories (auto-dispatch routing, bias fuse-vs-post-process,
 // activation fusion, dtype/compute-config plumbing). Each test uses small
 // deterministic inputs checked against a host fp32 reference (or a closed-form
 // golden), so a kernel that runs but produces garbage fails.
 //
 // Each test states in a comment which program factory or code path it covers.
+//
+// Covered factories: matmul_multicore, matmul_multicore_reuse_optimized,
+// matmul_multicore_reuse_mcast_1d, matmul_multicore_reuse_mcast_2d,
+// matmul_multicore_reuse_mcast_dram_sharded.
+//
+// DELIBERATELY EXCLUDED: matmul_multicore_reuse_batched_hs_dram_sharded. It is
+// never auto-selected (create_matmul_program_config excludes the config type,
+// matmul_program_config.cpp), so only an explicit
+// MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig reaches it, and
+// its validation (validate_matmul_batched_dram_sharded_config,
+// matmul_device_operation.cpp) demands A height-sharded in L1, B height-sharded
+// across all DRAM banks, and a matching height-sharded output. The bank count is
+// arch-specific, so the shapes cannot be a single set of constants shared by
+// Wormhole and Blackhole -- more setup than a smoke test should carry. Coverage
+// stays with tests/ttnn/unit_tests/operations/matmul/test_matmul_deepseek.py
+// (post-merge, not the merge gate); this factory can still regress into main.
 
 #include <gtest/gtest.h>
 
@@ -167,13 +184,13 @@ TEST_F(MatmulSmoke, SingleAndMultiTileOnes) {
 
 // ---------------------------------------------------------------------------
 // Core factories and compute-config plumbing: MultiCore fallback, ReuseOptimized
-// bmm, the auto-dispatch 2D mcast default, transpose, fp32 dest-acc cube, and
+// bmm, the auto-dispatch 2D mcast default, transpose, fp32 dest-acc grid, and
 // dtype plumbing (bfp8 weights, output-dtype override).
 // ---------------------------------------------------------------------------
 
 namespace detail {
 
-// Section-local helper for the Fp32DestAccCube cell: accumulation-order-insensitive expected
+// Section-local helper for the Fp32DestAccConfigGrid cells: accumulation-order-insensitive expected
 // values (double accumulation, single cast to float at the end).
 inline std::vector<float> cpu_matmul_f64_acc(
     const std::vector<float>& a, const std::vector<float>& b, int M, int K, int N) {
@@ -188,6 +205,21 @@ inline std::vector<float> cpu_matmul_f64_acc(
         }
     }
     return c;
+}
+
+// Section-local helper for the Fp32DestAccConfigGrid cells that need a well-conditioned reference:
+// k/64 for k in [-64, 63], which needs <= 7 significant bits and so is exact in fp32, bf16 and
+// tf32 alike. No input quantization anywhere, no cancellation across K -- the only divergence
+// left is dest-register accumulation, which is what the non-fp32 half of the grid measures.
+// (detail::mm_rand_bf16 is the same idea but is declared further down, after this section.)
+inline std::vector<float> grid_rand_exact(std::size_t n, uint32_t seed) {
+    std::mt19937 gen(seed);
+    std::uniform_int_distribution<int> dist(-64, 63);
+    std::vector<float> v(n);
+    for (auto& x : v) {
+        x = static_cast<float>(dist(gen)) * 0.015625f;  // 1/64: exact power-of-two scale
+    }
+    return v;
 }
 
 }  // namespace detail
@@ -433,38 +465,71 @@ TEST_F(MatmulSmoke, TransposeB) {
         detail::to_float_vector(out), detail::cpu_matmul(a_q, b_t, 1, M, K, N), 0.05f, 1.92f, 0.999f, 0.02f);
 }
 
-// fp32 inputs across the full {fp32_dest_acc_en} x {packer_l1_acc} compute-config cube
-// on the auto 2D path (untilize_out omitted: 1D-only knob).
-// Inputs are built with cancellation across K -- row pairs (+1024, -1023) whose partial sums
-// reach ~1024 but whose true row sum is 32 -- so dest-register precision decides the result:
-//   * fp32_dest_acc_en=true : operands have <= 11-bit mantissas (exact in src regs at HiFi3) and
-//     every partial sum is an integer <= 2^15, exactly representable in the fp32 dest -> the
-//     device must produce exactly 32; atol 0.02 only absorbs pack rounding.
-//   * fp32_dest_acc_en=false: 16-bit dest; ulp(1024) = 8 in bf16, so the +-(1024,1023) operands
-//     quantize during unpack/accumulate and the residuals distort (measured: uniform 128 on
-//     Blackhole p100a). atol 1024 = the partial-sum scale: for this half of the cube the test
-//     only guards against crashes / NaN / unbounded garbage from the config combination, not
-//     accuracy -- the precision cliff is the documented, expected behavior.
+// fp32 inputs across the full {fp32_dest_acc_en} x {packer_l1_acc} compute-config grid on the
+// auto 2D path -- 4 cells. (untilize_out would be a third axis, but it is a field of
+// MatmulMultiCoreReuseMultiCast1DProgramConfig only, so the 2D path cannot set it.)
+// Every cell gets a value check that a zeroed or corrupted output fails, but the two halves
+// of the grid need different inputs to get one, because a 16-bit dest cannot hold the fp32
+// cell's reference at all:
+//
+//   * fp32_dest_acc_en=true -> CANCELLING inputs, exact golden. Row pairs (+1024, -1023)
+//     drive partial sums to ~1024 while the true row sum is only 32, so dest precision alone
+//     decides the answer. The operands have <= 11-bit mantissas (exact in src regs at HiFi3)
+//     and every partial sum is an integer <= 2^15, exactly representable in the fp32 dest, so
+//     the device must return exactly 32; atol 0.02 only absorbs pack rounding. This is the
+//     cell that would catch a silent loss of fp32 accumulation.
+//
+//   * fp32_dest_acc_en=false -> WELL-CONDITIONED inputs, ordinary tolerances. Feeding the
+//     cancelling inputs here is a known precision cliff (ulp(1024) = 8 in bf16, so the
+//     +-(1024,1023) operands quantize during unpack/accumulate; measured: uniform 128 on
+//     Blackhole p100a). The only tolerance wide enough to accept that -- atol ~1024, the
+//     partial-sum scale -- also accepts an all-zero output, so it verifies nothing beyond
+//     "finite". Using detail::grid_rand_exact inputs instead keeps these two cells on the
+//     same bf16-accumulation budget as the rest of the file (atol = max(1.0, 0.02*K) = 1.28
+//     at K=64, rationale in MultiCoreUnaligned) plus pcc/frob, so they now verify the
+//     arithmetic and not just the absence of a crash. Measured on Blackhole p100a, identical
+//     for both packer_l1_acc values: worst |diff| 0.090 (atol 1.28), relative Frobenius
+//     0.0043 (limit 0.02), pcc > 0.99999 (limit 0.999) -- so the tightest of the three bounds
+//     still has ~4.7x headroom. An all-zero output, which the old atol 1024 accepted, now
+//     fails on all three: output sd is ~2.7 so most elements exceed atol outright, and
+//     relative Frobenius goes to 1.0 with pcc undefined.
+//
 // HiFi3 (not HiFi4) with fp32 acc: Wormhole HW bug #38306.
-TEST_F(MatmulSmoke, Fp32DestAccCube) {
+TEST_F(MatmulSmoke, Fp32DestAccConfigGrid) {
     auto& device = *device_;
     constexpr uint32_t M = 64, K = 64, N = 64;
-    std::vector<float> a(M * K);
-    std::vector<float> b(K * N, 1.0f);
+
+    // Cancelling pair, for the fp32-dest cells: true row sum 32, partial sums ~1024.
+    std::vector<float> a_cancel(M * K);
+    const std::vector<float> b_cancel(K * N, 1.0f);
     for (uint32_t i = 0; i < M; ++i) {
         for (uint32_t k = 0; k < K; ++k) {
-            a[i * K + k] = (k % 2 == 0) ? 1024.0f : -1023.0f;
+            a_cancel[i * K + k] = (k % 2 == 0) ? 1024.0f : -1023.0f;
         }
     }
-    // Accumulation-order-insensitive fp64 reference (== 32.0f everywhere by construction).
-    const std::vector<float> expected = detail::cpu_matmul_f64_acc(a, b, M, K, N);
+    // Well-conditioned pair, for the 16-bit-dest cells.
+    const std::vector<float> a_plain = detail::grid_rand_exact(static_cast<std::size_t>(M) * K, 801);
+    const std::vector<float> b_plain = detail::grid_rand_exact(static_cast<std::size_t>(K) * N, 802);
 
-    const auto ta =
-        detail::make_device_tensor<float>(device, ttnn::Shape({1, 1, M, K}), a, DataType::FLOAT32, Layout::TILE);
-    const auto tb = detail::make_device_tensor<float>(device, ttnn::Shape({K, N}), b, DataType::FLOAT32, Layout::TILE);
+    // Accumulation-order-insensitive fp64 references. The cancelling one is 32.0f everywhere
+    // by construction; asserting that documents the intent and pins the input generator.
+    const std::vector<float> expected_cancel = detail::cpu_matmul_f64_acc(a_cancel, b_cancel, M, K, N);
+    const std::vector<float> expected_plain = detail::cpu_matmul_f64_acc(a_plain, b_plain, M, K, N);
+    ASSERT_TRUE(std::all_of(expected_cancel.begin(), expected_cancel.end(), [](float v) { return v == 32.0f; }))
+        << "cancelling input pair no longer sums to exactly 32";
+
+    const auto ta_cancel =
+        detail::make_device_tensor<float>(device, ttnn::Shape({1, 1, M, K}), a_cancel, DataType::FLOAT32, Layout::TILE);
+    const auto tb_cancel =
+        detail::make_device_tensor<float>(device, ttnn::Shape({K, N}), b_cancel, DataType::FLOAT32, Layout::TILE);
+    const auto ta_plain =
+        detail::make_device_tensor<float>(device, ttnn::Shape({1, 1, M, K}), a_plain, DataType::FLOAT32, Layout::TILE);
+    const auto tb_plain =
+        detail::make_device_tensor<float>(device, ttnn::Shape({K, N}), b_plain, DataType::FLOAT32, Layout::TILE);
 
     for (const bool fp32_acc : {false, true}) {
         for (const bool l1_acc : {false, true}) {
+            SCOPED_TRACE("fp32_dest_acc_en=" + std::to_string(fp32_acc) + " packer_l1_acc=" + std::to_string(l1_acc));
             const ttnn::ComputeKernelConfig compute_cfg{
                 .math_fidelity = tt::tt_metal::MathFidelity::HiFi3,
                 .math_approx_mode = false,
@@ -472,8 +537,8 @@ TEST_F(MatmulSmoke, Fp32DestAccCube) {
                 .packer_l1_acc = l1_acc,
             };
             const auto out = ttnn::matmul(
-                ta,
-                tb,
+                fp32_acc ? ta_cancel : ta_plain,
+                fp32_acc ? tb_cancel : tb_plain,
                 false,
                 false,
                 detail::dram_interleaved(),
@@ -481,9 +546,12 @@ TEST_F(MatmulSmoke, Fp32DestAccCube) {
                 std::nullopt,
                 std::nullopt,
                 compute_cfg);
-            // pcc/frob skipped (defaults): expected is constant, so pcc's variance is zero.
-            detail::expect_close(
-                detail::to_float_vector(out), expected, /*rtol=*/0.0f, /*atol=*/fp32_acc ? 0.02f : 1024.0f);
+            if (fp32_acc) {
+                // pcc/frob skipped (defaults): expected is constant, so pcc's variance is zero.
+                detail::expect_close(detail::to_float_vector(out), expected_cancel, /*rtol=*/0.0f, /*atol=*/0.02f);
+            } else {
+                detail::expect_close(detail::to_float_vector(out), expected_plain, 0.05f, 1.28f, 0.999f, 0.02f);
+            }
         }
     }
 }
@@ -753,7 +821,7 @@ TEST_F(MatmulSmoke, FusedActivationGelu2D) {
 // string_to_unary_with_param ("silu" => UnaryWithParam(SILU), unary_op_utils.cpp)
 // and -- with no sharded inputs and no user core_grid -- is applied as a POST-OP
 // ttnn::unary_chain on the matmul output (matmul.cpp), not fused in the kernel.
-TEST_F(MatmulSmoke, FusedActivationSiluString) {
+TEST_F(MatmulSmoke, PostOpActivationSiluString) {
     auto& device = *device_;
     constexpr int M = 32, K = 64, N = 64;
     const auto a = detail::mm_rand_bf16(static_cast<std::size_t>(M) * K, 601);
