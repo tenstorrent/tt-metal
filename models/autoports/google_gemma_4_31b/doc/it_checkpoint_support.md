@@ -97,6 +97,56 @@ Both 4 and 5 were found locally, in minutes, by running the harness rather than
 reasoning about it. Neither would have appeared in the CI run, which serves
 through vLLM and never touches this script.
 
+## Local verification on device: -it works
+
+Measured on this host, greedy, same story prompt, 16-24 new tokens:
+
+| Weights | Prompting | HF reference | TT |
+| --- | --- | --- | --- |
+| base | completion (correct) | coherent | coherent |
+| `-it` | completion (**wrong**) | degenerate: repeats the prompt tail | degenerate: `"something" x11` then CJK tokens |
+| `-it` | chat (correct) | not run | **coherent** |
+
+The `-it` result with correct rendering:
+
+```text
+"something she had never seen before: a tiny, shimmering door carved
+ directly into the gnarled root of the oak."
+```
+
+Three conclusions:
+
+- **The base-tuned datatype policy carries over qualitatively.** BFP8 attention,
+  BFP4 MLP and LoFi fidelities were selected against base weights; `-it` produces
+  coherent, context-appropriate text under them. This does not replace a PCC or
+  top-1 measurement, which needs a reference run.
+- **The middle row was a prompting error, not a defect.** An instruction-tuned
+  checkpoint fed raw completions degenerates on any implementation, which is why
+  the HF reference -- containing no Tenstorrent code -- degenerated identically.
+  The base-weight control row is what proves the harness, mesh, port and policy
+  were fine all along.
+- **The three implementation changes work end to end on device**: checkpoint
+  resolution located `-it`, multi-token EOS is wired, and the relaxed context
+  assert blocked nothing.
+
+### A correction, and a method note
+
+Finding 4's first fix was wrong. The assertion said "unexpectedly acquired a chat
+template; **update prompt rendering**", and it was downgraded to a note while raw
+completions were still rendered -- with the claim that "a completion continuation
+is a valid probe for either checkpoint". The degenerate `-it` row disproves that.
+The correct fix applies the template when the tokenizer declares one, and records
+`prompt_mode`, `chat_template_present` and `rendering_method` from the tokenizer
+rather than hardcoding the completion path.
+
+On method: the coherence question was first attacked with the full qualitative
+harness, which loads a 31B HF reference into ~62 GB of RAM and decodes on CPU
+purely to have something to compare against. Two ten-minute loads went by before
+the cheaper experiment was written: a TT-only script that renders the prompt,
+calls `generator.generate(...)` and decodes, at 13 GB and no CPU decode. Where the
+question is "is the output coherent", the base-weight run is already the reference
+and no HF model is needed. Reach for the cheapest experiment that discriminates.
+
 ## What was deliberately not changed
 
 The datatype policy. Stage 08 selected BFP8 attention, BFP4 MLP and LoFi

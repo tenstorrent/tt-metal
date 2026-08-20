@@ -489,20 +489,30 @@ def run(args: argparse.Namespace) -> None:
         return
     prompts = _load_prompts(args.prompt_source)
     tokenizer = AutoTokenizer.from_pretrained(args.hf_model, local_files_only=True, trust_remote_code=True)
-    # The base checkpoint has no chat template, so prompts are rendered as raw
-    # completions. The instruction-tuned checkpoint ships one; keep raw rendering
-    # there too, because this harness compares TT output against an HF reference
-    # run on the same token ids, and a completion continuation is a valid probe for
-    # either checkpoint. Log it rather than refusing, so -it can be exercised.
-    if tokenizer.chat_template:
-        print(
-            f"note: {args.hf_model} defines a chat template; rendering raw completions anyway "
-            "(both sides of the comparison use the same token ids)"
-        )
+    # The base checkpoint has no chat template and is prompted as a raw completion.
+    # An instruction-tuned checkpoint must be prompted through its template: doing
+    # otherwise makes both the TT model and the HF reference degenerate (measured --
+    # base gives coherent continuations on both sides, -it rendered as a raw
+    # completion gives "something something ..." on TT and prompt-tail repetition on
+    # HF). So render according to what the tokenizer declares.
+    use_chat_template = bool(tokenizer.chat_template)
+    if use_chat_template:
+        print(f"note: {args.hf_model} defines a chat template; rendering prompts through it")
 
     rendered = []
     for prompt_id, prompt in enumerate(prompts):
-        token_ids = tokenizer.encode(prompt, add_special_tokens=True)
+        if use_chat_template:
+            # Render to text then encode: apply_chat_template(tokenize=True) returns a
+            # string on this transformers version, and the template already emits the
+            # BOS token, so add_special_tokens must be off.
+            text = tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                add_generation_prompt=True,
+                tokenize=False,
+            )
+            token_ids = tokenizer.encode(text, add_special_tokens=False)
+        else:
+            token_ids = tokenizer.encode(prompt, add_special_tokens=True)
         rendered.append({"id": prompt_id, "prompt": prompt, "prompt_token_ids": token_ids})
 
     hf_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -577,9 +587,13 @@ def run(args: argparse.Namespace) -> None:
     metadata = {
         "hf_model": str(args.hf_model),
         "tokenizer_class": tokenizer.__class__.__name__,
-        "chat_template_present": False,
-        "prompt_mode": "completion",
-        "rendering_method": "tokenizer.encode(prompt, add_special_tokens=True)",
+        "chat_template_present": bool(tokenizer.chat_template),
+        "prompt_mode": "chat" if tokenizer.chat_template else "completion",
+        "rendering_method": (
+            "tokenizer.apply_chat_template([{user: prompt}], add_generation_prompt=True)"
+            if tokenizer.chat_template
+            else "tokenizer.encode(prompt, add_special_tokens=True)"
+        ),
         "prompt_source_path": str(args.prompt_source),
         "max_new_tokens": args.max_new_tokens,
         "generation": {"do_sample": False, "num_beams": 1},
