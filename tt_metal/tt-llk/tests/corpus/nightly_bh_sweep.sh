@@ -192,6 +192,11 @@ python3 "$HERE/sweep_2x2.py" \
   --sim-bh "$SIM_BH" --sim-wh "$SIM_WH" \
   --sim-bh-sha "$PINNED_SIM_BH_SHA256" --sim-wh-sha "$PINNED_SIM_WH_SHA256" \
   --phases "${SWEEP_PHASES:-classify,silicon,report}" \
+  # RATIFIED (owner, 2026-08-20; charter §1(3) amended same day): sweeps run
+  # STRAIGHT SILICON — per-cell device-golden correctness legs gate every perf
+  # cell; CRAQ is a debug/lane-validation oracle (pinned sims), not a sweep
+  # precondition.  This flag is therefore the sanctioned default here, and
+  # sweep_2x2.py records an explicit CRAQ-gate taint/status line either way.
   --skip-craq-gate \
   --allow-hardware \
   --baseline "$BASELINE" \

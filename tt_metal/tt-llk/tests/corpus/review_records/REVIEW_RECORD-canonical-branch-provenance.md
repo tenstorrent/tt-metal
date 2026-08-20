@@ -22,11 +22,12 @@ this record's own merge commit is the first executed under that rule.
 
 ## Question 2 — the CRAQ ruling (straight-silicon default)
 
-Pending explicit owner ratification, asked 2026-08-20: either HANDOFF §1(3) is amended to
-match the operating reality (straight silicon, CRAQ demoted to debug oracle, `--skip-craq-gate`
-taint line now enforced by the merged taint-marker gate) or the sim gate is restored. This
-record will be superseded by the owner's answer; until then the taint marker makes every
-skip explicit and auditable.
+RATIFIED by the owner 2026-08-20 ("ratify straight-silicon and amend the handoff").
+Executed same day: HANDOFF §1(3) amended in both copies (owner's master and the sfpi repo's
+docs/handoff-20260817/HANDOFF.md) — per-cell device-golden correctness legs gate every sweep
+perf cell; CRAQ on the pinned sims remains the lane-level mechanism-validation and debug
+oracle; every `--skip-craq-gate` run carries an explicit taint line (gate merged at
+3a83b1ccde). Both sweep wrappers now carry the ratification rationale inline above the flag.
 
 ## Addendum (2026-08-20, owner order): `work/nkapre-sfpi` RETIRED
 
