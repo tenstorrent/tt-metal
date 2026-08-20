@@ -1158,6 +1158,16 @@ class Operation:
         function = runtime_decorator(function)
         self.decorated_function = function
 
+        if self.function.__doc__ is None:
+            return
+
+        # Delete the signature line created by nanobind
+        docstring_lines = self.function.__doc__.split("\n")
+        op_name = self.python_fully_qualified_name.split(".")[-1]
+        if f"{op_name}(" in docstring_lines[0]:
+            docstring_lines.pop(0)
+        self.__doc__ = "\n".join(docstring_lines)
+
     def __call__(self, *function_args, **function_kwargs):
         recording = ttnn.graph.is_python_io_recording_enabled()
         if recording:
@@ -1172,8 +1182,6 @@ class Operation:
             if recording:
                 ttnn.graph.track_function_end()
         return output
-
-    __doc__ = property(lambda self: self.decorated_function.__doc__)
 
 
 if TRACE_ALLOC_TRACKING:

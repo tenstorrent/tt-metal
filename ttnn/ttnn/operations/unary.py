@@ -323,6 +323,15 @@ def _golden_function_reciprocal(input_tensor_a, *args, device=None, **kwargs):
 ttnn.attach_golden_function(ttnn.reciprocal, golden_function=_golden_function_reciprocal)
 
 
+def _golden_function_i1(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.special.i1(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.i1, golden_function=_golden_function_i1)
+
+
 def _golden_function_pow(input_tensor_a, exponent, *args, **kwargs):
     import torch
 
