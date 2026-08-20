@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
-
 import ttnn
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
@@ -27,11 +25,6 @@ from .operations import (
     split_qkv_heads_prefill,
 )
 from .weights import AttentionWeights
-
-
-# Select the cache slot with a device-valued begin index instead of a host int, so a captured
-# per-chunk trace can replay any user's slot (request mode). Default off = host-int slice, unchanged.
-_DEVICE_SLOT_SLICE = os.environ.get("PREFILL_DEVICE_SLOT_SLICE", "0") == "1"
 
 
 def _slot_slice_device(packed, kv_cache, layer_idx, slot, n_rows, head_dim, mesh_device):
@@ -243,7 +236,11 @@ def attention_forward(
                     v_int = ttnn.to_memory_config(kv_cache.v, ttnn.DRAM_MEMORY_CONFIG)
                     ik_int = ttnn.to_memory_config(kv_cache.index_k, ttnn.DRAM_MEMORY_CONFIG)
                 with zone("slice", FINE):
-                    if _DEVICE_SLOT_SLICE:
+                    # With more than one user the slot has to vary per replay, so it rides a device
+                    # tensor that a host update re-targets; a captured trace would otherwise bake whichever
+                    # host int it saw. At one user every layer's slot is fixed, so the host int is already
+                    # correct and cheaper.
+                    if kv_cache.num_users > 1:
                         k_acc = _slot_slice_device(
                             k_int, kv_cache, layer_idx, slot, n_rows, config.head_dim, mesh_device
                         )
