@@ -8,23 +8,11 @@
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-namespace {
-
-void check_device_tensor(const Tensor& tensor, const char* name, Layout layout) {
-    TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE && tensor.buffer() != nullptr,
-        "qkv_causal_conv1d_silu: {} must be an allocated device tensor",
-        name);
-    TT_FATAL(tensor.layout() == layout, "qkv_causal_conv1d_silu: {} has unsupported layout", name);
-    TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "qkv_causal_conv1d_silu: {} must be BFLOAT16", name);
-    TT_FATAL(!tensor.is_sharded(), "qkv_causal_conv1d_silu: {} must use interleaved memory", name);
-}
-
-}  // namespace
 
 QkvCausalConv1dSiluOperation::program_factory_t QkvCausalConv1dSiluOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
@@ -33,17 +21,37 @@ QkvCausalConv1dSiluOperation::program_factory_t QkvCausalConv1dSiluOperation::se
 
 void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    check_device_tensor(in.input, "input", Layout::ROW_MAJOR);
-    check_device_tensor(in.history, "history", Layout::ROW_MAJOR);
-    check_device_tensor(in.tap0, "tap0", Layout::TILE);
-    check_device_tensor(in.tap1, "tap1", Layout::TILE);
-    check_device_tensor(in.tap2, "tap2", Layout::TILE);
-    check_device_tensor(in.tap3, "tap3", Layout::TILE);
-
-    auto* const input_device = in.input.device();
-    for (const auto* tensor : std::array{&in.history, &in.tap0, &in.tap1, &in.tap2, &in.tap3}) {
-        TT_FATAL(tensor->device() == input_device, "qkv_causal_conv1d_silu: all inputs must be on the same device");
-    }
+    using namespace kda_factory_detail;
+    constexpr std::string_view operation_name = "qkv_causal_conv1d_silu";
+    check_allocated_device_tensor(in.input, operation_name, "input");
+    check_layout(in.input, Layout::ROW_MAJOR, operation_name, "input");
+    check_dtype(in.input, DataType::BFLOAT16, operation_name, "input");
+    check_interleaved(in.input, operation_name, "input");
+    check_allocated_device_tensor(in.history, operation_name, "history");
+    check_layout(in.history, Layout::ROW_MAJOR, operation_name, "history");
+    check_dtype(in.history, DataType::BFLOAT16, operation_name, "history");
+    check_interleaved(in.history, operation_name, "history");
+    check_allocated_device_tensor(in.tap0, operation_name, "tap0");
+    check_layout(in.tap0, Layout::TILE, operation_name, "tap0");
+    check_dtype(in.tap0, DataType::BFLOAT16, operation_name, "tap0");
+    check_interleaved(in.tap0, operation_name, "tap0");
+    check_allocated_device_tensor(in.tap1, operation_name, "tap1");
+    check_layout(in.tap1, Layout::TILE, operation_name, "tap1");
+    check_dtype(in.tap1, DataType::BFLOAT16, operation_name, "tap1");
+    check_interleaved(in.tap1, operation_name, "tap1");
+    check_allocated_device_tensor(in.tap2, operation_name, "tap2");
+    check_layout(in.tap2, Layout::TILE, operation_name, "tap2");
+    check_dtype(in.tap2, DataType::BFLOAT16, operation_name, "tap2");
+    check_interleaved(in.tap2, operation_name, "tap2");
+    check_allocated_device_tensor(in.tap3, operation_name, "tap3");
+    check_layout(in.tap3, Layout::TILE, operation_name, "tap3");
+    check_dtype(in.tap3, DataType::BFLOAT16, operation_name, "tap3");
+    check_interleaved(in.tap3, operation_name, "tap3");
+    check_same_device(in.input, in.history, operation_name, "history");
+    check_same_device(in.input, in.tap0, operation_name, "tap0");
+    check_same_device(in.input, in.tap1, operation_name, "tap1");
+    check_same_device(in.input, in.tap2, operation_name, "tap2");
+    check_same_device(in.input, in.tap3, operation_name, "tap3");
 
     TT_FATAL(
         attrs.q_width > 0 && attrs.k_width > 0 && attrs.v_width > 0,
@@ -80,13 +88,8 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor->logical_volume() == channels, "qkv_causal_conv1d_silu: {} logical volume must equal Q+K+V", name);
     }
-    TT_FATAL(
-        !attrs.output_mem_config.is_sharded(),
-        "qkv_causal_conv1d_silu: output memory configuration must be interleaved");
-    TT_FATAL(
-        !attrs.compute_kernel_config.packer_l1_acc,
-        "qkv_causal_conv1d_silu: packer_l1_acc=true is unsupported because the compute kernel does not accumulate "
-        "through L1");
+    check_output_interleaved(attrs.output_mem_config, operation_name);
+    check_compute_config(attrs.compute_kernel_config, operation_name);
 }
 
 QkvCausalConv1dSiluOperation::spec_return_value_t QkvCausalConv1dSiluOperation::compute_output_specs(

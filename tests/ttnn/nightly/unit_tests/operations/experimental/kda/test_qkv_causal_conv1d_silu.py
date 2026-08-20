@@ -357,9 +357,9 @@ def test_qkv_causal_conv1d_silu_program_key_includes_split_widths(device: ttnn.D
         ("history_shape", r"history must be \[1,3,Q\+K\+V\]"),
         ("tap_last_dimension", r"tap2 last dimension must equal Q\+K\+V"),
         ("tap_volume", "tap2 logical volume must equal"),
-        ("input_layout", "input has unsupported layout"),
-        ("history_layout", "history has unsupported layout"),
-        ("tap_layout", "tap1 has unsupported layout"),
+        ("input_layout", "input must use ROW_MAJOR layout, got Layout::TILE"),
+        ("history_layout", "history must use ROW_MAJOR layout, got Layout::TILE"),
+        ("tap_layout", "tap1 must use TILE layout, got Layout::ROW_MAJOR"),
         ("input_dtype", "input must be BFLOAT16"),
         ("history_dtype", "history must be BFLOAT16"),
         ("tap_dtype", "tap3 must be BFLOAT16"),
@@ -440,5 +440,5 @@ def test_qkv_causal_conv1d_silu_rejects_sharded_output(device: ttnn.Device, expe
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     sharded_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-    with expect_error(RuntimeError, "output memory configuration must be interleaved"):
+    with expect_error(RuntimeError, "output memory layout must be INTERLEAVED, got HEIGHT_SHARDED"):
         _run(input_tt, history_tt, taps_tt, widths=(128, 128, 128), memory_config=sharded_config)
