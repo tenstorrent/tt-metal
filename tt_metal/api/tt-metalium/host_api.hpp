@@ -329,6 +329,9 @@ uint32_t CreateSemaphore(
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
  */
 // clang-format on
+[[deprecated(
+    "Use GlobalSemaphore(distributed::MeshDevice&, ...) constructor instead. "
+    "CreateGlobalSemaphore(IDevice*, ...) will be removed after 2026-09-17.")]]
 GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
@@ -347,6 +350,9 @@ GlobalSemaphore CreateGlobalSemaphore(
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
  */
 // clang-format on
+[[deprecated(
+    "Use GlobalSemaphore(distributed::MeshDevice&, ...) constructor instead. "
+    "CreateGlobalSemaphore(IDevice*, ...) will be removed after 2026-09-17.")]]
 GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
