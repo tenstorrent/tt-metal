@@ -11,7 +11,16 @@ from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.tile_loop import LoopBlockRow, LoopTileByTile, TileLoop
-from helpers.llk_params import DestSync, EltwiseBinaryReuseDestType
+from helpers.llk_params import DestAccumulation, DestSync, EltwiseBinaryReuseDestType
+
+
+def _uses_upk_to_dest_semaphores(config: GlobalConfig) -> bool:
+    from helpers.llk_params import PerfRunType
+
+    return not config.quasar_use_dvalid and config.perf_run_type in (
+        None,
+        PerfRunType.L1_TO_L1,
+    )
 
 
 def _unp_sel(compute_unit: FpuNode) -> str:
@@ -56,6 +65,43 @@ class UnpackerA(Unpacker):
 
         return tensor_a, tensor_b
 
+    def _perf_valid_args(
+        self,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> Tuple[str, str, int]:
+        if compute_unit.reuse_dest != EltwiseBinaryReuseDestType.NONE:
+            num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+            return "true", "true", num_faces
+        if config.dest_acc == DestAccumulation.Yes:
+            return "true", "true", block.block_tiles_x
+        return "true", "false", block.block_tiles_x
+
+    def perf_set_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        if compute_unit.unpack_to_dest.value:
+            return ""
+        set_a, set_b, count = self._perf_valid_args(config, compute_unit, block)
+        return f"_perf_unpack_loop_set_valid<{set_a}, {set_b}>({count});\n"
+
+    def perf_clear_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        if compute_unit.unpack_to_dest.value:
+            return ""
+        clear_a, clear_b, count = self._perf_valid_args(config, compute_unit, block)
+        return f"_perf_math_loop_clear_valid<{clear_a}, {clear_b}>({count});\n"
+
     def init(
         self,
         operation: L1Operation,
@@ -77,7 +123,7 @@ class UnpackerA(Unpacker):
         )
 
         code = ""
-        if compute_unit.unpack_to_dest.value:
+        if compute_unit.unpack_to_dest.value and _uses_upk_to_dest_semaphores(config):
             num_sem = 2 if operation.dest_sync == DestSync.Half else 1
             code += f"_llk_sync_init_(semaphore::UNPACK_MATH, {num_sem}, 0);\n"
         code += (
@@ -98,6 +144,14 @@ class UnpackerA(Unpacker):
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
         unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         dest_sync = operation.dest_sync.cpp_enum_value
+
+        if compute_unit.unpack_to_dest.value and not _uses_upk_to_dest_semaphores(
+            config
+        ):
+            return (
+                f"_llk_unpack_unary_operand_<{unp_sel}>"
+                f"({block.tile_id_global}, {tensor_shape});\n"
+            )
 
         return (
             f"_llk_unpack_unary_operand_<{unp_sel}, {reuse_dest}, {unpack_to_dest}, {dest_sync}>"

@@ -81,9 +81,13 @@ def configure_unpack(
     return _emit_configure(compute_node, dest_acc, new_A_dst, new_B_dst)
 
 
-def dvalid_init(quasar_use_dvalid: bool = False) -> str:
-    if quasar_use_dvalid:
-        return "set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
+def dvalid_init(config: "GlobalConfig" = None, operation: "L1Operation" = None) -> str:
+    from helpers.llk_params import PerfRunType
+
+    if config.quasar_use_dvalid:
+        if config.perf_run_type in (None, PerfRunType.L1_TO_L1):
+            return "set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
+        return ""
     return ""
 
 
