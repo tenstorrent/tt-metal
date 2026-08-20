@@ -27,8 +27,9 @@ uint32_t largest_power_of_two(uint32_t x) { return x == 0 ? 0 : (1U << (31 - __b
  * @brief Finds optimal core configuration for multi-core TopK execution
  *
  * This function determines the best way to distribute TopK work across multiple cores
- * by analyzing memory constraints, core availability, and workload balance. It searches
- * for a configuration that maximizes parallelization while staying within hardware limits.
+ * by analyzing memory constraints, core availability, and workload balance. It evaluates
+ * every valid configuration and returns the one with the lowest modeled makespan
+ * (see the fitted cost model at the search loop below).
  *
  * Algorithm overview:
  * 1. Start with a conservative split size based on available cores and width
@@ -36,7 +37,8 @@ uint32_t largest_power_of_two(uint32_t x) { return x == 0 ? 0 : (1U << (31 - __b
  * 3. For each split size, calculate required cores and memory costs
  * 4. Verify that configuration fits within available cores and memory
  * 5. Find contiguous core arrangement that matches the requirement
- * 6. Return the first valid configuration found
+ * 6. Score each valid configuration with the makespan model
+ *    (kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final) and return the minimum
  *
  * Memory cost model:
  * - Gather cost: Data movement between cores (2 * num_cores * tile_sizes)

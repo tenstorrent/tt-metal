@@ -59,7 +59,9 @@ tt::DataFormat index_cb_data_format_for(
  * MULTICORE EXECUTION REQUIREMENTS:
  * All of the following conditions must be met for multi-core execution:
  *
- * 1. DIMENSION SIZE: Input dimension >= multi_core_min_width
+ * 1. DIMENSION SIZE: Input dimension >= multi_core_min_width, OR the input has
+ *    at most two tile rows and the dimension is >= 1024 (the single-core factory
+ *    parallelizes across tile rows, so low-tile-row shapes column-split instead)
  *    - Ensures sufficient work to justify parallel execution overhead
  *    - Dimension size must be a power of 2 for bitonic sort
  *
@@ -98,8 +100,11 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
     // across 8+ otherwise-idle cores (min 64 elements per core), measured ~4x on
     // 32x2048 k=32. Wide-and-tall inputs keep the row-parallel single-core path.
     const uint32_t reduced_width = input_tensor.padded_shape()[args.dim];
-    const uint32_t num_tile_rows =
-        (input_tensor.padded_shape().volume() / std::max<uint32_t>(reduced_width, 1)) / tt::constants::TILE_HEIGHT;
+    // Use the tensor's actual tile height (the program factories size their work the
+    // same way via tensor_spec().tile()) so custom tile shapes count tile rows correctly.
+    const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    const uint32_t num_tile_rows = (input_tensor.padded_shape().volume() / std::max<uint32_t>(reduced_width, 1)) /
+                                   std::max<uint32_t>(tile_height, 1);
     bool multicore_supported =
         (reduced_width >= ttnn::prim::constants::multi_core_min_width) || (num_tile_rows <= 2 && reduced_width >= 1024);
 
