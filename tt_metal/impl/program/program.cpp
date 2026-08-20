@@ -2912,7 +2912,8 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     ttsl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
-    const auto& hal = MetalContext::instance(context_id).hal();
+    const MetalContext& metal_ctx = MetalContext::instance(context_id);
+    const auto& hal = metal_ctx.hal();
 
     // Collect dataflow buffers from all programs
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers;
@@ -2931,17 +2932,28 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
         state.offset = program_dispatch::finalize_rt_args(
-            kernels_getter(index), kernel_groups_getter(index), state.config_base_offset, index, state.rta_offset);
+            metal_ctx,
+            kernels_getter(index),
+            kernel_groups_getter(index),
+            state.config_base_offset,
+            index,
+            state.rta_offset);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
-        state.offset =
-            program_dispatch::finalize_sems(index, state.offset, semaphores_getter(), state.sem_offset, state.sem_size);
+        state.offset = program_dispatch::finalize_sems(
+            metal_ctx, index, state.offset, semaphores_getter(), state.sem_offset, state.sem_size);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         state.offset = program_dispatch::finalize_cbs(
-            index, kernel_groups_getter(index), state.offset, state.cb_offset, state.cb_size, state.local_cb_size);
+            metal_ctx,
+            index,
+            kernel_groups_getter(index),
+            state.offset,
+            state.cb_offset,
+            state.cb_size,
+            state.local_cb_size);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
@@ -2959,7 +2971,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         // CrossNodeDFB dense index; full pages live in program-owned config Buffers.
         // cross_node_dfb_offset is CROSS_NODE_DFB_OFFSET_NONE if there are no participants.
         uint32_t prev_offset_before_cross_node_dfb = state.offset;
-        state.offset = program_dispatch::finalize_cross_node_dfbs(index, programs, state.offset);
+        state.offset = program_dispatch::finalize_cross_node_dfbs(metal_ctx, index, programs, state.offset);
         state.cross_node_dfb_offset = (state.offset > prev_offset_before_cross_node_dfb)
                                           ? (prev_offset_before_cross_node_dfb - state.config_base_offset)
                                           : CROSS_NODE_DFB_OFFSET_NONE;
