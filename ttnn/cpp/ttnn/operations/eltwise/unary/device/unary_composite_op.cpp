@@ -238,11 +238,11 @@ Tensor clamp(
             output_memory_config);
     }
     Tensor a_max = ttnn::minimum(input_a, max.value(), std::nullopt, output_memory_config);
-    Tensor temp = ttnn::where(
-        ttnn::eq(min.value(), 0.0f, std::nullopt, output_memory_config),
-        ttnn::relu(a_max, output_memory_config),
-        ttnn::maximum(a_max, min.value(), std::nullopt, output_memory_config),
-        output_memory_config);
+    // relu(a_max) is maximum(a_max, 0), and that arm is only taken where min is
+    // 0, so the where was selecting between two ways of writing the same
+    // maximum(a_max, min). The eq, the relu and the where are gone; the gt
+    // guard below stays, because min > max is a real case with its own answer.
+    Tensor temp = ttnn::maximum(a_max, min.value(), std::nullopt, output_memory_config);
     return ttnn::where(
         ttnn::gt(min.value(), max.value(), std::nullopt, output_memory_config),
         max.value(),
