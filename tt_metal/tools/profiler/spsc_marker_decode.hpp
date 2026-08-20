@@ -12,9 +12,10 @@
 // rings at fixed offsets, windows circular) -- the drainer's high-fill fallback, where packing would
 // cost write issues to save almost nothing. Inside each window is a packet run (spsc_packet.h):
 // ZONE_START/END/TOTAL markers
-// (2 words), STICKY_TIMER (1 word, per-lane wall-clock high half), STICKY_PROG (2 words, per-lane
-// runtime host-id), and DATA/EVENT (2 + size words, self-describing). The producer publishes its tail
-// only on packet boundaries, so a window never ends mid-packet.
+// (2 words), STICKY_TIMER (1 word, per-lane wall-clock high half), STICKY_PROG (1 word, per-lane
+// runtime host-id in low27; 2-word PROG_EXT escape past 2^27), and DATA/EVENT (2 + size words,
+// self-describing). The producer publishes its tail only on packet boundaries, so a window never ends
+// mid-packet.
 #pragma once
 
 #include <algorithm>
@@ -235,6 +236,12 @@ inline uint32_t spsc_decode_frame(
                     th = pp_timer_hi(w0);
                     i += 1;
                 } else if (t == PP_STICKY_PROG) {
+                    if (const uint32_t id = pp_low27(w0); id != pg) {
+                        pg = id;
+                        emit_prog(lane, pg);
+                    }
+                    i += 1;
+                } else if (t == PP_STICKY_PROG_EXT) {
                     if (i + 2 > run) {
                         st.anomalies++;
                         break;
@@ -311,6 +318,12 @@ inline uint32_t spsc_decode_frame(
                 th = pp_timer_hi(w0);
                 i += 1;
             } else if (t == PP_STICKY_PROG) {
+                if (const uint32_t id = pp_low27(w0); id != pg) {
+                    pg = id;
+                    emit_prog(lane, pg);
+                }
+                i += 1;
+            } else if (t == PP_STICKY_PROG_EXT) {
                 if (i + 2 > run) {
                     st.anomalies++;
                     break;

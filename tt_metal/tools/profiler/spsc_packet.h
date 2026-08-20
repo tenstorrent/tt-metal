@@ -54,8 +54,9 @@
  * from the last-seen value of each sticky (all three are "sticky": they persist until the next update).
  *
  *   STICKY_PROG  : the runtime host-id (per-program unique id ttnn assigns; same value the DRAM
- *                  profiler uses). Emitted ONCE at BRISC FW start (and on program change). 2 WORDS:
- *                  payload32 = host-id (needs a full 32 bits); low27 unused (0).
+ *                  profiler uses). Emitted by every RISC at its launch point. 1 WORD: low27 = host-id.
+ *                  Ids that outgrow 27 bits (134M launches) ship as STICKY_PROG_EXT instead: 2 WORDS,
+ *                  payload32 = full host-id, low27 unused (0).
  *   STICKY_TIMER : timer_hi -- the high half of the device wall-clock. Emitted by ANY risc at a marker
  *                  record whenever its high half ticks over. 1 WORD: low27 = timer_hi (fits 27 bits, no
  *                  payload word).
@@ -118,6 +119,9 @@
  * Layout and the shared slice geometry live in hostdevcommon/profiler_common.h (SPSC_SPAN_*), which this
  * plain-C header cannot include; spsc_marker_decode.hpp static_asserts that the codes agree. */
 #define PP_BULK_SPAN 13u
+
+/* 2-word STICKY_PROG escape for host-ids >= 2^27 -- see STICKY_PROG above. */
+#define PP_STICKY_PROG_EXT 14u
 
 /* --- word0 fields --- */
 #define PP_TYPE_SHIFT 27
