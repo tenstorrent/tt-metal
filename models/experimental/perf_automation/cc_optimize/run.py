@@ -3049,15 +3049,25 @@ def _hard_ceiling_mult() -> int:
         return 0
 
 
-def _progress_signature(pgid, log_path=None, pid=None) -> tuple:
-    """probes owns this; see progress_signature there. Lazy import, as _set_depth is."""
+def _progress_watch(pgid, log_path=None, stall_s=0.0):
+    """probes owns the arithmetic; see ProgressWatch there. Lazy import, as _set_depth is.
+
+    The fallback answers "moved" for every poll, which is the safe direction: an unreadable
+    signature must not be mistaken for a wedge and kill working code. The ceiling still bounds the
+    run if the signature never becomes readable.
+    """
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
-        from agent.probes import progress_signature
+        from agent.probes import ProgressWatch
 
-        return progress_signature(pgid, log_path, pid)
-    except Exception:  # noqa: BLE001 -- an unreadable signature is "unchanged", which the clock handles
-        return (0, 0, 0, "")
+        return ProgressWatch(pgid, log_path, stall_s)
+    except Exception:  # noqa: BLE001
+
+        class _Blind:
+            def moved(self, *_a, **_k):
+                return True
+
+        return _Blind()
 
 
 def _tree_cpu_jiffies(root_pid: int) -> int:
@@ -3288,25 +3298,17 @@ def _run_device_proc(
             # that a hang has in abundance: CPU, and the mere EXISTENCE of a child process
             # (_llm_child_alive), which no hung run can fail. Cooling stays: it is a deliberate
             # pause this tool asked for.
-            _sig = _progress_signature(pgid, None)
-            _last_stack_at = start
+            _watch = _progress_watch(pgid, None, stall_s)
             max_gap = 0.0
             _over_budget = [False]
             _ceiling_mult = _hard_ceiling_mult()
             while proc.poll() is None:
                 time.sleep(5)
                 now = time.monotonic()
-                # Only once the cheap signals have been still a while -- see probes._execute.
-                _want_stack = (now - last_progress) >= max(60.0, stall_s / 2) and now - _last_stack_at >= 30.0
-                _new = _progress_signature(pgid, None, proc.pid if _want_stack else None)
-                if _want_stack:
-                    _last_stack_at = now
-                _sig_moved = _new[:3] != _sig[:3] or (bool(_new[3]) and bool(_sig[3]) and _new[3] != _sig[3])
-                _sig = _new if (_new[3] or not _sig[3]) else (_new[0], _new[1], _new[2], _sig[3])
                 # A cooling child is idle ON PURPOSE: it is sleeping against a thermometer, so it
                 # burns no CPU and prints only when the temperature moves. Both of this loop's
                 # liveness signals read that as a wedge, which is exactly wrong.
-                moved = _sig_moved or _act[0] > last_progress or _cooling_now()
+                moved = _watch.moved(now, last_progress, proc.pid) or _act[0] > last_progress or _cooling_now()
                 if moved:
                     max_gap = max(max_gap, now - last_progress)
                     last_progress = now

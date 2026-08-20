@@ -2115,20 +2115,28 @@ def check_pcc() -> dict:
     return res
 
 
-def _pg_progress_signature(pgid, pid=None):
-    """probes owns this; see progress_signature there.
+def _pg_progress_watch(pgid, stall_s=0.0):
+    """probes owns the arithmetic; see ProgressWatch there.
 
     THIS LOOP USED CPU, AND CPU IS NOT PROGRESS. It read `cpu > last_cpu + 10` as "still working",
     which is the signal that let run 12 spin for nine hours: a livelock burns CPU by definition. The
     backstop below bounded this loop so it could not hang outright, but the stall check was blind for
     the whole hour leading up to it. The signature moves only when work does.
+
+    The fallback answers "moved" every poll: an unreadable signature must not be read as a wedge.
+    The backstop still bounds the loop.
     """
     try:
-        from agent.probes import progress_signature
+        from agent.probes import ProgressWatch
 
-        return progress_signature(pgid, None, pid)
-    except Exception:  # noqa: BLE001 -- an unreadable signature is "unchanged", which the clock handles
-        return (0, 0, 0, "")
+        return ProgressWatch(pgid, None, stall_s)
+    except Exception:  # noqa: BLE001
+
+        class _Blind:
+            def moved(self, *_a, **_k):
+                return True
+
+        return _Blind()
 
 
 class _AdaptiveResult:
@@ -2175,21 +2183,12 @@ def _adaptive_run(cmd, cwd, env, label="device run", stall_s=None, backstop=None
     pgid = proc.pid
     start = _t.monotonic()
     last_progress = start
-    _sig = _pg_progress_signature(pgid)
-    _last_stack_at = start
+    _watch = _pg_progress_watch(pgid, stall_s)
     max_gap = 0.0
     while proc.poll() is None:
         _t.sleep(5)
         now = _t.monotonic()
-        # the stack sample is the expensive one -- only once the cheap counters have been still
-        # for a while, and at most every 30s. See probes._execute.
-        _want_stack = (now - last_progress) >= max(60.0, stall_s / 2) and now - _last_stack_at >= 30.0
-        _new = _pg_progress_signature(pgid, proc.pid if _want_stack else None)
-        if _want_stack:
-            _last_stack_at = now
-        _sig_moved = _new[:3] != _sig[:3] or (bool(_new[3]) and bool(_sig[3]) and _new[3] != _sig[3])
-        _sig = _new if (_new[3] or not _sig[3]) else (_new[0], _new[1], _new[2], _sig[3])
-        moved = _sig_moved or act[0] > last_progress
+        moved = _watch.moved(now, last_progress, proc.pid) or act[0] > last_progress
         if moved:
             max_gap = max(max_gap, now - last_progress)
             last_progress = now

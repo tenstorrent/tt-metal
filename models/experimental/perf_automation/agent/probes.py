@@ -600,6 +600,48 @@ def progress_signature(pgid, log_path=None, pid=None) -> tuple:
     return (size, calls, io_bytes, _stack_fingerprint(pid) if pid else "")
 
 
+_STACK_MIN_QUIET_S = 60.0
+
+
+class ProgressWatch:
+    """Has this process made progress since the last poll? One owner for that question.
+
+    THIS WAS COPY-PASTED INTO THREE SUPERVISED LOOPS on 2026-08-20 -- probes._execute,
+    run._run_device_proc and perf_mcp._adaptive_run -- and immediately drifted: three spellings of
+    the stack threshold (`_STACK_EVERY_S` in one, a literal 30.0 in the others) and two different
+    quiet windows (`stall/2` in one, `max(60, stall/2)` in the others). Same rule, three copies,
+    already diverging on the day it was written. So it lives here, once.
+
+    Holds the last signature and the last time a stack was sampled; `moved()` folds a fresh sample
+    in and answers. The stack is the expensive field -- it costs a subprocess -- so it is only
+    sampled once the cheap counters have been still for half the stall window (and never more often
+    than _STACK_EVERY_S), and only when the caller offers a pid.
+    """
+
+    def __init__(self, pgid, log_path=None, stall_s=0.0):
+        self._pgid = pgid
+        self._log = log_path
+        self._stall_s = float(stall_s or 0.0)
+        self._sig = progress_signature(pgid, log_path)
+        self._last_stack_at = 0.0
+
+    def moved(self, now, last_progress, pid=None) -> bool:
+        want = (
+            pid is not None
+            and (now - last_progress) >= max(_STACK_MIN_QUIET_S, self._stall_s / 2)
+            and now - self._last_stack_at >= _STACK_EVERY_S
+        )
+        new = progress_signature(self._pgid, self._log, pid if want else None)
+        if want:
+            self._last_stack_at = now
+        old = self._sig
+        # Compare the stack only when BOTH samples carry one; otherwise the cheap fields decide.
+        did = new[:3] != old[:3] or (bool(new[3]) and bool(old[3]) and new[3] != old[3])
+        # Keep the last stack we managed to read, so a poll that skipped it does not look like a change.
+        self._sig = new if (new[3] or not old[3]) else (new[0], new[1], new[2], old[3])
+        return did
+
+
 def _pgroup_cpu_jiffies(pgid: int) -> int:
     """Sum utime+stime (jiffies) over all live PIDs in process group `pgid`, from /proc.
     Liveness signal: a process doing real work (e.g. compiling kernels) keeps accruing CPU;
@@ -1099,8 +1141,7 @@ def _execute(
         # PROGRESS, NOT ACTIVITY. See progress_signature: CPU is excluded, because a livelock has
         # plenty of it. The stack is sampled only every _STACK_EVERY_S -- py-spy costs a fraction of
         # a second and the counters catch the common case on their own.
-        last_sig = progress_signature(pgid, log_path)
-        last_stack_at = start
+        _watch = ProgressWatch(pgid, log_path, stall_timeout_s)
         _over_budget = [False]
         poll = 5.0
         while True:
@@ -1125,22 +1166,8 @@ def _execute(
                 size = log_path.stat().st_size
             except OSError:
                 size = last_size
-            # THE EXPENSIVE SIGNAL, ONLY ONCE SUSPICIOUS. Sampling a stack costs a subprocess and a
-            # fraction of a second, and the counters settle the common case on their own -- so it is
-            # not taken until the cheap signals have already been still for half the stall window.
-            # Taken every poll it made this suite 2.5x slower, which the preflight pays before every
-            # single run.
-            _quiet = now - last_progress
-            _want_stack = _quiet >= (stall_timeout_s or 0) / 2 and now - last_stack_at >= _STACK_EVERY_S
-            sig = progress_signature(pgid, log_path, proc.pid if _want_stack else None)
-            if _want_stack:
-                last_stack_at = now
-            # Compare the stack only when both samples carry one; otherwise the cheap fields decide.
-            _moved = sig[:3] != last_sig[:3] or (bool(sig[3]) and bool(last_sig[3]) and sig[3] != last_sig[3])
-            if _moved:
+            if _watch.moved(now, last_progress, proc.pid):
                 last_progress = now
-            if sig[:3] != last_sig[:3] or sig[3]:
-                last_sig = sig if sig[3] or not last_sig[3] else (sig[0], sig[1], sig[2], last_sig[3])
             if stall_timeout_s and now - last_progress >= stall_timeout_s:
                 _kill_and_raise(
                     f"made no forward progress for {stall_timeout_s}s -- no log growth, no syscalls, "

@@ -91,7 +91,7 @@ def test_both_supervisors_use_it_and_neither_uses_cpu():
     probes = (_PA / "agent" / "probes.py").read_text()
     run = (_PA / "cc_optimize" / "run.py").read_text()
 
-    for name, src, call in (("probes", probes, "progress_signature("), ("run.py", run, "_progress_signature(")):
+    for name, src, call in (("probes", probes, "ProgressWatch("), ("run.py", run, "_progress_watch(")):
         code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
         assert call in code, "%s does not use the shared signature" % name
         assert "cpu > last_cpu" not in code, "%s still treats CPU as progress" % name
@@ -104,7 +104,7 @@ def test_cooling_is_still_exempt():
     """A cooling child is idle ON PURPOSE -- it sleeps against a thermometer. That exemption must
     survive, or the tool kills its own thermal wait."""
     run = (_PA / "cc_optimize" / "run.py").read_text()
-    i = run.index("moved = _sig_moved")
+    i = run.index("moved = _watch.moved(")
     assert "_cooling_now()" in run[i : i + 200]
 
 
@@ -205,7 +205,7 @@ def test_the_third_supervised_loop_is_not_still_on_cpu():
     root = Path(__file__).resolve().parents[1]
     code = _code_only(root / "cc_optimize" / "perf_mcp.py")
     assert "cpu > last_cpu" not in code, "perf_mcp's loop still treats CPU as progress"
-    assert "_pg_progress_signature" in code, "perf_mcp's loop has no progress signature"
+    assert "_pg_progress_watch" in code, "perf_mcp's loop has no progress watch"
 
 
 def test_no_supervised_loop_anywhere_still_uses_cpu_as_liveness():
@@ -260,3 +260,38 @@ def test_the_operator_ceiling_still_kills_a_waiting_agent():
         "ceiling": 100,
     }
     assert watchdog_decide(ev, agent=lambda _e: "wait") == "kill", "a confused agent can still wait forever"
+
+
+def test_the_signature_arithmetic_has_exactly_one_owner():
+    """THE DUPLICATION THIS WHOLE FIX KEPT CREATING.
+
+    The same eight lines -- sample, diff, carry the last readable stack forward -- were pasted into
+    all three supervised loops on the day they were written, and had already drifted by then: two
+    spellings of the stack interval (`_STACK_EVERY_S` and a bare 30.0) and two different quiet
+    windows (`stall/2` and `max(60, stall/2)`). Three copies of a rule is three rules.
+    """
+    root = Path(__file__).resolve().parents[1]
+    owners = []
+    for rel in (("agent", "probes.py"), ("cc_optimize", "run.py"), ("cc_optimize", "perf_mcp.py")):
+        code = _code_only(root.joinpath(*rel))
+        if "_sig_moved" in code or "_want_stack" in code:
+            owners.append("/".join(rel))
+    assert not owners, "the signature arithmetic is inlined again in: %s" % owners
+    assert "class ProgressWatch" in (root / "agent" / "probes.py").read_text()
+
+
+def test_nothing_was_sliced_away_with_the_helper():
+    """I have twice deleted a neighbouring definition by cutting from one `def` to the next -- both
+    times `_AdaptiveResult`, which only fails on a real run. Name the survivors explicitly."""
+    import ast
+
+    root = Path(__file__).resolve().parents[1]
+    for rel, needed in (
+        (("cc_optimize", "perf_mcp.py"), {"_AdaptiveResult", "_adaptive_run", "_pg_progress_watch"}),
+        (("cc_optimize", "run.py"), {"_run_device_proc", "_progress_watch", "_hard_ceiling_mult"}),
+        (("agent", "probes.py"), {"ProgressWatch", "progress_signature", "_execute"}),
+    ):
+        tree = ast.parse(root.joinpath(*rel).read_text())
+        have = {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        missing = needed - have
+        assert not missing, "%s lost %s" % ("/".join(rel), sorted(missing))

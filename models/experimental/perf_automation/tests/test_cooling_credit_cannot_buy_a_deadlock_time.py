@@ -49,7 +49,7 @@ def test_a_silent_child_stops_counting_as_cooling():
     """The stall detector must not accept a stale claim as liveness either -- both guards were off."""
     body = _fn("_cooling_now")
     assert "_COOL_HEARTBEAT_S" in body, "cooling liveness is not time-bounded"
-    i = _SRC.index("moved = _sig_moved")
+    i = _SRC.index("moved = _watch.moved(")
     assert "_cooling_now()" in _SRC[i : i + 200], "the stall detector reads the raw flag again"
 
 
