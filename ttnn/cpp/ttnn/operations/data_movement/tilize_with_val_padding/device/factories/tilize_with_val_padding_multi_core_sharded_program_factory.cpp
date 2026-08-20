@@ -196,6 +196,10 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     spec.kernels.push_back(KernelSpec{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp",
+        // O3 explicitly: the legacy ComputeConfigDescriptor set no opt_level and so resolved to O3,
+        // but Metal 2.0's type-agnostic CompilerOptions defaults to O2. Leaving it unset would drop
+        // a level on this kernel's compile and link.
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {DFBBinding{
                  .dfb_spec_name = STAGE,
