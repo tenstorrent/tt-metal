@@ -44,28 +44,28 @@ public:
     constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes, LlkOperandMembers llk) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes), llk_(llk) {}
 
+#ifdef COMPILE_FOR_TRISC
+    // Converts to a LLKMemDescriptor, which contains LLK relevant information about the scratchpad.
+    //
+    // These metadata are optionally provided from the host side through the ScratchpadSpec associated with
+    // the scratchpad binding. When the data format is not provided on the host side, the behavior of this function is
+    // undefined.
+    friend constexpr ckernel::experimental::LLKMemDescriptor to_llk_mem_descriptor(ScratchpadBindingToken token) {
+        return {
+            token.llk_.format,
+            ckernel::TensorShape{
+                token.llk_.face_r_dim, token.llk_.face_c_dim, token.llk_.num_faces_r_dim, token.llk_.num_faces_c_dim}};
+    }
+#endif
+
 private:
     template <typename T>
     friend class Scratchpad;
-#ifdef COMPILE_FOR_TRISC
-    friend constexpr ckernel::experimental::LLKMemDescriptor ckernel::experimental::to_llk_mem_descriptor(
-        ScratchpadBindingToken);
-#endif
 
     uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
     uint32_t size_in_bytes_;  // static per-node size
     LlkOperandMembers llk_{};
 };
-
-#ifdef COMPILE_FOR_TRISC
-namespace ckernel {
-namespace experimental {
-constexpr LLKMemDescriptor to_llk_mem_descriptor(ScratchpadBindingToken token) {
-    return llk_desc_from_members(token.llk_);
-}
-}  // namespace experimental
-}  // namespace ckernel
-#endif
 
 /**
  * @brief Kernel-side typed span over a Program-scope scratchpad.

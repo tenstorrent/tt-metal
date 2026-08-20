@@ -54,32 +54,21 @@ struct TensorBindingToken {
 
     constexpr TensorBindingToken(LlkOperandMembers llk) noexcept : llk_(llk) {}
 
-private:
 #ifdef COMPILE_FOR_TRISC
-    template <uint32_t C, uint32_t A>
-    friend constexpr ckernel::experimental::LLKMemDescriptor ckernel::experimental::to_llk_mem_descriptor(
-        TensorBindingToken<C, A>);
+    // Converts to a LLKMemDescriptor, which contains LLK relevant information about the tensor.
+    // These metadata are automatically derived from the host side through the TensorSpec associated with the tensor
+    // binding.
+    friend constexpr ckernel::experimental::LLKMemDescriptor to_llk_mem_descriptor(TensorBindingToken token) {
+        static_assert(!args_t::is_dram, "to_llk_mem_descriptor: DRAM TensorBindingToken has no node-local L1 region");
+        return {
+            token.llk_.format,
+            ckernel::TensorShape{
+                token.llk_.face_r_dim, token.llk_.face_c_dim, token.llk_.num_faces_r_dim, token.llk_.num_faces_c_dim}};
+    }
 #endif
 
+private:
     LlkOperandMembers llk_;
 };
 
 }  // namespace tensor_accessor
-
-#ifdef COMPILE_FOR_TRISC
-namespace ckernel {
-namespace experimental {
-
-// DRAM tensors have no node-local L1 region, so they are not LLK sources. LocalTensorAccessor already
-// rejects them the same way.
-template <uint32_t CTA, uint32_t CRTA>
-constexpr LLKMemDescriptor to_llk_mem_descriptor(tensor_accessor::TensorBindingToken<CTA, CRTA> token) {
-    static_assert(
-        !tensor_accessor::TensorBindingToken<CTA, CRTA>::args_t::is_dram,
-        "to_llk_mem_descriptor: DRAM TensorBindingToken has no node-local L1 region");
-    return llk_desc_from_members(token.llk_);
-}
-
-}  // namespace experimental
-}  // namespace ckernel
-#endif

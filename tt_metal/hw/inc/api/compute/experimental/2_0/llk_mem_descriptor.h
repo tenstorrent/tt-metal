@@ -8,19 +8,7 @@
 
 #include "tensor_shape.h"                        // ckernel::TensorShape + geometry helpers
 #include "api/compute/common_globals.h"          // DataFormat enum, DST_ACCUM_MODE, ALWI
-#include "api/llk_operand_members.h"             // LlkOperandMembers, as baked onto each BindingToken
 #include "internal/circular_buffer_interface.h"  // get_local_cb_interface (universal, all TRISCs)
-
-// Metal 2.0 BindingTokens. Only declared here: the to_llk_mem_descriptor overloads below are declarations,
-// so the token types need not be complete. Each token header defines its own overload (it already depends
-// on this header for LLKMemDescriptor; the reverse would drag NoC / CB / scratchpad machinery into every
-// LLK translation unit).
-struct DFBBindingToken;
-class ScratchpadBindingToken;
-namespace tensor_accessor {
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-struct TensorBindingToken;
-}  // namespace tensor_accessor
 
 // =====================================================================================================
 // Two id-free types:
@@ -39,6 +27,13 @@ namespace ckernel {
 namespace experimental {
 
 // The compile-time descriptor the LLK APIs accept as an NTTP: buffer L1 format + tile geometry.
+//
+// In Metal 2.0, this information can be injected from the host side. A kernel obtains a LLKMemDescriptor
+// from a Metal 2.0 BindingToken by calling to_llk_mem_descriptor(token). Each token supplies its own
+// conversion, found by ADL, so the call must be UNQUALIFIED:
+//
+//   constexpr auto desc = to_llk_mem_descriptor(dfb::in);
+//
 struct LLKMemDescriptor {
     std::uint8_t format;  // buffer L1 format (what the unpacker reads / the packer writes)
     TensorShape shape;    // tile geometry; derive num_faces / tile dims via TensorShape helpers
@@ -114,23 +109,6 @@ constexpr LLKMemDescriptor to_llk_mem_descriptor(Cb<CbId> /*cb*/) {
             unpack_tile_face_r_dim[CbId], MAX_FACE_C_DIM, unpack_num_faces_r_dim[CbId], unpack_num_faces_c_dim[CbId]}};
 #endif
 }
-
-// Metal 2.0 BindingToken source overloads. Unlike Cb<CbId>, a BindingToken carries its own constexpr
-// format + face grid (baked by headergen), so these fold with no chlkc slot lookup. Each is DEFINED in the
-// header that defines the token -- see the forward declarations at the top of this file for why.
-//
-// Converting a token whose host object declared no data format is undefined: there is deliberately no
-// presence check, and the members read back as the token's defaults.
-constexpr LLKMemDescriptor llk_desc_from_members(LlkOperandMembers m) {
-    return LLKMemDescriptor{m.format, TensorShape{m.face_r_dim, m.face_c_dim, m.num_faces_r_dim, m.num_faces_c_dim}};
-}
-
-constexpr LLKMemDescriptor to_llk_mem_descriptor(DFBBindingToken token);         // dataflow_buffer.h
-constexpr LLKMemDescriptor to_llk_mem_descriptor(ScratchpadBindingToken token);  // scratchpad.h
-
-template <uint32_t CTA, uint32_t CRTA>
-constexpr LLKMemDescriptor to_llk_mem_descriptor(
-    tensor_accessor::TensorBindingToken<CTA, CRTA> token);  // tensor/tensor_binding_token.h
 
 }  // namespace experimental
 }  // namespace ckernel

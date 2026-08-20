@@ -99,23 +99,22 @@ struct DFBBindingToken {
     // This conversion is constexpr; it's intended for Gen1 use only.
     constexpr operator uint32_t() const noexcept { return id_; }
 
-private:
 #ifdef COMPILE_FOR_TRISC
-    friend constexpr ckernel::experimental::LLKMemDescriptor ckernel::experimental::to_llk_mem_descriptor(
-        DFBBindingToken);
+    // Converts to a LLKMemDescriptor, which contains LLK relevant information about the dataflow buffer.
+    //
+    // These metadata are passed in from the host side through the DataflowBufferSpec associated with the DFB binding.
+    friend constexpr ckernel::experimental::LLKMemDescriptor to_llk_mem_descriptor(DFBBindingToken token) {
+        return {
+            token.llk_.format,
+            ckernel::TensorShape{
+                token.llk_.face_r_dim, token.llk_.face_c_dim, token.llk_.num_faces_r_dim, token.llk_.num_faces_c_dim}};
+    }
 #endif
 
+private:
     uint16_t id_;
     LlkOperandMembers llk_{};
 };
-
-#ifdef COMPILE_FOR_TRISC
-namespace ckernel {
-namespace experimental {
-constexpr LLKMemDescriptor to_llk_mem_descriptor(DFBBindingToken token) { return llk_desc_from_members(token.llk_); }
-}  // namespace experimental
-}  // namespace ckernel
-#endif
 
 class DataflowBuffer {
 public:
