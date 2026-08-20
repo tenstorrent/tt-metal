@@ -368,39 +368,33 @@ TT_KERNEL void compute(uint32_t work_count) {
         WAIT(g, ck);
         WAIT(beta, Ct);
 
-        DataflowBuffer* Q = &q;
-        DataflowBuffer* Kk = &k;
-        if constexpr (true) {
-            square_sfpu(q, scratch_one, ck);
-            rowsum_k(Ct, Kt);
-            WAIT(scratch_two, Ct);
-            inv_rms(scratch_two, scratch_three, Ct, EPS_BITS, SCALE_BITS, true);
-            WAIT(scratch_three, Ct);
-            POP(scratch_two, Ct);
-            bcast_cols_mul(q, scratch_three, state_temporary, Ct, Kt);
-            WAIT(state_temporary, ck);
-            POP(scratch_three, Ct);
-            POP(q, ck);
+        square_sfpu(q, scratch_one, ck);
+        rowsum_k(Ct, Kt);
+        WAIT(scratch_two, Ct);
+        inv_rms(scratch_two, scratch_three, Ct, EPS_BITS, SCALE_BITS, true);
+        WAIT(scratch_three, Ct);
+        POP(scratch_two, Ct);
+        bcast_cols_mul(q, scratch_three, state_temporary, Ct, Kt);
+        WAIT(state_temporary, ck);
+        POP(scratch_three, Ct);
+        POP(q, ck);
 
-            square_sfpu(k, scratch_one, ck);
-            rowsum_k(Ct, Kt);
-            WAIT(scratch_two, Ct);
-            inv_rms(scratch_two, scratch_three, Ct, EPS_BITS, SCALE_BITS, false);
-            WAIT(scratch_three, Ct);
-            POP(scratch_two, Ct);
-            bcast_cols_mul(k, scratch_three, final_state, Ct, Kt);
-            WAIT(final_state, ck);
-            POP(scratch_three, Ct);
-            POP(k, ck);
-            Q = &state_temporary;
-            Kk = &final_state;
-        }
+        square_sfpu(k, scratch_one, ck);
+        rowsum_k(Ct, Kt);
+        WAIT(scratch_two, Ct);
+        inv_rms(scratch_two, scratch_three, Ct, EPS_BITS, SCALE_BITS, false);
+        WAIT(scratch_three, Ct);
+        POP(scratch_two, Ct);
+        bcast_cols_mul(k, scratch_three, final_state, Ct, Kt);
+        WAIT(final_state, ck);
+        POP(scratch_three, Ct);
+        POP(k, ck);
 
         // v_beta and k_beta.
         bcast_cols_mul(v, beta, v_beta, Ct, Vt);
         WAIT(v_beta, cv);
         POP(v, cv);
-        bcast_cols_mul(*Kk, beta, k_beta, Ct, Kt);
+        bcast_cols_mul(final_state, beta, k_beta, Ct, Kt);
         WAIT(k_beta, ck);
         POP(beta, Ct);
 
@@ -447,11 +441,11 @@ TT_KERNEL void compute(uint32_t work_count) {
         WAIT(state_update, ck);
 
         // Preserve exact scan-facing factors, and use anchored factors only for pairwise products.
-        ew(*Q, decay_exp, q_decay, ck, 2);
+        ew(state_temporary, decay_exp, q_decay, ck, 2);
         WAIT(q_decay, ck);
-        ew(*Q, decay, state_three, ck, 2);
+        ew(state_temporary, decay, state_three, ck, 2);
         WAIT(state_three, ck);  // q*exp(G-anchor)
-        POP(*Q, ck);
+        POP(state_temporary, ck);
         ew(k_beta, decay_exp, w, ck, 2);
         WAIT(w, ck);
         ew(k_beta, decay, state_two, ck, 2);
@@ -463,9 +457,9 @@ TT_KERNEL void compute(uint32_t work_count) {
         WAIT(decay, ck);
         POP(scratch_one, ck);
         POP(scratch_two, ck);
-        ew(*Kk, decay_factor, scratch_one, ck, 2);
+        ew(final_state, decay_factor, scratch_one, ck, 2);
         WAIT(scratch_one, ck);  // k*exp(anchor-G)
-        POP(*Kk, ck);
+        POP(final_state, ck);
         POP(decay_factor, ck);
 
         // Materialize both anchored pairwise products, then release state_two/state_three before
