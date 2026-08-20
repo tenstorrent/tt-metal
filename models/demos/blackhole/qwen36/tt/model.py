@@ -554,6 +554,13 @@ class Qwen36Model:
         if self._lmhead_vocab_sharded:
             from models.tt_transformers.tt.ccl import tt_all_gather
 
+            # ~8 MB/device (B=32, vocab/tp=124160, bf16) puts this in the PREFILL-gather size band, not
+            # the tiny decode-norm/reduce-scatter one -- upstream's wpl=2/cps=10 fallback is tuned for
+            # the latter. Measured on N300 (test_vocab_all_gather_sweep.py), repeatable across runs:
+            # wpl=2 cps=10 (fallback) ~1,305us -> wpl=4 cps=10 ~1,078us (-17%) -> wpl=4 cps=25
+            # ~1,027us (-21%), matching the prefill AG's wpl=4 win. cps beyond 25 keeps inching down
+            # (cps=60 -> -23%) but that's untested territory elsewhere in this codebase; 25 already
+            # has precedent (test_attn_norm_decode_sweep.py) and captures nearly all of the win.
             logits = tt_all_gather(
                 logits,
                 self.mesh_device,
@@ -561,8 +568,16 @@ class Qwen36Model:
                 cluster_axis=None,
                 dim=len(logits.shape) - 1,
                 topology=self.args.ccl_topology(),
+                num_workers_per_link=4,
+                chunks_per_sync=25,
             )
         return logits
+
+    def _embed(self, tok):
+        """Token embedding. Decode B=32 on WH 9B N300 uses width-sharded L1; everything else is DRAM IL."""
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        return tpc.decode_embed(self.embd, tok, self.args)
 
     def _final_norm_decode(self, x):
         """Final RMSNorm before the LM head (TP decode).
@@ -685,15 +700,16 @@ class Qwen36Model:
 
     def decode_tp(self, token_id, pos, return_token=False):
         """Single-token TP decode at position `pos` (B=1). Uses KV + GDN from prefill/decode."""
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
         from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode
 
         tok = ttnn.from_torch(
-            torch.tensor([[int(token_id)]], dtype=torch.int32),
+            tpc.decode_ids_for_embed(torch.tensor([[int(token_id)]], dtype=torch.int32)),
             dtype=ttnn.uint32,
             device=self.device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
-        x = self.embd(tok)  # [1,1,dim_frac]
+        x = self._embed(tok)  # [1,1,dim_frac]
         x = ttnn.reshape(x, (1, 1, 1, x.shape[-1]))  # [1,1,B=1,dim_frac]
         # RoPE position offset by rope_delta for multimodal (KV position cur_pos_tt stays `pos`).
         cos, sin = rot_mats_decode(
@@ -976,14 +992,16 @@ class Qwen36Model:
 
     def decode(self, token_ids, current_pos):
         B = token_ids.shape[0]
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
-        token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
-        x = self.embd(token_ids_ttnn)
+        token_ids_ttnn = ttnn.from_torch(
+            tpc.decode_ids_for_embed(token_ids.to(torch.int32)), dtype=ttnn.uint32, device=self.device
+        )
+        x = self._embed(token_ids_ttnn)
         ttnn.deallocate(token_ids_ttnn)
         if self.num_devices > 1:
-            # TP expects [1,1,B,dim_frac]; embd yields [B,1,dim_frac] (same reshape as
-            # _forward_decode). Without it DistributedNorm's all_gather(dim=3) gets a rank-3
-            # tensor and TT_FATALs "Dimension input should be in between -3 and 2, but has 3".
+            # TP expects [1,1,B,dim_frac]; after [1,B] flatten, embd yields [1,B,dim_frac]
+            # and this reshape is still [1,1,B,dim_frac].
             x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[-1]))
 
         # RoPE position is offset by rope_delta for a multimodal request (image tokens compress the
@@ -1019,7 +1037,7 @@ class Qwen36Model:
         sharded_lm_head=True: return the pre-gather vocab-sharded logits (no all-gather)
         for the on-device sampler, which does its own cross-device top-k + gather.
         """
-        x = self.embd(token_ids_buf)
+        x = self._embed(token_ids_buf)
         if self.num_devices > 1:
             # TP expects [1,1,B,dim_frac]; embd yields [B,1,dim_frac].
             x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[-1]))
@@ -3283,13 +3301,16 @@ class Qwen36Model:
         if isinstance(page_table, torch.Tensor):
             page_table = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
 
-        token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
-        x = self.embd(token_ids_ttnn)
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        token_ids_ttnn = ttnn.from_torch(
+            tpc.decode_ids_for_embed(token_ids.to(torch.int32)), dtype=ttnn.uint32, device=self.device
+        )
+        x = self._embed(token_ids_ttnn)
         ttnn.deallocate(token_ids_ttnn)
         if self.num_devices > 1:
-            # TP expects [1,1,B,dim_frac]; embd yields [B,1,dim_frac] (same reshape as
-            # _forward_decode). Without it DistributedNorm's all_gather(dim=3) gets a rank-3
-            # tensor and TT_FATALs "Dimension input should be in between -3 and 2, but has 3".
+            # TP expects [1,1,B,dim_frac]; after [1,B] flatten, embd yields [1,B,dim_frac]
+            # and this reshape is still [1,1,B,dim_frac].
             x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[-1]))
 
         # RoPE position offset by rope_delta for multimodal (KV position stays the true seq pos).
@@ -3345,7 +3366,11 @@ class Qwen36Model:
         from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables
 
         B = tokens.shape[0]
-        tokens_tt = ttnn.from_torch(tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        tokens_tt = ttnn.from_torch(
+            tpc.decode_ids_for_embed(tokens.to(torch.int32)), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
         # Per-user positions: current_pos may be a [B] tensor (each user at its own position) or a
         # scalar (lockstep). Build a [B] int32 vector so cur_pos and rope carry one rotation per user.
         if isinstance(current_pos, torch.Tensor):

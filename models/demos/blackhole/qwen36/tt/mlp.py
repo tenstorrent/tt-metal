@@ -541,8 +541,11 @@ class Qwen36MLP:
         # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3).
         # Prefill passes tuned chunks_per_sync / num_workers_per_link (see tp_common
         # prefill_ccl_tuning); decode keeps tt_all_reduce's defaults, which its own path was tuned at.
+        # Gate on x.shape[-2] (seq/M), not `T` above: T is x.shape[1] and the activation is
+        # [1, 1, S, dim] in both modes, so T is always 1 and this branch never fired. Attention
+        # and GDN already pass prefill_ccl_tuning() unconditionally on their prefill RS.
         _ccl_kw = {}
-        if T > ttnn.TILE_SIZE:
+        if x.shape[-2] > ttnn.TILE_SIZE:
             _cps, _wpl = tpc.prefill_ccl_tuning()
             _ccl_kw = {"chunks_per_sync": _cps, "num_workers_per_link": _wpl}
         out = tt_all_reduce(
