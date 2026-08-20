@@ -100,9 +100,8 @@ namespace program_dispatch {
 
 namespace {
 
-inline bool is_watcher_assert_enabled() {
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-           !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
+inline bool is_watcher_assert_enabled(const MetalContext& metal_ctx) {
+    return metal_ctx.rtoptions().get_watcher_enabled() && !metal_ctx.rtoptions().watcher_assert_disabled();
 }
 
 struct CommandConstants {
@@ -143,11 +142,12 @@ DispatchWriteOffsets get_dispatch_write_offset(HalProgrammableCoreType core_type
 };  // namespace
 
 uint32_t configure_rta_offsets_for_kernel_groups(
+    const MetalContext& metal_ctx,
     uint32_t /*programmable_core_type_index*/,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset) {
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = metal_ctx.hal();
     uint32_t max_unique_rta_size = 0;
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
@@ -155,7 +155,7 @@ uint32_t configure_rta_offsets_for_kernel_groups(
         // Initialize RTA/CRTA offsets to sentinel when watcher enabled. Launch message memory
         // may contain stale data from previous dispatches. Can't use 0 as "no args" since 0 is
         // a valid L1 offset. Sentinel (0xFFFF) distinguishes "no args" from "args at offset 0"
-        if (is_watcher_assert_enabled()) {
+        if (is_watcher_assert_enabled(metal_ctx)) {
             auto rta_offsets = kg->launch_msg.view().kernel_config().rta_offset();
             for (size_t i = 0; i < rta_offsets.size(); i++) {
                 kg->launch_msg.view().kernel_config().rta_offset()[i].rta_offset() = RTA_CRTA_NO_ARGS_SENTINEL;
@@ -203,11 +203,12 @@ uint32_t configure_rta_offsets_for_kernel_groups(
 }
 
 uint32_t configure_crta_offsets_for_kernel_groups(
+    const MetalContext& metal_ctx,
     uint32_t /*programmable_core_type_index*/,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t crta_base_offset) {
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = metal_ctx.hal();
     uint32_t max_crta_size = 0;
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
@@ -262,16 +263,17 @@ uint32_t configure_crta_offsets_for_kernel_groups(
 }
 
 uint32_t finalize_rt_args(
+    const MetalContext& metal_ctx,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset,
     uint32_t programmable_core_type_index,
     uint32_t& rta_offset) {
     uint32_t max_unique_rta_size = program_dispatch::configure_rta_offsets_for_kernel_groups(
-        programmable_core_type_index, kernels, kernel_groups, base_offset);
+        metal_ctx, programmable_core_type_index, kernels, kernel_groups, base_offset);
     uint32_t crta_base_offset = base_offset + max_unique_rta_size;
     uint32_t max_crta_size = program_dispatch::configure_crta_offsets_for_kernel_groups(
-        programmable_core_type_index, kernels, kernel_groups, crta_base_offset);
+        metal_ctx, programmable_core_type_index, kernels, kernel_groups, crta_base_offset);
 
     uint32_t offset = max_unique_rta_size + max_crta_size;
 
@@ -280,25 +282,27 @@ uint32_t finalize_rt_args(
 }
 
 uint32_t finalize_sems(
+    const MetalContext& metal_ctx,
     uint32_t programmable_core_type_index,
     uint32_t sem_base_offset,
     const std::vector<Semaphore>& semaphores,
     uint32_t& semaphore_offset,
     uint32_t& semaphore_size) {
     int max_id = -1;
-    CoreType core_type = MetalContext::instance().hal().get_core_type(programmable_core_type_index);
+    CoreType core_type = metal_ctx.hal().get_core_type(programmable_core_type_index);
     for (const auto& sem : semaphores) {
         if (sem.core_type() == core_type && (int)sem.id() > max_id) {
             max_id = sem.id();
         }
     }
-    uint32_t sem_size = (max_id + 1) * MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    uint32_t sem_size = (max_id + 1) * metal_ctx.hal().get_alignment(HalMemType::L1);
     semaphore_offset = sem_base_offset;
     semaphore_size = sem_size;
     return sem_base_offset + sem_size;
 }
 
 uint32_t finalize_cbs(
+    const MetalContext& metal_ctx,
     uint32_t /*programmable_core_type_index*/,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset,
@@ -306,7 +310,7 @@ uint32_t finalize_cbs(
     uint32_t& cb_size,
     uint32_t& local_cb_size) {
     uint32_t max_local_end_index = 0;
-    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
+    uint32_t max_cbs = metal_ctx.hal().get_arch_num_circular_buffers();
     uint32_t min_remote_start_index = max_cbs;
 
     for (auto& kg : kernel_groups) {
@@ -331,7 +335,7 @@ uint32_t finalize_cbs(
     cb_offset = base_offset;
     cb_size = total_cb_size;
 
-    return tt::align(base_offset + total_cb_size, MetalContext::instance().hal().get_alignment(HalMemType::L1));
+    return tt::align(base_offset + total_cb_size, metal_ctx.hal().get_alignment(HalMemType::L1));
 }
 
 void finalize_dfb_masks(
@@ -362,7 +366,10 @@ void finalize_dfb_masks(
 // ranges. Merging participants by logical core would incorrectly give a non-NONE offset to a
 // program with no CrossNodeDFBs, causing firmware to parse stale kernel-config words.
 uint32_t finalize_cross_node_dfbs(
-    uint32_t programmable_core_type_index, ttsl::Span<ProgramImpl*> programs, uint32_t base_offset) {
+    const MetalContext& metal_ctx,
+    uint32_t programmable_core_type_index,
+    ttsl::Span<ProgramImpl*> programs,
+    uint32_t base_offset) {
     uint8_t max_num_cross_node_dfbs = 0;
     for (ProgramImpl* program : programs) {
         max_num_cross_node_dfbs = std::max(max_num_cross_node_dfbs, program->num_cross_node_dfb_slots());
@@ -412,8 +419,7 @@ uint32_t finalize_cross_node_dfbs(
         }
     }
 
-    return tt::align(
-        base_offset + cross_node_dfb_region_bytes, MetalContext::instance().hal().get_alignment(HalMemType::L1));
+    return tt::align(base_offset + cross_node_dfb_region_bytes, metal_ctx.hal().get_alignment(HalMemType::L1));
 }
 
 // Build the dense device config region from a core's sparse host participant records.
@@ -731,7 +737,7 @@ void generate_runtime_args_cmds(
         // When watcher assert is enabled, RTAs are stored as [count | args...] in the command buffer
         // RuntimeArgsData.rt_args_data points to args (skips count) for user-facing API
         // data_in_sequence points to args location in command buffer for retargeting
-        uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
+        uint32_t count_word_offset = is_watcher_assert_enabled(metal_ctx) ? 1 : 0;
         const uint32_t data_inc = tt::align(max_runtime_args_len * sizeof(uint32_t), l1_alignment);
         uint32_t num_data_copies = no_stride ? 1 : num_packed_cmds;
         for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
@@ -809,7 +815,7 @@ void generate_runtime_args_cmds_large_unicast(
     // Device reads rta_payload_sizeB bytes per sub-command, then pads the read pointer to `alignment`, so
     // consecutive per-core payloads in the command stream are separated by this aligned size.
     const uint32_t aligned_core_payload = tt::align(rta_payload_sizeB, l1_alignment);
-    const uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
+    const uint32_t count_word_offset = is_watcher_assert_enabled(metal_ctx) ? 1 : 0;
     // Cap cores/command by the prefetcher command size, not just the sub-cmd count (see helper above).
     const uint32_t max_cores_per_cmd =
         max_cores_per_large_unicast_cmd(metal_ctx, rta_payload_sizeB, max_prefetch_command_size);
@@ -881,8 +887,8 @@ void generate_runtime_args_cmds_large_unicast(
 // A kernel group's unique RTAs must go through CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST when their
 // per-core payload exceeds one dispatch page: the CQ_DISPATCH_CMD_WRITE_PACKED device handler asserts each
 // per-core write fits a single dispatch page (its `size` field is uint16_t and it does not wrap CB pages).
-bool unique_rta_requires_large_unicast(uint32_t total_rta_size) {
-    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+bool unique_rta_requires_large_unicast(const MetalContext& metal_ctx, uint32_t total_rta_size) {
+    const uint32_t l1_alignment = metal_ctx.hal().get_alignment(HalMemType::L1);
     const uint32_t dispatch_page_size = 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
     return tt::align(total_rta_size, l1_alignment) > dispatch_page_size;
 }
@@ -950,7 +956,7 @@ BatchedTransfers assemble_runtime_args_commands(
         for (auto& kg : program.get_kernel_groups(programmable_core_type_index)) {
             if (kg->total_rta_size != 0) {
                 uint32_t num_sub_cmds = kg->core_ranges.num_cores();
-                if (unique_rta_requires_large_unicast(kg->total_rta_size)) {
+                if (unique_rta_requires_large_unicast(metal_ctx, kg->total_rta_size)) {
                     command_count += div_up(
                         num_sub_cmds,
                         max_cores_per_large_unicast_cmd(
@@ -969,7 +975,7 @@ BatchedTransfers assemble_runtime_args_commands(
         }
     }
 
-    uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
+    uint32_t count_word_offset = is_watcher_assert_enabled(metal_ctx) ? 1 : 0;
 
     // Ethernet only: unicast to each core
     for (uint32_t p_idx = 0; p_idx < hal.get_programmable_core_type_count(); p_idx++) {
@@ -1098,7 +1104,7 @@ BatchedTransfers assemble_runtime_args_commands(
                     }
                 }
                 uint32_t rta_offset = program.get_program_config(index).rta_offset;
-                if (unique_rta_requires_large_unicast(kg->total_rta_size)) {
+                if (unique_rta_requires_large_unicast(metal_ctx, kg->total_rta_size)) {
                     // Per-core payload exceeds one dispatch page; the packed-write handler cannot span
                     // pages, so send these unique RTAs via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST.
                     generate_runtime_args_cmds_large_unicast(
@@ -2074,7 +2080,7 @@ public:
 
         // Byte offset to skip count word when watcher enabled. Uses sizeof(uint32_t) instead of 1
         // because transfer.data and data_collection_location are byte pointers (uint8_t*)
-        uint32_t count_word_byte_offset = is_watcher_assert_enabled() ? sizeof(uint32_t) : 0;
+        uint32_t count_word_byte_offset = is_watcher_assert_enabled(metal_ctx) ? sizeof(uint32_t) : 0;
         // Write out batched semaphore + CB multicast transfers.
         for (uint32_t i = 0; i < batched_dispatch_subcmds.size(); ++i) {
             auto& cmd_data = batched_cmd_data[i];
