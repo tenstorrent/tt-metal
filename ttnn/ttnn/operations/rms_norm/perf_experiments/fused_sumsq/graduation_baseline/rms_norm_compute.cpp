@@ -33,18 +33,12 @@
 //     [RM] untilize                            cb_output_tiles-> cb_rm_out
 //
 // Regime B (STREAMING-MASKED, two DRAM reads) chunks the dependent W axis at
-// WT_REDUCE_BLOCK / WT_SCALE_BLOCK and runs THE SAME fused sum-of-squares per
-// chunk:
-//     sum_of_squares  cb_input_tiles -> cb_sumsq_acc   (ONE tile per row)
-//     reduce<SUM, REDUCE_ROW, Accumulate>  cb_sumsq_acc -> cb_sumsq
-// i.e. Regime A's shape, chunked.  x*x is folded into ONE DEST row accumulator
-// per chunk, so the reduce collapses a 1-tile window instead of a
-// WT_REDUCE_BLOCK-tile one and there is no full-block x^2 intermediate CB at all.
-// The partial scaler (partial_mask / last_tile_at at scaler index 1) zeroes the
-// pad columns of the last W-tile on the LAST chunk only, so implicit tile padding
-// never enters the sum (risk R1).  The divisor is always 1/W_true, applied in
-// fp32 by MulUnary - never folded into the mandatory-bfloat16 reduce scaler
-// (risk R2).
+// WT_REDUCE_BLOCK / WT_SCALE_BLOCK and replaces the fused sum-of-squares with
+// square -> accumulating reduce<SUM, REDUCE_ROW>.  The partial scaler
+// (last_tile_at(1)) zeroes the pad columns of the last W-tile on the LAST chunk
+// only, so implicit tile padding never enters the sum (risk R1).  The divisor is
+// always 1/W_true, applied in fp32 by MulUnary - never folded into the
+// mandatory-bfloat16 reduce scaler (risk R2).
 //
 // CB-WRAP INVARIANT: the W-chunk divides Wt_core and every row-block is exactly
 // BLOCK_HT tile-rows, so every multi-page CB access here is a fixed size that
@@ -70,6 +64,7 @@ namespace {
 constexpr uint32_t cb_input_tiles = 0;
 constexpr uint32_t cb_gamma_tiles = 1;
 constexpr uint32_t cb_reduce_scaler = 2;
+constexpr uint32_t cb_squared = 3;
 constexpr uint32_t cb_sumsq = 4;
 constexpr uint32_t cb_rms_recip = 5;
 constexpr uint32_t cb_normed = 6;
@@ -154,170 +149,6 @@ ALWI void ingest_gamma() {
     }
 }
 
-// The partial form is datapath-specific (the reader emits the matching tile at
-// scaler index 1; see its scaler block).  `last_tile_at` carries only a scaler
-// INDEX, which AccumulateViaAdd reads as "tile-aligned" - it needs
-// `partial_mask`, which also carries the valid-element COUNT.
-constexpr auto partial_scaler = (W_PARTIAL == 0)
-                                    ? ckl::ReducePartialScaler::none()
-                                    : (REDUCE_VIA_ADD ? ckl::ReducePartialScaler::partial_mask(W_PARTIAL, 1)
-                                                      : ckl::ReducePartialScaler::last_tile_at(1));
-
-// ===========================================================================
-// Regime B's sum-of-squares phase: ONE fused accumulate per W-chunk
-// ===========================================================================
-// HELPER SUBSTITUTION (kernel_lib CAPABILITY gap - do NOT "fix" this back).
-// `fs_out` below is byte-for-byte what `ckl::row_output(cb_sumsq_acc)` expands to
-// inside `ckl::sum_of_squares` (eltwise/api/convenience.inl: PerOuter reserve +
-// PerOuter push + DestAccumulation::PerRow), and `sumsq_strided` is byte-for-byte
-// what `sum_of_squares` expands to (`square` -> `eltwise_chain(BinaryFpu<Mul, In,
-// In, D0, Output.dest_accumulation>, PackTile<Output>)`).  It is spelled out
-// because the NON-TILE-ALIGNED last chunk must walk a GAPPED column window
-// ("every column but the last", then "the last column"), which needs a
-// caller-supplied `StridedTileRange` per operand - and the `sum_of_squares`
-// wrapper takes no runtime element arguments, so there is no overload to pass the
-// stride to.  This is the composable surface UNDER the same helper family, not
-// raw LLK; the tile-aligned chunk still calls `sum_of_squares` itself.
-//
-// .INL-ONLY CONTRACT worth recording: `PackTile` static_asserts "L1 and DEST
-// accumulation cannot be combined" (eltwise/core/chain.inl), so the CROSS-chunk
-// accumulation can NOT be an L1-accumulating pack into cb_sumsq - it must go
-// through the reduce's `Accumulate`.  Hence the two-level shape: DEST accumulate
-// WITHIN a chunk, reduce `Accumulate` ACROSS chunks.
-constexpr auto fs_out = ckl::output(
-    cb_sumsq_acc,
-    ckl::ReservePolicy::PerOuter,
-    ckl::PushPolicy::PerOuter,
-    ckl::DataFormatReconfig::Enabled,
-    ckl::PackRelu::Disabled,
-    ckl::L1Accumulation::Disabled,
-    ckl::DestAccumulation::PerRow);
-
-// How the cross-chunk fold reloads cb_sumsq's running raw partial sum.
-// FoldViaAdd hands it to add_tiles as the SrcB operand instead of paying the
-// default CopySeedPairs' copy_tile + DEST-reuse add per chunk (measured 5-9% of
-// the WHOLE op at Wt_core <= 4, ~1.3% of the compute payload at Wt_core = 224).
-// Legal because nothing in this op tags cb_sumsq UnpackToDestFp32, which is
-// exactly the helper's stated contract (reduce_helpers_compute.hpp).  Ignored
-// outright on the ReduceTile datapath, which always reloads via copy_tile.
-constexpr auto FOLD_RELOAD = ckl::AccumulateReloadMode::FoldViaAdd;
-
-// x*x accumulated into ONE DEST tile per row over `NCOL` columns starting at
-// column `base` of a resident (BLOCK_HT x WT_REDUCE_BLOCK) window.  Caller owns
-// the cb_input_tiles wait/pop - TileOffset::Strided is (None, None)-only, since a
-// gapped window has no single wait/pop count.
-template <uint32_t NCOL>
-ALWI void sumsq_strided(uint32_t base) {
-    ckl::eltwise_chain(
-        ckl::IterationShape::grid(BLOCK_HT, NCOL).block_size(DEST_BLOCK),
-        ckl::BinaryFpu<
-            ckl::BinaryFpuOp::Mul,
-            ckl::input(
-                cb_input_tiles,
-                ckl::WaitPolicy::None,
-                ckl::PopPolicy::None,
-                ckl::OperandKind::Block,
-                ckl::DataFormatReconfig::Enabled,
-                ckl::TileOffset::Strided),
-            ckl::input(
-                cb_input_tiles,
-                ckl::WaitPolicy::None,
-                ckl::PopPolicy::None,
-                ckl::OperandKind::Block,
-                ckl::DataFormatReconfig::Enabled,
-                ckl::TileOffset::Strided),
-            ckl::Dst::D0,
-            ckl::DestAccumulation::PerRow>{
-            ckl::StridedTileRange{base, WT_REDUCE_BLOCK}, ckl::StridedTileRange{base, WT_REDUCE_BLOCK}},
-        ckl::PackTile<fs_out>{});
-}
-
-// Fold ONE raw partial tile per row out of cb_sumsq_acc into the running cb_sumsq
-// accumulator.  `k` is the cross-call Accumulate iteration (0 = seed); `last`
-// runs the single within-tile REDUCE_ROW finalize; `partial` masks the pad
-// columns - only ever on the accumulator tile that owns the LAST W-tile.
-ALWI void fold_partial_sum(uint32_t k, bool last, bool partial) {
-    MaybeDeviceZoneScope("cp_reduce");
-    ckl::reduce<
-        ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW,
-        cb_sumsq_acc,
-        cb_reduce_scaler,
-        cb_sumsq,
-        REDUCE_POLICY,
-        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ReduceFp32Mode::Fast,  // default (global scope, not in ckl)
-        REDUCE_ALGORITHM>(
-        ckl::ReduceInputBlockShape::of(BLOCK_HT, 1, 1),
-        ckl::ReduceInputMemoryLayout::contiguous(),
-        (last ? ckl::Accumulate::at_last(cb_sumsq, k) : ckl::Accumulate::at(cb_sumsq, k)).with_reload(FOLD_RELOAD),
-        ckl::NoOp{},
-        partial ? partial_scaler : ckl::ReducePartialScaler::none());
-}
-
-// One W-chunk of the sum-of-squares phase; `k` is the running cross-call
-// Accumulate index into cb_sumsq and the return value is the next one.
-ALWI uint32_t sumsq_chunk(uint32_t k, bool is_last_chunk) {
-    // NARROW CARVE-OUT, and the only one: a ONE-TILE chunk has nothing to fuse.
-    // The per-row DEST accumulate spans a single column, so `sum_of_squares`
-    // reduces to `square` while still paying its PerOuter reserve/push (BLOCK_HT
-    // CB round-trips instead of one) and the cross-chunk fold machinery - a
-    // MEASURED regression on the smallest supported cell ((32, 17): 3,365 ->
-    // 3,460 ns).  The degenerate fused form IS `square`, so this branch is the
-    // pre-fusion datapath exactly, just writing the shared cb_sumsq_acc (there is
-    // no separate x^2 CB on any path any more).  It is a carve-out around the
-    // case that CANNOT benefit, not an allow-list of measured widths.
-    if constexpr (WT_REDUCE_BLOCK == 1) {
-        {
-            MaybeDeviceZoneScope("cp_sumsq");
-            ckl::square<
-                ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::output(cb_sumsq_acc, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-                ckl::IterationShape::grid(BLOCK_HT, 1).block_size(DEST_BLOCK));
-        }
-        // The single tile of the chunk IS the last W-tile, so the mask lands on it.
-        fold_partial_sum(k, is_last_chunk, W_PARTIAL > 0 && is_last_chunk);
-        return k + 1;
-    } else if (!(W_PARTIAL > 0 && is_last_chunk)) {
-        // TILE-ALIGNED chunk: the whole chunk folds into ONE DEST row accumulator
-        // and the helper owns the input lifecycle.  No mask is needed - the
-        // accumulator's 32 columns are all meaningful.
-        {
-            MaybeDeviceZoneScope("cp_sumsq");
-            ckl::sum_of_squares<
-                ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::row_output(cb_sumsq_acc)>(
-                ckl::IterationShape::grid(BLOCK_HT, WT_REDUCE_BLOCK).block_size(DEST_BLOCK));
-        }
-        fold_partial_sum(k, is_last_chunk, false);
-        return k + 1;
-    } else {
-        // LAST chunk of a NON-TILE-ALIGNED W.  The pad columns live ONLY in the
-        // very last W-tile, so that tile gets its OWN accumulator: its 32 columns
-        // then map 1:1 onto the last W-tile's columns, which is what makes the
-        // reduce's existing masked-last-tile fold - partial_mask(W_PARTIAL, 1) on
-        // AccumulateViaAdd, last_tile_at(1) on ReduceTile - zero PRECISELY the pad
-        // columns (risk R1: the pad must never enter the sum).  Everything before
-        // it is a plain aligned accumulate.  The strided walk is what lets the
-        // split work for BLOCK_HT > 1, where "all columns but the last" is not
-        // contiguous.
-        constexpr uint32_t HEAD = (WT_REDUCE_BLOCK > 1) ? (WT_REDUCE_BLOCK - 1) : 1;
-        cb_wait_front(cb_input_tiles, BLOCK_HT * WT_REDUCE_BLOCK);
-        {
-            MaybeDeviceZoneScope("cp_sumsq");
-            sumsq_strided<HEAD>(0);
-        }
-        fold_partial_sum(k, false, false);
-        {
-            MaybeDeviceZoneScope("cp_sumsq");
-            sumsq_strided<1>(WT_REDUCE_BLOCK - 1);
-        }
-        fold_partial_sum(k + 1, true, true);
-        cb_pop_front(cb_input_tiles, BLOCK_HT * WT_REDUCE_BLOCK);
-        return k + 2;
-    }
-}
-
 // x * (1/rms) [* gamma] over one (BLOCK_HT x cw) chunk.
 //   RmsPop   : AtEnd in Regime A (one call per row-block); None in Regime B,
 //              where cb_rms_recip is reused across every W-chunk and popped by
@@ -366,6 +197,15 @@ void kernel_main() {
         ingest_gamma<Wt_core>();
     }
 
+    // The partial form is datapath-specific (the reader emits the matching tile at
+    // scaler index 1; see its scaler block).  `last_tile_at` carries only a scaler
+    // INDEX, which AccumulateViaAdd reads as "tile-aligned" - it needs
+    // `partial_mask`, which also carries the valid-element COUNT.
+    constexpr auto partial_scaler = (W_PARTIAL == 0)
+                                        ? ckl::ReducePartialScaler::none()
+                                        : (REDUCE_VIA_ADD ? ckl::ReducePartialScaler::partial_mask(W_PARTIAL, 1)
+                                                          : ckl::ReducePartialScaler::last_tile_at(1));
+
     for (uint32_t b = 0; b < num_row_blocks_here; ++b) {
         // ---------------- sum of squares over the reduced axis ---------------
         if constexpr (REGIME_A) {
@@ -413,20 +253,42 @@ void kernel_main() {
                     ckl::ReduceAlgorithm::AccumulateViaAdd>(ckl::ReduceInputBlockShape::of(BLOCK_HT, GROUP_SIZE, 1));
             }
         } else {
-            // `at_last` (inside fold_partial_sum) marks the finalizing fold: on the
-            // AccumulateViaAdd datapath cb_sumsq holds the RAW partial sum between
-            // chunks and the within-tile collapse runs exactly once, on the last
-            // one.  ReduceTile ignores the flag (it finalizes every chunk), so the
-            // same call site is correct for both datapaths.  `k` is a running
-            // counter, not `c`: the non-tile-aligned last chunk contributes TWO
-            // folds (its head, then the masked last W-tile).
-            uint32_t k = 0;
             for (uint32_t c = 0; c < NUM_REDUCE_CHUNKS; ++c) {
+                const bool is_last = (c + 1 == NUM_REDUCE_CHUNKS);
                 if constexpr (IS_ROW_MAJOR) {
                     MaybeDeviceZoneScope("cp_tilize");
                     ckl::tilize<WT_REDUCE_BLOCK, cb_rm_in, cb_input_tiles>(BLOCK_HT);
                 }
-                k = sumsq_chunk(k, c + 1 == NUM_REDUCE_CHUNKS);
+                {
+                    MaybeDeviceZoneScope("cp_square");
+                    ckl::square<
+                        ckl::input(
+                            cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                        ckl::output(cb_squared, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                        ckl::IterationShape::grid(BLOCK_HT, WT_REDUCE_BLOCK).block_size(DEST_BLOCK));
+                }
+
+                // `at_last` marks the finalizing chunk: on the AccumulateViaAdd
+                // datapath cb_sumsq holds the RAW partial sum between chunks and
+                // the within-tile collapse runs exactly once, on the last one.
+                // ReduceTile ignores the flag (it finalizes every chunk), so the
+                // same call site is correct for both datapaths.
+                MaybeDeviceZoneScope("cp_reduce");
+                ckl::reduce<
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_ROW,
+                    cb_squared,
+                    cb_reduce_scaler,
+                    cb_sumsq,
+                    REDUCE_POLICY,
+                    ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    ReduceFp32Mode::Fast,  // default (global scope, not in ckl)
+                    REDUCE_ALGORITHM>(
+                    ckl::ReduceInputBlockShape::of(BLOCK_HT, WT_REDUCE_BLOCK, 1),
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    is_last ? ckl::Accumulate::at_last(cb_sumsq, c) : ckl::Accumulate::at(cb_sumsq, c),
+                    ckl::NoOp{},
+                    is_last ? partial_scaler : ckl::ReducePartialScaler::none());
             }
         }
 

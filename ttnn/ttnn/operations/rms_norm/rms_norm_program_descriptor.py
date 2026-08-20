@@ -20,8 +20,9 @@ Axes:
 
 Two compute regimes, selected by a pinned host predicate:
     A  RESIDENT-FUSED    single DRAM read, fused sum-of-squares, no mask.
-    B  STREAMING-MASKED  two DRAM reads, chunked square+accumulating reduce with
-                         a partial scaler that zeroes the pad columns.
+    B  STREAMING-MASKED  two DRAM reads, chunked fused sum-of-squares +
+                         accumulating reduce, with a partial scaler that zeroes
+                         the pad columns of the last W-tile.
 """
 
 from __future__ import annotations
@@ -107,7 +108,11 @@ GAMMA_STAGE_MAX_BYTES = 64 * 1024
 CB_INPUT_TILES = 0
 CB_GAMMA_TILES = 1
 CB_REDUCE_SCALER = 2
-CB_SQUARED = 3
+# Slot 3 is RETIRED.  It held cb_squared, the full-block x^2 intermediate of the
+# old Regime B `square -> reduce` pair; the fused sum-of-squares accumulates x*x
+# in DEST instead, so there is nothing to park.  The slot is left unused rather
+# than renumbered: the reader addresses cb_sumsq / cb_sumsq_acc by these same
+# indices for the W-split combine.
 CB_SUMSQ = 4
 CB_RMS_RECIP = 5
 CB_NORMED = 6
@@ -133,6 +138,13 @@ def _div_up(a: int, b: int) -> int:
     return (a + b - 1) // b
 
 
+# Cap on cb_input_tiles' generations.  Named because TWO places must agree on it:
+# the W-chunk search's affordability profile and the depth ladder that actually
+# grows the depth (see `_solve`).  If they drift, the search buys a chunk it can
+# only pay for by giving the input CB back its generations.
+IN_DEPTH_CAP = 4
+
+
 def _largest_divisor_at_most(value: int, cap: int) -> int:
     """Largest divisor of `value` that is <= `cap` (>= 1)."""
     for cand in range(min(value, max(1, cap)), 0, -1):
@@ -151,7 +163,7 @@ BLOCK_FLOAT_DTYPES = (ttnn.bfloat8_b, ttnn.bfloat4_b)
 
 
 def _interm_dtype(input_dtype):
-    """Format for a compute-only intermediate CB (cb_squared / cb_normed).
+    """Format for a compute-only intermediate CB (cb_normed).
 
     Identical to the input dtype for every non-block format, so this is
     byte-identical on the float32 / bfloat16 paths.
@@ -197,7 +209,7 @@ def _apply_precision_levers(compute_kernel_config, levers):
     return out
 
 
-def _reduce_via_add(regime, compute_kernel_config, interm_dtype, W_partial: int, lever_on: bool) -> int:
+def _reduce_via_add(regime, compute_kernel_config, acc_dtype, W_partial: int, lever_on: bool) -> int:
     """Pick Regime B's reduce datapath: 1 = AccumulateViaAdd, 0 = ReduceTile.
 
     Regime A never accumulates across reduce() calls - its reduce is the single
@@ -215,17 +227,20 @@ def _reduce_via_add(regime, compute_kernel_config, interm_dtype, W_partial: int,
     CORRECT - AccumulateViaAdd's PARTIAL (non-tile-aligned) path folds the 0/1
     mask tile straight out of the scaler CB with NO data-format reconfig, so a
     masked reduce is only correct when the scaler CB - mandatorily bfloat16 -
-    already matches the reduce input CB's format.  A float32 `cb_squared` makes
-    the datapath unpack that bfloat16 mask as float32: measured rms 0.59 at W=17
-    / 0.11 at W=50 versus 0.0011 on the ReduceTile datapath.  bfloat16 and
-    bfloat8_b activations are unaffected because `_interm_dtype` already puts
-    `cb_squared` at bfloat16 for both.  A tile-aligned reduce uses no mask at all,
-    so the constraint does not apply there.
+    already matches the reduce INPUT CB's format.  That input CB is `cb_sumsq_acc`
+    (the fused sum-of-squares' per-row accumulator), so the predicate reads
+    `acc_dtype`, not the intermediate format: a float32 accumulator CB makes the
+    datapath unpack the bfloat16 mask as float32 (measured rms 0.59 at W=17 / 0.11
+    at W=50 versus 0.0011 on the ReduceTile datapath).  With `acc_narrow` the
+    accumulator is already bfloat16 for bfloat16 and bfloat8_b activations
+    whenever DEST is 16-bit, which is exactly when this datapath is NEEDED.  A
+    tile-aligned reduce uses no mask at all, so the constraint does not apply
+    there.
     """
     if regime != "B" or not lever_on:
         return 0
     needed = not bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
-    correct = (W_partial == 0) or (interm_dtype == ttnn.bfloat16)
+    correct = (W_partial == 0) or (acc_dtype == ttnn.bfloat16)
     return 1 if (needed and correct) else 0
 
 
@@ -404,13 +419,13 @@ def _cb_layout(
         # tile that zeroes the pad columns of the last W-tile.
         (CB_REDUCE_SCALER, 2 if (regime == "B" and W_partial) else 1, T_bf16, "bf16"),
     ]
-    if regime == "A":
-        # sum_of_squares' element-wise tile accumulator, collapsed along W by the
-        # finalize reduce.
-        layout.append((CB_SUMSQ_ACC, block_ht, T_acc, "acc"))
-    else:
-        # Sequential-helper intermediate: must hold the FULL block per call.
-        layout.append((CB_SQUARED, block_ht * wr, T_interm, "interm"))
+    # `sum_of_squares`' element-wise tile accumulator: ONE tile per tile-row,
+    # collapsed along W by the finalize reduce.  BOTH regimes run that shape now,
+    # so this is the only x^2 storage the op has - Regime B's old full-block
+    # `cb_squared` (block_ht * wr pages) is gone.  Regime B gets a second
+    # generation so the finalize reduce's unpack can overlap the next W-chunk's
+    # pack; Regime A writes it once per row-block.
+    layout.append((CB_SUMSQ_ACC, (2 if regime == "B" else 1) * block_ht, T_acc, "acc"))
     if has_gamma:
         # `gamma_depth` generations of the scale pass' gamma chunk.  In Regime B
         # this CB is STREAMED (one chunk pushed and popped per W-chunk), so a
@@ -550,6 +565,23 @@ def _solve(
         # used 344 KB less L1).  c = 1 always fits, so the search cannot fail; the
         # depth ladder below then spends whatever is left over.
         #
+        # THE PROFILE IS THE DEPTH LADDER'S TOP RUNG - (IN_DEPTH_CAP, out 2, rm 2,
+        # gamma 2) - AND NOT A SUBSET OF IT.  A subset lets the search call a
+        # coarser chunk "affordable" while paying for it out of a buffer generation
+        # it never accounted for, and the ladder below cannot claw that back:
+        # coarseness is not worth a generation.  Both failure modes are MEASURED,
+        # on the Regime-B sweep in perf_experiments/fused_sumsq/graduation_ab.py
+        # (arms `fused_p21` / `fused` / `fused_p42`), once the fused
+        # sum-of-squares freed 94-258 KB into this very decision:
+        #   profile (in 2, out 1): (1,1,32,3071) took wr=96/in=2/out=1 instead of
+        #       wr=48/in=4/out=2 and went 16.5us -> 18.7us (-12%).
+        #   profile (in 2, out 2): (1,1,32,4095) no-gamma / bfloat8_b took
+        #       wr=128/in=2..3 instead of wr=64/in=4 and went 16.7 -> 18.0us and
+        #       20.0 -> 23.2us (-8% / -14%).
+        #   profile (in 4, out 2): >= every other arm on all 14 cases of that
+        #       sweep, and >= the pre-graduation plan on all 14.
+        # Regime A never runs this search, so this is a Regime-B-only decision.
+        #
         # CB-WRAP CONSTRAINT (load-bearing): a multi-page cb_reserve_back /
         # cb_wait_front followed by a contiguous N-page access is only legal when
         # the CB's page count is a multiple of N and the fifo pointer is
@@ -567,10 +599,13 @@ def _solve(
         if _lever(levers, "coarse_chunk"):
             forced_wt = _lever(levers, "wt_block")
             chunk_cap = min(Wt_core, forced_wt) if forced_wt else Wt_core
+            # The ladder's top rung, scaled by `stream_depth` so the
+            # double_buffer=0 counterfactual still degenerates to depth 1.
+            in_target = IN_DEPTH_CAP if stream_depth > 1 else 1
             for cand in range(chunk_cap, 0, -1):
                 if Wt_core % cand != 0:
                     continue
-                if ws_bytes("B", 1, stream_depth, 1, stream_depth, cand, cand, gamma_depth) <= l1_cb_budget:
+                if ws_bytes("B", 1, in_target, stream_depth, stream_depth, cand, cand, gamma_depth) <= l1_cb_budget:
                     wr = wsc = cand
                     break
 
@@ -601,7 +636,7 @@ def _solve(
 
     if _lever(levers, "double_buffer"):
         while (
-            in_depth < 4
+            in_depth < IN_DEPTH_CAP
             and ws_bytes(regime, block_ht, in_depth + 1, out_depth, rm_depth, wr, wsc, gamma_depth) <= l1_cb_budget
         ):
             in_depth += 1
@@ -1057,7 +1092,7 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         GAMMA_DEPTH=solved.GAMMA_DEPTH,
         regime=regime,
         reduce_via_add=_reduce_via_add(
-            regime, compute_kernel_config, interm_dtype, W_partial, bool(_lever(levers, "reduce_via_add"))
+            regime, compute_kernel_config, acc_dtype, W_partial, bool(_lever(levers, "reduce_via_add"))
         ),
         num_row_blocks=solved.num_row_blocks,
         group_size=group_size,

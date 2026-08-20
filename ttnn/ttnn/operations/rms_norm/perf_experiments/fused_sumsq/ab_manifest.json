@@ -1,0 +1,982 @@
+[
+  {
+    "label": "w_nonalign/base_p21",
+    "shape": "w_nonalign",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign/base",
+    "shape": "w_nonalign",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign/fused_iso",
+    "shape": "w_nonalign",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign/fused",
+    "shape": "w_nonalign",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign/fused_p21",
+    "shape": "w_nonalign",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign/fused_p22",
+    "shape": "w_nonalign",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign/fused_rawall",
+    "shape": "w_nonalign",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_8191/base_p21",
+    "shape": "w_8191",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_8191/base",
+    "shape": "w_8191",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_8191/fused_iso",
+    "shape": "w_8191",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_8191/fused",
+    "shape": "w_8191",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_8191/fused_p21",
+    "shape": "w_8191",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_8191/fused_p22",
+    "shape": "w_8191",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_8191/fused_rawall",
+    "shape": "w_8191",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_3071/base_p21",
+    "shape": "w_3071",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_3071/base",
+    "shape": "w_3071",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_3071/fused_iso",
+    "shape": "w_3071",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_3071/fused",
+    "shape": "w_3071",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_3071/fused_p21",
+    "shape": "w_3071",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_3071/fused_p22",
+    "shape": "w_3071",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_3071/fused_rawall",
+    "shape": "w_3071",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_2047/base_p21",
+    "shape": "w_2047",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_2047/base",
+    "shape": "w_2047",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_2047/fused_iso",
+    "shape": "w_2047",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_2047/fused",
+    "shape": "w_2047",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_2047/fused_p21",
+    "shape": "w_2047",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_2047/fused_p22",
+    "shape": "w_2047",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_2047/fused_rawall",
+    "shape": "w_2047",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_1024/base_p21",
+    "shape": "w_nonalign_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_1024/base",
+    "shape": "w_nonalign_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_1024/fused_iso",
+    "shape": "w_nonalign_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_1024/fused",
+    "shape": "w_nonalign_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_1024/fused_p21",
+    "shape": "w_nonalign_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_1024/fused_p22",
+    "shape": "w_nonalign_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_1024/fused_rawall",
+    "shape": "w_nonalign_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "wide_prime_8224/base_p21",
+    "shape": "wide_prime_8224",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "wide_prime_8224/base",
+    "shape": "wide_prime_8224",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "wide_prime_8224/fused_iso",
+    "shape": "wide_prime_8224",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "wide_prime_8224/fused",
+    "shape": "wide_prime_8224",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "wide_prime_8224/fused_p21",
+    "shape": "wide_prime_8224",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "wide_prime_8224/fused_p22",
+    "shape": "wide_prime_8224",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "wide_prime_8224/fused_rawall",
+    "shape": "wide_prime_8224",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "smallest/base_p21",
+    "shape": "smallest",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "smallest/base",
+    "shape": "smallest",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "smallest/fused_iso",
+    "shape": "smallest",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "smallest/fused",
+    "shape": "smallest",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "smallest/fused_p21",
+    "shape": "smallest",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "smallest/fused_p22",
+    "shape": "smallest",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "smallest/fused_rawall",
+    "shape": "smallest",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_no_gamma/base_p21",
+    "shape": "w_nonalign_no_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": false,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_no_gamma/base",
+    "shape": "w_nonalign_no_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": false,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_no_gamma/fused_iso",
+    "shape": "w_nonalign_no_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": false,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_no_gamma/fused",
+    "shape": "w_nonalign_no_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": false,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_no_gamma/fused_p21",
+    "shape": "w_nonalign_no_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": false,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_no_gamma/fused_p22",
+    "shape": "w_nonalign_no_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": false,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_no_gamma/fused_rawall",
+    "shape": "w_nonalign_no_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": false,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_fp32/base_p21",
+    "shape": "w_nonalign_fp32",
+    "config": "default",
+    "dtype": "DataType.FLOAT32",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_fp32/base",
+    "shape": "w_nonalign_fp32",
+    "config": "default",
+    "dtype": "DataType.FLOAT32",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_fp32/fused_iso",
+    "shape": "w_nonalign_fp32",
+    "config": "default",
+    "dtype": "DataType.FLOAT32",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_fp32/fused",
+    "shape": "w_nonalign_fp32",
+    "config": "default",
+    "dtype": "DataType.FLOAT32",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_fp32/fused_p21",
+    "shape": "w_nonalign_fp32",
+    "config": "default",
+    "dtype": "DataType.FLOAT32",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_fp32/fused_p22",
+    "shape": "w_nonalign_fp32",
+    "config": "default",
+    "dtype": "DataType.FLOAT32",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_fp32/fused_rawall",
+    "shape": "w_nonalign_fp32",
+    "config": "default",
+    "dtype": "DataType.FLOAT32",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_bf8b/base_p21",
+    "shape": "w_nonalign_bf8b",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT8_B",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_bf8b/base",
+    "shape": "w_nonalign_bf8b",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT8_B",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_bf8b/fused_iso",
+    "shape": "w_nonalign_bf8b",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT8_B",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_bf8b/fused",
+    "shape": "w_nonalign_bf8b",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT8_B",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_bf8b/fused_p21",
+    "shape": "w_nonalign_bf8b",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT8_B",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_bf8b/fused_p22",
+    "shape": "w_nonalign_bf8b",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT8_B",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_bf8b/fused_rawall",
+    "shape": "w_nonalign_bf8b",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT8_B",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_gamma/base_p21",
+    "shape": "w_nonalign_rm_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_gamma/base",
+    "shape": "w_nonalign_rm_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_gamma/fused_iso",
+    "shape": "w_nonalign_rm_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_gamma/fused",
+    "shape": "w_nonalign_rm_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_gamma/fused_p21",
+    "shape": "w_nonalign_rm_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_gamma/fused_p22",
+    "shape": "w_nonalign_rm_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_gamma/fused_rawall",
+    "shape": "w_nonalign_rm_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_in/base_p21",
+    "shape": "w_nonalign_rm_in",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_in/base",
+    "shape": "w_nonalign_rm_in",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_in/fused_iso",
+    "shape": "w_nonalign_rm_in",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_in/fused",
+    "shape": "w_nonalign_rm_in",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_in/fused_p21",
+    "shape": "w_nonalign_rm_in",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_in/fused_p22",
+    "shape": "w_nonalign_rm_in",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_in/fused_rawall",
+    "shape": "w_nonalign_rm_in",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "focus_regime_a/base_p21",
+    "shape": "focus_regime_a",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "focus_regime_a/base",
+    "shape": "focus_regime_a",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "focus_regime_a/fused_iso",
+    "shape": "focus_regime_a",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "focus_regime_a/fused",
+    "shape": "focus_regime_a",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "focus_regime_a/fused_p21",
+    "shape": "focus_regime_a",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "focus_regime_a/fused_p22",
+    "shape": "focus_regime_a",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "focus_regime_a/fused_rawall",
+    "shape": "focus_regime_a",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "prefill_1024/base_p21",
+    "shape": "prefill_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "prefill_1024/base",
+    "shape": "prefill_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "prefill_1024/fused_iso",
+    "shape": "prefill_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "prefill_1024/fused",
+    "shape": "prefill_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "prefill_1024/fused_p21",
+    "shape": "prefill_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "prefill_1024/fused_p22",
+    "shape": "prefill_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "prefill_1024/fused_rawall",
+    "shape": "prefill_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  }
+]

@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
+// FROZEN COPY of kernels/rms_norm_compute.cpp with ONE branch changed (see the
+// HELPER-vs-RAW MEASUREMENT ARM comment in sumsq_chunk).  perf evidence only -
+// re-copy from the real kernel if that kernel moves; nothing in the op builds this.
+//
 // W-SPLIT combine, step 3 (only on a group ROOT, only when W_SPLIT=1): the
 // GROUP_SIZE gathered PARTIAL sum-of-squares tiles are summed element-wise and
 // collapsed along W in ONE reduce<SUM, REDUCE_ROW, ..., AccumulateViaAdd> call.
@@ -279,17 +283,20 @@ ALWI uint32_t sumsq_chunk(uint32_t k, bool is_last_chunk) {
         fold_partial_sum(k, is_last_chunk, W_PARTIAL > 0 && is_last_chunk);
         return k + 1;
     } else if (!(W_PARTIAL > 0 && is_last_chunk)) {
-        // TILE-ALIGNED chunk: the whole chunk folds into ONE DEST row accumulator
-        // and the helper owns the input lifecycle.  No mask is needed - the
-        // accumulator's 32 columns are all meaningful.
+        // HELPER-vs-RAW MEASUREMENT ARM ONLY (perf_experiments/fused_sumsq,
+        // graduation_rawall).  Identical work to the shipped kernel's
+        // `ckl::sum_of_squares` call, written as the eltwise_chain expansion that
+        // helper produces, with the caller owning the input lifecycle that
+        // TileOffset::Strided forces.  Exists so the helper-bypass changelog row
+        // has a MEASURED `helper ns` vs `raw ns` pair on the same window rather
+        // than an argument that they must be equal.
+        cb_wait_front(cb_input_tiles, BLOCK_HT * WT_REDUCE_BLOCK);
         {
             MaybeDeviceZoneScope("cp_sumsq");
-            ckl::sum_of_squares<
-                ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::row_output(cb_sumsq_acc)>(
-                ckl::IterationShape::grid(BLOCK_HT, WT_REDUCE_BLOCK).block_size(DEST_BLOCK));
+            sumsq_strided<WT_REDUCE_BLOCK>(0);
         }
         fold_partial_sum(k, is_last_chunk, false);
+        cb_pop_front(cb_input_tiles, BLOCK_HT * WT_REDUCE_BLOCK);
         return k + 1;
     } else {
         // LAST chunk of a NON-TILE-ALIGNED W.  The pad columns live ONLY in the
