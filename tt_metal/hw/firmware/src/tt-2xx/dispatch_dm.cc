@@ -127,7 +127,7 @@ extern "C" uint32_t _start1() {
     } else {
         risc_init();
         // Host-populated bank tables live in cached TL1; drop stale L2 lines before the copy.
-        noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+        noc_bank_table_init(MEM_DISPATCH_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;

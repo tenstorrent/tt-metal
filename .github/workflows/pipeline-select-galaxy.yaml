@@ -56,7 +56,6 @@ on:
           - qwen3_32b
           - qwen3_32b_long_context
           - deepseek_v3
-          - qwenimage
         default: "disabled"
       galaxy-integration:
         description: "Integration tests: Select all, specific model, or disabled"
@@ -68,7 +67,6 @@ on:
           - llama3
           - unit
           - wan22
-          - qwenimage
         default: "disabled"
       galaxy-perf:
         description: "Perf tests: Select all, specific model, or disabled"
@@ -83,7 +81,6 @@ on:
           #          - llama70b_prefill
           #          - sentence_bert
           - wan2-2
-          - qwenimage
         default: "disabled"
       galaxy-e2e:
         description: "Galaxy e2e tests: all, one suite (see tests/pipeline_reorg/galaxy_e2e_tests.yaml ids), or disabled"

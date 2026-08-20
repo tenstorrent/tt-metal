@@ -37,6 +37,7 @@
 #include "umd/device/utils/semver.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/firmware/firmware_utils.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
 #include <umd/device/pcie/pci_device.hpp>
 #include <umd/device/types/arch.hpp>
@@ -221,8 +222,6 @@ bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type)
 
 bool Cluster::is_iommu_enabled() const { return this->iommu_enabled_; }
 
-bool Cluster::is_noc_mapping_enabled() const { return this->noc_mapping_enabled_; }
-
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     ZoneScoped;
     log_info(tt::LogDevice, "Opening user mode device driver");
@@ -332,9 +331,10 @@ void Cluster::initialize_device_drivers() {
     umd::DeviceParams default_params;
     this->start_driver(default_params);
 
+    this->apply_tdp_limit_override();
+
     // Cache IOMMU status (expensive to query repeatedly)
     this->iommu_enabled_ = false;
-    this->noc_mapping_enabled_ = false;
     if (this->target_type_ == tt::TargetDevice::Silicon) {
         const auto& mmio_ids = this->driver_->get_target_mmio_device_ids();
         if (!mmio_ids.empty()) {
@@ -342,8 +342,42 @@ void Cluster::initialize_device_drivers() {
             auto* pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
             if (pci) {
                 this->iommu_enabled_ = pci->is_iommu_enabled();
-                this->noc_mapping_enabled_ = tt::umd::PCIDevice::is_mapping_buffer_to_noc_supported();
             }
+        }
+    }
+}
+
+void Cluster::apply_tdp_limit_override() {
+    const std::optional<uint32_t> tdp_limit_watts = this->rtoptions_.get_tdp_limit_watts();
+    if (!tdp_limit_watts.has_value() || this->target_type_ != TargetDevice::Silicon) {
+        return;
+    }
+
+    // The limit applies per ASIC, so it is set on every chip that this process drives over PCIe. It
+    // outlives this process: firmware drops it on chip reset, and nothing else restores it.
+    for (const ChipId mmio_device_id : this->driver_->get_target_mmio_device_ids()) {
+        try {
+            // Silicon only, so the chip is backed by a real TTDevice rather than a null mock one.
+            umd::TTDevice* tt_device = this->driver_->get_chip(mmio_device_id)->get_tt_device();
+            if (tdp_limit_watts.value() == llrt::TDP_LIMIT_RESTORE_DEFAULT_SENTINEL) {
+                umd::restore_default_tdp_limit(tt_device);
+            } else {
+                umd::set_tdp_limit(tt_device, tdp_limit_watts.value());
+            }
+            // Read back rather than echo: the board default is only known once firmware applies it.
+            log_info(
+                tt::LogDevice,
+                "TT_METAL_TDP_LIMIT_WATTS: firmware TDP limit on chip {} is now {} W",
+                mmio_device_id,
+                tt_device->get_firmware_info_provider()->get_tdp_limit());
+        } catch (const std::exception& e) {
+            // Capping power is optional: an unsupported architecture, firmware too old to take the
+            // message, or a limit firmware rejects must not fail the run. UMD carries the detail.
+            log_warning(
+                tt::LogDevice,
+                "TT_METAL_TDP_LIMIT_WATTS: leaving the firmware TDP limit on chip {} as it is: {}",
+                mmio_device_id,
+                e.what());
         }
     }
 }

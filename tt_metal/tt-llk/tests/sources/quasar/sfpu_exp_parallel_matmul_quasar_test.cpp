@@ -44,14 +44,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         const ckernel::TensorShape tensor_shape_A = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_A);
         const ckernel::TensorShape tensor_shape_B = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_B);
-        tdma_descriptor_t tdma_desc_src_a =
-            ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, buf_desc_id_src_a, formats.unpack_A_dst);
-        tdma_descriptor_t tdma_desc_src_b =
-            ckernel::trisc::construct_tdma_desc(tensor_shape_B, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src, buf_desc_id_src_b, formats.unpack_B_dst);
-
-        _configure_buf_desc_table_(tdma_desc_src_a.buf_desc_id, tdma_desc_src_a.buf_desc);
-        _configure_buf_desc_table_(tdma_desc_src_b.buf_desc_id, tdma_desc_src_b.buf_desc);
-        _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(tdma_desc_src_a.reg_data_format, tdma_desc_src_b.reg_data_format);
+        _configure_buf_desc_table_(buf_desc_id_src_a, ckernel::trisc::construct_buf_desc(tensor_shape_A, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src));
+        _configure_buf_desc_table_(buf_desc_id_src_b, ckernel::trisc::construct_buf_desc(tensor_shape_B, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src));
+        _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(
+            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
         _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(buf_desc_id_src_a, buf_desc_id_src_b, CT_DIM, RT_DIM, KT_DIM);
         PROFILER_SYNC();
     }
@@ -103,7 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false>(
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*EN_INT32_MATH_FORMAT*/>(
             static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
         _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
         PROFILER_SYNC();
@@ -187,20 +183,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // One MOP run issues one REPLAY per SrcS slice of a tile. The `done` bit on the final
     // LOADMACRO of each replay swaps the SrcS banks and resets the dvalids in hardware, so the
     // SFPU is paced purely by the dvalid handshake with the unpacker and packer.
-    ckernel_template mop(PARAM_SRCS_SLICE_COUNT, 1, _exp_loadmacro_op_(num_sfpu_iterations));
+    ckernel_template mop(PARAM_SRCS_SLICE_COUNT, 1 /*inner_loop_len*/, _exp_loadmacro_op_(num_sfpu_iterations));
 
     {
         ZONE_SCOPED("INIT")
         const ckernel::TensorShape srcs_shape = tensor_shape_from_dimensions(PARAM_SRCS_YDIM, PARAM_SRCS_XDIM, PARAM_SRCS_ZDIM, PARAM_SRCS_ZDIM);
-        tdma_descriptor_t td_unpack =
-            ckernel::trisc::construct_tdma_desc(srcs_shape, L1_ADDRESS(params.buffer_S[0]), formats.unpack_S_src, buf_desc_id_unpack, formats.unpack_S_dst);
-        _configure_buf_desc_table_(td_unpack.buf_desc_id, td_unpack.buf_desc);
-        _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack.reg_data_format);
+        _configure_buf_desc_table_(buf_desc_id_unpack, ckernel::trisc::construct_buf_desc(srcs_shape, L1_ADDRESS(params.buffer_S[0]), formats.unpack_S_src));
+        _llk_unpack_configure_unary_<p_unpacr::UNP_S>(static_cast<DataFormat>(formats.unpack_S_dst));
 
-        tdma_descriptor_t td_pack =
-            ckernel::trisc::construct_tdma_desc(srcs_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_S_dst, buf_desc_id_pack, formats.pack_S_src);
-        _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
-        _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack.reg_data_format, ckernel::ReluConfig::none());
+        _configure_buf_desc_table_(buf_desc_id_pack, ckernel::trisc::construct_buf_desc(srcs_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_S_dst));
+        _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
 
         _llk_unpack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
         _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
@@ -210,11 +202,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // be a compile-time constant, so branch on the runtime 32-bit mode into constexpr variants.
         if (PARAM_SRCS_32BIT_MODE)
         {
-            _exp_init_loadmacro_<2 * srcs_dims::ydim(true)>(load_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem);
+            _exp_init_loadmacro_<2 * srcs_dims::ydim(true /*srcs_32bit_mode*/) /*STORE_OFFSET*/>(load_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem);
         }
         else
         {
-            _exp_init_loadmacro_<2 * srcs_dims::ydim(false)>(load_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem);
+            _exp_init_loadmacro_<2 * srcs_dims::ydim(false /*srcs_32bit_mode*/) /*STORE_OFFSET*/>(load_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem);
         }
         mop.program(instrn_buffer);
         PROFILER_SYNC();
@@ -272,12 +264,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces);
-        tdma_descriptor_t tdma_desc_dst =
-            ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(params.buffer_C[0]), formats.pack_dst, buf_desc_id_dst, formats.pack_src);
-
-        _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc_dst.reg_data_format, ckernel::ReluConfig::none());
-        _llk_pack_matmul_init_(buf_desc_id_dst, RT_DIM, CT_DIM, 1);
+        _configure_buf_desc_table_(buf_desc_id_dst, ckernel::trisc::construct_buf_desc(tensor_shape, L1_ADDRESS(params.buffer_C[0]), formats.pack_dst));
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+        _llk_pack_matmul_init_(buf_desc_id_dst, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/);
         PROFILER_SYNC();
     }
     {
@@ -289,14 +278,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_matmul_(0, 0);
+                _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_matmul_(0, 0);
+                _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
                 _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }

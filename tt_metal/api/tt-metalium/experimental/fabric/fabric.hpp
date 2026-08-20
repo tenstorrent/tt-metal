@@ -172,6 +172,10 @@ void SetFabricConfig(
 FabricConfig GetFabricConfig();
 
 namespace experimental {
+
+// How many ethernet links the weakest hop along one row or column can open. Planes held back for
+// dispatch do not count. `cluster_axis` picks the direction: 0 runs down a column, 1 runs along a
+// row. `row_or_col` picks which one of them. Returns 0 if no hop could be measured.
 size_t get_number_of_available_routing_planes(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t cluster_axis, size_t row_or_col);
 }

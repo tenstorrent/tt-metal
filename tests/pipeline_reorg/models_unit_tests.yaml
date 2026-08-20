@@ -1173,6 +1173,23 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── Qwen-Image (TT-DiT) ────────────────────────────────────────────
+- name: TT-DiT Qwen-Image unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    pytest --timeout 1500 models/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair
+    pytest --timeout 900 models/tt_dit/tests/models/qwenimage/test_transformer_qwenimage.py -k "not not_traced"
+  model: qwenimage
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 45
+      tier: 2
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 - name: TT-DiT Motif-Image-6B unit tests
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
@@ -1387,4 +1404,18 @@
       timeout: 15
       tier: 2
   owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
+  team: models
+
+- name: On-device sampling unit tests
+  cmd: |
+    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap"
+  model: tt-model-sampling
+  skus:
+    wh_n150:
+      timeout: 10
+      tier: 3
+    bh_p150:
+      timeout: 10
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models

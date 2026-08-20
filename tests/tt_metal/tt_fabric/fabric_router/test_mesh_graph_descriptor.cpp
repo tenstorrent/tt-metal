@@ -1978,12 +1978,13 @@ TEST(MeshGraphDescriptorTests, PinningsParsing) {
 
     MeshGraphDescriptor desc(text_proto);
 
-    // Check that pinnings were extracted as one group per entry
+    // Check that pinnings were extracted as one group per entry (both on mesh 0)
     const auto& pinnings = desc.get_pinnings();
-    EXPECT_EQ(pinnings.size(), 2) << "Should have 2 pinning groups";
+    ASSERT_EQ(pinnings.size(), 1u);
+    ASSERT_EQ(pinnings.at(MeshId{0}).size(), 2u) << "Should have 2 pinning groups";
 
     // Check first pinning: (mesh 0, chip 0) -> (tray 1, location 1)
-    const auto& pinning1 = pinnings[0];
+    const auto& pinning1 = pinnings.at(MeshId{0})[0];
     ASSERT_EQ(pinning1.fabric_nodes.size(), 1) << "First pinning should have 1 fabric node";
     ASSERT_EQ(pinning1.asic_positions.size(), 1) << "First pinning should have 1 ASIC position";
     EXPECT_EQ(*pinning1.asic_positions[0].first, 1) << "First pinning should have tray_id 1";
@@ -1992,7 +1993,7 @@ TEST(MeshGraphDescriptorTests, PinningsParsing) {
     EXPECT_EQ(pinning1.fabric_nodes[0].chip_id, 0) << "First pinning should have chip_id 0";
 
     // Check second pinning: (mesh 0, chip 31) -> (tray 4, location 1)
-    const auto& pinning2 = pinnings[1];
+    const auto& pinning2 = pinnings.at(MeshId{0})[1];
     ASSERT_EQ(pinning2.fabric_nodes.size(), 1) << "Second pinning should have 1 fabric node";
     ASSERT_EQ(pinning2.asic_positions.size(), 1) << "Second pinning should have 1 ASIC position";
     EXPECT_EQ(*pinning2.asic_positions[0].first, 4) << "Second pinning should have tray_id 4";
@@ -2031,7 +2032,7 @@ TEST(MeshGraphDescriptorTests, PinningsMeshIdRegexRangeExpandsPerMesh) {
     const auto& pinnings = desc.get_pinnings();
     ASSERT_EQ(pinnings.size(), 3u) << "One group per matched mesh (0,1,2)";
     for (uint32_t m = 0; m < 3; ++m) {
-        const auto& g = pinnings[m];
+        const auto& g = pinnings.at(MeshId{m}).front();
         ASSERT_EQ(g.fabric_nodes.size(), 2u);
         EXPECT_EQ(*g.fabric_nodes[0].mesh_id, m);
         EXPECT_EQ(g.fabric_nodes[0].chip_id, 0u);
@@ -2069,12 +2070,12 @@ TEST(MeshGraphDescriptorTests, PinningsMeshIdRegexEvenOddParity) {
     MeshGraphDescriptor desc(text_proto);
     const auto& pinnings = desc.get_pinnings();
     ASSERT_EQ(pinnings.size(), 2u) << "Even meshes 0 and 2";
-    EXPECT_EQ(*pinnings[0].fabric_nodes.front().mesh_id, 0u);
-    EXPECT_EQ(*pinnings[1].fabric_nodes.front().mesh_id, 2u);
+    EXPECT_EQ(*pinnings.at(MeshId{0}).front().fabric_nodes.front().mesh_id, 0u);
+    EXPECT_EQ(*pinnings.at(MeshId{2}).front().fabric_nodes.front().mesh_id, 2u);
     // chip_id_regex "0-3" over a 2x2 (4-chip) mesh -> chips 0,1,2,3.
-    ASSERT_EQ(pinnings[0].fabric_nodes.size(), 4u);
+    ASSERT_EQ(pinnings.at(MeshId{0}).front().fabric_nodes.size(), 4u);
     for (uint32_t c = 0; c < 4; ++c) {
-        EXPECT_EQ(pinnings[0].fabric_nodes[c].chip_id, c);
+        EXPECT_EQ(pinnings.at(MeshId{0}).front().fabric_nodes[c].chip_id, c);
     }
 }
 
@@ -2165,12 +2166,14 @@ TEST(MeshGraphDescriptorTests, PinningsPhysicalRegexExpands) {
 
     MeshGraphDescriptor desc(text_proto);
     const auto& pinnings = desc.get_pinnings();
-    ASSERT_EQ(pinnings.size(), 2u);
+    ASSERT_EQ(pinnings.size(), 1u);
+    const auto& groups = pinnings.at(MeshId{0});
+    ASSERT_EQ(groups.size(), 2u);
 
-    ASSERT_EQ(pinnings[0].asic_positions.size(), 4u);
+    ASSERT_EQ(groups[0].asic_positions.size(), 4u);
     for (uint32_t tray : {1u, 2u, 3u, 4u}) {
         bool found = false;
-        for (const auto& pos : pinnings[0].asic_positions) {
+        for (const auto& pos : groups[0].asic_positions) {
             if (*pos.first == tray && *pos.second == 3u) {
                 found = true;
             }
@@ -2178,10 +2181,10 @@ TEST(MeshGraphDescriptorTests, PinningsPhysicalRegexExpands) {
         EXPECT_TRUE(found) << "Expected tray " << tray << " asic_location 3";
     }
 
-    ASSERT_EQ(pinnings[1].asic_positions.size(), 4u);
+    ASSERT_EQ(groups[1].asic_positions.size(), 4u);
     for (uint32_t loc : {2u, 3u, 6u, 7u}) {
         bool found = false;
-        for (const auto& pos : pinnings[1].asic_positions) {
+        for (const auto& pos : groups[1].asic_positions) {
             if (*pos.first == 1u && *pos.second == loc) {
                 found = true;
             }
@@ -2219,17 +2222,19 @@ TEST(MeshGraphDescriptorTests, PinningsRepeatedNodeKeptAsSeparateGroups) {
     MeshGraphDescriptor desc(text_proto);
     const auto& pinnings = desc.get_pinnings();
 
-    ASSERT_EQ(pinnings.size(), 2u);
+    ASSERT_EQ(pinnings.size(), 1u);
+    const auto& groups = pinnings.at(MeshId{0});
+    ASSERT_EQ(groups.size(), 2u);
     const FabricNodeId node(MeshId{0}, 0);
-    for (const auto& group : pinnings) {
+    for (const auto& group : groups) {
         ASSERT_EQ(group.fabric_nodes.size(), 1u);
         EXPECT_EQ(group.fabric_nodes[0], node);
         ASSERT_EQ(group.asic_positions.size(), 1u);
     }
-    EXPECT_EQ(*pinnings[0].asic_positions[0].first, 1u);
-    EXPECT_EQ(*pinnings[0].asic_positions[0].second, 1u);
-    EXPECT_EQ(*pinnings[1].asic_positions[0].first, 2u);
-    EXPECT_EQ(*pinnings[1].asic_positions[0].second, 2u);
+    EXPECT_EQ(*groups[0].asic_positions[0].first, 1u);
+    EXPECT_EQ(*groups[0].asic_positions[0].second, 1u);
+    EXPECT_EQ(*groups[1].asic_positions[0].first, 2u);
+    EXPECT_EQ(*groups[1].asic_positions[0].second, 2u);
 }
 
 TEST(MeshGraphDescriptorTests, PinningsEmpty) {
@@ -2332,7 +2337,7 @@ TEST(MeshGraphDescriptorTests, PinningsAllToAll) {
     const auto& pinnings = desc.get_pinnings();
     ASSERT_EQ(pinnings.size(), 1) << "The entry should be stored as a single many-to-many group";
 
-    const auto& group = pinnings[0];
+    const auto& group = pinnings.at(MeshId{0}).front();
     ASSERT_EQ(group.fabric_nodes.size(), 2) << "Group should list 2 fabric nodes";
     ASSERT_EQ(group.asic_positions.size(), 2) << "Group should list 2 ASIC positions";
 
@@ -2449,17 +2454,66 @@ TEST(MeshGraphDescriptorTests, PinningsRegexOverlappingMeshIdsExpandPerMesh) {
     const auto& pinnings = desc.get_pinnings();
 
     // Meshes 0, 1, 2 from the first entry plus meshes 2, 3 from the second.
-    ASSERT_EQ(pinnings.size(), 5u);
+    ASSERT_EQ(pinnings.size(), 4u);
     std::map<uint32_t, uint32_t> groups_per_mesh;
-    for (const auto& group : pinnings) {
-        ASSERT_EQ(group.fabric_nodes.size(), 1u);
-        EXPECT_EQ(group.fabric_nodes[0].chip_id, 0u);
-        groups_per_mesh[*group.fabric_nodes[0].mesh_id]++;
+    for (const auto& [_, groups] : pinnings) {
+        for (const auto& group : groups) {
+            ASSERT_EQ(group.fabric_nodes.size(), 1u);
+            EXPECT_EQ(group.fabric_nodes[0].chip_id, 0u);
+            groups_per_mesh[*group.fabric_nodes[0].mesh_id]++;
+        }
     }
     EXPECT_EQ(groups_per_mesh[0], 1u);
     EXPECT_EQ(groups_per_mesh[1], 1u);
     EXPECT_EQ(groups_per_mesh[2], 2u);
     EXPECT_EQ(groups_per_mesh[3], 1u);
+}
+
+TEST(MeshGraphDescriptorTests, PinningsLiteralMultiMeshSplitsByMesh) {
+    // A non-regex entry that lists nodes from two meshes must emit one group per mesh, matching the
+    // regex path, so get_pinnings() can look up without filtering mixed-mesh groups.
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+        }
+        pinnings: {
+          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
+          logical_fabric_node_id: { mesh_id: 0 chip_id: 3 }
+          logical_fabric_node_id: { mesh_id: 1 chip_id: 0 }
+          physical_asic_position: { tray_id: 1 asic_location: 3 }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+    const auto& pinnings = desc.get_pinnings();
+    ASSERT_EQ(pinnings.size(), 2u);
+
+    const auto& mesh0 = pinnings.at(MeshId{0});
+    ASSERT_EQ(mesh0.size(), 1u);
+    ASSERT_EQ(mesh0[0].fabric_nodes.size(), 2u);
+    EXPECT_EQ(*mesh0[0].fabric_nodes[0].mesh_id, 0u);
+    EXPECT_EQ(mesh0[0].fabric_nodes[0].chip_id, 0u);
+    EXPECT_EQ(*mesh0[0].fabric_nodes[1].mesh_id, 0u);
+    EXPECT_EQ(mesh0[0].fabric_nodes[1].chip_id, 3u);
+
+    const auto& mesh1 = pinnings.at(MeshId{1});
+    ASSERT_EQ(mesh1.size(), 1u);
+    ASSERT_EQ(mesh1[0].fabric_nodes.size(), 1u);
+    EXPECT_EQ(*mesh1[0].fabric_nodes[0].mesh_id, 1u);
+    EXPECT_EQ(mesh1[0].fabric_nodes[0].chip_id, 0u);
+
+    EXPECT_FALSE(pinnings.contains(MeshId{2}));
 }
 
 TEST(MeshGraphDescriptorTests, VectorReallocPreservesConnectionsByTypeLookup) {
