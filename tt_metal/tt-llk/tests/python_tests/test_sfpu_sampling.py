@@ -381,12 +381,9 @@ _HAZARD_ROWS = 4  # recip_scalar walks DEST rows 0-3 of face 0
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     legacy_compat=[True, False],
-    pollute=[True],
     skip_init=[False, True],
 )
-def test_sfpu_sampling_recip_prgm0_hazard(
-    formats, dest_acc, legacy_compat, pollute, skip_init
-):
+def test_sfpu_sampling_recip_prgm0_hazard(formats, dest_acc, legacy_compat, skip_init):
     """Prove sampling_recip_init repairs a polluted vConstFloatPrgm0, and is required to.
 
     Assertion matrix, with an earlier log_init having taken vConstFloatPrgm0:
@@ -398,9 +395,10 @@ def test_sfpu_sampling_recip_prgm0_hazard(
     | false         | called     | correct -- this is what the init exists for |
     | false         | skipped    | WRONG -- log's constant survives into the Newton step |
 
-    The (pollute=False, skip_init=True) cell is deliberately not swept: with no polluter
-    and no init, vConstFloatPrgm0 holds whatever the invariant LLK SFPU init happened to
-    leave, which is not a defined value and so not something to assert on either way.
+    The polluter always runs, so it is a constant in the driver rather than an axis: with
+    no polluter and no init, vConstFloatPrgm0 holds whatever the invariant LLK SFPU init
+    happened to leave, which is not a defined value and so not something to assert on
+    either way.
     """
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
@@ -435,7 +433,7 @@ def test_sfpu_sampling_recip_prgm0_hazard(
             SAMPLING_LEGACY_COMPAT(legacy_compat=legacy_compat),
             SFPU_UNARY_SCALAR(value_bits=scalar_bits),
             VECTOR_MODE(vector_mode=VectorMode.None_),
-            SAMPLING_PRGM0_HAZARD(pollute=pollute, skip_init=skip_init),
+            SAMPLING_PRGM0_HAZARD(pollute=True, skip_init=skip_init),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
