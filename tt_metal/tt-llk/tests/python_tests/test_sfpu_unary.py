@@ -1291,6 +1291,20 @@ _FITTED_CPP_OPS = [
     MathOperation.Sigmoid,
     MathOperation.Gelu,
     MathOperation.TanhDerivative,
+    # Lane CR wave 2 (same contract; provenance in fresh_cpp/*_fitted.h).
+    MathOperation.Digamma,
+    MathOperation.Lgamma,
+    MathOperation.Polygamma,
+    MathOperation.I0,
+    MathOperation.I1,
+    MathOperation.Mish,
+    MathOperation.Log,
+    MathOperation.Log1p,
+    MathOperation.Exp,
+    MathOperation.Rsqrt,
+    MathOperation.Celu,
+    MathOperation.Elu,
+    MathOperation.Selu,
 ]
 
 
