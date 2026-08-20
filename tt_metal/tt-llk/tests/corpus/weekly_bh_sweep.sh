@@ -81,6 +81,8 @@ python3 "$HERE/selftest_sweep_core_overhaul.py" > "$EV/selftest-sweep-core-overh
   || { echo "FATAL: sweep-core-overhaul self-test failed (see $EV/selftest-sweep-core-overhaul.txt)"; exit 2; }
 python3 "$HERE/selftest_knob_legs_semleg.py" > "$EV/selftest-knob-legs-semleg.txt" 2>&1 \
   || { echo "FATAL: knob-legs/sem-leg self-test failed (see $EV/selftest-knob-legs-semleg.txt)"; exit 2; }
+python3 "$HERE/selftest_dst_layout_32b.py" > "$EV/selftest-dst-layout-32b.txt" 2>&1 \
+  || { echo "FATAL: dst-layout-32b wiring self-test failed (see $EV/selftest-dst-layout-32b.txt)"; exit 2; }
 { mv /tmp/weekly-selftest-conf-lint.$$ "$EV/selftest-conf-lint.txt" 2>/dev/null || true; }
 { mv /tmp/weekly-selftest-wrapper-lib.$$ "$EV/selftest-wrapper-lib.txt" 2>/dev/null || true; }
 bash "$HERE/conf_lint.sh" > "$EV/conf-lint.txt" 2>&1 \

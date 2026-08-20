@@ -78,6 +78,8 @@ python3 "$HERE/selftest_enforcement_gates.py" > "$EV/selftest-enforcement-gates.
   || { echo "FATAL: enforcement-gates self-test failed (see $EV/selftest-enforcement-gates.txt)"; exit 2; }
 python3 "$HERE/selftest_knob_legs_semleg.py" > "$EV/selftest-knob-legs-semleg.txt" 2>&1 \
   || { echo "FATAL: knob-legs/sem-leg self-test failed (see $EV/selftest-knob-legs-semleg.txt)"; exit 2; }
+python3 "$HERE/selftest_dst_layout_32b.py" > "$EV/selftest-dst-layout-32b.txt" 2>&1 \
+  || { echo "FATAL: dst-layout-32b wiring self-test failed (see $EV/selftest-dst-layout-32b.txt)"; exit 2; }
 mv /tmp/headline-selftest-conf-lint.$$ "$EV/selftest-conf-lint.txt" 2>/dev/null || true
 bash "$HERE/conf_lint.sh" > "$EV/conf-lint.txt" 2>&1 \
   || { echo "FATAL: conf-lint refused (see $EV/conf-lint.txt)"; exit 2; }

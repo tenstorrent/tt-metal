@@ -101,6 +101,8 @@ python3 "$HERE/selftest_sweep_core_overhaul.py" > "$EV/selftest-sweep-core-overh
   || GATE_SELFTEST_RC=1
 python3 "$HERE/selftest_knob_legs_semleg.py" > "$EV/selftest-knob-legs-semleg.txt" 2>&1 \
   || GATE_SELFTEST_RC=1
+python3 "$HERE/selftest_dst_layout_32b.py" > "$EV/selftest-dst-layout-32b.txt" 2>&1 \
+  || GATE_SELFTEST_RC=1
 # Record the conf-lint verdict (already enforced above, pre-source) in-evidence.
 { mv /tmp/nightly-selftest-conf-lint.$$ "$EV/selftest-conf-lint.txt" 2>/dev/null || true; }
 { mv /tmp/nightly-selftest-wrapper-lib.$$ "$EV/selftest-wrapper-lib.txt" 2>/dev/null || true; }

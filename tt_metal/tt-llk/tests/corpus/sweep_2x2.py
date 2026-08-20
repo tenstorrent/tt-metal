@@ -599,6 +599,71 @@ for _k in KNOB_MODES:
     if KNOB_MODES[_k] not in ("solo", "drop-one", "on-plus"):
         sys.exit(f"KNOB_MODES[{_k}] must be 'solo', 'drop-one' or 'on-plus'")
     knob_legs(_k)  # drop-one/on-plus flag checks exit loudly
+
+
+# ---- dst-layout-32b integration wiring (lane DZ; DU integration note 4,
+# pin-15 lreg-allocator measurement prerequisite) ----------------------------
+# The DP LREG allocator (-mtt-tensix-optimize-lreg-alloc) spills vector webs
+# through 32-bit Dst scratch rows.  Its companion integration flag
+# -mtt-tensix-dst-layout-32b is a DECLARATION the build layer must derive
+# from the kernel's dest-accumulation mode: riscv.opt documents that
+# DECLARING IT FALSELY ON A 16-BIT-LAYOUT KERNEL MAKES A SPILLED COMPILATION
+# PRODUCE SILENT WRONG OUTPUT (no run-time error exists; DU red-team
+# witness: 0/128 vs 128/128 rows).  The sweep IS the build layer here — it
+# owns the flag strings — and the kernel's mode is authoritative in the
+# pytest node id: the harness's DestAccumulation enum (helpers/llk_params.py)
+# maps dest_acc:Yes -> is_fp32_dest_acc_en=true (32-bit Dst rows) and
+# dest_acc:No -> false, rendered verbatim into every node id.
+#
+# FAIL-CLOSED CONTRACT (both directions asymmetric by design):
+#   * inject ONLY on an explicit dest_acc:Yes token — dest_acc:No, an
+#     absent token, or any unrecognized spelling gets NO declaration.  A
+#     missing declaration is SAFE: the allocator refuses the spill classes
+#     that need it (byte-identical / named refusal), never wrong output.
+#     (test_config.py can auto-PROMOTE dest_acc No->Yes for outlier format
+#     combos — promotion makes the kernel 32-bit while we stay silent,
+#     which again only costs a measurement, never correctness.  It never
+#     demotes Yes->No, so an explicit Yes is always truthfully 32-bit.)
+#   * inject ONLY when the flag string already carries a consumer
+#     (-mtt-tensix-optimize-lreg-alloc): every leg that does not measure
+#     the allocator keeps its flag string BYTE-IDENTICAL — jobkeys,
+#     classify hashes, leg-store keys and cross-pin --prev-run adoption
+#     are untouched.
+# The injection is a pure function of (flags, node), applied at every
+# point where a flag string meets a node id (classify legs, batched
+# classify jobs, CRAQ legs, serial and batched device jobs), so evidence
+# files, jobkeys and chunk-session grouping all record the EFFECTIVE flag
+# string consistently.
+DST_LAYOUT_32B_FLAG = "-mtt-tensix-dst-layout-32b"
+DST_LAYOUT_CONSUMERS = ("-mtt-tensix-optimize-lreg-alloc",)
+_DEST_ACC_TOKEN_RE = re.compile(r"dest_acc:([A-Za-z0-9_.]+)")
+
+
+def node_dest_acc_32b(node):
+    """True ONLY for a node id explicitly declaring 32-bit dest accumulation
+    (dest_acc:Yes).  Everything else — dest_acc:No, no token, unrecognized
+    spelling — is False (fail closed; see the contract block above)."""
+    m = _DEST_ACC_TOKEN_RE.search(node or "")
+    if not m:
+        return False
+    return m.group(1).split(".")[-1] == "Yes"
+
+
+def dst_layout_flags(flags, node):
+    """Effective flag string for one (leg flags, pytest node) pair: appends
+    -mtt-tensix-dst-layout-32b iff the flags carry a consumer flag AND the
+    node explicitly declares dest_acc:Yes.  Pure and idempotent — safe to
+    apply at every flags/node meeting point."""
+    tokens = (flags or "").split()
+    if DST_LAYOUT_32B_FLAG in tokens:
+        return flags  # idempotent (already effective)
+    if not any(c in tokens for c in DST_LAYOUT_CONSUMERS):
+        return flags  # no consumer: never perturb existing legs
+    if not node_dest_acc_32b(node):
+        return flags  # fail closed: 16-bit/unknown mode gets NO declaration
+    return f"{flags} {DST_LAYOUT_32B_FLAG}"
+
+
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
 SILICON_LOCK = "/tmp/tt-llk-sfpu-silicon.lock"
@@ -1577,6 +1642,7 @@ class Sweep:
         (work / "node.txt").write_text(node + "\n")
         hashes = {}
         for leg, flags in legs:
+            flags = dst_layout_flags(flags, node)  # lane DZ: 32b-Dst wiring
             rt = work / f"rt-{leg}"
             shutil.rmtree(rt, ignore_errors=True)
             rt.mkdir(parents=True)
@@ -1753,7 +1819,10 @@ class Sweep:
                         "row": row,
                         "sel": sel,
                         "leg": leg,
-                        "flags": flags,
+                        # lane DZ: 32b-Dst wiring — effective flags BEFORE
+                        # chunk grouping, so 32b and 16b nodes never share
+                        # a session with divergent flag needs.
+                        "flags": dst_layout_flags(flags, row["nodes"][sel]),
                         "node": row["nodes"][sel],
                         "extra_env": row_env(row, sel),
                         "work": work,
@@ -2044,6 +2113,7 @@ class Sweep:
         (work / "node.txt").write_text(node + "\n")
         legs = {}
         for leg, flags in legs_spec:
+            flags = dst_layout_flags(flags, node)  # lane DZ: 32b-Dst wiring
             rt = work / f"rt-{leg}"
             shutil.rmtree(rt, ignore_errors=True)
             rt.mkdir(parents=True)
@@ -2135,6 +2205,7 @@ class Sweep:
     ):
         """One serialized device job under both flocks; CSVs copied in-lock."""
         node = row["nodes"][sel]
+        flags = dst_layout_flags(flags, node)  # lane DZ: 32b-Dst wiring
         work = self.ev / row["op"] / tag / sel / f"{label}-{leg}"
         # The full identity a cached cell must match before reuse: kernel
         # .text alone cannot see test parameters (node id: input ranges,
@@ -2451,6 +2522,7 @@ exit $RC
 
     def _mk_job(self, row, sel, label, leg, flags, kind):
         node = row["nodes"][sel]
+        flags = dst_layout_flags(flags, node)  # lane DZ: 32b-Dst wiring
         return {
             "row": row,
             "op": row["op"],
@@ -3577,8 +3649,13 @@ exit $RC
             knob_flags = dict(legs_spec)["knob"]
             entry = {
                 "selector": sel,
-                "flags": knob_flags,
-                "off_flags": dict(legs_spec)["off"],
+                # lane DZ: record the EFFECTIVE flag strings (32b-Dst wiring
+                # applies per node) so knob-silicon.json never under-reports
+                # what the legs actually compiled with.
+                "flags": dst_layout_flags(knob_flags, row["nodes"][sel]),
+                "off_flags": dst_layout_flags(
+                    dict(legs_spec)["off"], row["nodes"][sel]
+                ),
                 "mode": knob_mode(knob),
             }
             out[knob] = entry
