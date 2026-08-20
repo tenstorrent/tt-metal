@@ -1243,3 +1243,65 @@ def test_reduce_block_accumulate_reload_perf(device):
         )
     if report_path := os.environ.get("REDBLK_RELOAD_REPORT"):
         Path(report_path).write_text(report)
+
+
+def test_reduce_block_within_tile_skip(device):
+    """ReduceWithinTile::Skip — the cross-core combine. Every input tile is ALREADY collapsed on the reduce
+    axis (only lane 0 carries data; the other 31 lanes hold GARBAGE), so the combine is a pure cross-tile sum
+    and the SFPU finalize must be dropped. Two things are proven at once: the collapse really is skipped (a
+    Collapse run on the same input folds the garbage in and is wildly wrong), and reduce_mean's caller 1/N
+    still lands on the raw sum (it has to arm the SFPU itself, since Skip never touches it).
+
+    ROW: lane 0 = column 0 of each tile. COL: lane 0 = row 0 of each tile."""
+    GARBAGE = 999.0
+    cases = [
+        ("row", 1, 2, 1),
+        ("row", 2, 3, 1),
+        ("row", 1, 5, 1),
+        ("row", 2, 4, 2),
+        ("col", 2, 1, 1),
+        ("col", 3, 2, 1),
+        ("col", 4, 1, 2),
+    ]
+    for dim, Ht, Wt, NC in cases:
+        torch.manual_seed(13)
+        h, w = input_shape(Ht, Wt, NC)
+        data = torch.full((h, w), GARBAGE, dtype=torch.float32)
+        cnt = Wt if dim == "row" else Ht  # contributing partials per output
+        if dim == "row":
+            data[:, ::TILE] = torch.rand(h, Wt)  # lane 0 of every tile = column wt*32
+            # per output row: mean over the Wt partials. Batch nc owns tile-rows [nc*Ht, (nc+1)*Ht).
+            golden = data[:, ::TILE].to(torch.float64).mean(dim=1)
+        else:
+            data[::TILE, :] = torch.rand(NC * Ht, w)  # lane 0 of every tile = row (nc*Ht+ht)*32
+            # rows are NC-major: data[::TILE] is (NC*Ht, Wt*32) ordered (nc, ht) -> mean over ht
+            g = data[::TILE, :].to(torch.float64).view(NC, Ht, Wt * TILE).mean(dim=1)  # (NC, Wt*32)
+            golden = g.reshape(-1)
+        x = ttnn.from_torch(
+            data.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=create_sharded_memory_config((h, w)),
+        )
+        out = run_op(
+            x,
+            variant="accumulate_via_add",
+            dim=dim,
+            Ht=Ht,
+            Wt=Wt,
+            NC=NC,
+            accum="fp32",
+            kernel_iters=2,
+            within_tile="skip",
+        )
+        got = _readout(out, dim)
+        ma = (got - golden).abs().max().item()
+        logger.info(f"within_tile=skip {dim} Ht={Ht} Wt={Wt} NC={NC} cnt={cnt}  max_abs={ma:.5f}")
+        assert ma < 0.05, f"skip {dim} ({Ht},{Wt},{NC}): max_abs {ma:.4f} — the raw cross-tile sum is wrong"
+
+        # Control: the SAME input under Collapse must be badly wrong (it folds the 31 garbage lanes in), so a
+        # silently-ignored within_tile parameter cannot pass this test.
+        out_c = run_op(x, variant="accumulate_via_add", dim=dim, Ht=Ht, Wt=Wt, NC=NC, accum="fp32", kernel_iters=2)
+        ma_c = (_readout(out_c, dim) - golden).abs().max().item()
+        assert ma_c > 1.0, f"collapse control {dim} ({Ht},{Wt},{NC}) matched to {ma_c:.4f} — skip is a no-op?"
