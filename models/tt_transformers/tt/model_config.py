@@ -805,6 +805,13 @@ class ModelArgs:
                 else self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices, self.dim)
             )
 
+            # n150 1.7B decode: 16-core MLP L1 grid (RMSNorm + DRAM-sharded FF share it).
+            # Isolated RMSNorm 64c was 3.4x slower than 8c; fused FF 16c ranked faster than 64c.
+            # A/B 2026-08-20: 57.8 -> 59.4 tok/s, EN byte-id, JA Japanese+CJK.
+            if self.num_devices == 1 and not self.is_galaxy and self.dim == 2048 and self.hidden_dim == 6144:
+                self.mlp_core_grid = self.core_grid_for_count(16)
+                self.mlp2_core_grid = self.core_grid_for_count(16)
+
             # ============================================================================
             # Compute kernels Configs
             # Note: FP32 acc does not appear to be needed for accuracy in model tests or demo runs.
@@ -3301,6 +3308,18 @@ class ModelArgs:
     def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:
         rows, cols = self.find_grid(k // ttnn.TILE_SIZE)
         return ttnn.CoreGrid(x=cols, y=rows)
+
+    def core_grid_for_count(self, cores: int) -> ttnn.CoreGrid:
+        """Place `cores` as a rectangle on the Wormhole compute grid (wide-short first)."""
+        max_rows = 8 if is_wormhole_b0() else 10
+        max_cols = 8 if is_wormhole_b0() else 12
+        for y in range(1, max_rows + 1):
+            if cores % y:
+                continue
+            x = cores // y
+            if 1 <= x <= max_cols:
+                return ttnn.CoreGrid(x=x, y=y)
+        raise ValueError(f"No {max_cols}x{max_rows} rectangle for {cores} cores")
 
     def find_grid(self, N):
         """
