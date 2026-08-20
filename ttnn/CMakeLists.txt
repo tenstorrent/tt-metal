@@ -403,8 +403,11 @@ if(WITH_PYTHON_BINDINGS)
     # Precompile the headers that dominate parse time in the ~300 *_nanobind.cpp TUs
     # (nanobind + ttnn operation/tensor headers). The ttnn target cannot REUSE_FROM
     # TTNN::PCHFull because nanobind_opt_size/nanobind_compile_options alter its flags,
-    # so it gets its own PCH.
-    if(NOT CMAKE_DISABLE_PRECOMPILE_HEADERS)
+    # so it gets its own PCH. Since the target is its own PCH provider, Clang+ccache
+    # correctness requires tt_disable_ccache_for_pch on it — which would disable ccache
+    # for ALL of its TUs, a bad trade on warm-cache (CI) builds. So only enable this
+    # PCH when ccache is off: cold/local builds get the PCH win, CI keeps ccache.
+    if(NOT CMAKE_DISABLE_PRECOMPILE_HEADERS AND NOT ENABLE_CCACHE)
         target_precompile_headers(
             ttnn
             PRIVATE

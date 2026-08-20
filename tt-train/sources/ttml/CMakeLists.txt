@@ -526,7 +526,9 @@ target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
 # _ttml cannot REUSE_FROM ttml_pch (nanobind_add_module alters its compile flags),
 # so it gets its own PCH covering nanobind plus the heavy ttml umbrella headers.
-if(NOT CMAKE_DISABLE_PRECOMPILE_HEADERS)
+# Only when ccache is off: as its own PCH provider the target would need
+# tt_disable_ccache_for_pch, which would disable ccache for all of its TUs.
+if(NOT CMAKE_DISABLE_PRECOMPILE_HEADERS AND NOT ENABLE_CCACHE)
     target_precompile_headers(
         _ttml
         PRIVATE
