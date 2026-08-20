@@ -1300,8 +1300,18 @@ MatmulProgramConfig create_simple_matmul_program_config(
             out_subblock_h = std::get<0>(subblock_hw);
             out_subblock_w = std::get<1>(subblock_hw);
             // Sharded output additionally requires out_subblock_w == per_core_N or out_subblock_h == 1.
-            if (out_subblock_w != per_core_N) {
-                out_subblock_h = 1;
+            if (out_subblock_h != 1 and out_subblock_w != per_core_N) {
+                for (const auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
+                    out_subblock_h = std::get<0>(subblock_hw);
+                    out_subblock_w = std::get<1>(subblock_hw);
+                    if (fp32_dest_acc_en and (out_subblock_h * out_subblock_w) > 4) {
+                        continue;
+                    }
+                    if ((out_subblock_h == 1 or out_subblock_w == per_core_N) and per_core_M % out_subblock_h == 0 and
+                        per_core_N % out_subblock_w == 0) {
+                        break;
+                    }
+                }
             }
             if (all_dram_interleaved) {
                 in0_block_w = !transpose_mcast ? (Kt % num_cores_x == 0 ? Kt / num_cores_x : 1)

@@ -3690,16 +3690,27 @@ def test_matmul_default_width_sharded(
 
 
 @pytest.mark.parametrize(
-    "a_shape, b_shape, expected_shard_shape",
+    "a_shape, b_shape, expected_shard_shape, fp32_dest_acc_en",
     [
-        ((1, 400, 32), (1, 32, 400), (416, 416)),
-        ((1, 400, 32), (1, 32, 128), (416, 128)),
-        ((1, 512, 32), (1, 32, 512), (512, 512)),
-        ((5, 400, 32), (32, 400), (416, 416)),
+        ((1, 400, 32), (1, 32, 400), (416, 416), False),
+        ((1, 400, 32), (1, 32, 128), (416, 128), False),
+        ((1, 512, 32), (1, 32, 512), (512, 512), False),
+        ((5, 400, 32), (32, 400), (416, 416), False),
+        ((1, 320, 32), (1, 32, 64), (320, 64), False),
+        ((1, 128, 32), (1, 32, 128), (128, 128), False),
+        ((1, 128, 32), (1, 32, 128), (128, 128), True),
     ],
-    ids=["400x400", "400x128", "512x512", "batch5_broadcast_b"],
+    ids=[
+        "400x400",
+        "400x128",
+        "512x512",
+        "batch5_broadcast_b",
+        "320x64_10x2tiles",
+        "128x128_4x4tiles",
+        "128x128_4x4tiles_fp32",
+    ],
 )
-def test_matmul_default_block_sharded_single_core(device, a_shape, b_shape, expected_shard_shape):
+def test_matmul_default_block_sharded_single_core(device, a_shape, b_shape, expected_shard_shape, fp32_dest_acc_en):
     """BLOCK_SHARDED output with no program_config: the shard shape must follow the output size.
 
     Issue #32435: the per-core block was sized to fit L1 (starting at 16x16 tiles) and never
@@ -3709,6 +3720,9 @@ def test_matmul_default_block_sharded_single_core(device, a_shape, b_shape, expe
     Keep the shard grid 1x1 so this stays on the 2D path. A multi-core 1-row/1-col grid is
     routed to 1D (or fatals when B is batched, issue #32306). When A batch > 1 and B batch
     == 1, auto-config sets fuse_batch so the sharded out CB is not written in a batch loop.
+
+    The 10x2/4x4-tile cases also cover shapes where the sharded-output out_subblock must be
+    picked from a legal (h, w) pair other than out_subblock_h == 1.
     """
     torch.manual_seed(0)
 
@@ -3729,7 +3743,19 @@ def test_matmul_default_block_sharded_single_core(device, a_shape, b_shape, expe
         ),
     )
 
-    output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=True,
+    )
+
+    output_tensor = ttnn.matmul(
+        input_tensor_a,
+        input_tensor_b,
+        memory_config=output_memory_config,
+        compute_kernel_config=compute_kernel_config,
+    )
 
     actual_memory_config = output_tensor.memory_config()
     # Guards against passing via the 1D path, which would rewrite the layout to HEIGHT_SHARDED.
