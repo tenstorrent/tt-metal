@@ -52,7 +52,9 @@ SFPU_ADD_FORMATS = input_output_formats(
 
 SFPU_ADD_COMBINATIONS = [
     (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(SFPU_ADD_FORMATS)
+    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(
+        SFPU_ADD_FORMATS, srcs_pipeline=True
+    )
     for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
     for input_dimensions in [[32, 32], [64, 64]]
 ]

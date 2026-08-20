@@ -92,7 +92,9 @@ def _matmul_output_fits_dest(
 
 def generate_parallel_matmul_add_combinations(formats_list):
     combinations = []
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats_list):
+    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(
+        formats_list, srcs_pipeline=True
+    ):
         if not fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
             continue
         for dest_sync in (DestSync.Half, DestSync.Full):

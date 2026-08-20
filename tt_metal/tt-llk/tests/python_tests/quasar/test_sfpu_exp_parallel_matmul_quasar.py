@@ -76,7 +76,9 @@ def _matmul_output_fits_dest(
 
 def generate_parallel_matmul_exp_combinations(formats_list: list[FormatConfig]):
     combinations = []
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats_list):
+    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(
+        formats_list, srcs_pipeline=True
+    ):
         if not fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
             continue
         for dest_sync in (DestSync.Half, DestSync.Full):
@@ -199,6 +201,7 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         dest_acc,
         formats.input_format,
         exp_input_dimensions,
+        unpack_to_srcs=True,
     )
 
     num_faces = 4

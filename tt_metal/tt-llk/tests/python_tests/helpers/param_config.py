@@ -508,6 +508,7 @@ def is_invalid_quasar_sfpu_format_combination(
 
 def generate_sfpu_format_dest_acc_combinations(
     formats_list: List[FormatConfig],
+    srcs_pipeline: bool = False,
 ) -> List[Tuple[FormatConfig, DestAccumulation]]:
     """
     Generate (format, dest_acc) pairs for Quasar SFPU tests.
@@ -519,11 +520,17 @@ def generate_sfpu_format_dest_acc_combinations(
 
     Invalid Quasar combinations (see `is_invalid_quasar_sfpu_format_combination`)
     are filtered out.
+
+    `srcs_pipeline`: UNP_S -> SrcS -> PACK1. 16-bit inputs stay 16-bit in SrcS
+    (no fp16 -> TF32 conversion), so 16-bit-input -> 32-bit-output is dropped.
     """
     combinations: List[Tuple[FormatConfig, DestAccumulation]] = []
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
+
+        if srcs_pipeline and not in_fmt.is_32_bit() and fmt.output_format.is_32_bit():
+            continue
 
         if in_fmt.is_32_bit():
             dest_acc_modes = (DestAccumulation.Yes,)
