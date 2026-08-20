@@ -115,6 +115,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "fresh_cpp/shift.h"
 // Storm-contract semantic bodies (one op per header, fresh_cpp/README.md).
 #include "fresh_cpp/atan2.h"
+#include "fresh_cpp/atan2_fitted.h"
 #include "fresh_cpp/binary_float.h"
 #include "fresh_cpp/binarybitwise.h"
 #include "fresh_cpp/binarycomp.h"
@@ -212,6 +213,13 @@ inline void run_selected_binary_sfpu(
     else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::ATAN2)
     {
         call_atan2_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
+    }
+    // Lane DH fitted-kernel placeholder (tt-polynomial-fitter frontier atan
+    // winner + the storm-S1 quadrant fixup; provenance header in
+    // fresh_cpp/atan2_fitted.h): impl 2.
+    else if constexpr (FRESH_CPP_IMPL == 2 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::ATAN2)
+    {
+        call_atan2_fitted_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
     }
     else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::BITWISE_AND)
     {
