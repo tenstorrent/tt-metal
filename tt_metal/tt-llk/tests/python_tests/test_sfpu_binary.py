@@ -2088,7 +2088,10 @@ def test_fresh_cpp_lcm(formats, dest_acc, mathop, fresh_cpp_impl):
     kernel) vs fresh typed-C++ A/B over identical Int32 stimuli/golden; exact
     integer contract via the suite's integer format gate. Stimuli mirror
     test_sfpu_binary_int_uniform's SfpuLcm range (positive operands below 2^15,
-    the production kernel's own documented precondition)."""
+    the production kernel's own documented precondition). The fresh body's
+    unpredicated 15-round bound, its trimmed final round, and its two-refinement
+    reciprocal recovery are exhaustively certified over this exact domain
+    (fresh_cpp/lcm.h header; laneDI-evidence-20260820/lcm_cert.c)."""
     low, high = _INT_BINARY_STIMULI[MathOperation.SfpuLcm]
     sfpu_binary(
         formats,
