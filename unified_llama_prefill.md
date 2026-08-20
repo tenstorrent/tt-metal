@@ -642,14 +642,14 @@ rather than comparing our defaults against its cheaper ones:
 
 | | device time |
 |---|---|
-| ours: flash, 2 chunks, HiFi4 exact (metal defaults) | 66.6 us |
-| ours: flash, 2 chunks, HiFi2 approx | 51.6 us |
-| ours: flash, 4 chunks, HiFi4 exact | 107.3 us |
-| ours: flash, 4 chunks, HiFi2 approx | 89.7 us |
+| ours: flash, 2 chunks, HiFi4 exact (metal defaults) | 60.4 us |
+| ours: flash, 2 chunks, HiFi2 approx | 46.6 us |
+| ours: flash, 4 chunks, HiFi4 exact | 98.2 us |
+| ours: flash, 4 chunks, HiFi2 approx | 80.3 us |
 | ttnn SDPA, q32/k128, HiFi2 approx | 21.0 us |
 | ttnn SDPA, q128/k128, HiFi2 approx | 19.9 us |
 
-**ttnn is about 2.6x faster on one core at the same shape and the same fidelity.** That is down
+**ttnn is about 2.3x faster on one core at the same shape and the same fidelity.** That is down
 from 3.9x, and the way it came down is worth more than the number.
 
 ### Where the time actually goes
@@ -940,6 +940,62 @@ for. So:
 Option 3 sits next to the DST batching that already regressed, and the difference is worth
 stating: that attempt kept whole-tree-per-tile order, so it never reduced reconfiguration
 at all -- it only moved the acquire. Leaf-outer changes what is actually expensive here.
+
+### Leaf-outer emission: reconfiguration once per leaf per group
+
+Implemented, and it is the first structural win in this file. The interleaved walk in
+`expr.hpp` re-points the unpacker once per leaf per TILE, because a Bin loads its left
+leaf, applies, then loads its right. Turning the loops inside out -- load every tile of
+leaf 0, then every tile of leaf 1, and only then apply the ops -- pays that once per leaf
+per GROUP.
+
+| | before | after |
+|---|---|---|
+| flash, 2 chunks, HiFi2 approx | 51.60 us | **46.56 us** (-9.8%) |
+| flash, 4 chunks, HiFi2 approx | 89.72 us | **80.20 us** (-10.6%) |
+| flash, 2 chunks, HiFi4 exact | 66.55 us | 60.41 us |
+| `reconfig_data_format_srca`, math thread | 3.632 us | **1.573 us** |
+| `copy_tile_to_dst_init_short`, math thread | 6.130 us | **4.330 us** |
+| `copy_tile_to_dst_init_short`, unpack thread | 11.21 us | **1.68 us** |
+
+Error is unchanged to four decimals at both chunk counts, and the profiler confirms the
+mechanism rather than just the wall clock: reconfiguration on the bottleneck thread nearly
+halved, 9.76us to 5.90us. Worth noting the two halves did not fall proportionally even
+though they fire together -- the calls that survive are the genuine format changes at each
+leaf's first tile, while the ones removed were the cheap repeats, so the average survivor
+costs more.
+
+The cost is DST slots. `Emit` REUSES them, folding a Bin into its left operand, so a
+leaf's slot is overwritten before a later leaf is read -- which is exactly why leaf-outer
+cannot share that allocation and needs one slot per leaf. The layout that works is leaf
+`j` of tile `k` at `k*leaf_count + j`, with a subtree folding into its LEFTMOST leaf's
+slot; subtrees own disjoint leaf ranges, so folding left can never land on a slot another
+subtree still needs.
+
+**When it is NOT taken, and why that is not tuning.** A group of one reconfigures exactly
+as often as the interleaved walk, so a tree wide enough to leave no room for a second tile
+gains nothing and pays for the longer path. Measured: the five-leaf binary chain
+(`((a+b)-a)*b/a`, which gives `G = 8/5 = 1`) came out **5% slower**, 27.84 -> 29.32us.
+Gating on `leaf_count * 2 <= kMaxDstTiles` put it back at 27.85us exactly. Single-leaf
+trees keep the interleaved path too -- they already reconfigure once per pass, so batching
+them could only re-introduce the acquire penalty that the earlier DST experiment measured.
+Wide trees that will not fit at all also fall back, so no expression that compiled before
+stops compiling.
+
+This is the same territory as the DST batching that regressed, and the difference is now
+demonstrated rather than argued: that attempt kept whole-tree-per-tile order and never
+reduced reconfiguration, only moving the acquire. Reordering the loops is what mattered.
+
+The gates are not vacuous, which took a sabotage to establish. Dropping the reconfigure
+entirely fails `test_unified_mixed_format.py` and correctly PASSES
+`test_unified_binary.py` -- uniform formats genuinely do not need it, so only the
+mixed-format test can see this class of bug. A wrong stride, where different tiles' leaves
+collide, fails both binary and flash.
+
+Remaining on this thread: ~5.9us of reconfiguration still on the math TRISC, of which the
+MOP init is the larger part and has no conditional form. Metal's two-argument conditional
+reconfig (option 1 in the earlier proposal) is still available for what is left of the
+cheaper half.
 
 ### What to test next
 
