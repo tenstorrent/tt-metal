@@ -40,33 +40,6 @@ constexpr const char* kGenOutputShardDfbName = "output_shard";
 constexpr const char* kGenReaderKernel = "reader";
 constexpr const char* kGenWriterKernel = "writer";
 
-// Anonymous-namespace helper unique to reshard generic to avoid unity-build collisions.
-void push_reshard_generic_cb_pair(
-    ProgramDescriptor& desc,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t total_size,
-    uint32_t page_size,
-    const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer,
-    std::optional<Tile> tile = std::nullopt) {
-    CBDescriptor cb;
-    cb.total_size = total_size;
-    cb.core_ranges = core_ranges;
-    std::optional<TileDescriptor> tile_descriptor = std::nullopt;
-    if (tile) {
-        tile_descriptor = tt::tt_metal::TileDescriptor(tile.value());
-    }
-    cb.format_descriptors.push_back(CBFormatDescriptor{
-        .buffer_index = static_cast<uint8_t>(cb_index),
-        .data_format = data_format,
-        .page_size = page_size,
-        .tile = tile_descriptor,
-    });
-    cb.buffer = bound_buffer;
-    desc.cbs.push_back(std::move(cb));
-}
-
 }  // namespace
 
 namespace detail {
@@ -729,38 +702,8 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         total_size = static_cast<uint32_t>(output_shard_shape[0] * output_shard_shape[1] * output.element_size());
     }
 
-    ProgramDescriptor desc;
-
-    // Output sharded CB. Bind to output buffer for dynamic-CB rebinding on cache hits via cb.buffer.
-    push_reshard_generic_cb_pair(
-        desc,
-        dst_cb_index,
-        data_format,
-        total_size,
-        output_buffer->page_size(),
-        all_cores,
-        /*bound_buffer=*/output_buffer,
-        tile);
-
     const bool diff_width = input_buffer->page_size() != output_buffer->page_size();
     const char* kernel_source = diff_width ? kGenReaderDiffWidthKernelPath : kGenReaderKernelPath;
-
-    std::vector<uint32_t> compile_args = {
-        dst_cb_index, static_cast<uint32_t>(grid.x), static_cast<uint32_t>(grid.y), page_size, unit_size};
-
-    KernelDescriptor kernel_desc_0;
-    kernel_desc_0.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    kernel_desc_0.kernel_source = kernel_source;
-    kernel_desc_0.core_ranges = all_cores;
-    kernel_desc_0.config = ReaderConfigDescriptor{};
-    kernel_desc_0.compile_time_args = compile_args;
-
-    KernelDescriptor kernel_desc_1;
-    kernel_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    kernel_desc_1.kernel_source = kernel_source;
-    kernel_desc_1.core_ranges = all_cores;
-    kernel_desc_1.config = WriterConfigDescriptor{};
-    kernel_desc_1.compile_time_args = std::move(compile_args);
 
     std::vector<uint32_t> physical_core_coords;
     physical_core_coords.reserve(grid.x * grid.y);
@@ -890,6 +833,7 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         .entry_size = dfb_entry_size,
         .num_entries = std::min(total_size, output_packed_bytes) / dfb_entry_size,
         .data_format_metadata = data_format,
+        .tile_format_metadata = tile,
         .borrowed_from = TensorParamName{kGenOutputTensorParam},
     }};
 

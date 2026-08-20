@@ -106,7 +106,6 @@ ProgramDescriptor create_single_tile_descriptor(
 
     const auto input_tile = input.tensor_spec().tile();
     const auto input_tile_height = input_tile.get_height();
-    const auto input_tile_hw = input_tile.get_tile_hw();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = input_tile.get_tile_size(input_cb_data_format);
@@ -126,7 +125,7 @@ ProgramDescriptor create_single_tile_descriptor(
     uint32_t output_single_tile_size = input_tile.get_tile_size(output_cb_data_format);
 
     constexpr uint32_t Wt = 1;
-    uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t Ht = input.padded_shape()[-2] / input_tile_height;
     uint32_t HtWt = Ht * Wt;
     uint32_t Wbytes = input.padded_shape()[-1] * sizeof(bfloat16);
 
@@ -255,7 +254,7 @@ ProgramDescriptor create_single_tile_descriptor(
     });
 
     tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t scalar_single_tile_size = tt::tile_size(scalar_cb_data_format);
+    uint32_t scalar_single_tile_size = input_tile.get_tile_size(scalar_cb_data_format);
     constexpr uint8_t untilized_cos_interm_cb_index = tt::CBIndex::c_27;
     constexpr uint8_t untilized_cos_sync_cb_index = tt::CBIndex::c_5;
     constexpr uint8_t untilized_sin_interm_cb_index = tt::CBIndex::c_28;
@@ -511,7 +510,6 @@ ProgramDescriptor create_multi_tile_descriptor(
     const auto input_tile = input.tensor_spec().tile();
     const auto input_tile_width = input_tile.get_width();
     const auto input_tile_height = input_tile.get_height();
-    const auto input_tile_hw = input_tile.get_tile_hw();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = input_tile.get_tile_size(input_cb_data_format);

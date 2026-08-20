@@ -191,7 +191,7 @@ MassagedConcat build_non_aligned_last_dim_concat(
     auto dim_aligned = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
         return std::all_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
             auto storage_type = tensor.storage_type();
-            if (storage_type == tt::tt_metal::StorageType::DEVICE) {
+            if (storage_type == StorageType::DEVICE) {
                 // Use logical size: for TILE inputs the untilize→RM path produces sticks of
                 // logical width, and for 1D TILE tensors padded_shape[0] is tile height (e.g. 8
                 // for an 8x32 tiny tile), not the concat width.

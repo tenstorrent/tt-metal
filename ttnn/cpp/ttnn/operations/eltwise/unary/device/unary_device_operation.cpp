@@ -161,7 +161,6 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
             TensorLayout(args.output_dtype, page_config, MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
     }
 
-    const auto output_layout = tensor_args.input.layout();
     return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(
