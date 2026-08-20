@@ -31,6 +31,7 @@ checkpoint rather than hard-coding it.
 | [tt/optimized_decoder.py](tt/optimized_decoder.py) | Single-device optimized layer (fused QKV, sharded matmuls, program configs) |
 | [tt/multichip_decoder.py](tt/multichip_decoder.py) | Tensor-parallel layer and the CCL schedule for the 4-die mesh |
 | [tt/precision.py](tt/precision.py) | `PrecisionConfig` — per-tensor dtypes and math fidelity, overridable via `QWEN3_PRECISION_CONFIG` |
+| [config/](config/) | Runtime policy the serving path reads: the selected precision config and the served-context contract |
 | [tt/weight_mapping.py](tt/weight_mapping.py) | HF checkpoint → device tensor layout (QKV permutes, expert stacking) |
 | [tt/generator.py](tt/generator.py) | `build_generator()` + the high-level `generate()` loop (owns KV cache and page table) |
 | [tt/generator_vllm.py](tt/generator_vllm.py) | vLLM adapter — `prefill_forward` / `decode_forward` against a caller-owned cache |
@@ -42,11 +43,17 @@ so the same object serves the host-side demo/readiness path and vLLM.
 
 ## Precision
 
-`DEFAULT_PRECISION` in [tt/precision.py](tt/precision.py) is the shipped
-configuration. A 29-row datatype sweep over the attention, MoE, KV, CCL, norm
-and LM-head tensors found no downcast that improved end-to-end decode without
-costing accuracy, so **no dtype was changed from the default**. Override for
-experiments with `QWEN3_PRECISION_CONFIG=<path-to-json>`.
+A 29-row datatype sweep over the attention, MoE, KV, CCL, norm and LM-head
+tensors selected [config/selected_precision_config.json](config/selected_precision_config.json),
+which the vLLM path loads on every serve so that serving and readiness cannot
+run different numerics. `DEFAULT_PRECISION` in [tt/precision.py](tt/precision.py)
+is the equivalent in-code default. Override for experiments with
+`QWEN3_PRECISION_CONFIG=<path-to-json>`.
+
+Served context is capped by
+[config/context_contract.json](config/context_contract.json) rather than by the
+`--max-model-len` you pass, so a request for more context than has been
+validated fails loudly instead of serving a quietly-clipped model.
 
 ## Running the tests
 

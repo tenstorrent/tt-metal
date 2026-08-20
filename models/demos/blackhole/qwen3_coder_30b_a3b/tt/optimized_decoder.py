@@ -504,7 +504,7 @@ class OptimizedWeights:
       wo 8.91 MB, so the duplicate copy costs **20.05 MB** and the pair 40.11 MB,
       against 24 GB available. An 18.9 MB figure that this file used to carry
       came from rounding bfloat8_b to 1 B/elem and is withdrawn.
-      ``doc/context_contract.json`` now carries 20.05 MB too; an earlier
+      ``config/context_contract.json`` now carries 20.05 MB too; an earlier
       revision of it made the same rounding error and called the pair a wash
       against stage 01's single bf16 copy, which its ``optimized_note`` records.
     """

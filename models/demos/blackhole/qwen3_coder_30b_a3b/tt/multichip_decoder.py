@@ -290,7 +290,7 @@ def _meta_rope(ctx: MeshContext, cos_cache: ttnn.Tensor, sin_cache: ttnn.Tensor,
     in **prefill** as well, permuting the interleaved ``wqkv`` prefill copy, and
     changing the KV cache's channel convention -- which
     ``test_per_die_kv_heads_stitched`` compares against a single-chip cache and
-    which ``doc/context_contract.json`` describes. That is a whole-layer change,
+    which ``config/context_contract.json`` describes. That is a whole-layer change,
     not the in-place decode optimization this stage is.
 
     A second cost, smaller and independent: the qkv weight dtype
@@ -1324,7 +1324,7 @@ def create_mesh_kv_cache(
     per token per layer instead of 2048 -- 6.44 GB at the advertised 262144
     context over 48 layers, against 25.77 GB on one die. One die cannot hold
     this model at full context; four can, with room to spare. See
-    ``doc/context_contract.json``.
+    ``config/context_contract.json``.
 
     The buffers are *replicated at allocation* because they are zeros, and
     diverge the moment the first token is written -- each die holds a different

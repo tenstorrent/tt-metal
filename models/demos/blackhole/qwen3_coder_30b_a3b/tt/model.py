@@ -25,7 +25,7 @@ What the wrapper adds, and where each new boundary lives:
     with no collective at all. A hidden-sharded embedding would be 4x smaller
     per die but would owe an all-gather on every prefill chunk and every decode
     token; at 0.622 GB/die against 22.35 GB of measured headroom
-    (``doc/context_contract.json``) the replicated table is free and the
+    (``config/context_contract.json``) the replicated table is free and the
     collective is not. This is also the shape the stage-03 footprint probe
     allocated, so the published capacity numbers describe what actually runs.
 
@@ -1157,7 +1157,7 @@ class Qwen3CoderModel:
 
         512 B per token per layer per die -- a quarter of the single-die 2048 --
         which is what makes the advertised 262144 context fit; see
-        ``doc/context_contract.json``.
+        ``config/context_contract.json``.
         """
         cache_len = self.max_cache_len if max_cache_len is None else int(max_cache_len)
         blocks_per_seq = math.ceil(cache_len / self.page_block_size)

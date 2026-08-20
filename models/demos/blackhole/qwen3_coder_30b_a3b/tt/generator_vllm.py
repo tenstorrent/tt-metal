@@ -80,13 +80,13 @@ MODEL_DIR = Path(__file__).resolve().parents[1]
 #: CCL dtype, KV-cache dtype, compute fidelities and layer exceptions all come
 #: from this one file on the serving path exactly as they do on the readiness
 #: path. ``QWEN3_PRECISION_CONFIG`` still overrides it, for sweeps.
-SELECTED_PRECISION_CONFIG = MODEL_DIR / "doc" / "datatype_sweep" / "selected_precision_config.json"
+SELECTED_PRECISION_CONFIG = MODEL_DIR / "config" / "selected_precision_config.json"
 
-#: ``doc/context_contract.json`` is the single source of truth for served
+#: ``config/context_contract.json`` is the single source of truth for served
 #: context. ``get_max_tokens_all_users`` and ``initialize_vllm_model`` both read
 #: it rather than trusting a CLI value, so a ``--max-model-len`` above the
 #: recorded capability fails loudly instead of serving a quietly-clipped model.
-CONTEXT_CONTRACT = MODEL_DIR / "doc" / "context_contract.json"
+CONTEXT_CONTRACT = MODEL_DIR / "config" / "context_contract.json"
 
 #: Whether a serving prefill may run while the decode traces stay captured.
 #: **Off by default, and that is a measurement, not caution.** Keeping them alive
@@ -287,7 +287,7 @@ class Qwen3CoderForCausalLM:
     ) -> int:
         """Total KV tokens vLLM may allocate blocks for, across all users.
 
-        The whole advertised context for one user. ``doc/context_contract.json``
+        The whole advertised context for one user. ``config/context_contract.json``
         records 262144 as the supported context and the paged decode probe that
         reached position 262143; this is what makes vLLM size enough blocks for
         a single request to actually use it. At this port's 4 dies the KV cost is
