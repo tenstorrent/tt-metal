@@ -572,6 +572,9 @@ def _ci_unsupported_param_combos(**params):
         return True
 
     if is_ci_env or is_ci_v2_env:
+        # Perf (no-pcc) variants prove nothing without a correctness check, so direct CI
+        # collection drops them. Perf CI enters through wrapper tests whose
+        # --wrapper-invocation flag bypasses this predicate entirely, so they still run there.
         if not run_pcc_check:
             return True
         if num_links == 1:
