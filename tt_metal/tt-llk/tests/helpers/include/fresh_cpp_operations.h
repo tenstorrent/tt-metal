@@ -487,24 +487,30 @@ __attribute__((noinline)) void calculate_ceil_fresh_cpp()
     }
 }
 
-// EqualZero (production: fully raw-TTI calculate_comp float path with fixed
-// LREG0/2/5 and an ADDR_MOD_6-fused store increment, metal ckernel_sfpu_comp.h).
-// Semantic statement: 1.0 where |v| == 0 (covers -0.0; NaN keeps a nonzero
-// magnitude and stays 0.0 — the production kernel's documented contract).
+// EqualZero — OUT-OF-CONTRACT VARIANT (lane CL adjudication option B; owner
+// signature required before merge).  Semantic statement: 1.0 where the raw
+// bit pattern of v is +0.0 (SFPSETCC raw-bit zero test; -0.0 = 0x80000000
+// stays 0.0).  This is a NARROWER contract than the production float
+// calculate_comp (which sign-clears via TTI_SFPSETSGN and returns 1.0 for
+// -0.0, matching the ttnn golden torch.eq(x, 0)); it is only valid under the
+// paired sfpu_domains change that removes -0.0 from EqualZero's edge points.
+// Result materialization is the production dual-store shape with immediate
+// row addressing: load, store(vConst0), setcc, store(vConst1), encc =
+// 5 issue words/row — one BELOW the production kernel's 6, because the raw
+// predicate skips the sign-clear the production kernel pays.
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_eqz_fresh_cpp()
 {
+#pragma GCC unroll 32
     for (int d = 0; d < ITERATIONS; ++d)
     {
-        const sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat r       = 0.0f;
-        v_if (sfpi::abs(v) == 0.0f)
+        const sfpi::vFloat v = sfpi::dst_reg[d];
+        sfpi::dst_reg[d]     = sfpi::vConst0;
+        v_if (v == 0.0f)
         {
-            r = 1.0f;
+            sfpi::dst_reg[d] = sfpi::vConst1;
         }
         v_endif;
-        sfpi::dst_reg[0] = r;
-        sfpi::dst_reg++;
     }
 }
 

@@ -1148,19 +1148,41 @@ def test_ceil_fresh_cpp(fresh_cpp_impl):
 
 
 @pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
-def test_eqz_fresh_cpp(fresh_cpp_impl):
-    """A/B the fresh semantic equal-zero (typed |v|==0 predicate) against the
-    production all-raw-TTI calculate_comp float path with identical inputs."""
+@pytest.mark.parametrize("edge_values", [False, True], ids=["functional", "edges"])
+def test_eqz_fresh_cpp(fresh_cpp_impl, edge_values):
+    """A/B the fresh semantic equal-zero predicate against the production
+    all-raw-TTI calculate_comp float path with identical inputs.
+
+    The edges leg puts the op's edge points in the stimuli — under the
+    OUT-OF-CONTRACT ruling (see sfpu_domains._ZERO_EDGE_OPS) that is exact
+    +0.0 only: -0.0 is excluded from the eqz input domain, so the fresh
+    body's raw-bit zero test is legal and is NOT probed at -0.0.  The
+    functional leg's uniform(-2, 2) draw reaches exact zero with
+    probability ~0, so the edges leg is the only gate on the op's defining
+    input."""
     mathop = MathOperation.EqualZero
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    spec_A = None
+    if edge_values:
+        spec_A = edge_spec(
+            mathop,
+            formats.input_format,
+            formats.output_format,
+            specials=specials_safe(
+                formats.input_format, formats.output_format, DestAccumulation.No
+            ),
+        )
+        assert spec_A is not None
     custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        formats,
         DestAccumulation.No,
         ApproximationMode.No,
         mathop,
         FastMode.No,
         [64, 64],
+        spec_A=spec_A,
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
         fresh_cpp_impl=fresh_cpp_impl,

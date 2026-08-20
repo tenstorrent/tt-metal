@@ -1451,8 +1451,15 @@ def format_specials(fmt: DataFormat) -> Tuple[float, ...]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Ops whose only interesting point is exactly zero, and where +0.0/-0.0 may differ.
+# EqualZero is deliberately absent — OUT-OF-CONTRACT RULING (lane CL adjudication
+# option B, owner signature required): -0.0 is excluded from the eqz input domain,
+# so the harness probes only +0.0 (explicit _OP_EDGE_POINTS entry below) and a
+# raw-bit fresh body is legal.  NOTE what this ruling costs elsewhere: the
+# PRODUCTION float calculate_comp does handle -0.0 (TTI_SFPSETSGN sign-clear,
+# 'handles ±0' comment) and the ttnn golden is torch.eq(x, 0) which counts -0.0
+# as zero — under this ruling that production behavior and the framework-level
+# semantics are no longer exercised by the corpus for eqz.
 _ZERO_EDGE_OPS = (
-    MathOperation.EqualZero,
     MathOperation.NotEqualZero,
     MathOperation.LessThanZero,
     MathOperation.GreaterThanZero,
@@ -1483,6 +1490,9 @@ _COMPARISON_EDGE_OPS = (
 
 _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     **{op: (0.0, -0.0) for op in _ZERO_EDGE_OPS},
+    # EqualZero probes +0.0 only — see the OUT-OF-CONTRACT ruling note on
+    # _ZERO_EDGE_OPS above (-0.0 excluded from the eqz input domain).
+    MathOperation.EqualZero: (0.0,),
     **{op: (UNARY_COMP_THRESHOLD,) for op in _COMPARISON_EDGE_OPS},
     # logical_not(x) = (x == 0). Same shape as _ZERO_EDGE_OPS but it is a threshold op
     # rather than a sign op, so keep it named. (LogicalNotUnary is an alias of this
