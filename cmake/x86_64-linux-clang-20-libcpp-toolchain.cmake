@@ -1,8 +1,8 @@
 set(CMAKE_SYSTEM_PROCESSOR "x86_64")
 
-set(CMAKE_C_COMPILER clang-20 CACHE INTERNAL "C compiler")
+set(CMAKE_C_COMPILER clang-20-libcxx CACHE INTERNAL "C compiler")
 
-set(CMAKE_CXX_COMPILER clang++-20 CACHE INTERNAL "C++ compiler")
+set(CMAKE_CXX_COMPILER clang++-20-libcxx CACHE INTERNAL "C++ compiler")
 
 set(CMAKE_CXX_FLAGS_INIT "-stdlib=libc++")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "-lc++ -lc++abi")
