@@ -4895,7 +4895,7 @@ def record_kernel_attempt(
 
 
 @mcp.tool()
-def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
+def recall_knobs(op_class: str, grid: str = "", bound_by: str = "", regime: str = "") -> dict:
     """REUSE-FIRST: return the tested/known knobs already catalogued for this op_class, so you
     APPLY/ADAPT a proven one BEFORE improvising from scratch. Routed deterministically from the
     GUIDELINES catalog (numbered guides + LEARNED_*/GRADUATED_* learned levers) by op_class. CALL
@@ -4907,6 +4907,13 @@ def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
     record_kernel_attempt for the rung exactly as termination_check requires. If nothing matches,
     improvise from principles, then persist the win yourself with distill_knob (the write-back is a
     manual agent call on the cc engine).
+
+    regime: the STAGE this lever belongs to, as THE MODEL declared it in PIPELINE_STAGES -- pass
+    next_target.regime when the target carries one. This axis is deliberately open (router.VOCABULARY
+    validates it against the run's declared stages, not a fixed set) because a fixed
+    {prefill,decode,na} could not tag a lever written for an audio encoder. Levers for one stage are
+    tagged with it and nothing else reaches them: the KV-cache section is `op_class: attention,
+    datamove` + `regime: decode`, so narrowing by op_class ALONE cannot find it from a decode target.
 
     op_class: one of matmul|attention|reduction|eltwise|datamove|embedding|conv_pool|ccl|
     host_fallback|other (pass next_target.op_class). grid + bound_by (pass next_target.grid +
@@ -4957,14 +4964,36 @@ def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
         b = _BOUND_MAP.get((bound_by or "").strip().lower())
         if b:
             q["bound"] = b
+        # THE STAGE AXIS, WHICH NOTHING COULD REACH. router.DIMENSIONS has carried "regime" all along
+        # and route() filters on it, but no caller passed one -- so a stage-tagged lever was only ever
+        # findable by whatever op_class it also happened to declare. The KV-cache section is
+        # `op_class: attention,datamove` + `regime: decode`; a decode target narrowing by op_class
+        # alone lands on attention levers and never sees it.
+        _rg = (regime or "").strip().lower()
+        if _rg and _rg != "na":
+            q["regime"] = _rg
         try:
             hits = router.route(index, q) if q else router.all_entries(index)
         except Exception:  # noqa: BLE001
             hits = []
-        if not hits and len(q) > 1:  # narrowing starved -> never return empty wrongly; op_class-only
-            try:
-                hits = router.route(index, {"op_class": oc})
-            except Exception:  # noqa: BLE001
+        if not hits and len(q) > 1:  # narrowing starved -> never return empty wrongly
+            # Widen one axis at a time rather than collapsing straight to op_class: a target that
+            # carries a regime and no usable op_class (every run-level gate) would otherwise fall to
+            # `{"op_class": ""}` and lose the stage narrowing that was the only thing it had.
+            for _wider in (
+                {"op_class": oc, "regime": q["regime"]} if oc and "regime" in q else None,
+                {"regime": q["regime"]} if "regime" in q else None,
+                {"op_class": oc} if oc else None,
+            ):
+                if not _wider:
+                    continue
+                try:
+                    hits = router.route(index, _wider)
+                except Exception:  # noqa: BLE001
+                    hits = []
+                if hits:
+                    break
+            if not hits:
                 hits = router.all_entries(index)
         if not hits and not q:
             hits = router.all_entries(index)
@@ -5133,6 +5162,49 @@ def _decode_is_recompute(model_root) -> bool:
     return no_kv and not kv_write
 
 
+def _token_stage_name() -> str:
+    """The stage THE MODEL declared for the loop that retires a token, or "" if it did not say.
+
+    _decode_gate used to label its target `op_class="decode"`. That is a stage word this tool chose,
+    not one the model supplied, and it is not in the op_class vocabulary at all -- it survived only
+    because recall_knobs sends unknown values through _integrity.classify, an LLM round-trip, to be
+    remapped into something that is. So every firing of the gate spent a model call resolving a
+    constant we wrote ourselves, and resolved it to a SINGLE op_class, which cannot reach the
+    KV-cache section anyway (`op_class: attention,datamove` + `regime: decode`).
+
+    The stage belongs on the regime axis, which router.VOCABULARY leaves open precisely so a model
+    names its own stages -- its comment records that a fixed {prefill,decode,na} could not tag a
+    lever written for an audio encoder. So ask the model: PIPELINE_STAGES is its own declaration.
+
+    Returning "" is a real answer and the right one when nothing was declared: recall_knobs treats an
+    absent axis as unnarrowed, which hands over the whole catalogue with a note. That is strictly
+    better than narrowing on a word nobody said.
+    """
+    try:
+        from agent.stack_knob_repair import stage_names
+    except Exception:  # noqa: BLE001
+        return ""
+    try:
+        declared = [str(n or "").strip() for n in (stage_names(_MODEL_ROOT) or []) if str(n or "").strip()]
+    except Exception:  # noqa: BLE001
+        return ""
+    if not declared:
+        return ""
+    if len(declared) == 1:
+        return declared[0].lower()  # one stage, and it is the one that retires the token
+    # SEVERAL STAGES, AND NOTHING HERE CAN SAY WHICH ONE RETIRES THE TOKEN. The fact that would
+    # settle it -- a stage whose per-call item count is 1 -- lives in the pipeline's
+    # <stage>_trace_items hooks, and reading those means importing the pipeline, which imports ttnn
+    # and needs a device. This gate runs without one.
+    #
+    # So return "" and let the catalogue come back unnarrowed with a note. The alternative is a
+    # substring test for "decode" in the stage names, which is the exact guess headline_unit's
+    # docstring calls "a guess wearing an observation's clothes": a pipeline whose recurring stage is
+    # called `generate` reads as one-pass, and one that names any stage `decode` reads as
+    # autoregressive whether it loops or not. Unnarrowed-and-honest beats narrowed-and-wrong.
+    return ""
+
+
 def _decode_gate(prof: dict, attempts: list) -> dict | None:
     if os.environ.get("TT_PERF_MODULE_LEVEL") == "1":
         return None
@@ -5180,13 +5252,15 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
         "full prefill every token (no cached decode_step / KV-cache). Trace removes DISPATCH gaps ONLY "
         "and does NOT remove this REDUNDANT RECOMPUTE, so 'trace already applied' / 'irreducible' does NOT "
         "resolve this and will NOT clear the gate. You MUST add a KV-cache + single-token decode_step "
-        "(recall_knobs(op_class='decode')). Then record_kernel_attempt(op='generation_loop','kv-cache',"
+        "(recall_knobs(op_class='attention', regime=<the stage this target names>)). Then "
+        "record_kernel_attempt(op='generation_loop','kv-cache',"
         "measured_ms,beat_baseline) — this gate clears ONLY on a MEASURED per-token reduction from the cache."
         if repeat
         else "MANDATORY kv-cache — SEPARATE from trace. per-token cost scales with capacity "
         "(use_cache=False, no KV-cache write) -> O(capacity) recompute every token EVEN THOUGH it traces. "
         "Trace does NOT remove recompute; 'irreducible' is NOT accepted. Add a KV-cache + single-token "
-        "decode_step (recall_knobs(op_class='decode')); record_kernel_attempt(op='generation_loop','kv-cache',"
+        "decode_step (recall_knobs(op_class='attention', regime=<the stage this target names>)); "
+        "record_kernel_attempt(op='generation_loop','kv-cache',"
         "measured_ms,beat_baseline) — clears ONLY on a MEASURED per-token reduction."
     )
     host_ms = 0.0
@@ -5195,9 +5269,14 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
             host_ms = float(b.get("device_ms") or 0.0)
             break
     gap = max(host_ms, float(prof.get("per_token_ms") or 0.0), _MATERIAL_GAP_MS)
+    _stage = _token_stage_name()
     return {
         "op": "generation_loop",
-        "op_class": "decode",
+        # IN-VOCABULARY, and the stage carried on the axis built for it. The loop is host-bound
+        # orchestration -- this gate already says bound_by="host" -- so host_fallback is what it IS;
+        # WHICH stage it belongs to is the model's word, on the regime axis, or absent.
+        "op_class": "host_fallback",
+        "regime": _stage,
         "gap_ms": round(gap, 4),
         "bound_by": "host",
         "grid": None,
