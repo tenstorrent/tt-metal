@@ -38,7 +38,7 @@ def prefill_matmul_lofi_enabled(m: int) -> bool:
     """Use LoFi for tall auto DRAM-in0 prefills (above the tuned 1D band).
 
     Opt-in via ``GEMMA4_PREFILL_MATMUL_LOFI=1``. Decode / short tuned band keep
-    HiFi2 (``interleaved_*_prefill_config``) either way.
+    HiFi4 (``interleaved_*_prefill_config``) either way.
 
     LoFi here is NOT safe at long context, which is why it is off by default: on
     31B/128K it makes decode degenerate into endlessly repeated "la's". The
@@ -443,8 +443,29 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
 
 
 def _prefill_hifi2_ckc():
+    """Tall prefill (M > cutoff): HiFi2, dest-acc off.
+
+    Default for ``prefill_linear_above_cutoff`` / 2048-row chunks (demo warmup,
+    128k). LoFi is opt-in only (``GEMMA4_PREFILL_MATMUL_LOFI``) — it degenerated
+    31B/128k into repeated "la's". HiFi4 is the *short-ISL* pin below; do not
+    raise this path without a long-context gate (TTFT + 128k generation).
+    """
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
+def _prefill_hifi4_ckc():
+    """Short-ISL tuned band (TILE < M <= cutoff): HiFi4, dest-acc off.
+
+    Pinning a program config without an explicit CKC silently selected LoFi.
+    Dest-acc on this band dropped last-token PCC; do not enable it.
+    """
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -554,22 +575,14 @@ def interleaved_prefill_config(m, k, n):
     TT_THROW. That variant needs a second weight copy, so it is not free and is
     left out.
 
-    Math fidelity is pinned to HiFi2 — *not* cosmetic. Supplying a program config
-    changes what ttnn's default compute-kernel-config selection picks: a profile
-    of this path with the config but no explicit fidelity came back as LoFi where
-    the auto-selected baseline was HiFi2. That silently trades accuracy for part
-    of the speedup and still clears a 0.99 PCC gate, so it does not show up as a
-    test failure. Pin it, and the config change is a pure scheduling change.
+    Math fidelity is pinned — *not* cosmetic. A program config without an
+    explicit CKC selected LoFi where auto was HiFi2. Short-ISL uses
+    ``_prefill_hifi4_ckc``. M > cutoff returns None; callers use auto or
+    ``prefill_linear_above_cutoff`` (HiFi2).
     """
     if not TILE_SIZE < m <= _PREFILL_CUTOFF:
         return None, None, None
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
-    return prefill_progcfg(m, k, n), ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config
+    return prefill_progcfg(m, k, n), ttnn.DRAM_MEMORY_CONFIG, _prefill_hifi4_ckc()
 
 
 # Conservative interleaved-L1 budget for a *single* short-lived matmul output.
@@ -677,8 +690,8 @@ def interleaved_gate_up_prefill_config(m, k, n):
 
     Off Blackhole ``can_dram_shard`` is False, so ``SharedMLP.gate_up_proj`` is a
     bare ``ttnn.linear``. ``test_gate_up_matmul_sweep`` ranks the overall winner
-    for M=128 K=5376 N=5376 at TP=8 as ``1d_c42_bw4`` + L1-interleaved in0/out +
-    HiFi2 / bfp8 (~1.27x vs shipped auto). ``test_gate_up_output_slice_cost``
+    for M=128 K=5376 N=5376 at TP=8 as ``1d_c42_bw4`` + L1-interleaved in0/out
+    (HiFi2 sweep). CKC is ``_prefill_hifi4_ckc``. ``test_gate_up_output_slice_cost``
     confirmed L1-interleaved out is consumable by the GeGLU ``ttnn.slice`` split
     (and faster as a matmul+slice group than DRAM out).
 
@@ -694,13 +707,7 @@ def interleaved_gate_up_prefill_config(m, k, n):
     program_config = prefill_progcfg_1d(m, k, n)
     if program_config is None:
         return None, None, None
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
-    return program_config, prefill_l1_out_memcfg(m, n), compute_kernel_config
+    return program_config, prefill_l1_out_memcfg(m, n), _prefill_hifi4_ckc()
 
 
 def interleaved_down_proj_prefill_config(m, k, n):
@@ -709,8 +716,8 @@ def interleaved_down_proj_prefill_config(m, k, n):
     ttnn auto.
 
     ``test_down_proj_matmul_sweep`` ranks the overall winner for M=128 K=2688
-    N=5376 at TP=8 as ``1d_c42_bw4`` + L1-interleaved in0/out + HiFi2 / bfp8
-    (~1.35x vs shipped auto). Same ``prefill_progcfg_1d`` family as gate+up
+    N=5376 at TP=8 as ``1d_c42_bw4`` + L1-interleaved in0/out (HiFi2 sweep).
+    CKC is ``_prefill_hifi4_ckc``. Same ``prefill_progcfg_1d`` family as gate+up
     (Nt=168 → 42 cores); K differs (2688 vs 5376) but ``in0_block_w=4`` still
     divides Kt=84.
 
@@ -725,13 +732,7 @@ def interleaved_down_proj_prefill_config(m, k, n):
     program_config = prefill_progcfg_1d(m, k, n)
     if program_config is None:
         return None, None, None
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
-    return program_config, prefill_l1_out_memcfg(m, n), compute_kernel_config
+    return program_config, prefill_l1_out_memcfg(m, n), _prefill_hifi4_ckc()
 
 
 def _progcfg_grid_xy(program_config):
