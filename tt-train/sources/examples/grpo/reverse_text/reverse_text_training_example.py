@@ -126,10 +126,6 @@ class EvalCallback(TrainerCallback):
         self.latest: dict[str, float] = {}
 
     def on_train_begin(self, trainer):
-        # Populate the eval scalars once at train-begin so the built-in
-        # GRPOMonitor sees the keys when it snapshots the CSV column set
-        # (its `on_train_begin` runs after this callback because the trainer
-        # auto-appends the monitor at the end of the callback list).
         self._evaluate(0)
         trainer.metrics.update(self.latest)
 
@@ -183,12 +179,6 @@ def parse_args():
         help="RNG seed for reproducible runs, and the train/eval split seed.",
     )
     parser.add_argument(
-        "--model_source",
-        type=str,
-        default=MODEL_SOURCE,
-        help="HuggingFace model ID or local path (default: the reverse-text SFT checkpoint).",
-    )
-    parser.add_argument(
         "--eval_examples",
         type=int,
         default=16,
@@ -210,17 +200,11 @@ def parse_args():
         "--no-memory_efficient for the retain-activations runner: faster backward, much "
         "higher peak memory.",
     )
-    # Accept (and ignore) any extra flags passed by launch scripts so they
-    # don't crash argument parsing.
     args, _ = parser.parse_known_args()
     return args
 
 
 if __name__ == "__main__":
-    # Configure the root logger before any library (datasets, ...) can claim it.
-    # INFO surfaces the per-generate summaries; set GRPO_LOGLEVEL=DEBUG to also
-    # see the per-chunk decode progress in qwen3_completer. force=True wins
-    # regardless of import order.
     logging.basicConfig(
         level=os.environ.get("GRPO_LOGLEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -233,17 +217,17 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_source, trust_remote_code=True)
-    train_dataset, eval_dataset = build_dataset(tokenizer, args.seed)
-
     tt_metal_root = get_tt_metal_runtime_root()
     config_path = args.config if os.path.isabs(args.config) else os.path.join(tt_metal_root, args.config)
     raw = load_config(config_path)
     training_config = TrainingConfig(raw)
     device_config = DeviceConfig(raw)
+
+    model_source = raw["training_config"].get("model_source") or MODEL_SOURCE
+    tokenizer = AutoTokenizer.from_pretrained(model_source, trust_remote_code=True)
+    train_dataset, eval_dataset = build_dataset(tokenizer, args.seed)
+
     assert training_config.model_config, "training_config.model_config must be set"
-    # The Qwen3 architecture is read from the HF config inside the completer;
-    # only max_sequence_length is consulted here (to bound generation).
     transformer_config = get_model_config(training_config.model_config)
     if args.max_seq_len is not None:
         transformer_config.max_sequence_length = args.max_seq_len
@@ -275,7 +259,7 @@ if __name__ == "__main__":
         ctx=completion_ctx,
         transformer_config=transformer_config,
         device_config=device_config,
-        model_source=args.model_source,
+        model_source=model_source,
         memory_efficient=args.memory_efficient,
     )
 
@@ -285,11 +269,8 @@ if __name__ == "__main__":
         config=grpo_config,
         reward_func=similarity_reward,
         optimizer_dict=optimizer_dict,
-        # EvalCallback injects `eval_similarity`/`eval_chars`/`eval_format`
-        # into `trainer.metrics`; the built-in GRPOMonitor (auto-appended by
-        # GRPOTrainer from grpo_config) writes them into grpo_metrics.csv.
         callbacks=[EvalCallback(completer, completion_ctx, eval_dataset, args.eval_examples)],
-        model_source=args.model_source,
+        model_source=model_source,
     )
     grpo_trainer.train()
     logging.info("REVERSE TEXT GRPO TRAINING COMPLETE")
