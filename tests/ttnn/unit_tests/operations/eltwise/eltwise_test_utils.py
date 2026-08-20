@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import ttnn
 from tests.ttnn.utils_for_testing import generate_all_bfloat16_bitpatterns, flush_subnormal_values_to_zero
 
 
@@ -26,8 +27,13 @@ def generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=False):
                      When include_spl_values is False, special values are replaced by zero.
     """
     all_bf16 = generate_all_bfloat16_bitpatterns(dtype)
+    # Remember where -0.0 lives before flushing (bit pattern 0x8000 in bf16)
+    neg_zero_mask = (all_bf16 == 0) & (torch.signbit(all_bf16))
     all_bf16 = flush_subnormal_values_to_zero(all_bf16)
-    if not include_spl_values:
+    if include_spl_values:
+        # Restore -0.0 that was destroyed by subnormal flush
+        all_bf16[neg_zero_mask] = torch.tensor(-0.0, dtype=all_bf16.dtype)
+    else:
         # Replace -0 with +0
         all_bf16[all_bf16 == 0] = 0.0
         # Replace +/-infinity and NaN with zero
@@ -84,3 +90,16 @@ def generate_bfloat16_bits_in_range(low, high, dtype=torch.bfloat16, ftz=True):
     padded[:num_elements] = filtered
 
     return padded.reshape(rows, cols)
+
+
+def to_tt_tensor(
+    input_tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+):
+    """Convert a torch tensor to a ttnn tensor on device with TILE_LAYOUT and DRAM."""
+    return ttnn.from_torch(
+        input_tensor,
+        dtype=dtype,
+        device=device,
+        layout=layout,
+        memory_config=memory_config,
+    )
