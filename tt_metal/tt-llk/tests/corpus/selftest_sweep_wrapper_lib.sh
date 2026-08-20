@@ -77,33 +77,36 @@ check "empty pin refused" 3 "$rc"
 
 echo "== newest_clean_runs =="
 ROOT="$TMP/ev"
-mkdir -p "$ROOT/weekly-20990201" "$ROOT/weekly-20990202" \
-         "$ROOT/weekly-20990203-CONTAMINATED-pinX" "$ROOT/nightly-20990204" \
-         "$ROOT/weekly-20990205" "$ROOT/weekly-20990206"
-mkdir -p "$ROOT/weekly-20990205"; touch "$ROOT/weekly-20990205/CONTAMINATION-NOTE.md"
-# mtime order, oldest -> newest: 20990201, 20990202, nightly-20990204, 20990206(current)
-touch -t 209902010000 "$ROOT/weekly-20990201"
-touch -t 209902020000 "$ROOT/weekly-20990202"
-touch -t 209902030000 "$ROOT/weekly-20990203-CONTAMINATED-pinX"
-touch -t 209902040000 "$ROOT/nightly-20990204"
-touch -t 209902050000 "$ROOT/weekly-20990205"
-touch -t 209902060000 "$ROOT/weekly-20990206"
-CUR="$ROOT/weekly-20990206"
+mkdir -p "$ROOT/weekly-20330201" "$ROOT/weekly-20330202" \
+         "$ROOT/weekly-20330203-CONTAMINATED-pinX" "$ROOT/nightly-20330204" \
+         "$ROOT/weekly-20330205" "$ROOT/weekly-20330206"
+mkdir -p "$ROOT/weekly-20330205"; touch "$ROOT/weekly-20330205/CONTAMINATION-NOTE.md"
+# mtime order, oldest -> newest: 20330201, 20330202, nightly-20330204, 20330206(current)
+# Fixture dates are deliberately PRE-2038: the original 2099 mtimes clamped
+# on a y2038-limited filesystem (this box's xfs/tmpfs), scrambling the
+# ordering and FAILing 3 cases at every wrapper preflight (ledger 18 smell).
+touch -t 203302010000 "$ROOT/weekly-20330201"
+touch -t 203302020000 "$ROOT/weekly-20330202"
+touch -t 203302030000 "$ROOT/weekly-20330203-CONTAMINATED-pinX"
+touch -t 203302040000 "$ROOT/nightly-20330204"
+touch -t 203302050000 "$ROOT/weekly-20330205"
+touch -t 203302060000 "$ROOT/weekly-20330206"
+CUR="$ROOT/weekly-20330206"
 
 got=$(newest_clean_runs "$ROOT" "$CUR" 3 weekly nightly headline)
-want="$ROOT/nightly-20990204,$ROOT/weekly-20990202,$ROOT/weekly-20990201"
+want="$ROOT/nightly-20330204,$ROOT/weekly-20330202,$ROOT/weekly-20330201"
 if [ "$got" = "$want" ]; then say "PASS: chain = newest-first, skips current + name-contaminated + note-contaminated"; else say "FAIL: chain wrong: got '$got' want '$want'"; FAILS=$((FAILS+1)); fi
 
 got=$(newest_clean_runs "$ROOT" "$CUR" 1 weekly nightly headline)
-if [ "$got" = "$ROOT/nightly-20990204" ]; then say "PASS: N=1 single path, no comma"; else say "FAIL: N=1 wrong: '$got'"; FAILS=$((FAILS+1)); fi
+if [ "$got" = "$ROOT/nightly-20330204" ]; then say "PASS: N=1 single path, no comma"; else say "FAIL: N=1 wrong: '$got'"; FAILS=$((FAILS+1)); fi
 
 got=$(newest_clean_runs "$ROOT" "$CUR" 2 weekly nightly headline)
-if [ "$got" = "$ROOT/nightly-20990204,$ROOT/weekly-20990202" ]; then say "PASS: N caps the chain"; else say "FAIL: N=2 wrong: '$got'"; FAILS=$((FAILS+1)); fi
+if [ "$got" = "$ROOT/nightly-20330204,$ROOT/weekly-20330202" ]; then say "PASS: N caps the chain"; else say "FAIL: N=2 wrong: '$got'"; FAILS=$((FAILS+1)); fi
 
 # QUARANTINED marker file
-touch "$ROOT/nightly-20990204/QUARANTINED"
+touch "$ROOT/nightly-20330204/QUARANTINED"
 got=$(newest_clean_runs "$ROOT" "$CUR" 3 weekly nightly headline)
-if [ "$got" = "$ROOT/weekly-20990202,$ROOT/weekly-20990201" ]; then say "PASS: QUARANTINED marker skipped"; else say "FAIL: QUARANTINED not skipped: '$got'"; FAILS=$((FAILS+1)); fi
+if [ "$got" = "$ROOT/weekly-20330202,$ROOT/weekly-20330201" ]; then say "PASS: QUARANTINED marker skipped"; else say "FAIL: QUARANTINED not skipped: '$got'"; FAILS=$((FAILS+1)); fi
 
 # empty candidate set
 got=$(newest_clean_runs "$TMP/empty-root" "$CUR" 3 weekly)
