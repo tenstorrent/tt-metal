@@ -874,7 +874,15 @@
 
 # MiniMax-M3 full-model chunked-prefill throughput regression (same harness as KV PCC, PCC skipped).
 # Gates whole-sequence tok/s against PREFILL_EXPECTED_TPS +/- PREFILL_PERF_MARGIN on high-power Galaxy.
-# Allowed range: ~3825–5175 tok/s (4500 +/- 15%).
+# Allowed range: ~5007-6774 tok/s (5890 +/- 15%).
+# 5890 is the measured whole-sequence median of run 32280869211 job 96161901672 (PREFILL_TPS_ITERS=5
+# within that one run), the first run of this pipeline after the per-device MeshWorkload dispatch
+# fan-out was removed - it exceeded the old 4500 ceiling, which is why this moved. That is a single
+# run, unlike the ten-run median the Kimi chunked
+# baseline uses, so if this proves noisy widen PREFILL_PERF_MARGIN rather than chasing the centre.
+# For scale, this pipeline is host-dispatch bound: it measured 5057.8 tok/s (run 31996994902) with the
+# fan-out absent and 3582.8 (run 32075671439) with it present, so the gate's own floor is what caught
+# #52775 here.
 # If this test fails: first check whether it is a true regression or a performance improvement.
 # If neither (CI noise), widen this range or comment out this test due to CI instability.
 - name: "MiniMax-M3-428B chunked prefill perf longbook 55k@5k"
@@ -891,7 +899,7 @@
     export PREFILL_TPS_ITERS=5
     export PREFILL_SKIP_PCC=1
     export PREFILL_REQUIRE_HIGH_POWER=1
-    export PREFILL_EXPECTED_TPS=4500
+    export PREFILL_EXPECTED_TPS=5890
     export PREFILL_PERF_MARGIN=0.15
     mpirun --bind-to none --pernode --tag-output bash -lc '
       python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
