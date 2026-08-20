@@ -37,7 +37,7 @@ void kernel_main() {
     const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(7);
     const uint8_t sender_num_hops = get_arg_val<uint32_t>(8);
 
-    // The fabric arg block (laid out by append_ccl_fabric_rt_args) begins at
+    // The fabric arg block (laid out by build_ccl_fabric_rt_args) begins at
     // index 9; its leading has_forward flag also encodes the ack route direction.
     size_t conn_arg_idx = 9;
     const bool sender_is_forward = get_arg_val<uint32_t>(conn_arg_idx);

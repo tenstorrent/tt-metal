@@ -12,7 +12,7 @@ Packet framing (``ccl_packet_dims``) and 1-D routing (``ccl_dm_route``) are the
 Python-bound CCL host helpers — they own the bf16 ``bit_floor`` packet sizing,
 both page<->packet regimes, and the fabric forward/backward sign reversal +
 ring shorter-way. The fabric-connection runtime-arg block is laid out exactly
-as ``append_ccl_fabric_rt_args`` does (``[has_forward][fwd?][has_backward][bwd?]``),
+as ``build_ccl_fabric_rt_args`` does (``[has_forward][fwd?][has_backward][bwd?]``),
 which the kernel-side ``FabricStreamSender`` consumes.
 """
 
@@ -62,7 +62,7 @@ def resolve_intermediate_spec(input_tensor: ttnn.Tensor) -> ttnn.TensorSpec:
 
 
 def _append_fabric_rt_args(rt_args_ref, src_id, neighbor_id, program, core, is_forward):
-    """Mirror ttnn::ccl::dataflow::append_ccl_fabric_rt_args.
+    """Mirror ttnn::ccl::dataflow::build_ccl_fabric_rt_args.
 
     After the call the block beginning at the current rt_args length is:
         [has_forward][<forward conn args> if fwd][has_backward][<backward conn args> if bwd]
