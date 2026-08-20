@@ -49,6 +49,9 @@ OPS = {
     "sub": ("BN_SUB", lambda a, b: a - b, False, 0.01),
     "mul": ("BN_MUL", lambda a, b: a * b, True, 0.01),
     "div": ("BN_DIV", lambda a, b: a / b, False, 0.01),
+    # An elementwise max, which the online softmax of a flash attention folds its running
+    # row maxima with. Commutative, so no swapped-reference check applies.
+    "max": ("BN_MAX", lambda a, b: torch.maximum(a, b), True, 0.01),
     # ((a + b) - a) * b / a  ==  b*b/a
     "chain": ("BN_CHAIN", lambda a, b: b * b / a, False, 0.05),
 }
