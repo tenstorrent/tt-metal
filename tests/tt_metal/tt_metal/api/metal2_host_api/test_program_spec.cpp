@@ -5077,7 +5077,7 @@ TEST_F(ProgramSpecTestGen1, ScratchpadFormatAloneSucceeds) {
 #include "api/compute/experimental/2_0/llk_mem_descriptor.h"
 void kernel_main() {
     Scratchpad<uint32_t> pad(scratch::pad);
-    constexpr auto desc = ckernel::experimental::to_llk_mem_descriptor(scratch::pad);
+    constexpr auto desc = to_llk_mem_descriptor(scratch::pad);
     static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
     static_assert(desc.shape.face_r_dim == 16);
     static_assert(desc.shape.face_c_dim == 16);
@@ -5106,7 +5106,7 @@ TEST_F(ProgramSpecTestGen1, ScratchpadFormatAndTileSucceeds) {
 #include "api/compute/experimental/2_0/llk_mem_descriptor.h"
 void kernel_main() {
     Scratchpad<uint32_t> pad(scratch::pad);
-    constexpr auto desc = ckernel::experimental::to_llk_mem_descriptor(scratch::pad);
+    constexpr auto desc = to_llk_mem_descriptor(scratch::pad);
     static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
     static_assert(desc.shape.face_r_dim == 16);
     static_assert(desc.shape.face_c_dim == 16);
@@ -5136,7 +5136,7 @@ TEST_F(ProgramSpecTestGen1, ScratchpadFormatAndFaceGeometrySucceeds) {
 #include "api/compute/experimental/2_0/llk_mem_descriptor.h"
 void kernel_main() {
     Scratchpad<uint32_t> pad(scratch::pad);
-    constexpr auto desc = ckernel::experimental::to_llk_mem_descriptor(scratch::pad);
+    constexpr auto desc = to_llk_mem_descriptor(scratch::pad);
     static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
     static_assert(desc.shape.face_r_dim == 1);
     static_assert(desc.shape.face_c_dim == 16);
@@ -5166,7 +5166,7 @@ TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorDFBDefaultTileCompiles) {
 #include "api/compute/experimental/2_0/llk_mem_descriptor.h"
 void kernel_main() {
     DataflowBuffer in(dfb::input_dfb);
-    constexpr auto desc = ckernel::experimental::to_llk_mem_descriptor(dfb::input_dfb);
+    constexpr auto desc = to_llk_mem_descriptor(dfb::input_dfb);
     static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
     static_assert(desc.shape.face_r_dim == 16);
     static_assert(desc.shape.face_c_dim == 16);
@@ -5189,7 +5189,7 @@ TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorDFBFaceGeometryCompiles) {
 #include "api/compute/experimental/2_0/llk_mem_descriptor.h"
 void kernel_main() {
     DataflowBuffer in(dfb::input_dfb);
-    constexpr auto desc = ckernel::experimental::to_llk_mem_descriptor(dfb::input_dfb);
+    constexpr auto desc = to_llk_mem_descriptor(dfb::input_dfb);
     static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
     static_assert(desc.shape.face_r_dim == 1);
     static_assert(desc.shape.face_c_dim == 16);
@@ -5225,7 +5225,7 @@ TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorL1TensorDefaultCompiles) {
 #include "api/tensor/local_tensor_accessor.h"
 void kernel_main() {
     LocalTensorAccessor<uint32_t> a(tensor::a);
-    constexpr auto desc = ckernel::experimental::to_llk_mem_descriptor(tensor::a);
+    constexpr auto desc = to_llk_mem_descriptor(tensor::a);
     static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
     static_assert(desc.shape.face_r_dim == 16);
     static_assert(desc.shape.face_c_dim == 16);
@@ -5250,7 +5250,7 @@ TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorL1Tensor16x32Compiles) {
 #include "api/tensor/local_tensor_accessor.h"
 void kernel_main() {
     LocalTensorAccessor<uint32_t> a(tensor::a);
-    constexpr auto desc = ckernel::experimental::to_llk_mem_descriptor(tensor::a);
+    constexpr auto desc = to_llk_mem_descriptor(tensor::a);
     static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
     static_assert(desc.shape.face_r_dim == 16);
     static_assert(desc.shape.face_c_dim == 16);
@@ -5275,7 +5275,7 @@ TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorL1Tensor32x16Compiles) {
 #include "api/tensor/local_tensor_accessor.h"
 void kernel_main() {
     LocalTensorAccessor<uint32_t> a(tensor::a);
-    constexpr auto desc = ckernel::experimental::to_llk_mem_descriptor(tensor::a);
+    constexpr auto desc = to_llk_mem_descriptor(tensor::a);
     static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
     static_assert(desc.shape.face_r_dim == 16);
     static_assert(desc.shape.face_c_dim == 16);
@@ -5298,7 +5298,7 @@ TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorDramTensorFailsCompile) {
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
 #include "api/compute/experimental/2_0/llk_mem_descriptor.h"
 void kernel_main() {
-    constexpr auto desc = ckernel::experimental::to_llk_mem_descriptor(tensor::a);
+    constexpr auto desc = to_llk_mem_descriptor(tensor::a);
     (void)desc;
 }
 )"};
