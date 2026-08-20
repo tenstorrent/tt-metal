@@ -300,7 +300,7 @@ def test_recurrent_chunk_scan_rejects_host_initial_state(device: ttnn.Device, ex
         ("state_dtype", "initial_state must be FLOAT32"),
         ("state_rank", "initial_state must be rank 3"),
         ("state_shape", "initial_state shape mismatch"),
-        ("output_sharded", "output memory must be interleaved"),
+        ("output_sharded", "output memory layout must be INTERLEAVED, got HEIGHT_SHARDED"),
     ],
 )
 def test_recurrent_chunk_scan_rejects_invalid_inputs(
