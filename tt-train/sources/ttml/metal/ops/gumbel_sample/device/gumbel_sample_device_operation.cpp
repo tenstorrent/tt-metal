@@ -229,7 +229,9 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor_args.positions->tensor_topology() == logits.tensor_topology(),
             "GumbelSample: 'positions' must be distributed across the mesh exactly as the logits are "
-            "-- shard it with the SAME mapper the batch was sharded with");
+            "-- shard it with the SAME mapper the batch was sharded with. (A common cause: a batch "
+            "that does not divide across the mesh, which shrinks a 1D-sharded tensor's distribution "
+            "shape to the chunk count.)");
     }
 
     if (tensor_args.preallocated_output.has_value()) {
