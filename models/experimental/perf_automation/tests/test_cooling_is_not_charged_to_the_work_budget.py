@@ -59,8 +59,15 @@ def test_the_parent_and_child_agree_on_the_marker_text():
 
 
 def test_the_hard_limit_excludes_cooling():
+    """Anchored on the PROPERTY, not the spelling. The comparison was once written inline and is now
+    hoisted into `_worked`; either is fine, so long as cooling is subtracted before the budget and
+    the ceiling are judged."""
     src = (_PA / "cc_optimize" / "run.py").read_text()
-    assert "now - start - _cool_total() >= timeout_s" in src, "the hard limit still counts cooling as work"
+    assert "_worked = now - start - _cool_total()" in src, "the work clock no longer discounts cooling"
+    k = src.index("_worked = now - start - _cool_total()")
+    stanza = src[k : k + 1800]
+    assert "_worked >= timeout_s" in stanza, "the budget is not measured on the cooling-discounted clock"
+    assert "_worked >= timeout_s * _ceiling_mult" in stanza, "the ceiling is not measured on it either"
 
 
 def test_a_cooling_child_is_not_a_stall():

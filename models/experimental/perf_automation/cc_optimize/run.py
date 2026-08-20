@@ -3037,6 +3037,18 @@ def _pg_cpu_jiffies(pgid: int) -> int:
         return 0
 
 
+def _hard_ceiling_mult() -> int:
+    """probes owns this too -- one number, one home. 0 means "no ceiling" if probes is unreachable,
+    and the caller treats 0 as disabled rather than as an instant kill."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    try:
+        from agent.probes import _HARD_CEILING_MULT
+
+        return int(_HARD_CEILING_MULT)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _progress_signature(pgid, log_path=None, pid=None) -> tuple:
     """probes owns this; see progress_signature there. Lazy import, as _set_depth is."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -3290,6 +3302,7 @@ def _run_device_proc(
             _last_stack_at = start
             max_gap = 0.0
             _over_budget = [False]
+            _ceiling_mult = _hard_ceiling_mult()
             while proc.poll() is None:
                 time.sleep(5)
                 now = time.monotonic()
@@ -3317,7 +3330,7 @@ def _run_device_proc(
                         flush=True,
                     )
                     raise subprocess.TimeoutExpired(cmd, limit)
-                # NO WALL-CLOCK KILL WHILE THE WORK IS REAL.
+                # NO WALL-CLOCK KILL WHILE THE WORK IS REAL -- BUT THERE IS A CEILING.
                 #
                 # This raised the moment `timeout_s` elapsed, regardless of what the process was
                 # doing. On 2026-08-17 that killed a full-depth measurement after three hours while
@@ -3325,28 +3338,43 @@ def _run_device_proc(
                 # on a number. The number was not even a judgement about this measurement: it is the
                 # CEILING, taken because --fresh had wiped the observed durations meant to size it.
                 #
-                # The loop already knows the difference. `moved` is tree CPU, child output, a live
-                # LLM child or an in-progress cooldown, and the stall clock above kills the moment
-                # all of them go quiet -- which is what a wedge looks like. A process that is
-                # demonstrably working is not a wedge, and a clock cannot make it one.
+                # The loop already knows the difference. `moved` is log bytes, syscalls, io bytes,
+                # stack movement or an in-progress cooldown, and the stall clock above kills the
+                # moment all of them go quiet. A process that is demonstrably working is not a
+                # wedge, and a clock cannot make it one.
                 #
-                # So the budget becomes a REPORT, not a sentence: it is said out loud, once, and the
-                # run continues. What bounds the run is death, not duration -- the same rule the
-                # cooldown follows, where waiting ends when the board is cold rather than when a
-                # timer expires.
+                # WHAT THIS COMMENT USED TO SAY, AND WHY IT WAS WRONG. It said `moved` was "tree CPU"
+                # and concluded the budget should be a REPORT, not a sentence -- said once, run
+                # continues, "bounded by death, not duration". Run 12 is what that costs. At 03:09,
+                # exactly 3h in, this loop printed "over its 10800s budget and STILL WORKING (tree
+                # CPU is moving) -- not killing it", and then sat silent for NINE HOURS holding the
+                # board until it was killed by hand. CPU was moving because the process was spinning;
+                # the thing being trusted as proof of work was the symptom of the wedge.
                 #
-                # THE COST, STATED. A process that burns CPU forever without finishing now runs
-                # until it stops or the operator does. That is the trade: this tool would rather
-                # spend hours on work that may complete than throw away work that was completing,
-                # because the throw-away also triggers a recovery, and the recovery is what has
-                # twice damaged the board.
-                if not _over_budget[0] and now - start - _cool_total() >= timeout_s:
+                # So: the budget is still not a sentence, because the stall check above is now the
+                # real judge and it watches work rather than CPU. But there IS a ceiling behind it.
+                # A run that somehow keeps its signature twitching without ever finishing stops at
+                # _HARD_CEILING_MULT x its budget, and stops by RAISING -- so the caller books a
+                # failed attempt and its retries take over, rather than the run hanging forever.
+                _worked = now - start - _cool_total()
+                if not _over_budget[0] and _worked >= timeout_s:
                     _over_budget[0] = True
                     print(
                         f"  [optimize/cc] {label or 'device subprocess'} is over its {int(timeout_s)}s budget "
-                        f"and STILL WORKING (tree CPU is moving) -- not killing it; the stall check decides",
+                        f"and STILL WORKING (output, syscalls, bytes or stack are moving) -- not killing "
+                        f"it; the stall check decides, and a hard ceiling at "
+                        f"{int(timeout_s * (_ceiling_mult or 0))}s is behind that",
                         flush=True,
                     )
+                if _ceiling_mult and timeout_s and _worked >= timeout_s * _ceiling_mult:
+                    print(
+                        f"  [optimize/cc] {label or 'device subprocess'} exceeded "
+                        f"{int(timeout_s * _ceiling_mult)}s -- {_ceiling_mult}x its budget -- while still "
+                        f"looking busy. Nothing legitimate takes that long: killing it and failing the "
+                        f"attempt so the retry can run.",
+                        flush=True,
+                    )
+                    raise subprocess.TimeoutExpired(cmd, int(timeout_s * _ceiling_mult))
             rc = proc.returncode
             _pt.join(timeout=30)
             out = "".join(_buf)

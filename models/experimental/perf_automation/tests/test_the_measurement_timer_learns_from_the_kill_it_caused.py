@@ -91,10 +91,31 @@ def test_the_backstop_no_longer_kills_code_that_is_working():
     If the trade ever needs revisiting, the fix is not to restore a blind clock -- it is to make
     OUTPUT the liveness signal instead of CPU, since that deadlock printed nothing after one second
     and would have been caught in minutes.
+
+    UPDATED 2026-08-20, BY THE CASE THIS DOCSTRING PREDICTED. It ends "the fix is not to restore a
+    blind clock -- it is to make OUTPUT the liveness signal instead of CPU". Run 12 is what it cost
+    to leave that undone: at 03:09, exactly 3h in, the loop printed "over its 10800s budget and
+    STILL WORKING (tree CPU is moving) -- not killing it", then produced NOT ONE BYTE for nine hours
+    while holding the board, until it was killed by hand.
+
+    So liveness is now a progress signature -- log bytes, syscalls, io bytes, stack movement -- and
+    CPU is not consulted anywhere. The trade this docstring accepted ("a busy-wait deadlock now runs
+    until an operator stops it") is no longer accepted, because the operator turned out to be the
+    only backstop and cost nine hours and a wedged board.
+
+    What is preserved: the budget itself still does NOT kill. Reaching 1x the budget is reported,
+    once, and the run continues -- that part was right, and killing on it destroyed real work twice.
+    What is added: a ceiling at _HARD_CEILING_MULT x the budget that does kill, because a signature
+    that keeps twitching without ever finishing is not work either.
     """
     src = (_PA / "cc_optimize" / "run.py").read_text()
-    k = src.index("if not _over_budget[0] and now - start - _cool_total() >= timeout_s:")
-    stanza = src[k : k + 600]
-    assert "TimeoutExpired" not in stanza, "the budget kills again instead of reporting"
+    k = src.index("if not _over_budget[0] and _worked >= timeout_s:")
+    stanza = src[k : k + 700]
+    assert "TimeoutExpired" not in stanza, "the budget itself kills again instead of reporting"
     assert "STILL WORKING" in stanza, "the over-budget case is no longer announced"
+    assert "tree CPU is moving" not in src, "the message still points at CPU, which is not the signal"
     assert "raise subprocess.TimeoutExpired(cmd, limit)" in src, "nothing kills a genuinely stalled run"
+
+    # ...and the ceiling behind it does kill.
+    c = src.index("if _ceiling_mult and timeout_s and _worked >= timeout_s * _ceiling_mult:")
+    assert "raise subprocess.TimeoutExpired" in src[c : c + 900], "the ceiling does not stop anything"

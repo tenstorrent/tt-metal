@@ -133,3 +133,34 @@ def test_the_ceiling_fails_the_attempt_rather_than_the_run():
     i = src.index("if timeout_s and now - start >= timeout_s * _HARD_CEILING_MULT:")
     assert "_kill_and_raise" in src[i : i + 400]
     assert issubclass(TracyHangError, Exception)
+
+
+def test_both_supervised_loops_have_the_ceiling_not_just_one():
+    """RUN 12'S ACTUAL FAILURE. The ceiling went into probes._execute and NOT into
+    run.py._run_device_proc -- and _run_device_proc is the loop that printed "over its 10800s budget
+    ... not killing it" and then held the board silently for nine hours. A detector that covers one
+    of two supervised loops is a detector with a hole in it."""
+    run = Path(__file__).resolve().parents[1].joinpath("cc_optimize", "run.py").read_text()
+    probes = Path(__file__).resolve().parents[1].joinpath("agent", "probes.py").read_text()
+
+    assert "_HARD_CEILING_MULT" in probes, "probes lost its ceiling"
+    assert "_hard_ceiling_mult" in run, "run.py's device loop has no hard ceiling"
+
+    # and it must KILL, not merely narrate
+    i = run.index("if _ceiling_mult and timeout_s and _worked >= timeout_s * _ceiling_mult:")
+    assert "raise subprocess.TimeoutExpired" in run[i : i + 900], "run.py's ceiling does not stop anything"
+
+
+def test_the_budget_message_does_not_still_claim_cpu_is_the_signal():
+    """The line that let run 12 hang said "STILL WORKING (tree CPU is moving)". CPU is no longer
+    consulted, so a message that still says so would send the next reader after the wrong signal."""
+    run = Path(__file__).resolve().parents[1].joinpath("cc_optimize", "run.py").read_text()
+    assert "STILL WORKING (tree CPU is moving)" not in run
+
+
+def test_the_ceiling_is_measured_on_working_time_not_wall_clock():
+    """Cooling is legitimate non-progress and is already excluded from the budget; the ceiling must
+    exclude it too, or a long cooldown would spend the run's ceiling for it."""
+    run = Path(__file__).resolve().parents[1].joinpath("cc_optimize", "run.py").read_text()
+    i = run.index("_worked = now - start - _cool_total()")
+    assert "_worked >= timeout_s * _ceiling_mult" in run[i : i + 1800], "ceiling ignores cooling credit"
