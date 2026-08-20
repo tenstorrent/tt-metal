@@ -30,6 +30,20 @@
 // internal-only helpers built on it (tile_address). The source (CB / DataflowBuffer / Scratchpad) is NOT
 // known here -- source -> operand is done at the call site via the test-common CB helpers
 // (cb_operand_helpers.h) or a future accessor's translator.
+//
+// riverwu/m2-neat rebase onto main (2026-09-02): the Metal 2 BindingToken translators did not come
+// across. On that branch they lived on the pre-split llk_mem_descriptor.h, which main deleted and
+// replaced with this file + internal/llk_descriptor.h. Dropped device API:
+//   to_llk_mem_descriptor(DFBBindingToken)
+//   to_llk_mem_descriptor(ScratchpadBindingToken)
+//   to_llk_mem_descriptor(TensorBindingToken<CTA, CRTA>)  // static_assert(!args_t::is_dram)
+//   llk_desc_from_members(LlkOperandMembers)              // format + four face-grid uint8_ts -> descriptor
+// Final m2-neat layout (after the header restructure): declarations on llk_mem_descriptor.h, definitions
+// in each token header, COMPILE_FOR_TRISC-gated so data-movement builds of those headers do not pull LLK
+// include paths. Format-less conversion was UB; DRAM stayed the existing is_dram assert.
+// Not a mechanical port: this header #errors off Blackhole, LLKMemDescriptor::format is DataFormat
+// (m2-neat stored uint8_t), and Cb / to_llk_mem_descriptor(Cb) moved to test-only cb_operand_helpers.h.
+// Host bake (ScratchpadSpec fields, filegen designated-init LlkOperandMembers, kernel hash) still lands.
 // =====================================================================================================
 
 namespace ckernel {
