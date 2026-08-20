@@ -14,7 +14,7 @@ LLM-powered bug pattern detection for tt-metal PRs. Scans PR diffs against a lib
 
 ### GitHub Actions (primary)
 
-Comment `/bug-check run` on any PR. The workflow at `.github/workflows/bug-check.yaml` runs the checker and posts findings as inline comments. Comment `/bug-check` (bare) to see all available subcommands.
+The workflow at `.github/workflows/bug-check.yaml` runs automatically (equivalent to `/bug-check run`) when a PR is opened or marked ready for review — draft PRs are skipped until they leave draft. You can also comment `/bug-check run` on any PR to trigger it manually, or `/bug-check` (bare) to see all available subcommands.
 
 ## Subcommands
 
