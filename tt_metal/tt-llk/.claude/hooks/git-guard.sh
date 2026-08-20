@@ -80,7 +80,10 @@ SUBCMD='(^|[^[:alnum:]_-])git([[:space:]]+(-[^[:space:]]+|-C[[:space:]]+[^[:spac
 # bare-SHA pattern is what stops `git worktree add <dir> <old-sha>` and
 # `git checkout <old-sha> -- <path>`; `worktree` itself stays allowed because the
 # pipeline creates its own worktrees.
-REVREF='HEAD~|HEAD\^|@\{|\.git($|[^[:alnum:]_-])|(^|[^[:alnum:]])[0-9a-f]{7,40}([^[:alnum:]]|$)'
+#
+# Bare SHAs are handled by _has_sha_token below rather than by this pattern — see there for
+# the two false-positive classes the first real run exposed.
+REVREF='HEAD~|HEAD\^|@\{|\.git($|[^[:alnum:]_-])'
 
 # Same, minus the bare-SHA clause, for scanning file content: a 7+ hex-digit token is
 # common in source (constants, masks) and would false-block legitimate writes.
@@ -94,6 +97,21 @@ SUBCMD_LOOSE='(^|[^[:alnum:]_-])git[^[:alnum:]_]+(log|reflog|rev-list|cat-file|b
 
 # Cheap gate: only inspect text that mentions git or a .git path at all.
 GITISH='(^|[^[:alnum:]_-])git([^[:alnum:]_-]|$)|\.git($|[^[:alnum:]_-])'
+
+# A bare commit SHA, as an argument rather than as a fragment of something else. Two
+# false-positive classes from the first real run drove this shape:
+#   * hex inside a path — run ids are 8 hex chars, so every command naming LOG_DIR
+#     (".../2026-08-20_relu_quasar_8c1bcf65/...") matched. Hence: whitespace-delimited only.
+#   * pure-decimal numbers — every digit is a valid hex digit, so Confluence page ids like
+#     1173618806 matched. Hence: the token must contain at least one a-f.
+# A short SHA that happens to be all digits is therefore missed; that is an accepted gap,
+# since this clause is only a backstop behind SUBCMD and the HEAD~/.git patterns.
+_has_sha_token() {
+    printf '%s' "$1" \
+        | grep -oE '(^|[[:space:]])[0-9a-f]{7,40}([[:space:]]|:|$)' \
+        | tr -d '[:space:]:' \
+        | grep -qE '[a-f]'
+}
 
 # Writing a script and then running it defeats a command-text check: the Bash hook only
 # sees `bash x.sh`. Authoring the script *through bash* is already caught (the git text is
@@ -128,6 +146,8 @@ if [ "$BLIND" = "1" ] && [ "$scan_text" = "1" ] && printf '%s' "$cmd" | grep -qE
     if printf '%s' "$cmd" | grep -qE "$SUBCMD" || printf '%s' "$cmd" | grep -qE "$scan_revref"; then
         verdict=BLOCK
     elif [ -n "$scan_loose" ] && printf '%s' "$cmd" | grep -qE "$scan_loose"; then
+        verdict=BLOCK
+    elif [ "$tool" = "Bash" ] && _has_sha_token "$cmd"; then
         verdict=BLOCK
     fi
 fi
