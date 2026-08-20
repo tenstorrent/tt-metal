@@ -4,7 +4,6 @@
 
 #include "to_layout_op.hpp"
 
-#include <algorithm>
 #include <bit>
 #include <limits>
 #include <string_view>
@@ -183,9 +182,8 @@ Tensor to_layout_impl(
             if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
                 // workaround by applying padding and then tilizing
-                // Build the padding vector sized to the tensor's actual rank (rather than assuming rank 4),
-                // and use negative indices for height/width so this works for any rank >= 2.
-                int padding_rank = std::max<int>(padded_output_shape.rank(), 2);
+                // Pad only the last two dims (height/width), sized to the tensor's rank.
+                int padding_rank = padded_output_shape.rank();
                 ttsl::SmallVector<std::array<uint32_t, 2>> padding(padding_rank, {0, 0});
                 padding[padding_rank - 2] = {0, padded_output_shape[-2] - output_shape[-2]};
                 padding[padding_rank - 1] = {0, padded_output_shape[-1] - output_shape[-1]};
