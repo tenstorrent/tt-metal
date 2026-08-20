@@ -98,6 +98,10 @@ LEVER_DEFAULTS = {
     # leader, then y axis to the root) wherever the group rectangle earns it;
     # 0 = the flat root of Perf 1, all G cores unicasting into one core.
     "combine_tree": 1,
+    # 1 (applied) = grow the CHOSEN plan's row block past `_solve`'s
+    # one-block-per-core cap while the grid stays DRAM-saturated; 0 = the Perf-1
+    # cap, i.e. the coarsest block that still keeps every parallel unit busy.
+    "coarsen_blocks": 1,
     # 0 = let the policy choose; N = pin G = N.  This is what makes the group-size
     # calibration in `_choose_group_size` re-MEASURABLE instead of asserted: a new
     # box or a new shape can be swept without editing the policy.
@@ -797,6 +801,14 @@ RM_MIN_CORE_STICK_BYTES = 1024
 # See perf_experiments/tree_combine/.
 TREE_MIN_GY = 4
 
+# Row-blocks below which the grid stops saturating DRAM.  MEASURED, not assumed:
+# the A0 core sweep on (1,1,8192,1024) reads 93,535 ns at the full 130-core grid,
+# 94,470 at 64 cores (the same, inside the band) and 110,136 at 32 (1.17x worse) -
+# so ~64 concurrent readers already hold the DRAM roof and every core past that
+# buys nothing, while below it parallelism is still the wall.  Re-measurable with
+# `_levers=dict(active_cores=N)`.
+MIN_SATURATING_BLOCKS = 64
+
 
 def _tree_gy(group_size: int, gy: int, levers) -> int:
     """The level-2 fan-in, or 0 when this rectangle keeps the flat root."""
@@ -1085,6 +1097,62 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         layout_common=layout_common,
         levers=levers,
     )
+    # ---- grow the CHOSEN plan's row block past the one-block-per-core cap ----
+    # `_solve` caps BLOCK_HT at ceil(Rt / row_parallel_units) - the coarsest block
+    # that still keeps every parallel unit busy.  On a shape whose grid is ALREADY
+    # DRAM-saturated that is the wrong objective: the extra cores buy no bandwidth
+    # and the finer row block pays per-block overhead.  MEASURED on (1,1,8192,1024)
+    # @ bfloat8_b: BLOCK_HT 2 on 128 cores 58.2 us vs BLOCK_HT 4 on 64 cores 52.7 us
+    # (1.10x) - and the same 64 cores forced back to BLOCK_HT 2 measure 58.1 us, so
+    # it is the BLOCK and not the core count.  Also (1,1,4096,1024) bf8b 1.29x and
+    # bf16 1.12x.  See perf_experiments/plan_policy/.
+    #
+    # Two brakes, both of which a measurement forced:
+    #   * the coarser block must still afford the streaming depth PROFILE
+    #     (IN_DEPTH_CAP, out 2, rm 2) - the same rule the W-chunk search runs on.
+    #     Without it the search takes BLOCK_HT 5 by dropping IN_BUF_DEPTH 4 -> 3 and
+    #     gives the whole win back (57.3-57.9 us), and `row_major` goes 91.8 -> 95.5.
+    #   * at least MIN_SATURATING_BLOCKS row-blocks must remain.  Without it
+    #     `h_nonalign` (1,1,100,736) coarsens its 4 row-blocks onto 2 cores:
+    #     7.4 -> 11.5 us (0.64x).
+    #
+    # It runs on the CHOSEN plan only, never inside `_choose_group_size`:
+    # `_split_cost` prices a candidate by per-core tile count, so scoring coarsened
+    # candidates flips bfloat8_b prefill to G=2 and lands on 54.2 us instead of 52.7.
+    for _b in range(min(Rt, dest_limit) if _lever(levers, "coarsen_blocks") else 0, solved.BLOCK_HT, -1):
+        if _div_up(Rt, _b) < MIN_SATURATING_BLOCKS:
+            continue
+        at_profile = _working_set_bytes(
+            regime=solved.regime,
+            block_ht=_b,
+            in_depth=IN_DEPTH_CAP,
+            out_depth=2,
+            rm_depth=2,
+            gamma_depth=solved.GAMMA_DEPTH,
+            wr=solved.WT_REDUCE_BLOCK,
+            ws=solved.WT_SCALE_BLOCK,
+            gamma_ingest_block=solved.GAMMA_INGEST_BLOCK,
+            Wt_core=Wt_core,
+            w_split_group=w_split_group,
+            w_split_gy=w_split_gy,
+            **layout_common,
+        )
+        if at_profile <= l1_cb_budget:
+            solved = _solve(
+                Wt_core=Wt_core,
+                w_split_group=w_split_group,
+                w_split_gy=w_split_gy,
+                row_parallel_units=_div_up(Rt, _b),
+                Rt=Rt,
+                maskless_w=maskless_w,
+                dest_limit=dest_limit,
+                l1_cb_budget=l1_cb_budget,
+                gamma_cap_tiles=gamma_cap_tiles,
+                layout_common=layout_common,
+                levers=levers,
+            )
+            break
+
     regime = solved.regime
     groups_used = max(1, min(num_groups, solved.num_row_blocks))
 

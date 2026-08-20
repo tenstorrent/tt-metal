@@ -100,6 +100,9 @@ BENCH_SHAPES = {
     # Regime A shape.  Both are supported cells, so a graduation that regressed
     # them would be a regression on a supported cell.
     "w_nonalign": ((1, 1, 32, 4095), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    # --- Perf 2: the row-block-coarsening regime (Rt just above the DRAM-
+    # saturation width, so `_solve`'s one-block-per-core cap is the binding one) ---
+    "prefill_4096": ((1, 1, 4096, 1024), ttnn.bfloat16, ttnn.TILE_LAYOUT),
     "h_nonalign": ((1, 1, 100, 736), ttnn.bfloat16, ttnn.TILE_LAYOUT),
 }
 
@@ -116,6 +119,7 @@ BENCH_GAMMA_LAYOUT = {
     "prefill_7168": ttnn.TILE_LAYOUT,
     "w_nonalign": ttnn.TILE_LAYOUT,
     "h_nonalign": ttnn.TILE_LAYOUT,
+    "prefill_4096": ttnn.TILE_LAYOUT,
 }
 
 
@@ -157,6 +161,11 @@ LEVER_ARMS = {
     "F25": _arm(levers=dict(dest_acc=0)),
     # F24: applied = the FAST bfloat8_b packer, so the OFF arm forces PRECISE.
     "F24": _arm(levers=dict(pack_precise=1)),
+    # --- Perf 2 -------------------------------------------------------------
+    # The hierarchical combine: OFF is Perf 1's flat root at the same G.
+    "combine_tree": _arm(levers=dict(combine_tree=0)),
+    # The row-block coarsening: OFF is Perf 1's one-block-per-core cap.
+    "coarsen_blocks": _arm(levers=dict(coarsen_blocks=0)),
     # --- Perf 1 -------------------------------------------------------------
     # The W-split work distribution: OFF forces G = 1, the pure row-parallel plan
     # the op shipped before this round.
@@ -341,6 +350,49 @@ def run_group_sweep(device, shape_name, groups=(0, 1, 4, 8, 14, 16, 28, 32, 56),
             run_arm(device, manifest, f"{shape_name}/G:{g or 'policy'}", shape_name, levers, config=config)
         except AssertionError as exc:  # not a legal G here — record the fact, keep going
             print(f"RMS_BENCH: {shape_name} G={g} skipped: {exc}")
+    return manifest
+
+
+def run_perf2_pairs(device):
+    """Perf 2: ON/OFF for the two host-plan graduations, on the shapes they act on."""
+    manifest = []
+    for name, dtype, levs in (
+        ("focus", None, "combine_tree"),
+        ("grid_starved", None, "combine_tree"),
+        ("prefill_1024", ttnn.bfloat8_b, "coarsen_blocks"),
+        ("prefill_4096", ttnn.bfloat8_b, "coarsen_blocks"),
+        ("prefill_4096", None, "coarsen_blocks"),
+        ("h_nonalign", None, "coarsen_blocks"),
+        ("row_major", None, "coarsen_blocks"),
+    ):
+        tag = f"{name}{'/bf8b' if dtype else ''}"
+        run_arm(device, manifest, f"{tag}/ON:{levs}", name, config="loose", dtype=dtype)
+        run_arm(device, manifest, f"{tag}/OFF:{levs}", name, LEVER_ARMS[levs], config="loose", dtype=dtype)
+    return manifest
+
+
+def run_combine_floor(device, shape_name="focus", groups=(1, 4, 8, 16, 32, 56)):
+    """Perf 2: price the W-split COMBINE's own floor, as a function of group size.
+
+    `stub_both` removes every DRAM payload but keeps ALL the sync scaffolding -
+    including the combine's gather write, gather semaphore and 1->N broadcast,
+    which are NOT DRAM traffic and so survive the stub.  Sweeping G under
+    `stub_both` therefore separates the fixed program-launch cost (the G=1 arm,
+    which creates no combine at all) from the combine handshake's own cost, and
+    shows how that cost scales with the flat root's fan-in.
+    """
+    manifest = []
+    for g in groups:
+        base = dict(w_split=0) if g == 1 else dict(w_group=g)
+        run_arm(
+            device,
+            manifest,
+            f"{shape_name}/floor:G{g}",
+            shape_name,
+            _arm(levers=dict(stub_dm=1, stub_compute=1, **base)),
+            config="loose",
+        )
+        run_arm(device, manifest, f"{shape_name}/live:G{g}", shape_name, _arm(levers=dict(**base)), config="loose")
     return manifest
 
 
