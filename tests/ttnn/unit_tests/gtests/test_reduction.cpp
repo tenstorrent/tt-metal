@@ -41,6 +41,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
+#include "smoke_test_utils.hpp"
 #include "ttnn_test_fixtures.hpp"
 
 namespace ttnn::operations::reduction::test {
@@ -49,22 +50,8 @@ class ReductionSmoke : public TTNNFixtureWithSuiteDevice<ReductionSmoke> {};
 
 namespace detail {
 
-inline MemoryConfig dram_interleaved() {
-    return MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-}
-
-template <typename T>
-Tensor make_device_tensor(
-    tt::tt_metal::distributed::MeshDevice& device,
-    const ttnn::Shape& shape,
-    const std::vector<T>& data,
-    DataType dtype,
-    Layout layout) {
-    const MemoryConfig mem_cfg = dram_interleaved();
-    const TensorLayout tensor_layout(dtype, PageConfig(layout), mem_cfg);
-    const tt::tt_metal::TensorSpec tensor_spec(shape, tensor_layout);
-    return Tensor::from_vector(data, tensor_spec).to_device(&device, mem_cfg, ttnn::QueueId(0));
-}
+using ttnn::test_utils::dram_interleaved;
+using ttnn::test_utils::make_device_tensor;
 
 }  // namespace detail
 
