@@ -25,8 +25,8 @@
 
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/compute_kernel_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Square (SFPU unary)
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"  // Square (SFPU unary)
 
 namespace ckl = compute_kernel_lib;
 using namespace compute_kernel_lib;
