@@ -68,6 +68,19 @@ void bind_combine(nb::module_& mod) {
                 Defaults to True.
             use_fp8_combine (bool, optional): When True, emit the combined output in fp8_e4m3.
                 Requires Blackhole hardware. Defaults to False.
+            staging_buffer (ttnn.Tensor, optional): Caller-owned DRAM scratch for the
+                store-and-forward path. UINT32 ROW_MAJOR interleaved DRAM, replicated across the
+                mesh. Its page count is divided evenly across every
+                (direction, relay level, sender core) stream, so the buffer size is what sets the
+                per-stream ring depth; the quotient must be a power of two and at least 2. It holds
+                no state between invocations, so one buffer may be shared by every layer. Required
+                when use_store_and_forward is True and the combine axis is deep enough for a relay
+                to exist. Defaults to None.
+            use_store_and_forward (bool, optional): When True, a token more than one hop from its
+                destination is written to the first neighbour's staging_buffer and relayed one hop
+                at a time instead of being sent as a multi-hop fabric unicast. Every ethernet packet
+                is then terminal at its receiver, so no router eRISC has to re-inject forwarded
+                traffic. Defaults to False.
 
         Returns:
             ttnn.Tensor:
@@ -94,7 +107,9 @@ void bind_combine(nb::module_& mod) {
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("init_zeros") = true,
         nb::arg("use_l1_small_for_semaphores") = false,
-        nb::arg("use_fp8_combine") = false);
+        nb::arg("use_fp8_combine") = false,
+        nb::arg("staging_buffer") = nb::none(),
+        nb::arg("use_store_and_forward") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine::detail

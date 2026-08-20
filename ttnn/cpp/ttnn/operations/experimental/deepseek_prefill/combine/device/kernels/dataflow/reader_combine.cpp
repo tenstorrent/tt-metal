@@ -6,10 +6,12 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/constants.hpp>
+#include "api/debug/assert.h"
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/zero_init_common.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/device/combine_sf.hpp"
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
@@ -95,15 +97,20 @@ void kernel_main() {
     constexpr auto output_args = TensorAccessorArgs<experts_tok_counter_args.next_compile_time_args_offset()>();
     constexpr auto expert_region_offsets_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
+#if USE_STORE_AND_FORWARD
+    constexpr auto staging_args = TensorAccessorArgs<expert_region_offsets_args.next_compile_time_args_offset()>();
+    constexpr uint32_t after_accessor_args = staging_args.next_compile_time_args_offset();
+#else
+    constexpr uint32_t after_accessor_args = expert_region_offsets_args.next_compile_time_args_offset();
+#endif
+
 #if INIT_ZEROS
     // Zero-init args follow immediately after the TensorAccessorArgs block
-    constexpr uint32_t cb_zero_buffer_id =
-        get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset());
-    constexpr uint32_t num_total_untilizer_cores =
-        get_compile_time_arg_val(expert_region_offsets_args.next_compile_time_args_offset() + 1);
-    constexpr uint32_t tile_layout_args_base = expert_region_offsets_args.next_compile_time_args_offset() + 2;
+    constexpr uint32_t cb_zero_buffer_id = get_compile_time_arg_val(after_accessor_args);
+    constexpr uint32_t num_total_untilizer_cores = get_compile_time_arg_val(after_accessor_args + 1);
+    constexpr uint32_t tile_layout_args_base = after_accessor_args + 2;
 #else
-    constexpr uint32_t tile_layout_args_base = expert_region_offsets_args.next_compile_time_args_offset();
+    constexpr uint32_t tile_layout_args_base = after_accessor_args;
 #endif
 
     // Sender always consumes untilized rows + routing metadata from its dedicated untilizer
@@ -115,6 +122,25 @@ void kernel_main() {
     constexpr uint32_t cb_metadata_buf_id = get_compile_time_arg_val(tile_layout_args_base + 2);
     // Per-untilizer ring depth on the sender's receive_buf (drives the slot ring below).
     constexpr uint32_t SLOTS_PER_UNTILIZER = get_compile_time_arg_val(tile_layout_args_base + 3);
+
+#if USE_STORE_AND_FORWARD
+    namespace sf = ttnn::operations::experimental::deepseek_prefill::combine::sf;
+    // Which of this chip's sender cores we are; selects our slice of every staging ring.
+    constexpr uint32_t sf_my_core = get_compile_time_arg_val(tile_layout_args_base + 4);
+    constexpr uint32_t sf_levels = SF_LEVELS;
+    constexpr uint32_t sf_slots = SF_SLOTS;
+    constexpr uint32_t sf_hdr_bytes = SF_HDR_BYTES;
+    constexpr uint32_t sf_num_cores = SF_NUM_CORES;
+    constexpr uint32_t sf_out_live_mask[2] = SF_OUT_LIVE_MASK;
+    constexpr uint32_t sf_in_live_mask[2] = SF_IN_LIVE_MASK;
+    constexpr uint32_t sf_neighbour[2] = SF_NEIGHBOUR;
+    // Serve at most this many relayed pages before giving an injection a turn.  Transit outranks
+    // injection because a downstream chip is already waiting on it, but injection carries the
+    // untilizer sentinels that end-of-stream is derived from, so it cannot be starved outright.
+    constexpr uint32_t SF_INJ_QUANTUM = 8;
+    auto sf_out_live = [&](uint32_t d, uint32_t r) { return ((sf_out_live_mask[d] >> (r - 1)) & 1u) != 0; };
+    auto sf_in_live = [&](uint32_t d, uint32_t r) { return ((sf_in_live_mask[d] >> (r - 1)) & 1u) != 0; };
+#endif
 
     // ===== Runtime Args =====
     uint32_t rt_args = 0;
@@ -190,6 +216,56 @@ void kernel_main() {
         self_data_ready_noc_addrs[c] = get_noc_addr(my_x[noc_index], my_y[noc_index], data_ready_l1);
         untilizer_credits_noc_addrs[c] = get_noc_addr(untilizer_noc_x[c], untilizer_noc_y[c], credits_l1);
     }
+
+#if USE_STORE_AND_FORWARD
+    const uint32_t sf_staging_addr = get_arg_val<uint32_t>(rt_args++);
+    const uint32_t sf_cleanup_semaphore_id = get_arg_val<uint32_t>(rt_args++);
+    // Arrival and credit counters, ordered to match the host's construction.  Both are indexed by
+    // the DATA direction; a credit increment for direction d travels the opposite way, which is the
+    // single most error-prone thing in this protocol.
+    uint32_t sf_arrived_addr[2][sf_levels];
+    uint32_t sf_credit_addr[2][sf_levels];
+    for (uint32_t d = 0; d < 2; d++) {
+        for (uint32_t r = 0; r < sf_levels; r++) {
+            sf_arrived_addr[d][r] = get_arg_val<uint32_t>(rt_args++);
+            sf_credit_addr[d][r] = get_arg_val<uint32_t>(rt_args++);
+        }
+    }
+    const auto sf_staging_gen = TensorAccessor(staging_args, sf_staging_addr);
+
+    // Pages we have handed to the downstream ring, versus pages it has told us it freed.  Both
+    // monotonic with a single writer each, so no read-modify-write can race.
+    uint32_t sf_staged[2][sf_levels] = {};
+    uint32_t sf_pool_rd[2][sf_levels] = {};
+    bool sf_eos_out[2][sf_levels] = {};
+    uint32_t sf_cred_pending[2][sf_levels] = {};
+    uint32_t sf_arrived_pending[2][sf_levels] = {};
+    uint32_t sf_transit_run = 0;
+
+    auto sf_arrived_raw = [&](uint32_t d, uint32_t r) {
+        invalidate_l1_cache();
+        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sf_arrived_addr[d][r - 1]);
+    };
+    // An arrival count carries the end-of-stream flag as an additive bias, so a close can never be
+    // observed ahead of the last batched increment that preceded it.
+    auto sf_closed = [&](uint32_t d, uint32_t r) { return sf_arrived_raw(d, r) >= sf::EOS_BIAS; };
+    auto sf_total = [&](uint32_t d, uint32_t r) {
+        const uint32_t raw = sf_arrived_raw(d, r);
+        return raw >= sf::EOS_BIAS ? raw - sf::EOS_BIAS : raw;
+    };
+    auto sf_credit = [&](uint32_t d, uint32_t r) {
+        invalidate_l1_cache();
+        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sf_credit_addr[d][r - 1]);
+    };
+    // Level 0 is the destination's own output page, which is preallocated and always available.
+    // That is the base of the deadlock argument: the lowest level never has to wait for anything.
+    auto sf_has_room = [&](uint32_t d, uint32_t r) {
+        return r == 0 || (sf_staged[d][r - 1] - sf_credit(d, r) < sf_slots);
+    };
+    auto sf_base_page = [&](uint32_t d, uint32_t r) {
+        return sf::base_page(d, r, sf_my_core, sf_levels, sf_num_cores, sf_slots);
+    };
+#endif
 
 #if INIT_ZEROS
     // Signal writer that output-zeroing is complete
@@ -299,6 +375,261 @@ void kernel_main() {
             }
         }
 
+#if USE_STORE_AND_FORWARD
+        // Route toward each axis neighbour, resolved once.  A token's direction is identified by
+        // matching its own first-hop route against these, which avoids duplicating the topology
+        // arithmetic that get_route already owns.
+        constexpr uint32_t SF_ROUTE_NONE = 0xFFu;
+        uint32_t sf_dir_route[2];
+        for (uint32_t d = 0; d < 2; d++) {
+            sf_dir_route[d] = sf_neighbour[d] == SF_NO_NEIGHBOUR
+                                  ? SF_ROUTE_NONE
+                                  : get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, sf_neighbour[d]);
+        }
+
+        constexpr uint32_t SF_SLOT_MASK = sf_slots - 1;
+        constexpr uint32_t SF_BUMP_EVERY = sf::BUMP_EVERY;
+
+        // Control-only queue entries carry no payload but still take a slot, which is why the queue
+        // is deeper than the two the non-relaying path needs.
+        auto sf_push_ctl = [&](uint32_t cmd, uint32_t d, uint32_t level, uint32_t sem_addr, uint32_t value) {
+            cb_reserve_back(cb_route_info_id, 1);
+            volatile tt_l1_ptr uint32_t* hdr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
+            hdr[sf::HDR_ROUTE] = sf_dir_route[d];
+            hdr[sf::HDR_DISTANCE] = 1;
+            hdr[sf::HDR_PAGE_IDX] = 0;
+            hdr[sf::HDR_DST_CHIP] = sf_neighbour[d];
+            hdr[sf::HDR_CMD] = cmd;
+            hdr[sf::HDR_SEM_ADDR] = sem_addr;
+            hdr[sf::HDR_INC_VALUE] = value;
+            hdr[sf::HDR_INC_DIR] = d;
+            cb_push_back(cb_route_info_id, 1);
+        };
+
+        // An arrival travels with the data it accounts for; a credit travels back against it, so it
+        // is addressed to the upstream neighbour, which is the one in the OPPOSITE direction.
+        auto sf_flush_counters = [&](bool force) {
+            for (uint32_t d = 0; d < 2; d++) {
+                for (uint32_t r = 1; r <= sf_levels; r++) {
+                    uint32_t& arrived = sf_arrived_pending[d][r - 1];
+                    if (arrived != 0 && (force || arrived >= SF_BUMP_EVERY)) {
+                        sf_push_ctl(sf::CMD_ARRIVED_INC, d, r, sf_arrived_addr[d][r - 1], arrived);
+                        arrived = 0;
+                    }
+                    uint32_t& credit = sf_cred_pending[d][r - 1];
+                    if (credit != 0 && (force || credit >= SF_BUMP_EVERY)) {
+                        sf_push_ctl(sf::CMD_CREDIT_INC, 1 - d, r, sf_credit_addr[d][r - 1], credit);
+                        credit = 0;
+                    }
+                }
+            }
+        };
+
+        auto sf_drained = [&](uint32_t d, uint32_t r) {
+            return sf_closed(d, r) && sf_pool_rd[d][r - 1] == sf_total(d, r);
+        };
+
+        // Relay a page one hop.  Which FIFO it came out of tells us everything: the direction, the
+        // outbound FIFO, and whether this hop is the last one.
+        auto sf_try_transit = [&]() {
+            for (uint32_t d = 0; d < 2; d++) {
+                for (uint32_t r = 1; r <= sf_levels; r++) {
+                    if (!sf_in_live(d, r) || sf_pool_rd[d][r - 1] == sf_total(d, r)) {
+                        continue;
+                    }
+                    if (!sf_has_room(d, r - 1)) {
+                        continue;  // downstream full: try another source rather than wait
+                    }
+                    const uint32_t page = sf_base_page(d, r) + (sf_pool_rd[d][r - 1] & SF_SLOT_MASK);
+                    cb_reserve_back(cb_route_info_id, 1);
+                    const uint32_t cb_base = get_write_ptr(cb_route_info_id);
+                    const uint32_t payload = cb_base + sf_hdr_bytes;
+                    noc_async_read(
+                        sf_staging_gen.get_noc_addr(page), payload, aligned_output_page_size + sf::tail_bytes());
+                    noc_async_read_barrier();
+
+                    volatile tt_l1_ptr uint32_t* tail =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(payload + aligned_output_page_size);
+                    const uint32_t final_chip = tail[sf::TAIL_FINAL_DST_CHIP];
+                    // Reading an unwritten page means the arrival accounting is off by one, which
+                    // would otherwise show up as a single wrong token rather than as a failure.
+                    ASSERT(tail[sf::TAIL_MAGIC] == sf::MAGIC);
+                    // The level a page sits at must equal its real remaining distance.  Checking the
+                    // invariant beats checking a copy of it that every hop would have to re-stamp.
+                    // Hoisted out of ASSERT: the macro cannot carry the template argument commas.
+                    const uint32_t observed_hops =
+                        manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, final_chip);
+                    ASSERT(observed_hops == r);
+
+                    volatile tt_l1_ptr uint32_t* hdr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
+                    hdr[sf::HDR_ROUTE] = sf_dir_route[d];
+                    hdr[sf::HDR_DISTANCE] = 1;
+                    hdr[sf::HDR_DST_CHIP] = sf_neighbour[d];
+                    hdr[sf::HDR_INC_DIR] = d;
+                    if (r == 1) {
+                        hdr[sf::HDR_CMD] = sf::CMD_FINAL_WRITE;
+                        hdr[sf::HDR_PAGE_IDX] = tail[sf::TAIL_OUTPUT_PAGE_IDX];
+                    } else {
+                        hdr[sf::HDR_CMD] = sf::CMD_STAGE;
+                        hdr[sf::HDR_PAGE_IDX] = sf_base_page(d, r - 1) + (sf_staged[d][r - 2] & SF_SLOT_MASK);
+                        sf_staged[d][r - 2]++;
+                        sf_arrived_pending[d][r - 2]++;
+                    }
+                    cb_push_back(cb_route_info_id, 1);
+                    sf_pool_rd[d][r - 1]++;
+                    sf_cred_pending[d][r - 1]++;
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // Peek the head of each untilizer ring and only commit once the destination has room.  A row
+        // left uncommitted keeps its slot and its credit, which is the backpressure that stops the
+        // untilizers running ahead of the network.
+        auto sf_try_inject = [&]() {
+            for (uint32_t c = 0; c < num_untilizer_cores_group; c++) {
+                if (untilizer_finished[c]) {
+                    continue;
+                }
+                invalidate_l1_cache();
+                if (*data_ready_sem_ptrs[c] == consumed[c]) {
+                    continue;
+                }
+                const uint32_t slot = read_slots[c];
+                volatile tt_l1_ptr uint32_t* ring_meta =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ring_meta_addr[c][slot]);
+                const uint32_t meta0 = ring_meta[0];
+
+                if (meta0 == ROUTE_INFO_SENTINEL) {
+                    consumed[c]++;
+                    read_slots[c] = (slot + 1) & SLOTS_PER_UNTILIZER_MASK;
+                    noc_semaphore_set(data_ready_sem_ptrs[c], 0);
+                    noc_async_atomic_barrier();
+                    untilizer_finished[c] = true;
+                    untilizer_done_count++;
+                    return true;
+                }
+
+                const uint32_t dst_chip = meta0;
+                const uint32_t distance =
+                    manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                const uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                const uint32_t d = route == sf_dir_route[0] ? 0u : 1u;
+                const uint32_t target_level = distance - 1;  // zero means straight to the output page
+                if (!sf_has_room(d, target_level)) {
+                    continue;  // no commit: the row and its credit stay put
+                }
+
+                consumed[c]++;
+                read_slots[c] = (slot + 1) & SLOTS_PER_UNTILIZER_MASK;
+                const uint32_t output_page_idx = ring_meta[1] * num_experts_per_tok + ring_meta[2];
+
+                cb_reserve_back(cb_route_info_id, 1);
+                const uint32_t cb_base = get_write_ptr(cb_route_info_id);
+                const uint32_t payload = cb_base + sf_hdr_bytes;
+                noc_async_read(buffer_scratch_noc_addr_table[c][slot], payload, aligned_output_page_size);
+                noc_async_read_barrier();
+
+                volatile tt_l1_ptr uint32_t* hdr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
+                hdr[sf::HDR_ROUTE] = sf_dir_route[d];
+                hdr[sf::HDR_DISTANCE] = 1;
+                hdr[sf::HDR_DST_CHIP] = sf_neighbour[d];
+                hdr[sf::HDR_INC_DIR] = d;
+                if (target_level == 0) {
+                    hdr[sf::HDR_CMD] = sf::CMD_FINAL_WRITE;
+                    hdr[sf::HDR_PAGE_IDX] = output_page_idx;
+                } else {
+                    volatile tt_l1_ptr uint32_t* tail =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(payload + aligned_output_page_size);
+                    tail[sf::TAIL_OUTPUT_PAGE_IDX] = output_page_idx;
+                    tail[sf::TAIL_FINAL_DST_CHIP] = dst_chip;
+                    tail[sf::TAIL_MAGIC] = sf::MAGIC;
+                    tail[sf::TAIL_RESERVED] = 0;
+                    hdr[sf::HDR_CMD] = sf::CMD_STAGE;
+                    hdr[sf::HDR_PAGE_IDX] =
+                        sf_base_page(d, target_level) + (sf_staged[d][target_level - 1] & SF_SLOT_MASK);
+                    sf_staged[d][target_level - 1]++;
+                    sf_arrived_pending[d][target_level - 1]++;
+                }
+                cb_push_back(cb_route_info_id, 1);
+                noc_semaphore_inc<true>(untilizer_credits_noc_addrs[c], 1);
+                return true;
+            }
+            return false;
+        };
+
+        // Our downstream's level r is fed only by pages we hold of remaining distance r + 1: our own
+        // injections, and our inbound level r + 1.  Level sf_levels has no inbound level above it,
+        // so its close depends on nothing but local completion.  That is the base case, and it is
+        // why this terminates on a ring, where waiting for an upstream close would cycle forever.
+        auto sf_try_emit_eos = [&]() {
+            if (untilizer_done_count < num_untilizer_cores_group) {
+                return;
+            }
+            for (uint32_t d = 0; d < 2; d++) {
+                for (uint32_t r = sf_levels; r >= 1; r--) {
+                    if (!sf_out_live(d, r) || sf_eos_out[d][r - 1]) {
+                        continue;
+                    }
+                    const bool fed_from_above = r + 1 <= sf_levels && sf_in_live(d, r + 1);
+                    if (fed_from_above && !sf_drained(d, r + 1)) {
+                        continue;
+                    }
+                    // Carry any outstanding arrivals in the same increment, so the close cannot be
+                    // observed before the pages it closes over.
+                    sf_push_ctl(
+                        sf::CMD_ARRIVED_INC,
+                        d,
+                        r,
+                        sf_arrived_addr[d][r - 1],
+                        sf_arrived_pending[d][r - 1] + sf::EOS_BIAS);
+                    sf_arrived_pending[d][r - 1] = 0;
+                    sf_eos_out[d][r - 1] = true;
+                }
+            }
+        };
+
+        auto sf_all_done = [&]() {
+            if (untilizer_done_count < num_untilizer_cores_group) {
+                return false;
+            }
+            for (uint32_t d = 0; d < 2; d++) {
+                for (uint32_t r = 1; r <= sf_levels; r++) {
+                    if (sf_in_live(d, r) && !sf_drained(d, r)) {
+                        return false;
+                    }
+                    if (sf_out_live(d, r) && !sf_eos_out[d][r - 1]) {
+                        return false;
+                    }
+                    if (sf_cred_pending[d][r - 1] != 0 || sf_arrived_pending[d][r - 1] != 0) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+
+        while (!sf_all_done()) {
+            bool progressed = false;
+            if (sf_transit_run < SF_INJ_QUANTUM) {
+                progressed = sf_try_transit();
+                if (progressed) {
+                    sf_transit_run++;
+                }
+            }
+            if (!progressed) {
+                sf_transit_run = 0;
+                progressed = sf_try_inject();
+            }
+            // Force the counters out when nothing moved: the peer that unblocks us is waiting on
+            // exactly these, so holding a partial batch back would be the deadlock.
+            sf_flush_counters(!progressed);
+            sf_try_emit_eos();
+        }
+        sf_flush_counters(true);
+#else
         while (untilizer_done_count < num_untilizer_cores_group) {
             for (uint32_t c = 0; c < num_untilizer_cores_group; c++) {
                 if (untilizer_finished[c]) {
@@ -363,6 +694,7 @@ void kernel_main() {
                 noc_semaphore_inc<true>(untilizer_credits_noc_addrs[c], 1);
             }
         }
+#endif
     }
 
     // Push sentinel to signal writer that all dispatches are done
@@ -373,5 +705,39 @@ void kernel_main() {
     route_info[1] = 0;
     route_info[2] = 0;
     route_info[3] = 0;
+#if USE_STORE_AND_FORWARD
+    // The relaying writer dispatches on the command word, so termination is a command rather than a
+    // sentinel in the route slot.
+    route_info[sf::HDR_CMD] = sf::CMD_DONE;
+#endif
     cb_push_back(cb_route_info_id, 1);
+
+#if USE_STORE_AND_FORWARD
+    // The cross-chip counters live on GlobalSemaphores, which the framework zeroes when it creates
+    // them and never again -- so without this, a second invocation would open with an arrival count
+    // already past the end-of-stream bias and read pages that were never written.
+    //
+    // Waiting for the writer's exit barrier is what makes this safe: it proves every peer has issued
+    // its last data and end-of-stream increments, and no peer can begin the next invocation's sends
+    // before that invocation's init barrier, which it cannot reach until we finish here.  Subtract
+    // rather than assign, so an increment that arrives against expectation shows up as a residue the
+    // magic-word and distance checks will catch, instead of being silently dropped.
+    {
+        Semaphore<> sf_cleanup_sem(sf_cleanup_semaphore_id);
+        sf_cleanup_sem.wait(1);
+        for (uint32_t d = 0; d < 2; d++) {
+            for (uint32_t r = 0; r < sf_levels; r++) {
+                for (const uint32_t addr : {sf_arrived_addr[d][r], sf_credit_addr[d][r]}) {
+                    invalidate_l1_cache();
+                    const uint32_t observed = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+                    if (observed != 0) {
+                        noc_semaphore_inc(get_noc_addr(addr), (uint32_t)(-(int32_t)observed));
+                    }
+                }
+            }
+        }
+        noc_async_atomic_barrier();
+        sf_cleanup_sem.set(0);
+    }
+#endif
 }

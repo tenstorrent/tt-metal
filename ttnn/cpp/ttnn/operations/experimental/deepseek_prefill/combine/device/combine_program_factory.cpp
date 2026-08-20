@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "combine_device_operation.hpp"
+#include "combine_sf.hpp"
 #include <algorithm>
 #include <array>
 #include <bitset>
@@ -118,6 +119,102 @@ std::vector<uint32_t> compute_per_neighbor_forwarding_links(
     return per_conn_links;
 }
 
+// Resolved store-and-forward geometry for one mesh coordinate.  Everything the kernels need is
+// either here or derived from it by combine_sf.hpp, so host and device never compute the same
+// quantity two different ways.
+struct SfPlan {
+    bool enabled = false;
+    uint32_t extent = 0;  // devices on the combine axis
+    bool is_ring = false;
+    uint32_t levels = 0;      // relay levels; 0 means nothing is ever staged
+    uint32_t slots = 0;       // ring depth per (direction, level, sender core), power of two
+    uint32_t page_bytes = 0;  // staging page stride == L1 ring slot stride
+    uint32_t hdr_bytes = 0;   // queue header, padded so the payload after it is DRAM-aligned
+    uint32_t ring_depth = 0;  // reader -> writer queue depth
+    // Bit per level, indexed [direction].  A chip near the end of a line neither fills nor is fed at
+    // every level, and these must agree with the neighbour's opposite mask or the drain and
+    // end-of-stream handshakes disagree about which FIFOs are in use.
+    std::array<uint32_t, 2> out_live_mask{0, 0};
+    std::array<uint32_t, 2> in_live_mask{0, 0};
+    // Linearized index of the axis neighbour in each direction, or NO_NEIGHBOUR.
+    static constexpr uint32_t NO_NEIGHBOUR = 0xFFFFFFFFu;
+    std::array<uint32_t, 2> neighbour{NO_NEIGHBOUR, NO_NEIGHBOUR};
+};
+
+// Direction 0 is the positive traversal of the combine axis (increasing row for axis 0), direction
+// 1 the negative one.  The distinction only has to be self-consistent: it selects which of the two
+// neighbours a stream flows toward, and the same rule runs on every chip.
+SfPlan build_sf_plan(
+    const CombineParams& operation_attributes,
+    const CombineInputs& tensor_args,
+    const ttnn::Tensor& output_tensor,
+    const ttnn::MeshDeviceView& mesh_view,
+    uint32_t linearized_mesh_coord,
+    uint32_t num_cores) {
+    SfPlan plan;
+    if (!operation_attributes.use_store_and_forward) {
+        return plan;
+    }
+
+    const uint32_t axis = operation_attributes.axis.value_or(0);
+    plan.extent = axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
+    plan.is_ring = operation_attributes.topology == tt::tt_fabric::Topology::Ring;
+    plan.levels = sf::num_levels(plan.extent, plan.is_ring);
+    if (plan.levels == 0) {
+        return plan;  // inert on this mesh; caller keeps the legacy path
+    }
+    plan.enabled = true;
+
+    const auto dram_alignment = (uint32_t)tt::tt_metal::hal::get_dram_alignment();
+    plan.page_bytes = sf::page_bytes(detail::get_aligned_page_size(output_tensor), dram_alignment);
+    plan.hdr_bytes = dram_alignment;
+    TT_FATAL(
+        sf::HDR_WORDS * sizeof(uint32_t) <= plan.hdr_bytes,
+        "queue header needs {} bytes but the DRAM alignment only affords {}",
+        sf::HDR_WORDS * sizeof(uint32_t),
+        plan.hdr_bytes);
+    // Two is the minimum that lets a read overlap a send; deeper only pays once several reads are
+    // in flight, which needs the batched path.
+    plan.ring_depth = 4;
+
+    const auto& staging = tensor_args.staging_buffer.value();
+    const uint32_t staging_pages = (uint32_t)staging.buffer()->num_pages();
+    plan.slots = staging_pages / (2u * plan.levels * num_cores);
+    TT_FATAL(
+        (uint32_t)staging.buffer()->aligned_page_size() == plan.page_bytes,
+        "staging_buffer aligned page size is {} but the payload stride requires {} "
+        "(output page {} + {} tail bytes, rounded up to the {}-byte DRAM alignment)",
+        staging.buffer()->aligned_page_size(),
+        plan.page_bytes,
+        detail::get_aligned_page_size(output_tensor),
+        sf::tail_bytes(),
+        dram_alignment);
+
+    const uint32_t mesh_cols = mesh_view.num_cols();
+    // Position along the combine axis, and the fixed coordinate on the other axis.  Recomposing the
+    // neighbour from (position, fixed) rather than adding a signed delta keeps the ring wrap from
+    // underflowing when position 0 steps backwards to extent - 1.
+    const uint32_t pos = axis == 0 ? linearized_mesh_coord / mesh_cols : linearized_mesh_coord % mesh_cols;
+    const uint32_t fixed = axis == 0 ? linearized_mesh_coord % mesh_cols : linearized_mesh_coord / mesh_cols;
+    for (uint32_t dir = 0; dir < 2; dir++) {
+        const bool positive = dir == 0;
+        for (uint32_t level = 1; level <= plan.levels; level++) {
+            if (sf::out_live(pos, plan.extent, plan.is_ring, positive, level)) {
+                plan.out_live_mask[dir] |= 1u << (level - 1);
+            }
+            if (sf::in_live(pos, plan.extent, plan.is_ring, positive, level)) {
+                plan.in_live_mask[dir] |= 1u << (level - 1);
+            }
+        }
+        const bool has_neighbour = plan.is_ring || (positive ? pos + 1 < plan.extent : pos > 0);
+        if (has_neighbour) {
+            const uint32_t nbr_pos = positive ? (pos + 1) % plan.extent : (pos + plan.extent - 1) % plan.extent;
+            plan.neighbour[dir] = axis == 0 ? nbr_pos * mesh_cols + fixed : fixed * mesh_cols + nbr_pos;
+        }
+    }
+    return plan;
+}
+
 // Per-coord ProgramDescriptor builder.  The cross-device GlobalSemaphores are
 // allocated once at workload scope in create_workload_descriptor() and passed
 // down by const-reference so every per-coord program references the same
@@ -129,7 +226,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     ttnn::Tensor& tensor_return_value,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const GlobalSemaphore& init_semaphore,
-    const GlobalSemaphore& exit_semaphore) {
+    const GlobalSemaphore& exit_semaphore,
+    const std::vector<GlobalSemaphore>& sf_semaphores) {
     tt::tt_metal::ProgramDescriptor desc;
 
     const auto& dispatched_buffer = tensor_args.dispatched_buffer;
@@ -203,6 +301,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     uint32_t num_cores = effective_num_links;
     uint32_t experts_per_core_range = tt::div_up(operation_attributes.experts_per_chip, num_cores);
+
+    const SfPlan sf_plan =
+        build_sf_plan(operation_attributes, tensor_args, output_tensor, mesh_view, linearized_mesh_coord, num_cores);
 
     // Core layout depends on dispatched_buffer layout:
     //   TILE_LAYOUT: sender placed at the start of its untilizer group so every untilizer core sits to the
@@ -396,6 +497,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     uint32_t output_init_complete_semaphore_id = add_sema(sender_core_grid);
     uint32_t output_init_barrier_semaphore_id = add_sema(sender_core_grid);
+    // Writer -> reader on the same core: the cross-chip counters can only be cleared once the exit
+    // barrier proves every peer has stopped incrementing them, and the writer is what owns that
+    // barrier.  Program-scope rather than global precisely because the framework re-zeroes these on
+    // every launch, which a counter used as a one-shot latch needs.
+    uint32_t sf_cleanup_semaphore_id = sf_plan.enabled ? add_sema(sender_core_grid) : 0;
 
     // Rows per untilize batch.  Both layouts route through the untilizer pipeline and share the
     // same receive_buf ring / sender polling loop, so ROW_MAJOR uses the same batch size as TILE
@@ -481,11 +587,16 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     {
         constexpr uint32_t rw_buffering = 2;
 
-        uint32_t route_info_page_size = l1_alignment;
-        uint32_t output_payload_page_size = detail::get_aligned_page_size(output_tensor);
+        // Store-and-forward widens both halves: the header is padded to the DRAM alignment so the
+        // payload that follows it is a legal destination for a relay's DRAM read, and the payload
+        // carries the routing tail as well as the token.
+        uint32_t route_info_page_size = sf_plan.enabled ? sf_plan.hdr_bytes : l1_alignment;
+        uint32_t output_payload_page_size =
+            sf_plan.enabled ? sf_plan.page_bytes : detail::get_aligned_page_size(output_tensor);
         uint32_t merged_page_size = route_info_page_size + output_payload_page_size;
+        uint32_t queue_depth = sf_plan.enabled ? sf_plan.ring_depth : rw_buffering;
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = rw_buffering * merged_page_size,
+            .total_size = queue_depth * merged_page_size,
             .core_ranges = sender_core_grid,
             .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
@@ -619,6 +730,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     tt::tt_metal::TensorAccessorArgs(expert_token_counts.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(expert_region_offsets.buffer()).append_to(compile_time_args);
+    if (sf_plan.enabled) {
+        tt::tt_metal::TensorAccessorArgs(tensor_args.staging_buffer.value().buffer()).append_to(compile_time_args);
+    }
 
     // Both reader and writer get fabric defines so the reader can compute routes
     std::map<std::string, std::string> fabric_defines;
@@ -629,6 +743,24 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     }
     if (operation_attributes.axis.has_value()) {
         fabric_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
+    }
+
+    // Emitted only when the path is live, so a flag-off program hashes and compiles exactly as
+    // before.  The geometry travels as defines rather than compile-time args to avoid perturbing
+    // the reader's positional arg indices, which later args are computed relative to.
+    if (sf_plan.enabled) {
+        fabric_defines["USE_STORE_AND_FORWARD"] = "1";
+        fabric_defines["SF_LEVELS"] = std::to_string(sf_plan.levels);
+        fabric_defines["SF_SLOTS"] = std::to_string(sf_plan.slots);
+        fabric_defines["SF_PAGE_BYTES"] = std::to_string(sf_plan.page_bytes);
+        fabric_defines["SF_EXTENT"] = std::to_string(sf_plan.extent);
+        fabric_defines["SF_OUT_LIVE_MASK"] = ccl::common::stringify(sf_plan.out_live_mask);
+        fabric_defines["SF_IN_LIVE_MASK"] = ccl::common::stringify(sf_plan.in_live_mask);
+        fabric_defines["SF_NEIGHBOUR"] = ccl::common::stringify(sf_plan.neighbour);
+        fabric_defines["SF_HDR_BYTES"] = std::to_string(sf_plan.hdr_bytes);
+        fabric_defines["SF_RING_DEPTH"] = std::to_string(sf_plan.ring_depth);
+        fabric_defines["SF_NUM_CORES"] = std::to_string(num_cores);
+        fabric_defines["SF_NO_NEIGHBOUR"] = std::to_string(SfPlan::NO_NEIGHBOUR);
     }
 
     std::map<std::string, std::string> reader_defines = fabric_defines;
@@ -1022,6 +1154,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_untilize_id
             per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_19));  // cb_metadata_buf_id
             per_sender_compile_args.push_back(SLOTS_PER_UNTILIZER);                       // per-untilizer ring depth
+            if (sf_plan.enabled) {
+                per_sender_compile_args.push_back(s);  // this sender's stream index within the chip
+            }
         }
         CoreRangeSet single_sender_core({CoreRange(sender_cores[s])});
         tt::tt_metal::KernelDescriptor reader_kd;
@@ -1247,6 +1382,16 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 reader_runtime_args.push_back(mcast_cfg.untilizer_noc_coords[c].second);
             }
         }
+        if (sf_plan.enabled) {
+            reader_runtime_args.push_back(tensor_args.staging_buffer.value().buffer());
+            reader_runtime_args.push_back(sf_cleanup_semaphore_id);
+            // These are GlobalSemaphores rather than buffers: allocated once per workload and held
+            // on WorkloadDescriptor::semaphores, so the address outlives every cached program. Same
+            // reason the init and exit barriers already bake theirs in as plain values.
+            for (const auto& sem : sf_semaphores) {
+                reader_runtime_args.push_back((uint32_t)sem.address());  // smuggled-rta-ok: semaphore, not a buffer
+            }
+        }
 
         // Writer RT args: build into a plain std::vector<uint32_t> first because
         // append_fabric_connection_rt_args appends raw uint32_t values to a
@@ -1271,6 +1416,20 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         for (const auto& [noc_x, noc_y] : sender_noc_coords) {
             writer_runtime_args_raw.push_back(noc_x);
             writer_runtime_args_raw.push_back(noc_y);
+        }
+
+        // Ahead of the fabric trailer, which append_fabric_connection_rt_args adds positionally.
+        // The staging address is recorded so the promotion below can hand it over as a Buffer*: a
+        // plain uint32 here would go unpatched on a program-cache hit and a caller that swapped
+        // buffers would silently write into the old one.
+        size_t sf_staging_arg_index = 0;
+        if (sf_plan.enabled) {
+            sf_staging_arg_index = writer_runtime_args_raw.size();
+            writer_runtime_args_raw.push_back(tensor_args.staging_buffer.value().buffer()->address());
+            writer_runtime_args_raw.push_back(sf_cleanup_semaphore_id);
+            for (const auto& sem : sf_semaphores) {
+                writer_runtime_args_raw.push_back((uint32_t)sem.address());
+            }
         }
 
         if (num_links > 0) {
@@ -1355,7 +1514,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         writer_runtime_args.push_back(expert_region_offsets.buffer());
         writer_runtime_args.push_back(output_tensor.buffer());
         for (size_t i = 5; i < writer_runtime_args_raw.size(); ++i) {
-            writer_runtime_args.push_back(writer_runtime_args_raw[i]);
+            if (sf_plan.enabled && i == sf_staging_arg_index) {
+                writer_runtime_args.push_back(tensor_args.staging_buffer.value().buffer());
+            } else {
+                writer_runtime_args.push_back(writer_runtime_args_raw[i]);
+            }
         }
         desc.kernels[writer_kernel_id].emplace_runtime_args(sender_core, writer_runtime_args);
 
@@ -1442,6 +1605,25 @@ tt::tt_metal::WorkloadDescriptor CombineProgramFactory::create_workload_descript
         mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
     auto exit_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
         mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
+
+    // Store-and-forward counters: one arrival and one credit per (direction, relay level), ordered
+    // so both host and kernel index them the same way.  They are GlobalSemaphores because a
+    // neighbour bumps them over the fabric and because the framework zeroes them at creation;
+    // being per-core words at a mesh-uniform address is what keeps each sender's streams separate.
+    std::vector<GlobalSemaphore> sf_semaphores;
+    if (operation_attributes.use_store_and_forward) {
+        const auto& mesh_view = mesh_device->get_view();
+        const uint32_t axis = operation_attributes.axis.value_or(0);
+        const uint32_t extent = axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
+        const bool is_ring = operation_attributes.topology == tt::tt_fabric::Topology::Ring;
+        const uint32_t levels = sf::num_levels(extent, is_ring);
+        sf_semaphores.reserve(2 * 2 * levels);
+        for (uint32_t i = 0; i < 2 * 2 * levels; i++) {
+            sf_semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(
+                mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type));
+        }
+    }
+
     // Cross-device barrier: ensure every device's GlobalSemaphores have been allocated
     // before any kernel reads them.  Mirrors the previous prepare_resources hook.
     tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
@@ -1449,6 +1631,9 @@ tt::tt_metal::WorkloadDescriptor CombineProgramFactory::create_workload_descript
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(init_barrier_semaphore);
     workload_descriptor.semaphores.push_back(exit_barrier_semaphore);
+    for (const auto& sem : sf_semaphores) {
+        workload_descriptor.semaphores.push_back(sem);
+    }
 
     // Combine is mesh-coord-dependent (fabric routing + linearized counter offset
     // are baked into kernel compile-time args), so we cannot replicate one
@@ -1460,7 +1645,8 @@ tt::tt_metal::WorkloadDescriptor CombineProgramFactory::create_workload_descript
             tensor_return_value,
             coord,
             init_barrier_semaphore,
-            exit_barrier_semaphore);
+            exit_barrier_semaphore,
+            sf_semaphores);
         workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return workload_descriptor;

@@ -13,6 +13,7 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/device/combine_sf.hpp"
 
 // FABRIC_2D vs 1D dispatch is handled portably via ccl_routing_utils::fabric_set_line_unicast_route
 // (templated on packet-header type). Under 1D the helper consumes route_info.distance_in_hops,
@@ -101,6 +102,14 @@ void kernel_main() {
     constexpr auto experts_tok_counter_args =
         TensorAccessorArgs<dispatched_metadata_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<experts_tok_counter_args.next_compile_time_args_offset()>();
+#if USE_STORE_AND_FORWARD
+    namespace sf = ttnn::operations::experimental::deepseek_prefill::combine::sf;
+    // The writer skips expert_region_offsets, but has to walk past it to reach the staging accessor.
+    constexpr auto expert_region_offsets_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    constexpr auto staging_args = TensorAccessorArgs<expert_region_offsets_args.next_compile_time_args_offset()>();
+    constexpr uint32_t sf_levels = SF_LEVELS;
+    constexpr uint32_t sf_hdr_bytes = SF_HDR_BYTES;
+#endif
 
     // ===== Runtime Args =====
     size_t rt_args_idx = 0;
@@ -137,6 +146,15 @@ void kernel_main() {
         rt_args_idx += 2;
 #endif
     }
+
+#if USE_STORE_AND_FORWARD
+    const uint32_t sf_staging_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t sf_cleanup_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    // Only the addresses are needed here: the reader decides what to increment and by how much, and
+    // hands this kernel a command naming the target.
+    rt_args_idx += 2 * 2 * sf_levels;
+    const auto sf_staging_gen = TensorAccessor(staging_args, sf_staging_addr);
+#endif
 
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
@@ -273,6 +291,94 @@ void kernel_main() {
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
     {
+#if USE_STORE_AND_FORWARD
+        // Relaying turns this kernel into a command interpreter: the reader owns every routing and
+        // credit decision, and each item here is one single-hop send.  Deliberately nothing in this
+        // loop can block on a staging credit -- the reader-side admission control is what keeps the
+        // queue draining, and a wait here would head-of-line block relayed pages behind injected
+        // ones and reintroduce the cycle the level FIFOs exist to break.
+#ifdef DEST_CHIP_ID
+        auto sf_prepare_route = [&](uint32_t dst_chip_index, uint32_t route_1d) -> uint32_t {
+            ccl_routing_utils::line_unicast_route_info_t pkt_route_info{};
+            uint32_t fabric_route;
+            if constexpr (
+                std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::HybridMeshPacketHeader> ||
+                std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
+                pkt_route_info.dst_chip_id = dest_chip_ids[dst_chip_index];
+                pkt_route_info.dst_mesh_id = dest_mesh_ids[dst_chip_index];
+                fabric_route = static_cast<uint32_t>(
+                    get_next_hop_router_direction(dest_mesh_ids[dst_chip_index], dest_chip_ids[dst_chip_index]));
+            } else {
+                // Every store-and-forward packet is terminal at the neighbour; that is the whole
+                // point, so the hop count is never anything but one.
+                pkt_route_info.distance_in_hops = 1;
+                fabric_route = route_1d;
+            }
+            ccl_routing_utils::fabric_set_line_unicast_route(
+                pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
+            return fabric_route;
+        };
+#endif
+        while (true) {
+            cb_wait_front(cb_route_info_id, 1);
+            const uint32_t cb_base = get_read_ptr(cb_route_info_id);
+            volatile tt_l1_ptr uint32_t* hdr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
+            const uint32_t cmd = hdr[sf::HDR_CMD];
+            if (cmd == sf::CMD_DONE) {
+                cb_pop_front(cb_route_info_id, 1);
+                break;
+            }
+#ifdef DEST_CHIP_ID
+            const uint32_t nbr = hdr[sf::HDR_DST_CHIP];
+            // A logical axis neighbour that is not one physical hop away would silently turn this
+            // back into multi-hop forwarding and defeat the design.  Hoisted out of ASSERT because
+            // the macro cannot carry the commas in the template argument list.
+            const uint32_t nbr_hops = manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, nbr);
+            ASSERT(nbr_hops == 1);
+            const uint32_t fabric_route = sf_prepare_route(nbr, hdr[sf::HDR_ROUTE]);
+#ifdef FABRIC_2D
+            ASSERT(dir_to_slot[fabric_route] != DIR_TO_SLOT_EMPTY);
+            auto& payload_sender = fabric_connections.get(dir_to_slot[fabric_route]).sender;
+#else
+            auto& payload_sender = fabric_connections[fabric_route];
+#endif
+            const uint32_t payload_addr = cb_base + sf_hdr_bytes;
+            if (cmd == sf::CMD_FINAL_WRITE) {
+                // Exactly the token, never the tail: the output page stride has no room for it and
+                // an over-long write would land in the next token's page.
+                fabric_send_noc_unicast<fabric_max_packet_size>(
+                    output_addr_gen,
+                    payload_sender,
+                    unicast_packet_header,
+                    payload_addr,
+                    hdr[sf::HDR_PAGE_IDX],
+                    (int)aligned_output_page_size,
+                    l1_alignment);
+                noc_async_writes_flushed();
+            } else if (cmd == sf::CMD_STAGE) {
+                fabric_send_noc_unicast<fabric_max_packet_size>(
+                    sf_staging_gen,
+                    payload_sender,
+                    unicast_packet_header,
+                    payload_addr,
+                    hdr[sf::HDR_PAGE_IDX],
+                    (int)(aligned_output_page_size + sf::tail_bytes()),
+                    l1_alignment);
+                noc_async_writes_flushed();
+            } else {
+                // Header-only atomic inc.  Never the fused write-plus-inc: that is documented to
+                // hang Blackhole when the payload lands in DRAM, which is exactly where staged
+                // pages go.  flush=true holds the increment behind the writes it accounts for.
+                unicast_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                    get_noc_addr(hdr[sf::HDR_SEM_ADDR]), hdr[sf::HDR_INC_VALUE], /*flush=*/true});
+                payload_sender.wait_for_empty_write_slot();
+                payload_sender.send_payload_flush_blocking_from_address(
+                    reinterpret_cast<uint32_t>(unicast_packet_header), sizeof(PACKET_HEADER_TYPE));
+            }
+#endif
+            cb_pop_front(cb_route_info_id, 1);
+        }
+#else
         // DeviceZoneScopedN("combine-ethernet-flow");
         //  Sentinel-terminated fabric send loop
         while (true) {
@@ -339,6 +445,7 @@ void kernel_main() {
             // Pop the route-info CB, which also carries the output payload (merged CB).
             cb_pop_front(cb_route_info_id, 1);
         }
+#endif
     }
 
 #ifdef DEST_CHIP_ID
@@ -386,6 +493,12 @@ void kernel_main() {
     // not prove arrival in the EDM inbox; FABRIC_1D's per-target helper sends are non-blocking. Keep a
     // full barrier before either connection path closes so every prior write and atomic has arrived.
     noc_async_full_barrier();
+
+#if USE_STORE_AND_FORWARD
+    // Release the reader to clear the cross-chip counters.  Only meaningful after the exit barrier,
+    // which is what establishes that no peer will increment them again.
+    Semaphore<>(sf_cleanup_semaphore_id).set(1);
+#endif
 
 #ifdef FABRIC_2D
     fabric_connections.close();

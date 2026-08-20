@@ -44,5 +44,7 @@ ttnn::Tensor prefill_combine(
     const CoreRangeSet& worker_core_range_set,
     bool init_zeros,
     bool use_l1_small_for_semaphores = false,
-    bool use_fp8_combine = false);
+    bool use_fp8_combine = false,
+    const std::optional<ttnn::Tensor>& staging_buffer = std::nullopt,
+    bool use_store_and_forward = false);
 }  // namespace ttnn::prim
