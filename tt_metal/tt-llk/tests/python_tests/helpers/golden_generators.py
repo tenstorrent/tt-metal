@@ -2546,28 +2546,41 @@ class UnarySFPUGolden:
         return 1.0 if x == 0 else 0.0
 
     def _cast_fp32_to_fp16a(self, x):
-        # cast_fp32_to_fp16a lowers to sfpi::convert<vFloat16a>, which rounds each
-        # lane to the fp16a *mantissa* (10 fraction bits, round-to-nearest-even)
-        # while the value stays in the fp32-range SFPU LREG. It only reduces
-        # mantissa precision; it does NOT clamp the exponent to the fp16 range, so
-        # magnitudes above the fp16 max (65504) are preserved (rounded), not
-        # overflowed to +/-inf. Model that by rounding the fp32 bit pattern's
-        # 23-bit mantissa down to 10 bits (drop 13) with round-half-to-even,
-        # keeping the exponent intact.
+        # cast_fp32_to_fp16a lowers to sfpi::convert<vFloat16a> =
+        # SFP_STOCH_RND mod1=FP32_TO_FP16A rnd_mode=0.  Golden re-specced (lane
+        # CX, owner-signed in the swarm ledger 2026-08-20) to the HARDWARE cast
+        # semantics, machine-checked by lane CT's exhaustive 2^32 sweep against
+        # the pinned craq oracle (sfpi-gcc agent/cast-peephole-harvest
+        # fc70df6a87b4a: gcc/config/riscv/tt/proofs/cast-fp16a-rne/, lifting
+        # tensix.cpp:9524-9541 + the :2772-2816 srnd helpers "matching RTL"):
+        #   * finite normals: drop the 13 low mantissa bits and round
+        #     HALF-AWAY -- the kept part rounds up exactly when the discarded
+        #     remainder is >= the midpoint 0x1000.  (The rnd encoding is NAMED
+        #     RND_EVEN but behaves as round-half-away in RTL; never trust
+        #     encoding names for rounding behavior.)  The +0x2000 increment
+        #     may carry through the mantissa into the exponent, which also
+        #     saturates max-magnitude normals to signed infinity.
+        #   * exponent == 0 (both zeros and all denormals): flushed to +0.0.
+        #     The sign is lost, including -0.0 -> +0.0 (CT's 4,097-input
+        #     sign-loss class).
+        #   * exponent == 0xFF (inf and every NaN payload): collapsed to
+        #     signed infinity (CT's 16,777,214-input NaN class).
+        # The previous software-RNE-with-nonfinite-passthrough golden disagreed
+        # with the hardware on 33,810,429 of 2^32 inputs (CT's four exact
+        # mismatch classes); it survived only because the corr cells ran on a
+        # pipeline that bf16-truncated the operand first.
         bits = struct.unpack("<I", struct.pack("<f", x))[0]
         exponent = (bits >> 23) & 0xFF
-        if exponent == 0xFF:
-            # Non-finite input (inf/nan): pass the bit pattern through unchanged.
-            return struct.unpack("<f", struct.pack("<I", bits))[0]
-        drop = 13
-        lower_mask = (1 << drop) - 1
-        halfway = 1 << (drop - 1)
-        remainder = bits & lower_mask
-        truncated = bits & ~lower_mask
-        # Round-half-to-even: up on >halfway, or ==halfway with an odd kept LSB.
-        if remainder > halfway or (remainder == halfway and (truncated >> drop) & 1):
-            truncated += 1 << drop  # carry may ripple into the exponent (correct)
-        return struct.unpack("<f", struct.pack("<I", truncated & 0xFFFFFFFF))[0]
+        if exponent == 0:
+            bits = 0  # denormal/zero flushed to +0 (sign lost)
+        elif exponent == 0xFF:
+            bits &= 0xFF800000  # inf and NaN -> signed infinity
+        else:
+            discarded = bits & 0x1FFF
+            bits -= discarded
+            if discarded >= 0x1000:  # half-away: >= midpoint rounds up
+                bits += 0x2000  # carry may saturate to signed infinity
+        return struct.unpack("<f", struct.pack("<I", bits & 0xFFFFFFFF))[0]
 
     # Comparison-to-zero ops. The Quasar kernel builds the strict comparisons from
     # SFPSETCC sign + magnitude tests (ltz = negative AND nonzero, gtz = positive AND

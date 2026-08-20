@@ -1512,6 +1512,46 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     MathOperation.Softplus: (SOFTPLUS_THRESHOLD,),
     # Round-half-to-even ties, where the kernel's _round_even_ and a naive round differ.
     MathOperation.Round: (-2.5, -1.5, -0.5, 0.5, 1.5, 2.5),
+    # cast_fp32_to_fp16a = SFP_STOCH_RND FP32_TO_FP16A rnd_mode=0; golden re-specced
+    # to the hardware semantics (lane CT's exhaustive 2^32 proof, sfpi-gcc
+    # agent/cast-peephole-harvest: gcc/config/riscv/tt/proofs/cast-fp16a-rne/):
+    # half-AWAY rounding on the 13 discarded mantissa bits, exponent-0 inputs flushed
+    # to +0.0, NaN -> signed inf.  Exact rounding-visible probes; note they only reach
+    # the SFPU intact on the 32-bit unpack-to-dest pipeline (Float32 input,
+    # dest_acc=Yes) -- every other pipeline quantizes them to the bf16 lattice, where
+    # the cast is the identity.  Saturate-to-inf probes (top fp16a step of exponent
+    # 254, |x| ~ 3.40282e38) are NOT listed: clip_to_format's Float32 default is the
+    # bf16 ceiling 3.3895314e38, which drops them; that class stays covered by CT's
+    # exhaustive proof rather than by a stimulus.
+    MathOperation.CastFp32ToFp16a: (
+        # Ties (discarded bits == 0x1000, exactly the midpoint).  Kept-LSB EVEN is
+        # the RNE-vs-half-away discriminator: RNE rounds down, the hardware rounds up.
+        float.fromhex("0x1.002p+0"),  # 0x3F801000 tie, kept-LSB even
+        float.fromhex("-0x1.002p+0"),  # 0xBF801000 tie, even, negative (away = down)
+        float.fromhex("0x1.006p+0"),  # 0x3F803000 tie, kept-LSB odd (both models up)
+        # Nearest neighbours of the tie: below/above the midpoint round the same
+        # under both models -- they gate that only the tie itself differs.
+        float.fromhex("0x1.001ffep+0"),  # 0x3F800FFF just below the midpoint
+        float.fromhex("0x1.002002p+0"),  # 0x3F801001 just above the midpoint
+        # Tie whose round-up carries through the mantissa into the exponent.
+        float.fromhex("0x1.ffep-1"),  # 0x3F7FF000 odd tie: 0.999756 -> 1.0
+        # Denormals: the hardware flushes every exponent-0 input to +0.0.
+        float.fromhex("0x1p-149"),  # 0x00000001 min +denormal -> +0
+        float.fromhex("0x0.fffffep-126"),  # 0x007FFFFF max +denormal -> +0
+        float.fromhex("-0x1p-149"),  # 0x80000001 min -denormal -> +0 (sign lost)
+        float.fromhex("-0x0.8p-126"),  # 0x80400000 mid -denormal -> +0 (sign lost)
+        # Min normal (exponent 1: NOT flushed) and the tie one step inside it.
+        float.fromhex("0x1p-126"),  # 0x00800000 identity
+        float.fromhex(
+            "0x1.002p-126"
+        ),  # 0x00801000 tie at the flush boundary (CT's example)
+        # Signed zeros: +0.0 -> +0.0 and -0.0 -> +0.0 (CT's sign-loss class; -0.0 is
+        # dedup-exempt).  torch.isclose equates the two zeros, so the -0.0 lane is
+        # enforced by the golden spec and the archived legacy differential, not by
+        # the comparator.
+        0.0,
+        -0.0,
+    ),
     # Integer knees. floor/ceil differ from trunc only on the negative side, and frac
     # keeps the sign of x, so each list has to span both.
     MathOperation.Floor: (-2.0, -1.0, 0.0, 1.0, 2.0),

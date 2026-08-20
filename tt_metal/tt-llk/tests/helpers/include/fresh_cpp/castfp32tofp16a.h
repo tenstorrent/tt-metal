@@ -4,13 +4,25 @@
 #pragma once
 
 // Storm-contract semantic body for the `castfp32tofp16a` corpus row (metal
-// cast_fp32_to_fp16a).  Mathematical definition (the golden's own model):
-// round each lane's fp32 bit pattern to the fp16a MANTISSA — keep the top 10
-// fraction bits, dropping 13, with round-half-to-even — while the exponent
-// stays fp32-range (no fp16 clamp; a mantissa carry may ripple into the
-// exponent, which is correct).  Non-finite inputs (exponent 0xFF) pass
-// through unchanged.  Stated directly on the integer view with the classic
-// RNE increment bits + 0x0FFF + kept-LSB.
+// cast_fp32_to_fp16a), re-specced by lane CX (2026-08-20, owner-signed).
+//
+// Semantic definition = the row's golden = the HARDWARE cast semantics of
+// SFP_STOCH_RND mod1=FP32_TO_FP16A rnd_mode=0, machine-checked by lane CT's
+// exhaustive 2^32 proof against the pinned craq oracle (sfpi-gcc
+// agent/cast-peephole-harvest: gcc/config/riscv/tt/proofs/cast-fp16a-rne/):
+// half-AWAY rounding on the 13 discarded mantissa bits (>= midpoint rounds
+// up, despite the rnd encoding being NAMED RND_EVEN), exponent-0 inputs
+// (zeros and denormals) flushed to +0.0, every NaN payload collapsed to
+// signed infinity, exponent kept fp32-range (a mantissa carry may ripple
+// into the exponent, saturating max normals to signed infinity).
+//
+// The typed statement of that function IS the hardware convert —
+// sfpi::convert<vFloat16a>(x, RoundMode::Nearest) (sfpi_lib.h; on WH/BH
+// RoundMode::Nearest aliases NearestAway) — so the semantic body states it
+// directly.  The previous software-RNE body (preserved verbatim in
+// castfp32tofp16a_legacy.h) implemented the OLD golden's model, which CT's
+// proof showed disagrees with the hardware on 33,810,429 of 2^32 inputs;
+// under the re-specced golden it fails at exactly those classes.
 #include <cstdint>
 
 namespace ckernel::sfpu
@@ -19,29 +31,10 @@ namespace ckernel::sfpu
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_cast_fp32_to_fp16a_fresh_cpp()
 {
-    constexpr int EXPONENT_FIELD = 0x7F800000;
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat v = sfpi::dst_reg[0];
-        const sfpi::vUInt u  = sfpi::as<sfpi::vUInt>(v);
-
-        // Round-half-to-even on the dropped 13 mantissa bits: adding
-        // (halfway - 1) + kept-LSB rounds up exactly when the remainder is
-        // above halfway, or equal to halfway with an odd kept bit.
-        const sfpi::vUInt kept_lsb = (u >> 13) & 1;
-        sfpi::vUInt rounded        = u + 0x0FFF + kept_lsb;
-        rounded                    = rounded & 0xFFFFE000u;
-        sfpi::vFloat r             = sfpi::as<sfpi::vFloat>(rounded);
-
-        // Non-finite input (inf/nan): pass the bit pattern through unchanged.
-        const sfpi::vInt exponent_bits = sfpi::as<sfpi::vInt>(v) & EXPONENT_FIELD;
-        v_if (exponent_bits == EXPONENT_FIELD)
-        {
-            r = v;
-        }
-        v_endif;
-
-        sfpi::dst_reg[0] = r;
+        sfpi::dst_reg[0]     = sfpi::convert<sfpi::vFloat16a>(v, sfpi::RoundMode::Nearest);
         sfpi::dst_reg++;
     }
 }

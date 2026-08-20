@@ -1375,7 +1375,9 @@ _CAUSAL_LIFT_B2_F32_OPS = [
     # Storm lane S1 (fresh_cpp/<op>.h bodies; formats mirror each op's swept
     # corr leg).
     MathOperation.Add1,
-    MathOperation.CastFp32ToFp16a,
+    # CastFp32ToFp16a moved to its own test_cast_fp32_to_fp16a_fresh_cpp (lane CX
+    # golden re-spec): this family's Float32/dest_acc=No pipeline bf16-truncates
+    # the operand, making the cast the identity and its rounding dead code.
     # Storm S2 (agent/storm-s2, fresh_cpp/<op>.h canonical bodies; F32 corr rows).
     MathOperation.Erf,
     MathOperation.Erfc,
@@ -1448,6 +1450,73 @@ def test_causal_lift_fresh_cpp(mathop, fresh_cpp_impl):
         [64, 64],
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+@pytest.mark.parametrize("edge_values", [False, True], ids=["functional", "edges"])
+def test_cast_fp32_to_fp16a_fresh_cpp(fresh_cpp_impl, edge_values):
+    """A/B the fresh cast body against the production sfpi::convert kernel on
+    the one pipeline where the cast is observable, under the hardware-semantics
+    golden.
+
+    Golden re-spec (lane CX, owner-signed 2026-08-20): the golden states the
+    HARDWARE cast semantics -- SFP_STOCH_RND FP32_TO_FP16A rnd_mode=0 rounds
+    half-AWAY on the 13 discarded mantissa bits, flushes exponent-0 inputs
+    (denormals and both zeros) to +0.0, and collapses every NaN payload to
+    signed infinity -- machine-checked by lane CT's exhaustive 2^32 proof
+    against the pinned craq oracle (sfpi-gcc agent/cast-peephole-harvest,
+    gcc/config/riscv/tt/proofs/cast-fp16a-rne/).
+
+    Reachability (the eqz -0.0 / lane CL discipline): both legs run
+    Float32->Float32 at dest_acc=Yes because that is exactly the driver's own
+    unpack_to_dest condition -- the only pipeline that delivers the low 13
+    mantissa bits (and denormals, -0.0, NaN payloads) to the SFPU.  At
+    dest_acc=No the operand is bf16-truncated upstream on BOTH the golden and
+    device paths, the cast is the identity on everything that arrives, and the
+    rounding logic of either impl is dead code -- which is how the old
+    software-RNE golden survived unfalsified (lane CT's harness audit).
+
+    The edges leg lands exactly on the rounding-visible inputs: ties of both
+    kept-LSB parities (the even tie is the RNE-vs-half-away discriminator),
+    midpoint neighbours, the exponent-carry tie, denormals of both signs,
+    +-0.0, and (via specials_safe) NaN and +-inf.
+
+    Comparison is exact (custom_atol=custom_rtol=0.0, the harness's own strict
+    form): the op is a pure bit-lattice function, losslessly representable in
+    an fp32 dest, and the default Float32 tolerance is blind to the
+    2^-11-relative rounding differences this row exists to price.  Known
+    comparator limit: torch.isclose equates -0.0 with +0.0, so the single
+    exact -0.0 input of CT's 4,097-case sign-loss class is enforced by the
+    golden spec (and the archived legacy-body failing differential) rather
+    than by this assert; the other 4,096 sign-loss inputs are negative
+    denormals and DO fail loudly (nonzero vs +0)."""
+    mathop = MathOperation.CastFp32ToFp16a
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    spec_A = None
+    if edge_values:
+        spec_A = edge_spec(
+            mathop,
+            formats.input_format,
+            formats.output_format,
+            specials=specials_safe(
+                formats.input_format, formats.output_format, dest_acc
+            ),
+        )
+        assert spec_A is not None
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=spec_A,
+        custom_atol=0.0,
+        custom_rtol=0.0,
         fresh_cpp_impl=fresh_cpp_impl,
     )
 
