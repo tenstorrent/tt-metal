@@ -519,6 +519,87 @@ def _proc_stat_fields():
         yield int(entry), data[rp + 2 :].split()
 
 
+_STACK_EVERY_S = 30.0
+
+# How far past its budget a still-moving step may run before the attempt is failed. A multiple, so
+# it scales with what the caller already said the work is worth.
+_HARD_CEILING_MULT = 4
+
+
+def _pgroup_io_counters(pgid) -> tuple:
+    """(syscalls, io_bytes) summed over the process group. (0, 0) when /proc cannot be read.
+
+    CPU IS NOT EVIDENCE OF PROGRESS, and this is what is. A process doing real work with a device
+    crosses into the kernel constantly -- ioctl to the driver, reads, writes -- so its syscall and
+    byte counters move. A process spinning in userspace moves neither.
+
+    Measured on run 12's hang, 2026-08-20: pinned at a full core for ten hours inside one
+    ttnn.from_torch call, with syscr and syscw unchanged across a twenty-second window and
+    read_bytes/write_bytes flat. Its stall clock never fired because CPU movement reset it on every
+    poll.
+    """
+    calls = 0
+    total = 0
+    for pid, fields in _proc_stat_fields():
+        if len(fields) <= 2 or fields[2] != str(pgid):
+            continue
+        try:
+            with open("/proc/%d/io" % pid) as fh:
+                for line in fh:
+                    k, _, v = line.partition(":")
+                    if k in ("syscr", "syscw"):
+                        calls += int(v)
+                    elif k in ("read_bytes", "write_bytes"):
+                        total += int(v)
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError, ValueError):
+            continue
+    return calls, total
+
+
+def _stack_fingerprint(pid) -> str:
+    """The top of the process's Python stack, or "" when it cannot be sampled.
+
+    THE ONE SIGNAL A KERNEL-SIDE LIVELOCK CANNOT FAKE. A poll loop asking the driver "ready yet?"
+    moves the syscall counter forever, so the counters above call it alive; its STACK does not move.
+    Sampled with py-spy when it is installed -- optional by design, because the counters already
+    cover the common case and a missing profiler must not make the tool refuse to run.
+    """
+    import shutil as _shutil
+    import subprocess as _sp
+
+    exe = _shutil.which("py-spy")
+    if not exe:
+        return ""
+    try:
+        r = _sp.run([exe, "dump", "--pid", str(int(pid))], capture_output=True, text=True, timeout=8)
+    except Exception:  # noqa: BLE001 -- an unsampleable process contributes nothing, never an error
+        return ""
+    if r.returncode != 0:
+        return ""
+    # The frames only -- not the thread header, which carries a state that flickers between samples.
+    return "\n".join(ln.strip() for ln in (r.stdout or "").splitlines() if ln.startswith("    "))[:2000]
+
+
+def progress_signature(pgid, log_path=None, pid=None) -> tuple:
+    """Everything that changes when a process tree is getting somewhere, and nothing that changes
+    when it merely runs.
+
+    Deliberately EXCLUDES CPU. The three states a supervised step can be in are told apart like so:
+
+        working    log grows, or syscalls/bytes move, or the stack moves
+        deadlock   nothing moves at all, CPU included
+        livelock   CPU pinned; log, counters and stack all still
+
+    Only the last was invisible before, and it is the one that cost ten hours.
+    """
+    try:
+        size = int(Path(log_path).stat().st_size) if log_path else 0
+    except OSError:
+        size = -1
+    calls, io_bytes = _pgroup_io_counters(pgid)
+    return (size, calls, io_bytes, _stack_fingerprint(pid) if pid else "")
+
+
 def _pgroup_cpu_jiffies(pgid: int) -> int:
     """Sum utime+stime (jiffies) over all live PIDs in process group `pgid`, from /proc.
     Liveness signal: a process doing real work (e.g. compiling kernels) keeps accruing CPU;
@@ -805,6 +886,9 @@ _SYSFS_HWMON = "/sys/class/hwmon"
 # perfectly plausible 0C and would drag a max-of-chips DOWN, which is the dangerous direction.
 _DIE_TEMP_MIN_C, _DIE_TEMP_MAX_C = 0.0, 150.0
 _TT_SMI_TEMP_TIMEOUT_S = float(os.environ.get("PERF_MCP_TT_SMI_TEMP_TIMEOUT_S", "15") or "15")
+# How long tt-smi is left alone after it hangs, and when it last did. See _tt_smi_asic_temp.
+_TT_SMI_BREAKER_S = 120.0
+_TT_SMI_HUNG_AT = 0.0
 
 
 def _sysfs_asic_temps() -> list:
@@ -882,13 +966,33 @@ def chips_without_telemetry() -> list:
 
 
 def _tt_smi_asic_temp():
-    """The second opinion. Bounded, because tt-smi's failure mode is to HANG, not to answer."""
+    """The second opinion. Bounded, because tt-smi's failure mode is to HANG, not to answer.
+
+    AND NOT RE-ASKED WHILE IT IS HANGING. A wedged ARC does not make tt-smi slow, it makes tt-smi
+    never answer, so every call costs the full timeout and every caller pays it. Measured on a board
+    whose ARC had failed to start: `tt-smi -s` never returned, the preflight suite went from 2.2min
+    to 5.5min, and the tax lands on every probe in every round.
+
+    So a timeout opens a breaker for _TT_SMI_BREAKER_S. That is only skipping calls that would have
+    timed out and returned None anyway -- the reading is not being suppressed, it was never going to
+    arrive. Thermal safety is unchanged: sysfs is still read every single time (it is the source that
+    still works on a wedged board), the two sources are still max()'d, and a clean answer from tt-smi
+    immediately closes the breaker again. The window is short next to how fast a die actually heats.
+    """
+    global _TT_SMI_HUNG_AT
+    if _TT_SMI_HUNG_AT and time.time() - _TT_SMI_HUNG_AT < _TT_SMI_BREAKER_S:
+        return None
     tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
     try:
         proc = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=_TT_SMI_TEMP_TIMEOUT_S)
-        return _max_asic_temp(json.loads(proc.stdout))
+        temp = _max_asic_temp(json.loads(proc.stdout))
+    except subprocess.TimeoutExpired:
+        _TT_SMI_HUNG_AT = time.time()
+        return None
     except Exception:  # noqa: BLE001
         return None
+    _TT_SMI_HUNG_AT = 0.0
+    return temp
 
 
 def _read_asic_temp():
@@ -992,8 +1096,11 @@ def _execute(
         pgid = proc.pid
         start = time.monotonic()
         last_progress = start
-        last_size = -1
-        last_cpu = _pgroup_cpu_jiffies(pgid)
+        # PROGRESS, NOT ACTIVITY. See progress_signature: CPU is excluded, because a livelock has
+        # plenty of it. The stack is sampled only every _STACK_EVERY_S -- py-spy costs a fraction of
+        # a second and the counters catch the common case on their own.
+        last_sig = progress_signature(pgid, log_path)
+        last_stack_at = start
         _over_budget = [False]
         poll = 5.0
         while True:
@@ -1018,14 +1125,27 @@ def _execute(
                 size = log_path.stat().st_size
             except OSError:
                 size = last_size
-            cpu = _pgroup_cpu_jiffies(pgid)
-            if size > last_size or cpu > last_cpu + 10:
+            # THE EXPENSIVE SIGNAL, ONLY ONCE SUSPICIOUS. Sampling a stack costs a subprocess and a
+            # fraction of a second, and the counters settle the common case on their own -- so it is
+            # not taken until the cheap signals have already been still for half the stall window.
+            # Taken every poll it made this suite 2.5x slower, which the preflight pays before every
+            # single run.
+            _quiet = now - last_progress
+            _want_stack = _quiet >= (stall_timeout_s or 0) / 2 and now - last_stack_at >= _STACK_EVERY_S
+            sig = progress_signature(pgid, log_path, proc.pid if _want_stack else None)
+            if _want_stack:
+                last_stack_at = now
+            # Compare the stack only when both samples carry one; otherwise the cheap fields decide.
+            _moved = sig[:3] != last_sig[:3] or (bool(sig[3]) and bool(last_sig[3]) and sig[3] != last_sig[3])
+            if _moved:
                 last_progress = now
-            last_size, last_cpu = size, cpu
+            if sig[:3] != last_sig[:3] or sig[3]:
+                last_sig = sig if sig[3] or not last_sig[3] else (sig[0], sig[1], sig[2], last_sig[3])
             if stall_timeout_s and now - last_progress >= stall_timeout_s:
                 _kill_and_raise(
-                    f"made no forward progress for {stall_timeout_s}s "
-                    f"(stalled/hung: no log growth and ~no CPU) — process group killed"
+                    f"made no forward progress for {stall_timeout_s}s -- no log growth, no syscalls, "
+                    f"no bytes and an unchanged stack. CPU alone is not progress; a livelock has "
+                    f"plenty of it. Process group killed"
                 )
             # THE SAME RULE AS _run_device_proc: a clock does not get to call working code dead.
             #
@@ -1038,10 +1158,28 @@ def _execute(
             if not _over_budget[0] and now - start >= timeout_s:
                 _over_budget[0] = True
                 print(
-                    f"  [probes] profile is over its {int(timeout_s)}s budget and STILL WORKING "
-                    f"(log growing or CPU moving) -- not killing it; the stall check decides",
+                    f"  [probes] profile is over its {int(timeout_s)}s budget and still making "
+                    f"progress -- not killing it; the stall check decides, and the hard ceiling at "
+                    f"{int(timeout_s * _HARD_CEILING_MULT)}s is behind that",
                     file=sys.stderr,
                     flush=True,
+                )
+            # THE CEILING BEHIND THE DETECTOR. The signature above catches a step that stops
+            # progressing; it cannot catch one that genuinely re-executes work forever -- fresh
+            # syscalls, a moving stack, no end. Nothing in this tool's own loops does that (they are
+            # bounded by counters: rounds, restarts, regens, kv attempts), but a model's code can,
+            # and this supervises model code.
+            #
+            # A MULTIPLE OF THE BUDGET, NOT A FIXED CLOCK. The 3-hour timer this replaces was set so
+            # high it was useless, because firing wrongly killed the RUN. This raises the same
+            # TracyHangError every other detection raises, which every caller already treats as a
+            # failed attempt -- the perf-test loop regenerates, the supervisor restarts. Getting it
+            # wrong costs one attempt, so it can be set low enough to matter.
+            if timeout_s and now - start >= timeout_s * _HARD_CEILING_MULT:
+                _kill_and_raise(
+                    f"exceeded {int(timeout_s * _HARD_CEILING_MULT)}s -- {_HARD_CEILING_MULT}x its "
+                    f"{int(timeout_s)}s budget. It was still moving, so this is the ceiling behind "
+                    f"the stall detector, not a stall: the attempt is failed and may be retried"
                 )
 
 

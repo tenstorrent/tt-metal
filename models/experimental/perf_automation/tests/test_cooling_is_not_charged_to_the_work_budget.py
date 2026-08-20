@@ -66,7 +66,10 @@ def test_the_hard_limit_excludes_cooling():
 def test_a_cooling_child_is_not_a_stall():
     """It burns no CPU and prints only when the temperature moves -- both wedge signals, wrongly."""
     src = (_PA / "cc_optimize" / "run.py").read_text()
-    i = src.index("moved = cpu > last_cpu")
+    # CPU is no longer a liveness signal at all (a livelock has plenty); the line is now
+    # `moved = _sig_moved or _act[0] > last_progress or _cooling_now()`. What this test is about is
+    # that cooling still counts, and it still does.
+    i = src.index("moved = _sig_moved")
     assert "_cooling_now()" in src[i : i + 200], "a cooling child still reads as a no-progress stall"
 
 

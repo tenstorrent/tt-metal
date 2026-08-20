@@ -3037,6 +3037,17 @@ def _pg_cpu_jiffies(pgid: int) -> int:
         return 0
 
 
+def _progress_signature(pgid, log_path=None, pid=None) -> tuple:
+    """probes owns this; see progress_signature there. Lazy import, as _set_depth is."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    try:
+        from agent.probes import progress_signature
+
+        return progress_signature(pgid, log_path, pid)
+    except Exception:  # noqa: BLE001 -- an unreadable signature is "unchanged", which the clock handles
+        return (0, 0, 0, "")
+
+
 def _tree_cpu_jiffies(root_pid: int) -> int:
     """Sum utime+stime over the WHOLE process TREE rooted at root_pid (every descendant, ACROSS
     process groups / sessions). The build's on-device validation is spawned with start_new_session
@@ -3271,18 +3282,28 @@ def _run_device_proc(
             pgid = proc.pid
             start = time.monotonic()
             last_progress = start
-            last_cpu = _tree_cpu_jiffies(proc.pid)
+            # PROGRESS, NOT ACTIVITY -- probes.progress_signature. Two things counted as life here
+            # that a hang has in abundance: CPU, and the mere EXISTENCE of a child process
+            # (_llm_child_alive), which no hung run can fail. Cooling stays: it is a deliberate
+            # pause this tool asked for.
+            _sig = _progress_signature(pgid, None)
+            _last_stack_at = start
             max_gap = 0.0
             _over_budget = [False]
             while proc.poll() is None:
                 time.sleep(5)
                 now = time.monotonic()
-                cpu = _tree_cpu_jiffies(proc.pid)
+                # Only once the cheap signals have been still a while -- see probes._execute.
+                _want_stack = (now - last_progress) >= max(60.0, stall_s / 2) and now - _last_stack_at >= 30.0
+                _new = _progress_signature(pgid, None, proc.pid if _want_stack else None)
+                if _want_stack:
+                    _last_stack_at = now
+                _sig_moved = _new[:3] != _sig[:3] or (bool(_new[3]) and bool(_sig[3]) and _new[3] != _sig[3])
+                _sig = _new if (_new[3] or not _sig[3]) else (_new[0], _new[1], _new[2], _sig[3])
                 # A cooling child is idle ON PURPOSE: it is sleeping against a thermometer, so it
                 # burns no CPU and prints only when the temperature moves. Both of this loop's
                 # liveness signals read that as a wedge, which is exactly wrong.
-                moved = cpu > last_cpu + 10 or _act[0] > last_progress or _llm_child_alive(pgid) or _cooling_now()
-                last_cpu = cpu
+                moved = _sig_moved or _act[0] > last_progress or _cooling_now()
                 if moved:
                     max_gap = max(max_gap, now - last_progress)
                     last_progress = now
@@ -3290,7 +3311,8 @@ def _run_device_proc(
                 idle = now - last_progress
                 if idle >= limit:
                     print(
-                        f"  [optimize/cc] {label or 'device subprocess'} STALLED (no output/CPU for "
+                        f"  [optimize/cc] {label or 'device subprocess'} STALLED (no output, syscalls, "
+                        f"bytes or stack movement for "
                         f"{int(idle)}s > adaptive limit {limit}s) -- treating as wedge",
                         flush=True,
                     )
