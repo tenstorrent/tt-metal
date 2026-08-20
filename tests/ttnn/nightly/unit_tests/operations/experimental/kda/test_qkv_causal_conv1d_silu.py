@@ -18,6 +18,7 @@ from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_progra
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
+    collect_accuracy_and_determinism_results,
     assert_equal,
 )
 
@@ -188,51 +189,23 @@ def test_qkv_causal_conv1d_silu_contract(device: ttnn.Device, widths: tuple[int,
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
 def test_qkv_causal_conv1d_silu_is_device_deterministic(device: ttnn.Device, case: _ProductionCase) -> None:
     """Compare repeated large outputs on device; cache behavior is tested separately."""
-    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=case.widths)
+    host, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=case.widths)
+    expected = _reference(*host, case.widths)
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         with ttnn.manage_config("throw_exception_on_fallback", True):
             return _run(input_tt, history_tt, taps_tt, widths=case.widths)
 
-    reference_outputs = run()
-    mismatch_scratch = tuple(
-        ttnn.empty(
-            output.shape,
-            dtype=ttnn.bfloat16,
-            layout=output.layout,
-            device=device,
-            memory_config=output.memory_config(),
-        )
-        for output in reference_outputs
+    output_tensors, outputs, mismatch_marker = collect_accuracy_and_determinism_results(device, run)
+    assert_equal(
+        torch.zeros_like(mismatch_marker),
+        mismatch_marker,
+        name=f"{case.case_id} device-side exact-value determinism marker",
     )
-    mismatch_markers: list[ttnn.Tensor | None] = [None, None, None]
-    for _ in range(2):
-        current_outputs = run()
-        for index, (reference, current, scratch) in enumerate(
-            zip(reference_outputs, current_outputs, mismatch_scratch, strict=True)
-        ):
-            ttnn.ne(reference, current, dtype=ttnn.bfloat16, output_tensor=scratch)
-            current_marker = ttnn.max(scratch)
-            ttnn.deallocate(current)
-            if mismatch_markers[index] is None:
-                mismatch_markers[index] = current_marker
-            else:
-                updated_marker = ttnn.maximum(mismatch_markers[index], current_marker)
-                ttnn.deallocate(mismatch_markers[index])
-                ttnn.deallocate(current_marker)
-                mismatch_markers[index] = updated_marker
-
-    for name, marker in zip(("q", "k", "v"), mismatch_markers, strict=True):
-        assert marker is not None
-        marker_host = ttnn.to_torch(marker).clone()
-        assert_equal(
-            torch.zeros_like(marker_host),
-            marker_host,
-            name=f"{case.case_id} {name} device-side exact-value determinism marker",
-        )
-        ttnn.deallocate(marker)
-    for tensor in (*reference_outputs, *mismatch_scratch):
-        ttnn.deallocate(tensor)
+    for name, golden, output in zip(("q", "k", "v"), expected, outputs, strict=True):
+        assert_accurate(golden, output, name=f"{case.case_id} {name}", pcc_threshold=0.999)
+    for output in output_tensors:
+        ttnn.deallocate(output)
 
 
 def test_qkv_causal_conv1d_silu_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
