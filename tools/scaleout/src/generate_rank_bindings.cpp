@@ -154,6 +154,117 @@ struct TopologyMappingInputs {
 TopologyMappingInputs build_topology_mapping_inputs(
     const PhysicalSystemDescriptor& psd,
     const PhysicalGroupingDescriptor& pgd,
+    const MeshGraphDescriptor& mgd,
+    const std::filesystem::path& mgd_path) {
+    auto& context = tt::tt_metal::MetalContext::instance();
+    const auto& cluster = context.get_cluster();
+    MeshGraph mesh_graph(cluster, mgd_path.string());
+
+    // Configure topology mapping
+    TopologyMappingConfig config;
+    config.strict_mode = true;
+    config.disable_rank_bindings = false;  // Pass the rank bindings to make sure there isn't host rank boundary issues
+
+    // Apply the same galaxy corner pinnings as the control plane (Phase 2) so Phase 1 and Phase 2 place
+    // the galaxy pins identically. Full galaxies (per-host slice >= 32) pin all four corners; sub-galaxy
+    // slices pin only the NW corner to any tray-corner ASIC (asic_location==1 on trays 1..4).
+    if (cluster.is_ubb_galaxy()) {
+        const int world_size =
+            static_cast<int>(*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size());
+        for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+            const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+            const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
+            if (!is_1d && mesh_shape.mesh_size() % 32 == 0) {
+                auto mesh_pinning_groups = get_galaxy_fixed_asic_position_pinnings_for_mesh(
+                    mesh_id, mesh_shape, /*hard_pin_node_0=*/world_size == 1, /*nw_corner_only=*/false);
+                config.pinnings.insert(config.pinnings.end(), mesh_pinning_groups.begin(), mesh_pinning_groups.end());
+            }
+        }
+    }
+
+    // PSD hostname grouping and tray/ASIC-location map (logical mesh 0 anchor + pinnings support).
+    for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
+        config.hostname_to_asics[desc.host_name].insert(asic_id);
+        config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
+    }
+
+    // MGD many-to-many pinning groups, now keyed by local mesh id (PinningsByMesh). Single MGD, so local == global:
+    // flatten every mesh's groups into config.pinnings for the CSP solve, and pass the keyed map to the builder below.
+    const PinningsByMesh& mgd_pinnings = mgd.get_pinnings();
+    for (const auto& [_, groups] : mgd_pinnings) {
+        config.pinnings.insert(config.pinnings.end(), groups.begin(), groups.end());
+    }
+
+    // Set per-mesh validation modes based on mesh graph policy
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        config.mesh_validation_modes[mesh_id] = mesh_graph.is_intra_mesh_policy_relaxed(mesh_id)
+                                                    ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
+                                                    : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+    }
+
+    // Set inter-mesh validation mode based on mesh graph policy
+    // TODO: Enable per-connection inter-mesh validation mode. Currently, all inter-mesh connections
+    // use the same validation mode based on the mesh graph's global inter-mesh policy. In the future,
+    // we should support mixed STRICT and RELAXED policies where some inter-mesh connections are
+    // device-level (strict) and others are mesh-level (relaxed).
+    config.inter_mesh_validation_mode = mesh_graph.is_inter_mesh_policy_relaxed()
+                                            ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
+                                            : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+    if (config.inter_mesh_validation_mode.value() == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+        log_info(tt::LogFabric, "Inter-mesh validation mode: RELAXED");
+    } else {
+        log_info(tt::LogFabric, "Inter-mesh validation mode: STRICT");
+    }
+
+    // Build physical multi-mesh graph from PSD, PGD, and MGD
+    log_info(tt::LogFabric, "Building physical multi-mesh adjacency graph...");
+    PhysicalMultiMeshGraph physical_graph =
+        build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd, std::optional<PinningsByMesh>{mgd_pinnings});
+
+    // Build logical multi-mesh graph from MGD
+    log_info(tt::LogFabric, "Building logical multi-mesh adjacency graph...");
+    LogicalMultiMeshGraph logical_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
+
+    // Print adjacency maps
+    log_logical_multi_mesh_adjacency_histograms(logical_graph);
+    log_physical_multi_mesh_adjacency_histograms(physical_graph);
+
+    // Build logical rank bindings from mesh graph: each fabric node gets its mesh_host_rank from the mesh graph
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        const auto& chip_ids = mesh_graph.get_chip_ids(mesh_id);
+        for (const auto& [coord, chip_id] : chip_ids) {
+            FabricNodeId fabric_node_id(mesh_id, chip_id);
+            auto mesh_host_rank = mesh_graph.get_host_rank_for_chip(mesh_id, chip_id);
+            if (mesh_host_rank.has_value()) {
+                fabric_node_id_to_mesh_rank[mesh_id][fabric_node_id] = mesh_host_rank.value();
+            }
+        }
+    }
+
+    // Physical rank bindings are left empty (all ASICs UNSET) so the topology mapper assigns physical
+    // ASICs to hosts itself; TopologyMappingInputs::asic_id_to_mesh_rank defaults to empty.
+    TopologyMappingInputs inputs;
+    inputs.logical_graph = std::move(logical_graph);
+    inputs.physical_graph = std::move(physical_graph);
+    inputs.config = std::move(config);
+    inputs.fabric_node_id_to_mesh_rank = std::move(fabric_node_id_to_mesh_rank);
+    return inputs;
+}
+
+/**
+ * @brief Run topology mapper to map logical meshes to physical ASICs
+ *
+ * @param mesh_graph_descriptors  Const reference to the caller's vector of loaded MGDs (the `std::vector`
+ *                                is not copied—only a reference is passed). Must match `mgd_paths_in_order`
+ *                                in length and order (one path per descriptor for `MeshGraph` host ranks).
+ * @param mgd_paths_in_order      Const reference to paths parallel to `mesh_graph_descriptors`.
+ *
+ * @return Mapping result plus per-MGD local -> global mesh id maps (same order as descriptors / `MeshGraph`s).
+ */
+TopologyMappingWithLocalMaps run_topology_mapping(
+    const PhysicalSystemDescriptor& psd,
+    const PhysicalGroupingDescriptor& pgd,
     const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
     const std::vector<std::filesystem::path>& mgd_paths_in_order) {
     if (mesh_graph_descriptors.size() != mgd_paths_in_order.size() || mesh_graph_descriptors.empty()) {
@@ -191,14 +302,16 @@ TopologyMappingInputs build_topology_mapping_inputs(
         config.hostname_to_asics[desc.host_name].insert(asic_id);
     }
 
-    // Build pinnings once, in each MGD's LOCAL mesh-id space, already keyed by mesh (MGD populate + galaxy
-    // corner pins merged into the same map). `per_mgd_pinnings[i]` is threaded into the physical builder for
-    // MGD i; the same pins are remapped to GLOBAL mesh ids and concatenated into config.pinnings for the
-    // mesh->physical CSP solve, so both stages apply identical pins.
+    // Build pinnings once, in each MGD's LOCAL mesh-id space, exactly as the single-MGD path feeds one MGD's
+    // pinnings to build_physical_multi_mesh_adjacency_graph (get_valid_groupings_for_mgd filters pins by the MGD's
+    // own local mesh ids). `per_mgd_pinnings[i]` is threaded into the physical builder for MGD i (PGD<->MGD match +
+    // PSD placement); the same pins are also remapped to GLOBAL mesh ids and concatenated into config.pinnings for
+    // the mesh->physical CSP solve, so both stages apply identical pins (the same places as the normal path).
     std::vector<std::optional<PinningsByMesh>> per_mgd_pinnings(mesh_graph_descriptors.size());
     const int world_size =
         static_cast<int>(*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size());
     for (std::size_t mgi = 0; mgi < mesh_graph_descriptors.size(); ++mgi) {
+        // The MGD's own many-to-many pinning groups, already keyed by this MGD's local mesh ids (PinningsByMesh).
         PinningsByMesh local_pins = mesh_graph_descriptors[mgi].get_pinnings();
 
         // Galaxy corner pins per full-galaxy mesh (local mesh id), same as the control plane / single-MGD path.
@@ -307,42 +420,16 @@ TopologyMappingInputs build_topology_mapping_inputs(
         }
     }
 
-    // Physical rank bindings are left empty (all ASICs UNSET) so the topology mapper assigns physical
-    // ASICs to hosts itself; TopologyMappingInputs::asic_id_to_mesh_rank defaults to empty.
-    TopologyMappingInputs inputs;
-    inputs.logical_graph = std::move(logical_graph);
-    inputs.physical_graph = std::move(physical_graph);
-    inputs.config = std::move(config);
-    inputs.fabric_node_id_to_mesh_rank = std::move(fabric_node_id_to_mesh_rank);
-    return inputs;
-}
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank = {};
 
-// Single-solution mapping (default): returns the first solution the mapper finds.
-TopologyMappingResult run_topology_mapping(
-    const PhysicalSystemDescriptor& psd,
-    const PhysicalGroupingDescriptor& pgd,
-    const MeshGraphDescriptor& mgd,
-    const std::filesystem::path& mgd_path) {
-    auto inputs = build_topology_mapping_inputs(psd, pgd, mgd, mgd_path);
     log_info(tt::LogFabric, "Running topology mapping with mesh graph rank bindings...");
-    return map_multi_mesh_to_physical(
-        inputs.logical_graph,
-        inputs.physical_graph,
-        inputs.config,
-        inputs.asic_id_to_mesh_rank,
-        inputs.fabric_node_id_to_mesh_rank);
+    TopologyMappingWithLocalMaps out;
+    out.mapping = map_multi_mesh_to_physical(
+        logical_graph, physical_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+    out.per_part_local_to_global_mesh_ids = std::move(per_part_local_to_global_mesh_ids);
+    return out;
 }
 
-// Multi-solution mapping (--all-solutions): enumerate up to max_solutions distinct solutions.
-// max_solutions == 0 means "all up to the solver safety cap".
-//
-// `unique_shapes` is the SOLVER-level dedup: it collapses solutions whose set of physical graph nodes
-// (for this multi-mesh solve, the physical meshes/sub-meshes used) is identical up to permutation, so the
-// solver does not re-emit automorphic footprints. It is ALWAYS ON by default (see main(): only the hidden
-// --allow-shape-permutations turns it off). Note this is NOT the same as distinct *host* sets: for MGDs
-// whose meshes are smaller than a host (e.g. 8-chip blitz meshes on 128-chip galaxies), two shape-distinct
-// solutions can still occupy the same set of hosts. Host-set dedup (--distinct-host-sets) is applied later,
-// in main(), on the resolved hostnames — see the write loop.
 /**
  * @brief Extract rank bindings from topology mapping result with topology-aware splitting.
  *
@@ -623,15 +710,10 @@ struct ProgramArgs {
     std::map<int, std::filesystem::path> subcontext_id_to_mgd_path;
     std::optional<std::string> physical_grouping_descriptor_path;
     std::optional<std::string> output_dir;
-    bool all_solutions = false;     // --all-solutions/-a: write one artifact set per solution
+    bool all_solutions = false;     // --all-solutions/-a: one artifact set per solution (single-MGD only)
     std::size_t max_solutions = 0;  // --max-solutions/-n: cap (0 = all up to solver cap); implies --all-solutions
-    // --distinct-host-sets/-d: keep only one solution per unique set of HOSTS (post-filter on resolved
-    // hostnames in main(); collapses solutions that occupy the same hosts but wire/assign differently).
-    bool distinct_host_sets = false;
-    // Hidden --allow-shape-permutations: turn OFF the solver's unique_shapes dedup (which is otherwise
-    // always on). When off, the solver may emit multiple automorphic physical footprints (same set of
-    // physical meshes, permuted). Advanced/debug only; not shown in --help.
-    bool allow_shape_permutations = false;
+    bool distinct_host_sets = false;        // --distinct-host-sets/-d: one solution per unique host set
+    bool allow_shape_permutations = false;  // hidden: disable the solver's unique_shapes dedup
 };
 
 /**
@@ -664,7 +746,8 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         cxxopts::value<std::string>())(
         "a,all-solutions",
         "Enumerate all valid solutions and write one artifact set per solution into per-solution subdirectories "
-        "(plus solutions_index.yaml). Default: write only the first solution flat in --output-dir.")(
+        "(plus solutions_index.yaml). SINGLE-MGD only (-m). Default: write only the first solution flat in "
+        "--output-dir.")(
         "n,max-solutions",
         "Maximum number of solutions to enumerate (0 = all up to the solver safety cap). Implies --all-solutions.",
         cxxopts::value<std::size_t>())(
@@ -684,8 +767,7 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         const auto result = options.parse(argc, argv);
 
         if (result.contains("help") || argc == 1) {
-            // Only the default (unnamed) group; hidden/advanced options are intentionally omitted.
-            std::cout << options.help({""}) << std::endl;
+            std::cout << options.help() << std::endl;
             exit(0);
         }
 
@@ -728,14 +810,7 @@ ProgramArgs parse_arguments(int argc, char** argv) {
             }
         }
         if (result.contains("allow-shape-permutations")) {
-            args.allow_shape_permutations = true;  // hidden: turns OFF the always-on solver unique_shapes dedup
-            // Only consulted on the --all-solutions enumeration path (implied by --max-solutions too),
-            // so warn if neither is set -- same limitation as --distinct-host-sets above.
-            if (!args.all_solutions) {
-                log_warning(
-                    tt::LogFabric,
-                    "--allow-shape-permutations has no effect without --all-solutions/--max-solutions; ignoring it.");
-            }
+            args.allow_shape_permutations = true;
         }
 
         return args;
@@ -796,69 +871,66 @@ int main(int argc, char** argv) {
         // Get current rank - only rank 0 performs topology mapping and file generation
         auto current_rank = *context->rank();
         if (current_rank == 0) {
-            // Single MeshGraph in a vector to match the multi-MGD extract_rank_bindings signature.
-            auto& metal_context = tt::tt_metal::MetalContext::instance();
-            const auto& cluster = metal_context.get_cluster();
-            std::vector<MeshGraph> mesh_graphs_for_extract;
-            mesh_graphs_for_extract.emplace_back(cluster, mgd_path.string());
-
-            const std::filesystem::path output_dir =
-                args.output_dir.has_value() ? std::filesystem::path(*args.output_dir) : "generated/ttrun";
-            std::filesystem::create_directories(output_dir);
-
-            const bool mock_cluster_rankfile = !mpi_rank_to_cluster_desc_path.empty();
-
-            // Flush a file and its parent directory to storage before signaling peers via barrier.
-            // std::ofstream::close() only drains the C++ stream buffer to the OS page cache; without fsync(),
-            // NFS peers (and local readers) may see stale or absent files even after this process exits. We
-            // fsync each file and its parent directory so both data and directory entries are durable before
-            // the barrier() below — making the barrier the authoritative "writes are visible" signal.
-            auto fsync_path = [](const std::filesystem::path& p) noexcept {
-                int fd = ::open(p.c_str(), O_RDONLY);
-                if (fd >= 0) {
-                    ::fsync(fd);
-                    ::close(fd);
-                }
-                int dir_fd = ::open(p.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
-                if (dir_fd >= 0) {
-                    ::fsync(dir_fd);
-                    ::close(dir_fd);
-                }
-            };
-
-            // Write one solution's artifacts (rank_bindings.yaml, rankfile, optional phase2 mock mapping) into `dir`.
-            auto write_solution_artifacts = [&](const std::vector<RankBindingConfig>& rank_bindings,
-                                                const std::filesystem::path& dir) {
-                std::filesystem::create_directories(dir);
-                const std::filesystem::path rank_bindings_file = dir / "rank_bindings.yaml";
-                write_rank_bindings_yaml(rank_bindings, args.mesh_graph_descriptor_path, rank_bindings_file.string());
-                const std::filesystem::path rankfile_path = dir / "rankfile";
-                write_rankfile(rank_bindings, rankfile_path.string(), mock_cluster_rankfile);
-                fsync_path(rank_bindings_file);
-                fsync_path(rankfile_path);
-                if (!mpi_rank_to_cluster_desc_path.empty()) {
-                    const std::filesystem::path phase2_mock_path = dir / "phase2_mock_mapping.yaml";
-                    write_phase2_mock_mapping_yaml(
-                        rank_bindings, mpi_rank_to_cluster_desc_path, phase2_mock_path.string());
-                    fsync_path(phase2_mock_path);
-                }
-                log_info(tt::LogFabric, "Successfully wrote solution artifacts to: {}", dir.string());
-            };
-
-            if (!args.all_solutions) {
-                // Default: single solution written flat in output_dir (unchanged behavior).
-                log_info(tt::LogFabric, "Stage: Running topology mapping...");
-                TopologyMappingResult mapping_result = run_topology_mapping(psd, pgd, mgd, mgd_path);
-                if (!mapping_result.success) {
-                    log_error(tt::LogFabric, "Topology mapping failed: {}", mapping_result.error_message);
+            if (args.all_solutions) {
+                if (args.subcontext_id_to_mgd_path.size() != 1) {
+                    log_error(
+                        tt::LogFabric,
+                        "--all-solutions is only supported with a single MGD (-m); multi-MGD (-M / multiple "
+                        "sub-contexts) is not supported.");
                     return 1;
                 }
-                log_info(tt::LogFabric, "Topology mapping complete");
-                std::vector<RankBindingConfig> rank_bindings =
-                    extract_rank_bindings(psd, mapping_result, mesh_graphs_for_extract, /*per_part_local_to_global_mesh_ids=*/{});
-                log_info(tt::LogFabric, "Extracted {} rank binding(s)", rank_bindings.size());
-                write_solution_artifacts(rank_bindings, output_dir);
-            } else {
+                const MeshGraphDescriptor& mgd = mgds.front();
+                const std::filesystem::path& mgd_path = mgd_paths_in_order.front();
+                const std::string mgd_path_str = mgd_path.string();
+                auto& metal_context = tt::tt_metal::MetalContext::instance();
+                const auto& cluster = metal_context.get_cluster();
+                // Single MeshGraph in a vector to match main's multi-MGD extract_rank_bindings signature.
+                std::vector<MeshGraph> mesh_graphs_for_extract;
+                mesh_graphs_for_extract.emplace_back(cluster, mgd_path.string());
+                const std::filesystem::path output_dir =
+                    args.output_dir.has_value() ? std::filesystem::path(*args.output_dir) : "generated/ttrun";
+                std::filesystem::create_directories(output_dir);
+
+                const bool mock_cluster_rankfile = !mpi_rank_to_cluster_desc_path.empty();
+
+                // Flush a file and its parent directory to storage before signaling peers via barrier.
+                // std::ofstream::close() only drains the C++ stream buffer to the OS page cache; without fsync(),
+                // NFS peers (and local readers) may see stale or absent files even after this process exits. We
+                // fsync each file and its parent directory so both data and directory entries are durable before
+                // the barrier() below — making the barrier the authoritative "writes are visible" signal.
+                auto fsync_path = [](const std::filesystem::path& p) noexcept {
+                    int fd = ::open(p.c_str(), O_RDONLY);
+                    if (fd >= 0) {
+                        ::fsync(fd);
+                        ::close(fd);
+                    }
+                    int dir_fd = ::open(p.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
+                    if (dir_fd >= 0) {
+                        ::fsync(dir_fd);
+                        ::close(dir_fd);
+                    }
+                };
+
+                // Write one solution's artifacts (rank_bindings.yaml, rankfile, optional phase2 mock mapping) into
+                // `dir`.
+                auto write_solution_artifacts = [&](const std::vector<RankBindingConfig>& rank_bindings,
+                                                    const std::filesystem::path& dir) {
+                    std::filesystem::create_directories(dir);
+                    const std::filesystem::path rank_bindings_file = dir / "rank_bindings.yaml";
+                    write_rank_bindings_yaml(rank_bindings, mgd_path_str, rank_bindings_file.string());
+                    const std::filesystem::path rankfile_path = dir / "rankfile";
+                    write_rankfile(rank_bindings, rankfile_path.string(), mock_cluster_rankfile);
+                    fsync_path(rank_bindings_file);
+                    fsync_path(rankfile_path);
+                    if (!mpi_rank_to_cluster_desc_path.empty()) {
+                        const std::filesystem::path phase2_mock_path = dir / "phase2_mock_mapping.yaml";
+                        write_phase2_mock_mapping_yaml(
+                            rank_bindings, mpi_rank_to_cluster_desc_path, phase2_mock_path.string());
+                        fsync_path(phase2_mock_path);
+                    }
+                    log_info(tt::LogFabric, "Successfully wrote solution artifacts to: {}", dir.string());
+                };
+
                 // --all-solutions: one artifact set per solution in a content-hash subdirectory, plus a
                 // top-level solutions_index.yaml summarizing them all.
                 log_info(tt::LogFabric, "Stage: Enumerating all topology mapping solutions (streaming)...");
@@ -956,8 +1028,7 @@ int main(int argc, char** argv) {
                         key_file << signature << std::endl;
                     }
                     const std::filesystem::path meta_path = solution_dir / "solution_meta.yaml";
-                    write_solution_meta_yaml(
-                        rank_bindings, solution_id, args.mesh_graph_descriptor_path, meta_path.string());
+                    write_solution_meta_yaml(rank_bindings, solution_id, mgd_path_str, meta_path.string());
                     fsync_path(key_path);
                     fsync_path(meta_path);
 
@@ -973,7 +1044,7 @@ int main(int argc, char** argv) {
                     // the definitive flag is written after the enumeration ends below. The consumer keys off the
                     // producer's liveness, not this flag, to decide whether more solutions are pending.
                     write_solutions_index_yaml(
-                        args.mesh_graph_descriptor_path,
+                        mgd_path_str,
                         enumeration_mode,
                         args.max_solutions,
                         /*truncated=*/true,
@@ -988,12 +1059,7 @@ int main(int argc, char** argv) {
                 // output (more solutions may exist), false once the enumeration is genuinely exhausted.
                 const bool truncated = cap_reached;
                 write_solutions_index_yaml(
-                    args.mesh_graph_descriptor_path,
-                    enumeration_mode,
-                    args.max_solutions,
-                    truncated,
-                    index_entries,
-                    index_path.string());
+                    mgd_path_str, enumeration_mode, args.max_solutions, truncated, index_entries, index_path.string());
                 fsync_path(index_path);
                 log_info(
                     tt::LogFabric,
@@ -1006,9 +1072,157 @@ int main(int argc, char** argv) {
                     log_error(tt::LogFabric, "No valid topology solutions found");
                     return 1;
                 }
-            }
+            } else {
+                // Stage: Run topology mapping
+                log_info(tt::LogFabric, "Stage: Running topology mapping...");
 
+                TopologyMappingWithLocalMaps topology = run_topology_mapping(psd, pgd, mgds, mgd_paths_in_order);
+
+                if (!topology.mapping.success) {
+                    log_error(tt::LogFabric, "Topology mapping failed: {}", topology.mapping.error_message);
+                    return 1;
+                }
+                log_info(tt::LogFabric, "Topology mapping complete");
+
+                auto& metal_context = tt::tt_metal::MetalContext::instance();
+                const auto& cluster = metal_context.get_cluster();
+                std::vector<MeshGraph> mesh_graphs_for_extract;
+                mesh_graphs_for_extract.reserve(mgd_paths_in_order.size());
+                for (const auto& p : mgd_paths_in_order) {
+                    mesh_graphs_for_extract.emplace_back(cluster, p.string());
+                }
+
+                std::vector<int> subcontext_ids_in_order;
+                subcontext_ids_in_order.reserve(args.subcontext_id_to_mgd_path.size());
+                for (const auto& [sid, _] : args.subcontext_id_to_mgd_path) {
+                    subcontext_ids_in_order.push_back(sid);
+                }
+
+                std::filesystem::path output_dir =
+                    args.output_dir.has_value() ? std::filesystem::path(*args.output_dir) : "generated/ttrun";
+                std::filesystem::create_directories(output_dir);
+
+                const bool mock_cluster_rankfile = !mpi_rank_to_cluster_desc_path.empty();
+
+                const bool multi_mgd = mesh_graphs_for_extract.size() > 1;
+                if (multi_mgd) {
+                    log_info(
+                        tt::LogFabric,
+                        "Stage: Extracting rank bindings per MGD (per-sub-context YAML + one global rankfile / phase2 "
+                        "mock)...");
+                } else {
+                    log_info(tt::LogFabric, "Stage: Extracting rank bindings...");
+                }
+
+                std::vector<RankBindingConfig> merged_global_rank_bindings;
+                merged_global_rank_bindings.reserve(topology.mapping.fabric_node_to_asic.size());
+                std::vector<std::pair<int, std::string>> rank_bindings_mapping_entries;
+                int global_rank_base = 0;
+
+                for (size_t mgi = 0; mgi < mesh_graphs_for_extract.size(); ++mgi) {
+                    const int subctx_id = subcontext_ids_in_order[mgi];
+                    std::vector<MeshGraph> one_graph = {mesh_graphs_for_extract[mgi]};
+                    std::vector<std::map<MeshId, MeshId>> one_map = {topology.per_part_local_to_global_mesh_ids[mgi]};
+                    std::vector<RankBindingConfig> rank_bindings =
+                        extract_rank_bindings(psd, topology.mapping, one_graph, one_map);
+
+                    if (rank_bindings.empty()) {
+                        if (multi_mgd) {
+                            log_info(tt::LogFabric, "Sub-context {}: extracted 0 rank binding(s)", subctx_id);
+                        } else {
+                            log_info(tt::LogFabric, "Extracted 0 rank binding(s)");
+                        }
+                    } else if (multi_mgd) {
+                        log_info(
+                            tt::LogFabric,
+                            "Sub-context {}: extracted {} rank binding(s) (global mpi rank range [{} , {}))",
+                            subctx_id,
+                            rank_bindings.size(),
+                            global_rank_base,
+                            global_rank_base + static_cast<int>(rank_bindings.size()) - 1);
+                    } else {
+                        log_info(tt::LogFabric, "Extracted {} rank binding(s)", rank_bindings.size());
+                    }
+
+                    if (!multi_mgd) {
+                        log_info(tt::LogFabric, "Stage: Writing rank bindings to YAML...");
+                    }
+                    const std::string mesh_desc_path_for_sub = mgd_paths_in_order[mgi].string();
+                    const std::filesystem::path yaml_path =
+                        multi_mgd ? output_dir / fmt::format("rank_bindings_subctx_{}.yaml", subctx_id)
+                                  : output_dir / "rank_bindings.yaml";
+                    if (multi_mgd) {
+                        rank_bindings_mapping_entries.emplace_back(subctx_id, yaml_path.filename().string());
+                    }
+                    write_rank_bindings_yaml(rank_bindings, mesh_desc_path_for_sub, yaml_path.string());
+                    log_info(tt::LogFabric, "Successfully wrote: {}", yaml_path.string());
+
+                    for (const RankBindingConfig& b : rank_bindings) {
+                        RankBindingConfig merged = b;
+                        merged.rank = global_rank_base + b.rank;
+                        merged_global_rank_bindings.push_back(std::move(merged));
+                    }
+                    global_rank_base += static_cast<int>(rank_bindings.size());
+                }
+
+                if (multi_mgd) {
+                    const std::filesystem::path mapping_path = output_dir / "rank_bindings_mapping.yaml";
+                    write_subcontext_rank_bindings_mapping_yaml(rank_bindings_mapping_entries, mapping_path.string());
+                    log_info(tt::LogFabric, "Successfully wrote: {}", mapping_path.string());
+                }
+
+                assign_rankfile_slots_in_global_mpi_order(merged_global_rank_bindings);
+
+                std::filesystem::path rankfile_path = output_dir / "rankfile";
+                write_rankfile(merged_global_rank_bindings, rankfile_path.string(), mock_cluster_rankfile);
+                if (global_rank_base == 0) {
+                    log_info(tt::LogFabric, "Successfully wrote: {} (empty)", rankfile_path.string());
+                } else {
+                    log_info(
+                        tt::LogFabric,
+                        "Successfully wrote: {} (MPI world size {}, ranks {} .. {})",
+                        rankfile_path.string(),
+                        global_rank_base,
+                        0,
+                        global_rank_base - 1);
+                }
+
+                if (!mpi_rank_to_cluster_desc_path.empty()) {
+                    std::filesystem::path phase2_mock_path = output_dir / "phase2_mock_mapping.yaml";
+                    write_phase2_mock_mapping_yaml(
+                        merged_global_rank_bindings, mpi_rank_to_cluster_desc_path, phase2_mock_path.string());
+                    log_info(
+                        tt::LogFabric,
+                        "Successfully wrote: {} (cluster descriptors used during allocation)",
+                        phase2_mock_path.string());
+                }
+
+                // Flush all output files to storage before signaling peers via barrier.
+                // std::ofstream::close() only drains the C++ stream buffer to the OS page cache.
+                // Without fsync(), NFS peers (and local readers) may see stale or absent files
+                // even after generate_rank_bindings exits.  We fsync each file and its parent
+                // directory so that both data and directory entries are durable before we call
+                // barrier() below — making the barrier the authoritative "writes are visible"
+                // signal and allowing ttrun.py to skip any blind sleep after this subprocess.
+                auto fsync_path = [](const std::filesystem::path& p) noexcept {
+                    int fd = ::open(p.c_str(), O_RDONLY);
+                    if (fd >= 0) {
+                        ::fsync(fd);
+                        ::close(fd);
+                    }
+                    int dir_fd = ::open(p.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
+                    if (dir_fd >= 0) {
+                        ::fsync(dir_fd);
+                        ::close(dir_fd);
+                    }
+                };
+                fsync_path(rankfile_path);
+                if (!mpi_rank_to_cluster_desc_path.empty()) {
+                    fsync_path(output_dir / "phase2_mock_mapping.yaml");
+                }
+            }
             log_info(tt::LogFabric, "Fsynced output files; barrier will signal peers that writes are visible.");
+
             log_info(tt::LogFabric, "Rank bindings generation complete!");
         } else {
             log_info(
