@@ -491,20 +491,30 @@ __attribute__((noinline)) void calculate_ceil_fresh_cpp()
 // LREG0/2/5 and an ADDR_MOD_6-fused store increment, metal ckernel_sfpu_comp.h).
 // Semantic statement: 1.0 where |v| == 0 (covers -0.0; NaN keeps a nonzero
 // magnitude and stays 0.0 — the production kernel's documented contract).
+//
+// Result materialization mirrors the production kernel's dual-store shape:
+// store 0 unconditionally, then store 1 under the |v|==0 CC — the stores come
+// straight from the hard constant registers (vConst0/vConst1), so no lane
+// register ever materializes the result.  Rows are addressed by immediate
+// offset (dst_reg[d]) rather than dst_reg++: the compiler will not fuse a
+// counter increment into a CC-predicated trailing store (it emits a separate
+// TTINCRWC, giving the increment its own issue word), while indexed rows need
+// no counter at all.  Net 6 issue words/row (load, store0, abs, setcc,
+// store1, encc) = the production kernel's exact slot count — the -0.0
+// handling (the abs) is kept.
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_eqz_fresh_cpp()
 {
+#pragma GCC unroll 32
     for (int d = 0; d < ITERATIONS; ++d)
     {
-        const sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat r       = 0.0f;
+        const sfpi::vFloat v = sfpi::dst_reg[d];
+        sfpi::dst_reg[d]     = sfpi::vConst0;
         v_if (sfpi::abs(v) == 0.0f)
         {
-            r = 1.0f;
+            sfpi::dst_reg[d] = sfpi::vConst1;
         }
         v_endif;
-        sfpi::dst_reg[0] = r;
-        sfpi::dst_reg++;
     }
 }
 

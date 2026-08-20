@@ -1148,19 +1148,48 @@ def test_ceil_fresh_cpp(fresh_cpp_impl):
 
 
 @pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
-def test_eqz_fresh_cpp(fresh_cpp_impl):
+@pytest.mark.parametrize("edge_values", [False, True], ids=["functional", "edges"])
+def test_eqz_fresh_cpp(fresh_cpp_impl, edge_values):
     """A/B the fresh semantic equal-zero (typed |v|==0 predicate) against the
-    production all-raw-TTI calculate_comp float path with identical inputs."""
+    production all-raw-TTI calculate_comp float path with identical inputs.
+
+    The edges leg puts exact +0.0 and -0.0 in the stimuli (op_edge_points for
+    EqualZero) — the one pair of inputs the op is about, which the functional
+    leg's uniform(-2, 2) draw reaches with probability ~0.  Both impls must
+    return 1.0 for both zeros (ttnn golden: torch.eq(x, 0); production kernel
+    comment: "handles ±0"), so the fresh body's sign handling is gated here,
+    not just by review of its semantic statement.
+
+    The edges leg runs dest_acc=Yes: -0.0 only survives to DEST on the
+    32-bit unpack-to-dest path — on the 16-bit src-reg path the sign of
+    zero is lost upstream and every zero reaches the SFPU as +0.0 (that is
+    the registered Signbit _EDGE_KNOWN_DIVERGENCES xfail set), so a
+    dest_acc=No edge probe cannot distinguish a sign-clearing body from a
+    raw-bit one."""
     mathop = MathOperation.EqualZero
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes if edge_values else DestAccumulation.No
+    spec_A = None
+    if edge_values:
+        spec_A = edge_spec(
+            mathop,
+            formats.input_format,
+            formats.output_format,
+            specials=specials_safe(
+                formats.input_format, formats.output_format, dest_acc
+            ),
+        )
+        assert spec_A is not None
     custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
-        DestAccumulation.No,
+        formats,
+        dest_acc,
         ApproximationMode.No,
         mathop,
         FastMode.No,
         [64, 64],
+        spec_A=spec_A,
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
         fresh_cpp_impl=fresh_cpp_impl,
