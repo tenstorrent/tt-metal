@@ -21,11 +21,11 @@ operations:
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
-        unpack_to_dest: true
-      # - type: "UnarySfpu"
-      #   operation: "Exp"
-      #   approximation_mode: false
-      #   iterations: 32
+        # unpack_to_dest: true
+      - type: "UnarySfpu"
+        operation: "Exp"
+        approximation_mode: false
+        iterations: 32
     pack:
       - output: "datacopy_out"
         packer: "Packer"
