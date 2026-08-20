@@ -622,6 +622,46 @@ the full sequence, not of the chunk, so every chunk count still sees the same pr
 At the original 5x ramp the first of those measured 0.025 and only just tripped a 0.02
 threshold; at 21x it is a 10x margin.
 
+## Benchmarking
+
+`unified_bench.py` measures DEVICE time using metal's real-time profiler, which streams a
+`ProgramRealtimeRecord` per completed program over the existing dispatch path: start and end
+timestamps plus the device frequency. Records carry `kernel_sources`, which is how a
+measurement is attributed to the op that produced it.
+
+That indirection is necessary rather than fancy. These kernels run in tens of microseconds and
+host dispatch is tens of microseconds, so wall-clock timing measures the dispatcher. It also
+confirms the model's structure from the outside: a unified kernel's record lists the same
+source three times, once per descriptor.
+
+`bench_attention.py` puts our kernels next to ttnn's SDPA at one shape. S=128, D=64, causal,
+one head, ONE CORE each -- ttnn's `SDPAProgramConfig` takes the grid size, so pinning it to
+`CoreCoord(1, 1)` is what makes the comparison mean anything:
+
+| | device time |
+|---|---|
+| ours: flash, 2 chunks | 81.4 us |
+| ours: flash, 4 chunks | 139.8 us |
+| ttnn SDPA, q32/k128 | 21.0 us |
+| ttnn SDPA, q128/k128 | 19.9 us |
+
+**ttnn is about 4x faster on one core at the same shape**, and that is the honest headline. Two
+things it points at:
+
+- **Per-pass overhead dominates.** Our kernel runs roughly eleven separate compute passes per
+  chunk, each paying a circular-buffer round trip -- `store()` reserves and pushes, the reader
+  waits and pops. ttnn's SDPA keeps intermediates in DST and fuses far more per acquire. The
+  clearest evidence is that going from 2 chunks to 4 makes us 1.7x SLOWER: the per-chunk fixed
+  cost, not the arithmetic, is what we are paying.
+- **The full grid was never the interesting number.** ttnn on 64 cores is 13.8 us against 21 us
+  on one, because at S=128 with a single head there are only a handful of q-chunks of work and
+  most cores idle. Any per-core figure derived from the full grid is fiction, which is why the
+  table pins both sides to one core.
+
+Not measured, and worth stating: ttnn is solving the general problem -- batches, heads, GQA,
+arbitrary sequence lengths -- while these kernels do one head at one shape, and the shapes our
+DST budget allows are far below where ttnn is designed to operate.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.
