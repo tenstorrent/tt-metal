@@ -4404,8 +4404,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& group : pinnings) {
-        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+    for (const auto& [_, groups] : pinnings) {
+        for (const auto& group : groups) {
+            config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+        }
     }
 
     if (!config.pinnings.empty()) {
@@ -4534,8 +4536,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& group : pinnings) {
-        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+    for (const auto& [_, groups] : pinnings) {
+        for (const auto& group : groups) {
+            config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+        }
     }
 
     if (!config.pinnings.empty()) {
@@ -4664,8 +4668,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& group : pinnings) {
-        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+    for (const auto& [_, groups] : pinnings) {
+        for (const auto& group : groups) {
+            config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+        }
     }
 
     if (!config.pinnings.empty()) {
@@ -5175,7 +5181,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_VectorOverload_Threa
 
     // Build via the multi-MGD vector overload, threading pins as per_mgd_pinnings[0].
     const std::vector<MeshGraphDescriptor> mgds{mgd};
-    const std::vector<std::optional<std::vector<PinningConstraint>>> per_mgd_pins{pins};
+    const std::vector<std::optional<PinningsByMesh>> per_mgd_pins{pinnings_by_mesh_from_groups(pins)};
     const auto vec_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgds, per_mgd_pins);
 
     ASSERT_EQ(vec_graph.mesh_adjacency_graphs_.size(), 1u);
@@ -5199,7 +5205,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_VectorOverload_Threa
     // (2) Threading must reach the exact same grouping/placement code as the single-MGD overload: same pins in ->
     // same mesh_pgd_pinnings_ out.
     const auto singular_graph =
-        build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd, std::optional<std::vector<PinningConstraint>>{pins});
+        build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd, pinnings_by_mesh_from_groups(pins));
     EXPECT_EQ(vec_graph.mesh_pgd_pinnings_, singular_graph.mesh_pgd_pinnings_)
         << "Vector overload with per-MGD pins must match the single-MGD overload with the same pins";
 }

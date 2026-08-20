@@ -160,8 +160,7 @@ inline DeviceData::DeviceData(
     bool is_banked,
     uint32_t dram_data_size_words,
     const DispatchTestConfig& cfg) :
-    use_coherent_data_(cfg.use_coherent_data),
-    hugepage_issue_buffer_size_(cfg.hugepage_issue_buffer_size) {
+    use_coherent_data_(cfg.use_coherent_data), hugepage_issue_buffer_size_(cfg.hugepage_issue_buffer_size) {
     this->base_data_addr[static_cast<int>(tt::CoreType::WORKER)] = l1_data_addr;
     this->base_data_addr[static_cast<int>(tt::CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)] = dram_data_addr;
@@ -984,13 +983,9 @@ inline tt::CoreType sd_cq_kernel_core_type(const tt_metal::IDevice* device) {
     return tt::tt_metal::detail::resolve_sd_cq_kernel_core_type(device);
 }
 
-inline tt_metal::DataMovementProcessor prefetch_dm() {
-    return tt::tt_metal::detail::prefetch_dm_processor();
-}
+inline tt_metal::DataMovementProcessor prefetch_dm() { return tt::tt_metal::detail::prefetch_dm_processor(); }
 
-inline tt_metal::DataMovementProcessor dispatch_dm() {
-    return tt::tt_metal::detail::dispatch_dm_processor();
-}
+inline tt_metal::DataMovementProcessor dispatch_dm() { return tt::tt_metal::detail::dispatch_dm_processor(); }
 
 inline const tt_metal::DispatchMemMap& sd_dispatch_mem_map() {
     return tt_metal::MetalContext::instance().dispatch_mem_map();
@@ -1198,13 +1193,16 @@ protected:
         if (!Common::is_quasar_sim()) {
             return default_worker_start;
         }
+        const CoreCoord worker_grid = device_->compute_with_storage_grid_size();
         const bool fast_dispatch = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
-        return fast_dispatch ? CoreCoord{0, 0} : CoreCoord{1, 0};
+        return fast_dispatch ? CoreCoord{0, 0} : CoreCoord{worker_grid.x - 1, 0};
     }
 
     CoreRange worker_range(const CoreCoord& first_worker, bool multi_core = true) const {
         if (Common::is_quasar_sim()) {
-            return CoreRange{first_worker, first_worker};
+            const CoreCoord worker_grid = device_->compute_with_storage_grid_size();
+            const CoreCoord last_worker = multi_core ? CoreCoord{worker_grid.x - 1, worker_grid.y - 1} : first_worker;
+            return CoreRange{first_worker, last_worker};
         }
         const CoreCoord last_worker = multi_core ? CoreCoord{first_worker.x + 1, first_worker.y + 1} : first_worker;
         return CoreRange{first_worker, last_worker};

@@ -23,7 +23,8 @@ from helpers.perf.parquet import (
     write_parquet,
     write_run_batch,
 )
-from helpers.perf.wide_schema import DB_SCHEMA
+from helpers.perf.test_schemas import PERF_TEST_SCHEMAS
+from helpers.perf.wide_schema import DB_SCHEMA, DROPPED_COLUMNS
 
 _RUN_PROV = dict(
     commit_sha="abc123",
@@ -292,6 +293,24 @@ def test_convert_keeps_num_blocks_columns(tmp_path):
     names = pq.read_table(tmp_path / "out.parquet").schema.names
     assert "input_num_blocks" in names
     assert "output_num_blocks" in names
+
+
+def test_catalog_columns_are_in_db_schema():
+    # Every WH/BH per-test CSV column must be in the published WH/BH table (or
+    # intentionally dropped). Quasar has its own table — see
+    # test_perf_parquet_quasar.py.
+    schema_names = {c.name for c in DB_SCHEMA} | DROPPED_COLUMNS
+    missing = {}
+    for test, entry in PERF_TEST_SCHEMAS.items():
+        unknown = sorted(set(entry["columns"]) - schema_names)
+        if unknown:
+            missing[test] = unknown
+    assert not missing, (
+        "WH/BH perf-test catalog column(s) are not in "
+        "helpers.perf.wide_schema.DB_SCHEMA and would be dropped from Parquet: "
+        f"{missing}. Add them as nullable columns (or to DROPPED_COLUMNS if they "
+        "must not be published)."
+    )
 
 
 # ── Parquet -> CSV (reverse conversion) ───────────────────────────────────────
