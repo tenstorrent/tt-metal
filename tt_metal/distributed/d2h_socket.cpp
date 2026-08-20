@@ -757,6 +757,39 @@ void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
     }
 }
 
+D2HSocket::ReadView D2HSocket::peek(uint32_t num_pages) {
+    TT_FATAL(page_size_ > 0, "Page size must be set before peeking.");
+    uint32_t num_bytes = num_pages * page_size_;
+    TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot peek more pages than the socket FIFO size.");
+    this->wait_for_bytes(num_bytes);
+
+    uint32_t head_bytes = num_bytes;
+    if (read_ptr_ + num_bytes > fifo_curr_size_) {
+        head_bytes = fifo_curr_size_ - read_ptr_;
+    }
+    uint32_t tail_bytes = num_bytes - head_bytes;
+
+    uint32_t* base = using_hugepage_ ? hugepage_data_host_ptr_ : host_buffer_.get();
+    uint32_t* src = base + (read_ptr_ / sizeof(uint32_t));
+    if (using_hugepage_) {
+        for (uint32_t i = 0; i < head_bytes; i += k_x86_clflush_line_bytes) {
+            _mm_clflush(reinterpret_cast<char*>(src) + i);
+        }
+        for (uint32_t i = 0; i < tail_bytes; i += k_x86_clflush_line_bytes) {
+            _mm_clflush(reinterpret_cast<char*>(base) + i);
+        }
+        _mm_lfence();
+    }
+    return ReadView{src, head_bytes, tail_bytes > 0 ? base : nullptr, tail_bytes};
+}
+
+void D2HSocket::pop(uint32_t num_pages, bool notify_sender) {
+    this->pop_bytes(num_pages * page_size_);
+    if (notify_sender) {
+        this->notify_sender();
+    }
+}
+
 uint32_t D2HSocket::pages_available() {
     TT_FATAL(page_size_ > 0, "Page size must be set before checking available pages.");
     uint32_t bytes_sent_value;

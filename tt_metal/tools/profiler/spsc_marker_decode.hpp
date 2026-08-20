@@ -2,31 +2,36 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Shared host-side decoder for the DRISC drainer's 2-word + split-sticky stream
+// SINGLE SOURCE OF TRUTH for the host-side decode of the DRISC drainer's wire
 // (producer: tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp).
 //
-// This is the SINGLE SOURCE OF TRUTH for the host-side wire decode, so the standalone benchmark
-// (the standalone drain harness) and the production RealtimeProfilerManager can never drift apart on the marker
-// format (the drift -- manager decoding a stale 4-word layout while the drainer emits the 2-word
-// linearized stream -- is exactly what this module exists to prevent).
-//
-// The wire is a self-framed variable-length stream of packets (spsc_packet.h):
-//   STICKY_SRC   (1 word): sets the CURRENT lane (reader-injected on each source switch)
-//   STICKY_TIMER (1 word): sets the current lane's wall-clock high half (timer_hi)
-//   STICKY_PROG  (2 word): sets the program-global runtime host-id (prog)
-//   BULKCORE     (variable): one core's NRISC sub-rings, each an inner variable-length packet run
-//   marker       (2 word): ZONE_START/END/TOTAL -- emitted to the caller with its resolved lane/ts/prog
-//
-// D2HSocket/host pages are NOT packet-aligned, so a read can end mid-packet: the trailing partial packet is
-// carried in SpscDecodeState::resid and prepended to the next call. Sticky state (cur_lane/cur_hi/prog)
-// likewise persists across calls -- the stream is continuous.
+// The wire carries only whole variable-length BULK_SPAN frames (layout and geometry rules in
+// profiler_common.h): a 16-word prefix whose word 1 is the payload length, the worker's 64-word control
+// vector verbatim, then each RISC's live ring window packed flat -- congruence-padded, wrap resolved
+// device-side. Frames with SPSC_SPAN_RAW_FLAG in word 0 instead carry the whole raw span (five full
+// rings at fixed offsets, windows circular) -- the drainer's high-fill fallback, where packing would
+// cost write issues to save almost nothing. Inside each window is a packet run (spsc_packet.h):
+// ZONE_START/END/TOTAL markers
+// (2 words), STICKY_TIMER (1 word, per-lane wall-clock high half), STICKY_PROG (1 word, per-lane
+// runtime host-id in low27; 2-word PROG_EXT escape past 2^27), EVENT (2 words, a payload-less flag)
+// and DATA (3 + size words, self-describing -- the length lives in its word2). The producer publishes
+// its tail only on packet boundaries, so a window never ends mid-packet.
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
+
+#if defined(__x86_64__)
+#include <xmmintrin.h>
+#endif
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
 
 #include "hostdevcommon/profiler_common.h"
 #include "spsc_packet.h"
@@ -51,320 +56,337 @@ static_assert(PP_DATA_SIZE_SHIFT == kernel_profiler::SPSC_DATA_SIZE_SHIFT, "PP_D
 namespace tt::tt_metal::profiler {
 
 // Worker per-RISC SPSC ring depth (words) and RISC count -- MUST match the producer (kernel_profiler.hpp
-// RING_CAPACITY, = kernel_profiler::PROFILER_L1_VECTOR_SIZE) so the BULKCORE sub-ring walk indexes
-// correctly.
+// RING_CAPACITY, = kernel_profiler::PROFILER_L1_VECTOR_SIZE) so run clamps agree with the drainer's.
 inline constexpr uint32_t kSpscRingCap = 512;
+inline constexpr uint32_t kSpscRingMask = kSpscRingCap - 1;
 inline constexpr uint32_t kSpscNRiscDecode = 5;
 
-// Sticky/framing state carried ACROSS decode calls for one continuous stream (one D2HSocket / host ring).
-struct SpscDecodeState {
-    uint32_t cur_lane = 0xFFFFFFFFu;  // set by STICKY_SRC
-    uint32_t cur_prog = 0;            // set by STICKY_PROG (program-global)
-    std::vector<uint32_t> cur_hi;     // per-lane wall-clock high half (set by STICKY_TIMER), size = nl
-    std::vector<uint32_t> resid;      // trailing partial packet carried to the next call
-    // BULK_SPAN identity: packed (y << 16) | x -> dense core index, so lane = core*NRISC + risc keeps its
-    // meaning downstream. The caller owns this map because only the host knows the grid; the drainer never
-    // sees it and never puts a core id on the wire. A frame whose xy is absent is skipped whole.
-    std::unordered_map<uint32_t, uint32_t> core_of_xy;
-    // Host-side head mirror, per lane. The drainer stopped patching heads into the frame (5 stores per core
-    // per visit); the host reconstructs them instead: head(frame N) == tail(frame N-1) for that lane, which
-    // is exact because the D2H FIFO is ordered and lossless. The span's own head field still arrives free
-    // inside the control vector, so it seeds this on first sight and thereafter serves as a CONSISTENCY
-    // CHECK -- `head_drift` counts disagreements rather than silently trusting either side.
-    std::vector<uint32_t> host_head;
-    std::vector<uint8_t> head_seeded;
-    uint64_t head_drift = 0;
-
-    void reset(uint32_t nl) {
-        cur_lane = 0xFFFFFFFFu;
-        cur_prog = 0;
-        cur_hi.assign(nl, 0);
-        resid.clear();
-        host_head.assign(nl, 0);
-        head_seeded.assign(nl, 0);
-        head_drift = 0;
-    }
-};
-
-// Decode `in[0..in_n)` (a fresh read), prepending any carried residual. For each MARKER packet, calls
-//   emit(uint32_t lane, uint32_t type, uint32_t zone_id, uint64_t full_ts, uint32_t prog)
-// where type is PP_ZONE_START/END/TOTAL, zone_id is the FULL 27-bit structural zone id
-// (tu_id << TT_ZONE_LOCAL_BITS | local -- hostdevcommon/profiler_zone_id.h; it was a 16-bit
-// source-location hash before, and the mask that truncated it here is gone), and full_ts is the 59-bit
-// device timestamp (timer_hi<<32 | timer_low). Sticky packets update `st` and are not emitted. A trailing
-// partial packet is saved into st.resid for the next call. `nl` = number of lanes (num_cores * NRISC).
-// No-op default for the point-marker sink (PP_DATA / PP_EVENT), so a caller that only wants zones compiles
-// unchanged. `type` is the wire type: BOTH PP_DATA and PP_EVENT now carry a compile-time structural id in
-// the same 27 bits a zone marker uses, so both are name-resolved the same way. They differ only in LENGTH
-// -- PP_EVENT is a bare 2-word flag, PP_DATA is 3 + payload with the length in its word2.
-struct SpscIgnoreData {
-    void operator()(
-        uint32_t /*lane*/,
-        uint32_t /*type*/,
-        uint32_t /*id*/,
-        uint64_t /*full_ts*/,
-        uint32_t /*prog*/,
-        const uint32_t* /*payload*/,
-        uint32_t /*n*/) const {}
-};
-
-// Largest PP_DATA payload the 7-bit size field can express; bounds the ring-unwrap scratch buffer.
+// Largest PP_DATA payload the 7-bit size field can express; bounds the raw-layout unwrap scratch.
 inline constexpr uint32_t kSpscMaxDataWords = 127;
 
-template <typename Emit, typename EmitData = SpscIgnoreData>
-inline void spsc_decode(
-    SpscDecodeState& st,
-    const uint32_t* in,
-    size_t in_n,
-    uint32_t nl,
-    Emit&& emit,
-    EmitData&& emit_data = SpscIgnoreData{}) {
-    // Prepend the carried residual so packets that straddled the previous read are decoded whole.
-    std::vector<uint32_t>& buf = st.resid;
-    const size_t rn = buf.size();
-    buf.resize(rn + in_n);
-    for (size_t i = 0; i < in_n; i++) {
-        buf[rn + i] = in[i];
-    }
-    const size_t sz = buf.size();
-    const uint32_t* w = buf.data();
+// Worst case: five full rings, each behind a maximal congruence pad. Larger than the raw 2,640-word span
+// the drainer stages, so this bounds the bounce buffer and frame validation, not any device layout.
+inline constexpr uint32_t kSpscMaxPayloadWords =
+    kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE +
+    kSpscNRiscDecode * (kSpscRingCap + kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS - 1);
+inline constexpr uint32_t kSpscMaxFrameWords = kernel_profiler::spsc_span_frame_words(kSpscMaxPayloadWords);
+inline constexpr uint32_t kSpscMaxFramePages = kSpscMaxFrameWords / kernel_profiler::SPSC_SPAN_PAGE_WORDS;
+static_assert(kSpscMaxFrameWords == 2656 && kSpscMaxFramePages == 166);
 
-    size_t p = 0;
-    while (p < sz) {
-        const uint32_t w0 = w[p];
-        if (pp_is_bulkcore(w0)) {
-            if (p + 1 >= sz) {
-                break;  // need the count word
+// Decode state for one socket's frame stream. Written only by that socket's decode thread.
+struct SpanDecodeState {
+    std::vector<uint32_t> timer_hi;  // per lane: sticky wall-clock high half
+    std::vector<uint32_t> prog;      // per lane: sticky runtime host-id (every RISC emits its own at launch)
+    std::vector<uint32_t> head;      // per lane: monotonic words-consumed mirror; head(N) == tail(N-1)
+    std::vector<uint8_t> seeded;
+    std::unordered_map<uint32_t, uint32_t> core_of_xy;  // packed (y<<16)|x -> dense core index
+    uint64_t live_words = 0;
+    uint64_t resync_events = 0;
+    uint64_t resync_words = 0;
+    uint64_t head_lag = 0;
+    uint64_t anomalies = 0;  // torn run / truncated run / undecodable word
+    uint64_t unknown_core_frames = 0;
+
+    void reset(uint32_t num_cores) {
+        timer_hi.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
+        prog.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
+        head.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
+        seeded.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
+    }
+};
+
+struct SpscIgnoreProg {
+    void operator()(uint32_t /*lane*/, uint32_t /*prog*/) const {}
+};
+
+// Sentinel default for the vectorized zone-block sink: without a real one the walk stays scalar.
+struct SpscNoZones8 {};
+
+inline void spsc_prefetch(const void* p) {
+#if defined(__x86_64__)
+    _mm_prefetch(static_cast<const char*>(p), _MM_HINT_T0);
+#else
+    (void)p;
+#endif
+}
+
+// Decode ONE whole packed BULK_SPAN frame in place. For each marker calls
+//   emit(lane, wire_type, zone_id27, full_ts, prog)  (ZONE_START/END; ZONE_TOTAL with full_ts = the sum)
+// where zone_id27 is the FULL 27-bit structural zone id (tu_id << TT_ZONE_LOCAL_BITS | local --
+// hostdevcommon/profiler_zone_id.h; it was a 16-bit source-location hash before, and the mask that
+// truncated it here is gone),
+// and for each PP_DATA/PP_EVENT
+//   emit_data(lane, wire_type, id, full_ts, prog, payload_words, n)   (payload in place, hi-word first)
+// and emit_prog(lane, prog) whenever a lane's sticky host-id changes.
+//
+// Returns the payload words the control vector implies -- the caller checks it against the frame's own
+// length field, since a pack-rule disagreement with the drainer desynchronizes every lane after the
+// first -- or 0 for an unknown-core frame (decoded as nothing; the caller still owns the advance).
+//
+// Head adoption: the mirror and the extent's start are both monotonic and can each run behind -- the
+// mirror after a frame was lost upstream (device credit-timeout drop), the extent when the drainer's
+// head write-back lagged its snapshot, making the frame re-ship words the mirror already consumed -- so
+// decode begins at the larger of the two: adopt-and-count on a loss, skip the overlap on a lag.
+// The optional emit_zones8(lane, timer_hi, prog, w0s, w1s) sink receives EIGHT consecutive 2-word zone
+// markers at once, deinterleaved into AVX2 vectors of word0s and word1s, whenever a 16-word block passes
+// the all-zone type screen -- the dominant case in a busy frame, and where the scalar walk's per-record
+// cost lives.
+template <
+    typename EmitMarker,
+    typename EmitData,
+    typename EmitProg = SpscIgnoreProg,
+    typename EmitZones8 = SpscNoZones8>
+inline uint32_t spsc_decode_frame(
+    SpanDecodeState& st,
+    const uint32_t* frame,
+    EmitMarker&& emit,
+    EmitData&& emit_data,
+    EmitProg&& emit_prog = SpscIgnoreProg{},
+    EmitZones8&& emit_zones8 = SpscNoZones8{}) {
+    const uint32_t* ctrl = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
+    const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_CORE_XY]);
+    if (xy_it == st.core_of_xy.end()) {
+        st.unknown_core_frames++;
+        return 0;
+    }
+    const uint32_t core = xy_it->second;
+    const bool raw = (frame[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) != 0;
+    uint32_t off = kernel_profiler::SPSC_SPAN_PREFIX_WORDS + kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE;
+    for (uint32_t r = 0; r < kSpscNRiscDecode; r++) {
+        const uint32_t lane = core * kSpscNRiscDecode + r;
+        const uint32_t tail = ctrl[kernel_profiler::SPSC_RING_TAIL_0 + r];
+        const uint32_t frame_head = ctrl[kernel_profiler::SPSC_RING_HEAD_0 + r];
+        const uint32_t extent = kernel_profiler::spsc_span_live(frame_head, tail, kSpscRingCap);
+        if (extent != tail - frame_head) {
+            st.anomalies++;  // torn snapshot; the clamped geometry still frames consistently on both sides
+        }
+        const uint32_t start = tail - extent;
+        const uint32_t* p = nullptr;
+        if (!raw && extent != 0) {
+            off += kernel_profiler::spsc_span_pack_pad(start, off);
+            p = frame + off;
+            off += extent;
+        }
+        uint32_t head;
+        if (st.seeded[lane] == 0) {
+            st.seeded[lane] = 1;
+            head = start;
+        } else {
+            head = st.head[lane];
+            const int32_t behind = static_cast<int32_t>(start - head);
+            if (behind > 0) {
+                st.resync_events++;
+                st.resync_words += static_cast<uint32_t>(behind);
+                head = start;
+            } else if (behind < 0) {
+                st.head_lag++;
             }
-            const uint32_t core = pp_bulkcore_core(w0);
-            const uint32_t rawn = w[p + 1];
-            uint32_t prefix = 2u + kSpscNRiscDecode;  // {w0, count} + per-RISC {head,run} meta
-            if (prefix & 1u) {
-                prefix++;  // meta padded to an even word count (matches the producer framing)
+        }
+        st.head[lane] = tail;
+        const uint32_t run = tail - head;
+        if (run == 0) {
+            continue;
+        }
+        if (run > extent) {
+            st.anomalies++;
+            continue;
+        }
+        st.live_words += run;
+        uint32_t th = st.timer_hi[lane];
+        uint32_t pg = st.prog[lane];
+        if (raw) {
+            const uint32_t* ring = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS +
+                                   kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE + r * kSpscRingCap;
+            const uint32_t hm = head & kSpscRingMask;
+            for (uint32_t o = 0; o < run; o += 16) {
+                spsc_prefetch(ring + ((hm + o) & kSpscRingMask));
             }
-            if (p + prefix + rawn > sz) {
-                break;  // incomplete bulk block -> carry to next call
-            }
-            const uint32_t* meta = &w[p + 2];
-            const uint32_t* raw = &w[p + prefix];
-            for (uint32_t r = 0; r < kSpscNRiscDecode; r++) {
-                const uint32_t head_mod = pp_bulk_head(meta[r]);
-                const uint32_t run = pp_bulk_run(meta[r]);
-                const uint32_t lane = core * kSpscNRiscDecode + r;
-                const uint32_t* ring = raw + (size_t)r * kSpscRingCap;
-                uint32_t i = 0;
-                while (i < run) {
-                    const uint32_t rw0 = ring[(head_mod + i) % kSpscRingCap];
-                    if (pp_is_timer(rw0)) {  // 1-word: refresh this lane's timer_hi
-                        if (lane < nl) {
-                            st.cur_hi[lane] = pp_timer_hi(rw0);
+            uint32_t i = 0;
+            while (i < run) {
+#if defined(__AVX2__)
+                if constexpr (!std::is_same_v<std::decay_t<EmitZones8>, SpscNoZones8>) {
+                    const uint32_t idx = (hm + i) & kSpscRingMask;
+                    if (i + 16 <= run && idx + 16 <= kSpscRingCap) {
+                        const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ring + idx));
+                        const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ring + idx + 8));
+                        const __m256i even = _mm256_castps_si256(_mm256_shuffle_ps(
+                            _mm256_castsi256_ps(v0), _mm256_castsi256_ps(v1), _MM_SHUFFLE(2, 0, 2, 0)));
+                        const __m256i odd = _mm256_castps_si256(_mm256_shuffle_ps(
+                            _mm256_castsi256_ps(v0), _mm256_castsi256_ps(v1), _MM_SHUFFLE(3, 1, 3, 1)));
+                        const __m256i w0s = _mm256_permute4x64_epi64(even, _MM_SHUFFLE(3, 1, 2, 0));
+                        const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
+                        if (_mm256_movemask_epi8(_mm256_cmpgt_epi32(types, _mm256_set1_epi32(1))) == 0) {
+                            const __m256i w1s = _mm256_permute4x64_epi64(odd, _MM_SHUFFLE(3, 1, 2, 0));
+                            emit_zones8(lane, th, pg, w0s, w1s);
+                            i += 16;
+                            continue;
                         }
-                        i += 1;
-                        continue;
                     }
-                    if (i + 1 >= run) {
-                        break;  // partial trailing marker inside the run (shouldn't happen on a full frame)
-                    }
-                    const uint32_t rw1 = ring[(head_mod + i + 1) % kSpscRingCap];
-                    if (pp_is_event(rw0)) {
-                        // PP_EVENT: a bare 2-word flag, no payload and no size word.
-                        if (lane < nl) {
-                            emit_data(
-                                lane,
-                                PP_EVENT,
-                                pp_point_id(rw0),
-                                pp_full_ts(st.cur_hi[lane], rw1),
-                                st.cur_prog,
-                                nullptr,
-                                0);
-                        }
-                        i += 2;
-                        continue;
-                    }
-                    if (pp_is_data(rw0)) {
-                        // PP_DATA is VARIABLE length (3 + size), and the length lives in word2 -- so the
-                        // whole header has to be inside this frame before it can be sized at all.
-                        if (i + 2u >= run) {
-                            break;
-                        }
-                        const uint32_t n = pp_data_size(ring[(head_mod + i + 2) % kSpscRingCap]);
-                        if (i + 3u + n > run) {
-                            break;  // payload not fully inside this frame -> carry via the next head
-                        }
-                        if (lane < nl) {
-                            // The payload can wrap the circular ring, so unwrap it into a flat scratch buffer
-                            // before handing it to the sink.
-                            uint32_t payload[kSpscMaxDataWords];
-                            for (uint32_t k = 0; k < n && k < kSpscMaxDataWords; k++) {
-                                payload[k] = ring[(head_mod + i + 3 + k) % kSpscRingCap];
-                            }
-                            const uint64_t ts = pp_full_ts(st.cur_hi[lane], rw1);
-                            emit_data(lane, PP_DATA, pp_point_id(rw0), ts, st.cur_prog, payload, n);
-                        }
-                        i += 3u + n;
-                        continue;
-                    }
-                    if (pp_type(rw0) == PP_STICKY_PROG) {
-                        st.cur_prog = rw1;
-                    } else if (lane < nl) {
-                        const uint32_t zone_id = pp_low27(rw0);  // full 27-bit structural id
-                        const uint64_t ts = pp_full_ts(st.cur_hi[lane], rw1);
-                        emit(lane, pp_type(rw0), zone_id, ts, st.cur_prog);
-                    }
-                    i += 2;
                 }
-            }
-            p += prefix + rawn;
-        } else if (pp_is_bulkspan(w0)) {
-            // Identity-free whole-core frame. Everything BULK_CORE puts in a drainer-written header --
-            // which core, how much is live -- is re-derived here from the worker's OWN control vector.
-            // Payload is each RISC's live run, packed exactly and already unwrapped device-side.
-            if (p + 1 >= sz) {
-                break;  // need the length word
-            }
-            const uint32_t frame = kernel_profiler::spsc_span_frame_words(w[p + 1]);
-            if (p + frame > sz) {
-                break;  // incomplete frame -> carry to the next call
-            }
-            const uint32_t* ctrl = &w[p + kernel_profiler::SPSC_SPAN_PREFIX_WORDS];
-            const uint32_t* blk = ctrl + kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE;
-            const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_CORE_XY]);
-            const bool known = xy_it != st.core_of_xy.end();
-            for (uint32_t r = 0; r < kSpscNRiscDecode; r++) {
-                // The payload is five WHOLE raw rings -- the drainer is a conduit and never repacked them
-                // (a CPU repack cost it 45% of its cycles). So the live window is the circular range
-                // [head, head+run) and the wrap is resolved here, on a host that has cycles to spare.
-                const uint32_t tail = ctrl[kernel_profiler::SPSC_RING_TAIL_0 + r];
-                const uint32_t* ring = blk;
-                blk += kSpscRingCap;  // rings are fixed-size and in RISC order, present even when empty
-                const uint32_t lane = known ? xy_it->second * kSpscNRiscDecode + r : nl;
-                if (lane >= nl) {
-                    continue;
-                }
-                if (!st.head_seeded[lane]) {
-                    st.host_head[lane] = ctrl[kernel_profiler::SPSC_RING_HEAD_0 + r];
-                    st.head_seeded[lane] = 1;
-                } else if (ctrl[kernel_profiler::SPSC_RING_HEAD_0 + r] != st.host_head[lane]) {
-                    // Benign if the drainer's write-back was still in flight when the snapshot was taken;
-                    // a real signal if a frame went missing. Counted, never trusted over the mirror.
-                    st.head_drift++;
-                }
-                const uint32_t head = st.host_head[lane];
-                const uint32_t run = kernel_profiler::spsc_span_live(head, tail, kSpscRingCap);
-                st.host_head[lane] = head + run;
-                const uint32_t head_mod = head % kSpscRingCap;
-                if (run == 0) {
-                    continue;
-                }
-                uint32_t i = 0;
-                while (i < run) {
-                    const uint32_t rw0 = ring[(head_mod + i) % kSpscRingCap];
-                    if (pp_is_timer(rw0)) {  // 1-word: refresh this lane's timer_hi
-                        st.cur_hi[lane] = pp_timer_hi(rw0);
-                        i += 1;
-                        continue;
-                    }
-                    // The producer publishes its tail only after a whole packet is in the ring, so a run
-                    // never ends mid-packet. These bounds checks are assertions, not recovery.
-                    if (i + 1 >= run) {
+#endif
+                const uint32_t w0 = ring[(hm + i) & kSpscRingMask];
+                const uint32_t t = pp_type(w0);
+                if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
+                    if (i + 2 > run) {
+                        st.anomalies++;
                         break;
                     }
-                    const uint32_t rw1 = ring[(head_mod + i + 1) % kSpscRingCap];
-                    if (pp_is_event(rw0)) {
-                        emit_data(
-                            lane,
-                            PP_EVENT,
-                            pp_point_id(rw0),
-                            pp_full_ts(st.cur_hi[lane], rw1),
-                            st.cur_prog,
-                            nullptr,
-                            0);
-                        i += 2;
-                        continue;
+                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    const uint64_t ts = (t == PP_ZONE_TOTAL) ? w1 : pp_full_ts(th, w1);
+                    emit(lane, t, pp_low27(w0), ts, pg);  // full 27-bit structural id
+                    i += 2;
+                } else if (t == PP_STICKY_TIMER) {
+                    th = pp_timer_hi(w0);
+                    i += 1;
+                } else if (t == PP_STICKY_PROG) {
+                    if (const uint32_t id = pp_low27(w0); id != pg) {
+                        pg = id;
+                        emit_prog(lane, pg);
                     }
-                    if (pp_is_data(rw0)) {
-                        if (i + 2u >= run) {
-                            break;
-                        }
-                        const uint32_t n = pp_data_size(ring[(head_mod + i + 2) % kSpscRingCap]);
-                        if (i + 3u + n > run) {
-                            break;
-                        }
-                        // The payload can wrap the ring, so unwrap it into a flat scratch buffer first.
-                        uint32_t payload[kSpscMaxDataWords];
-                        for (uint32_t k = 0; k < n && k < kSpscMaxDataWords; k++) {
-                            payload[k] = ring[(head_mod + i + 3 + k) % kSpscRingCap];
-                        }
-                        emit_data(
-                            lane, PP_DATA, pp_point_id(rw0), pp_full_ts(st.cur_hi[lane], rw1), st.cur_prog, payload, n);
-                        i += 3u + n;
-                        continue;
+                    i += 1;
+                } else if (t == PP_STICKY_PROG_EXT) {
+                    if (i + 2 > run) {
+                        st.anomalies++;
+                        break;
                     }
-                    if (pp_type(rw0) == PP_STICKY_PROG) {
-                        st.cur_prog = rw1;
-                    } else {
-                        emit(lane, pp_type(rw0), pp_low27(rw0), pp_full_ts(st.cur_hi[lane], rw1), st.cur_prog);
+                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    if (w1 != pg) {
+                        pg = w1;
+                        emit_prog(lane, pg);
                     }
                     i += 2;
+                } else if (t == PP_EVENT) {
+                    // PP_EVENT: exactly 2 words -- a flag with a compile-time structural id, no payload.
+                    if (i + 2 > run) {
+                        st.anomalies++;
+                        break;
+                    }
+                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    emit_data(lane, PP_EVENT, pp_point_id(w0), pp_full_ts(th, w1), pg, nullptr, 0);
+                    i += 2;
+                } else if (t == PP_DATA) {
+                    // PP_DATA is 3 + size words and the length lives in word2, so the whole header must
+                    // be inside the run before the packet can be sized at all.
+                    if (i + 3 > run) {
+                        st.anomalies++;
+                        break;
+                    }
+                    const uint32_t n = pp_data_size(ring[(hm + i + 2) & kSpscRingMask]);
+                    if (i + 3 + n > run) {
+                        st.anomalies++;
+                        break;
+                    }
+                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    // The payload can wrap the circular ring, so unwrap it into a flat scratch first.
+                    uint32_t payload[kSpscMaxDataWords];
+                    for (uint32_t k = 0; k < n; k++) {
+                        payload[k] = ring[(hm + i + 3 + k) & kSpscRingMask];
+                    }
+                    emit_data(lane, PP_DATA, pp_point_id(w0), pp_full_ts(th, w1), pg, payload, n);
+                    i += 3 + n;
+                } else {
+                    st.anomalies++;
+                    break;
                 }
             }
-            p += frame;
-        } else if (pp_is_src(w0)) {  // 1-word: set the current lane
-            st.cur_lane = pp_src_lane(w0);
-            p += 1;
-        } else if (pp_is_timer(w0)) {  // 1-word: refresh the current lane's timer_hi
-            if (st.cur_lane < nl) {
-                st.cur_hi[st.cur_lane] = pp_timer_hi(w0);
+            st.timer_hi[lane] = th;
+            st.prog[lane] = pg;
+            continue;
+        }
+        p += extent - run;
+        // Just-in-time prefetch of this lane's live window: small bursts consumed immediately fit the
+        // core's fill-buffer budget -- issuing whole frames ahead was measured 30-40% SLOWER (the bulk
+        // cold-line prefetches starve the walk's own demand loads).
+        for (uint32_t o = 0; o < run; o += 16) {
+            spsc_prefetch(p + o);
+        }
+        uint32_t i = 0;
+        while (i < run) {
+#if defined(__AVX2__)
+            if constexpr (!std::is_same_v<std::decay_t<EmitZones8>, SpscNoZones8>) {
+                if (i + 16 <= run) {
+                    const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + i));
+                    const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + i + 8));
+                    const __m256i even = _mm256_castps_si256(
+                        _mm256_shuffle_ps(_mm256_castsi256_ps(v0), _mm256_castsi256_ps(v1), _MM_SHUFFLE(2, 0, 2, 0)));
+                    const __m256i odd = _mm256_castps_si256(
+                        _mm256_shuffle_ps(_mm256_castsi256_ps(v0), _mm256_castsi256_ps(v1), _MM_SHUFFLE(3, 1, 3, 1)));
+                    const __m256i w0s = _mm256_permute4x64_epi64(even, _MM_SHUFFLE(3, 1, 2, 0));
+                    const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
+                    if (_mm256_movemask_epi8(_mm256_cmpgt_epi32(types, _mm256_set1_epi32(1))) == 0) {
+                        const __m256i w1s = _mm256_permute4x64_epi64(odd, _MM_SHUFFLE(3, 1, 2, 0));
+                        emit_zones8(lane, th, pg, w0s, w1s);
+                        i += 16;
+                        continue;
+                    }
+                }
             }
-            p += 1;
-        } else if (pp_is_event(w0)) {
-            // PP_EVENT: exactly 2 words -- a flag with a compile-time structural id and no payload.
-            if (p + 1 >= sz) {
+#endif
+            const uint32_t w0 = p[i];
+            const uint32_t t = pp_type(w0);
+            if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
+                if (i + 2 > run) {
+                    st.anomalies++;
+                    break;
+                }
+                const uint32_t w1 = p[i + 1];
+                const uint64_t ts = (t == PP_ZONE_TOTAL) ? w1 : pp_full_ts(th, w1);
+                emit(lane, t, pp_low27(w0), ts, pg);  // full 27-bit structural id
+                i += 2;
+            } else if (t == PP_STICKY_TIMER) {
+                th = pp_timer_hi(w0);
+                i += 1;
+            } else if (t == PP_STICKY_PROG) {
+                if (const uint32_t id = pp_low27(w0); id != pg) {
+                    pg = id;
+                    emit_prog(lane, pg);
+                }
+                i += 1;
+            } else if (t == PP_STICKY_PROG_EXT) {
+                if (i + 2 > run) {
+                    st.anomalies++;
+                    break;
+                }
+                const uint32_t w1 = p[i + 1];
+                if (w1 != pg) {
+                    pg = w1;
+                    emit_prog(lane, pg);
+                }
+                i += 2;
+            } else if (t == PP_EVENT) {
+                // PP_EVENT: exactly 2 words -- a flag with a compile-time structural id, no payload.
+                if (i + 2 > run) {
+                    st.anomalies++;
+                    break;
+                }
+                emit_data(lane, PP_EVENT, pp_point_id(w0), pp_full_ts(th, p[i + 1]), pg, nullptr, 0);
+                i += 2;
+            } else if (t == PP_DATA) {
+                // PP_DATA is 3 + size words with the length in word2; the packed window is flat, so the
+                // payload is handed to the sink in place.
+                if (i + 3 > run) {
+                    st.anomalies++;
+                    break;
+                }
+                const uint32_t n = pp_data_size(p[i + 2]);
+                if (i + 3 + n > run) {
+                    st.anomalies++;
+                    break;
+                }
+                emit_data(lane, PP_DATA, pp_point_id(w0), pp_full_ts(th, p[i + 1]), pg, p + i + 3, n);
+                i += 3 + n;
+            } else {
+                st.anomalies++;
                 break;
             }
-            if (st.cur_lane < nl) {
-                const uint64_t ts = pp_full_ts(st.cur_hi[st.cur_lane], w[p + 1]);
-                emit_data(st.cur_lane, PP_EVENT, pp_point_id(w0), ts, st.cur_prog, nullptr, 0);
-            }
-            p += 2;
-        } else if (pp_is_data(w0)) {
-            // PP_DATA: 3 + size words. The length lives in word2, so the full 3-word header must be in
-            // hand before the packet can be sized; it is still self-describing, so an unknown payload
-            // shape can never desynchronize the walk.
-            if (p + 2 >= sz) {
-                break;  // need word2 to know how long this packet is
-            }
-            const uint32_t n = pp_data_size(w[p + 2]);
-            if (p + 3 + n > sz) {
-                break;  // partial payload -> carry
-            }
-            if (st.cur_lane < nl) {
-                const uint64_t ts = pp_full_ts(st.cur_hi[st.cur_lane], w[p + 1]);
-                emit_data(st.cur_lane, PP_DATA, pp_point_id(w0), ts, st.cur_prog, &w[p + 3], n);
-            }
-            p += 3 + n;
-        } else {  // 2-word: STICKY_PROG or a marker
-            if (p + 1 >= sz) {
-                break;  // partial marker -> carry
-            }
-            const uint32_t w1 = w[p + 1];
-            if (pp_type(w0) == PP_STICKY_PROG) {
-                st.cur_prog = w1;
-            } else if (st.cur_lane < nl) {
-                const uint32_t zone_id = pp_low27(w0);  // full 27-bit structural id
-                const uint64_t ts = pp_full_ts(st.cur_hi[st.cur_lane], w1);
-                emit(st.cur_lane, pp_type(w0), zone_id, ts, st.cur_prog);
-            }
-            p += 2;
         }
+        st.timer_hi[lane] = th;
+        st.prog[lane] = pg;
     }
-
-    // Carry the trailing partial packet (if any) to the next call.
-    if (p < sz) {
-        buf.erase(buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(p));
-    } else {
-        buf.clear();
+    if (raw) {
+        return kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE + kSpscNRiscDecode * kSpscRingCap;
     }
+    return off - kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
 }
 
 }  // namespace tt::tt_metal::profiler

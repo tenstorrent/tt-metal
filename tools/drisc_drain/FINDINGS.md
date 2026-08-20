@@ -5725,3 +5725,337 @@ because these runs followed an earlier ResNet run that had already refilled the 
 run after a host reboot the tax is much larger, since `/home` is not persistent on this box and both caches are
 empty (measured: `~/.cache/huggingface` = 56K, two months stale). **Discard rep 1 regardless**; it is cheap
 insurance and its size is not predictable.
+
+## §N+51 — Receiver v2 (zero-copy decode into per-stream rings) is lossless and count-exact; the delay-15 stall floor is DEVICE-side (bh-18, 2026-08-19)
+
+The host receiver was reimplemented (commits 433ab8ce367..b89c0d5491c): per-socket threads fuse poll +
+in-place decode straight off the D2H FIFO (`peek`/`pop`, no staging copy) + decode-paced acks; records are
+emitted directly into per-stream BroadcastRings (direct-emit reserve/store/commit, NT 16 B slot stores);
+one consumer thread per registered callback; the drain kernel sweeps-to-empty on stop=1; a teardown
+completeness verifier compares every worker lane's tail against the receiver's consumed mirror.
+
+**Losslessness is now verified per run, to the marker.** At gx12 gy10 iters10k, delivered zones equal
+offered + stall-zone pairs + FW wrappers exactly (e.g. 60,362,777 = 60,000,000 + 362,177 + 600), and the
+decoded stall-zone count independently matches the L1 stall counters to the digit. COMPLETENESS reports
+600/600 lanes, 0 words stranded on every clean run; `WRITER_DIE_AFTER` (host killed mid-stream) leaves no
+wedge and the verifier reports the stranded capture loudly (600 lanes, 43.7M words).
+
+**The stall series that locates the floor** (gx12 gy10 iters10k delay15, L1 counters):
+
+| host configuration | producer stalls |
+|---|---|
+| old receiver (memcpy-rate acks, ~26.7M records discarded host-side) | 352,442 |
+| receiver v2 (decode-paced acks, lossless) | 361,279–361,443 |
+| NO_DECODE (pop+ack only through the receiver) | 291,265 |
+| bare `discard_pending_pages()` loop (no receiver machinery at all) | **289,657** |
+
+Two independent maximal-ack hosts agree at ~290k, so that is a device-side floor: in those runs mover
+credit-waits are 0.1 us and filler ring-room waits ~15 us — nothing downstream is pushing back — yet all
+120 cores stall. The mechanism is the filler scan cadence itself: at delay 15 a core's 512-word ring
+refills on the same timescale its filler revisits it among 30 cores. Consistent with that mechanism,
+stalls RISE to 380,605 at delay 50 (lower span fill = more device sweep bytes per marker). Zero stalls at
+delay 15 full grid therefore needs device-side changes (scan rate, ring depth, more fillers), not host ones.
+
+The lossless receiver adds ~70k stalls over the floor because acks pace at decode speed: decode sustains
+5.6–5.8 GB/s aggregate (SUSTAINED busy, 307–319 Mzones/s; 7.46 GB/s at delay 50) against ~7.4 GB/s offered.
+Decode optimization rounds: NT slot stores + live-window prefetch were real (5.31 -> 5.81 GB/s); hoisting
+the per-record stats out of the aliased Stream fields (perf attributed ~20% to a per-marker load-add-store
+forced by the NT stores' pointer casts) measured within run-to-run noise — the remaining decode time is
+cold-line latency on the DMA-fresh wire.
+
+## §N+52 — --delay calibration: 1 unit = 10.00 cycles = 7.41 ns; 2 GiB rings retain a whole capture; ring hugepages are a wash (bh-18, 2026-08-19)
+
+**Delay conversion, measured.** 2x2 x 2000-iter runs (0 stalls, unthrottled) at delay 15/500/2000 give device
+zone windows of 4.0/75.8/298.0 ms. The slope is 7.407 ns per delay unit = **exactly 10.00 cycles at 1.35 GHz**,
+intercept **86.7 ns fixed cost per zone**. So `zone body ~= 87 ns + 7.41 ns x delay`:
+
+| --delay | ns/zone | unthrottled Mmarkers/s/lane |
+|---|---|---|
+| 0 | ~87 | 23.1 |
+| 15 | 198 | 10.1 |
+| 50 | 457 | 4.4 |
+| 500 | 3,790 | 0.53 |
+| 2000 | 14,900 | 0.13 |
+
+At delay 15 the unthrottled offer is ~10M markers/s/lane x 600 lanes ~= 48 GB/s of wire — 6x any drain path —
+so the 290-365k stalls there are the lossless throttle working, not a removable inefficiency. The harness now
+prints the conversion.
+
+**Ring sizing.** The per-stream record-ring default is now 2 GiB (128 Mi x 16 B records): a full judged
+capture (120.7M records) fits, so the Tracy consumer delivered **120,720,976 records with 0 drops** (was
+53.6M dropped at 512 MiB). SUSTAINED busy 6.36 GB/s with plain pages.
+
+**Hugepages (mmap + MADV_HUGEPAGE for slot arrays >= 64 MiB; THP is madvise-only on this box): no measurable
+effect** — decode threads 171.5/195.2 ms vs plain 172.5/172.7 ms, inside the ±10% per-thread spread observed
+across ten runs (165-207 ms). Coherent: the ring is written once, sequentially, with NT stores, while the
+decode wall is cold reads from the socket's pinned FIFO, which ring pages cannot touch. Kept for the page-table
+footprint (2 GiB of 4 KiB PTEs is ~4 MB per ring).
+
+## §N+53 — The D2H ladder: PCIe writes ~37 GB/s, pinned-FIFO reads 27 GB/s, DECODE 5.6-6.4 GB/s -- the wall is interpretation, not the pipe (bh-18, 2026-08-19)
+
+Three probes on the judged config (gx12 gy10 iters10k delay15), one layer each:
+
+| layer | probe | measured |
+|---|---|---|
+| device -> host PCIe write | SHIP_REPEAT=8 + NO_DECODE (17.4 GB shipped) | **36.8 GB/s** per mover during the write chunk (74 KB / 2.01 us); 29.1 GB/s per push incl. push_pages + notify |
+| host read of the pinned FIFO | READ_ONLY=1 (peek + line-stride sum + pop) | **27.0 GB/s** aggregate over 2 threads (568 MB / 41.9 ms each) |
+| decode (interpret + emit records) | normal run | **5.6-6.4 GB/s** aggregate (~2.9-3.2 GB/s/thread) |
+
+So "D2H throughput" as the receiver reports it is a decode-compute number: the link and the memory both do
+tens of GB/s today. Per thread, the same bytes read raw at 13.6 GB/s and decode at ~2.9 -- the walk spends
+~4.7x the raw-read time on interpretation and record emission, ~12-14 cycles per 8 B record (2 masked loads,
+type dispatch, ts assembly, meta pack, NT store, order check).
+
+Comparison point: the tensor prefetcher's 21-23 GB/s single-RISC DRAM reads come from deep batching --
+enormous bytes moved per instruction issued. The wire here is 8 B markers decoded scalar, one at a time.
+The equivalent lever is a vectorized fast path for the dominant case (a full span's run is almost entirely
+contiguous 2-word zone markers): AVX2-check 8 packets' types at once, build 8 records with shuffles, store
+128 B NT -- an expected 3-6x per-record, putting decode in the 15-30 GB/s range where the FIFO read (27)
+and PCIe write (29-37) layers sit.
+
+READ_ONLY's stall count (307,897) slots between the max-ack floor (~290k) and decode-paced (~361k),
+consistent with the layer costs above.
+
+## §N+54 — AVX2 zone-block decode: 2.1x, SUSTAINED busy 5.8 -> 12.2 GB/s D2H, 667 Mzones/s (bh-18, 2026-08-19)
+
+The scalar walk's ~12-14 cycles per 8 B marker (§N+53) was the D2H wall. The decode SSoT now screens each
+16-word block with one AVX2 shift+compare over the deinterleaved word0s; when all eight packets are plain
+zone markers -- the dominant case in a full span -- the receiver's vectorized sink builds all eight records
+in registers (timestamps th<<32|w1 via cvtepu32, meta by masked shift/or with the bit-field layout pinned by
+a TT_FATAL bit_cast probe, order/stall/min-max stats vectorized) and issues eight 16 B NT stores. Any other
+type in the block falls back to the scalar walk.
+
+Judged run: decode 189.5 -> 89.6/90.5 ms per thread; SUSTAINED busy 12.19 GB/s D2H / 10.67 GB/s marker-wire
+/ 666.9 Mzones/s. Capture stays count-exact (zones == 60M + 352,217 stall-pairs + 600 wrappers, matching the
+L1 stall counters exactly), 0 order regressions, 0 consumer drops. Producer stalls 361k -> 352,217,
+converging toward the ~290k device floor (§N+51). Per-thread decode is now 6.2 GB/s against the 13.6 GB/s
+raw-read ceiling (§N+53), so roughly another 2x of headroom remains in the scalar residue (screen misses,
+sub-16-word tails, per-block overheads) before reads become the wall.
+
+## §N+55 — Decode is memory-LATENCY bound: ALU trims are wall-time-neutral, two-pass scanning is a regression (bh-18, 2026-08-19)
+
+Three structural variants of the AVX2 zone-block path, measured on the judged run:
+
+| variant | decode ms (2 threads) | busy GB/s |
+|---|---|---|
+| v2: per-block screen + cvtepu assembly + full order chain | 89.6 / 90.5 | 12.19 |
+| v3: scan-then-emit stretches (screen pass + emit pass) | 92.9 / **120.9** | 9.11 |
+| v4: per-block screen + endpoint order check + unpack assembly | 88.2-91.8 / 92.7-99.0 | 11.2-11.9 |
+
+v3's second touch of every block (reload + re-shuffle, even from L1) cost more than its branchless emit
+stretch saved -- REVERTED. v4 deletes ~14 uops/block versus v2 (endpoint-only order compare; records built
+by 32-bit interleaves against splatted th/prog then 64-bit pairing, no widening) and measures WITHIN NOISE
+of v2 -- kept for the smaller loop, but the lesson is that per-thread decode (~6 GB/s vs the 13.6 GB/s
+raw-read ceiling) is bound by dependent access latency on cold lines, not by instruction count. §N+54's
+"~2x headroom in the scalar residue" is refuted: the residue is latency.
+
+Remaining rungs, in order of expected value: cross-frame latency overlap (prefetch frame N+1's live
+windows while decoding frame N), AVX-512 (Zen 4 present; halves uop count but double-pumped and the path
+is latency-bound, so expect modest), decode fan-out via frame sharding (unattractive on this 6-core part:
+2 decode + consumer + workload + Tracy client already fill it), and producer-side wire changes (the big
+lever, out of receiver scope). Context: at delay 15 the host already drains within 1.3x of the device's
+offered rate; host-attributable stalls are ~60k of ~352k.
+
+## §N+56 — Cross-frame window prefetch REGRESSES 30-40%: bulk cold-line prefetch starves demand loads (bh-18, 2026-08-19)
+
+Software-pipelining the prefetch (while decoding frame f: blind-prefetch f+2's ctrl lines; read f+1's
+head/tail fields and prefetch its full live windows) measured 121-129 ms decode on BOTH threads across two
+judged runs, versus 88-99 ms with the per-lane just-in-time prefetch -- reverted. Mechanism: a full-fill
+frame's windows are ~160 cold lines; issuing them as one burst saturates the core's line-fill buffers, so
+the CURRENT frame's demand loads queue behind speculative prefetches. The per-lane form (<= 32 lines,
+consumed immediately) fits the LFB budget, which is why it measured +9% when introduced (§N+54) while the
+"better" pipelined form loses.
+
+Combined with §N+55 (ALU trims wall-time-neutral), the single-thread decode ceiling on this part is set by
+DMA-cold DRAM latency at LFB-limited concurrency: ~6 GB/s/thread decoding vs 13.6 GB/s raw-streaming the
+same bytes. AVX-512 (present on this Zen 4) is predicted neutral by the same evidence -- it halves
+instruction count, which §N+55 showed does not move wall time, and 512-bit ops are double-pumped here so
+load-port pressure is unchanged. Not built; the dispatch + code duplication is complexity with no predicted
+return. The remaining single-thread levers are wire-side (producer-packed records / higher span fill), not
+host-side.
+
+## §N+57 — AVX-512 emit measured: neutral-to-worse, as N+56 predicted; not kept (bh-18, 2026-08-19)
+
+Built for real (Zen 4 has avx512f/bw/dq/vl): a target-attributed emit path taking 16 markers (32
+screen-verified words) per call, with `vpermt2d` collapsing the whole shuffle network -- one pair of
+permutes deinterleaves the block, one pairs (w1, meta), and one per 4 records expands the pairs against
+the splatted (th, prog) constants into finished 64 B record lines, stored with 64 B NT streams when
+position-aligned. CPUID-dispatched (base build is v3); correctness gate exact (10,020 zones, 0 order
+regressions, 0 stranded).
+
+Measured on the judged run, two repeats: decode 106.9/96.9 and 93.9/93.8 ms (10.32 / 11.76 GB/s busy)
+against the AVX2-only 88-99 ms band (12.1 GB/s) -- inside noise, leaning worse (the extra call boundary
+per block is not free and the saved uops were not the constraint). Confirms N+55/N+56: the single-thread
+ceiling is DMA-cold line latency at fill-buffer concurrency, and no instruction-count reduction moves it.
+The code is NOT kept (measured-neutral complexity); this entry preserves the construction should a
+latency-relieved future (warm staging via a copier thread, or a denser wire) make ALU width matter again.
+
+## §N+58 — Live-extent packed frames: NIU-gathered packing at the socket push; 3.0x fewer bytes at 29% fill, exact everywhere (bh-18, 2026-08-19)
+
+The wire moved to the format profiler_common.h always documented: per frame, prefix + control vector +
+each RISC's live window `[tail - run, tail)` packed flat, `w[1]` = the real payload length, frames
+variable-length and page-rounded. The 45%-of-drainer CPU copy that killed exact packing originally is NOT
+reintroduced: ship_once parses the staged control vector (~20 L1 loads/frame), patches the length word,
+and the NIU gathers the windows straight from staging — ~11 NoC writes per frame instead of one burst per
+batch. Packing happens ONLY at the socket push: fillers, the DRAM-ring protocol and the scan are
+byte-identical, so the DRAM slots stay raw and the mover packs blind from the frame's own ctrl.
+
+The part the proposal underestimated: NoC L1->PCIe writes require dst ≡ src (mod 16 B,
+NOC_PCIE_WRITE_ALIGNMENT_BYTES; the NoC mis-delivers rather than rejects). Each live run therefore
+carries 0-3 pad words bringing the wire offset to its ring phase — spsc_span_pack_pad() in
+profiler_common.h, the single rule both sides compute; the wrap continuation is congruent for free
+(512 ≡ 0 mod 4). Worst-case frame is now 2,656 words (10,624 B, 166 pages) — BIGGER than raw when all
+five rings are full. Pad and page-tail words are never written; the host walks past them.
+
+Host: decode_pass parses the peeked window header-by-header (partial tail left unpopped — the device
+only pushes whole frames), acks by actual pages, and the per-lane walk went circular->linear: ring mask,
+wrap-stitch scratch and the AVX2 ring-boundary bailout are all deleted. The decode returns the
+ctrl-implied payload and the receiver checks it against w[1], so a pack-rule disagreement is a counted
+bad frame, not silent corruption.
+
+Measured (judged delay-15, 12x10 x10k):
+  - Correctness exact on every gate: 2x2 20,040 records; role-split, full-role, self-zones; judged runs
+    0 bad frames / 0 anomalies / 0 resyncs / 0 order regressions; COMPLETENESS 600/600, 0 stranded.
+  - Wire 553 -> 502 MB/socket (-9%); busy 12.63 GB/s, 759 Mzones/s (baseline 12.10, 667); stalls
+    351,347 vs 352,621. Best judged run of the series, but within run-to-run spread (632-759 over 3).
+  - WHY only 9%: this benchmark saturates producers by design, so snapshots run 88-96% full — there is
+    almost no dead data to strip. The 2.3x projection used a stale 44% fill figure; the baseline's real
+    fill was 667 Mzones/s x 16 B / 12.1 GB/s = 88%.
+  - Sparse regime (delay 150, 29% fill): 61,897 frames, 215.3 MB packed vs 653.6 MB raw-equivalent
+    (frames x 10,560 — same-run arithmetic, no A/B needed) = 3.04x; decode busy 19.4 ms vs ~54 ms raw
+    at the same GB/s. The win scales inversely with fill; near-empty spans (real-model traces) approach
+    the 165-page -> 5-page floor.
+  - Device cost: mover noc-chunk 6.98 us per 7-frame push at ~96% fill (~9.9 GB/s per mover, ~20 GB/s
+    aggregate — above the device's ~15.9 GB/s offer, so egress stays off the critical path; stalls
+    unchanged agree). Hoisting noc_write_init_state out of the per-chunk path was neutral (7.04 -> 6.98):
+    the cost is the ~77 write issues per push, not command-buffer setup. The judged run's DRAM rings hit
+    100% high-water with ~2,550 filler ring-room waits — that is host-decode < device-offer backlog
+    (250 MB vs 256 MB ring capacity), present in the baseline arithmetic too, absorbed losslessly.
+  - Deferred option if mover issue cost ever matters: a raw-fallback bit for >=~90%-full frames (one
+    burst again). Rejected for now — it is a second wire format for a path that is not the bottleneck.
+
+## §N+59 — Op-perf CSV consumer vs the classic device profiler: semantics match; the capture costs this workload ~8-10% (bh-18, 2026-08-19)
+
+The ops-csv consumer (TT_METAL_PERF_DEBUG_OPS_CSV, first register_consumer user) was validated against
+the classic device profiler's ops_perf_results on a 20x ttnn.matmul(512x512) loop. The classic producer
+is dead on this branch (the SPSC producer replaced it at compile time), so the reference CSV came from
+temporarily flipping kernel_profiler.hpp's ARCH_QUASAR seam to the parked push producer, then reverting.
+Join key: our GLOBAL CALL COUNT (= device run_host_id) == classic's >> 10 (host op ids reserve low bits).
+
+Two attribution bugs found and fixed by the comparison, both host-consumer-side:
+  1. Only BRISC emits STICKY_PROG, so rec.prog on NCRISC/TRISC lanes is exact only to drainer-sweep
+     granularity. Back-to-back cache-hit launches put an op boundary inside nearly every frame and the
+     per-op union swallowed a neighbouring kernel: ops 5+ measured exactly ~2x (48.6k vs 23.7k cycles)
+     while compile-spaced ops 1-4 were clean. Fix: BRISC kernel windows (exact, in-ring order with the
+     sticky) define each op's span per core; other lanes' pairs are assigned by timestamp.
+  2. "Latest BRISC start at or before the pair" still misassigned ~half the pairs (NCRISC/TRISC +150%,
+     first-to-last-start +10,000%): the five RISCs get go signals independently, so a lane's wrapper can
+     open slightly BEFORE its own op's BRISC window. Fix: nearest window start (launch skew is sub-us,
+     op gaps tens of us).
+
+After both fixes, per-op agreement across all kernel columns: mean +8-10%, first-to-last-start +-2%,
+uniform across columns -- a run difference, not a measurement difference. It is systematic:
+  - within-arm spread: perf-debug +-1% (3 runs), classic -0.2% +-0.7% (2 runs);
+  - NOT sweep contention: FILL_PCT=90 (throttled sweeps) left the median at 16.7 us vs 16.5-16.9;
+  - NOT ring blocking: 0 producer stalls;
+  - lead suspect: SPSC per-marker emit cost (flow-control check per marker vs push's plain store) in
+    kernels that emit zones in loops (compute CB waits). OPEN -- needs a marker-count ablation.
+Also: no *-FW columns are possible on this branch -- the SPSC lifecycle wrapper deliberately emits no
+FW markers -- so the CSV reports kernel columns only, plus kernel start/end cycles.
+
+## §N+60 — Per-lane STICKY_PROG: exact op attribution structurally; supersedes N+59's window method (bh-18, 2026-08-19)
+
+N+59's consumer-side attribution (BRISC windows + nearest-start assignment) was a timestamp-proximity
+heuristic -- safe only while launch skew << op gap, i.e. guaranteed to misattribute on trace replays.
+Root cause was the wire: only BRISC emitted STICKY_PROG, so the other lanes' rings carried no op
+identity at all and rec.prog on them was sweep-granular. Now every RISC emits its own sticky at its
+launch point (ncrisc.cc/trisc.cc mirror brisc.cc; each reads host_assigned_id from its own mailbox) and
+decode scopes prog per LANE -- rec.prog is exact on every record by in-ring ordering, the same mechanism
+that always made BRISC exact. The ops-CSV consumer's window/matching machinery is deleted; it keys on
+rec.prog directly.
+
+Cost, measured:
+  - Judged delay-15: 351,090 stalls (baseline 350,988-352,621), 11.50 GB/s busy / 691 Mzones/s (spread
+    of prior runs 632-820 at 10.5-13.7 GB/s) -- within run noise, no pipeline cost.
+  - Launch-heavy matmul loop: medians 16,610-17,196 ns post vs 16,450-16,850 pre (n=3 each, overlapping
+    ranges) -- bounded above by ~2%, indistinguishable from noise; the sticky is ~20-40 cycles per
+    subordinate per launch, outside the kernel wrappers and the marker hot path.
+  - Wire: +8 words (32 B) per core per launch.
+  - Gates: pytest passed, 2x2 exact (20,040 records), COMPLETENESS 600/600.
+
+vs classic after the structural fix: same uniform +11% on kernel columns, first-to-last-start +2.8%
+mean -- confirming N+59's residual is the capture's zone-scope overhead (user: perf-debug zone scope is
+currently ~2x the device profiler's per-zone cost), not attribution.
+
+## §N+61 — ResNet-50 validation: perf-debug ops CSV vs classic, non-trace and trace (bh-18, 2026-08-19)
+
+Blackhole ResNet-50 batch-16 (BFLOAT8_B/LoFi), classic arm via the temporarily re-enabled push
+producer, perf-debug arm with TT_METAL_PERF_DEBUG_OPS_CSV. Kernel-duration agreement per op:
+  - non-trace: 230/230 classic device rows matched 1:1; median +0.80%, mean +2.05%, p90 6.8%.
+  - trace (1 replay): 233/233 matched; median +0.46%. The classic report's extra 115 rows are the
+    capture-time host ops with EMPTY device columns (trace capture records without executing); ours
+    reports exactly the device executions.
+  - tails (max ~30-54%) are cross-RUN variance on tiny ops, not measurement disagreement: the arms are
+    separate processes and short ops swing several us run-to-run.
+  - The matmul microbench's +10% capture footprint does NOT appear on ResNet (<1% median): the
+    zone-scope overhead is per zone, so the footprint scales with zone density, not op runtime.
+
+Execution splitting exercised for real on test_perf_trace (15 trace replays): 3,714 rows, max
+EXECUTION 14, 3,220 rows with EXECUTION>0. Per-op duration CoV across an op's 15 executions: median
+1.58% -- replays of the same program measure consistently, which is a self-consistency check no
+single-execution run can provide. Consumer delivered 1,581,952 records with 0 drops; 0 producer
+stalls; COMPLETENESS 550/550 on every arm. First realistic-model validation of the packed-frame
+capture path end to end.
+
+## §N+62 — Per-op repeatability under capture: perf-debug jitters 3-4x more than classic, medians unbiased (bh-18, 2026-08-19)
+
+N+61's cross-profiler tails were claimed to be run-to-run variance; measured (ResNet-50 non-trace,
+230 ops, per-op |kernel-duration diff| distributions):
+  pd vs pd (3 pairs):      median 0.71-0.82%, p90 5.0-5.8%, max 23-32%
+  classic vs classic:      median 0.21%,      p90 2.1%,     max 7.0%
+  classic vs pd (2 pairs): median 1.5-1.7%,   p90 6.1-6.8%, max 29-34%
+The cross tails match pd's own within-arm spread -- no hidden per-op disagreement -- but the variance
+is OURS: under capture the same op repeats ~3-4x less tightly than under classic, with no mean shift
+and 0 stalls. Fits sweep-collision contention: which ops a filler's 10.5 KB span reads land on differs
+with sweep phase per run, injecting per-op jitter without bias. The ~1% cross-median residual above
+pd's within-arm floor is the long-op-amortized zone-scope cost. Honest footprint statement for real
+models: medians unbiased to ~1.5%, per-op jitter p90 ~5.5% vs classic's ~2%.
+
+## §N+63 — Raw fallback: per-frame cheapest-encoding selector; mover ceiling 45 GB/s at max load (bh-18, 2026-08-19)
+
+The packed gather's issue cost was the mover's problem at high fill (N+58: 6.98 us/push, ~10 GB/s/mover
+ceiling; small writes backpressure the command buffer, and the init-state hoist proved it is issue
+count, not setup). Fix: one compare per frame in the drainer -- payload > ~2/3 of live capacity ships
+the RAW span as the old single burst, flagged by SPSC_SPAN_RAW_FLAG in w0's reserved bits (the exact
+DEFLATE stored-block shape). The host decode branches per frame; the raw branch is the pre-packing
+circular walk resurrected verbatim.
+
+Measured:
+  - Judged delay-15 (raw-dominant): exact counts (60.35M records, 0 bad frames/anomalies through the
+    raw branch), stalls 352,709 (baseline 352,621), wire 546 MB/socket, decode 88.4 ms -- the raw
+    baseline restored where raw is optimal.
+  - Mover at high fill: noc-chunk 1.24-1.55 us/push -- 5x better than packed (6.98) and well under the
+    prior raw estimate (~4.5): big posted bursts issue in ~1.3 us and the transfer hides behind them;
+    packed's cost was cmd-buffer backpressure from ~77 small writes per push.
+  - Egress ceiling (SHIP_REPEAT=4 + NO_DECODE, wall): 45.1 GB/s aggregate -- ~3x the device's 15.9 GB/s
+    max offer. The mover max-load margin concern is closed.
+  - 2x2 (packed path) exact; ops-CSV pytest passed. Both decode branches now gate-covered every run.
+Low fill keeps the packed 3x (N+58 delay-150); high fill keeps raw's burst economics; the selector is
+one compare and one reserved bit.
+
+Final-state confirmation (post raw-fallback, 57f8b10815b): the three classic comparisons re-run on the
+shipped build -- matmul 20/20 median +10.79% (the N+59 zone-density footprint), ResNet non-trace
+230/230 median +0.80%, ResNet trace 233/233 median +0.26%; tails match the N+62 jitter distributions.
+Sparse workloads select packed, as designed; nothing moved.
+
+## §N+64 — DRISC code-region overflow at max instrumentation: one u64 division cost a 956 B soft-div (bh-18, 2026-08-20)
+
+The flagged N+58 risk was real: DRISC_ZONES=1 + DRISC_ZONE_DETAIL=1 + NOC_FOOTPRINT overflowed the
+11,264 B code region by 888 B (graceful: drainer refuses to load, capture empty, run exits 0). ELF
+autopsy (debug-line histogram) first CLEARED the packed-gather code -- it is compile-time absent from
+the filler ELF that overflowed -- then found the real hog: the pacing controller's mean-fill division
+divided a u64 by a u32, dragging the 956 B __udivdi3 soft-division routine into every drainer build.
+One sweep's word delta is bounded by grid x live capacity (~300 K, static_asserted), so a u32 cast on
+the numerator is exact; the soft-div is gone, the max config fits with ~180 B of headroom, and no
+inlining changed anywhere. Lesson for this code region: a single 64-bit divide costs more text than
+any feature; the FAILED-TO-LOAD message now says so.

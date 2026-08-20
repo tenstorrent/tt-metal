@@ -131,6 +131,7 @@ int main(int argc, char* argv[]) {
 
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
+        DeviceZoneSetCounter(launch_msg->kernel_config.host_assigned_id);
 
         uint32_t kernel_config_base =
             firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, internal_::get_hw_thread_idx());
