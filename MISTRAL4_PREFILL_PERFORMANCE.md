@@ -12,33 +12,70 @@ Machines: **12 kW** — the box prefill will actually run on, so this is the col
 
 ---
 
-## 1. The decision table — 12 kW, single-rank vs PP=4
+## 0. READ FIRST — a measurement bug invalidated the earlier PP numbers
 
-| window | single-rank (production) | PP=4 × (8,1) | ratio | verdict |
-|---|---|---|---|---|
-| 5,120 | **36,312** | 34,004 | 0.94x | single-rank wins |
-| 25,600 | 32,821 | **41,664** | 1.27x | PP wins — but see caveat below |
-| 102,400 | **23,546** | 23,437 steady / 20,592 total | 1.00x / 0.87x | single-rank wins |
-| 261,120 | 15,022 | **16,377** steady / 15,697 total | 1.09x / 1.05x | PP wins, modestly |
+`PP_HANDOFF=none` allocated every downstream rank's input as `torch.zeros` and never refreshed it. A
+zero hidden state gives every token identical gate logits, so top-k selects the **same experts for the
+whole batch** and it all piles onto one chip; with EP > 1 the traffic also converges across the expert
+axis, idling the other group. Every PP number measured before 2026-08-20 21:00 carries this artefact.
 
-tok/s. Single-rank measured at `c34e372b47d`; PP=4 at `9f44e5fe988` (identical content to
-`b5c4de3551a` on `kmabee/mistral4-prefill-full`), both 2026-08-20.
+Reproduced exactly from an independent harness (`pp_contention.py`, `PP_ZERO_HIDDEN=1`):
 
-**Two caveats shrink PP's case further, and both cut the same way:**
+| shape | stages | real routing | zero-fed | what the driver reported | inflation |
+|---|---|---|---|---|---|
+| (8,1) | 4 | 134.89 ms | 152.88 ms | **150.6 ms** | **1.13x** |
+| (8,2) | 2 | 200.25 ms | 415.04 ms | **414.7 ms** | **2.07x** |
 
-1. **`PP_HANDOFF=none` on every PP row — no activations actually cross a stage boundary.** These are
-   upper bounds. The only handoff we have measured, `host`, costs 42 MB/hop and ~1121 ms/iteration,
-   i.e. catastrophic. A real device-to-device handoff cost has to come off margins that are already
-   ≤9% at three of four windows.
-2. **The 5,120 and 25,600 rows are not chunked.** They use `concurrent_throughput` with
-   `PP_WINDOW` = the whole window, so each stage does one single-shot forward. Production always
-   chunks. Against the single-shot single-rank peak (~33,552 near a 25k window) the 25,600 win is
-   ~1.24x, not 1.27x-over-chunked. Only the 102,400 and 261,120 rows (`PP_WINDOW=5120`) are
-   production-shaped — and those read **1.00x and 1.09x steady, before handoff cost**.
+Both reproductions land within 1.5% of the driver, from a separate code path. **Fixed** in
+`test_prefill_pipeline_concurrent.py` via `_seed_downstream_inputs`, which replays stage 0 once and
+seeds each downstream rank with that real activation before timing.
+
+**Where it bites:** short windows, where MoE dominates (+11.7% at 5,120, +9.3% at 25,600). It
+*vanishes* at long context, where attention over accumulated KV dominates (~0% at 102,400 and
+261,120). So the 100K/256K conclusions were never affected; the short-window ones were.
+
+Also note the `handoff=none` framing was wrong in **both** directions at once: it omits transport cost
+(optimistic) while inflating MoE cost (pessimistic). It is a ceiling for the *transport* only.
 
 ---
 
-## 2. 8 kW vs 12 kW — and why PP's advantage keeps shrinking
+## 1. The decision table — 8 kW, corrected
+
+Measured 2026-08-20 with the fixed driver, `kmabee/mistral4-prefill-full`, `PP_HANDOFF=none`, traced.
+
+| window | single-rank | PP=4 x (8,1) | ratio | previously reported |
+|---|---|---|---|---|
+| 5,120 | 32,611 | **38,027** | **1.17x** | 1.04x |
+| 25,600 | 27,090 | **45,238** | **1.67x** | 1.53x |
+| 102,400 | 19,810 | 20,115 total / **23,132** steady | 1.02x / **1.17x** | 0.99x / 1.17x |
+| 261,120 | 10,888 | 12,192 total / **12,408** steady | 1.12x / **1.14x** | 1.13x / 1.14x |
+
+PP=4 now wins every window on the steady-state metric, and only the 102,400 single-request total is a
+wash. The `PP_HANDOFF=none` caveat still applies to all of it: no activation crosses a stage boundary,
+so a real device-to-device transport cost has to come off these margins.
+
+## 2. 12 kW — STALE, needs re-measurement
+
+The 12 kW runs predate the fix, so their PP column is understated at the two short windows. Applying
+the 8 kW correction factors gives estimates only — **re-run with the fixed driver before quoting
+these.**
+
+| window | single-rank (12 kW) | PP=4 measured (buggy) | PP=4 estimated | est. ratio | was |
+|---|---|---|---|---|---|
+| 5,120 | 36,312 | 34,004 | ~37,970 | **~1.05x** | 0.94x (a loss) |
+| 25,600 | 32,821 | 41,664 | ~45,550 | **~1.39x** | 1.27x |
+| 102,400 | 23,546 | 20,592 / 23,437 | ~21,220 / ~23,330 | ~0.90x / **~0.99x** | 0.87x / 1.00x |
+| 261,120 | 15,022 | 15,697 / 16,377 | ~15,500 / ~16,340 | ~1.03x / **~1.09x** | 1.04x / 1.09x |
+
+**This may partly reverse the earlier recommendation.** The old reading was "PP=4 wins 1 of 4 windows
+on 12 kW"; corrected, it plausibly wins 3 of 4 (marginally at 5,120, clearly at 25,600, modestly at
+261,120) and washes at 102,400. That is materially different, and it is an *estimate* — the 12 kW
+re-run is now the highest-value item in the queue.
+
+What does **not** change: single-rank still scales with board power far better than PP=4 does. Those
+8→12 kW scaling factors (1.11-1.38x for single-rank vs ~1.00x for PP at three of four windows) came
+from comparing each config against itself across machines, so the bug affects both sides of each
+ratio roughly equally at a given window.
 
 ### Single-rank scales with power
 
@@ -49,61 +86,177 @@ tok/s. Single-rank measured at `c34e372b47d`; PP=4 at `9f44e5fe988` (identical c
 | 102,400 | 19,810 | 23,546 | 1.19x |
 | 261,120 | 10,888 | 15,022 | **1.38x** |
 
-### PP=4 mostly doesn't
-
-| window | 8 kW | 12 kW | 12/8 |
-|---|---|---|---|
-| 5,120 | 34,059 | 34,004 | **1.00x** |
-| 25,600 | 41,376 | 41,664 | **1.01x** |
-| 102,400 steady | 23,234 | 23,437 | **1.01x** |
-| 102,400 total | 19,520 | 20,592 | 1.05x |
-| 261,120 steady | 12,434 | 16,377 | 1.32x |
-| 261,120 total | 12,346 | 15,697 | 1.27x |
-
-**This is the most informative result in the doc.** At three of four windows PP=4 gains *nothing*
-from 50% more board power (1.00x / 1.01x / 1.01x) while single-rank gains 11-21%. PP=4 × (8,1) is
-therefore **not power-bound** at short and mid windows — it is limited by something extra power does
-not relieve (per-stage serialisation, host dispatch, or the 8-chip SP ring). Single-rank at TP=4 is
-collective- and bandwidth-hungry and absorbs the headroom.
-
-That single fact explains the whole "PP's advantage shrinks as power goes up" pattern, and it means
-the gap will keep closing on any future higher-power part. Only at 261,120 does PP scale with power
-(1.32x steady) — the one window where it still wins.
-
-### Head-to-head ratios side by side
-
-| window | 8 kW PP/single | 12 kW PP/single |
-|---|---|---|
-| 5,120 | 1.04x | **0.94x** |
-| 25,600 | 1.53x | 1.27x |
-| 102,400 (steady) | 1.17x | **1.00x** |
-| 261,120 (steady) | 1.14x | 1.09x |
-
-Every window got worse for PP. Two crossed from win to loss/wash.
-
 ---
 
-## 3. Recommendations — next steps
+## 3. Experiment queue (TODO)
 
-1. **Keep single-rank SP=8 × TP=4 chunked as the production config.** On current 12 kW evidence PP=4
-   wins one of four windows outright, and the two production-shaped windows read 1.00x and 1.09x
-   *before* any handoff cost. That does not justify productising a second parallelism scheme.
-2. **Before spending more on PP, measure a real device-to-device handoff.** It is the cheapest
-   decisive experiment we have: if it costs more than ~5%, it erases three of four windows and the
-   question is closed. `handoff=none` numbers cannot settle anything.
-3. **Explain PP's flat power scaling** (1.00x, 8→12 kW). Highest-information measurement after #2.
-   If the limiter is host dispatch or stage serialisation, PP's ceiling moves and it is worth
-   revisiting; if it is the 8-chip SP ring, PP is structurally done at these windows.
-4. **Attack MoE Dispatch + Combine — 33.8% of device time**, the largest single category, larger than
-   matmul or attention. It is SP-axis token routing, so `PP=4 × (8,1)` does not touch it at all. This
-   is the biggest lever available to the *production* config, which is the one that ships.
-5. **Close the ~13.7% host/dispatch overhead that survives trace replay** (100.1 ms device busy vs
-   116.0 ms wall clock).
-6. **Re-run the 25,600 row chunked** (`PP_CONTEXT=25600 PP_WINDOW=5120`) so the one window PP clearly
-   wins is measured on the production path rather than single-shot.
-7. **Re-measure accuracy (§5) and the op breakdown (§6) on the 12 kW box** — both have only ever been
-   run on 8 kW.
-8. **Fix the `analyze_ops_perf.py` CCL regex** before anyone trusts its numbers (see §6).
+Ordered. **Tick items off in place and add the measured result inline**, so a later reader sees what
+was tried and rejected rather than just what is open.
+
+| # | experiment | why | status |
+|---|---|---|---|
+| 1 | **Re-run the 12 kW numbers with the fixed driver** | The target box's PP column is stale and the correction may flip the 5,120 loss into a win. Highest value item in this list. | **TODO — needs 12 kW** |
+| 2 | **Re-measure `(4,2)`** | It was rejected on buggy numbers, and it is EP=2 — the configuration the bug punished 2.07x. Its rejection is not currently supported. | **IN PROGRESS** — 8 kW |
+| 3 | **Profile single-rank TP=4** (op breakdown) | What TP collectives actually cost in the *production* config, i.e. the size of the prize any PP variant chases. Never measured. | TODO |
+| 4 | **Measure a real device-to-device handoff** | Every PP number is `PP_HANDOFF=none`. If a real handoff costs >5% it erases the thin margins. | TODO |
+| 5 | **Attack MoE Dispatch + Combine** | 33.8% of device time, largest single category. SP-axis, so PP cannot touch it. Biggest lever for the config that ships. | TODO |
+| 6 | **Close the ~13.7% host/dispatch overhead** under trace replay | 100.1 ms device busy vs 116.0 ms wall clock. | TODO |
+| 7 | **Re-run the 25,600 PP row chunked** (`PP_CONTEXT=25600 PP_WINDOW=5120`) | PP's best window is measured single-shot, not on the production path. | TODO |
+| 8 | **Re-measure accuracy (§5) and op breakdown (§6) on 12 kW** | Both have only ever been run on 8 kW. | TODO |
+| 9 | **Fix the `analyze_ops_perf.py` CCL regex** | Reports CCL at 8.0% vs the true 4.5%; it string-matches names and `LayerNormPostAllGatherDeviceOperation` contains "AllGather". | TODO |
+| — | ~~PP=2 x (8,2)~~ | **DONE — closed on its merits.** 27,061 tok/s corrected (0.83x single-rank, 0.71x PP=4). See below. | done |
+
+### Standing recommendation
+
+**Hold.** The previous recommendation ("keep single-rank; PP=4 wins only 1 of 4 windows on 12 kW")
+rested on numbers the §0 bug understated. On 8 kW, corrected, PP=4 wins every window on the
+steady-state metric. The 12 kW re-run (queue #1) decides this, and until it lands neither
+recommendation is supported. Single-rank remains the default in the meantime because it is the tuned,
+validated, single-mesh path — not because PP=4 has been shown to lose.
+
+### Why #3 (PP=2 × (8,2)) is the interesting variant
+
+> **Superseded — kept as the pre-measurement rationale.** The reasoning below was sound but the
+> premise was wrong: it treats halving TP as the interesting variable, when the depth term
+> (layers per stage) dominates. Measured outcome and the corrected analysis are two sections down.
+
+Put the configurations on a ladder and the gap is obvious:
+
+| config | SP | TP | chips/stage | status |
+|---|---|---|---|---|
+| PP=1 × (8,4) | 8 | 4 | 32 | production; power-bound, scales +11-38% with power |
+| **PP=2 × (8,2)** | **8** | **2** | **16** | **untested — this queue item** |
+| PP=4 × (8,1) | 8 | 1 | 8 | flat vs power at 3/4 windows; wins 1/4 on 12 kW |
+| PP=4 × (4,2) | 4 | 2 | 8 | rejected, see §7 — worse than no PP at all |
+
+PP=2 × (8,2) is the only untried point that **holds SP=8 fixed** — the variable `(4,2)` violated — while
+halving the TP collective width instead of eliminating it. Three reasons it could beat PP=4:
+
+1. **It attacks PP's worst window directly.** The 102,400 total-throughput loss (0.87x on 12 kW) is
+   pipeline fill/drain. Two stages instead of four roughly halves that penalty.
+2. **Keeping TP=2 should keep some power scaling**, so it need not flatline at 1.00x the way `(8,1)`
+   does — and 12 kW is the target.
+3. **Cheaper to productise**: 2 driver ranks instead of 4, 2 weight caches instead of 4, and 18 layers
+   divides 36 evenly.
+
+Against it: if deleting collectives is what PP buys, TP=2 only deletes half of it. Which is exactly
+what queue item #1 is for.
+
+### Result of #3: PP=2 x (8,2) measured on 8 kW — a clear loss at every window
+
+Measured 2026-08-20, `kmabee/mistral4-prefill-full` @ `ca63b3d`, `PP_HANDOFF=none`, traced, same
+commands as PP=4 with `-8x2` in place of `-8x1`. Correctness first: the layer-slicing test passes at
+**both** pipeline depths — `pp4` (9 layers/stage) and `pp2` (18 layers/stage) each sample token 2 at
+p=0.7147, identical to single-rank 36L — so these are throughput numbers for a correct pipeline.
+
+| window | PP=2 x (8,2) | PP=4 x (8,1) | single-rank | PP=2 vs single-rank |
+|---|---|---|---|---|
+| 5,120 | **27,061** (corrected) | 38,027 | 32,611 | **0.83x** |
+| 25,600 | 13,370 (buggy) | 45,238 | 27,090 | — re-run pending |
+| 102,400 | 11,098 / 11,368 (buggy) | 20,115 / 23,132 | 19,810 | — re-run pending |
+| 261,120 | 9,227 / 9,348 (buggy) | 12,192 / 12,408 | 10,888 | — re-run pending |
+
+Only 5,120 has been re-measured with the fixed driver; it moved 12,346 -> **27,061** (2.19x, the
+expected EP=2 correction). The remaining rows are left as measured, marked buggy, and are not worth
+re-running because the depth argument below closes the configuration regardless: PP=2 is 0.71x of PP=4
+at the one window where both are clean.
+
+### Why PP=2 loses: shorter stages beat wider experts
+
+**A first pass at this concluded EP=2 was pathological. That was wrong**, and the error is worth
+recording because it is easy to repeat: per-layer times were derived from *concurrent* runs and
+compared against a *single-stage* baseline, which folds contention into what looks like a
+parallel-efficiency number. Timing one stage alone with `pp_layer_sweep.py`
+(`iter_ms(N) = intercept + slope*N`, layers ∈ {1,2,4,9,18}) says the opposite:
+
+| stage shape | slope ms/layer | intercept ms | 18 layers | chips | scaling vs (8,1) |
+|---|---|---|---|---|---|
+| (8,1) | 13.84 | -0.46 | 248.71 | 8 | baseline |
+| (8,2) | **9.43** | -0.76 | **169.04** | 16 | **73% of linear** |
+
+Both are perfectly linear with a zero intercept, so per-layer cost is constant in stage depth and
+trace launch/sync is free at this scale. `(8,2)` is **1.47x faster per layer** than `(8,1)` on 2x the
+chips — an ordinary 73% scaling efficiency. There is no EP anomaly.
+
+PP=2 loses for a structural reason instead, and the arithmetic is simple:
+throughput = `W / (layers_per_stage x ms_per_layer)`.
+
+| config | ideal iteration | ideal tok/s | measured (fixed driver) | achieved |
+|---|---|---|---|---|
+| PP=4 x (8,1) | 9 x 13.84 = 124.6 ms | 41,090 | **38,027** | 93% |
+| PP=2 x (8,2) | 18 x 9.43 = 169.7 ms | 30,170 | **27,061** | 90% |
+
+**The pipeline-depth term dominates the per-layer term.** Halving the depth doubles the stage's layer
+count, which more than cancels the 1.47x per-layer gain from doubling its width.
+
+The model predicts the outcome quantitatively: PP=2/PP=4 should be
+`(9 x 13.84)/(18 x 9.43)` = **0.73x**, and the measured ratio with the fixed driver is
+27,061/38,027 = **0.71x**. So PP=2 is closed on structure, not on an artefact — its ceiling sits below
+both PP=4 and single-rank's 32,611. Both configurations now achieve ~90% of their single-stage
+ceiling, which is what a healthy pipeline should look like.
+
+### Contention, and the false trail it led down
+
+**Real contention is unremarkable.** With realistic routing (`pp_contention.py`):
+
+| shape | 1 stage | 2 stages | 4 stages | contention |
+|---|---|---|---|---|
+| (8,1), 9L | 121.20 ms | 134.24 ms | 134.89 ms | **1.11x**, saturated |
+| (8,2), 18L | 168.98 ms | 200.25 ms | — | **1.19x** |
+
+`(8,1)` contention appears entirely at the second stage and then stops — 2 to 4 stages costs 0.5%, so
+four stages overlap essentially perfectly.
+
+**The trail worth recording.** Before the §0 bug was found, the same table read 1.24x and 2.45x, and
+`414.7 > 2 x 169.04` implied two stages doing worse than running serially. That "backwards" pattern
+sent me hunting a mechanism that does not exist — I ruled out an interleaved submesh carve
+(`carve_probe.py`: the `(8,4)` parent's logical columns map to physical `0, 4, 12, 8`; `(8,2)` carves
+adjacent pairs, cols {0,1} = phys 0&4 and cols {2,3} = phys 12&8) and then column-axis routing-plane
+scarcity, before checking what the ranks were actually being fed. **Both figures were contention plus
+degenerate routing.** The lesson is the ordinary one: validate the harness's inputs before theorising
+about the hardware.
+
+**Ruled out — an interleaved submesh carve.** `carve_probe.py`: the `(8,4)` parent's logical columns
+map to physical `0, 4, 12, 8`; `(8,1)` carves one physical column each; `(8,2)` carves sub0 = cols
+{0,1} (phys 0&4) and sub1 = cols {2,3} (phys 12&8) — **adjacent pairs, not interleaved**.
+
+**Leading hypothesis, under test.** An `(8,1)` stage has an expert-parallel axis of width 1 and so
+emits *no* column-axis traffic at all, while every `(8,2)` stage does; the fabric log reports
+`only 2 routing planes are available` on some column directions. Two stages competing for a scarce
+shared column-axis resource that four `(8,1)` stages never touch fits every data point, including why
+single-rank `(8,4)` is unaffected (one mesh, no sibling). `pp_contention.py` tests the falsifiable
+prediction: cost should climb with stage count for `(8,2)` and stay flat for `(8,1)`.
+
+**The 21% I thought was available was mostly this bug.** PP=4 now achieves 93% of its single-stage
+ceiling (38,027 of 41,090); the residual ~7% is the real 1.11x cross-stage contention, which
+saturates at two stages and is not obviously worth chasing.
+
+**Also ruled out — tuned-matmul fallback.** At EP=2 the MLA weights have Kt=64 (`q_a_proj`,
+`kv_a_proj_with_mqa`, `o_proj`) or Kt=32 (`q_b_proj`), and every tuned `in0_block_w` in
+`MLA_MATMUL_CONFIG` divides those, so `_cfg_fits_weight` rejects nothing — confirmed by a fallback
+count of 0 on a completed run. It does land in the *other* branch of that guard's known gap (at Kt=64
+a config tuned for a different K applies silently), but MLA matmuls are ~21.6% of device time and
+cannot account for a 2.45x gap.
+
+### Next measurements
+
+1. **Re-run 12 kW with the fixed driver** — queue #1, and the one that decides the recommendation.
+2. **Re-measure `(4,2)`** — queue #2, rejected on buggy EP=2 numbers.
+3. **PP=2 x (16,1)** — dropped. The depth arithmetic above says a 2-stage pipeline cannot beat a
+   4-stage one at equal per-layer cost, so it is not worth the SP=16 ring-attention risk.
+4. **A 2-device CCL microbenchmark** — deprioritised. It was motivated by the EP=2 "pathology", which
+   turned out not to exist.
+
+### The open question behind all of this
+
+PP=4 measured 1.27-1.53x at 25,600 — **far more than eliminating TP collectives can plausibly buy.**
+The 4.5% CCL figure in §6 was measured on a *TP=1 PP stage*, which by construction has no TP
+collectives at all, so it says nothing about the production config's collective cost. The likely real
+mechanism for PP's gain is **overlapping host dispatch across independent meshes** — four submeshes let
+stage N+1's dispatch overlap stage N's execution — rather than deleting CCL. If that is true it
+explains PP's flat power scaling exactly (host-bound work does not care about board power), and it
+means queue item #5 is cheaper than productising any PP variant and would capture the same win.
+Item #1 settles it.
 
 ---
 
@@ -139,15 +292,18 @@ Swap `chunks51`/`261120` for `chunks01`/`5120`, `chunks05`/`25600`, `chunks20`/`
 Four stages of 9 layers, each SP/CP=8 × TP=1 on 8 chips, tiling the 32-chip galaxy. Motivation: every
 collective in this model's dense path is on the TP axis, so TP=1 deletes all of it.
 
-Measured at `9f44e5fe988`, `PP_HANDOFF=none`, traced. The 8 kW figures are within 1.4% of those
-measured on the original pre-rebase branch, so the PP integration is faithful.
+`PP_HANDOFF=none`, traced. The 8 kW column is **corrected** (fixed driver, 2026-08-20 21:00+); the
+12 kW column still carries the §0 bug and must be re-run.
 
-| window | 8 kW | 12 kW | 12 kW verbatim |
-|---|---|---|---|
-| 5,120 | 34,059 | 34,004 min / 33,282 med | `min_ms=150.6 med_ms=153.8` |
-| 25,600 | 41,376 | 41,664 min / 39,639 med | `min_ms=614.4 med_ms=645.8` |
-| 102,400 | 23,234 steady / 19,520 total | 23,437 steady / 20,592 total | `total_s=4.97 med_ms=218.5` |
-| 261,120 | 12,434 steady / 12,346 total | 16,377 steady / 15,697 total | `total_s=16.63 med_ms=312.6` |
+| window | 8 kW corrected | 8 kW verbatim | 8 kW buggy | 12 kW (STALE) |
+|---|---|---|---|---|
+| 5,120 | **38,027** | `min_ms=134.6 med_ms=135.0` | 34,059 | 34,004 |
+| 25,600 | **45,238** | `min_ms=565.9 med_ms=566.7` | 41,376 | 41,664 |
+| 102,400 | **23,132** steady / 20,115 total | `total_s=5.09 med_ms=221.3` | 23,234 / 19,520 | 23,437 / 20,592 |
+| 261,120 | **12,408** steady / 12,192 total | `total_s=21.42 med_ms=412.6` | 12,434 / 12,346 | 16,377 / 15,697 |
+
+The pre-fix 8 kW figures were within 1.4% of the original pre-rebase branch, so the PP integration
+itself was always faithful — the driver was feeding it the wrong inputs.
 
 **Read `total` vs `steady` carefully.** `total` is the whole request including pipeline fill/drain;
 `steady` is the steady-state median, i.e. the server case with back-to-back requests. At 102,400 the
@@ -224,16 +380,18 @@ op *names* and `LayerNormPostAllGatherDeviceOperation` contains "AllGather". Fix
 
 ## 7. Measured and rejected — do not re-run
 
-### PP=4 × (4,2)
+### PP=4 × (4,2) — rejection WITHDRAWN pending re-measurement
 
-| window | (4,2) | (8,1) | (4,2) vs single-rank |
+| window | (4,2), buggy | (8,1), corrected | (4,2) vs single-rank, buggy |
 |---|---|---|---|
-| 5,120 | 24,416 | 34,059 | **0.93x** |
-| 25,600 | 17,483 | 41,376 | **0.52x** |
+| 5,120 | 24,416 | 38,027 | 0.93x |
+| 25,600 | 17,483 | 45,238 | 0.52x |
 
-`(4,2)` is not merely worse than `(8,1)` — it is worse than not using PP at all. It keeps 2-way TP
-collectives *and* halves the sequence split (SP 8 → 4), so each rank carries twice the tokens through
-a shorter ring.
+**These numbers are not trustworthy.** `(4,2)` is EP=2 — the configuration the §0 bug punished by
+2.07x — and it was rejected purely on them. It is being re-measured (queue #2) with the 65 GB `4x2`
+cache in `/home/kmabee/mistral4_ttnn_cache_pp`. The structural argument against it (halved sequence
+split, so each rank carries twice the tokens) still stands on its own, but "worse than not using PP at
+all" is no longer a supported claim.
 
 ### Others
 
