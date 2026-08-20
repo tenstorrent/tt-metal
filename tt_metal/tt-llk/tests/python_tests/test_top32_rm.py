@@ -55,8 +55,16 @@ pytestmark = [
     skip_for_wormhole,
     skip_for_quasar,
     pytest.mark.skip(
-        reason="Wedges real BH (run 32375077551): bitonic SFPU sort hangs (TENSIX-TIMED-OUT). "
-        "Needs a BH-card debug of the sort completion path. Un-skip once fixed."
+        reason="Deadlocks real BH at kernel startup (NOT the bitonic sort, contrary to the "
+        "earlier theory). BH-card tt-exalens callstacks show all three TRISCs stall in the "
+        "first unpack->dest tile: MATH in math_unpack_to_dest_math_ready (MATH_DONE sem7), "
+        "UNPACK in _llk_unpack_A_top32_rm_->set_dst_write_addr (mailbox_read). The math side "
+        "of math_top32_group was ALSO wrongly driving unpack->dest for the bf16 value stream "
+        "(now fixed: gated on is_32bit_input like the metal wrapper), but the 32-bit index "
+        "stream's math_unpack_to_dest_math_ready handshake still deadlocks standalone -- the "
+        "bare LLK test lacks the framework CB flow-control ordering the demo kernel relies on. "
+        "Header/handshake issue for @pmilenkovicTT; un-skip once the unpack->dest rendezvous "
+        "works without the compute-kernel framework."
     ),
 ]
 

@@ -241,7 +241,23 @@ constexpr bool APPROX = false; // The bitonic wrappers take APPROXIMATION_MODE b
 inline void math_top32_group(std::uint32_t dst_tile, std::uint32_t num_faces, std::uint32_t src_format, std::uint32_t dst_format)
 {
     _llk_math_top32_rm_init_<is_fp32_dest_acc_en>(num_faces, dst_format);
-    _llk_math_top32_rm_<dest_sync, is_fp32_dest_acc_en, true>(dst_tile, src_format, dst_format, num_faces);
+    // The unpack->dest handshake in _llk_math_top32_rm_<...,unpack_to_dest=true>
+    // (math_unpack_to_dest_math_ready / mailbox_write / math_unpack_to_dest_tile_ready) is
+    // matched, on the unpack side (_llk_unpack_A_top32_rm_), by a half that runs ONLY when
+    // is_32bit_input() is true. Hardcoding unpack_to_dest=true here deadlocks the bf16
+    // value stream: MATH does the full handshake but the 16-bit UNPACR never posts the
+    // MATH_DONE / UNPACK_TO_DEST tokens MATH waits on. Gate on the SAME is_32bit_input()
+    // predicate the unpacker uses, exactly as the metal wrapper (llk_math_top32_rm_api.h)
+    // splits int32 vs. non-int32 -- so the 32-bit index stream takes the unpack->dest path
+    // and the bf16 value stream takes the SrcA->dest MOP path, symmetrically on both TRISCs.
+    if (math::is_32bit_input(src_format, dst_format))
+    {
+        _llk_math_top32_rm_<dest_sync, is_fp32_dest_acc_en, true>(dst_tile, src_format, dst_format, num_faces);
+    }
+    else
+    {
+        _llk_math_top32_rm_<dest_sync, is_fp32_dest_acc_en, false>(dst_tile, src_format, dst_format, num_faces);
+    }
 }
 
 // Mode-1 whole-1024-chunk load: A2D datacopy the tile into DEST then transpose it
