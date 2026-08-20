@@ -237,6 +237,7 @@ run_profiling_test() {
 run_goodhost_deviceperf() {
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
     echo "GOODHOST_DP_INFO hostname=$(hostname) commit=$(git rev-parse --short HEAD)"
     pytest -s --timeout 1200 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-1024-2-2-1-32-False" 2>&1
 }
