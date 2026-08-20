@@ -106,8 +106,16 @@ void validate_buffer_parameters(
         // bank id for it -- or not caught at all, in which case the shard lands on a bank that does
         // not exist. Applies to both the ND (BufferDistributionSpec) and legacy (ShardSpecBuffer)
         // paths.
-        const bool bank_backed =
-            buffer_type == BufferType::DRAM || buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL;
+        //
+        // L1_SMALL is checked against the L1 bank map. The two are filled by the same loop over the
+        // same logical cores, so they agree on which coordinates are legal, but the L1_SMALL map is
+        // left empty entirely when the device is opened without a small region -- the default -- so
+        // asking it directly would reject every core on such a device. Whether a small region
+        // exists is the allocator's business and it reports that itself; it is not a bad shard grid,
+        // and buffers that are never allocated (graph capture hooks the allocation out) legitimately
+        // never ask.
+        const BufferType bank_type = buffer_type == BufferType::L1_SMALL ? BufferType::L1 : buffer_type;
+        const bool bank_backed = bank_type == BufferType::DRAM || bank_type == BufferType::L1;
         if (bank_backed) {
             std::vector<CoreCoord> shard_cores;
             if (buffer_distribution_spec.has_value()) {
@@ -129,15 +137,15 @@ void validate_buffer_parameters(
                         core.y);
                 }
                 TT_FATAL(
-                    allocator.has_bank(buffer_type, core),
+                    allocator.has_bank(bank_type, core),
                     "Invalid shard grid: shard core ({}, {}) has no {} bank on this device, which has "
                     "{} of them. Derive the shard grid from the device (dram_grid_size() for DRAM, "
                     "compute_with_storage_grid_size() for L1) rather than assuming a fixed size -- a "
                     "harvested device exposes fewer banks than an unharvested one of the same type.",
                     core.x,
                     core.y,
-                    enchantum::to_string(buffer_type),
-                    allocator.get_num_banks(buffer_type));
+                    enchantum::to_string(bank_type),
+                    allocator.get_num_banks(bank_type));
             }
         }
     } else {
