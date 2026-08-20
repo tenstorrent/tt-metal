@@ -1,7 +1,26 @@
-# Build-infra recipes (lane DA) — killing gate-recompilation waste
+# Lane recipes — do EVERYTHING the fast way (one page)
 
-Four adoption recipes.  Everything here is OPT-IN: no existing script's
-behavior changed.  Evidence: `~/sfpi-uplift/laneDA-evidence-20260820/`.
+The consolidated fast-path handbook for a fresh lane: build, gate, and
+measure without recompiling what somebody already proved.  Everything is
+OPT-IN — no existing script's behavior changed.  Provenance: lane DA
+(build infra, evidence `~/sfpi-uplift/laneDA-evidence-20260820/`) + lane DD
+(wrapper surface, evidence `~/sfpi-uplift/laneDD-evidence-20260820/`).
+
+## 0. Fresh-lane quick path (the 5-minute version)
+
+1. **Lane toolchain build**: ccache + stockcfg (recipe 4) — hot rebuild
+   ~56s instead of ~6min.  Wrap long makes in `tools/with-cores N --`
+   (recipe 3) so parallel lanes don't trisect the box.
+2. **Byte gates**: compile ONLY your edit leg; gate the base half against
+   the published base-leg store (recipe 1) — saves 40-60 min per pin cycle.
+3. **DejaGnu**: serial full rvtt.exp is ~28s (recipe 2) — never the
+   bottleneck; parallel recipe exists for when suites grow.
+4. **Measurement**: `headline_bh_sweep.sh` for "show me the flips fast";
+   the weekly/nightly wrappers for full surface (recipe 6).  All three
+   carry the evidence-root collision guard — respect its refusal.
+5. **Pin cut**: `pin-install-fast.sh` installs gate-proven binaries in
+   minutes, no rebuild (recipe 5).  cc1plus alone is NEVER enough when
+   .opt changed — drivers ship with it.
 
 ## 1. Base-leg store: byte-gate WITHOUT recompiling the base leg
 
@@ -104,7 +123,7 @@ all-or-nothing acquisition (no partial-hold deadlock), exit status
 propagated.  OPT-IN: nothing acquires a slot unless wrapped.  Selftest:
 `tools/selftest_with_cores.sh`.
 
-## 4. Lane toolchain builds: ccache + the pin-rebuild fast path
+## 4. Lane toolchain builds: ccache (BLESSED) + surgical stamps
 
 **ccache verdict: BLESSED for lane builds** (5-arm proof, laneDA
 evidence fastpath/).  The stockcfg recipe tolerates `CC='ccache gcc'
@@ -142,15 +161,6 @@ by construction.  Never compare a ccache-built cc1plus sha against a
 plain-built one and call it a mismatch: check the 36-byte decomposition
 first (evidence: fastpath/divergence/DECOMPOSITION.txt).
 
-**Pin-rebuild fast path (PROVEN IN PRODUCTION at pin 14)**: install the
-gate-proven union binaries directly — cc1plus (+ cc1/lto1) AND the
-in-tree xg++/xgcc drivers TOGETHER — with the cc1plus sha256 gate as
-the sole trust anchor (verify the sha you gated is the sha you
-installed, then witness_preflight on the INSTALLED binary).  Minutes,
-not hours.  GOTCHA: installing cc1plus alone is INSUFFICIENT whenever
-.opt options changed — the DRIVER embeds the option tables and rejects
-the new flags; xgcc/xg++ must ship with cc1plus.
-
 **Surgical stamp policy (sfpi build system)**: already exists —
 scripts/build.sh pre-marks every non-stage2 newlib stamp
 "Incremental" when a base txz is available (build.sh lines ~227-237),
@@ -163,7 +173,63 @@ agent/build-infra (b5cd9ac) — local store ~/sfpi-uplift/build-base/
 BASE_FALLBACK_FULL_BUILD marker on total miss.
 sfpi_7.69.0_x86_64_debian.txz is staged in the local store.
 
-## 5. Sweep resume across pins (audit finding — fix belongs to the sweep owner)
+## 5. Pin cut: install gate-proven binaries in MINUTES, no rebuild
+
+**PROVEN IN PRODUCTION at pin 14** (owner-ratified: the trust anchor is
+the sha256 of the installed binaries, never the build path).  The
+productized script lives in the **sfpi repo**: `scripts/pin-install-fast.sh`
+(committed with the pin-14 cut, sfpi 7e0ffd8):
+
+    ~/sfpi-uplift/sfpi/scripts/pin-install-fast.sh \
+        <gcc-build-dir> <install-root> \
+        --expect-cc1plus <the sha256 the union gates blessed> \
+        --flags <new-flag,comma-list>          # smoke-tests acceptance
+        # add --dry-run first
+
+It backs up everything it replaces (rollback on ANY failure), installs
+cc1plus + cc1 + lto1 AND the in-tree drivers (xg++ -> riscv-tt-elf-g++,
+xgcc -> riscv-tt-elf-gcc) TOGETHER, re-verifies shas, smoke-tests flag
+acceptance + a default compile, and writes PIN-INSTALL-MANIFEST.txt.
+
+GOTCHA (banked at pin 14): **installing cc1plus alone is INSUFFICIENT
+whenever .opt options changed — the DRIVER embeds the option tables and
+rejects the new flags**; xgcc/xg++ must ship with cc1plus.  After
+install: verify `sha256sum $(g++ -print-prog-name=cc1plus)` equals the
+gated sha, then run witness_preflight on the INSTALLED binary.
+
+## 6. Measurement entry points (this directory, one level up)
+
+- **`headline_bh_sweep.sh` — "show me the flips fast"**: ops =
+  HEADLINE_ROWS + every row whose fresh body/golden/mapped test changed
+  since the previous pin (git-derived by `headline_ops.py`; log in the
+  evidence dir).  `--ops a,b,c` overrides.  Weekly pins/gates; no knob
+  attribution, no DejaGnu suites.  Run this BEFORE a full-surface sweep
+  (owner priority order 2026-08-20).
+- **`weekly_bh_sweep.sh` / `nightly_bh_sweep.sh`**: full surface / nightly
+  schedule, unchanged scope.
+- **Evidence-root collision guard (all three)**: a wrapper REFUSES to
+  write into an existing root recorded under a different toolchain pin
+  (PIN_STAMP / preflight.json vs the conf's PINNED_CC1PLUS_SHA256) and
+  fails closed on unknown provenance — the 2026-08-20 pin-12/pin-14
+  contamination class.  Same-pin roots resume as before.  `SWEEP_DATE`
+  is the sanctioned root-name override; the refusal suggests a free one.
+- **`--prev-run` chain**: wrappers pass the newest N clean roots
+  (default 3, `SWEEP_PREV_CHAIN=N`), skipping contaminated/quarantined
+  roots — cross-pin cell reuse engages automatically once its consumer
+  lands in sweep_2x2.py.
+- **Live logs**: wrappers run the sweep under PYTHONUNBUFFERED + stdbuf,
+  so a tee'd log shows progress immediately — a many-minutes-silent log
+  now means STALLED, not buffered.
+- **Classify workers**: `SWEEP_CLASSIFY_WORKERS=12` recommended on this
+  box (laneDA measurement: 6 workers ≈ 15.4 min classify wall; sessions
+  are compile-dominated, private RUNNER_TEMPs already avoid the /tmp
+  race).  Confirm with a 3-4 op A/B in private evidence roots; adopt 12
+  if ≥1.6x.
+- **Detach discipline**: `setsid nohup <wrapper> ... & disown` — sweeps
+  launched inside harness background tasks die when the task's process
+  group is reaped.
+
+## 7. Sweep resume across pins (audit finding — fix owned by the sweep lane)
 
 tt-metal's JIT cache keys on `g++ --version`, so pin swaps invalidate
 every compile — but sweep_2x2.py's hash-matched device resume is
@@ -173,24 +239,11 @@ DESIGNED to reuse cells whose archived .text equals this run's build
 fires, one-line reason: **the resume cache is probed only under THIS
 run's evidence root (`_device_job`: `work = self.ev / op / tag / sel /
 label-leg`), and `--prev-run` is consumed ONLY by the scoreboard
-annotator (sweep_2x2.py ~3145/~3359)** — the weekly wrapper mints a
-fresh `weekly-<date>` root each run, so every OFF/hand cell
-re-measures.  Fix shape (sweep owner): in the cached-cell probe, also
-probe `prev_run/<op>/<tag>/<sel>/<label>-<leg>` under the SAME jobkey +
-classify-hash checks (all the trust machinery already exists) and
-adopt the cell on match.  Expected saving: roughly the OFF+hand half
-of device work per weekly sweep.
-
-## 6. Classify prewarm workers (measurement + recommendation)
-
-Weekly pin-13 sweep, 6 workers: 976 classify compile events (~488
-pytest compile-producer sessions) in 15.4 min sustained ≈11 s/session
-≈6 cores busy — on a 32-logical-core box with a 28-slot budget and the
-device phase needing ≤4 cores.  RECOMMENDATION: `SWEEP_CLASSIFY_WORKERS=12`
-(expected classify wall ~8 min, ~2x), safe because sessions are
-compile-dominated and the shared-/tmp build race is already avoided by
-private RUNNER_TEMPs.  Caveat: log-derived, not a controlled A/B — the
-harness venv/farm were the pin-14 merger's live resources tonight.
-Confirmation recipe: run the classify phase of 3-4 ops twice in
-private evidence roots with SWEEP_CLASSIFY_WORKERS=6 vs 12 and compare
-wall clock; adopt 12 if ≥1.6x.
+annotator (sweep_2x2.py ~3145/~3359)** — so every OFF/hand cell
+re-measures each pin.  Fix shape (sweep owner): in the cached-cell
+probe, also probe `prev_run/<op>/<tag>/<sel>/<label>-<leg>` under the
+SAME jobkey + classify-hash checks (all the trust machinery already
+exists) and adopt the cell on match.  The wrappers already feed the
+clean prev-run chain (recipe 6), so the fix engages with zero wrapper
+changes.  Expected saving: roughly the OFF+hand half of device work
+per weekly sweep.
