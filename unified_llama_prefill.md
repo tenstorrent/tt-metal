@@ -703,20 +703,52 @@ alone takes a single exp from 0.6% to 3.3% max relative error -- which is why
 `test_unified_unary.py`, whose gate is 2% relative error, would fail under it. The default stays
 exact; ttnn's SDPA runs at the cheap settings, so that is what the comparison uses.
 
-### Still unaccounted for
+### Every op is cheap, and the kernel is not
 
-At 54.3 us for 2 chunks, the measured pass plumbing is roughly 14 us and approx exp about 3 us.
-The remaining ~35 us is matmul, reduce and broadcast math that has not been isolated the way the
-unary ops above were. `passcost.cpp` is the tool for it -- the same baseline-subtraction against
-a zero-math pass -- and doing that for `reduce` and `bcast` is the next honest step before any
-further optimisation. Two structural notes on that ~35 us:
+`passcost.cpp` prices the rest of the op set the same way, by baseline subtraction
+against the zero-math copy control. `bcast` and `matmul` are shape-preserving, so they
+chain and the slope method applies directly; `matmul` uses the IDENTITY as its second
+operand, which makes the chain exact -- every product but one is a zero -- while the
+FPU still does the full inner product, because the hardware does not shortcut a zero.
+A reduction collapses and cannot be chained, so it is swept by shape instead: widening
+`cols` at fixed `rows` prices one more input tile, and raising `rows` prices input and
+output together, so the difference is the per-output-tile part alone.
 
-- `Strategy<ReduceFusion>` still takes one acquire per output tile. Given that batching hurt the
-  SFPU path, there is no reason to expect it to help here, but it has not been measured.
-- Going from 2 chunks to 4 costs 75%, and the reason is not fixed per-chunk overhead: halving the
-  chunk keeps total score work about constant while doubling how many times the running (m, l, o)
-  state is corrected. That is redundant vector math, and the fix is bigger chunks, which the
-  8-tile DST budget is what currently caps.
+| | measured | against a copy of the same tiles |
+|---|---|---|
+| copy (the control) | 0.097 us/tile/pass | -- |
+| broadcast, as `bcast - copy` | 0.012 us/tile | +12% |
+| matmul | 0.133 us/tile-MAC (0.267 us/output tile) | 2.7x |
+| reduce, per input tile | 0.153 us | 1.6x |
+| reduce, per output tile alone | 0.082 us | the acquire and pack |
+
+Two things fall out. The per-output-tile cost of a reduction is 0.082us, so **batching
+`Strategy<ReduceFusion>`'s one-acquire-per-output-tile could not win more than that**,
+and the SFPU batching that already failed says even that is optimistic -- the open
+question in the notes is answered, and the answer is not to bother. And a broadcast is
+very nearly free, which retires the idea that the bcast-heavy softmax tail is where
+flash spends itself.
+
+**The sum of the parts does not come to the whole, and that is now the finding.** For
+flash's 4-chunk shape the measured per-op costs add to about 9.4us per chunk, against a
+measured marginal 20.4us -- the kernel costs 2.2x what everything in it costs. Four
+candidates are now dead: SFPU math (measured, and the reason approx exp mattered), CB
+plumbing (0.097us/tile/pass), per-tile acquire batching (tried, a regression), and
+reconfiguration between passes. That last one is worth stating because it was the
+obvious suspect: a homogeneous chain is the best case for the hardware, so PC_ALT
+alternates broadcast and copy to make every pass change kind, and a broadcast leaves
+the unpacker in a mode the next SFPU op has to restore. It costs **+0.005us per pass**.
+Switching kinds is free.
+
+What passcost structurally does NOT have is DRAM traffic: it loads one block and
+everything after that is L1-resident, so its slope can never include a load. Flash
+reads K, V and mask per chunk and calls `.wait()` on each immediately. At 4 chunks that
+is 8 tiles of DRAM per chunk against an 11us shortfall, or ~1.4us per tile, which is
+the right order for an unhidden DRAM round trip. That makes prefetch the next thing to
+try -- the CBs are already double-buffered, but issuing chunk j+1's loads before
+computing chunk j is what would let the latency overlap. **Not yet measured, and stated
+as the leading candidate rather than a conclusion** -- the last three confident
+diagnoses in this file were all wrong, which is why each now comes with a number.
 
 ### The full grid was never the interesting number
 
