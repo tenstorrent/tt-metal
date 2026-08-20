@@ -457,6 +457,15 @@ enable_model_warmup=True` at 16:55:32 and logged nothing further until
 `Got Keyboard Interrupt` at 17:07:18. No traceback, no `TT_THROW`, no watchdog
 trip, no OOM in the full server log.
 
+**That silence is the model load, not a hang.** The healthy run behaves
+identically: its engine logged at 12:35:34, then nothing until 12:52:04 -- a
+16m 30s gap -- and became healthy 12 s later. So the failed run was doing the same
+work and was interrupted 11m 46s in, roughly 71% through a ~16m 30s load, about
+4m 45s short. Nothing was wedged and nothing needs fixing in the model; the load
+phase simply emits no progress output, which is why one run in isolation cannot be
+told apart from a hang. A progress log in `build_generator` would remove that
+ambiguity.
+
 ### The applied config was as intended
 
 From the run's `runtime_model_specs/*.json` artifact, not inferred: `impl
