@@ -77,6 +77,11 @@ struct TileSource : expr::Fluent<TileSource<S>> {
 
     uint32_t cb_id;
 
+    // Which buffer this leaf reads. The SFPU path never needs it -- it copies the tile
+    // into DST and works there -- but the FPU forms take their operands from L1, so for
+    // them the buffer identity IS the operand.
+    uint32_t source_cb() const { return cb_id; }
+
     // `reconfigure` re-points the unpacker's srcA data format at THIS leaf's buffer.
     // Without it a tree whose leaves live in circular buffers of different formats is
     // silently wrong: copy_tile does not carry a format, and
@@ -114,19 +119,61 @@ struct TileSource : expr::Fluent<TileSource<S>> {
 // units for this op; binary_op_init_common is the one that carries hw_configure and
 // pack_sync_init, and calling THAT a second time mid-kernel hangs the device, the
 // same trap phase 7 hit with matmul.
-struct AddOp {
+// --- FPU elementwise helpers ---
+//
+// add, sub and mul exist on both units. The SFPU forms take two DST slots, so every
+// operand needs a copy_tile to get there; these read their operands out of circular
+// buffers instead. Measured on one Wormhole core: 0.31us/tile against 0.53 for the SFPU
+// add and sub, and 0.33 against 1.12 for mul. See unified_llama_prefill.md.
+//
+// The reuse forms are what let a CHAIN stay on the FPU: one operand comes from a buffer
+// and the other from DST, so `(a * b) + c` never has to round-trip through L1. The
+// direction picks which side DST lands on, which matters for sub -- DEST_TO_SRCA gives
+// dst OP buffer, DEST_TO_SRCB gives buffer OP dst.
+enum class FpuOp { Add, Sub, Mul };
+
+// Everything the FPU forms need, in one place, so the ops below are one line each and
+// expr.hpp reaches all of it through Op:: -- the same way it already reaches apply and
+// apply_in_place. ckernel's two enums stay inside the guarded bodies here.
+template <FpuOp TheOp>
+struct FpuBinary {
     static constexpr bool fpu_capable = true;
-    static void init_fpu(uint32_t cb0, uint32_t cb1) {
+    static constexpr FpuOp fpu_op = TheOp;
+
+    // Seed: both operands out of circular buffers, result to DST.
+    static void fpu_seed_init(uint32_t cb0, uint32_t cb1) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        ckernel::add_tiles_init(cb0, cb1);
+        // Point srcA and srcB at these two buffers' formats FIRST. The *_tiles_init
+        // calls below are the short inits -- they program the math unit for the op and
+        // the unpackers for the operand pair, but not the hardware data formats, which
+        // came from compute_init at kernel entry for one specific pair. Without this a
+        // mixed-format pair reads garbage: test_unified_mixed_format went to inf error,
+        // not to a slightly worse number. The full init that would cover it,
+        // binary_op_init_common, carries hw_configure and pack_sync_init and must not
+        // run twice, so this is the same split matmul_block_init uses.
+        ckernel::reconfig_data_format(cb0, cb1);
+        if constexpr (TheOp == FpuOp::Add) {
+            ckernel::add_tiles_init(cb0, cb1);
+        } else if constexpr (TheOp == FpuOp::Sub) {
+            ckernel::sub_tiles_init(cb0, cb1);
+        } else {
+            ckernel::mul_tiles_init(cb0, cb1);
+        }
 #else
         (void)cb0;
         (void)cb1;
 #endif
     }
-    static void apply_fpu(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t dst) {
+
+    static void fpu_seed_apply(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t dst) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        ckernel::add_tiles(cb0, cb1, t0, t1, dst);
+        if constexpr (TheOp == FpuOp::Add) {
+            ckernel::add_tiles(cb0, cb1, t0, t1, dst);
+        } else if constexpr (TheOp == FpuOp::Sub) {
+            ckernel::sub_tiles(cb0, cb1, t0, t1, dst);
+        } else {
+            ckernel::mul_tiles(cb0, cb1, t0, t1, dst);
+        }
 #else
         (void)cb0;
         (void)cb1;
@@ -135,6 +182,52 @@ struct AddOp {
         (void)dst;
 #endif
     }
+
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+    static constexpr ckernel::EltwiseBinaryType kType = TheOp == FpuOp::Add   ? ckernel::EltwiseBinaryType::ELWADD
+                                                        : TheOp == FpuOp::Sub ? ckernel::EltwiseBinaryType::ELWSUB
+                                                                              : ckernel::EltwiseBinaryType::ELWMUL;
+    // DEST_TO_SRCA puts the running value in srcA, so the result is dst OP buffer;
+    // DEST_TO_SRCB puts it in srcB, giving buffer OP dst. Which one a chain link wants
+    // depends on which side of the operator the subexpression was, and getting it
+    // backwards silently reverses a subtraction.
+    template <bool DstIsLhs>
+    static constexpr ckernel::EltwiseBinaryReuseDestType kDir =
+        DstIsLhs ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
+                 : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
+#endif
+
+    // Chain link: one operand from a buffer, the other already in DST.
+    template <bool DstIsLhs>
+    static void fpu_reuse_init(uint32_t cb) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        // Only the buffer operand's side needs re-pointing here; the other side is DST,
+        // whose format the accumulator already fixed. DstIsLhs means DST went to srcA,
+        // so the buffer is srcB, and the other way round.
+        if constexpr (DstIsLhs) {
+            ckernel::reconfig_data_format_srcb(cb);
+        } else {
+            ckernel::reconfig_data_format_srca(cb);
+        }
+        ckernel::binary_dest_reuse_tiles_init<kType, kDir<DstIsLhs>>(cb);
+#else
+        (void)cb;
+#endif
+    }
+
+    template <bool DstIsLhs>
+    static void fpu_reuse_apply(uint32_t cb, uint32_t tile, uint32_t dst) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        ckernel::binary_dest_reuse_tiles<kType, kDir<DstIsLhs>>(cb, tile, dst);
+#else
+        (void)cb;
+        (void)tile;
+        (void)dst;
+#endif
+    }
+};
+
+struct AddOp : FpuBinary<FpuOp::Add> {
     static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         ckernel::add_binary_tile_init();
@@ -156,27 +249,7 @@ struct AddOp {
 // No apply_in_place: a binary has two operands, so it cannot be a link in a
 // unary epilogue chain the way relu and exp can.
 
-struct SubOp {
-    static constexpr bool fpu_capable = true;
-    static void init_fpu(uint32_t cb0, uint32_t cb1) {
-#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        ckernel::sub_tiles_init(cb0, cb1);
-#else
-        (void)cb0;
-        (void)cb1;
-#endif
-    }
-    static void apply_fpu(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t dst) {
-#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        ckernel::sub_tiles(cb0, cb1, t0, t1, dst);
-#else
-        (void)cb0;
-        (void)cb1;
-        (void)t0;
-        (void)t1;
-        (void)dst;
-#endif
-    }
+struct SubOp : FpuBinary<FpuOp::Sub> {
     static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         ckernel::sub_binary_tile_init();
@@ -189,27 +262,16 @@ struct SubOp {
     }
 };
 
-struct MulOp {
-    static constexpr bool fpu_capable = true;
-    static void init_fpu(uint32_t cb0, uint32_t cb1) {
-#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        ckernel::mul_tiles_init(cb0, cb1);
-#else
-        (void)cb0;
-        (void)cb1;
+// The one op where the FPU is not a free win. Measured on test_unified_binary, max
+// relative error 0.01023 on the FPU against 0.00380 on the SFPU -- 2.7x worse, and past
+// the 0.01 that test gates at -- for 0.33us/tile against 1.12us, 3.4x faster. add and
+// sub have no such tension: the FPU is as accurate or better AND faster, so they need
+// no knob. This one is a real accuracy-for-speed trade, so it is opt-in rather than
+// decided here: -DTT_UNIFIED_FPU_MUL takes it.
+struct MulOp : FpuBinary<FpuOp::Mul> {
+#if !defined(TT_UNIFIED_FPU_MUL)
+    static constexpr bool fpu_capable = false;
 #endif
-    }
-    static void apply_fpu(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t dst) {
-#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        ckernel::mul_tiles(cb0, cb1, t0, t1, dst);
-#else
-        (void)cb0;
-        (void)cb1;
-        (void)t0;
-        (void)t1;
-        (void)dst;
-#endif
-    }
     static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         ckernel::mul_binary_tile_init();
@@ -226,6 +288,8 @@ struct MulOp {
 // chunk's row maxima into the running ones. Not an operator: `max` is not spelled with
 // punctuation, so it gets a named function below.
 struct MaxOp {
+    // No FPU form exists for this one, so a tree containing it stays on the SFPU.
+    static constexpr bool fpu_capable = false;
     static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         ckernel::binary_max_tile_init();
@@ -239,6 +303,8 @@ struct MaxOp {
 };
 
 struct DivOp {
+    // No FPU form exists for this one, so a tree containing it stays on the SFPU.
+    static constexpr bool fpu_capable = false;
     static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         ckernel::div_binary_tile_init();
@@ -367,22 +433,10 @@ using SFPUFusion = expr::TreeKind;
 
 struct FPUFusion {};
 
-// One elementwise binary of two whole blocks, done on the FPU. Deliberately NOT
-// wired into kind_of yet: this is the shape being priced against the SFPU path
-// before deciding whether trees should dispatch here on their own.
-struct FpuEltwiseFusion {};
-
-template <typename Op, typename S>
-struct FpuBinNode : expr::Fluent<FpuBinNode<Op, S>> {
-    using is_expr_node = std::true_type;
-    using shape = S;
-    using fusion_kind = FpuEltwiseFusion;
-    using op = Op;
-    static_assert(Op::fpu_capable, "this op has no FPU form; it belongs on the SFPU path");
-
-    uint32_t lhs_cb;
-    uint32_t rhs_cb;
-};
+// The same expression tree, run on the FPU instead of the SFPU. Nothing declares this
+// kind: expr::kind_of derives it from the tree's own shape, so a kernel writing `a + b`
+// gets whichever unit can do it. See the FPU eltwise section of expr.hpp.
+using FpuEltwiseFusion = expr::FpuTreeKind;
 
 struct ReduceFusion {};
 
@@ -1192,29 +1246,23 @@ struct Strategy<SFPUFusion> {
     }
 };
 
-// FPU elementwise: the operands stay in L1 and the FPU reads them itself, so DST
-// holds only results -- one slot per output tile, whatever the operand count. That is
-// the opposite of the SFPU tree, where every operand needs its own slot and its own
-// copy_tile to get there.
+// FPU elementwise: the operands stay in L1 and the FPU reads them itself, so DST holds
+// only results -- one slot per output tile, whatever the tree's size. That is the
+// opposite of the SFPU tree, where every operand needs its own slot and a copy_tile to
+// get there, and it is why the whole group fits in one acquire.
 template <>
 struct Strategy<FpuEltwiseFusion> {
     template <typename Node>
     static void run(const Node& node, uint32_t cb_id, uint32_t num_tiles) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        using Op = typename Node::op;
-        // A whole group per acquire, because nothing competes for DST here.
         constexpr uint32_t kPerAcquire = kMaxDstTiles;
         cb_reserve_back(cb_id, num_tiles);
-        // Once per pass: this reprograms the unpackers for the operand pair and the
-        // math unit for the op, and both survive the tile_regs cycle below.
-        Op::init_fpu(node.lhs_cb, node.rhs_cb);
         for (uint32_t base = 0; base < num_tiles; base += kPerAcquire) {
             const uint32_t remaining = num_tiles - base;
             const uint32_t count = remaining < kPerAcquire ? remaining : kPerAcquire;
             ckernel::tile_regs_acquire();
-            for (uint32_t k = 0; k < count; ++k) {
-                Op::apply_fpu(node.lhs_cb, node.rhs_cb, base + k, base + k, k);
-            }
+            // Op-outer: one init per op for the whole group. See expr::FpuStages.
+            expr::fpu_stages(node, base, count);
             ckernel::tile_regs_commit();
             ckernel::tile_regs_wait();
             for (uint32_t k = 0; k < count; ++k) {
