@@ -347,7 +347,12 @@ jobs:
             sanity_skus+=("${bh_skus[@]}")
           fi
           if [[ "$run_sim" == "true" ]]; then
-            sim_skus+=("sim_wh_n150" "sim_wh_galaxy" "sim_bh_p150" "sim_bh_galaxy")
+            sim_skus+=(
+              "sim_wh_n150"
+              "sim_wh_galaxy"
+              "sim_bh_p150"
+              "sim_bh_galaxy"
+            )
             sanity_skus+=("${sim_skus[@]}")
           fi
 
