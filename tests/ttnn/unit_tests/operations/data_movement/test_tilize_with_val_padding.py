@@ -12,7 +12,7 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import (
     tilize_with_val_padding as pytorch_tilize_with_val_padding,
 )
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import is_blackhole, skip_for_blackhole
 
 torch.manual_seed(0)
 
