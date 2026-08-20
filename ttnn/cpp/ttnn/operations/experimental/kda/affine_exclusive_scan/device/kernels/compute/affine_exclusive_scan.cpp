@@ -11,7 +11,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-namespace {
 FORCE_INLINE void matmul(
     DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out, uint32_t Mt, uint32_t Kt, uint32_t Nt) {
     const uint32_t a_id = a.get_id();
@@ -72,7 +71,6 @@ FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) 
     }
     out.push_back(tiles);
 }
-}  // namespace
 
 template <uint32_t Kt, uint32_t Vt, uint32_t G>
 TT_KERNEL void compute(uint32_t group) {
