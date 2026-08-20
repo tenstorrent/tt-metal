@@ -2,7 +2,7 @@
 #
 # Watches the "Package and release" workflow; on a failed run it collects the
 # failed jobs and opens (or de-duplicates onto) a Jira issue via
-# create_jira_issue.py.
+# jira_client.py.
 #
 # TODO (specifics to be provided):
 #   - JIRA_ISSUE_TYPE        : issue type (default below: Bug)
@@ -111,4 +111,4 @@ jobs:
             echo "::notice::JIRA_RELEASE_* secrets not configured; skipping Jira filing."
             exit 0
           fi
-          python3 .github/actions/scripts/create_jira_issue.py
+          python3 .github/actions/scripts/jira_client.py

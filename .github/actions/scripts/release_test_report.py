@@ -20,7 +20,7 @@ Environment:
   SIM_CI_CONFIG       config the gating job selects              (default: 1x3)
   TEST_REPORTS_DIR    JUnit XML from release-demo-tests                (optional)
   REPORT_MD_OUT       write the markdown report here                   (optional)
-  JIRA_*              as create_jira_issue.py; JIRA_ISSUE_TYPE default Task
+  JIRA_*              as jira_client.py; JIRA_ISSUE_TYPE default Task
   JIRA_SKIP           build the report but do not file it
 
 Exits 0 whether or not tests failed -- this reports, it does not gate.
@@ -34,8 +34,8 @@ from pathlib import Path
 
 import yaml
 
-from create_jira_issue import _env, _truthy, file_issue
-from file_rtl_sim_jira import format_test, match_entry, parse_failed
+from jira_client import _env, _truthy, file_issue
+from create_jira import format_test, match_entry, parse_failed
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]

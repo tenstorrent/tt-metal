@@ -21,7 +21,7 @@ import json
 import os
 import re
 
-from create_jira_issue import _env, _truthy, file_issue
+from jira_client import _env, _truthy, file_issue
 
 # The sim reporter renders every row with --gtest_filter= regardless of runner,
 # so the group's extension, not the separator, decides the runner.

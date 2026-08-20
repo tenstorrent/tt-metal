@@ -19,7 +19,7 @@ import pytest
 SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from file_rtl_sim_jira import parse_failed  # noqa: E402
+from create_jira import parse_failed  # noqa: E402
 from release_test_report import (  # noqa: E402
     FAILED,
     INCONCLUSIVE,
