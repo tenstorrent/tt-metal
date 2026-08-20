@@ -3,102 +3,50 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include <cstdint>
+
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
-#include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 
-void kernel_main() {
-    constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(0);
+constexpr uint32_t MAX_RANK = 8;
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_dims = get_arg_val<uint32_t>(1);
-    const uint32_t start_id = get_arg_val<uint32_t>(2);
-    const uint32_t num_tiles_per_core = get_arg_val<uint32_t>(3);
-    const uint32_t num_tiles_per_barrier = get_arg_val<uint32_t>(4);
-    const uint32_t num_tiles_per_row_this_core = get_arg_val<uint32_t>(5);
-    const uint32_t num_unpadded_sticks_addr = get_arg_addr(6);
+template <uint32_t num_tiles_per_row>
+TT_KERNEL void reader(
+    uint32_t num_dims,
+    uint32_t start_id,
+    uint32_t num_tiles_per_core,
+    uint32_t num_tiles_per_barrier,
+    uint32_t num_tiles_per_row_this_core) {
+    uint32_t num_unpadded_sticks[MAX_RANK];
+    uint32_t num_padded_sticks[MAX_RANK];
+    uint32_t id_per_dim[MAX_RANK];
+    for (uint32_t j = 0; j < num_dims; ++j) {
+        num_unpadded_sticks[j] = get_vararg(j);
+        num_padded_sticks[j] = get_vararg(num_dims + j);
+        id_per_dim[j] = get_vararg(2 * num_dims + j);
+    }
 
-    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(num_unpadded_sticks_addr);
-    volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
-    volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
-
-    constexpr uint32_t cb_id_in0 = 0;
+    const auto input = TensorAccessor(tensor::input);
+    DataflowBuffer input_dfb(dfb::input);
+    Noc noc;
 
     uint32_t src_stick_id = start_id;
     uint32_t tiles_read = 0;
-    const uint32_t tile_size = get_tile_size(cb_id_in0);
-    constexpr auto src_args = TensorAccessorArgs<1>();
-    const auto s0 = TensorAccessor(src_args, src_addr);
+    constexpr uint32_t tile_size = get_tile_size(dfb::input);
     const uint32_t extra_tiles_per_row = num_tiles_per_row - num_tiles_per_row_this_core;
 
-    Noc noc;
-    experimental::CB cb_in0(cb_id_in0);
-
-#ifdef DEBUG
-    DPRINT(
-        "src_addr: {}, num_dims: {}, start_id: {}, num_tiles_per_core: {}, num_tiles_per_barrier: {}\n",
-        src_addr,
-        num_dims,
-        start_id,
-        num_tiles_per_core,
-        num_tiles_per_barrier);
-
-    DPRINT("tile_size: {}, src_stick_id: {}, tiles_read: {}\n", tile_size, src_stick_id, tiles_read);
-
-    DPRINT(
-        "num_unpadded_sticks: {} {} {} {}\n",
-        num_unpadded_sticks[0],
-        num_unpadded_sticks[1],
-        num_unpadded_sticks[2],
-        num_unpadded_sticks[3]);
-    DPRINT(
-        "num_padded_sticks: {} {} {} {}\n",
-        num_padded_sticks[0],
-        num_padded_sticks[1],
-        num_padded_sticks[2],
-        num_padded_sticks[3]);
-    DPRINT(
-        "num_tiles_per_row_this_core: {} extra_tiles_per_row: {}\n", num_tiles_per_row_this_core, extra_tiles_per_row);
-#endif
-    uint32_t num_tiles_pushed = 0;
     while (tiles_read < num_tiles_per_core) {
-        cb_in0.reserve_back(num_tiles_per_barrier);
+        input_dfb.reserve_back(num_tiles_per_barrier);
         uint32_t l1_offset = 0;
-#ifdef DEBUG
-        DPRINT("Src Buffer L1 Addr: {}\n", cb_in0.get_write_ptr());
-        DPRINT("Tiles read {} Num tiles pushed: {}\n", tiles_read, num_tiles_pushed);
-#endif
         for (uint32_t i = 0; i < num_tiles_per_barrier and tiles_read < num_tiles_per_core; ++i) {
             tiles_read++;
             if (id_per_dim[0] >= (num_unpadded_sticks[0] - extra_tiles_per_row)) {
-#ifdef DEBUG
-                DPRINT(
-                    "Skipping read for src_stick_id: {}, id_per_dim: {} {} {} {}, tiles_read: {}\n",
-                    src_stick_id,
-                    id_per_dim[0],
-                    id_per_dim[1],
-                    id_per_dim[2],
-                    id_per_dim[3],
-                    tiles_read);
-#endif
                 l1_offset += tile_size;
                 src_stick_id++;
-
             } else {
-                noc.async_read(s0, cb_in0, tile_size, {.page_id = src_stick_id}, {.offset_bytes = l1_offset});
-#ifdef DEBUG
-                DPRINT(
-                    "src_stick_id: {}, src_buffer_l1_addr: {}, tiles_read: {}, id {} {} {} {}\n",
-                    src_stick_id,
-                    cb_in0.get_write_ptr() + l1_offset,
-                    tiles_read,
-                    id_per_dim[0],
-                    id_per_dim[1],
-                    id_per_dim[2],
-                    id_per_dim[3]);
-#endif
+                noc.async_read(input, input_dfb, tile_size, {.page_id = src_stick_id}, {.offset_bytes = l1_offset});
                 l1_offset += tile_size;
                 src_stick_id++;
             }
@@ -114,7 +62,6 @@ void kernel_main() {
             }
         }
         noc.async_read_barrier();
-        cb_in0.push_back(num_tiles_per_barrier);
-        num_tiles_pushed += num_tiles_per_barrier;
+        input_dfb.push_back(num_tiles_per_barrier);
     }
 }
