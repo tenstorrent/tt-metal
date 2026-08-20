@@ -93,6 +93,17 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
         make_dfb(REMOTE_B, kv, tt::DataFormat::Float32),
         make_dfb(SCRATCH, kv, tt::DataFormat::Float32),
     };
+    // The sender addresses a peer's inbound mailbox with its own local write pointer, which is only
+    // valid while these buffers hold one phase-independent slot. Any additional depth lets sender and
+    // receiver select different halves and silently corrupts the reduction.
+    for (const auto& dfb : dfbs) {
+        if (dfb.unique_id == REMOTE_A || dfb.unique_id == REMOTE_B) {
+            TT_FATAL(
+                dfb.num_entries == (dfb.unique_id == REMOTE_A ? kk : kv),
+                "reduce_affine_transforms: remotely addressed mailbox {} must hold exactly one block",
+                *dfb.unique_id);
+        }
+    }
 
     m2::KernelSpec dataflow{
         .unique_id = DATAFLOW,
