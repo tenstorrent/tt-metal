@@ -136,10 +136,18 @@ def depths_from_checkpoint(model_id: str = "", model_dir=None) -> list:
     checkpoint_sections.declared_sections already does the counting -- the same join stage_roots and
     the tower split use -- so this is a reader, not a second implementation.
     """
+    # AN ABSENT ROOT IS NOT THE CURRENT DIRECTORY. declared_sections(Path("")) scans the process's
+    # CWD, so a None or empty model_dir silently asked "what model is in the directory the tool
+    # happens to be running from". Caught by the preflight before run 12 started: run from
+    # voxtral-wt, a hostile root found a stray checkpoint and reported {'net': 5}, which bounded the
+    # coverage ladder to [2, 4, 5] instead of leaving it [2, 4, 8, 16].
+    _root = str(model_dir or "").strip()
+    if not _root and not str(model_id or "").strip():
+        return []
     try:
         from .checkpoint_sections import declared_sections
 
-        secs = declared_sections(model_dir or "", str(model_id or "")) or {}
+        secs = declared_sections(_root, str(model_id or "")) or {}
     except Exception:  # noqa: BLE001 -- an unreadable checkpoint falls through to the config
         return []
     return sorted({int(v) for v in secs.values() if int(v) > 0}, reverse=True)
