@@ -110,6 +110,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_actual_isl = std::nullopt,
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
+    bool circular_kv_cache = false,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k = std::nullopt,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v = std::nullopt,
     // Trace-safe metadata path, same contract as ring_mla's below: when slot_id and

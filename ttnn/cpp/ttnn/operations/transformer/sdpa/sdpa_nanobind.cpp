@@ -56,6 +56,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_actual_isl,
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<uint32_t> sliding_window_size,
+    bool circular_kv_cache,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v,
     const std::optional<ttnn::Tensor>& slot_id,
@@ -96,6 +97,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_actual_isl,
         attention_sink,
         sliding_window_size,
+        circular_kv_cache,
         persistent_output_buffer_joint_k,
         persistent_output_buffer_joint_v,
         slot_id,
@@ -649,6 +651,11 @@ void bind_sdpa(nb::module_& mod) {
                 compute kernels prune K chunks outside the window. Ring attention currently supports the
                 GPT-OSS specialization: a 128-token window, local 8Q:1K:1V heads with D64, BF16 Q,
                 BFP8_B K/V, SP4 production or SP8 test topology, and chunked prefill without joint tokens.
+            circular_kv_cache (bool): The sliding KV cache is a circular buffer of whole chunk-sized
+                slabs (chunk group g lives in local slab g % n_slabs; the writer wraps host-side). The
+                slab count is derived on-device from the cache/Q geometry (>= 2 whole slabs required).
+                logical_n / kv_actual_isl stay TRUE ABSOLUTE values. Requires sliding_window_size +
+                kv_actual_isl. Defaults to False (unbounded cache, unchanged behavior).
             persistent_output_buffer_joint_k (ttnn.Tensor, optional): Persistent buffer for the
                 gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.
             persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
@@ -719,6 +726,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_actual_isl").noconvert() = nb::none(),
         nb::arg("attention_sink") = nb::none(),
         nb::arg("sliding_window_size") = nb::none(),
+        nb::arg("circular_kv_cache") = false,
         nb::arg("persistent_output_buffer_joint_k").noconvert() = nb::none(),
         nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none(),
         nb::arg("slot_id").noconvert() = nb::none(),
