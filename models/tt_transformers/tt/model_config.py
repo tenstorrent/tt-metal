@@ -1627,9 +1627,11 @@ class ModelArgs:
                 k_chunk_size=k_chunk,
             )
         else:
+            # n150 1.7B decode: SDPA exp_approx. A/B 61.9 -> 62.1 tok/s, EN byte-id, JA Japanese+CJK.
+            n150_asr = self.num_devices == 1 and not self.is_galaxy and self.dim == 2048 and self.hidden_dim == 6144
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
-                exp_approx_mode=False,
+                exp_approx_mode=n150_asr,
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
             )
