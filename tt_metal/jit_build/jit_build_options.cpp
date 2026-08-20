@@ -7,7 +7,7 @@
 #include <string>
 
 #include "build.hpp"
-#include "impl/metal2_host_api/llk_operand_facts.hpp"
+#include "llk_operand_facts.hpp"
 
 namespace tt::tt_metal {
 
