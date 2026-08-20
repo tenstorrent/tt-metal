@@ -164,6 +164,32 @@ Batch robustness (laneCH, storm-first-silicon lesson):
     per (row, selector, tag), verdict content is identical serial vs
     concurrent, and SWEEP_CLASSIFY_WORKERS=1 keeps them fully sequential.
 
+Pipeline overhaul (laneDC, owner-ordered, 2026-08-20 — SPEED with every
+trust anchor byte-identical in semantics):
+  1. CLASSIFY/SILICON PIPELINING (default; --no-pipeline escape): the phase
+     barrier is gone — rows admit to silicon in priority-ordered ROLLING
+     WAVES as their classify (and CRAQ, when phased) verdicts complete,
+     while a background gating thread keeps classifying later waves.  The
+     batch planner handles incremental admission by re-planning per wave
+     (session dirs silicon-batches/w<i>/); flocked device serialization,
+     per-session provenance, keyed gates and refusal logic are the same
+     code (_gate_one_row/_gate_rows/_batched_silicon), merely re-scheduled.
+  2. ROW PRIORITY SCHEDULING: rows expected to have DIFFERING OFF/ON .text
+     (something to measure) classify and measure first; expected
+     byte-identical re-baseline rows last; --priority-ops jumps the queue
+     entirely.  The expectation is a queue hint (prior verdicts/baseline
+     class) — a wrong hint costs only position.  Results stream by value.
+  3. CROSS-PIN CELL REUSE: --prev-run takes evidence root(s) (comma list,
+     newest first) and the resume prober now probes them — a device leg
+     whose jobkey AND archived .text hash set match THIS run's classify
+     output adopts the prior silicon instead of re-running (REUSED_FROM.txt
+     marker + scoreboard reused_cells: provenance visible, never silent).
+  4. FIRST-CLASS ROW VERDICT STREAMING: <evidence-root>/<op>/
+     ROW-VERDICT.json lands the moment a row's cells are assembled —
+     cycles per leg, causal/vs_hand %, WIN/PARITY/LOSS band, baseline
+     drift — via the same _row_verdict computation REPORT.md aggregates at
+     the end (row lines byte-equal).
+
 Typical one-command full sweep:
   python3 tt_metal/tt-llk/tests/corpus/sweep_2x2.py \
     --evidence-root ~/sfpi-uplift/sweep-2x2/evidence-$(date +%Y%m%d) \
@@ -2760,10 +2786,15 @@ exit $RC
         )
         self._split_batch_session(sdir, jobs, session_rc, gctx)
 
-    def _batched_silicon(self, gated):
+    def _batched_silicon(self, gated, wave=None):
         """Executor entry: gated = [(row, classifications)] rows the silicon
         gates admitted.  Produces every pending leg's evidence; assembly
-        (silicon()) then consumes it via the keyed resume path."""
+        (silicon()) then consumes it via the keyed resume path.
+
+        `wave` scopes the session dirs (silicon-batches/<wave>/...) under
+        pipelined rolling admission: each admitted wave is re-planned and
+        executed independently, so group dir names never collide across
+        waves while per-LEG evidence stays at its one canonical path."""
         jobs = []
         for row, cls in gated:
             jobs.extend(self._silicon_jobs(row, cls))
@@ -2781,6 +2812,8 @@ exit $RC
 
         gkeys = sorted(groups, key=gorder)
         broot = self.ev / "silicon-batches"
+        if wave is not None:
+            broot = broot / str(wave)
         broot.mkdir(parents=True, exist_ok=True)
         gnames = {
             key: f"g{i}-{hashlib.sha256((key[0] + repr(key[1])).encode()).hexdigest()[:8]}"
@@ -3686,7 +3719,7 @@ exit $RC
         return rag
 
     # ---------------- main flow ----------------
-    def _silicon_phase(self, slots):
+    def _silicon_phase(self, slots, wave=None):
         """Execute + assemble the silicon phase for the gated rows, in row
         order.  slots entries: ("withheld", <result>) pass straight through
         to the results list; ("go", row, classifications, attribution) rows
@@ -3695,10 +3728,11 @@ exit $RC
         note and STOP decision from the per-leg evidence via the keyed
         hash-matched resume path, so batched and serial runs share one
         assembly code path.  Factored out of run() so the batched-vs-legacy
-        layout selftest can drive it without a toolchain."""
+        layout selftest can drive it without a toolchain.  `wave` scopes
+        the batched session dirs under pipelined rolling admission."""
         gated = [(s[1], s[2]) for s in slots if s[0] == "go"]
         if self.exec_mode == "batched" and gated:
-            self._batched_silicon(gated)
+            self._batched_silicon(gated, wave=wave)
         results = []
         for s in slots:
             if s[0] == "withheld":
@@ -3718,6 +3752,254 @@ exit $RC
             # the serial per-leg path this increment (jobkeys mode=serial).
             if attribution and row["op"] in (self.a.knob_silicon_rows or []):
                 self.knob_silicon(row, attribution)
+        return results
+
+    def _classify_prewarm(self, rows, phases):
+        """Batched classify prewarm (owner order 2026-08-19; laneCH session
+        batching) for the given rows: every (row, selector) classify is
+        independent — its work dir, logs, and verdict file are disjoint —
+        so the pending ones compile here in BATCHED producer sessions
+        (chunked per flag set, per-node outcome attribution via the
+        in-tree pytest plugin); the sequential gating loop then resumes
+        every verdict hash-matched from cache.  Errors surface exactly as
+        before: a cached COMPILE_FAIL verdict replays identically, and any
+        leg the batch could not prove falls back to the legacy solo
+        compile inside classify()."""
+        if "classify" not in phases or getattr(self.a, "classify_workers", 1) <= 1:
+            return
+        self.verify_toolchain("classify")
+        prewarm = []
+        for row in rows:
+            if row["kind"] == "skip":
+                continue
+            p_legs = (
+                (("default", row["pin_flags"]),) if row["kind"] == "pinpair" else None
+            )
+            for sel in SELECTORS:
+                if row["nodes"][sel]:
+                    prewarm.append((row, sel, p_legs))
+        if prewarm:
+            unproven = self._batched_classify(prewarm)
+            # Legs the chunks could not prove used to compile one at a
+            # time inside the gating loop; dispatch them through the pool
+            # as CONCURRENT legacy-solo sessions instead (laneDB: identical
+            # sessions, identical verdicts — only the scheduling changes).
+            self._solo_classify_pool(unproven, "batched-classify fallback")
+        if self.a.knob_attribution:
+            # Knob-attribution prewarm (owner order 2026-08-20, laneDB):
+            # attribute_knobs runs len(KNOBS) solo classify verdicts per
+            # CHANGED row inside the sequential gating loop — the
+            # serialized stretch that dominated weekly classify
+            # wall-clock.  Mirror its gating EXACTLY (non-pinpair,
+            # perf-else-corr selector, main verdict CHANGED) and compile
+            # the same verdict set concurrently; the gating loop then
+            # resumes every one hash-matched from cache.  Rows whose main
+            # verdict is still unwritten (solo-pool spec raised) simply
+            # stay serial-legacy in the loop.  Under pipelined rolling
+            # admission this runs per WAVE, so knob prewarm overlaps the
+            # earlier waves' silicon exactly like the main classify.
+            knob_specs = []
+            for row in rows:
+                if row["kind"] in ("skip", "pinpair"):
+                    continue
+                sel = "sem-perf" if row["nodes"]["sem-perf"] else "sem-corr"
+                if not row["nodes"][sel]:
+                    continue
+                cached = self._classify_cached(
+                    self.ev / row["op"] / "classify" / sel
+                )
+                if cached is None or cached.get("all") != "CHANGED":
+                    continue
+                for knob, flag in KNOBS.items():
+                    knob_specs.append(
+                        (
+                            row,
+                            sel,
+                            (("off", OFF_FLAGS), ("knob", f"{OFF_FLAGS} {flag}")),
+                            f"knobs/{knob}",
+                        )
+                    )
+            self._solo_classify_pool(knob_specs, "knob attribution")
+
+    def _gate_one_row(self, row, phases):
+        """Classify/CRAQ/attribution for ONE row — verbatim the legacy
+        pass-1 per-row body (unchanged semantics), factored so the
+        pipelined gating thread and the legacy loop share one code path.
+        Returns the prelim triple (row, classifications, attribution)."""
+        # pinpair rows classify/CRAQ a single pinned-flag leg per selector.
+        pin_legs = (
+            (("default", row["pin_flags"]),) if row["kind"] == "pinpair" else None
+        )
+        classifications = {}
+        if "classify" in phases:
+            self.verify_toolchain("classify")
+            for sel in SELECTORS:
+                if row["nodes"][sel]:
+                    classifications[sel] = (
+                        self.classify(row, sel, legs=pin_legs)
+                        if pin_legs
+                        else self.classify(row, sel)
+                    )
+        if "craq" in phases:
+            self.verify_toolchain("craq")
+            for arch in row["craq_archs"].split(","):
+                for sel in ("sem-corr", "hand-corr"):
+                    if row["nodes"][sel]:
+                        if pin_legs:
+                            self.craq(row, sel, arch.strip(), legs_spec=pin_legs)
+                        else:
+                            self.craq(row, sel, arch.strip())
+        attribution = None
+        if self.a.knob_attribution and "classify" in phases:
+            attribution = self.attribute_knobs(row, classifications)
+        return (row, classifications, attribution)
+
+    def _gate_rows(self, prelim):
+        """Gate every row BEFORE any device work (same rules, same REDs as
+        the legacy flow): keyed classify evidence required, keyed BH CRAQ
+        gate required.  `slots` keeps the row order so the results list is
+        unchanged vs the legacy loop.  Returns ordered slots:
+        ("withheld", result) | ("go", row, classifications, attribution)."""
+        slots = []
+        for row, classifications, attribution in prelim:
+            # Silicon runs only on classify evidence KEYED to this run
+            # (finding sweep_2x2.py:1341: with classify skipped,
+            # classifications={} disabled the byte-identical refusal
+            # logic and every hash-match).  A resumed evidence root
+            # supplies verdicts only if their cc1plus/tt-metal keys
+            # match; otherwise the row is withheld RED.
+            missing_cls = []
+            for sel in SELECTORS:
+                if row["nodes"][sel] and sel not in classifications:
+                    keyed = self._load_keyed_classification(row, sel)
+                    if keyed is None:
+                        missing_cls.append(sel)
+                    else:
+                        classifications[sel] = keyed
+            if missing_cls:
+                self.reds.append(
+                    f"{row['op']}: silicon withheld — no classify evidence "
+                    f"keyed to this toolchain/tree for "
+                    f"{','.join(missing_cls)} (run the classify phase)"
+                )
+                slots.append(
+                    (
+                        "withheld",
+                        dict(
+                            self._result_skeleton(row, classifications),
+                            notes=[
+                                "silicon withheld: classify evidence missing "
+                                "or keyed to another toolchain/tree"
+                            ],
+                        ),
+                    )
+                )
+                continue
+            # Keyed BH CRAQ gate: stale-toolchain greens never open it.
+            gate = self._bh_craq_gate(row)
+            if not gate and not self.a.skip_craq_gate:
+                self.reds.append(
+                    f"{row['op']}: silicon withheld — paired BH CRAQ not green"
+                )
+                if attribution and row["op"] in (self.a.knob_silicon_rows or []):
+                    self.reds.append(
+                        f"{row['op']}: knob silicon withheld — main BH CRAQ gate not green"
+                    )
+                slots.append(
+                    (
+                        "withheld",
+                        dict(
+                            self._result_skeleton(row, classifications),
+                            notes=["silicon withheld: BH CRAQ gate not green"],
+                        ),
+                    )
+                )
+                continue
+            slots.append(("go", row, classifications, attribution))
+        return slots
+
+    # ------------- classify/silicon pipelining (rolling admission) -------
+    _FIRST_WAVE_ROWS = 3
+
+    def _admission_waves(self, rows):
+        """Rolling admission groups over the priority-ordered rows.  Wave 0
+        is deliberately small — the --priority-ops rows when given (they
+        are a prefix of the priority order), else the first
+        _FIRST_WAVE_ROWS rows — so device work begins minutes after
+        launch; later waves take --admit-wave-rows rows each."""
+        if not rows:
+            return []
+        prio = set(getattr(self.a, "priority_ops", None) or [])
+        first_n = sum(1 for r in rows if r["op"] in prio) or min(
+            self._FIRST_WAVE_ROWS, len(rows)
+        )
+        step = max(1, int(getattr(self.a, "admit_wave_rows", 8) or 8))
+        waves = [rows[:first_n]]
+        i = first_n
+        while i < len(rows):
+            waves.append(rows[i : i + step])
+            i += step
+        return waves
+
+    def _pipeline_run(self, phases, rows):
+        """CLASSIFY/SILICON PIPELINING (owner order — kill the phase
+        barrier): silicon starts on rows whose classify (and CRAQ, when in
+        phases) verdicts are complete while classify continues on the
+        rest, so device work begins minutes after launch instead of hours.
+
+        A background GATING thread processes admission waves in priority
+        order — batched classify prewarm per wave, then the verbatim
+        per-row classify/CRAQ/attribution (_gate_one_row) and the verbatim
+        keyed gates (_gate_rows) — and publishes each wave's slots.  The
+        MAIN thread consumes admitted waves as they land: the batch
+        planner handles incremental row admission by RE-PLANNING per wave
+        (rolling groups; session dirs scoped silicon-batches/w<i>/), and
+        per-row assembly + ROW-VERDICT streaming run immediately.  Trust
+        anchors are untouched in semantics: same classify/CRAQ code, same
+        keyed gates, same flocked device serialization and per-session
+        provenance inside _batched_silicon, same assembly path.  Evidence
+        writes are disjoint between the threads (classify/craq dirs of
+        not-yet-admitted rows vs silicon dirs of admitted rows).  A gating
+        failure — including SystemExit from a mid-run toolchain swap check
+        — is forwarded to the main thread and re-raised, never swallowed.
+        """
+        import queue as queue_mod
+        import threading
+
+        waves = self._admission_waves(rows)
+        q = queue_mod.Queue()
+        print(
+            f"pipeline: {sum(len(w) for w in waves)} row(s) in "
+            f"{len(waves)} admission wave(s): "
+            + " | ".join(",".join(r["op"] for r in w) for w in waves)
+        )
+
+        def gate():
+            try:
+                for wi, wave in enumerate(waves):
+                    self._classify_prewarm(wave, phases)
+                    prelim = [self._gate_one_row(row, phases) for row in wave]
+                    q.put(("wave", wi, self._gate_rows(prelim)))
+                q.put(("done", None, None))
+            except BaseException as exc:  # incl. SystemExit: forward, re-raise
+                q.put(("fatal", None, exc))
+
+        t = threading.Thread(target=gate, name="sweep-gating", daemon=True)
+        t.start()
+        results = []
+        while True:
+            kind, wi, payload = q.get()
+            if kind == "fatal":
+                raise payload
+            if kind == "done":
+                break
+            print(
+                f"pipeline: wave w{wi} admitted ({len(payload)} row "
+                "slot(s)) — silicon executes now while later waves keep "
+                "classifying"
+            )
+            results.extend(self._silicon_phase(payload, wave=f"w{wi}"))
+        t.join()
         return results
 
     def run(self):
@@ -3743,77 +4025,7 @@ exit $RC
                     "full sweep)",
                 }
             )
-        # Pass 1: classify/CRAQ/attribution per row (unchanged semantics);
-        # rows that reach the silicon phase are GATED here and executed by
-        # the batched executor between gating and per-row assembly (the
-        # assembly pass computes every cell/ratio/STOP through the legacy
-        # silicon() code, consuming the executor's per-leg evidence via the
-        # keyed hash-matched resume path).
-        prelim = []  # ordered: ("row", row, classifications, attribution)
-        if "classify" in phases and getattr(self.a, "classify_workers", 1) > 1:
-            # Batched classify prewarm (owner order 2026-08-19; laneCH
-            # session batching): every (row, selector) classify is
-            # independent — its work dir, logs, and verdict file are
-            # disjoint — so compile the pending ones here in BATCHED
-            # producer sessions (chunked per flag set, per-node outcome
-            # attribution via the in-tree pytest plugin); the sequential
-            # row loop below then resumes every verdict hash-matched from
-            # cache.  Errors surface in the loop exactly as before: a
-            # cached COMPILE_FAIL verdict replays identically, and any leg
-            # the batch could not prove falls back to the legacy solo
-            # compile inside classify().
-            self.verify_toolchain("classify")
-            prewarm = []
-            for row in self.rows:
-                if row["kind"] == "skip":
-                    continue
-                p_legs = (
-                    (("default", row["pin_flags"]),)
-                    if row["kind"] == "pinpair"
-                    else None
-                )
-                for sel in SELECTORS:
-                    if row["nodes"][sel]:
-                        prewarm.append((row, sel, p_legs))
-            unproven = self._batched_classify(prewarm)
-            # Legs the chunks could not prove used to compile one at a
-            # time inside the row loop; dispatch them through the pool as
-            # CONCURRENT legacy-solo sessions instead (identical sessions,
-            # identical verdicts — only the scheduling changes).
-            self._solo_classify_pool(unproven, "batched-classify fallback")
-            if self.a.knob_attribution:
-                # Knob-attribution prewarm (owner order 2026-08-20,
-                # laneDB): attribute_knobs runs len(KNOBS) solo classify
-                # verdicts per CHANGED row inside the sequential row loop
-                # — the serialized stretch that dominated weekly classify
-                # wall-clock.  Mirror its gating EXACTLY (non-pinpair,
-                # perf-else-corr selector, main verdict CHANGED) and
-                # compile the same verdict set concurrently; the row loop
-                # then resumes every one hash-matched from cache.  Rows
-                # whose main verdict is still unwritten (solo-pool spec
-                # raised) simply stay serial-legacy in the loop.
-                knob_specs = []
-                for row in self.rows:
-                    if row["kind"] in ("skip", "pinpair"):
-                        continue
-                    sel = "sem-perf" if row["nodes"]["sem-perf"] else "sem-corr"
-                    if not row["nodes"][sel]:
-                        continue
-                    cached = self._classify_cached(
-                        self.ev / row["op"] / "classify" / sel
-                    )
-                    if cached is None or cached.get("all") != "CHANGED":
-                        continue
-                    for knob, flag in KNOBS.items():
-                        knob_specs.append(
-                            (
-                                row,
-                                sel,
-                                (("off", OFF_FLAGS), ("knob", f"{OFF_FLAGS} {flag}")),
-                                f"knobs/{knob}",
-                            )
-                        )
-                self._solo_classify_pool(knob_specs, "knob attribution")
+        live = []
         for row in self.rows:
             if row["kind"] == "skip":
                 skips.append(
@@ -3824,110 +4036,51 @@ exit $RC
                         "reason": row["note"],
                     }
                 )
-                continue
-            # pinpair rows classify/CRAQ a single pinned-flag leg per selector.
-            pin_legs = (
-                (("default", row["pin_flags"]),) if row["kind"] == "pinpair" else None
-            )
-            classifications = {}
-            if "classify" in phases:
-                self.verify_toolchain("classify")
-                for sel in SELECTORS:
-                    if row["nodes"][sel]:
-                        classifications[sel] = (
-                            self.classify(row, sel, legs=pin_legs)
-                            if pin_legs
-                            else self.classify(row, sel)
-                        )
-            if "craq" in phases:
-                self.verify_toolchain("craq")
-                for arch in row["craq_archs"].split(","):
-                    for sel in ("sem-corr", "hand-corr"):
-                        if row["nodes"][sel]:
-                            if pin_legs:
-                                self.craq(row, sel, arch.strip(), legs_spec=pin_legs)
-                            else:
-                                self.craq(row, sel, arch.strip())
-            attribution = None
-            if self.a.knob_attribution and "classify" in phases:
-                attribution = self.attribute_knobs(row, classifications)
-            prelim.append((row, classifications, attribution))
-        if "silicon" not in phases:
-            for row, classifications, _attr in prelim:
-                results.append(self._result_skeleton(row, classifications))
-        elif not self.a.allow_hardware:
-            for row, _cls, _attr in prelim:
-                skips.append(
-                    {
-                        "op": row["op"],
-                        "corpus_id": row["corpus_id"],
-                        "status": "SKIP_HARDWARE_NOT_AUTHORIZED",
-                        "reason": "silicon phase requires --allow-hardware",
-                    }
-                )
-        else:
+            else:
+                live.append(row)
+        # CLASSIFY/SILICON PIPELINING is the default whenever this run both
+        # classifies and executes silicon with the batched executor: the
+        # phase barrier (classify EVERY row, then device work) is replaced
+        # by rolling admission.  Resume-shaped runs (--phases without
+        # classify), --serial-legacy, --no-pipeline and non-hardware runs
+        # keep the legacy phase-barrier flow (semantics identical either
+        # way — the pipeline only reorders WHEN gated rows reach the
+        # executor, never what gates them).
+        pipelined = (
+            "silicon" in phases
+            and self.a.allow_hardware
+            and "classify" in phases
+            and self.exec_mode == "batched"
+            and not getattr(self.a, "no_pipeline", False)
+            and bool(live)
+        )
+        if pipelined:
             self.verify_toolchain("silicon")
-            # Gate every row BEFORE any device work (same rules, same REDs
-            # as the per-row flow): keyed classify evidence required, keyed
-            # BH CRAQ gate required.  `slots` keeps the row order so the
-            # results list is unchanged vs the legacy loop.
-            slots = []  # ("withheld", result) | ("go", row, cls, attribution)
-            for row, classifications, attribution in prelim:
-                # Silicon runs only on classify evidence KEYED to this run
-                # (finding sweep_2x2.py:1341: with classify skipped,
-                # classifications={} disabled the byte-identical refusal
-                # logic and every hash-match).  A resumed evidence root
-                # supplies verdicts only if their cc1plus/tt-metal keys
-                # match; otherwise the row is withheld RED.
-                missing_cls = []
-                for sel in SELECTORS:
-                    if row["nodes"][sel] and sel not in classifications:
-                        keyed = self._load_keyed_classification(row, sel)
-                        if keyed is None:
-                            missing_cls.append(sel)
-                        else:
-                            classifications[sel] = keyed
-                if missing_cls:
-                    self.reds.append(
-                        f"{row['op']}: silicon withheld — no classify evidence "
-                        f"keyed to this toolchain/tree for "
-                        f"{','.join(missing_cls)} (run the classify phase)"
+            results.extend(self._pipeline_run(phases, live))
+        else:
+            if "silicon" in phases and self.a.allow_hardware and live:
+                print(
+                    "pipeline: legacy phase-barrier flow (--no-pipeline, "
+                    "--serial-legacy, or a resume without the classify phase)"
+                )
+            self._classify_prewarm(live, phases)
+            prelim = [self._gate_one_row(row, phases) for row in live]
+            if "silicon" not in phases:
+                for row, classifications, _attr in prelim:
+                    results.append(self._result_skeleton(row, classifications))
+            elif not self.a.allow_hardware:
+                for row, _cls, _attr in prelim:
+                    skips.append(
+                        {
+                            "op": row["op"],
+                            "corpus_id": row["corpus_id"],
+                            "status": "SKIP_HARDWARE_NOT_AUTHORIZED",
+                            "reason": "silicon phase requires --allow-hardware",
+                        }
                     )
-                    slots.append(
-                        (
-                            "withheld",
-                            dict(
-                                self._result_skeleton(row, classifications),
-                                notes=[
-                                    "silicon withheld: classify evidence missing "
-                                    "or keyed to another toolchain/tree"
-                                ],
-                            ),
-                        )
-                    )
-                    continue
-                # Keyed BH CRAQ gate: stale-toolchain greens never open it.
-                gate = self._bh_craq_gate(row)
-                if not gate and not self.a.skip_craq_gate:
-                    self.reds.append(
-                        f"{row['op']}: silicon withheld — paired BH CRAQ not green"
-                    )
-                    if attribution and row["op"] in (self.a.knob_silicon_rows or []):
-                        self.reds.append(
-                            f"{row['op']}: knob silicon withheld — main BH CRAQ gate not green"
-                        )
-                    slots.append(
-                        (
-                            "withheld",
-                            dict(
-                                self._result_skeleton(row, classifications),
-                                notes=["silicon withheld: BH CRAQ gate not green"],
-                            ),
-                        )
-                    )
-                    continue
-                slots.append(("go", row, classifications, attribution))
-            results.extend(self._silicon_phase(slots))
+            else:
+                self.verify_toolchain("silicon")
+                results.extend(self._silicon_phase(self._gate_rows(prelim)))
         self.emit_scoreboard(results, skips)
         rag = "GREEN"
         if "report" in phases:
@@ -4089,6 +4242,22 @@ def main():
         "--dry-run",
         action="store_true",
         help="print device jobs instead of running them",
+    )
+    ap.add_argument(
+        "--no-pipeline",
+        action="store_true",
+        help="ESCAPE: disable classify/silicon pipelining (rolling wave "
+        "admission) and run the legacy phase barrier — classify EVERY row, "
+        "then all device work; gating/refusal/provenance semantics are "
+        "identical either way",
+    )
+    ap.add_argument(
+        "--admit-wave-rows",
+        type=int,
+        default=8,
+        help="pipelined rolling admission: rows per gating wave after the "
+        "first (the first wave is the --priority-ops list, else "
+        f"{Sweep._FIRST_WAVE_ROWS} rows, so device work starts early)",
     )
     ap.add_argument(
         "--serial-legacy",
