@@ -133,7 +133,7 @@ def test_dflash_prefill_integration(
     H = dcfg.hidden_size
     drafter_sd = drafter_state_dict  # SAME weights the HF reference holds — see conftest hf_drafter/drafter_state_dict
 
-    # Device drafter (concat mode: store the 6 taps, one grouped-shard fc(concat) at write time).
+    # Device drafter (sliced FC: stream fc_slice_i @ h_i and accumulate at tap time — the production path).
     drafter = TtDFlashDrafter(
         mesh_device,
         dcfg,
@@ -143,20 +143,19 @@ def test_dflash_prefill_integration(
         max_seq_len=isl_total,
         num_links=num_links,
         topology=topology,
-        fc_mode="concat",
     )
     drafter.reset()
     target_ids = set(dcfg.target_layer_ids)
     tapped = []  # records the GLOBAL layer indices that actually fire a tap — asserted == EXPECTED_TARGET_LAYERS
+    tapped_hiddens = {}
 
     def on_layer_hidden(global_idx, h):
-        # ONLY the 6 target layers are kept, ON DEVICE, in DRAM. h is [1,1,seq/sp,H/tp] (SP-sharded on seq,
-        # TP-sharded on hidden). Leave seq SP-sharded — clone (drafter takes ownership + frees its tap; h is
-        # the verifier's live residual) and tap this chip's own slice, no gather. No host copy.
         if global_idx not in target_ids:
             return
         tapped.append(global_idx)
-        drafter.tap(ttnn.clone(h), global_idx)  # own a private copy of the live SP-sharded residual slice
+        hc = ttnn.clone(h)
+        tapped_hiddens[global_idx] = hc
+        drafter.tap(hc, global_idx)
 
     # Build + run the full 61-layer verifier DIRECTLY (weight handling identical to
     # test_prefill_transformer.run_model). on_layer_hidden taps ONLY the 6 target layers on device.
@@ -261,12 +260,12 @@ def test_dflash_prefill_integration(
     )
 
     # The hook must have tapped EXACTLY the target layers [1,12,24,35,47,58] during the forward — no more,
-    # no fewer — and each must have landed in the drafter's DRAM tap slots.
+    # no fewer — and each must have landed in the test's captured-hidden map.
     assert sorted(tapped) == list(EXPECTED_TARGET_LAYERS), (
         f"on_layer_hidden tapped {sorted(tapped)}, expected {list(EXPECTED_TARGET_LAYERS)} "
         f"(check the on_layer_hidden hook + the target-layer guard)"
     )
-    assert all(t is not None for t in drafter._taps), "a drafter tap slot is empty after the forward"
+    assert set(tapped_hiddens) == set(EXPECTED_TARGET_LAYERS), "a target-layer hidden was not captured"
     logger.info(f"tap check OK — tapped exactly layers {sorted(tapped)}")
 
     def _to_host(t):  # -> host [1, seq, H]; TP concatenated on hidden → full H
@@ -276,17 +275,21 @@ def test_dflash_prefill_integration(
         )
         return host.reshape(1, isl_total, H).float()
 
-    target_hiddens = [_to_host(drafter._taps[j]) for j in range(len(dcfg.target_layer_ids))]
+    target_hiddens = [_to_host(tapped_hiddens[tid]) for tid in dcfg.target_layer_ids]
+    # Free the captured device residuals now that they're on host: the sliced drafter retains no ownership
+    # of the taps, and at 5K x 7168 holding all six is substantial DRAM during this 61-layer test.
+    for _tapped in tapped_hiddens.values():
+        ttnn.deallocate(_tapped)
     ctx = torch.cat(target_hiddens, dim=-1)  # [1, seq, n*H] — the fc input (concat over target layers)
     assert ctx.shape[-1] == dcfg.target_feature_size, f"ctx feature {ctx.shape[-1]} != {dcfg.target_feature_size}"
 
     # HF reference: real drafter forward on the SAME 6 target hiddens, per-layer context (k, v)
     real = hf_context_kv(ctx)
 
-    # Device drafter: finalize from the DRAM taps (concat → grouped-shard fc → per-layer k/v/norm/rope).
-    # Caller owns the K/V caches (like the MLA prefill runner) and passes them into write_kv_cache.
+    # Device drafter: finalize the accumulated sliced FC (reduce_scatter → hidden_norm → per-layer k/v/norm/rope).
+    # Caller owns the K/V caches (like the MLA prefill runner) and passes them into forward().
     k_cache, v_cache = allocate_dflash_kv_cache(mesh_device, dcfg, isl_total, sp_axis=sp_axis, tp_axis=tp_axis)
-    drafter.write_kv_cache(k_cache, v_cache)
+    drafter.forward(k_cache, v_cache)
     ttnn.synchronize_device(mesh_device)
 
     # cache SP-sharded on seq → concat SP along seq(dim2), TP along kv-head(dim1); the host[:num_layers]

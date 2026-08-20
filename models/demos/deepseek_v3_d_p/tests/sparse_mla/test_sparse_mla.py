@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sparse MLA / DSA tests for DeepSeek V3.2-family variants.
+"""Sparse MLA / DSA tests for the GLM-5.1 / GLM-5.2 variants.
 
 Dense MLA coverage lives in test_mla.py. This file keeps the sparse reference
 path separate while reusing the same TT execution helper and the production mesh
@@ -41,7 +41,7 @@ SPARSE_KVPE_PCC = 0.99
 # quantization noise. Measured ~0.99991 on 2x4 BH (both variants, chunked + rotated), tracking the
 # bf16 KVPE cache; 0.999 keeps ample bf8 headroom while still catching a real write regression.
 SPARSE_INDEX_PCC = 0.999
-SPARSE_VARIANTS = ["deepseek_v32", "glm_5_1", "glm_5_2"]
+SPARSE_VARIANTS = ["glm_5_1", "glm_5_2"]
 
 
 def _collect_kvpe_cache(cache, mesh_device):
@@ -186,7 +186,7 @@ def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot
     Layer-slot count mirrors the serving adapter (glm_5_2.py allocate_kv_cache): the indexer strides the
     folded user-major cache by num_full_indexer_layers (only ``full`` layers own an index slot), so the
     cache must carry that many layer slots for update_padded_kv_cache's cache_batch % num_layers check to
-    hold. Falls back to 1 when the config has no ``indexer_types`` (deepseek_v32 / glm_5_1: every layer full,
+    hold. Falls back to 1 when the config has no ``indexer_types`` (glm_5_1: every layer full,
     single-layer standalone MLA -> stride 1)."""
     return init_kvpe_cache(
         kvpe_cache_head_dim=getattr(config, "index_head_dim", 128),

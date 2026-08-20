@@ -51,7 +51,9 @@ def main():
     from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
     from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)  # one-shot gather-Q; no torus/ring needed
+    # Since #53153 chunk 0 uses cache-backed RingJointSDPA whenever max_seq_len > chunk (i.e. the small
+    # size here) -> needs FABRIC_1D_RING + the torus descriptor + a fresh node without tt-smi -r.
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(ROWS, COLS))
     print(f"[varchunk] mesh {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
     try:

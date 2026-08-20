@@ -25,7 +25,7 @@ on:
           - dit-common
           - wan-2.2-t2v
           - wan-2.2-i2v
-          # llama3.3-70b-galaxy: disabled — see #42139
+          - llama3.3-70b-galaxy
           - flux.1-schnell
           - flux.1-dev
           - ltx-2.3
@@ -120,6 +120,7 @@ jobs:
           echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -133,6 +134,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   models-unit-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     secrets: inherit
     # OIDC only on this caller (multihost-ci runner chart may need it), not workflow-wide.
     # Job-level permissions replace inherited defaults, so restate what tests need.

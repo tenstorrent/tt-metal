@@ -20,11 +20,11 @@ Migration hooks (Gate 1–2 in ``PREFILL_MIGRATION_TESTING.md``): ``build_kv_chu
 ``set_layer_ack_channel``. Request-mode H2D delivers SP-sharded uint32 tokens; ``prefill_chunk``
 embeds them on the first rank (same path as ``make_chunk_input``).
 
-CHUNKED prefill is supported: the SP cache-READ attention path (``cached_len > 0``, chunks 1+) uses the
-ring-joint dense SDPA over the block-cyclic packed KV cache (``attention/dense_sp.py``); chunk 0 /
-one-shot (``cached_len == 0``) uses the gather-Q stand-in. The single-chip (sp==1) cache-read is still
-``NotImplementedError`` (not used on the galaxy). The galaxy KV-PCC harness runs both one-shot and
-multi-chunk.
+CHUNKED prefill is supported: the SP cache-backed RingJointSDPA path uses the block-cyclic packed KV
+cache (``attention/dense_sp.py``) from chunk 0 onward. One-shot SP prefill retains its exact
+all-gather fallback because sliding RingJointSDPA requires short-Q/long-K. The single-chip (sp==1)
+cache-read is still ``NotImplementedError`` (not used on the galaxy). The galaxy KV-PCC harness runs
+both one-shot and multi-chunk.
 """
 
 import json
@@ -57,7 +57,8 @@ class TtPrefillRuntimeConfig:
     num_users: int = 1  # independent cache slots (user-major batch)
     sp_axis: int = 0
     tp_axis: int = 1
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    # Chunked SP requests use RingJointSDPA from chunk 0; one-shot uses the all-gather fallback.
+    topology: ttnn.Topology = ttnn.Topology.Ring
     use_ep_moe: bool = True
     expert_weight_dtype: ttnn.DataType = ttnn.bfloat4_b
     cache_dtype: ttnn.DataType = ttnn.bfloat8_b
@@ -100,6 +101,7 @@ class TtPrefillRuntime:
                 f"max_seq_len ({config.max_seq_len}) must be a multiple of every supported chunk size; "
                 f"{cs} does not divide it (supported: {self.chunk_sizes})"
             )
+        assert config.topology == ttnn.Topology.Ring, "GPT-OSS sequence-parallel prefill requires Ring topology"
 
         self.model_built = False
         self.kv_cache_allocated = False
@@ -242,13 +244,11 @@ class TtPrefillRuntime:
     def compile(self, kv_caches=None) -> None:
         """Warm up the kernels by running zero-token chunks through prefill_chunk (JIT-compiles).
 
-        Two warmups: the first chunk (actual_start=0, the gather-Q path) AND — when the config is
-        multi-chunk (max_seq_len > chunk_size) — a second chunk (actual_start>0), which is the ONLY
-        path that fires the SP ring cache-read (attention/dense_sp.py). Without the second warmup the
-        ring kernels JIT-compile inside the first *served/timed* chunk, inflating first-request TTFT.
-        (This is separate from the one-time empty-disk kernel-cache compile that only the very first run
-        ever pays.) One-shot (max_seq_len == chunk_size) never reaches the ring path and uses FABRIC_1D,
-        so it skips the second warmup."""
+        The first chunk exercises cache-backed RingJointSDPA when the cache is larger than the chunk;
+        equal-sized one-shot requests instead warm the all-gather fallback. When the config is multi-chunk
+        (max_seq_len > chunk_size), warm a second chunk too so its cache-growth runtime arguments are
+        covered before the first served/timed request. (This is separate from the one-time empty-disk
+        kernel-cache compile that only the very first run ever pays.)"""
         assert self.model_built
         # Warm up EACH supported chunk size — the ring kernels + rope slice differ per size, so a size
         # that isn't warmed here would JIT inside its first served chunk.
@@ -256,7 +256,7 @@ class TtPrefillRuntime:
             ring = self.config.max_seq_len > chunk
             logger.info(
                 f"GPT-OSS TtPrefillRuntime.compile() — warming up "
-                f"{'2 chunks (gather-Q + ring cache-read)' if ring else 'one chunk'} of {chunk} tokens"
+                f"{'2 cache-backed ring chunks' if ring else 'one all-gather fallback chunk'} of {chunk} tokens"
             )
             # prefill_chunk consumes (deallocates) its input tensor, so build a fresh input per call.
             self.prefill_chunk(
@@ -302,12 +302,12 @@ class TtPrefillRuntime:
         is the cache write offset (valid prefix already cached); the last chunk's tail may be pad, so
         actual_end < actual_start + chunk_size. Call once per chunk, in order.
 
-        actual_start > 0 drives the SP ring cache-READ path (chunks 1+, attention/dense_sp.py);
-        actual_start == 0 (first/only chunk) uses the gather-Q stand-in.
-
         On the first rank ``input_tensor`` is SP-sharded uint32 tokens (``make_chunk_input`` / H2D);
         they are embedded here. Non-first ranks receive activations over D2D already embedded.
         If a LayerAck channel is registered, the model bumps it once per layer via ``on_layer_complete``.
+
+        Every SP chunk writes K/V. A chunked request, including actual_start == 0, then uses the
+        cache-backed RingJointSDPA path; an equal-sized one-shot request uses the all-gather fallback.
         """
         if d2h_service is not None:
             raise NotImplementedError(

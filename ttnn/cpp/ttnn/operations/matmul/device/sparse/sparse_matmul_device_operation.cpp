@@ -30,7 +30,8 @@ ttnn::Shape compute_sparse_matmul_output_shape(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     bool is_input_a_sparse,
-    bool is_input_b_sparse) {
+    bool is_input_b_sparse,
+    std::optional<uint32_t> num_active = std::nullopt) {
     const auto& input_shape_a = input_tensor_a.logical_shape();
     const auto& input_shape_b = input_tensor_b.logical_shape();
 
@@ -59,6 +60,13 @@ ttnn::Shape compute_sparse_matmul_output_shape(
     // Add batched dims from input A to output shape
     for (uint32_t i = 0; i < a_batched_dims; ++i) {
         output_shape[-3 - b_batched_dims - i] = input_shape_a[-3 - i];
+    }
+
+    // Indexed/gather mode: the expert/batch axis is COMPACT (only the num_active selected experts).
+    // For every supported mode here input B is sparse with layout [..., E, K, N], so the E batch
+    // length lives at output_shape[-3]; overwrite it with num_active. (M/N are unchanged.)
+    if (num_active.has_value()) {
+        output_shape[-3] = num_active.value();
     }
 
     return output_shape;
@@ -219,6 +227,67 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     // host -- it is the caller's responsibility to pass an exact nnz, and the contract is validated
     // on-device in reader_bmm_tile_layout_in0_sender_padding.cpp (asserts loudly under watcher instead of
     // hanging).
+    // Indexed/gather mode validation. `indices` (optional_input_tensors[0]) is a compacted list of
+    // active sparse-group (expert) ids; the kernels iterate it directly (bB = indices[i]) instead of
+    // scanning all batch slots, and the output group axis becomes num_active = indices.logical_volume().
+    std::optional<uint32_t> indexed_num_active = std::nullopt;
+    if (operation_attributes.use_indices) {
+        TT_FATAL(
+            !tensor_args.optional_input_tensors.empty() && tensor_args.optional_input_tensors.at(0).has_value(),
+            "use_indices is set but no indices tensor was provided");
+        const auto& indices = tensor_args.optional_input_tensors.at(0).value();
+        TT_FATAL(
+            operation_attributes.is_input_b_sparse,
+            "Indexed/gather mode requires is_input_b_sparse=true (the indexed operand is the expert "
+            "weight tensor B, laid out as [..., E, K, N]).");
+        // The indices operand is dispatched on input A's device by the program factory, so it must be
+        // a device tensor with a live buffer on that same device -- is_allocated() alone is also true
+        // for a host tensor, and says nothing about device affinity.
+        TT_FATAL(indices.storage_type() == ttnn::StorageType::DEVICE, "indices tensor must be on device");
+        TT_FATAL(indices.buffer() != nullptr, "indices tensor must be allocated in a buffer");
+        TT_FATAL(
+            indices.device() == input_tensor_a.device(),
+            "indices tensor must be on the same device as the other sparse matmul inputs");
+        TT_FATAL(
+            indices.layout() == ttnn::Layout::ROW_MAJOR, "indices must be ROW_MAJOR layout, got {}", indices.layout());
+        TT_FATAL(
+            indices.dtype() == tt::tt_metal::DataType::UINT16, "indices must be UINT16 dtype, got {}", indices.dtype());
+        // The in1 reader fetches the whole id list with a single page-0 read, so every id must live in
+        // one ROW_MAJOR stick. A tensor like [1, 1, 8, 1] has the same volume but eight one-element
+        // pages, of which only the first would be read.
+        const auto& indices_shape = indices.logical_shape();
+        TT_FATAL(
+            indices_shape[-1] == indices.logical_volume(),
+            "indices must occupy a single ROW_MAJOR stick (all dimensions except the last must be 1), got shape {}",
+            indices_shape);
+        // In indexed mode the loop count comes from num_active, so an nnz would be silently ignored.
+        TT_FATAL(
+            !operation_attributes.nnz.has_value(),
+            "nnz ({}) must not be supplied together with indices: the indexed/gather loop count is "
+            "num_active (the length of indices), so nnz would be ignored",
+            operation_attributes.nnz.value_or(0));
+        // The ids address B's sparse-group axis, and the indexed output shape is the expanded shape
+        // with that axis shortened to num_active (see compute_sparse_matmul_output_shape). Both only
+        // hold when the group axis is B's *only* batch dimension.
+        TT_FATAL(
+            b_shape_padded.rank() >= 3,
+            "Indexed/gather mode requires input B to have a sparse-group axis (rank >= 3), got shape {}",
+            b_shape_padded);
+        TT_FATAL(
+            batch_length_B == b_shape_padded[-3],
+            "Indexed/gather mode requires input B's sparse-group axis to be its only batch dimension "
+            "(B batch length {} != B.shape[-3] {}), otherwise the indexed ids and the compact output "
+            "shape are ambiguous. B shape: {}",
+            batch_length_B,
+            b_shape_padded[-3],
+            b_shape_padded);
+        TT_FATAL(
+            indices.logical_volume() <= batch_length_B,
+            "indices length / num_active ({}) must be <= the number of sparse groups in input B ({})",
+            indices.logical_volume(),
+            batch_length_B);
+        indexed_num_active = static_cast<uint32_t>(indices.logical_volume());
+    }
 
     const bool is_output_tensor_given =
         !tensor_args.optional_output_tensors.empty() && tensor_args.optional_output_tensors.at(0).has_value();
@@ -243,7 +312,25 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.is_input_a_sparse,
             operation_attributes.is_input_b_sparse);
 
-        if (operation_attributes.nnz.has_value()) {
+        if (indexed_num_active.has_value()) {
+            // Indexed/gather mode writes num_active compact slots addressed by the loop counter, so the
+            // only valid output is the indexed shape. A full-E output would leave holes (the writer no
+            // longer zero-fills skipped slots because it never visits them), and an undersized one
+            // would be written out of bounds.
+            const auto indexed_output_shape = compute_sparse_matmul_output_shape(
+                input_tensor_a,
+                input_tensor_b,
+                operation_attributes.is_input_a_sparse,
+                operation_attributes.is_input_b_sparse,
+                indexed_num_active);
+            TT_FATAL(
+                optional_output_shape == indexed_output_shape,
+                "Optional output tensor shape {} must match the indexed output shape {} when indices are "
+                "provided (num_active={})",
+                optional_output_shape,
+                indexed_output_shape,
+                indexed_num_active.value());
+        } else if (operation_attributes.nnz.has_value()) {
             const auto compact_output_shape = compute_sparse_matmul_compact_output_shape(
                 input_tensor_a, input_tensor_b, operation_attributes.nnz.value());
             TT_FATAL(
@@ -325,8 +412,20 @@ SparseMatmulDeviceOperation::spec_return_value_t SparseMatmulDeviceOperation::co
     const auto& input_tensor_a = tensor_args.input_tensors.at(0);
     const auto& input_tensor_b = tensor_args.input_tensors.at(1);
 
+    // Indexed/gather mode -> compact output: the expert axis shrinks from E to num_active (the
+    // length of the indices operand carried in optional_input_tensors[0]).
+    std::optional<uint32_t> num_active = std::nullopt;
+    if (operation_attributes.use_indices && !tensor_args.optional_input_tensors.empty() &&
+        tensor_args.optional_input_tensors.at(0).has_value()) {
+        num_active = tensor_args.optional_input_tensors.at(0)->logical_volume();
+    }
+
     const auto output_shape = compute_sparse_matmul_output_shape(
-        input_tensor_a, input_tensor_b, operation_attributes.is_input_a_sparse, operation_attributes.is_input_b_sparse);
+        input_tensor_a,
+        input_tensor_b,
+        operation_attributes.is_input_a_sparse,
+        operation_attributes.is_input_b_sparse,
+        num_active);
 
     const auto output_dtype = operation_attributes.output_dtype.has_value() ? operation_attributes.output_dtype.value()
                                                                             : input_tensor_a.dtype();
@@ -420,11 +519,13 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
     const std::optional<const CoreCoord>& user_core_coord,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     const std::optional<const GlobalCircularBuffer>& global_cb,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<Tensor>& indices) {
     auto sparse_matmul_attributes = SparseMatmulParams{
         nnz,
         is_input_a_sparse,
         is_input_b_sparse,
+        indices.has_value(),  // use_indices
         program_config,
         memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
         dtype,
@@ -437,7 +538,17 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
     auto parameters = create_sparse_matmul_attributes(
         input_tensor_a, input_tensor_b, sparsity, sparse_matmul_attributes, {optional_output_tensor});
 
-    return {parameters, SparseMatmulInputs{{input_tensor_a, input_tensor_b, sparsity}, {}, {optional_output_tensor}}};
+    // The indices operand (if any) rides in optional_input_tensors[0]; presence there is the sole
+    // trigger for indexed/gather mode. When absent, optional_input_tensors stays empty and every
+    // downstream path is byte-for-byte identical to the dense sparsity-scan behavior.
+    std::vector<std::optional<const Tensor>> optional_inputs;
+    if (indices.has_value()) {
+        optional_inputs.emplace_back(indices);
+    }
+
+    return {
+        parameters,
+        SparseMatmulInputs{{input_tensor_a, input_tensor_b, sparsity}, optional_inputs, {optional_output_tensor}}};
 }
 
 SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
@@ -455,7 +566,8 @@ SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
     const std::optional<const CoreCoord>& user_core_coord,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     const std::optional<const GlobalCircularBuffer>& global_cb,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<Tensor>& indices) {
     auto [params, inputs] = sparse_matmul_build_operation_args(
         input_tensor_a,
         input_tensor_b,
@@ -471,7 +583,8 @@ SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
         user_core_coord,
         output_tile,
         global_cb,
-        sub_device_id);
+        sub_device_id,
+        indices);
     return ttnn::device_operation::launch<SparseMatmulDeviceOperation>(params, inputs);
 }
 
@@ -507,6 +620,7 @@ SparseMatmulParams create_sparse_matmul_attributes(
         parameters.nnz,
         parameters.is_input_a_sparse,
         parameters.is_input_b_sparse,
+        parameters.use_indices,
         matmul_struct.program_config,
         matmul_struct.output_mem_config,
         matmul_struct.output_dtype,
