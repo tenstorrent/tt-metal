@@ -412,13 +412,20 @@ def watch(child, root: Path, total: int, config, pool: int, all_ids: list):
             name = request.get("worker", "?")
             label = request.get("variant") or "an unknown variant"
             # One hang is the race. The other formats of this test hit the same
-            # site; letting them run costs another core each.
-            skip_hang_family(root, request.get("case", ""), all_ids, config.report_dir)
+            # site; letting them run costs another core each. A mismatch dirties
+            # the core without that trap; skip_family is False so siblings run
+            # on the spare. Default True keeps old hang payloads behaving.
+            skip_family = request.get("skip_family", True)
+            if skip_family:
+                skip_hang_family(
+                    root, request.get("case", ""), all_ids, config.report_dir
+                )
+            why = "hung" if skip_family else "dirtied the core"
             if evicted < budget and evict(request):
                 evicted += 1
-                log(f"{name} hung on {label}; killed, xdist replaces it on a spare")
+                log(f"{name} {why} on {label}; killed, xdist replaces it on a spare")
             else:
-                log(f"{name} hung on {label}; no spare core left, resetting the card")
+                log(f"{name} {why} on {label}; no spare core left, resetting the card")
                 return "wedged", None, records
 
         # One silent worker is enough to act on. Workers sit on separate cores, so

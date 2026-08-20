@@ -51,14 +51,14 @@ def _hb() -> heartbeat.Writer:
     return _writer
 
 
-def _hang_closes_case(nodeid: str, variant: str) -> None:
+def _hang_closes_case(nodeid: str, variant: str, skip_family: bool = True) -> None:
     """Close a case out on a hang, and ask to be moved off the core it cost us."""
     global _parked
     # Done, not retried: a case that just hung a core mostly hangs the next one,
     # and anything resuming from the done-log has to step over it. The red pytest
     # reports is what carries the result.
     _hb().mark_done(nodeid)
-    _hb().request_recovery(nodeid, variant)
+    _hb().request_recovery(nodeid, variant, skip_family=skip_family)
     # Nobody is watching an unsupervised run, so there is no recovery coming and
     # nothing to wait for.
     _parked = _hb().enabled
@@ -83,11 +83,15 @@ def _park() -> None:
 
 @contextmanager
 def quiet_harness():
-    """Mute the harness's own logging for the duration of a variant.
+    """Mute the harness's own logging for the duration of a run.
 
     Variants are *meant* to fail, and the harness answers every mismatch with a
     colour dump of the offending tiles. A hundred of those is the whole console.
-    The baseline pass runs outside this, so a genuinely broken test still says so.
+    The baseline pass is muted on the same grounds: a red baseline is skipped
+    rather than swept, so its dump tells the sweep nothing, and at scale it is
+    the entire log (868 red baselines rendered 245k of one shard's 273k lines).
+    conftest's one-line report still names every failure; run the test without
+    this plugin to get the tiles back.
     """
     logger.disable("helpers")
     try:
@@ -477,7 +481,10 @@ def pytest_runtest_call(item):
     unwatch = perturber.watch_baseline()
     _hb().beat(item.nodeid)
     try:
-        outcome = yield
+        # The baseline runs muted too: a red one is skipped rather than swept, so
+        # its tile dump buys nothing here, and conftest still names the failure.
+        with quiet_harness():
+            outcome = yield
 
         # A test that was already red tells us nothing about timing.
         if outcome.excinfo is not None:
@@ -517,6 +524,11 @@ def pytest_runtest_call(item):
             outcome.force_exception(
                 AssertionError(f"{len(failures)} perturbation(s) failed: {head}")
             )
+            # A mismatch race still dirties dest/semaphores. The next case on this
+            # core then fails its clean baseline (860 LoFi matmuls after one
+            # moe_gate race). Same spare-core eviction as a hang; siblings stay
+            # queued because they are another window, not another wedge.
+            _hang_closes_case(item.nodeid, failures[0], skip_family=False)
     finally:
         unwatch()
 
