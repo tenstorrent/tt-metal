@@ -177,13 +177,11 @@ inline void calculate_sfpu_binary_div(
                 // r = 1/inf = 0 and result = in0 * 0 = 0, so result * in1 is 0 * inf, the
                 // residual is NaN and the refinement destroys a correct zero. The guard is
                 // about whether the residual can be formed, not about the quotient's size.
-                v_if(sfpi::exexp(in1, sfpi::ExponentMode::Biased) != 255) {
-                    // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
-                    // The residual subtraction is exact under Sterbenz's lemma.
-                    sfpi::vFloat e = in0 - result * in1;
-                    result = result + e * r;
-                }
-                v_endif;
+                v_and(sfpi::exexp(in1, sfpi::ExponentMode::Biased) != 255);
+                // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
+                // The residual subtraction is exact under Sterbenz's lemma.
+                sfpi::vFloat e = in0 - result * in1;
+                result = result + e * r;
             }
             v_endif;
         }
