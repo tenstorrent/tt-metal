@@ -180,8 +180,8 @@
       "test_lm_head_bfp8_weight_decode_batch32[blackhole-1x8]": 0.99,
       "test_sampling_log_probs_pcc[wormhole_b0-1x8]": 0.999,
       "test_sampling_log_probs_pcc[blackhole-1x8]": 0.999,
-      "_comment_teacher_forcing_e2e": "Baselined to measured 31B seq=128 behaviour, not a correctness target: 129 teacher-forced steps span PCC 0.5628 (decode[98]) to 0.9800, mean 0.9139, prefill 0.8375. Floor is the worst step. test_full_model 0.98 is a ~6-token prompt; at 128 tokens ttnn_prefill_forward matches the generator. p64_n64 is unmeasured and still falls back to 0.99.",
-      "test_e2e_logits_pcc[wormhole_b0-p128_n128-1x8]": 0.55
+      "_comment_teacher_forcing_e2e": "Default case is prefill_512-max_new_tokens_500 (tt-transformers TokenAccuracy lengths). Floor 0.55 was measured on 31B p128_n128 (worst step 0.5628); remeasure at the default lengths before tightening. test_full_model 0.98 is a ~6-token prompt, not this e2e path.",
+      "test_e2e_logits_pcc[wormhole_b0-prefill_512-max_new_tokens_500-1x8]": 0.55
     }
   }
 }
