@@ -31,7 +31,7 @@
 
 #include <protobuf/factory_system_descriptor.pb.h>   // tt::scaleout_tools::fsd::proto (from scaleout_tools)
 #include <protobuf/physical_system_descriptor.pb.h>  // tt::fabric::proto (compiled into this lib)
-#include "board/board.hpp"  // tt::scaleout_tools::get_board_type_from_string
+#include "board/board.hpp"                           // tt::scaleout_tools::get_board_type_from_string
 
 namespace tt::scaleout_tools {
 
