@@ -237,6 +237,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_actual_isl,
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<uint32_t> sliding_window_size,
+    std::optional<uint32_t> bounded_kv_slab_count,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v) {
     // Normalize empty joints to nullopt (see drop_if_empty).
@@ -282,7 +283,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         std::nullopt,  // kv_actual_isl_tensor
         1,             // kv_cache_num_layers
         0,             // kv_cache_layer_idx
-        sliding_window_size);
+        sliding_window_size,
+        bounded_kv_slab_count);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],

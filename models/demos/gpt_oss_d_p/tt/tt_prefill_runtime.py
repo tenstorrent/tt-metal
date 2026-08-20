@@ -85,9 +85,9 @@ class TtPrefillRuntimeConfig:
     is_last_rank: bool = True
     first_layer_idx: int = 0
     # PR1 bounded sliding-window KV: sliding layers get a small circular cache (2 chunk slabs)
-    # instead of a full max_seq_len slot. PR1 is allocation + circular WRITE + host readback only;
-    # the on-device cache-read of a bounded layer asserts (PR2, C++), and KV migration is
-    # incompatible (PR3). Default off => allocation byte-identical to today.
+    # instead of a full max_seq_len slot. PR1 = allocation + circular WRITE + host readback; PR2
+    # adds the on-device cache-read (ring op bounded_kv_slab_count, threaded by prefill.py). KV
+    # migration is still incompatible (PR3). Default off => allocation byte-identical to today.
     bounded_sliding_kv_cache: bool = False
 
     @property

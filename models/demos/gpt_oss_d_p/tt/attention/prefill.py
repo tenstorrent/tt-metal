@@ -209,18 +209,18 @@ def attention_forward(
             # the split full/sliding caches. batch_idx is the flat slot, so the op call below passes
             # slot_idx=batch_idx, layer_idx=0, num_layers=1 (the kernel linearizes identically).
             cache_k, cache_v, cache_batch_idx, cache_capacity, cache_bounded = kv_cache.layer_view(user_id, layer_idx)
+            # Bounded (circular) sliding cache: the ring read wraps its local slab addressing
+            # on-device (PR2, opt-in via bounded_kv_slab_count = capacity in chunk slabs). The
+            # capacity is a chunk multiple by construction (PR1 allocates 2 chunk slabs); assert so
+            # a config drift fails loud instead of passing a wrong slab count to the kernel.
+            chunk_global = seq_len * sp
+            bounded_kv_slab_count = None
             if cache_bounded:
-                # PR1 ships allocation + the circular WRITE only: the ring cache-read cannot
-                # un-rotate a CIRCULAR (bounded) sliding cache yet — that is the PR2 C++ change.
-                # The cache-backed ring path serves every chunk (chunk 0 included), so bounded
-                # sliding layers cannot take ANY chunked SP read in PR1. Fail loud instead of
-                # reading garbage KV.
-                raise NotImplementedError(
-                    f"bounded_sliding_kv_cache: on-device cache-read of a bounded sliding layer "
-                    f"(layer {layer_idx}, cached_len={cached_len}) is not supported yet — the ring "
-                    f"cache-read un-rotation lands with PR2 (C++). PR1 supports allocation + the "
-                    f"circular write only; validate via host readback (kv_cache_pcc_check)."
+                assert cache_capacity % chunk_global == 0, (
+                    f"bounded sliding cache capacity ({cache_capacity}) must be a whole number of "
+                    f"chunk slabs (chunk_global={chunk_global})"
                 )
+                bounded_kv_slab_count = cache_capacity // chunk_global
             tt_sdpa_out = dense_sp_attention(
                 tt_q,
                 cache_k,
@@ -240,6 +240,9 @@ def attention_forward(
                 cluster_axis=mesh_config.sp_axis,
                 attention_sink=weights.sinks,
                 sliding_window_size=config.sliding_window,
+                # PR2: bounded circular sliding cache (None on full layers / unbounded caches).
+                # kv_actual / logical_n above stay TRUE ABSOLUTE lengths.
+                bounded_kv_slab_count=bounded_kv_slab_count,
                 slot_idx=cache_batch_idx,
                 layer_idx=0,
                 num_layers=1,

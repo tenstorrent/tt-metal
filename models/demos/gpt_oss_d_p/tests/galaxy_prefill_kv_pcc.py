@@ -18,9 +18,8 @@ Env:
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement                   [default 1]
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs) [default: all]
   PREFILL_BOUNDED_SLIDING_KV  "1" -> bounded circular KV cache on sliding layers (PR1: allocation +
-                      circular write + host-readback PCC; the on-device ring cache-read of a bounded
-                      layer asserts until PR2, and the ring path now serves EVERY chunk, so chunked
-                      mode cannot run yet)                                                  [default 0]
+                      circular write + host-readback PCC; PR2 adds the on-device ring cache-read via
+                      bounded_kv_slab_count, so chunked runs cover every chunk)             [default 0]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8"                        [default bf4]
   GPT_OSS_WEIGHTS_FROM_CACHE  "1" -> pass an empty state_dict (load tilized weights from the TTNN cache)
   HF_MODEL            real gpt-oss weights dir (read by ModelArgs)

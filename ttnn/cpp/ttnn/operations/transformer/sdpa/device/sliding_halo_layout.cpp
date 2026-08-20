@@ -10,7 +10,7 @@ bool ChunkedSlidingHaloLayout::uses_neighbor_halo() const { return ring_size > 1
 
 uint32_t ChunkedSlidingHaloLayout::send_tail_start_tile(uint32_t source_device) const {
     return chunked_sliding_halo_source_start_tile(
-        source_device, q_local_tile_rows, ring_size, logical_k_tile_rows, halo_tile_rows);
+        source_device, q_local_tile_rows, ring_size, logical_k_tile_rows, halo_tile_rows, bounded_kv_slab_count);
 }
 
 ChunkedSlidingHaloLayout build_chunked_sliding_halo_layout(
@@ -19,11 +19,13 @@ ChunkedSlidingHaloLayout build_chunked_sliding_halo_layout(
     uint32_t sliding_window_tokens,
     uint32_t tile_height,
     uint32_t ring_size,
-    uint32_t logical_k_tile_rows) {
+    uint32_t logical_k_tile_rows,
+    uint32_t bounded_kv_slab_count) {
     ChunkedSlidingHaloLayout layout;
     layout.q_local_tile_rows = q_local_tile_rows;
     layout.logical_k_tile_rows = logical_k_tile_rows;
     layout.ring_size = ring_size;
+    layout.bounded_kv_slab_count = bounded_kv_slab_count;
     const uint32_t q_group_tile_rows = q_local_tile_rows * ring_size;
     // The first complete Q group needs a neighbor halo too: devices 1..R-1 read
     // their predecessor within that group. The work plan clips the only missing

@@ -56,6 +56,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_actual_isl,
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<uint32_t> sliding_window_size,
+    std::optional<uint32_t> bounded_kv_slab_count,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
@@ -92,6 +93,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_actual_isl,
         attention_sink,
         sliding_window_size,
+        bounded_kv_slab_count,
         persistent_output_buffer_joint_k,
         persistent_output_buffer_joint_v);
     return outputs;
@@ -638,6 +640,11 @@ void bind_sdpa(nb::module_& mod) {
                 compute kernels prune K chunks outside the window. Ring attention currently supports the
                 GPT-OSS specialization: a 128-token window, local 8Q:1K:1V heads with D64, BF16 Q,
                 BFP8_B K/V, SP4 production or SP8 test topology, and chunked prefill without joint tokens.
+            bounded_kv_slab_count (int, optional): Bounded circular sliding KV cache. The per-device
+                K/V shard holds only this many chunk-sized slabs (chunk group g lives in local slab
+                g % n_slabs; the writer wraps host-side). logical_n / kv_actual_isl stay TRUE ABSOLUTE
+                values. Requires sliding_window_size + kv_actual_isl and a cache of exactly
+                n_slabs Q-sized slabs per device. Defaults to None (unbounded cache, unchanged behavior).
             persistent_output_buffer_joint_k (ttnn.Tensor, optional): Persistent buffer for the
                 gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.
             persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
@@ -696,6 +703,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_actual_isl").noconvert() = nb::none(),
         nb::arg("attention_sink") = nb::none(),
         nb::arg("sliding_window_size") = nb::none(),
+        nb::arg("bounded_kv_slab_count").noconvert() = nb::none(),
         nb::arg("persistent_output_buffer_joint_k").noconvert() = nb::none(),
         nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none());
 

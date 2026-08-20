@@ -21,9 +21,10 @@ on, allocation splits into TWO packed caches — full layers keep the full-lengt
 (``num_users * n_full`` batch), sliding layers get small circular slots (``num_users * n_slide``
 batch, ``sliding_capacity`` tokens = 2 chunk slabs) — remapped per layer via
 :func:`build_layer_map` / :meth:`GptOssKVCache.layer_view`. Sliding writes wrap via a host-side
-modulo on ``kv_actual`` (see :func:`write_kv_chunk`); the on-device cache-READ of a bounded layer is
-NOT supported yet (PR2, a C++ change) and callers must fail loud. Flag off => byte-identical to the
-legacy single packed cache.
+modulo on ``kv_actual`` (see :func:`write_kv_chunk`); the on-device cache-READ of a bounded layer
+wraps the same slab addressing inside the ring op (PR2: ``bounded_kv_slab_count`` on
+``ring_joint_scaled_dot_product_attention``, threaded by prefill.py from :meth:`layer_view`). Flag
+off => byte-identical to the legacy single packed cache.
 """
 
 from dataclasses import dataclass
