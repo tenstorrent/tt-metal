@@ -319,24 +319,10 @@ void Kernel::process_dataflow_buffer_binding_handles(const std::function<void(
                                                          uint16_t logical_dfb_id,
                                                          bool is_relay,
                                                          uint8_t prefetcher_pipe_id,
-                                                         uint8_t hw_format,
-                                                         uint8_t face_r_dim,
-                                                         uint8_t face_c_dim,
-                                                         uint8_t num_faces_r_dim,
-                                                         uint8_t num_faces_c_dim,
-                                                         bool present)> callback) const {
+                                                         const LlkOperandFacts&)> callback) const {
     for (const auto& handle : this->dataflow_buffer_binding_handles_) {
         callback(
-            handle.accessor_name,
-            handle.slot,
-            handle.is_relay,
-            handle.prefetcher_pipe_id,
-            handle.llk_facts.hw_format,
-            handle.llk_facts.face_r_dim,
-            handle.llk_facts.face_c_dim,
-            handle.llk_facts.num_faces_r_dim,
-            handle.llk_facts.num_faces_c_dim,
-            handle.llk_facts.present);
+            handle.accessor_name, handle.slot, handle.is_relay, handle.prefetcher_pipe_id, handle.llk_facts);
     }
 }
 
@@ -354,48 +340,23 @@ void Kernel::process_tensor_binding_handles(const std::function<void(
                                                 uint32_t cta_offset,
                                                 uint32_t addr_crta_offset,
                                                 uint32_t num_runtime_field_crta_words,
-                                                uint8_t hw_format,
-                                                uint8_t face_r_dim,
-                                                uint8_t face_c_dim,
-                                                uint8_t num_faces_r_dim,
-                                                uint8_t num_faces_c_dim,
-                                                bool present)> callback) const {
+                                                const LlkOperandFacts&)> callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
         callback(
             handle.accessor_name,
             handle.cta_offset,
             handle.addr_crta_offset,
             handle.num_runtime_field_crta_words,
-            handle.llk_facts.hw_format,
-            handle.llk_facts.face_r_dim,
-            handle.llk_facts.face_c_dim,
-            handle.llk_facts.num_faces_r_dim,
-            handle.llk_facts.num_faces_c_dim,
-            handle.llk_facts.present);
+            handle.llk_facts);
     }
 }
 
-void Kernel::process_scratchpad_binding_handles(const std::function<void(
-                                                    const std::string& accessor_name,
-                                                    uint32_t size_bytes,
-                                                    uint32_t addr_crta_word,
-                                                    uint8_t hw_format,
-                                                    uint8_t face_r_dim,
-                                                    uint8_t face_c_dim,
-                                                    uint8_t num_faces_r_dim,
-                                                    uint8_t num_faces_c_dim,
-                                                    bool present)> callback) const {
+void Kernel::process_scratchpad_binding_handles(
+    const std::function<
+        void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word, const LlkOperandFacts&)>
+        callback) const {
     for (const auto& handle : this->scratchpad_binding_handles_) {
-        callback(
-            handle.accessor_name,
-            handle.size_bytes,
-            handle.addr_crta_word,
-            handle.llk_facts.hw_format,
-            handle.llk_facts.face_r_dim,
-            handle.llk_facts.face_c_dim,
-            handle.llk_facts.num_faces_r_dim,
-            handle.llk_facts.num_faces_c_dim,
-            handle.llk_facts.present);
+        callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word, handle.llk_facts);
     }
 }
 

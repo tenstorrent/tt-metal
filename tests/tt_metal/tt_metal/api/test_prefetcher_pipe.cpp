@@ -773,12 +773,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
                 uint16_t logical_id,
                 bool is_relay,
                 uint8_t prefetcher_pipe_id,
-                uint8_t,
-                uint8_t,
-                uint8_t,
-                uint8_t,
-                uint8_t,
-                bool) {
+                const LlkOperandFacts&) {
                 EXPECT_EQ(name, "relay_dfb");
                 EXPECT_EQ(logical_id, expected_slot);
                 EXPECT_TRUE(is_relay);

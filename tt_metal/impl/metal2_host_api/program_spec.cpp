@@ -27,6 +27,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "impl/kernels/kernel.hpp"
+#include "jit_build/llk_operand_facts.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
@@ -753,71 +754,66 @@ bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, con
 
 namespace {
 
-template <typename Id>
-void ValidateUnpackFaceGeometry(std::string_view kind, const Id& unique_id, const FaceGeometry& geom) {
-    TT_FATAL(
-        geom.face_r_dim > 0,
-        "{} '{}' has unpack_face_geometry_metadata.face_r_dim == 0; face_r_dim must be > 0",
-        kind,
-        unique_id);
-    TT_FATAL(
-        geom.face_r_dim <= tt::constants::FACE_HEIGHT,
-        "{} '{}' has unpack_face_geometry_metadata.face_r_dim ({}) which must be <= FACE_HEIGHT ({})",
-        kind,
-        unique_id,
-        geom.face_r_dim,
-        tt::constants::FACE_HEIGHT);
-    TT_FATAL(
-        geom.num_faces > 0,
-        "{} '{}' has unpack_face_geometry_metadata.num_faces == 0; num_faces must be > 0",
-        kind,
-        unique_id);
-}
-
-template <typename Id>
-void ValidateFaceGridFitsTile(std::string_view kind, const Id& unique_id, const Tile& tile, const FaceGeometry& geom) {
-    TT_FATAL(
-        tile.get_width() % tt::constants::FACE_WIDTH == 0,
-        "{} '{}' tile_c_dim ({}) must be a multiple of FACE_WIDTH ({})",
-        kind,
-        unique_id,
-        tile.get_width(),
-        tt::constants::FACE_WIDTH);
-    const uint32_t tile_c_faces = tile.get_width() / tt::constants::FACE_WIDTH;
-    TT_FATAL(
-        tile_c_faces > 0, "{} '{}' tile_c_dim ({}) must include at least one face", kind, unique_id, tile.get_width());
-    const uint32_t num_faces_c_dim = std::min(tile_c_faces, geom.num_faces);
-    TT_FATAL(
-        geom.num_faces % num_faces_c_dim == 0,
-        "{} '{}' num_faces ({}) must be divisible by num_faces_c_dim ({})",
-        kind,
-        unique_id,
-        geom.num_faces,
-        num_faces_c_dim);
-    const uint32_t num_faces_r_dim = geom.num_faces / num_faces_c_dim;
-    TT_FATAL(
-        num_faces_r_dim * geom.face_r_dim <= tile.get_height(),
-        "{} '{}' face grid (num_faces_r_dim={} * face_r_dim={} = {} rows) exceeds tile_r_dim ({})",
-        kind,
-        unique_id,
-        num_faces_r_dim,
-        geom.face_r_dim,
-        num_faces_r_dim * geom.face_r_dim,
-        tile.get_height());
-}
-
+// The LLK geometry rules shared by DFBs and scratchpads. Format presence and arch support are per-object
+// and stay with the callers.
 template <typename Id>
 void ValidateLlkTileAndFaceGeometry(
     std::string_view kind,
     const Id& unique_id,
     const std::optional<Tile>& tile,
     const std::optional<FaceGeometry>& face) {
-    if (face.has_value()) {
-        ValidateUnpackFaceGeometry(kind, unique_id, *face);
+    if (!face.has_value()) {
+        return;
     }
-    if (tile.has_value() && face.has_value()) {
-        ValidateFaceGridFitsTile(kind, unique_id, *tile, *face);
+    // Same checks as CircularBufferConfig::set_unpack_face_geometry.
+    TT_FATAL(
+        face->face_r_dim > 0,
+        "{} '{}' has unpack_face_geometry_metadata.face_r_dim == 0; face_r_dim must be > 0",
+        kind,
+        unique_id);
+    TT_FATAL(
+        face->face_r_dim <= tt::constants::FACE_HEIGHT,
+        "{} '{}' has unpack_face_geometry_metadata.face_r_dim ({}) which must be <= FACE_HEIGHT ({})",
+        kind,
+        unique_id,
+        face->face_r_dim,
+        tt::constants::FACE_HEIGHT);
+    TT_FATAL(
+        face->num_faces > 0,
+        "{} '{}' has unpack_face_geometry_metadata.num_faces == 0; num_faces must be > 0",
+        kind,
+        unique_id);
+    if (tile.has_value()) {
+        compute_face_grid_dims(
+            tile->get_height(),
+            tile->get_width(),
+            face->face_r_dim,
+            face->num_faces,
+            fmt::format("{} '{}'", kind, unique_id));
     }
+}
+
+// Normalize each source's LLK metadata into the facts genfiles bakes onto the binding token. A DFB or
+// scratchpad without a declared format is not an LLK operand, so it gets absent facts. A tensor always
+// has both a dtype and a tile, and that tile *is* the geometry -- there is no face-geometry override.
+LlkOperandFacts FactsFromDfb(const DataflowBufferSpec& spec) {
+    if (!spec.data_format_metadata.has_value()) {
+        return {};
+    }
+    return facts_from_format_tile_and_face(
+        *spec.data_format_metadata, spec.tile_format_metadata, spec.unpack_face_geometry_metadata);
+}
+
+LlkOperandFacts FactsFromScratchpad(const ScratchpadSpec& spec) {
+    if (!spec.data_format_metadata.has_value()) {
+        return {};
+    }
+    return facts_from_format_tile_and_face(
+        *spec.data_format_metadata, spec.tile_format_metadata, spec.unpack_face_geometry_metadata);
+}
+
+LlkOperandFacts FactsFromTensorSpec(const TensorSpec& spec) {
+    return facts_from_tile(datatype_to_dataformat_converter(spec.data_type()), spec.tile());
 }
 
 }  // namespace
@@ -2391,7 +2387,9 @@ struct ResolvedTensorParameter {
     // For now, since there are only two mutually exclusive possibilities, it's sufficient to
     // distinguish them with a boolean.
     bool runtime_field_is_page_size = false;
-    const TensorSpec* spec = nullptr;
+
+    // Compile-time LLK operand facts derived from the TensorParameter's spec, baked onto the binding token.
+    LlkOperandFacts llk_facts;
 };
 
 // Resolve a TensorParameter's static layout into a CTA payload + an extra CRTA word
@@ -2472,7 +2470,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
         std::numeric_limits<uint32_t>::max());
 
     ResolvedTensorParameter result;
-    result.spec = &spec;
+    result.llk_facts = FactsFromTensorSpec(spec);
     std::vector<uint32_t>& cta_payload = result.cta_payload;
 
     // Common header (always emitted, sharded or not):
@@ -2603,11 +2601,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
         handle.num_runtime_field_crta_words = resolved.extra_crta_words;
         handle.runtime_field_is_page_size = resolved.runtime_field_is_page_size;
-        TT_FATAL(
-            resolved.spec != nullptr,
-            "Resolved TensorParameter '{}' is missing its TensorSpec",
-            binding.tensor_parameter_name);
-        handle.llk_facts = facts_from_tensor_spec(*resolved.spec);
+        handle.llk_facts = resolved.llk_facts;
 
         out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
         cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
@@ -2651,7 +2645,7 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         handle.accessor_name = binding.accessor_name;
         handle.size_bytes = scratchpad_spec->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
-        handle.llk_facts = facts_from_scratchpad(*scratchpad_spec);
+        handle.llk_facts = FactsFromScratchpad(*scratchpad_spec);
         // handle.allocated_address stays 0 until allocate_scratchpads runs.
         out.handles.push_back(std::move(handle));
         crta_word_index += 1;  // one address word per scratchpad binding
@@ -2688,7 +2682,7 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
         handle.slot = static_cast<uint16_t>(slot);
         handle.is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
         handle.prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
-        handle.llk_facts = facts_from_dfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
+        handle.llk_facts = FactsFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
         out.push_back(std::move(handle));
     }
     return out;

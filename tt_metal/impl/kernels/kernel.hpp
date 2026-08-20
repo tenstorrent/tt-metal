@@ -22,7 +22,6 @@
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
-#include "impl/metal2_host_api/llk_operand_facts.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_source.hpp"
 #include <enchantum/enchantum.hpp>
@@ -250,12 +249,7 @@ public:
                                                      uint16_t logical_dfb_id,
                                                      bool is_relay,
                                                      uint8_t prefetcher_pipe_id,
-                                                     uint8_t hw_format,
-                                                     uint8_t face_r_dim,
-                                                     uint8_t face_c_dim,
-                                                     uint8_t num_faces_r_dim,
-                                                     uint8_t num_faces_c_dim,
-                                                     bool present)>) const override;
+                                                     const LlkOperandFacts&)>) const override;
     void process_semaphore_binding_handles(
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
@@ -265,23 +259,12 @@ public:
                                             uint32_t cta_offset,
                                             uint32_t addr_crta_offset,
                                             uint32_t num_runtime_field_crta_words,
-                                            uint8_t hw_format,
-                                            uint8_t face_r_dim,
-                                            uint8_t face_c_dim,
-                                            uint8_t num_faces_r_dim,
-                                            uint8_t num_faces_c_dim,
-                                            bool present)>) const override;
+                                            const LlkOperandFacts&)>) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
-    void process_scratchpad_binding_handles(std::function<void(
-                                                const std::string& accessor_name,
-                                                uint32_t size_bytes,
-                                                uint32_t addr_crta_word,
-                                                uint8_t hw_format,
-                                                uint8_t face_r_dim,
-                                                uint8_t face_c_dim,
-                                                uint8_t num_faces_r_dim,
-                                                uint8_t num_faces_c_dim,
-                                                bool present)>) const override;
+    void process_scratchpad_binding_handles(
+        std::function<void(
+            const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word, const LlkOperandFacts&)>)
+        const override;
     // Scratchpad binding handles are set post-construction.
     // Non-const accessor lets allocate_scratchpads fill each handle's allocated_address after L1 allocation.
     const std::vector<ScratchpadBindingHandle>& scratchpad_binding_handles() const {

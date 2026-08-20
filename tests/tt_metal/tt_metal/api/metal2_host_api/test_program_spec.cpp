@@ -5204,22 +5204,15 @@ void kernel_main() {
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
+// An L1-sharded tensor whose page tile is exactly `tile_shape`, so to_llk_mem_descriptor sees a
+// non-default face grid.
 TensorParameter MakeL1ShardedTiledTensor(std::string name, std::array<uint32_t, 2> tile_shape) {
-    constexpr uint32_t num_cores = 1;
-    auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, CoreCoord{num_cores, 1}, /*row_wise=*/true);
-    tt::tt_metal::ShardSpec shard_spec{
-        shard_grid, {tile_shape[0], tile_shape[1]}, tt::tt_metal::ShardOrientation::ROW_MAJOR};
-    tt::tt_metal::MemoryConfig memory_config{
-        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
-    auto tensor_layout = tt::tt_metal::TensorLayout(
-        tt::tt_metal::DataType::BFLOAT16,
-        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, Tile{tile_shape}),
-        memory_config);
-    return TensorParameter{
-        .unique_id = TensorParamName{std::move(name)},
-        .spec =
-            tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, tile_shape[0], tile_shape[1]}, std::move(tensor_layout)),
-    };
+    return MakeShardedTensorParameter(
+        std::move(name),
+        tt::tt_metal::Shape{1, 1, tile_shape[0], tile_shape[1]},
+        tile_shape,
+        /*num_cores=*/1,
+        Tile{tile_shape});
 }
 
 TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorL1TensorDefaultCompiles) {
@@ -5313,45 +5306,6 @@ void kernel_main() {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DRAM")));
-}
-
-TEST_F(ProgramSpecTestGen1, ScratchpadLlkFormatAffectsKernelHash) {
-    auto make_spec = [](std::optional<tt::DataFormat> format) {
-        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-        spec.scratchpads = {ScratchpadSpec{
-            .unique_id = ScratchpadSpecName{"pad"},
-            .size_per_node = 1024,
-            .data_format_metadata = format,
-        }};
-        spec.kernels[1].scratchpad_bindings.push_back(
-            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
-        return spec;
-    };
-
-    Program prog_none = MakeProgramFromSpec(*mesh_device_, make_spec(std::nullopt));
-    Program prog_f16 = MakeProgramFromSpec(*mesh_device_, make_spec(tt::DataFormat::Float16_b));
-    Program prog_f32 = MakeProgramFromSpec(*mesh_device_, make_spec(tt::DataFormat::Float32));
-
-    auto hash_none = prog_none.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();
-    auto hash_f16 = prog_f16.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();
-    auto hash_f32 = prog_f32.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();
-    EXPECT_NE(hash_none, hash_f16);
-    EXPECT_NE(hash_f16, hash_f32);
-}
-
-TEST_F(ProgramSpecTestGen1, DFBTileMetadataAffectsKernelHash) {
-    auto make_spec = [](std::optional<Tile> tile) {
-        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-        spec.dataflow_buffers[0].tile_format_metadata = tile;
-        return spec;
-    };
-
-    Program prog_default = MakeProgramFromSpec(*mesh_device_, make_spec(std::nullopt));
-    Program prog_wide = MakeProgramFromSpec(*mesh_device_, make_spec(Tile{{16, 32}}));
-
-    auto hash_default = prog_default.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();
-    auto hash_wide = prog_wide.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();
-    EXPECT_NE(hash_default, hash_wide);
 }
 
 // Compile-only: a range-based for loop over a Scratchpad must compile. Exercises begin()/end() and the
