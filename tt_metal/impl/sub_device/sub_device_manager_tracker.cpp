@@ -145,6 +145,11 @@ SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() cons
     return default_sub_device_manager_;
 }
 
+SubDeviceManager* SubDeviceManagerTracker::find_sub_device_manager(SubDeviceManagerId sub_device_manager_id) const {
+    auto sub_device_manager = sub_device_managers_.find(sub_device_manager_id);
+    return sub_device_manager == sub_device_managers_.end() ? nullptr : sub_device_manager->second.get();
+}
+
 DeviceAddr SubDeviceManagerTracker::get_max_trace_high_water_mark() const {
     DeviceAddr max_high_water_mark = 0;
     for (const auto& entry : sub_device_managers_) {

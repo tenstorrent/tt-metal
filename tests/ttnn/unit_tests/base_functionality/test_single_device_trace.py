@@ -161,7 +161,7 @@ def test_single_device_multi_trace(device, shape, blocking):
 
 @skip_for_slow_dispatch()
 @pytest.mark.skipif(not ttnn.TRACE_ALLOC_TRACKING, reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup")
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}, {"trace_region_size": 0}], indirect=True)
 def test_trace_allocation_tracking_is_per_trace(device, expect_error):
     shape = (1, 1, 32, 32)
     trace_input = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)

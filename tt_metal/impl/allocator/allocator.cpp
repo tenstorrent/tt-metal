@@ -116,7 +116,7 @@ void AllocatorImpl::init_one_bank_per_l1() {
 }
 
 void AllocatorImpl::verify_safe_allocation() const {
-    if (!allocations_unsafe_) {
+    if (!allocations_unsafe_ || allocation_context_contains("trace_storage")) {
         return;
     }
 
@@ -167,7 +167,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
         buffer->set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
-        if (tracking_enabled_) [[unlikely]] {
+        if (tracking_enabled_ && !unsafe_tracked_ids_by_manager_and_trace_.empty()) [[unlikely]] {
             this->record_allocation_if_unsafe(buffer);
         }
         return buffer->per_core_addresses_.at(cores[0]);
@@ -214,7 +214,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
-    if (tracking_enabled_) [[unlikely]] {
+    if (tracking_enabled_ && !unsafe_tracked_ids_by_manager_and_trace_.empty()) [[unlikely]] {
         this->record_allocation_if_unsafe(buffer);
     }
     return address;
@@ -525,6 +525,8 @@ void AllocatorConfig::reset() {
 }
 
 AllocatorImpl::~AllocatorImpl() {
+    this->clear_trace_allocation_state();
+
     bank_id_to_dram_channel_.clear();
     dram_channel_to_bank_ids_.clear();
     bank_id_to_logical_core_.clear();
