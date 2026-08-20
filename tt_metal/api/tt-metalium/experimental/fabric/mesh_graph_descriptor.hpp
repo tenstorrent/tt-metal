@@ -8,6 +8,7 @@
 #include <string_view>
 #include <filesystem>
 #include <memory>
+#include <map>
 #include <vector>
 #include <unordered_set>
 #include <unordered_map>
@@ -101,6 +102,14 @@ using AsicPosition = tt::tt_metal::ASICPosition;
 struct AsicPinningGroup {
     std::vector<FabricNodeId> fabric_nodes;
     std::vector<AsicPosition> asic_positions;
+
+    bool operator==(const AsicPinningGroup& other) const {
+        return fabric_nodes == other.fabric_nodes && asic_positions == other.asic_positions;
+    }
+    bool operator<(const AsicPinningGroup& other) const {
+        return fabric_nodes == other.fabric_nodes ? asic_positions < other.asic_positions
+                                                  : fabric_nodes < other.fabric_nodes;
+    }
 };
 
 // TODO: Try make efficient by storing stringviews?
@@ -226,9 +235,10 @@ public:
     static FabricType infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc);
     static FabricType infer_fabric_type_from_dim_types(const proto::SwitchDescriptor* switch_desc);
 
-    // Many-to-many pinning groups parsed from the MGD's top-level `pinnings` section. Each entry may
-    // bind multiple logical fabric nodes to multiple physical ASIC positions (all-to-all).
-    const std::vector<AsicPinningGroup>& get_pinnings() const { return pinnings_; }
+    // Many-to-many pinning groups parsed from the MGD's top-level `pinnings` section, keyed by local
+    // mesh id. Each entry may bind multiple logical fabric nodes to multiple physical ASIC positions
+    // (all-to-all). Groups are split by mesh at construction (regex and literal entries).
+    const std::map<MeshId, std::vector<AsicPinningGroup>>& get_pinnings() const { return pinnings_; }
 
 private:
     // Descriptor fast lookup
@@ -257,7 +267,7 @@ private:
     std::unordered_map<std::string, std::vector<ConnectionId>> connections_by_type_;
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
-    std::vector<AsicPinningGroup> pinnings_;
+    std::map<MeshId, std::vector<AsicPinningGroup>> pinnings_;
 
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(

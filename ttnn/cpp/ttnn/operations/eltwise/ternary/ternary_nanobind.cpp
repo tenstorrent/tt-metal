@@ -28,9 +28,9 @@ void bind_ternary_where(nb::module_& mod, const std::string& description) {
             {2}
 
         Args:
-            condition (ttnn.Tensor): the condition tensor must contain only 0's or 1's.
-            true_value (ttnn.Tensor or Number): The value selected if the corresponding element in condition is 1.
-            false_value (ttnn.Tensor or Number): The value selected if the corresponding element in condition is 0.
+            predicate (ttnn.Tensor): the predicate tensor must contain only 0's or 1's.
+            true_value (ttnn.Tensor or Number): The value selected if the corresponding element in predicate is 1.
+            false_value (ttnn.Tensor or Number): The value selected if the corresponding element in predicate is 0.
 
 
         Keyword Args:
@@ -399,7 +399,7 @@ void py_module(nb::module_& mod) {
         "FLOAT32, BFLOAT16, BFLOAT8_B");
     bind_ternary_where(
         mod,
-        R"doc(Selects elements from :attr:`true_value` or :attr:`false_value` depending on the corresponding value in :attr:`condition`. For each element, if the corresponding entry in :attr:`condition` is 1, the output element is taken from :attr:`true_value`; otherwise, it is taken from :attr:`false_value`.)doc");
+        R"doc(Selects elements from :attr:`true_value` or :attr:`false_value` depending on the corresponding value in :attr:`predicate`. For each element, if the corresponding entry in :attr:`predicate` is 1, the output element is taken from :attr:`true_value`; otherwise, it is taken from :attr:`false_value`.)doc");
 
     bind_ternary_lerp(
         mod,

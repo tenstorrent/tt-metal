@@ -108,6 +108,20 @@ def _make_row(search_len: int, seed: int, mode: str) -> torch.Tensor:
         return _distinct_bf16_from_hi16(hi16)
     if mode == "random":
         return torch.randn(search_len, generator=gen).to(torch.bfloat16).float()
+    if mode.startswith("planted:"):
+        # K distinct high values planted at seeded positions over a constant
+        # low filler. The only stimulus that supports search_len > 16384 with
+        # an exact index golden: bf16 has no 2^16 distinct finite positive
+        # values (0x3F80 + 16384 is already +inf), so "positive" cannot scale
+        # -- and the planted positions land in every chunk, exercising the
+        # full runtime chunk-id range.
+        k = int(mode.split(":", 1)[1])
+        row = torch.full((search_len,), 1.0, dtype=torch.float32)  # 0x3F80 filler
+        positions = torch.randperm(search_len, generator=gen)[:k]
+        row[positions] = _distinct_bf16_from_hi16(
+            0x4080 + torch.randperm(k, generator=gen)
+        )
+        return row
     if mode == "all_equal":
         # Degenerate input: all identical.
         return torch.full((search_len,), 3.0, dtype=torch.float32)
@@ -173,6 +187,8 @@ def _variant(
     fused_reduce=False,
     chunk_base_mode=TopKXLChunkBaseMode.Static,
     chunk_base=0,
+    fused_e2e=False,
+    seg_base=0,
     dest_sync=DestSync.Full,
     formats=FORMATS,
 ):
@@ -213,6 +229,8 @@ def _variant(
                 fused_reduce=fused_reduce,
                 chunk_base_mode=chunk_base_mode,
                 chunk_base=chunk_base,
+                fused_e2e=fused_e2e,
+                seg_base=seg_base,
             ),
         ],
         variant_stimuli=StimuliConfig(
@@ -639,6 +657,88 @@ def test_topk_xl_fused_reduce(K, num_chunks):
     _check_coordinates(
         result, K, rows, num_chunks=num_chunks, group_id=GROUP_ID, core_id=None
     )
+
+
+@parametrize(K=[512, 1024, 2048], num_chunks=[2, 4, 32])
+def test_topk_xl_fused_e2e(K, num_chunks):
+    """
+    Fused END-TO-END (the topk_large_indices wide-row path): the chunk id is
+    stamped at RUNTIME into index bits [15:11] (_topk_xl_add_lsb_indices_rt_),
+    every merge/rebuild stays in the fused word, and ONE row-major global
+    split per row (_topk_xl_separate_indices_row_major_global_) recovers
+    chunk_id * K + within-chunk. num_chunks=32 exercises the full 5-bit stamp
+    range (ids 0..31), the information-theoretic limit of the fused word.
+    """
+    mode = f"planted:{K}" if num_chunks * K > 16384 else "positive"
+    _run_test_topk(K, num_chunks=num_chunks, fused_e2e=True, mode=mode)
+
+
+@parametrize(K=[512, 1024, 2048], seg_base_chunks=[32, 96, 160])
+def test_topk_xl_fused_e2e_segment_base(K, seg_base_chunks):
+    """
+    Segment-base split (_topk_xl_separate_indices_row_major_global_base_,
+    segmented fusion): a runtime seg_base is OR'd into every decoded index.
+    seg_base = seg_chunks * K is 2^(5 + log2 K)-aligned while the decoded
+    local index occupies exactly those low bits, so OR == ADD with zero bit
+    overlap -- the golden simply shifts by seg_base (index_offset).
+
+    The lattice pins each LREG5 load path: K=1024 combines the base with the
+    chunk-field rescale (chunk_field_shift = -1) and its 32-chunk base
+    (0x8000) probes lower-half sign handling; K=512 x 160 (0x14000) and
+    K=1024 x 96 (0x18000) load BOTH halves nonzero; K=2048 bases are pure
+    upper-half (n * 65536).
+    """
+    seg_base = seg_base_chunks * K
+    _run_test_topk(
+        K, num_chunks=4, fused_e2e=True, seg_base=seg_base, index_offset=seg_base
+    )
+
+
+@parametrize(K=[512, 1024, 2048], with_seg_base=[False, True])
+def test_topk_xl_fused_e2e_partial_tail(K, with_seg_base):
+    """-inf padded tail lanes must sort last and never win index lanes --
+    with and without a segment base on the split."""
+    seg_base = (32 * K) if with_seg_base else 0
+    _run_test_topk(
+        K,
+        num_chunks=3,
+        tail_elements=K // 2 + 17,
+        fused_e2e=True,
+        seg_base=seg_base,
+        index_offset=seg_base,
+    )
+
+
+def test_topk_xl_fused_e2e_denormal_word():
+    """
+    +0-valued winners produce denormal-shaped fused words (0x0000xxxx): the
+    runtime stamp and the GLOBAL split must move them with raw integer
+    load/stores -- an FP32 flush would annihilate the index (making it 0,
+    tripping the distinct-index assert). Mirrors
+    test_topk_xl_denormal_fused_word through the fused-e2e pipeline.
+    """
+    _run_test_topk(512, num_chunks=2, mode="zeros_win", fused_e2e=True)
+
+
+def test_topk_xl_fused_e2e_signed():
+    """Negative fused words carrying runtime stamps order correctly."""
+    _run_test_topk(2048, num_chunks=2, mode="signed", fused_e2e=True)
+
+
+def test_topk_xl_fused_e2e_two_rows():
+    """Row-loop re-entry after a global split: ADDR_MOD/LREG12 residue from
+    row r must not leak into row r+1's stamp or split."""
+    _run_test_topk(1024, num_chunks=4, num_rows=2, fused_e2e=True)
+
+
+@parametrize(K=[512, 2048])
+def test_topk_xl_fused_e2e_single_chunk(K):
+    """num_chunks=1: the global split runs on a raw descending local sort
+    with no merge/rebuild in between (the op's single-segment tail case).
+    The harness golden requires >= K valid elements, so the tail is full;
+    -inf pad-lane handling through a split is covered at the op level."""
+    (K,) = K
+    _run_test_topk(K, num_chunks=1, fused_e2e=True)
 
 
 @parametrize(K=[512, 1024, 2048], partial_tail=[False, True])

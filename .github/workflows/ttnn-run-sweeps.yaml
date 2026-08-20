@@ -794,6 +794,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
     needs: [check-harbor, resolve-inputs]
+    if: ${{ !cancelled() && needs.resolve-inputs.result == 'success' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
