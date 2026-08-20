@@ -91,99 +91,6 @@ Two properties make that hold, and both transfer to any op distributing a ragged
   idle `1/G` of the group for the whole gather/reduce phase *and* leave `W` coprime with power-of-two
   tile counts, which is the more ragged split rather than the less.
 
-## Push or pull the gather? Measured both ways
-
-`reduce_scatter_mcast` **pulls** (each worker reads from every contributor) and
-`reduce_scatter_push` **pushes** (each contributor writes into the owning worker). Same algorithm,
-same gather layout, same tile ownership - only the direction of the transfer differs, so the pair
-isolates that one choice.
-
-### L1: there is no difference, and there does not have to be
-
-Both allocate `CB_GATHER` at `group_size * max_assigned` pages and `CB_PARTIAL` at `max_assigned`, so
-the *peak per-core* footprint is `(G + 1) * A * P` either way - the gather buffer's size is set by how
-the *work* is partitioned (each worker holds `G` copies of its own `1/W` slice), which push and pull
-agree on. Measured ceiling on a `1x8` line is identical: both pass at 224 tiles/core, both fail at 232.
-
-The one asymmetry is *which* cores pay, not how much. A pusher derives the destination gather address
-from its own `get_write_ptr()`, so the CB must be declared on every participating core, where the pull
-variant declares it on the `W` workers alone. When `num_workers == group_size` - any
-`num_tiles >= group_size` - that is the same set of cores and even the aggregate matches. Where it is
-not, it is an implementation choice rather than a requirement: passing the destination address as a
-runtime arg instead of deriving it locally would let push allocate worker-only too.
-
-### It is not NoC contention - tt-npe says congestion is exactly zero
-
-Captured with `--collect-noc-traces` and replayed through tt-npe's link-level congestion model
-(`--device blackhole`), `1x8` x 8 groups, one all-reduce per launch:
-
-| Trace | cong=`fast` | cong=`none` | congestion cost | golden | avg link util |
-|---|---:|---:|---:|---:|---:|
-| pull, 8 tiles/core | 3446 | 3446 | **0 cycles** | 4337 | 8.2% |
-| push, 8 tiles/core | 4912 | 4912 | **0 cycles** | 5805 | 6.8% |
-| pull, 32 tiles/core | 9469 | 9469 | **0 cycles** | 11226 | 10.5% |
-| push, 32 tiles/core | 11677 | 11677 | **0 cycles** | 13373 | 10.2% |
-
-Turning the congestion model off changes nothing to the cycle, and average link utilization never
-exceeds 11%. **Neither direction is contention-bound, and contention does not distinguish them.**
-
-### What does distinguish them: 512 extra semaphore atomics
-
-A census of the same traces - both variants move byte-for-byte the same payload:
-
-| | payload transfers | payload bytes | `SEMAPHORE_INC` | total NoC events |
-|---|---:|---:|---:|---:|
-| pull, 8 t/c | 584 | 1216 KiB | 120 | 1176 |
-| push, 8 t/c | 584 | 1216 KiB | **632** | 1752 |
-| pull, 32 t/c | 2312 | 4672 KiB | 120 | 2904 |
-| push, 32 t/c | 2312 | 4672 KiB | **632** | 3480 |
-
-The payload is identical; push adds exactly **512** semaphore increments, which is
-`8 groups x 8 contributors x 8 workers` - the `group_size * num_workers` handshake push needs and pull
-does not, because pull reads the immutable input tensor and never has to be told a contributor is
-ready. With congestion at zero, that is pure per-transaction issue cost. **Push does strictly more NoC
-work than pull for the same result**, and the modelled and golden cycles both rank pull ahead.
-
-### Measured, with each all-reduce causally separated
-
-Use `--kernel-iters 1`. **Do not compare these variants at `--kernel-iters > 1`:** push has no
-consumer back-pressure, so a contributor can run ahead through every in-kernel iteration without ever
-waiting for a worker, while pull's read barrier makes its iterations serialize. The repeat therefore
-flatters push by an amount that has nothing to do with steady-state throughput.
-
-`1x8` x 8 groups, `--kernel-iters 1`, N=5:
-
-| tiles/core | pull | pull noise | push | push noise |
-|---:|---:|---:|---:|---:|
-| 1 | 1593.0 | 0.9% | 1559.0 | 1.5% |
-| 8 | **2721.0** | 1.6% | 3080.0 | 1.2% |
-| 16 | **4393.0** | 1.4% | 4888.0 | 0.5% |
-| 24 | 8242.0 | 2.3% | **6699.0** | 0.3% |
-| 28 | 12070.0 | 5.0% | **7687.0** | 0.2% |
-| 32 | 12548.0 | 1.9% | **8485.0** | 0.2% |
-| 36 | 15686.0 | 1.9% | **9522.0** | 0.1% |
-| 40 | 11599.0 | 10.4% | **10310.0** | 0.3% |
-| 48 | **10733.0** | 2.4% | 12127.0 | 0.2% |
-| 64 | **14518.0** | 5.2% | 15700.0 | 0.1% |
-
-**Reading of the result.** Push is monotone and stable across the whole range - 6699 -> 12127 ns from
-24 to 48 tiles/core, a clean ~247 ns/tile, never worse than 1.5% run-to-run. Pull is *not*: over the
-same range it goes 8242 -> 12070 -> 12548 -> 15686 -> 11599 -> 10733, so 36 tiles/core is **1.46x
-slower than 48 tiles/core**, and its noise reaches 10.4%. Pull's fast points (24 and 48) are as good as
-or better than push; it simply does not hit them reliably.
-
-So the honest summary is **not** that each direction owns a payload regime. Push does more NoC work and
-is slower wherever pull behaves; pull's advantage disappears in a band above ~24 tiles/core where its
-own timing becomes erratic and non-monotonic. **That instability, not any push strength, is what
-produces an apparent crossover.** Its cause is not established here - it is not contention (above), and
-the payload traffic is identical to push's, so it is something in the read path rather than the
-algorithm. Treat it as an open question.
-
-**Choosing.** Prefer **pull**: it does less NoC work, needs no handshake, no group-wide CB and no
-notification protocol, and it is faster wherever it is well behaved. Reach for **push** when
-predictability matters more than the median - it is the only one of the two with a smooth, monotone,
-sub-1% cost curve, which is what you want if the reducer sits on a latency budget.
-
 ## L1 pressure - what each topology costs per core
 
 The reducers do not just differ in speed; they differ in how much L1 each core has to give up,
@@ -244,6 +151,28 @@ is why its ceiling stops tracking `G` and flattens out near the same number for 
 Practical consequence: **L1 headroom, not speed, is usually what rules the root reducers out first.**
 If an op needs to keep other buffers resident on the same cores, the gather buffer that scales as
 `G * T` is the first thing to go.
+
+## Push or pull the gather?
+
+`reduce_scatter_push` mirrors `reduce_scatter_mcast` with the transfer reversed - contributors write
+into the owning worker instead of each worker reading from every contributor. Measured, it is a
+second-order choice next to the topology decision above:
+
+- **No L1 difference, and none is required.** The gather buffer's size follows the *work* split, not
+  the direction, so both peak at `(G + 1) * A * P` and both top out at 224 tiles/core on `1x8`.
+- **It is not contention.** `--collect-noc-traces` replayed through tt-npe puts the congestion cost at
+  *exactly 0 cycles* for both directions at both sizes, with average link utilization under 11%.
+- **Pull does less work.** A census of those traces shows byte-for-byte identical payload plus 512
+  extra `SEMAPHORE_INC` for push (`group_size * num_workers` per group) - the handshake pull never
+  needs, because it reads the immutable input tensor and no contributor-ready notification exists.
+- **Pull is faster wherever it is well behaved** (2721 vs 3080 ns at 8 tiles/core), but its timing goes
+  erratic above ~24 tiles/core - 36 tiles/core runs **1.46x slower than 48**, with noise to 10.4% -
+  where push stays monotone at ~247 ns/tile and under 1.5%. That instability, not a push advantage, is
+  what can look like a crossover. Its cause is not established here.
+
+Prefer **pull**; take **push** when predictability matters more than the median. Compare the two only
+at `--kernel-iters 1`: push has no consumer back-pressure, so in-kernel repeats let contributors run
+ahead of the workers and inflate it for reasons unrelated to steady-state throughput.
 
 ## CLI - measure your own shapes and parameters
 
