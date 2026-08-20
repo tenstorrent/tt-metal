@@ -179,7 +179,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_p
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     uint32_t num_workers_per_link,
-    uint32_t num_buffers_per_channel) {
+    uint32_t num_buffers_per_channel,
+    std::optional<uint32_t> tokens_per_frame,
+    std::optional<uint32_t> num_frames_padded,
+    std::vector<uint32_t> sparse_frame_mask) {
     return ttnn::transformer::ExecuteExpRingJointAttention::invoke(
         input_tensor_q,
         input_tensor_k,
@@ -202,7 +205,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_p
         scale,
         compute_kernel_config,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        tokens_per_frame,
+        num_frames_padded,
+        std::move(sparse_frame_mask));
 }
 
 }  // namespace
@@ -853,7 +859,10 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("topology"),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("num_workers_per_link") = 1,
-        nb::arg("num_buffers_per_channel") = 8);
+        nb::arg("num_buffers_per_channel") = 8,
+        nb::arg("tokens_per_frame") = nb::none(),
+        nb::arg("num_frames_padded") = nb::none(),
+        nb::arg("sparse_frame_mask") = std::vector<uint32_t>{});
 
     const auto* const mla_doc =
         R"doc(

@@ -285,6 +285,75 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         num_q_chunks,
         total_q_chunks,
         num_sdpa_cores);
+
+    // --- Sparse frame-block attention ---
+    // Trimmed vs the sibling ring_joint op: exp is non-causal only and has no kv-pad-rotation /
+    // sliding-window / attention-sink paths, so those mutual-exclusion checks are omitted here.
+    if (args.has_sparse_frames()) {
+        const uint32_t tokens_per_frame = args.tokens_per_frame.value();
+        const uint32_t nf_pad = args.num_frames_padded.value();
+
+        TT_FATAL(
+            tokens_per_frame % tt::constants::TILE_HEIGHT == 0,
+            "sparse-frames: tokens_per_frame ({}) must be a multiple of TILE_HEIGHT ({}).",
+            tokens_per_frame,
+            tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            q_chunk_size <= tokens_per_frame && tokens_per_frame % q_chunk_size == 0,
+            "sparse-frames: q_chunk_size ({}) must divide tokens_per_frame ({}) (a chunk fits within one frame).",
+            q_chunk_size,
+            tokens_per_frame);
+        TT_FATAL(
+            k_chunk_size <= tokens_per_frame && tokens_per_frame % k_chunk_size == 0,
+            "sparse-frames: k_chunk_size ({}) must divide tokens_per_frame ({}) (a chunk fits within one frame).",
+            k_chunk_size,
+            tokens_per_frame);
+        TT_FATAL(nf_pad >= 1 && nf_pad <= 32, "sparse-frames: num_frames_padded ({}) must be in [1, 32].", nf_pad);
+
+        // The padded frame extent must cover exactly the padded (gathered) global sequence, so mask
+        // frame indices derived from tile positions stay in bounds. N_global == N_local * ring_size
+        // is already validated above.
+        TT_FATAL(
+            static_cast<std::size_t>(nf_pad) * tokens_per_frame == N_global,
+            "sparse-frames: num_frames_padded * tokens_per_frame ({} * {} = {}) must equal the global (gathered) "
+            "sequence length ({}).",
+            nf_pad,
+            tokens_per_frame,
+            static_cast<std::size_t>(nf_pad) * tokens_per_frame,
+            N_global);
+        TT_FATAL(
+            args.logical_n % tokens_per_frame == 0,
+            "sparse-frames: logical_n ({}) must be a multiple of tokens_per_frame ({}).",
+            args.logical_n,
+            tokens_per_frame);
+
+        const uint32_t required_words = (nf_pad * nf_pad + 31) / 32;
+        TT_FATAL(
+            args.sparse_frame_mask.size() >= required_words,
+            "sparse-frames: sparse_frame_mask has {} words but needs at least {} (ceil(nf_pad^2 / 32), nf_pad={}).",
+            args.sparse_frame_mask.size(),
+            required_words,
+            nf_pad);
+
+        // Every real (non-pad) Q frame must attend at least one K frame, else that frame produces no
+        // output and the running-softmax normalization divides by zero.
+        const uint32_t num_real_q_frames = args.logical_n / tokens_per_frame;
+        for (uint32_t qf = 0; qf < num_real_q_frames; ++qf) {
+            bool attends_any = false;
+            for (uint32_t kf = 0; kf < nf_pad; ++kf) {
+                const uint32_t bit = qf * nf_pad + kf;
+                if ((args.sparse_frame_mask[bit / 32] >> (bit % 32)) & 1u) {
+                    attends_any = true;
+                    break;
+                }
+            }
+            TT_FATAL(attends_any, "sparse-frames: Q frame {} attends no K frame (its allow-table row is empty).", qf);
+        }
+    } else {
+        TT_FATAL(
+            args.sparse_frame_mask.empty(),
+            "sparse-frames: sparse_frame_mask must be empty when tokens_per_frame/num_frames_padded are unset.");
+    }
 }
 
 ExpRingJointSDPAResultSpec ExpRingJointSDPADeviceOperation::compute_output_specs(
@@ -399,8 +468,21 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
-    const uint32_t num_buffers_per_channel) {
+    const uint32_t num_buffers_per_channel,
+    std::optional<uint32_t> tokens_per_frame,
+    std::optional<uint32_t> num_frames_padded,
+    std::vector<uint32_t> sparse_frame_mask) {
     using OperationType = ttnn::prim::ExpRingJointSDPADeviceOperation;
+
+    // Sparse-frame attention: all three params set together, or all unset.
+    const bool sparse_frames =
+        tokens_per_frame.has_value() || num_frames_padded.has_value() || !sparse_frame_mask.empty();
+    if (sparse_frames) {
+        TT_FATAL(
+            tokens_per_frame.has_value() && num_frames_padded.has_value() && !sparse_frame_mask.empty(),
+            "Sparse-frame attention requires tokens_per_frame, num_frames_padded, and sparse_frame_mask to all be set "
+            "together (or all unset).");
+    }
 
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
@@ -435,7 +517,10 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
         subdevice_id,
         cluster_axis,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        tokens_per_frame,
+        num_frames_padded,
+        std::move(sparse_frame_mask));
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

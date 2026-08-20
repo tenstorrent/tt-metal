@@ -37,6 +37,17 @@ struct ExpRingJointSDPAParams {
     uint32_t num_workers_per_link = 1;
     uint32_t num_buffers_per_channel = 8;
 
+    // Sparse computation (frame-block / windowed attention). All three set together or all unset.
+    // `tokens_per_frame` is in TOKENS (a multiple of TILE_HEIGHT); `num_frames_padded` is the
+    // (sp-aligned) frame count, must be <= 32. `sparse_frame_mask` is a bit-packed row-major
+    // [num_frames_padded, num_frames_padded] allow-table: bit (q * num_frames_padded + k) is 1 iff Q
+    // frame q attends K frame k (at most 32 uint32 words -> max num_frames_padded = 32). Kept
+    // host-side and threaded to the kernels as runtime args (see the program factory). Mirrors the
+    // sibling ring_joint_sdpa op.
+    std::optional<std::uint32_t> tokens_per_frame = std::nullopt;
+    std::optional<std::uint32_t> num_frames_padded = std::nullopt;
+    std::vector<std::uint32_t> sparse_frame_mask;  // empty when sparse-frames disabled
+
     ExpRingJointSDPAParams(
         std::string joint_strategy,
         std::optional<float> scale,
@@ -52,7 +63,10 @@ struct ExpRingJointSDPAParams {
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         uint32_t cluster_axis,
         uint32_t num_workers_per_link = 1,
-        uint32_t num_buffers_per_channel = 8) :
+        uint32_t num_buffers_per_channel = 8,
+        std::optional<std::uint32_t> tokens_per_frame = std::nullopt,
+        std::optional<std::uint32_t> num_frames_padded = std::nullopt,
+        std::vector<std::uint32_t> sparse_frame_mask = {}) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         logical_n(logical_n),
@@ -67,7 +81,10 @@ struct ExpRingJointSDPAParams {
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis),
         num_workers_per_link(num_workers_per_link),
-        num_buffers_per_channel(num_buffers_per_channel) {}
+        num_buffers_per_channel(num_buffers_per_channel),
+        tokens_per_frame(tokens_per_frame),
+        num_frames_padded(num_frames_padded),
+        sparse_frame_mask(std::move(sparse_frame_mask)) {}
 
     // for Program-cache hash calculation
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -79,7 +96,10 @@ struct ExpRingJointSDPAParams {
         "program_config",
         "dim",
         "num_links",
-        "cluster_axis");
+        "cluster_axis",
+        "tokens_per_frame",
+        "num_frames_padded",
+        "sparse_frame_mask");
     auto attribute_values() const {
         return std::forward_as_tuple(
             joint_strategy,
@@ -90,12 +110,17 @@ struct ExpRingJointSDPAParams {
             program_config,
             dim,
             num_links,
-            cluster_axis);
+            cluster_axis,
+            tokens_per_frame,
+            num_frames_padded,
+            sparse_frame_mask);
     }
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
     std::uint32_t get_k_chunk_size() const { return program_config.has_value() ? program_config->k_chunk_size : 32; }
+
+    bool has_sparse_frames() const { return tokens_per_frame.has_value() && num_frames_padded.has_value(); }
 };
 
 struct ExpRingJointSDPAInputs {

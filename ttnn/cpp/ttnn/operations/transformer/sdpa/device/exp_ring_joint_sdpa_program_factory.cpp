@@ -555,6 +555,14 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
 
+    // Sparse frame-block attention: host-derived values (0 when disabled). tiles_per_frame is in
+    // TILES (tokens_per_frame / TILE_HEIGHT). These are pushed as trailing compute CT args (indices
+    // 29-31, matching the compute kernel) and gate the sparse RT-arg stream below.
+    const bool sparse_frames_enabled = args.has_sparse_frames();
+    const uint32_t sparse_tiles_per_frame =
+        sparse_frames_enabled ? (args.tokens_per_frame.value() / tt::constants::TILE_HEIGHT) : 0;
+    const uint32_t sparse_num_frames_padded = sparse_frames_enabled ? args.num_frames_padded.value() : 0;
+
     std::vector<uint32_t> compute_compile_time_args = {
         NH,
         DHt,
@@ -585,6 +593,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         static_cast<std::uint32_t>(use_streaming_compute),
         global_n_partial_col,
         joint_l_partial_col,
+        static_cast<std::uint32_t>(sparse_frames_enabled),  // CT idx 29
+        sparse_tiles_per_frame,                             // CT idx 30
+        sparse_num_frames_padded,                           // CT idx 31
     };
 
     std::map<std::string, std::string> defines;

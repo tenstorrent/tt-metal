@@ -47,6 +47,11 @@ void kernel_main() {
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(27);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(28);
 
+    // Sparse frame-block attention. Indices must match the program factory's compute CT-arg pushes.
+    constexpr bool sparse_frames_enabled = get_compile_time_arg_val(29) == 1;
+    constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(30);
+    constexpr uint32_t num_frames_padded_compile = get_compile_time_arg_val(31);
+
     // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
     // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
     // Only needed when any K/joint dimension has padding that doesn't fill a chunk.
@@ -106,6 +111,23 @@ void kernel_main() {
     constexpr uint32_t cb_signal = tt::CBIndex::c_12;
 
     constexpr uint32_t num_q_chunks = local_padded_Nt / Sq_chunk_t + Lt / Sq_chunk_t;
+
+    // Sparse-frames runtime args: 32 packed mask words + the per-q_chunk work bitmap, present in the
+    // RT stream only when enabled (the host omits them otherwise, so gate on the compile flag to keep
+    // the stream aligned). argidx continues past the RingSDPAOpIndexer args consumed above. The Q
+    // shard's global tile offset is constant across ring iterations.
+    [[maybe_unused]] uint32_t sparse_frame_mask_words[32] = {};
+    uint32_t q_work_bitmap[num_q_chunks] = {};
+    uint32_t q_shard_start_tile = 0;
+    if constexpr (sparse_frames_enabled) {
+        for (uint32_t w = 0; w < 32; ++w) {
+            sparse_frame_mask_words[w] = get_arg_val<uint32_t>(argidx++);
+        }
+        for (uint32_t q = 0; q < num_q_chunks; ++q) {
+            q_work_bitmap[q] = get_arg_val<uint32_t>(argidx++);
+        }
+        q_shard_start_tile = fused_op_indexer.ring_index * local_padded_Nt;
+    }
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);
@@ -225,7 +247,10 @@ void kernel_main() {
                 global_n_has_padding,
                 local_n_has_padding,
                 joint_has_padding,
-                false>(  // straddle_mask_enabled
+                false,  // straddle_mask_enabled
+                sparse_frames_enabled,
+                tiles_per_frame,
+                num_frames_padded_compile>(
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,
@@ -247,7 +272,10 @@ void kernel_main() {
                 /*skip_first_half_q=*/false,
                 /*use_zigzag_balancing=*/false,
                 ChunkedContext{},
-                /*is_first_active_iter=*/(ring_iter == 0));
+                /*is_first_active_iter=*/(ring_iter == 0),
+                sparse_frame_mask_words,
+                q_shard_start_tile,
+                q_work_bitmap);
         } else {
             sdpa_ring<
                 cb_qk_im,
