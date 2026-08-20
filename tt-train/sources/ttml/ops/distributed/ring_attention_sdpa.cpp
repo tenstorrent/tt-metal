@@ -205,13 +205,9 @@ autograd::TensorPtr ring_attention_sdpa(
         // FP32 host accumulators: each ring step contributes a bf16 kernel output, but
         // summing them in bf16 rounds the full running magnitude every step. The
         // accumulators are cast back to the input dtype once, after the loop.
-        auto make_fp32_zeros = [mesh_device](const ttnn::Tensor& like) {
-            return ttnn::full(
-                like.logical_shape(), 0.0F, ttnn::DataType::FLOAT32, ttnn::Layout::TILE, std::ref(*mesh_device));
-        };
-        ttnn::Tensor grad_Q_accum = make_fp32_zeros(query_tensor);
-        ttnn::Tensor grad_K_accum = make_fp32_zeros(key->get_value());
-        ttnn::Tensor grad_V_accum = make_fp32_zeros(value->get_value());
+        ttnn::Tensor grad_Q_accum = ttnn::zeros_like(query_tensor, ttnn::DataType::FLOAT32);
+        ttnn::Tensor grad_K_accum = ttnn::zeros_like(key->get_value(), ttnn::DataType::FLOAT32);
+        ttnn::Tensor grad_V_accum = ttnn::zeros_like(value->get_value(), ttnn::DataType::FLOAT32);
 
         ttnn::Tensor grad_Q_step = ttnn::zeros_like(query_tensor);
         ttnn::Tensor grad_K_step = ttnn::zeros_like(key->get_value());

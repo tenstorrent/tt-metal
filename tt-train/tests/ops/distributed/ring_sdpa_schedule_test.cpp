@@ -13,6 +13,8 @@
 
 #include <gtest/gtest.h>
 
+#include <initializer_list>
+
 #include "metal/ops/common/ring_sdpa_utils.hpp"
 
 namespace {
@@ -24,6 +26,44 @@ using ttml::ttnn_fixed::distributed::RingShiftDirection;
 uint32_t source_device(uint32_t device, uint32_t step, uint32_t ring_size, RingShiftDirection direction) {
     return direction == RingShiftDirection::Backward ? (device + step) % ring_size
                                                      : (device + ring_size - (step % ring_size)) % ring_size;
+}
+
+struct Expected {
+    uint32_t device;
+    uint32_t step;
+    bool execute;
+    AttentionMaskType mask;
+};
+
+// Ring size 3, causal: every row except device 1's off-diagonal steps is the same
+// in both shift directions — step 0 is always the device's own chunk (causal mask),
+// device 0 skips both remote chunks, device 2 attends to both in full.
+static constexpr Expected kRing3CausalCommonRows[] = {
+    // device 0: only the diagonal executes
+    {0, 0, true, AttentionMaskType::Causal},
+    {0, 1, false, AttentionMaskType::None},
+    {0, 2, false, AttentionMaskType::None},
+    // device 1: diagonal; steps 1-2 depend on direction (checked per test)
+    {1, 0, true, AttentionMaskType::Causal},
+    // device 2: diagonal, then full attention on both earlier chunks
+    {2, 0, true, AttentionMaskType::Causal},
+    {2, 1, true, AttentionMaskType::None},
+    {2, 2, true, AttentionMaskType::None},
+};
+
+void expect_ring3_causal_schedule(RingShiftDirection direction, std::initializer_list<Expected> direction_rows) {
+    auto check_row = [direction](const Expected& expected) {
+        const auto [execute, mask] =
+            get_device_execution_info(expected.device, expected.step, 3U, AttentionMaskType::Causal, direction);
+        EXPECT_EQ(execute, expected.execute) << "device " << expected.device << " step " << expected.step;
+        EXPECT_EQ(mask, expected.mask) << "device " << expected.device << " step " << expected.step;
+    };
+    for (const auto& expected : kRing3CausalCommonRows) {
+        check_row(expected);
+    }
+    for (const auto& expected : direction_rows) {
+        check_row(expected);
+    }
 }
 
 }  // namespace
@@ -44,62 +84,24 @@ TEST(RingSDPAScheduleTest, NonCausalAlwaysExecutesUnmasked) {
 }
 
 // Non-power-of-two ring, Forward direction: the source index must be computed
-// mod ring_size, not mod 2^32. Full expected table for ring size 3,
-// src = (device - step) mod 3.
+// mod ring_size, not mod 2^32. src = (device - step) mod 3.
 TEST(RingSDPAScheduleTest, ForwardDirectionRingSize3CausalTable) {
-    struct Expected {
-        uint32_t device;
-        uint32_t step;
-        bool execute;
-        AttentionMaskType mask;
-    };
-    const Expected table[] = {
-        // device 0: sources 0, 2, 1 -> diagonal, skip, skip
-        {0, 0, true, AttentionMaskType::Causal},
-        {0, 1, false, AttentionMaskType::None},  // src 2 > 0: later chunk, skip
-        {0, 2, false, AttentionMaskType::None},  // src 1 > 0: later chunk, skip
-        // device 1: sources 1, 0, 2 -> diagonal, full, skip
-        {1, 0, true, AttentionMaskType::Causal},
-        {1, 1, true, AttentionMaskType::None},  // src 0 < 1: earlier chunk, full attention
-        {1, 2, false, AttentionMaskType::None},
-        // device 2: sources 2, 1, 0 -> diagonal, full, full
-        {2, 0, true, AttentionMaskType::Causal},
-        {2, 1, true, AttentionMaskType::None},
-        {2, 2, true, AttentionMaskType::None},
-    };
-    for (const auto& expected : table) {
-        const auto [execute, mask] = get_device_execution_info(
-            expected.device, expected.step, 3U, AttentionMaskType::Causal, RingShiftDirection::Forward);
-        EXPECT_EQ(execute, expected.execute) << "device " << expected.device << " step " << expected.step;
-        EXPECT_EQ(mask, expected.mask) << "device " << expected.device << " step " << expected.step;
-    }
+    expect_ring3_causal_schedule(
+        RingShiftDirection::Forward,
+        {
+            {1, 1, true, AttentionMaskType::None},   // src 0 < 1: earlier chunk, full attention
+            {1, 2, false, AttentionMaskType::None},  // src 2 > 1: later chunk, skip
+        });
 }
 
 // Backward direction on the same ring size, src = (device + step) mod 3.
 TEST(RingSDPAScheduleTest, BackwardDirectionRingSize3CausalTable) {
-    struct Expected {
-        uint32_t device;
-        uint32_t step;
-        bool execute;
-        AttentionMaskType mask;
-    };
-    const Expected table[] = {
-        {0, 0, true, AttentionMaskType::Causal},
-        {0, 1, false, AttentionMaskType::None},  // src 1 > 0
-        {0, 2, false, AttentionMaskType::None},  // src 2 > 0
-        {1, 0, true, AttentionMaskType::Causal},
-        {1, 1, false, AttentionMaskType::None},  // src 2 > 1
-        {1, 2, true, AttentionMaskType::None},   // src 0 < 1
-        {2, 0, true, AttentionMaskType::Causal},
-        {2, 1, true, AttentionMaskType::None},  // src 0 < 2
-        {2, 2, true, AttentionMaskType::None},  // src 1 < 2
-    };
-    for (const auto& expected : table) {
-        const auto [execute, mask] = get_device_execution_info(
-            expected.device, expected.step, 3U, AttentionMaskType::Causal, RingShiftDirection::Backward);
-        EXPECT_EQ(execute, expected.execute) << "device " << expected.device << " step " << expected.step;
-        EXPECT_EQ(mask, expected.mask) << "device " << expected.device << " step " << expected.step;
-    }
+    expect_ring3_causal_schedule(
+        RingShiftDirection::Backward,
+        {
+            {1, 1, false, AttentionMaskType::None},  // src 2 > 1: later chunk, skip
+            {1, 2, true, AttentionMaskType::None},   // src 0 < 1: earlier chunk, full attention
+        });
 }
 
 // Causal schedule invariants for both directions across power-of-two and
