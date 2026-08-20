@@ -11,22 +11,10 @@
 
 namespace ckl = compute_kernel_lib;
 
-#if defined(INP_INT32) || defined(INP_UINT32)
-constexpr bool kIsInt = true;
-#else
-constexpr bool kIsInt = false;
-#endif
-constexpr bool kIsFloat = !kIsInt;
-
-#if defined(INP_INT32)
-constexpr DataFormat kWhereDF = DataFormat::Int32;
-#elif defined(INP_UINT32)
-constexpr DataFormat kWhereDF = DataFormat::UInt32;
-#elif defined(INP_FLOAT32)
-constexpr DataFormat kWhereDF = DataFormat::Float32;
-#else
-constexpr DataFormat kWhereDF = DataFormat::Float16_b;
-#endif
+constexpr auto kWhereDF = static_cast<DataFormat>(get_compile_time_arg_val(0));
+constexpr bool kIsInt = kWhereDF == DataFormat::Int32 || kWhereDF == DataFormat::UInt32;
+constexpr bool kIsFloat = kWhereDF == DataFormat::Float32 || kWhereDF == DataFormat::Float16_b;
+static_assert(kIsInt || kIsFloat, "where_tss supports only Int32, UInt32, Float32, and Float16_b");
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);

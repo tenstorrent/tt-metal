@@ -13,11 +13,7 @@
 
 namespace ckl = compute_kernel_lib;
 
-#ifdef FILL_WITH_VALUE_INT
-constexpr bool kIsInt = true;
-#else
-constexpr bool kIsInt = false;
-#endif
+constexpr bool kIsInt = get_compile_time_arg_val(1) == 1;
 constexpr bool kIsFloat = !kIsInt;
 
 constexpr DataFormat kWhereDF = DataFormat::WHERE_DATA_FORMAT;

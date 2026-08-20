@@ -27,7 +27,7 @@ template <
     uint32_t dfb_max_id,
     uint32_t dfb_out_id>
 ALWI void calc_numeric_stable() {
-    auto dfb_out_obj_id = DataflowBuffer(dfb_out_id);
+    DataflowBuffer dfb_out(dfb_out_id);
 
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
@@ -49,7 +49,7 @@ ALWI void calc_numeric_stable() {
         ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
             dfb_out_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{});
-    dfb_out_obj_id.wait_front(block_w);
+    dfb_out.wait_front(block_w);
 }
 
 void kernel_main() {
@@ -57,6 +57,9 @@ void kernel_main() {
     constexpr std::uint32_t block_w = get_arg(args::block_w);
     constexpr std::uint32_t subblock_w = get_arg(args::subblock_w);
     constexpr std::uint32_t num_subblocks_w = get_arg(args::num_subblocks_w);
+    constexpr bool causal_mask = get_arg(args::causal_mask);
+    constexpr bool sharded_causal_mask = get_arg(args::sharded_causal_mask);
+    constexpr bool numeric_stable = get_arg(args::numeric_stable);
 
 #ifdef NUMERIC_STABLE
     constexpr auto dfb_x_id = dfb::x;
@@ -67,32 +70,10 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in0, dfb::max_scaler, dfb::exps);
 
-    auto dfb_exps_obj_id = DataflowBuffer(dfb::exps);
-    auto dfb_x_obj_id = DataflowBuffer(dfb_x_id);
-#if FUSED_SCALE_MASK
-    // fused_scale/fused_attn/scale_mask are bound only on the fused scale-mask path.
-#endif
-#ifdef NUMERIC_STABLE
-#endif
-
-    constexpr int dst0 = 0;
+    DataflowBuffer dfb_exps(dfb::exps);
+    DataflowBuffer dfb_x(dfb_x_id);
 
 #if FUSED_SCALE_MASK
-#ifdef CAUSAL_MASK
-    constexpr bool causal_mask = true;
-#else
-    constexpr bool causal_mask = false;
-#endif
-#ifdef SHARDED_CAUSAL_MASK
-    constexpr bool sharded_causal_mask = true;
-#else
-    constexpr bool sharded_causal_mask = false;
-#endif
-#ifdef NUMERIC_STABLE
-    constexpr bool numeric_stable = true;
-#else
-    constexpr bool numeric_stable = false;
-#endif
     constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
     constexpr auto mask_wait = sharded_causal_mask ? ckl::WaitPolicy::None : ckl::WaitPolicy::Upfront;
     constexpr auto mask_pop = causal_mask ? ckl::PopPolicy::AtEnd : ckl::PopPolicy::None;
@@ -121,7 +102,7 @@ void kernel_main() {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-        dfb_x_obj_id.wait_front(block_w);
+        dfb_x.wait_front(block_w);
         calc_numeric_stable<block_w, num_subblocks_w, subblock_w, dfb_x_id, dfb::max_scaler, dfb::max, dfb::exps>();
 #endif
 
@@ -145,7 +126,7 @@ void kernel_main() {
         // SUM reduce with reciprocal operation using PRELOADED mode
         // PRELOADED is correct for sharded - all tiles loaded at once
         // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
-        dfb_exps_obj_id.wait_front(block_w);
+        dfb_exps.wait_front(block_w);
         ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,

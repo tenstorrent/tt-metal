@@ -26,17 +26,17 @@ namespace ckl = compute_kernel_lib;
 // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
 // then read another Wt tiles of mask for the next batch
 
-template <uint32_t dfb_in_id, uint32_t dfb_max_scaler_id, uint32_t dfb_max_id, uint32_t dfb_out_id>
-void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
-    auto dfb_out_obj_id = DataflowBuffer(dfb_out_id);
+template <std::uint32_t dfb_in, std::uint32_t dfb_max_scaler, std::uint32_t dfb_max, std::uint32_t dfb_out>
+void calc_numeric_stable(std::uint32_t Wt, std::uint32_t ndst) {
+    DataflowBuffer dfb_out_obj(dfb_out);
 
     // calculate max val per row
     ckl::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
-        dfb_in_id,
-        dfb_max_scaler_id,
-        dfb_max_id,
+        dfb_in,
+        dfb_max_scaler,
+        dfb_max,
         ckl::ReduceInputPolicy::WaitUpfrontNoPop,
         ckl::ReduceDataFormatReconfigMode::INPUT>(ckl::ReduceInputBlockShape::row(Wt));
 
@@ -46,20 +46,20 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
         ckl::BinaryFpu<
             ckl::BinaryFpuOp::Sub,
             ckl::input(
-                dfb_in_id,
+                dfb_in,
                 ckl::WaitPolicy::Upfront,
                 ckl::PopPolicy::AtEnd,
                 ckl::InputTileMapping::Block,
                 ckl::DataFormatReconfig::Disabled),
-            ckl::input(dfb_max_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{},
+            ckl::input(dfb_max, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{},
         ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
         // reuse the exps buffer again, this time in a circular manner
         ckl::PackTile<ckl::output(
-            dfb_out_id,
+            dfb_out,
             ckl::ReservePolicy::PerBlockSize,
             ckl::PushPolicy::PerBlockSize,
             ckl::DataFormatReconfig::Disabled)>{});
-    dfb_out_obj_id.wait_front(Wt);
+    dfb_out_obj.wait_front(Wt);
 }
 
 // CB consumers cannot wrap mid-fifo: pops in one cycle must land exactly on fifo_limit.
@@ -113,7 +113,7 @@ void kernel_main() {
     // reserve one tile for zeros on dfb_in2
     // We only do the reserve for the intermediates once and use pack_tile
     // So effectively these are used as pre-allocated arrays
-    // Note that the entire W dimension must fit in the intermed0 DFB for this kernel to be correct
+    // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
     DataflowBuffer dfb_max_scaler_obj(dfb::max_scaler);
     DataflowBuffer dfb_sum_scaler_obj(dfb::sum_scaler);
     DataflowBuffer dfb_out0_obj(dfb::out0);
@@ -127,11 +127,11 @@ void kernel_main() {
 #if defined(FUSED_SCALE_MASK) || defined(MASK_PADDED_DATA)
     // dfb_x is a distinct intermediate (c_10) only on the numeric-stable paths that post-process a masked
     // buffer; otherwise the reads go straight from dfb::in0 (see the calc_numeric_stable<dfb::in0,...> call).
-    constexpr auto dfb_x_id = dfb::x;
+    constexpr auto dfb_x = dfb::x;
 #endif
 #else
     // Without numeric_stable, dfb_x aliases dfb_exps (Same-FIFO reuse) so exp results circulate in one buffer.
-    constexpr auto dfb_x_id = dfb::exps;
+    constexpr auto dfb_x = dfb::exps;
 #endif
 
     dfb_max_scaler_obj.wait_front(1);  // comes from the reader
@@ -185,7 +185,7 @@ void kernel_main() {
             ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
             // reuse the exps buffer again, this time in a circular manner
             ckl::PackTile<ckl::output(
-                dfb_x_id,
+                dfb_x,
                 ckl::ReservePolicy::PerBlockSize,
                 ckl::PushPolicy::PerBlockSize,
                 ckl::DataFormatReconfig::Disabled)>{});
@@ -193,7 +193,7 @@ void kernel_main() {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-        calc_numeric_stable<dfb_x_id, dfb::max_scaler, dfb::max, dfb::exps>(Wt, ndst);
+        calc_numeric_stable<dfb_x, dfb::max_scaler, dfb::max, dfb::exps>(Wt, ndst);
 #endif
 
 #ifdef CAUSAL_MASK
@@ -232,7 +232,7 @@ void kernel_main() {
                         ckl::InputTileMapping::Block)>{},
                     ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
                     ckl::PackTile<ckl::output(
-                        dfb_x_id,
+                        dfb_x,
                         ckl::ReservePolicy::PerBlockSize,
                         ckl::PushPolicy::PerBlockSize,
                         ckl::DataFormatReconfig::Disabled)>{});
@@ -252,7 +252,7 @@ void kernel_main() {
                                                    // pop
                 ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
                 ckl::PackTile<ckl::output(
-                    dfb_x_id,
+                    dfb_x,
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
                     ckl::DataFormatReconfig::Disabled)>{});
@@ -260,7 +260,7 @@ void kernel_main() {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-            calc_numeric_stable<dfb_x_id, dfb::max_scaler, dfb::max, dfb::exps>(Wt, ndst);
+            calc_numeric_stable<dfb_x, dfb::max_scaler, dfb::max, dfb::exps>(Wt, ndst);
 #endif
         }
 #else
@@ -317,11 +317,11 @@ void kernel_main() {
         cycle_dfb_pad(dfb::scale_mask, scale_mask_pad);
 #ifdef NUMERIC_STABLE
         // Without NUMERIC_STABLE, dfb_x aliases dfb_exps; cycling it again would drift it per row.
-        cycle_dfb_pad(dfb_x_id, exps_pad);
+        cycle_dfb_pad(dfb_x, exps_pad);
 #endif
 #elif defined(NUMERIC_STABLE) && defined(MASK_PADDED_DATA)
         // dfb_x is a distinct buffer only here; without NUMERIC_STABLE it aliases dfb_exps (already cycled).
-        cycle_dfb_pad(dfb_x_id, exps_pad);
+        cycle_dfb_pad(dfb_x, exps_pad);
 #endif
         if (out0_pad > 0) {
             dfb_out0_obj.reserve_back(out0_pad);
@@ -329,7 +329,7 @@ void kernel_main() {
         }
     }  // NCHt loop
     // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at
-    // the end so the DFBs are left balanced.
+    // the end so the CBs are left balanced.
     dfb_max_scaler_obj.pop_front(1);
     dfb_sum_scaler_obj.pop_front(1);
 #if FUSED_SCALE_MASK

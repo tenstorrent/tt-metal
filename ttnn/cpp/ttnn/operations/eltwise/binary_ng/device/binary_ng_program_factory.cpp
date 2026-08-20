@@ -1288,17 +1288,19 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         reader_defines["BCAST_LLK"] = "0";
     }
 
+    const bool fill_with_value_int = b_dtype == DataType::INT32 || b_dtype == DataType::UINT32;
     if (op_type == BinaryOpType::WHERE_TTS || op_type == BinaryOpType::WHERE_TST) {
         // Add common fill defines
         compute_kernel_defines["FILL_LLK"] = "fill_tile";
         if (b_dtype == DataType::INT32) {
             compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::Int32>";
-            compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else if (b_dtype == DataType::UINT32) {
             compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::UInt32>";
-            compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else {
             compute_kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
+        }
+        if (fill_with_value_int && compute_kernel != CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
+            compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         }
         // where_tile<DataFormat::X> selector — mirrors get_sfpu_init_fn(WHERE, a_dtype)
         // in binary_ng_utils.cpp so the eltwise_chain `Where` element can pick the
@@ -1317,7 +1319,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_device_cores;
     compute_desc.defines = {compute_kernel_defines.begin(), compute_kernel_defines.end()};
-    compute_desc.compile_time_args = {num_tiles_per_cycle};
+    compute_desc.compile_time_args = {num_tiles_per_cycle, static_cast<uint32_t>(fill_with_value_int)};
     compute_desc.config = ComputeConfigDescriptor{
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},

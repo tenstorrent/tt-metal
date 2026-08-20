@@ -513,6 +513,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     } else if (ops_chain[0].type() == UnaryOpType::LOGIT) {
         compute_desc.compile_time_args = {static_cast<uint32_t>(logit_clamp_enabled)};
     }
+    compute_desc.compile_time_args.push_back(static_cast<uint32_t>(cb_data_format));
     compute_desc.defines = {unary_defines.begin(), unary_defines.end()};
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
