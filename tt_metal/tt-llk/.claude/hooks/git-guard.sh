@@ -74,7 +74,7 @@ fi
 
 # A history-reading git subcommand. Allows for a path prefix (/usr/bin/git), a
 # `command` prefix, and leading options such as `-C <dir>` or `--no-pager`.
-SUBCMD='(^|[^[:alnum:]_-])git([[:space:]]+(-[^[:space:]]+|-C[[:space:]]+[^[:space:]]+))*[[:space:]]+(log|reflog|rev-list|cat-file|blame|stash|fsck|archive|show)([^[:alnum:]_-]|$)'
+SUBCMD='(^|[^[:alnum:]_-])git([[:space:]]+(-[^[:space:]]+|-C[[:space:]]+[^[:space:]]+))*[[:space:]]+(log|reflog|rev-list|cat-file|blame|stash|fsck|archive|show|shortlog|whatchanged|for-each-ref)([^[:alnum:]_-]|$)'
 
 # Any explicit reference to an older revision, or a raw read of the object store. The
 # bare-SHA pattern is what stops `git worktree add <dir> <old-sha>` and
@@ -93,10 +93,30 @@ REVREF_CONTENT='HEAD~|HEAD\^|@\{|\.git($|[^[:alnum:]_-])'
 # `subprocess.run(["git", "reflog"])` puts quotes and a comma between the two tokens. Any
 # run of non-word characters counts as the separator. This cannot span an intervening word,
 # so `git status; cat build.log` still does not match.
-SUBCMD_LOOSE='(^|[^[:alnum:]_-])git[^[:alnum:]_]+(log|reflog|rev-list|cat-file|blame|stash|fsck|archive|show)([^[:alnum:]_-]|$)'
+SUBCMD_LOOSE='(^|[^[:alnum:]_-])git[^[:alnum:]_]+(log|reflog|rev-list|cat-file|blame|stash|fsck|archive|show|shortlog|whatchanged|for-each-ref)([^[:alnum:]_-]|$)'
+
+# `git branch -v` prints the tip commit's subject for every branch — the same disclosure as
+# `git log -1`, which is how the topk run's analyzer would have learned the op was hidden.
+# Only the verbose forms are blocked: setup_worktree.sh needs `git branch <name> <base>` and
+# `git branch -D <name>` — and a branch name can itself contain "-v" (…-quasar-v7), so the
+# flag must be a standalone token.
+BRANCHV='(^|[^[:alnum:]_-])git[[:space:]]+branch[^;|&]*[[:space:]](-vv?|--verbose)([[:space:]]|$)'
 
 # Cheap gate: only inspect text that mentions git or a .git path at all.
 GITISH='(^|[^[:alnum:]_-])git([^[:alnum:]_-]|$)|\.git($|[^[:alnum:]_-])'
+
+# Mentioning .git in order to SKIP it is not an attempt to read it. `find . -not -path
+# "./.git/*"` and `grep --exclude-dir=.git` are the normal ways to keep a search out of the
+# object store, and blocking them produced 2 false positives on the first real topk run.
+# Strip exclusion clauses before scanning. A real history read cannot hide inside one: a git
+# subcommand survives the scrub (`git log --exclude=x` still reads as `git log`).
+_scrub_exclusions() {
+    printf '%s' "$1" \
+        | sed -E 's/(-not[[:space:]]+-path|![[:space:]]+-path)[[:space:]]+[^[:space:]]+//g' \
+        | sed -E 's/--exclude(-dir)?=[^[:space:]]+//g' \
+        | sed -E 's/--exclude(-dir)?[[:space:]]+[^[:space:]]+//g' \
+        | sed -E 's/:\(exclude\)[^[:space:]]*//g'
+}
 
 # A bare commit SHA, as an argument rather than as a fragment of something else. Two
 # false-positive classes from the first real run drove this shape:
@@ -142,12 +162,14 @@ case "$tool" in
 esac
 
 verdict=OK
-if [ "$BLIND" = "1" ] && [ "$scan_text" = "1" ] && printf '%s' "$cmd" | grep -qE "$GITISH"; then
-    if printf '%s' "$cmd" | grep -qE "$SUBCMD" || printf '%s' "$cmd" | grep -qE "$scan_revref"; then
+scan_src="$(_scrub_exclusions "$cmd")"
+if [ "$BLIND" = "1" ] && [ "$scan_text" = "1" ] && printf '%s' "$scan_src" | grep -qE "$GITISH"; then
+    if printf '%s' "$scan_src" | grep -qE "$SUBCMD" || printf '%s' "$scan_src" | grep -qE "$scan_revref" \
+        || { [ "$tool" = "Bash" ] && printf '%s' "$scan_src" | grep -qE "$BRANCHV"; }; then
         verdict=BLOCK
-    elif [ -n "$scan_loose" ] && printf '%s' "$cmd" | grep -qE "$scan_loose"; then
+    elif [ -n "$scan_loose" ] && printf '%s' "$scan_src" | grep -qE "$scan_loose"; then
         verdict=BLOCK
-    elif [ "$tool" = "Bash" ] && _has_sha_token "$cmd"; then
+    elif [ "$tool" = "Bash" ] && _has_sha_token "$scan_src"; then
         verdict=BLOCK
     fi
 fi
