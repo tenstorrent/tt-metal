@@ -202,16 +202,30 @@ def attention_forward(
                 packer_l1_acc=False,
             )
             assert kv_cache is not None, "SP chunked cache-read needs a KV cache"
+            # Where this (user, layer) lives — the legacy packed cache, or (bounded_sliding_kv_cache)
+            # the split full/sliding caches. batch_idx is the flat slot, so the op call below passes
+            # slot_idx=batch_idx, layer_idx=0, num_layers=1 (the kernel linearizes identically).
+            cache_k, cache_v, cache_batch_idx, cache_capacity, cache_bounded = kv_cache.layer_view(user_id, layer_idx)
+            if cache_bounded:
+                # PR1 ships allocation + the circular WRITE only: the ring cache-read cannot
+                # un-rotate a CIRCULAR (bounded) sliding cache yet — that is the PR2 C++ change.
+                # Fail loud instead of reading garbage KV.
+                raise NotImplementedError(
+                    f"bounded_sliding_kv_cache: on-device cache-read of a bounded sliding layer "
+                    f"(layer {layer_idx}, cached_len={cached_len}) is not supported yet — the ring "
+                    f"cache-read un-rotation lands with PR2 (C++). PR1 supports allocation + the "
+                    f"circular write only; validate via host readback (kv_cache_pcc_check)."
+                )
             tt_sdpa_out = dense_sp_attention(
                 tt_q,
-                kv_cache.k,
-                kv_cache.v,
+                cache_k,
+                cache_v,
                 tt_k,
                 tt_v,
                 kv_actual=cached_len,
                 logical_n=cached_len + seq_len * sp,
                 n_kv=config.num_kv_heads,
-                cache_global=kv_cache.max_seq_len,
+                cache_global=cache_capacity,
                 head_dim=config.head_dim,
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
@@ -225,9 +239,9 @@ def attention_forward(
                 # sliding (window 128) and full-attention layers are sink-correct.
                 attention_sink=weights.sinks,
                 sliding_window_size=config.sliding_window,
-                slot_idx=user_id,
-                layer_idx=layer_idx,
-                num_layers=kv_cache.num_layers,
+                slot_idx=cache_batch_idx,
+                layer_idx=0,
+                num_layers=1,
                 write_chunk=False,
             )
         else:
