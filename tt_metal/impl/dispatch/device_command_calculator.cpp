@@ -12,10 +12,8 @@
 
 namespace tt::tt_metal {
 
-DeviceCommandCalculator::DeviceCommandCalculator(MetalContext& ctx) {
-    this->pcie_alignment = ctx.hal().get_alignment(HalMemType::HOST);
-    this->l1_alignment = ctx.hal().get_alignment(HalMemType::L1);
-}
+DeviceCommandCalculator::DeviceCommandCalculator(MetalContext& ctx) :
+    pcie_alignment(ctx.hal().get_alignment(HalMemType::HOST)), l1_alignment(ctx.hal().get_alignment(HalMemType::L1)) {}
 
 template <typename PackedSubCmd>
 uint32_t DeviceCommandCalculator::get_max_write_packed_sub_cmds(
