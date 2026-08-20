@@ -32,7 +32,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
 #endif
-    const std::uint32_t num_tiles_per_unpack = TILE_CNT;
 
     {
         ZONE_SCOPED("INIT")
@@ -63,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
-            ckernel::trisc::bfd_current<unp_res>(), tensor_shape_A, num_tiles_per_unpack);
+            ckernel::trisc::bfd_current<unp_res>(), tensor_shape_A, TILE_CNT);
         PROFILER_SYNC();
     }
     {
@@ -75,19 +74,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
+            const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT;
             if constexpr (is_fp32_dest_acc_en)
             {
                 // 32-bit datacopy uses ELWADD and consumes both the selected
                 // source and the dummy source produced by unpack.
-                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT);
+                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(src_handshake_iters);
             }
             else if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
             {
-                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(LOOP_FACTOR * TILE_CNT);
+                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(src_handshake_iters);
             }
             else
             {
-                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT);
+                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(src_handshake_iters);
             }
         }
         else
@@ -134,7 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // End-to-end and math-isolate runs require FPU destination ownership.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
         DataFormat src_format = static_cast<DataFormat>(formats.math);
@@ -150,17 +150,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
+            const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT;
             if constexpr (is_fp32_dest_acc_en)
             {
-                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * TILE_CNT);
+                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(src_handshake_iters);
             }
             else if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
             {
-                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(LOOP_FACTOR * TILE_CNT);
+                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(src_handshake_iters);
             }
             else
             {
-                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * TILE_CNT);
+                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(src_handshake_iters);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -208,7 +209,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t DST_INDEX   = params.DST_INDEX;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    const std::uint32_t num_tiles_per_pack = TILE_CNT;
 
     {
         ZONE_SCOPED("INIT")
@@ -216,19 +216,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg                                    = (volatile std::uint32_t*)TENSIX_CFG_BASE;
-            cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+            set_up_zero_dest_dvalid_handshake_for_pack();
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
         const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape_A, num_tiles_per_pack);
+        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape_A, TILE_CNT);
         PROFILER_SYNC();
     }
     {

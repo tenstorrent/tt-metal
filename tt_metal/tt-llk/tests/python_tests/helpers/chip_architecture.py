@@ -4,8 +4,6 @@
 import os
 from enum import Enum
 
-from ttexalens.tt_exalens_lib import check_context
-
 
 class ChipArchitecture(Enum):
     BLACKHOLE = "blackhole"
@@ -47,6 +45,8 @@ def get_chip_architecture():
 
     chip_architecture = os.getenv("CHIP_ARCH")
     if not chip_architecture:
+        from ttexalens.tt_exalens_lib import check_context
+
         context = check_context()
         chip_architecture = str(context.devices[0]._arch)
 

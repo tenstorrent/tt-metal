@@ -168,6 +168,7 @@ set(TTNN_CORE_JIT_API_HEADERS
     cpp/ttnn/kernel/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp
     cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp
     cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
+    cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id_metal2.cpp
     cpp/ttnn/kernel/kernel_common_utils.hpp
     cpp/ttnn/kernel/kernel_utils.hpp
 )
