@@ -124,10 +124,14 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
         supported_context = int(
             context_contract.get("vllm_supported_context", context_contract["current_supported_context"])
         )
-        if int(max_seq_len) != supported_context:
+        # Accept anything up to the contract rather than requiring equality: the
+        # hybrid KV pool in get_max_tokens_all_users derives from max_model_len, so
+        # a shorter context computes correctly, and a platform spec should be free
+        # to serve this model at less than its ceiling.
+        if int(max_seq_len) > supported_context:
             raise ValueError(
-                f"Gemma 4 31B serving must use context_contract max_model_len={supported_context}, "
-                f"got {max_seq_len}"
+                f"Gemma 4 31B serving supports max_model_len up to context_contract "
+                f"{supported_context}, got {max_seq_len}"
             )
 
         model_mesh = _select_tp4_mesh(mesh_device)
