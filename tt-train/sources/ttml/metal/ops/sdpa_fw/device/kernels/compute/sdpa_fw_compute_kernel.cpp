@@ -42,6 +42,8 @@ constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(7);  // used to tr
 [[maybe_unused]] constexpr uint32_t Sk_chunk_t =
     get_compile_time_arg_val(8);  // multi-tile K/V chunking factor (1 = single-tile inner loop)
 constexpr uint32_t pv_block_size = get_compile_time_arg_val(9);  // PV matmul_block ct_dim (cap = dst_size)
+constexpr uint32_t scaler_bf16_bits =
+    get_compile_time_arg_val(10);  // host-side RNE BF16 of scaler_bits, for the WH fused scale+exp
 constexpr uint32_t pairs_per_seq = Ht / 2;
 
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
@@ -196,10 +198,6 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         // The per-n mask is unique (no reusable transformed tiles) and apply_mask_on_reg operates
         // on a single DST tile + scratch, which fits comfortably here. K is laid out col-major
         // in cb_key (uniform reader layout), so the K tile index is `feat*Sk_chunk_t + n`.
-        //
-        // Without USE_ATTN_MASK (AttentionMaskType::None) the host never creates cb_attn_mask
-        // and the reader never fills it, so every mask touch must be compiled out; scaling
-        // still happens later inside the scaled exp of the softmax.
         constexpr uint32_t matmul_accum_reg = 0U;
         for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
             matmul_init(cb_query, cb_key, /* transpose */ 1);
@@ -243,7 +241,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             alias_cb_prev_max,
             /* do_eltwise_max */ k_chunk > 0);
 
-        apply_exp_inplace_and_find_exp_sum<scaler_bits, Sk_chunk_t>(
+        apply_exp_inplace_and_find_exp_sum<scaler_bits, scaler_bf16_bits, Sk_chunk_t>(
             cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp);
 
         matmul_qk_by_v<Sk_chunk_t>(vWt, pv_block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
@@ -253,7 +251,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 
         // Online correction against the previous chunk's running stats.
         if (k_chunk > 0) {
-            update_exp_max_diff<scaler_bits>(alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff);
+            update_exp_max_diff<scaler_bits, scaler_bf16_bits>(alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff);
             cb_pop_front(alias_cb_prev_max, onetile);
 
             update_cur_exp_sum_inplace(alias_cb_prev_sum_exp, alias_cb_cur_sum_exp, cb_exp_max_diff);
