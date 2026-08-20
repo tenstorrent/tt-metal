@@ -77,8 +77,10 @@ void kernel_main() {
     constexpr uint32_t block_w = get_compile_time_arg_val(9);
 
     // compile_time_arg 10: size (unused here)
-    constexpr uint32_t reduce_factor_w = get_compile_time_arg_val(11);
-    constexpr uint32_t reduce_factor_c = get_compile_time_arg_val(12);
+    // Slots 11/12 kept to preserve positional CT-arg numbering; the divisors moved to the compute
+    // kernel's post-reduce multiply (mean_recip_bits / global_recip_bits), see #53846.
+    [[maybe_unused]] constexpr uint32_t reduce_factor_w = get_compile_time_arg_val(11);
+    [[maybe_unused]] constexpr uint32_t reduce_factor_c = get_compile_time_arg_val(12);
 
     constexpr auto gamma_args = TensorAccessorArgs<13>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -100,6 +102,8 @@ void kernel_main() {
     // the selector with the once-per-core c_18 rowvalid tile synthesized below. Arg 9 carries the
     // per-core valid-row count: rows_in_last_tile on the core holding a batch's final row-tile,
     // and tile_height elsewhere (an all-ones rowvalid tile, making the composition a no-op there).
+    // Runtime arg 8 (formerly pad_scaler_bits) is a kept-but-unused slot; the pad-corrected
+    // divisor now reaches the compute kernel as mean_recip_bits (#53846).
     const uint32_t rows_valid_this_core = get_arg_val<uint32_t>(9);
 #endif
     // c_7 ships one row-0-only column-selector set per (batch, group) in every build.
@@ -224,22 +228,16 @@ void kernel_main() {
 #endif
 
             if (i == 0 and b == 0) {
+                // Exact 1.0 scaler: REDUCE_SCALAR applies the scaler twice (row then col), so
+                // encoding the divisor here as bf16(1/sqrt(N)) makes the effective divisor
+                // bf16(1/sqrt(N))^2 -- inexact unless sqrt(N) is a power of two (#53846). The
+                // reduce therefore runs as an exact SUM and the compute kernel divides once, in
+                // fp32, via its post-reduce multiply (mean_recip_bits, pad-corrected on host).
                 constexpr uint32_t dfb_in_2 = tt::CBIndex::c_2;
-#ifdef PAD_CORRECTION
-                // Host-precomputed corrected reduce scaler: the row mask fixes the numerator,
-                // this fixes the denominator.
-                const float pad_corrected_scaler = __builtin_bit_cast(float, get_arg_val<uint32_t>(8));
-                dataflow_kernel_lib::prepare_reduce_scaler<
-                    dfb_in_2,
-                    ckernel::PoolType::AVG,
-                    ckernel::ReduceDim::REDUCE_SCALAR>(pad_corrected_scaler);
-#else
                 dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                     dfb_in_2,
-                    ckernel::PoolType::AVG,
-                    ckernel::ReduceDim::REDUCE_SCALAR,
-                    reduce_factor_w>();
-#endif
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_SCALAR>();
 
                 constexpr uint32_t ones = 0x3F803F80;  // 2 packed bfloat16 into 1 uint32_t of value 1.0
                 generate_tile_with_packed_bfloat16_values(dfb_ones_id, ones);
@@ -264,9 +262,8 @@ void kernel_main() {
                     constexpr uint32_t dfb_in_4 = tt::CBIndex::c_4;
                     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                         dfb_in_4,
-                        ckernel::PoolType::AVG,
-                        ckernel::ReduceDim::REDUCE_SCALAR,
-                        reduce_factor_c>();
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_SCALAR>();
                 }
 
                 constexpr uint32_t eps_dfb_id = tt::CBIndex::c_3;
