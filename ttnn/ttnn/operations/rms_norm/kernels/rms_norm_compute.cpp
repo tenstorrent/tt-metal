@@ -15,9 +15,12 @@
 // GROUP_SIZE tiles plus the collapse.  It is also why the split requires Regime A
 // per core: only Regime A produces that pre-collapse tile.
 //
-// rms_norm compute (TRISC x3).  Every phase is kernel_lib-helper covered; there
-// is no raw-LLK compute anywhere in this file.  `compute_kernel_hw_startup` is
-// the chain's documented caller-init contract, not a bypass.
+// rms_norm compute (TRISC x3).  Every phase is kernel_lib-helper covered EXCEPT
+// the rms chain, which is a documented raw-SFPU bypass - see `rms_chain` below
+// and the `### Helper bypasses` table in changelog.md "Perf 2".  Do NOT "fix" it
+// back to `ckl::eltwise_chain`: that reverts a measured 1.069x on the perf-gated
+// focus case and 1.208x on the smallest supported cell.  `compute_kernel_hw_startup`
+// is the chain's documented caller-init contract, not a bypass.
 //
 // Regime A (RESIDENT-FUSED, single DRAM read):
 //     [RM] tilize                              cb_rm_in       -> cb_input_tiles
@@ -26,7 +29,8 @@
 //                                              cb_input_tiles -> cb_sumsq_acc
 //     reduce<SUM, REDUCE_ROW>  (the within-tile finalize of that accumulator)
 //                                              cb_sumsq_acc   -> cb_sumsq
-//     eltwise_chain   (*1/W, +eps, rsqrt in ONE dst-sync window, fp32 scalars)
+//     rms_chain       (*1/W, +eps, rsqrt in ONE dst-sync window, fp32 scalars,
+//                      SFPU-scoped to column 0 - the only column that carries data)
 //                                              cb_sumsq       -> cb_rms_recip
 //     mul <Col bcast>                          x, 1/rms       -> cb_normed | cb_output_tiles
 //     mul <Row bcast>                          normed, gamma  -> cb_output_tiles
@@ -43,8 +47,8 @@
 // The partial scaler (partial_mask / last_tile_at at scaler index 1) zeroes the
 // pad columns of the last W-tile on the LAST chunk only, so implicit tile padding
 // never enters the sum (risk R1).  The divisor is always 1/W_true, applied in
-// fp32 by MulUnary - never folded into the mandatory-bfloat16 reduce scaler
-// (risk R2).
+// fp32 by the rms chain's MUL_UNARY step - never folded into the
+// mandatory-bfloat16 reduce scaler (risk R2).
 //
 // CB-WRAP INVARIANT: the W-chunk divides Wt_core and every row-block is exactly
 // BLOCK_HT tile-rows, so every multi-page CB access here is a fixed size that
@@ -62,6 +66,14 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+// --- raw-SFPU entry points for the column-0 rms chain (see `rms_chain`) ------
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#ifdef TRISC_MATH
+#include "ckernel_sfpu_binop_with_unary.h"
+#include "ckernel_sfpu_sqrt.h"
+#include "sfpu/ckernel_sfpu_converter.h"
+#endif
 
 namespace ckl = compute_kernel_lib;
 
@@ -201,6 +213,113 @@ constexpr auto fs_out = ckl::output(
 // exactly the helper's stated contract (reduce_helpers_compute.hpp).  Ignored
 // outright on the ReduceTile datapath, which always reloads via copy_tile.
 constexpr auto FOLD_RELOAD = ckl::AccumulateReloadMode::FoldViaAdd;
+
+// ===========================================================================
+// The rms chain: 1/rms = rsqrt(sumsq * (1/W) + eps), SCOPED TO COLUMN 0
+// ===========================================================================
+// RAW-SFPU BYPASS, DELIBERATE AND MEASURED.  Helper bypassed:
+// `ckl::eltwise_chain` with `MulUnary` / `AddUnary` / `Rsqrt`.
+//
+// WHY (capability gap, not taste): `cb_sumsq` is the output of a
+// `reduce<SUM, ReduceDim::REDUCE_ROW>`, so its ONLY meaningful data is COLUMN 0
+// - one value per row - and its single consumer reads it back as
+// `input(cb_rms_recip, BroadcastDim::Col, ..., OperandKind::Col)`, i.e. column 0
+// broadcast across columns.  The helper nonetheless runs all three SFPU passes at
+// `VectorMode::RC` + `ITERATIONS=8` = 3 x 32 vector ops, of which 8 touch column
+// 0.  The op structs call `mul_unary_tile` / `add_unary_tile` / `rsqrt_tile`, each
+// of which HARDCODES the vector mode and the iteration count at its own
+// `SFPU_UNARY_CALL` site; neither the mode, the iteration count, nor a DEST
+// address stride is reachable through the chain's public API.  There is no
+// overload to scope it with, so the scope cannot be expressed with the helper.
+//
+// THE MECHANISM (master.md `sfpu_tile_scope`): an SFPU vector op is 4 rows x 8
+// stride-2 columns and the SFPU walks a face as [rg0-even, rg0-odd, rg1-even, ...].
+// Column 0 is EVEN, so the odd-parity vectors only ever touch columns 1,3,..,15.
+// Visiting DEST offsets 0,2,4,6 keeps the net advance at +8 == the stock
+// `ITERATIONS=8`, so `VectorMode::C`'s face0 -> face2 stepping composes unchanged
+// and column 0 of all 32 rows is covered in 8 vector ops instead of 32.
+//
+// MEASURED (Blackhole p150b, 1350 MHz): isolated MATH-thread ns per chain call
+// 976.4 -> 270.4 (3.61x); whole-op on the perf-gated focus case (1,1,32,7168)
+// 9,071 -> 8,485 (1.069x), (32,17) 3,324 -> 2,786 (1.208x), (1,1,100,736)
+// 7,443 -> 6,708 (1.121x).  Precision is NOT traded: the same instructions run on
+// fewer lanes, so PCC, amax and the row-scale bias are identical to the helper's
+// to every printed digit on every shape and every dtype.  (A FUSED single-pass
+// form was also measured - 230.5 ns isolated - and REJECTED: it keeps the two
+// scalar steps out of the 16-bit DEST and moves the row-scale bias by ~0.18 pp,
+// for a whole-op delta below noise.)
+//
+// THE DON'T-CARE IS PROVEN, NOT ASSUMED.  A poison probe that stamps NaN over
+// every DEST lane except column 0 leaves the output bit-identical on all 11 bench
+// shapes, and the positive control that also stamps column 0 turns it to NaN - so
+// the probe genuinely reaches the consumer and nothing but column 0 is ever read.
+// (The W-split's whole-tile NoC broadcast carries `cb_sumsq`, which is upstream of
+// this chain; `cb_rms_recip` never crosses the NoC.)  The probe lives in
+// perf_experiments/sfpu_col0_chain/.
+#ifdef TRISC_MATH
+// One SFPU pass over the 4 even-parity vectors of a face.
+template <int BINOP>
+sfpi_inline void rms_skip_binop(uint32_t param) {
+    for (int d = 0; d < 4; d++) {
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = (BINOP == ckernel::sfpu::MUL) ? (v * ckernel::sfpu::Converter::as_float(param))
+                                                         : (v + ckernel::sfpu::Converter::as_float(param));
+        sfpi::dst_reg += 2;
+    }
+}
+sfpi_inline void rms_skip_mul(uint32_t p) { rms_skip_binop<ckernel::sfpu::MUL>(p); }
+sfpi_inline void rms_skip_add(uint32_t p) { rms_skip_binop<ckernel::sfpu::ADD>(p); }
+sfpi_inline void rms_skip_rsqrt() {
+    for (int d = 0; d < 4; d++) {
+        sfpi::vFloat t = ckernel::sfpu::_calculate_sqrt_body_<APPROX, true, false>(sfpi::dst_reg[0]);
+        // The stock rsqrt_tile rounds back to the DEST datum width when DEST is
+        // 16-bit; keeping that step is what makes this bit-identical to the helper.
+        if constexpr (!DST_ACCUM_MODE) {
+            t = sfpi::convert<sfpi::vFloat16b>(t, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = t;
+        sfpi::dst_reg += 2;
+    }
+}
+#endif
+
+// `nt` tiles of cb_sumsq -> cb_rms_recip.  The CB lifecycle the helper used to own
+// is now this function's, which is also what lets the WAIT be zoned separately
+// from the WORK (a starved chain and an expensive one want opposite fixes).
+ALWI void rms_chain(uint32_t nt, uint32_t inv_w_bits, uint32_t eps_bits) {
+    {
+        MaybeDeviceZoneScope("cp_rms_wait");
+        cb_wait_front(cb_sumsq, nt);
+        cb_reserve_back(cb_rms_recip, nt);
+    }
+    MaybeDeviceZoneScope("cp_rms_chain");
+    reconfig_data_format_srca(cb_sumsq);
+    pack_reconfig_data_format(cb_rms_recip);
+    pack_reconfig_l1_acc(0);
+    copy_tile_init(cb_sumsq);
+    for (uint32_t i = 0; i < nt; ++i) {
+        tile_regs_acquire();
+        // The /perf-measure ablation arm (`stub_compute`) stubs the PAYLOAD and keeps
+        // the sync scaffolding.  This chain is raw SFPU, so it does not inherit the
+        // eltwise-chain helper's own skip and has to honour it explicitly - otherwise
+        // the ablation silently stops covering this stage.  It must be spelled as the
+        // library's `constexpr bool`, NOT as `#ifndef CKL_ELTWISE_CHAIN_SKIP_COMPUTE`:
+        // chain.hpp `#define`s that macro to 0 when it is unset, so an `#ifndef` guard
+        // is ALWAYS false and silently deletes the payload from every build.
+        if constexpr (!ckl::detail::eltwise_chain_skip_compute_v) {
+            copy_tile(cb_sumsq, i, 0);
+            MATH((_llk_math_eltwise_unary_sfpu_params_(rms_skip_mul, 0, ckernel::VectorMode::C, inv_w_bits)));
+            MATH((_llk_math_eltwise_unary_sfpu_params_(rms_skip_add, 0, ckernel::VectorMode::C, eps_bits)));
+            MATH((_llk_math_eltwise_unary_sfpu_params_(rms_skip_rsqrt, 0, ckernel::VectorMode::C)));
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_rms_recip, i);
+        tile_regs_release();
+    }
+    cb_push_back(cb_rms_recip, nt);
+    cb_pop_front(cb_sumsq, nt);
+}
 
 // x*x accumulated into ONE DEST tile per row over `NCOL` columns starting at
 // column `base` of a resident (BLOCK_HT x WT_REDUCE_BLOCK) window.  Caller owns
@@ -359,6 +478,10 @@ void kernel_main() {
     } else {
         compute_kernel_hw_startup(cb_input_tiles, cb_input_tiles, cb_output_tiles);
     }
+    // `rms_chain` drives the SFPU directly (see its rationale block), so it owns
+    // the two inits the bypassed helper's op structs used to emit.
+    binop_with_scalar_tile_init();
+    rsqrt_tile_init();
 
     // Regime A holds the whole per-core gamma width resident for the whole
     // kernel: ingested exactly once, never popped.
@@ -431,19 +554,10 @@ void kernel_main() {
         }
 
         // ---------------- rms chain: *1/W, +eps, rsqrt -----------------------
-        // One helper call, one dst-sync window, no constant CBs.  MulUnary /
-        // AddUnary take fp32 bit patterns, so 1/W and epsilon are applied at
-        // full fp32 precision.
-        {
-            MaybeDeviceZoneScope("cp_rms_chain");
-            ckl::eltwise_chain(
-                ckl::IterationShape::tiles(BLOCK_HT),
-                ckl::CopyTile<ckl::input(cb_sumsq)>{},
-                ckl::MulUnary<>{inv_w_bits},
-                ckl::AddUnary<>{eps_bits},
-                ckl::Rsqrt<>{},
-                ckl::PackTile<ckl::output(cb_rms_recip)>{});
-        }
+        // One dst-sync window, no constant CBs, SFPU scoped to column 0.  The two
+        // scalar steps take fp32 bit patterns, so 1/W and epsilon are applied at
+        // full fp32 precision.  See the rationale block above `rms_chain`.
+        rms_chain(BLOCK_HT, inv_w_bits, eps_bits);
 
         // ---------------- scale (and gamma) ----------------------------------
         if constexpr (REGIME_A) {
