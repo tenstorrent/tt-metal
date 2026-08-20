@@ -67,7 +67,6 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
     const m2::DFBSpecName REMOTE_A{"remote_a"};
     const m2::DFBSpecName REMOTE_B{"remote_b"};
     const m2::DFBSpecName SCRATCH{"scratch"};
-    const m2::DFBSpecName STAGE_TOKEN{"stage_token"};
 
     const m2::SemaphoreSpecName READY{"ready"};
     const m2::SemaphoreSpecName ARRIVAL{"arrival"};
@@ -101,7 +100,6 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
         make_dfb(REMOTE_A, kk, tt::DataFormat::Float32),
         make_dfb(REMOTE_B, kv, tt::DataFormat::Float32),
         make_dfb(SCRATCH, kv, tt::DataFormat::Float32),
-        make_dfb(STAGE_TOKEN, 1, tt::DataFormat::Float32),
     };
 
     m2::KernelSpec dataflow{
@@ -119,7 +117,6 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
                 m2::DFBBinding{SEND_B_PONG, "send_b_pong", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{REMOTE_A, "remote_a", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{REMOTE_B, "remote_b", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STAGE_TOKEN, "stage_token", m2::DFBEndpointType::PRODUCER},
             },
         .semaphore_bindings =
             {
@@ -144,8 +141,7 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
 
     auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
     auto& unpack_modes = m2::unpack_modes(compute_hw);
-    for (const auto& name :
-         {STAGE_A_PING, STAGE_B_PING, STAGE_A_PONG, STAGE_B_PONG, REMOTE_A, REMOTE_B, SCRATCH, STAGE_TOKEN}) {
+    for (const auto& name : {STAGE_A_PING, STAGE_B_PING, STAGE_A_PONG, STAGE_B_PONG, REMOTE_A, REMOTE_B, SCRATCH}) {
         unpack_modes[name] = UnpackMode::UnpackToSrc;
     }
     if (summary_format == tt::DataFormat::Float32) {
@@ -179,7 +175,6 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
                 m2::DFBBinding{REMOTE_B, "remote_b", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{SCRATCH, "scratch", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{SCRATCH, "scratch", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STAGE_TOKEN, "stage_token", m2::DFBEndpointType::CONSUMER},
             },
         .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"G", G}},
         .runtime_arg_schema = {.runtime_arg_names = {"group"}},
