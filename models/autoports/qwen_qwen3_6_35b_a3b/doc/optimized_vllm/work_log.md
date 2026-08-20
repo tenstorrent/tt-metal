@@ -195,3 +195,11 @@ Stage review:
 
 - Independent review returned `clean-pass`, stage-review subagent
   `01a02061-aee6-7102-84ef-3e11c325dc66`.
+
+Local checkpoint commits:
+
+- `tt-metal` branch `vkovacevic/agentic-research/qb2-qwen36-35b-a3b`:
+  `2deb1d8cdb7839909ef830c28b0bb465fc8ac404` (`Optimize Qwen vLLM serving`).
+- `vllm` branch `dev`:
+  `b2d90800d77ba04a54462dad1384641d17e1db47` (`Add TT force-full decode guard`).
+- No commits were pushed.
