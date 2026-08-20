@@ -46,8 +46,8 @@ def test_order_is_preserved_from_the_capture_into_op_rows():
 # ---------------------------------------------------------------- the gate
 
 
-def _op(code, nxt="", prv="", gap=5.0):
-    return {"op_code": code, "next_op": nxt, "prev_op": prv, "gap_ms": gap, "bucket": "matmul", "count": 30}
+def _op(code, nxt="", prv="", gap=5.0, bucket="matmul"):
+    return {"op_code": code, "next_op": nxt, "prev_op": prv, "gap_ms": gap, "bucket": bucket, "count": 30}
 
 
 def _prof(ops):
@@ -69,7 +69,39 @@ def test_a_projection_with_no_slice_neighbour_is_not_flagged():
 def test_a_non_projection_next_to_a_slice_is_not_flagged():
     """The lever is about projection-vs-slice ordering, not any op that happens to precede a slice."""
     m = _mcp()
-    assert m._order_gate(_prof([{**_op("LayerNorm", nxt="Slice"), "op_code": "LayerNorm"}]), []) is None
+    assert m._order_gate(_prof([_op("LayerNorm", nxt="SliceDeviceOperation", bucket="reduction")]), []) is None
+
+
+def test_the_neighbour_is_classified_not_substring_matched():
+    """THE HARDCODING THIS REPLACES. The detector kept
+    _SLICE_MARKERS = ("slice","gather","concat","split","transpose","permute","reshape","index") --
+    a name-substring vocabulary, and a second copy of a decision agent/opclass.py already owns. Every
+    one of those ops classifies as `datamove` there, and a list misses the next op name by
+    construction."""
+    m = _mcp()
+    # an op whose NAME contains none of the old markers, but which classifies as datamove
+    assert m._is_datamove("Halo") is False  # conv_pool, not datamove
+    assert m._is_datamove("InterleavedToSharded") is True, "classifier not consulted"
+    assert m._order_gate(_prof([_op("Matmul QKV", nxt="InterleavedToSharded")]), []) is not None
+    code = _code_only(_PA / "cc_optimize" / "perf_mcp.py")
+    assert "_SLICE_MARKERS" not in code, "the hardcoded marker list is back"
+
+
+def _code_only(path):
+    import ast
+    import io
+    import tokenize
+
+    src = Path(path).read_text()
+    toks = [t for t in tokenize.generate_tokens(io.StringIO(src).readline) if t.type != tokenize.COMMENT]
+    stripped = tokenize.untokenize(toks)
+    tree = ast.parse(stripped)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            d = ast.get_docstring(node, clean=False)
+            if d:
+                stripped = stripped.replace(d, "")
+    return stripped
 
 
 def test_a_forced_order_is_a_legitimate_outcome(monkeypatch):

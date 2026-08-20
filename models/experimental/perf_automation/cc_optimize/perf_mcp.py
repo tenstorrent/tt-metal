@@ -5340,7 +5340,7 @@ def _fold_gate(prof: dict, attempts: list) -> dict | None:
     worst = max(cands, key=lambda o: float(o.get("gap_ms") or 0.0))
     return {
         "op": str(worst.get("op_code") or "repeated_op"),
-        "op_class": str(worst.get("bucket") or "matmul"),
+        "op_class": str(worst.get("bucket") or ""),
         "gap_ms": round(gap, 4),
         "bound_by": worst.get("bound_by"),
         "grid": worst.get("grid"),
@@ -5370,7 +5370,22 @@ def _fold_gate(prof: dict, attempts: list) -> dict | None:
     }
 
 
-_SLICE_MARKERS = ("slice", "gather", "concat", "split", "transpose", "permute", "reshape", "index")
+def _is_datamove(op_code: str) -> bool:
+    """Does this op exist to move/reshape data rather than compute on it?
+
+    ASK THE CLASSIFIER, DO NOT KEEP A LIST. This started as
+    _SLICE_MARKERS = ("slice","gather","concat","split","transpose","permute","reshape","index")
+    -- a substring list matched against op names, which is both a hardcoded vocabulary and a second
+    copy of a decision agent/opclass.py already owns. Every one of those ops classifies as
+    `datamove` there, and a list like that misses the next op name by construction, which is the
+    same reason _integrity.classify exists instead of an alias table.
+    """
+    try:
+        from agent.opclass import classify_op
+
+        return classify_op(op_code or "") == "datamove"
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _order_gate(prof: dict, attempts: list) -> dict | None:
@@ -5392,13 +5407,13 @@ def _order_gate(prof: dict, attempts: list) -> dict | None:
     """
     cands = []
     for o in prof.get("open_ops") or []:
-        code = str(o.get("op_code") or "").lower()
-        if "matmul" not in code and "linear" not in code:
+        # the op's OWN class, as the profile classified it -- not a substring of its name
+        if str(o.get("bucket") or "").lower() != "matmul":
             continue
-        nxt, prv = str(o.get("next_op") or "").lower(), str(o.get("prev_op") or "").lower()
-        if any(m in nxt for m in _SLICE_MARKERS) or any(m in prv for m in _SLICE_MARKERS):
-            if float(o.get("gap_ms") or 0.0) > 0:
-                cands.append(o)
+        if not (_is_datamove(o.get("next_op")) or _is_datamove(o.get("prev_op"))):
+            continue
+        if float(o.get("gap_ms") or 0.0) > 0:
+            cands.append(o)
     if not cands:
         return None  # (1) not applicable: no projection is adjacent to a slice/gather
     gap = sum(float(o.get("gap_ms") or 0.0) for o in cands)
@@ -5415,7 +5430,7 @@ def _order_gate(prof: dict, attempts: list) -> dict | None:
     _pair = str(worst.get("next_op") or worst.get("prev_op") or "the adjacent reshape")
     return {
         "op": str(worst.get("op_code") or "projection"),
-        "op_class": str(worst.get("bucket") or "matmul"),
+        "op_class": str(worst.get("bucket") or ""),
         "gap_ms": round(gap, 4),
         "bound_by": worst.get("bound_by"),
         "grid": worst.get("grid"),
