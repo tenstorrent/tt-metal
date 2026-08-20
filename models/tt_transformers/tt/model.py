@@ -140,11 +140,16 @@ class Transformer(LightweightModule):
             TG=args.is_galaxy,
         )
 
+        # n150 decode sweep: lm_head BFP8/HiFi2 was fastest with PCC>=0.99 vs torch.
+        # KEEP only if EN/JA gates pass. Prefetcher / TG keep the caller's dtype.
+        lm_dtype = dtype
+        if prefetcher is None and not args.is_galaxy and args.num_devices == 1:
+            lm_dtype = ttnn.bfloat8_b
         self.lm_head = LMHead(
             args=args,
             mesh_device=mesh_device,
             tt_ccl=self.tt_ccl,
-            dtype=dtype,
+            dtype=lm_dtype,
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=weight_cache_path,
