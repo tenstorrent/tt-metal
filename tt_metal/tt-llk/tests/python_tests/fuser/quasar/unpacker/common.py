@@ -33,28 +33,22 @@ def _emit_configure(
     unpack_B_dst: DataFormat,
 ) -> str:
     if _is_unary_broadcast_unpacker(compute_node):
-        desc_b = compute_node.src_b.cpp_desc_name
-        code = f"{desc_b}.reg_data_format = static_cast<std::uint8_t>({unpack_B_dst.cpp_underlying_value});\n"
-        code += f"_llk_unpack_configure_unary_<p_unpacr::UNP_B>({desc_b});\n"
-        return code
+        return f"_llk_unpack_configure_unary_<p_unpacr::UNP_B>(static_cast<DataFormat>({unpack_B_dst.cpp_underlying_value}));\n"
 
     is_unary = is_unary_unpacker(compute_node)
     has_reuse_dest = compute_node.reuse_dest != EltwiseBinaryReuseDestType.NONE
     unpack_to_dest = compute_node.unpack_to_dest.value
 
-    desc_a = compute_node.src_a.cpp_desc_name
-    code = f"{desc_a}.reg_data_format = static_cast<std::uint8_t>({unpack_A_dst.cpp_underlying_value});\n"
+    code = ""
     if unpack_to_dest:
         code += f"_llk_math_upk_to_dest_hw_configure_<false, {dest_acc}, false>();\n"
 
     if is_unary and ((dest_acc == "true" and not unpack_to_dest) or has_reuse_dest):
-        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>({desc_a}, {desc_a});\n"
+        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}), static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}));\n"
     elif is_unary:
-        code += f"_llk_unpack_configure_unary_<p_unpacr::UNP_A>({desc_a});\n"
+        code += f"_llk_unpack_configure_unary_<p_unpacr::UNP_A>(static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}));\n"
     else:
-        desc_b = compute_node.src_b.cpp_desc_name
-        code += f"{desc_b}.reg_data_format = static_cast<std::uint8_t>({unpack_B_dst.cpp_underlying_value});\n"
-        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>({desc_a}, {desc_b});\n"
+        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}), static_cast<DataFormat>({unpack_B_dst.cpp_underlying_value}));\n"
 
     return code
 

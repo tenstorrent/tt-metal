@@ -95,8 +95,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #endif
 
-static constexpr bool TILIZE = true;
-
 #ifdef LLK_TRISC_MATH
 
 #include "llk_lib_math_wrappers.h"
@@ -118,6 +116,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        const bool TILIZE = true;
         // copy srca to dest
         _llk_math_eltwise_unary_datacopy_init_wrapper_<
             DataCopyType::A2D,
@@ -126,7 +126,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_int_fpu_en,
             llk_test_pack_mode_v<false, TILIZE>>(4 /* num_faces */, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         PROFILER_SYNC();
     }
 
@@ -212,11 +211,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-
-        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
-            formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
-        _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(formats.pack_dst);
-        _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        const bool skip_bh_tilize_workaround = _llk_pack_skip_bh_tilize_workaround_wrapper_(formats.unpack_A_src);
+        const bool TILIZE                    = true;
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, false>>(
+            formats.pack_src,
+            formats.pack_dst,
+            16 * 16 * 4 /* tile_size */,
+            FACE_R_DIM,
+            TILE_C_DIM,
+            4 /* num_faces */,
+            false /* partial_face */,
+            false /* narrow_tile */,
+            0 /* relu_config */);
+        _llk_pack_init_with_src_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(
+            formats.pack_src,
+            formats.pack_dst,
+            FACE_R_DIM,
+            TILE_C_DIM,
+            4 /* num_faces */,
+            false /* partial_face */,
+            false /* narrow_tile */,
+            1 /* num_tiles */,
+            skip_bh_tilize_workaround);
+        _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
         PROFILER_SYNC();
     }
     {

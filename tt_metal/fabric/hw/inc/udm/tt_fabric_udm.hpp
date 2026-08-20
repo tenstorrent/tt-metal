@@ -78,7 +78,7 @@ FORCE_INLINE uint32_t get_fabric_counter_address() {
     static_assert(dm_id < MaxDMProcessorsPerCoreType);
     static_assert(static_cast<uint8_t>(barrier_type) < NUM_FABRIC_BARRIER_TYPES);
     constexpr uint32_t offset =
-        MEM_FABRIC_COUNTER_BASE +
+        FABRIC_COUNTER_BASE +
         (dm_id * NUM_FABRIC_BARRIER_TYPES + static_cast<uint8_t>(barrier_type)) * MEM_FABRIC_COUNTER_SIZE;
     return offset;
 }
@@ -93,7 +93,7 @@ FORCE_INLINE uint32_t get_fabric_counter_address() {
 template <FabricBarrierType barrier_type>
 FORCE_INLINE uint32_t get_fabric_counter_address(uint8_t dm_id) {
     static_assert(static_cast<uint8_t>(barrier_type) < NUM_FABRIC_BARRIER_TYPES);
-    uint32_t offset = MEM_FABRIC_COUNTER_BASE +
+    uint32_t offset = FABRIC_COUNTER_BASE +
                       (dm_id * NUM_FABRIC_BARRIER_TYPES + static_cast<uint8_t>(barrier_type)) * MEM_FABRIC_COUNTER_SIZE;
     return offset;
 }

@@ -21,9 +21,12 @@ from unittest.mock import MagicMock
 # (the kernel functions are only used for fp8 quantization, not needed for bf16 testing)
 sys.modules["models.demos.deepseek_v3.reference.deepseek.kernel"] = MagicMock()
 
+import pytest
 import torch
 import torch.nn as nn
 from loguru import logger
+
+import ttnn
 
 # Import reference modules from model.py
 from models.demos.deepseek_v3.reference.deepseek.model import MLP, Expert, Gate, Linear, ModelArgs
@@ -31,6 +34,8 @@ from models.demos.deepseek_v3.reference.deepseek.model import MLP, Expert, Gate,
 # Set Linear dtype to float32 for testing (default is bfloat16)
 Linear.dtype = torch.float32
 
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.modeling_kimi_moe import KimiSparseMoeBlock
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, compute_constants, get_gate_outputs
 
@@ -368,3 +373,253 @@ def test_moe_reference_pcc():
     logger.debug("=" * 60)
     logger.debug("TEST PASSED!")
     logger.debug("=" * 60)
+
+
+# ---------------------------------------------------------------------------
+# Kimi-K3 LatentMoE
+# ---------------------------------------------------------------------------
+
+
+def _k3_test_config(emb_dim, latent_dim, moe_inter, n_routed, topk, n_shared, activation, use_norm=True):
+    """A scaled-down but structurally exact Kimi-K3 text config.
+
+    Ratios that matter are preserved: ``routed_expert_hidden_size == hidden_size / 2`` (K3:
+    3584/7168) and one shared expert MLP at ``moe_intermediate_size * num_shared_experts``.
+    """
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3.configuration_kimi_k3 import KimiLinearConfig
+
+    return KimiLinearConfig(
+        hidden_size=emb_dim,
+        routed_expert_hidden_size=latent_dim,
+        moe_intermediate_size=moe_inter,
+        intermediate_size=moe_inter * 4,  # dense layer-0 FFN; unused by the MoE block
+        num_experts=n_routed,
+        num_experts_per_token=topk,
+        num_shared_experts=n_shared,
+        num_expert_group=1,
+        topk_group=1,
+        moe_renormalize=True,
+        moe_router_activation_func="sigmoid",
+        routed_scaling_factor=1.0,
+        latent_moe_use_norm=use_norm,
+        hidden_act=activation,
+        activation_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
+        activation_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
+        rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
+    )
+
+
+def _tt_moe_from_kimi_block(blk, cfg, *, seq_len, dispatch_group_size, capacity_factor, activation):
+    """Build a ``TorchMoe`` that mirrors ``blk`` tensor for tensor.
+
+    The K3 -> TT weight-name remap lives here and nowhere else:
+      * routed experts ``w1 -> gate_proj``, ``w3 -> up_proj``, ``w2 -> down_proj``
+      * shared expert keeps ``gate_proj`` / ``up_proj`` / ``down_proj``
+      * the latent trio maps straight across
+    """
+    routed_weights = [
+        {
+            "gate_proj": e.w1.weight.detach().clone(),
+            "up_proj": e.w3.weight.detach().clone(),
+            "down_proj": e.w2.weight.detach().clone(),
+        }
+        for e in blk.experts
+    ]
+    shared_weights = {
+        "gate_proj": blk.shared_experts.gate_proj.weight.detach().clone(),
+        "up_proj": blk.shared_experts.up_proj.weight.detach().clone(),
+        "down_proj": blk.shared_experts.down_proj.weight.detach().clone(),
+    }
+    latent_weights = {
+        "down_proj": blk.routed_expert_down_proj.weight.detach().clone(),
+        "up_proj": blk.routed_expert_up_proj.weight.detach().clone(),
+        # Present only when the latent norm is enabled; upstream does not construct it otherwise.
+        "norm": blk.routed_expert_norm.weight.detach().clone() if blk.latent_moe_use_norm else None,
+    }
+
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len,
+        cfg.num_experts,
+        cfg.num_experts_per_token,
+        dispatch_group_size,
+        dispatch_group_size,
+        capacity_factor,
+    )
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
+        num_routed_experts=cfg.num_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=1,
+    )
+
+    tt_moe = TorchMoe(
+        dispatch_group_size=dispatch_group_size,
+        experts_per_chip=experts_per_chip,
+        num_routed_experts=cfg.num_experts,
+        num_experts_per_tok=cfg.num_experts_per_token,
+        metadata_len=metadata_len,
+        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
+        seq_len_per_chip=seq_len,
+        emb_dim=cfg.hidden_size,
+        hidden_dim=cfg.moe_intermediate_size,
+        expert_dispatch_table=expert_dispatch_table,
+        routed_expert_weights=routed_weights,
+        shared_expert_weights=shared_weights,
+        # --- the K3 deltas ---
+        routed_emb_dim=cfg.routed_expert_hidden_size,
+        shared_hidden_dim=cfg.moe_intermediate_size * cfg.num_shared_experts,
+        latent_weights=latent_weights,
+        latent_use_norm=cfg.latent_moe_use_norm,
+        rms_norm_eps=cfg.rms_norm_eps,
+        activation=activation,
+        situ_beta=cfg.activation_situ_beta,
+        situ_linear_beta=cfg.activation_situ_linear_beta,
+    )
+    return tt_moe, experts_per_chip, expert_dispatch_table
+
+
+@pytest.mark.parametrize(
+    "activation, latent_use_norm",
+    [
+        # The checkpoint's real combination.
+        ("situ", True),
+        # What the device still runs outside the routed experts (shared expert, dense FFN).
+        ("silu", True),
+        # Upstream's own default, even though K3's checkpoint sets it true.
+        ("situ", False),
+    ],
+    ids=["situ", "silu", "situ-no-latent-norm"],
+)
+def test_kimi_k3_latent_moe_reference_pcc(activation, latent_use_norm):
+    """Compare ``TorchMoe``'s LatentMoE path against upstream ``KimiSparseMoeBlock``.
+
+    Host only -- no TTNN, no device. This is the gate that pins the K3 MoE *math* before any device
+    work: down-projection into the latent space, experts at the reduced width, top-k weighted sum in
+    latent space, latent RMSNorm, up-projection, plus the shared expert on the *pre*-projection
+    input.
+
+    The gate is deliberately factored out: ``KimiSparseMoeBlock`` computes routing internally, so we
+    call its ``gate`` once and hand the same ``(indices, weights)`` to ``TorchMoe``. That isolates
+    the dataflow under test from any gate-implementation difference -- gate parity is covered by the
+    device-side gate tests.
+
+    Both activations are exercised: ``situ`` is what the checkpoint does and what the routed experts
+    now run on device (#51351), and ``silu`` is what the shared expert and the dense FFN still run,
+    having no SiTU kernel at their widths. Testing both means each half of that split is validated
+    against upstream rather than assumed.
+    """
+    torch.manual_seed(42)
+
+    # Structurally exact, scaled down ~28x on the hidden dim. Latent is exactly half of emb, as in
+    # K3 (3584 / 7168), and both are tile-aligned.
+    seq_len = 1024
+    emb_dim = 256
+    latent_dim = 128
+    moe_inter = 64
+    n_routed_experts = 64
+    num_experts_per_tok = 8
+    n_shared_experts = 2
+    dispatch_group_size = 1
+
+    # Size the dispatch buffer from the actual worst case rather than a magic number.
+    # get_gate_outputs pads each expert's token count up to a TILE_SIZE boundary, so the buffer must
+    # hold the dispatched tokens plus up to TILE_SIZE-1 padding per expert; underestimating it
+    # overflows inside TorchDispatchModule with a bare IndexError.
+    worst_case_tokens = seq_len * num_experts_per_tok + n_routed_experts * (ttnn.TILE_SIZE - 1)
+    capacity_factor = -(-worst_case_tokens // (dispatch_group_size * seq_len))  # ceil-div
+
+    cfg = _k3_test_config(
+        emb_dim,
+        latent_dim,
+        moe_inter,
+        n_routed_experts,
+        num_experts_per_tok,
+        n_shared_experts,
+        activation,
+        use_norm=latent_use_norm,
+    )
+    blk = KimiSparseMoeBlock(cfg).eval()
+    with torch.no_grad():
+        torch.nn.init.normal_(blk.gate.e_score_correction_bias, std=0.02)
+
+    logger.debug(
+        f"K3 LatentMoE: act={activation} latent_norm={latent_use_norm} emb={emb_dim} latent={latent_dim} "
+        f"moe_inter={moe_inter} shared_inter={moe_inter * n_shared_experts} experts={n_routed_experts} "
+        f"topk={num_experts_per_tok}"
+    )
+    # Guard the structure itself: if upstream ever stops taking the latent path for this config the
+    # test would silently degrade into a plain-MoE comparison.
+    assert blk.use_latent_moe, "upstream did not take the latent path; routed_expert_hidden_size ignored?"
+    assert blk.latent_moe_use_norm == latent_use_norm, "latent RMSNorm presence does not match the config"
+    assert hasattr(blk, "routed_expert_norm") == latent_use_norm, "routed_expert_norm construction mismatch"
+    assert blk.experts[0].w1.weight.shape == (moe_inter, latent_dim), "routed experts are not at the latent width"
+    assert blk.shared_experts.gate_proj.weight.shape == (moe_inter * n_shared_experts, emb_dim)
+
+    tt_moe, experts_per_chip, expert_dispatch_table = _tt_moe_from_kimi_block(
+        blk,
+        cfg,
+        seq_len=seq_len,
+        dispatch_group_size=dispatch_group_size,
+        capacity_factor=capacity_factor,
+        activation=activation,
+    )
+
+    x = torch.randn(1, seq_len, emb_dim, dtype=torch.float32)
+
+    # Reference: full upstream block, gate included.
+    with torch.no_grad():
+        ref_output = blk(x)
+
+    # Same routing decisions for TorchMoe, taken from the same gate.
+    with torch.no_grad():
+        indices, weights = blk.gate(x)
+    weights_tt = weights.view(dispatch_group_size, seq_len, num_experts_per_tok).float()
+    indices_tt = indices.view(dispatch_group_size, seq_len, num_experts_per_tok).to(torch.int32)
+
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
+        indices_tt,
+        dispatch_group_size=dispatch_group_size,
+        num_routed_experts=n_routed_experts,
+        experts_per_chip=experts_per_chip,
+        seq_len_per_chip=seq_len,
+        num_experts_per_tok=num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
+    )
+
+    with torch.no_grad():
+        tt_output, inter = tt_moe(
+            x.squeeze(0).unsqueeze(0),
+            weights_tt,
+            indices_tt,
+            expert_offsets,
+            expert_token_counts,
+            expert_region_offsets,
+            return_intermediates=True,
+        )
+
+    # The latent tensors must actually be at the reduced width, otherwise the test would pass while
+    # silently running the whole thing at emb_dim.
+    assert inter.latent_input.shape[-1] == latent_dim, inter.latent_input.shape
+    assert inter.dispatched_buffer.shape[-1] == latent_dim, inter.dispatched_buffer.shape
+    assert inter.latent_routed_output.shape[-1] == latent_dim, inter.latent_routed_output.shape
+    assert inter.routed_output.shape[-1] == emb_dim, inter.routed_output.shape
+
+    tt_output_reshaped = tt_output.view(1, seq_len, emb_dim)
+    pcc = compute_pcc(ref_output, tt_output_reshaped)
+    logger.debug(f"PCC vs upstream KimiSparseMoeBlock: {pcc:.6f}")
+    logger.debug(f"ref: min={ref_output.min():.4f} max={ref_output.max():.4f} mean={ref_output.mean():.4f}")
+    logger.debug(
+        f"tt : min={tt_output_reshaped.min():.4f} max={tt_output_reshaped.max():.4f} "
+        f"mean={tt_output_reshaped.mean():.4f}"
+    )
+
+    assert torch.isfinite(ref_output).all(), "reference output is not finite"
+    assert torch.isfinite(tt_output_reshaped).all(), "TorchMoe output is not finite"
+    # Both sides are fp32 torch computing the same graph in a different order, so this should be
+    # near-exact; 0.999 leaves room only for reduction-order noise.
+    assert pcc >= 0.999, f"PCC {pcc:.6f} below threshold 0.999"

@@ -1166,8 +1166,7 @@ public:
                 "SD cmd CB + dispatch CB too large for L1");
         } else {
             TT_FATAL(raw.size() + l1_buf_base <= dispatch_l1_size, "SD command buffer too large for L1");
-            TT_FATAL(
-                dispatch_buffer_size + l1_buf_base <= dispatch_l1_size, "SD dispatch buffer too large for L1");
+            TT_FATAL(dispatch_buffer_size + l1_buf_base <= dispatch_l1_size, "SD dispatch buffer too large for L1");
         }
 
         tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -1175,8 +1174,8 @@ public:
 
         tt_metal::Program program = tt_metal::CreateProgram();
 
-        const uint32_t spoof_prefetch_sem_id = tt_metal::CreateSemaphore(
-            program, {spoof_logical}, dispatch_buffer_pages, cq_core_type);
+        const uint32_t spoof_prefetch_sem_id =
+            tt_metal::CreateSemaphore(program, {spoof_logical}, dispatch_buffer_pages, cq_core_type);
         const uint32_t dispatch_core_sem_id = tt_metal::CreateSemaphore(program, {disp_logical}, 0, cq_core_type);
         const uint32_t prefetch_sync_sem = tt_metal::CreateSemaphore(program, {spoof_logical}, 0, cq_core_type);
 
