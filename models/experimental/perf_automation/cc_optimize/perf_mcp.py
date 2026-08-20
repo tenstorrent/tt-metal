@@ -2115,14 +2115,20 @@ def check_pcc() -> dict:
     return res
 
 
-def _pg_cpu_jiffies(pgid):
-    # probes owns the /proc walk; this was one of four copies of it.
-    try:
-        from agent.probes import _pgroup_cpu_jiffies
+def _pg_progress_signature(pgid, pid=None):
+    """probes owns this; see progress_signature there.
 
-        return _pgroup_cpu_jiffies(pgid)
-    except Exception:  # noqa: BLE001
-        return 0
+    THIS LOOP USED CPU, AND CPU IS NOT PROGRESS. It read `cpu > last_cpu + 10` as "still working",
+    which is the signal that let run 12 spin for nine hours: a livelock burns CPU by definition. The
+    backstop below bounded this loop so it could not hang outright, but the stall check was blind for
+    the whole hour leading up to it. The signature moves only when work does.
+    """
+    try:
+        from agent.probes import progress_signature
+
+        return progress_signature(pgid, None, pid)
+    except Exception:  # noqa: BLE001 -- an unreadable signature is "unchanged", which the clock handles
+        return (0, 0, 0, "")
 
 
 class _AdaptiveResult:
@@ -2169,14 +2175,21 @@ def _adaptive_run(cmd, cwd, env, label="device run", stall_s=None, backstop=None
     pgid = proc.pid
     start = _t.monotonic()
     last_progress = start
-    last_cpu = _pg_cpu_jiffies(pgid)
+    _sig = _pg_progress_signature(pgid)
+    _last_stack_at = start
     max_gap = 0.0
     while proc.poll() is None:
         _t.sleep(5)
         now = _t.monotonic()
-        cpu = _pg_cpu_jiffies(pgid)
-        moved = cpu > last_cpu + 10 or act[0] > last_progress
-        last_cpu = cpu
+        # the stack sample is the expensive one -- only once the cheap counters have been still
+        # for a while, and at most every 30s. See probes._execute.
+        _want_stack = (now - last_progress) >= max(60.0, stall_s / 2) and now - _last_stack_at >= 30.0
+        _new = _pg_progress_signature(pgid, proc.pid if _want_stack else None)
+        if _want_stack:
+            _last_stack_at = now
+        _sig_moved = _new[:3] != _sig[:3] or (bool(_new[3]) and bool(_sig[3]) and _new[3] != _sig[3])
+        _sig = _new if (_new[3] or not _sig[3]) else (_new[0], _new[1], _new[2], _sig[3])
+        moved = _sig_moved or act[0] > last_progress
         if moved:
             max_gap = max(max_gap, now - last_progress)
             last_progress = now

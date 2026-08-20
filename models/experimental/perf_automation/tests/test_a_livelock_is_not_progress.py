@@ -164,3 +164,99 @@ def test_the_ceiling_is_measured_on_working_time_not_wall_clock():
     run = Path(__file__).resolve().parents[1].joinpath("cc_optimize", "run.py").read_text()
     i = run.index("_worked = now - start - _cool_total()")
     assert "_worked >= timeout_s * _ceiling_mult" in run[i : i + 1800], "ceiling ignores cooling credit"
+
+
+def _code_only(path):
+    """Source with comments and docstrings removed.
+
+    These assertions are about what the code DOES. A docstring that quotes the old bad line -- and
+    the fix's docstrings do quote it, deliberately, so the next reader knows what was wrong -- must
+    not read as the bad line still being present."""
+    import ast
+    import io
+    import tokenize
+
+    src = Path(path).read_text()
+    out = []
+    for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+        if tok.type == tokenize.COMMENT:
+            continue
+        out.append(tok)
+    stripped = tokenize.untokenize(out)
+    tree = ast.parse(stripped)
+    docs = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            d = ast.get_docstring(node, clean=False)
+            if d:
+                docs.add(d)
+    for d in docs:
+        stripped = stripped.replace(d, "")
+    return stripped
+
+
+# ------------------------------------------------------------------ the third loop, and the LLM
+
+
+def test_the_third_supervised_loop_is_not_still_on_cpu():
+    """perf_mcp has its own Popen poll loop. It was missed on the first pass: it still read
+    `cpu > last_cpu + 10` as progress. Its absolute backstop meant it could not hang outright, but
+    the stall check was blind for the whole hour leading up to that backstop."""
+    root = Path(__file__).resolve().parents[1]
+    code = _code_only(root / "cc_optimize" / "perf_mcp.py")
+    assert "cpu > last_cpu" not in code, "perf_mcp's loop still treats CPU as progress"
+    assert "_pg_progress_signature" in code, "perf_mcp's loop has no progress signature"
+
+
+def test_no_supervised_loop_anywhere_still_uses_cpu_as_liveness():
+    """The whole point. Three loops, one rule -- and nothing left over that says otherwise."""
+    root = Path(__file__).resolve().parents[1]
+    for rel in (("agent", "probes.py"), ("cc_optimize", "run.py"), ("cc_optimize", "perf_mcp.py")):
+        code = _code_only(root.joinpath(*rel))
+        assert "cpu > last_cpu" not in code, "%s still reads CPU as progress" % (rel,)
+    run = root.joinpath("cc_optimize", "run.py").read_text()
+    assert "def _llm_child_alive" not in run, "the dead child-alive probe is still here"
+
+
+def test_an_llm_verdict_cannot_re_arm_a_round_forever():
+    """`wait` resets the round's progress clock, so an agent that keeps answering `wait` kept a
+    stuck round alive with no bound -- the round-level twin of the budget that was demoted to a
+    warning. A judgement is worth having; an unlimited number of them is not a bound."""
+    run = Path(__file__).resolve().parents[1].joinpath("cc_optimize", "run.py").read_text()
+    assert "_MAX_WATCHDOG_REPRIEVES" in run, "watchdog reprieves are unbounded"
+    i = run.index('if _verdict == "wait":')
+    stanza = run[i : i + 1200]
+    assert "_reprieves[0] < _MAX_WATCHDOG_REPRIEVES" in stanza, "the reprieve is not counted"
+    assert "break" in stanza, "running out of reprieves does not end the round"
+
+
+def test_the_watchdogs_own_ceiling_is_not_reset_by_a_reprieve():
+    """watchdog_decide already refuses to wait past an operator ceiling -- but it judged
+    `since_commit`, which was computed from a clock the reprieve rewound. The bound was being
+    cleared by the thing it existed to bound."""
+    run = Path(__file__).resolve().parents[1].joinpath("cc_optimize", "run.py").read_text()
+    assert '"since_commit": _now - last_real' not in run, "the stuck clock is still rewound by reprieves"
+    assert '"since_commit": _now - (_stuck_since[0] or _now)' in run
+    # and only REAL progress clears it
+    j = run.index("_stuck_since[0] = None")
+    assert "real progress" in run[max(0, j - 200) : j + 120]
+
+
+def test_the_operator_ceiling_still_kills_a_waiting_agent():
+    """Behavioural, not textual: an agent that says wait forever must still be overruled."""
+    from cc_optimize.run import watchdog_decide
+
+    ev = {
+        "op": "round",
+        "op_elapsed": 10**6,
+        "since_commit": 10**6,
+        "cpu_hist": [1],
+        "txt_hist": [1],
+        "actions": 5,
+        "distinct_actions": 1,
+        "action_seq": [],
+        "log_tail": "",
+        "observed": {},
+        "ceiling": 100,
+    }
+    assert watchdog_decide(ev, agent=lambda _e: "wait") == "kill", "a confused agent can still wait forever"

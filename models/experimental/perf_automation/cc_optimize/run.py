@@ -3088,16 +3088,6 @@ def _tree_cpu_jiffies(root_pid: int) -> int:
     return total
 
 
-def _llm_child_alive(pgid: int) -> bool:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    try:
-        from agent.probes import _proc_stat_fields
-    except Exception:  # noqa: BLE001
-        return False
-    target = str(pgid)
-    return any(len(f) > 2 and f[2] == target for _pid, f in _proc_stat_fields())
-
-
 # Defined by perf_mcp, which emits them; named here so the watchdog can recognise a cooling child.
 _COOL_BEGIN = "PERF_MCP_COOLING_BEGIN"
 _COOL_END = "PERF_MCP_COOLING_END"
@@ -3695,6 +3685,12 @@ def _adaptive_cap(repo_root: Path, floor: int, mult: int = 3) -> int:
     return min(ceil, max(int(_MIN_TIMER_S), scaled or floor))
 
 
+# How many times the agent watchdog may answer "wait" and re-arm a round that has shown no real
+# progress. Each reprieve is worth one max_no_progress window. Finite, because an LLM verdict is a
+# judgement and not a bound -- see _run_round_with_watchdog.
+_MAX_WATCHDOG_REPRIEVES = 3
+
+
 def _round_hard_cap(repo_root: Path, stall_sec: int) -> int:
     """UNPRODUCTIVE bound for one agent round, derived from the observed ROUND cycle."""
     return adaptive_timer(repo_root, "round", env_key="PERF_MCP_ROUND_MAX_SEC")
@@ -3913,6 +3909,8 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
     _now0 = time.monotonic()
     last_active = _now0  # last sign of life (CPU / transcript / real progress)
     last_real = _now0  # last REAL progress (commit / recorded kernel attempt)
+    _reprieves = [0]  # how many times the watchdog has re-armed this round; see below
+    _stuck_since = [None]  # when real progress was last seen; NOT rewound by a reprieve
     _t0 = _now0
     wedge_reason = ""
     try:
@@ -3927,12 +3925,15 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
                 live = _liveness()
                 if tok != last_tok:  # real progress resets BOTH clocks
                     last_tok, last_live, last_active, last_real = tok, live, _now, _now
+                    _stuck_since[0] = None  # and only real progress clears the stuck clock
                 elif live[0] != last_live[0] or (live[1] - last_live[1]) > 200:  # alive: transcript/CPU
                     last_live, last_active = live, _now
                 if _now - last_active > stall_sec:
                     wedge_reason = "FROZEN %ds — no commit, no device CPU, no agent activity (real wedge)" % stall_sec
                     break
                 if _now - last_real > max_no_progress:
+                    if _stuck_since[0] is None:
+                        _stuck_since[0] = last_real
                     # BUG 4: elapsed wall clock alone cannot tell slow-but-working from stuck --
                     # it killed a healthy llama round 4x on 2026-07-25. Ask the agent watchdog,
                     # which reads the actual evidence; the derived net still bounds it.
@@ -3940,7 +3941,11 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
                         "model": str(repo_root.name),
                         "op": "round",
                         "op_elapsed": _now - _t0,
-                        "since_commit": _now - last_real,
+                        # NOT `_now - last_real`. A reprieve rewinds last_real, so reporting from
+                        # it reset the watchdog's own operator ceiling ("a confused agent cannot wait
+                        # forever") to zero on every reprieve -- the bound was being cleared by the
+                        # thing it existed to bound. This clock is only cleared by REAL progress.
+                        "since_commit": _now - (_stuck_since[0] or _now),
                         "cpu_hist": [1 if live else 0 for _ in range(5)],
                         "txt_hist": [1 if live else 0 for _ in range(5)],
                         "actions": 1,
@@ -3950,9 +3955,39 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
                         "observed": _observed_stats(repo_root, "round"),
                         "ceiling": _baseline_ceiling(repo_root)[1],
                     }
-                    if watchdog_decide(_ev) == "wait":
-                        last_real = _now  # judged healthy: re-arm and keep going
-                        continue
+                    # AN LLM MAY NOT RE-ARM THIS FOREVER.
+                    #
+                    # "wait" resets last_real, so a watchdog that keeps answering "wait" keeps a
+                    # stuck round alive with no bound at all -- the round equivalent of the budget
+                    # that was demoted to a warning and let run 12 spin for nine hours. A judgement
+                    # is worth having; an unlimited number of them is not a bound.
+                    #
+                    # So the verdict is honoured a fixed number of times and then stops being asked.
+                    # Each reprieve is worth max_no_progress, so the round still gets
+                    # _MAX_WATCHDOG_REPRIEVES x that before it is called stuck -- generous for slow
+                    # work, finite for stuck work.
+                    _verdict = watchdog_decide(_ev)
+                    if _verdict == "wait":
+                        if _reprieves[0] < _MAX_WATCHDOG_REPRIEVES:
+                            _reprieves[0] += 1
+                            print(
+                                "  [optimize/cc] watchdog judged the round healthy — reprieve %d/%d "
+                                "(%ds each, %ds stuck)"
+                                % (
+                                    _reprieves[0],
+                                    _MAX_WATCHDOG_REPRIEVES,
+                                    max_no_progress,
+                                    int(_now - (_stuck_since[0] or _now)),
+                                ),
+                                flush=True,
+                            )
+                            last_real = _now  # judged healthy: re-arm and keep going
+                            continue
+                        wedge_reason = (
+                            "UNPRODUCTIVE %ds — the watchdog re-armed this round %d times and it "
+                            "still has no real progress; a verdict is not a bound" % (max_no_progress, _reprieves[0])
+                        )
+                        break
                     wedge_reason = (
                         "UNPRODUCTIVE %ds — agent watchdog judged the round stuck (no real progress)" % max_no_progress
                     )
