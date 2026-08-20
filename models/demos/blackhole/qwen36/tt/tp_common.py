@@ -145,7 +145,7 @@ def wh_9b_n300(args):
     """True only for Qwen3.5-9B on a Wormhole N300 -- the exact configuration the DECODE
     optimizations below were measured and PCC-validated on.
 
-    Single source of truth for the scope of five decode changes that were all measured on this one
+    Single source of truth for the scope of decode changes that were all measured on this one
     config and are unvalidated anywhere else:
       * ``TPAttention._make_heads_decode``'s ``skip_v_reshard`` (v goes straight from the head split
         into the paged-cache write)
@@ -155,6 +155,7 @@ def wh_9b_n300(args):
       * ``mlp_w1/w3_decode_1d_progcfg``'s num_cores=56 + fp32_dest_acc_en=False, paired with
         ``Qwen36MLP.compute_kernel_config_gateup_decode``
       * ``rope_permuted_enabled`` below (permuted-head_dim full-width RoPE)
+      * ``emb_decode_memcfg`` (width-sharded L1 token embedding on a tile of indices)
 
     Three conditions, each load-bearing:
       * ``not is_blackhole()`` -- Blackhole has 1.84x the L1 and a taller grid, takes a different
@@ -169,7 +170,7 @@ def wh_9b_n300(args):
         worker grid, and the batch-derived shard grids were only checked against this mesh; N150
         (TP=1) never reaches the TP path at all and T3K (TP=8) re-shapes every one of these grids.
 
-    Outside this scope every one of the four falls back to the previously shipped behavior.
+    Outside this scope every one of these falls back to the previously shipped behavior.
     """
     return not is_blackhole() and getattr(args, "dim", 0) <= 4096 and getattr(args, "device_name", None) == "N300"
 
@@ -385,6 +386,40 @@ def create_activation_shard_config(k):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+
+
+def decode_ids_for_embed(token_ids):
+    """Host flatten of decode ids to ``[1, B]``.
+
+    ``ttnn.embedding`` fused-tilize keys off last dim (must be a multiple of 32). Decode tensors
+    arrive as ``[B, 1]``; leaving them that way keeps last dim 1 and the 1-core RM factory.
+    Flatten on the host (logical numel), never via on-device reshape of a padded RM ``[B,1]``.
+    """
+    return token_ids.reshape(1, token_ids.numel())
+
+
+def decode_embed(emb, tok, args):
+    """Token embedding with the decode width-shard when the indices are a full tile.
+
+    ``EmbeddingsDeviceOperation`` with interleaved output parallelizes over token tiles, so
+    decode B=32 is 1 core / ~21us of serial DRAM gathers. Width-sharded L1 output splits
+    across dim instead; measured 3.0us on N300 (test_embedding_decode_sweep.py) with PCC=1.0,
+    and the pre-norm all-gather accepts that layout with no extra reshard.
+
+    Only used when ``args.emb_decode_memcfg`` is set (wh_9b_n300) AND the token tensor already
+    has a full tile on the last dim (``shape[-1] % 32 == 0`` and ``<= 32``). That is the fused-
+    tilize precondition. Decode call sites flatten host tokens ``[B,1]`` -> ``[1,B]`` before
+    ``from_torch`` so this fires at serving batch 32. Do not reshape ``[B,1]`` on device: RM
+    page padding makes that view the first padded row (1 real id + zeros), not B ids.
+    B=1 (last dim 1) stays DRAM interleaved.
+    """
+    mc = getattr(args, "emb_decode_memcfg", None)
+    if mc is None:
+        return emb(tok)
+    last = int(tok.shape[-1])
+    if last == 0 or last > TILE_SIZE or last % TILE_SIZE != 0:
+        return emb(tok)
+    return emb(tok, memory_config=mc)
 
 
 # 2D prefill matmul config
