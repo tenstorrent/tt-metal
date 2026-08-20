@@ -11,6 +11,11 @@
 //   default    out = copy(in)                      the zero-math control
 //   PC_BCAST   out = prev + bcast<Cols>(vec)       shape-preserving, so chainable
 //   PC_MATMUL  out = matmul(prev, w), w square     shape-preserving, so chainable
+//   PC_BIN     out = prev <op> rhs, both whole blocks of the same shape. With PC_FPU
+//              the op runs on the FPU, reading both operands out of L1 and needing no
+//              copy_tile at all; without it, on the SFPU, which costs two copy_tiles
+//              per output tile. PC_OP_SUB / PC_OP_MUL pick the op, add is the default.
+//              This is the pair the FPU-vs-SFPU question turns on.
 //   PC_ALT     alternates bcast and copy per pass  same tiles, mixed KINDS
 //   PC_REDUCE  out = reduce_max<Cols>(in, one)     collapses, so PASSES==1 only
 //
@@ -63,7 +68,20 @@ static_assert(PASSES == 1, "a reduction is not shape-preserving, so it cannot be
 
 // Every pass is one expression, so the mode is the expression and the chain below is
 // the same code in all three cases.
-#if defined(PC_BCAST)
+#if defined(PC_BIN)
+#if defined(PC_OP_SUB)
+#define PC_PASS(x) PC_BIN_APPLY(sub, -, x)
+#elif defined(PC_OP_MUL)
+#define PC_PASS(x) PC_BIN_APPLY(mul, *, x)
+#else
+#define PC_PASS(x) PC_BIN_APPLY(add, +, x)
+#endif
+#if defined(PC_FPU)
+#define PC_BIN_APPLY(fpu, sym, x) u::fpu_##fpu((x), rhs)
+#else
+#define PC_BIN_APPLY(fpu, sym, x) ((x)sym rhs)
+#endif
+#elif defined(PC_BCAST)
 #define PC_PASS(x) ((x) + u::bcast<u::Axis::Cols>(vec))
 #elif defined(PC_MATMUL)
 #define PC_PASS(x) u::matmul((x), vec)
@@ -84,7 +102,7 @@ void kernel_main() {
     constexpr uint32_t cols = get_compile_time_arg_val(1);
 
     constexpr auto in_args = TensorAccessorArgs<2>();
-#if defined(PC_BCAST) || defined(PC_MATMUL) || defined(PC_ALT)
+#if defined(PC_BCAST) || defined(PC_MATMUL) || defined(PC_ALT) || defined(PC_BIN)
     constexpr auto vec_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<vec_args.next_compile_time_args_offset()>();
 #else
@@ -92,7 +110,7 @@ void kernel_main() {
 #endif
 
     const uint32_t in_addr = get_arg_val<uint32_t>(0);
-#if defined(PC_BCAST) || defined(PC_MATMUL) || defined(PC_ALT)
+#if defined(PC_BCAST) || defined(PC_MATMUL) || defined(PC_ALT) || defined(PC_BIN)
     const uint32_t vec_addr = get_arg_val<uint32_t>(1);
     const uint32_t out_addr = get_arg_val<uint32_t>(2);
 #else
@@ -128,6 +146,11 @@ void kernel_main() {
 
     u::ComputeBlock c0 = u::noc_load<1>(in_storage, in_acc, 0).wait();
 
+#if defined(PC_BIN)
+    u::Storage<S> rhs_storage(kCbVec);
+    const auto rhs_acc = TensorAccessor(vec_args, vec_addr);
+    u::ComputeBlock rhs = u::noc_load<1>(rhs_storage, rhs_acc, 0).wait();
+#endif
 #if defined(PC_BCAST) || defined(PC_MATMUL) || defined(PC_ALT)
     // Read once and used by every pass: a ComputeBlock is not consumed by being read,
     // which is what lets one operand feed the whole chain.

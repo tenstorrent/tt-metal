@@ -98,6 +98,22 @@ inline void reduce_uninit(uint32_t icb = 0) { T("  reduce_uninit(cb" + n(icb) + 
 inline void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1) {
     T("  add_bcast_rows_init(cb" + n(icb0) + ",cb" + n(icb1) + ")");
 }
+// FPU elementwise binaries: two circular buffers in, DST out, no copy_tile in sight.
+// The trace shows the CBs rather than DST slots for the operands, which is the whole
+// difference from the SFPU forms above.
+inline void add_tiles_init(uint32_t cb0, uint32_t cb1) { T("    add_tiles_init(cb" + n(cb0) + ",cb" + n(cb1) + ")"); }
+inline void sub_tiles_init(uint32_t cb0, uint32_t cb1) { T("    sub_tiles_init(cb" + n(cb0) + ",cb" + n(cb1) + ")"); }
+inline void mul_tiles_init(uint32_t cb0, uint32_t cb1) { T("    mul_tiles_init(cb" + n(cb0) + ",cb" + n(cb1) + ")"); }
+inline void add_tiles(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t d) {
+    T("      add_tiles(cb" + n(cb0) + "[" + n(t0) + "],cb" + n(cb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
+}
+inline void sub_tiles(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t d) {
+    T("      sub_tiles(cb" + n(cb0) + "[" + n(t0) + "],cb" + n(cb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
+}
+inline void mul_tiles(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t d) {
+    T("      mul_tiles(cb" + n(cb0) + "[" + n(t0) + "],cb" + n(cb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
+}
+
 inline void add_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     T("    add_bcast_rows(cb" + n(icb0) + ",tile=" + n(itile0) + " + cb" + n(icb1) + ",tile=" + n(itile1) + " -> dst" +
       n(idst) + ")");

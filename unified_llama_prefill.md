@@ -1127,6 +1127,45 @@ reading, purely to wind the pointers back. And the numerics move: today `s + mas
 in DST and packed once, where L1 accumulate packs `s` to bfloat16 first and adds it to a
 bfloat16 mask, so the error gate has to be re-checked rather than assumed.
 
+### FPU vs SFPU for add, sub and mul: the FPU wins everywhere
+
+add, sub and mul exist on both units, and the two forms differ in a way that matters
+given where the time actually goes. The SFPU form takes two DST slots, so every operand
+needs a `copy_tile` to get there; the FPU form reads both operands straight out of
+circular buffers and needs no copy at all. Since the SFPU budget is dominated by leaf
+copies rather than arithmetic, that is the right thing to attack.
+
+Priced through the real code path -- `Strategy<FpuEltwiseFusion>` behind an explicit
+`u::fpu_add/sub/mul`, not a hand-rolled approximation -- as the slope in tiles at one
+pass, so the program floor cancels:
+
+| op | SFPU us/tile | FPU us/tile | ratio |
+|---|---|---|---|
+| add | 0.532 | 0.311 | **0.58x** |
+| sub | 0.524 | 0.314 | 0.60x |
+| **mul** | **1.123** | **0.332** | **0.30x** |
+
+Identical at HiFi2 + approx to within noise, and every check gates on exact equality, so
+the two units agree bit for bit on inputs where nothing rounds.
+
+**The caution recorded before this measurement was wrong in an instructive way.** The
+worry was that FPU eltwise runs at MATH_FIDELITY, so `mul_tiles` might take four passes
+at our HiFi4 default and lose to the SFPU. The opposite holds: the SFPU multiply is the
+most expensive op in the set at 1.123us/tile -- more than twice the SFPU add -- and the
+FPU does it in 0.332us at either fidelity. So mul is the BIGGEST winner rather than the
+exception, no fidelity-dependent predicate is needed, and the "measure before building"
+step earned its keep for the third time today.
+
+What this implies for flash. Of six SFPU passes per chunk, four are FPU-fusable: `s +
+mask` (8 tiles), `os + pv` (8), `l_prev*c_old + rs` (4, mul then add), and
+`(m_prev - m_now).exp()` (4, sub with an SFPU epilogue). At 0.21us/tile saved for add and
+sub and 0.79us for mul, that is roughly 4-5us per chunk, so **9-10us of a 46.6us kernel,
+about 20%** -- the largest single item identified anywhere in this file.
+
+Also worth recording: `eltwise_binary.h` was simply never included by
+`adaptor_v1.hpp`, which had only the `_sfpu` variant. The FPU forms of the three ops the
+model already supports were not reachable at all.
+
 ### What to test next
 
 Ordered by expected value, with what each result would actually mean. Six candidates are
