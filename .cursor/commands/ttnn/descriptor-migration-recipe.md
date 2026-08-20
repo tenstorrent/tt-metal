@@ -23,7 +23,6 @@ This recipe was validated on the Bernoulli, Matmul, Conv2d, and FullLike operati
 > **Background reading:** "Descriptors and Specs: how a TTNN op describes its program" is the
 > full "what good looks like and why" document (cache mechanics, keying, refresh, bad
 > practices); this recipe is the mechanical procedure. It lives at
-> `tech_reports/ttnn/descriptors_and_specs.md` and at
 > <https://gist.github.com/dgomezTT/7584e4eb0dc6ddc5214f9a7e90e77181>. For a brand-new op (not
 > a migration), also consider a **Spec** factory (`create_program_artifacts`) — Specs are the
 > Metal 2.0 direction; see §3 and §6 of that document for whether your op's shape fits yet.
@@ -311,10 +310,11 @@ supersedes binding patching (branch (a) of §1.2). Rules for writing it:
    named constants or a comment; multi-factory ops mirror `select_program_factory` through a
    shared helper too.
 
-See `sparse_sdpa_program_factory.cpp` and
-`interleaved_to_sharded_partial_program_factory.cpp` for the model: a few addresses and one
-hash-excluded scalar written in place, everything else deliberately untouched because a hit
-guarantees it is already right.
+See `sparse_sdpa_program_factory.cpp` for the model: a few addresses and one hash-excluded
+scalar written in place, everything else deliberately untouched because a hit guarantees it is
+already right. (`interleaved_to_sharded_partial_program_factory.cpp` does the same job but
+builds a positional placeholder list and indexes `desc.cbs[i]`; do not copy that part — rule 6
+above requires matching CBs by `CBIndex`.)
 
 > **`get_dynamic_runtime_args` is FORBIDDEN in new code.** The older per-slot
 > `{kernel_idx, core, arg_idx, value}` dynamic-args hook is legacy and being removed
@@ -349,9 +349,11 @@ kernel ELF. They must stay in the hash.
 >
 > Some ops deliberately do the opposite: they **exclude shape from the hash** so one program is
 > reused across shapes, with the per-core args (num_tiles, offsets, num_cores) carrying the shape and
-> the **slow-path rebuild** recomputing them every dispatch (e.g. `binary_ng` hashes `shard_volumes`,
-> not shape). Such shape-agnostic ops **cannot** use bindings-only fast patching — it would leave
-> the shape-dependent args stale and miscompute; adding a binding *removes* the rebuild that was
+> the **slow-path rebuild** recomputing them every dispatch (`binary_ng` hashes `shard_volumes`, not
+> shape; it now re-derives those args in
+> `BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments`, not via a rebuild).
+> Such shape-agnostic ops **cannot** use bindings-only fast patching — it would leave the
+> shape-dependent args stale and miscompute; adding a binding *removes* the rebuild that was
 > silently saving them. Pick deliberately between: re-key the hash so a work-split change is a
 > miss (losing the cross-shape reuse), keep the slow-path rebuild, or re-derive every per-core arg
 > in the override (which is just the rebuild wearing a different name).
