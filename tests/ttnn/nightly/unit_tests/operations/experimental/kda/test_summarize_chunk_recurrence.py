@@ -55,7 +55,7 @@ _PRODUCTION_CASE = _ProductionCase(
     batch_heads=8,
     num_chunks=4,
     dim=32,
-    expected_duration_ns=26_214,
+    expected_duration_ns=20_476,
 )
 
 
