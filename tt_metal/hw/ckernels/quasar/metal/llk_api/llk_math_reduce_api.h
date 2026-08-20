@@ -44,7 +44,22 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
         srcA_2x ? DataFormat::MxFp4_2x_B : static_cast<DataFormat>(unpack_dst_format[operandA_id]);
     const DataFormat srcB_format = static_cast<DataFormat>(unpack_dst_format[operandB_id]);
 
-    _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(srcA_format, srcB_format);
+    // When srcA_2x, srcA_format deviates from the op-agnostic unpack_dst_format[] table that kernel
+    // startup (llk_math_hw_configure) already programmed the ALU from and latched as
+    // DataFormatConfigSet::DEFAULT. That latch keys on which config set is active, not on the
+    // formats, so _configure_default_alu_data_format_state_ would early-return and leave the ALU
+    // decoding 2x-packed SrcA as Float16_b. Program the ALU directly in that case; this is still the
+    // DEFAULT config shape (implied math format off, no dest-format override), so the latched
+    // DataFormatConfigSet::DEFAULT stays truthful and transpose-dest's restore contract holds.
+    if (srcA_2x) {
+        const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
+                                          _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
+        _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(
+            srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
+    } else {
+        _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(
+            srcA_format, srcB_format);
+    }
     _llk_math_reduce_init_<pool_type, reduce_dim, math_fidelity, is_int_fpu_en>(tensor_shape);
 }
 

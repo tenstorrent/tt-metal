@@ -50,8 +50,24 @@ inline void llk_math_matmul_init(
         is_2x_format(srcA_format) == is_2x_format(srcB_format),
         "SrcA and SrcB must both be 2x formats or both non-2x formats");
 
-    _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
-        srcA_format, srcB_format);
+    // srcA/srcB above are the per-op effective src-register formats, which for MxFp4 differ from the
+    // op-agnostic unpack_dst_format[] table that kernel startup (llk_math_hw_configure) already
+    // programmed the ALU from and latched as DataFormatConfigSet::DEFAULT. That latch keys on which
+    // config set is active, not on the formats, so _configure_default_alu_data_format_state_ would
+    // early-return and leave the ALU decoding 2x-packed src registers as Float16_b while the EN_X2
+    // MOP below ran over them. When the formats deviate, program the ALU directly instead; this is
+    // still the DEFAULT config shape (implied math format off, no dest-format override), so the
+    // latched DataFormatConfigSet::DEFAULT stays truthful and transpose-dest's restore contract holds.
+    if ((srcA_format != static_cast<DataFormat>(get_operand_dst_format(operandB_id))) ||
+        (srcB_format != static_cast<DataFormat>(get_operand_dst_format(operandA_id)))) {
+        const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
+                                          _is_src_fmt_int32_dest_compatible_(srcB_format) && DST_ACCUM_MODE;
+        _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
+            srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
+    } else {
+        _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
+            srcA_format, srcB_format);
+    }
     const bool src_2x = is_2x_format(srcA_format) && is_2x_format(srcB_format);
     if (src_2x) {
         _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, true /*EN_X2*/>(ct_dim, rt_dim);
