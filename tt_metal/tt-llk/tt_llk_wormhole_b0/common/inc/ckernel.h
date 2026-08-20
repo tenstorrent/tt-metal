@@ -57,7 +57,7 @@ void __builtin_rvtt_rmwciB0(unsigned, unsigned, unsigned);
 void __builtin_rvtt_rmwciB1(unsigned, unsigned, unsigned);
 void __builtin_rvtt_rmwciB2(unsigned, unsigned, unsigned);
 void __builtin_rvtt_rmwciB3(unsigned, unsigned, unsigned);
-void __builtin_rvtt_cfg_store(unsigned, unsigned, unsigned);
+unsigned __builtin_rvtt_cfg_store_word(unsigned, unsigned, unsigned);
 #pragma GCC diagnostic pop
 
 namespace ckernel
@@ -387,17 +387,22 @@ inline std::uint32_t cfg_addr(std::uint32_t cfg_addr32)
 }
 
 // Memory-mapped Config write: cfg[addr32] = data, issued by the RISC-V core.
-// Routed through __builtin_rvtt_cfg_store, which emits exactly the same store
-// (no extra instruction, no extra register) but carries the word index so
-// pass_rvtt_config forgets that one word instead of discarding everything it
-// knows.  A naked cfg[...] = ... store is invisible to the pass, which has to
-// treat it as an opaque barrier.
+// Stays a store, so the loop optimizers can tell it apart from every other
+// object and keep hoisting across it; __builtin_rvtt_cfg_store_word is const
+// and its value is the data, with the window base and the word index along for
+// pass_rvtt_config, which fuses the two back into one write before expansion.
+// The pass then forgets that one word instead of discarding everything it knows.
+//
+// A call here instead costs the per-tile loops every hoist and every register
+// promotion they had: on whisper it was 12% more retired instructions on the
+// unpack thread, all of it in the matmul tile loop.
 inline void cfg_store(volatile std::uint32_t tt_reg_ptr *cfg, std::uint32_t addr32, std::uint32_t data)
 {
     // The builtin's operands are 'unsigned int'; std::uint32_t is 'unsigned
     // long' on this target, so cast explicitly rather than relying on the
     // implicit conversion (which the builtin's argument check rejects).
-    __builtin_rvtt_cfg_store(static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(cfg)), static_cast<unsigned>(addr32), static_cast<unsigned>(data));
+    cfg[addr32] =
+        __builtin_rvtt_cfg_store_word(static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(cfg)), static_cast<unsigned>(addr32), static_cast<unsigned>(data));
 }
 
 inline void cfg_write(std::uint32_t cfg_addr32, std::uint32_t data)
