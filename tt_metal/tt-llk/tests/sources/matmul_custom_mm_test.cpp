@@ -34,7 +34,7 @@
 // W-stride and restores it afterwards. That mirrors what a real caller does via
 // custom_mm_block_init / _block_uninit.
 //
-// Not covered yet, deliberately (see A1 in REMAINING_WORK.md): transpose, split_acc /
+// Not covered yet, deliberately: transpose, split_acc /
 // finalize (both ARE forwarded on this family, unlike the compressed one), and the top of
 // the documented kt_dim range. This file establishes the family under test; widening it is
 // cheaper than starting it.

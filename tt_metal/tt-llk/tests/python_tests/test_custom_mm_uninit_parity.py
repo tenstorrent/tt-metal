@@ -17,7 +17,8 @@ runtime test:
    passes.
 
 This file closes both textually. It is the cheap interim guard for what really wants a
-metal-side test calling the real entry points (tracked as B1 in ``REMAINING_WORK.md``); it
+metal-side test calling the real entry points -- one that can include
+``tt_metal/hw/inc/api/compute``, which a tt-llk test cannot; it
 does not replace that, because a text match cannot tell you the functions *work* -- only
 that they still say the same thing.
 
@@ -109,7 +110,8 @@ def test_custom_mm_uninit_bodies_have_not_diverged():
         f"  {first_fn}:\n    {first}\n\n"
         f"  {second_fn}:\n    {second}\n\n"
         "Either restore the shared body, or split the driver and its test so each family "
-        "is covered on its own. See B1 in REMAINING_WORK.md."
+        "is covered on its own -- properly, that means a metal-side test that includes the "
+        "compute API headers and calls both entry points, which a tt-llk test cannot do."
     )
 
 

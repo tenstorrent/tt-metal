@@ -9,7 +9,9 @@ The plain custom_mm family was promoted to ``experimental/`` by tt-metal #52727 
 The asymmetry is easy to miss -- ``test_matmul_custom_compressed.py`` covers the
 *compressed* variant, so the harder path was exercised and the simpler one was not, and
 ``test_matmul_custom.py`` drives ``llk_math_matmul_custom_no_mop.h``, an unrelated family.
-Tracked as A1 in ``REMAINING_WORK.md``; this closes the "no coverage at all" part of it.
+This closes the "no coverage at all" part; what it still leaves uncovered -- transpose,
+split_acc/finalize, and the top of the documented kt_dim range -- is listed in the header
+comment of ``sources/matmul_custom_mm_test.cpp``.
 
 The op is not a general matmul. Operand a is a full 32x32 4-face tile, operand b a narrow
 ``[{1,2,4,8}, 32]`` tile using only its top two faces, so the computation is
