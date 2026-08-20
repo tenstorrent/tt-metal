@@ -580,7 +580,10 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
     for output, golden_output in zip(outputs, golden_outputs):
         if output.tensor_id is None:
             raise RuntimeError(f"Output tensor does not have a tensor_id")
-        TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output.tensor_id] = golden_output
+        # Keep global goldens independent from caller-owned tensors and mutable golden temporaries.
+        # In-place goldens may update their inputs; without a storage boundary, later host-side
+        # golden calls can silently corrupt the state used by comparison mode.
+        TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output.tensor_id] = golden_output.clone()
 
 
 if TRACE_ALLOC_DIAGNOSTICS:
