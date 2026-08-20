@@ -817,6 +817,9 @@ class ModelArgs:
                 self.max_columns_per_device_lm_head = self.get_lm_head_max_columns_per_device(
                     self.lm_head_core_grid, self.prefetcher
                 )
+                # FF2 LoFi: A/B 60.8 -> 61.4 tok/s, EN byte-id, JA Japanese+CJK.
+                for conf in self.optimizations.decoder_optimizations.values():
+                    conf.op_fidelity_settings[OpGroup.LI_FF2] = MathFidelitySetting.LOFI
 
             # ============================================================================
             # Compute kernels Configs
