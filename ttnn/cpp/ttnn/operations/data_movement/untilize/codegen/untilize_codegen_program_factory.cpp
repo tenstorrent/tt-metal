@@ -408,28 +408,7 @@ std::optional<ProgramDescriptor> build_with_unpadding(
     return desc;
 }
 
-// Last-resort builder for the rare case where NO codegen CB plan fits the L1 that is actually
-// free right now (see kUsableL1Note): build the program the native untilize op would have built
-// for this very same (input -> output) pair, and let prim::untilize_codegen run that instead.
-//
-// This is a program-level fallback, deliberately NOT a routing-level one. supported_by_codegen()
-// is evaluated independently at three sites (ttnn::untilize's routing gate,
-// untilize_force_codegen's TT_FATAL, and validate_on_program_cache_miss) and is only self-
-// consistent because it is a pure function of static properties; teaching it about live L1
-// occupancy is what made routing say "yes" and validate then TT_FATAL on the same tensor. Here
-// the decision is made once, after the op has committed to codegen and after its output tensor
-// is allocated, so there is no second observer to disagree with.
-//
-// Delegating (rather than duplicating native's kernels) keeps the two in lockstep by
-// construction. It is sound because the output tensor the codegen op already allocated is
-// byte-identical in spec to the one native would allocate for the same case:
-//   - tile-aligned  -> UntilizeDeviceOperation::compute_output_specs (same logical shape, same
-//     ROW_MAJOR page config, same dtype demotion bf8_b->bf16, same padded shape carried through)
-//   - non-aligned   -> UntilizeWithUnpaddingDeviceOperation::compute_output_specs with
-//     output_tensor_end = logical_shape - 1, i.e. the compact interleaved spec, which is exactly
-//     what UntilizeCodegenDeviceOperation::compute_output_specs's non-aligned branch declares.
-// The native factories only read `output` (buffer address, spec) to emit their descriptor, so
-// handing them the already-allocated tensor is exactly what their own op would have done.
+// Native untilize factories, used when no codegen CB plan fits live L1 (see kUsableL1Note).
 ProgramDescriptor build_native_equivalent(
     const UntilizeCodegenOperationAttributes& operation_attributes, const Tensor& input, const Tensor& output) {
     namespace dm = ttnn::operations::data_movement;
