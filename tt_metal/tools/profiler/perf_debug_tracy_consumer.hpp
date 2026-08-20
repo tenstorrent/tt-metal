@@ -2,17 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Record-batch consumer that drives PerfDebugTracyHandler: resolves lane identity through
+// RAW-stream consumer that drives PerfDebugTracyHandler: resolves lane identity through
 // the capture context's lane table, reassembles Data/Event payloads from Ext/Cont records,
-// and pushes zones in arrival order (per-lane order is the receiver's contract, and Tracy
-// nesting is by push order).
+// and pushes zone starts/ends in arrival order. It consumes the receiver's INTERNAL raw
+// stream (add_raw_consumer), not the public Zone-record contract: Tracy's timeline encodes
+// nesting through the interleaving of begin/end pushes, and the paired stream emits a zone
+// only when it CLOSES -- child before parent -- which no push order over whole zones can
+// render as a properly nested timeline.
 #pragma once
 
 #include <cstdint>
 #include <unordered_map>
 #include <vector>
 
-#include "tools/profiler/perf_debug_consumer.hpp"
+#include "tools/profiler/perf_debug_receiver.hpp"
 
 namespace tt::tt_metal {
 
@@ -24,7 +27,7 @@ class PerfDebugTracyConsumer {
 public:
     explicit PerfDebugTracyConsumer(PerfDebugTracyHandler* handler);
 
-    void operator()(const PerfDebugRecordBatch& batch);
+    void operator()(const PerfDebugRawRecordBatch& batch);
 
 private:
     static constexpr uint32_t kMaxEventValues = 64;  // ceil(127 payload words / 2)

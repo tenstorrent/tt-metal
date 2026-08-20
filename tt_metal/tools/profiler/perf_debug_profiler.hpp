@@ -12,7 +12,7 @@
 // This class is the CONTROL PLANE: drainer bring-up (resident kernels, NIU stream-mode flips, D2H socket
 // construction, static TLBs), host<->device clock sync and Tracy anchoring, the ordered quiesce, the
 // device results reporting, and the teardown completeness check. Everything from the socket reads to the
-// record consumers lives in PerfDebugReceiver; the Tracy sink is its first registered consumer.
+// record consumers lives in PerfDebugReceiver; the Tracy sink rides its internal raw stream.
 // Booted once at MeshDevice bring-up (resident); at teardown the host writes 1 to each drainer's stop word
 // to quiesce it, then 2 to release its NIU (no reset).
 #pragma once

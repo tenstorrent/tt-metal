@@ -2,20 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Perf-debug profiler record contract: the 16 B record the receiver publishes, the lane
+// Perf-debug profiler record contract: the record the receiver delivers to consumers, the lane
 // table consumers resolve identity against, and the batch-callback types.
 //
 // Stream contracts:
-//  - Per lane, records appear in emission order with monotonic timestamps. Cross-lane and
-//    cross-socket interleaving is arbitrary; demux by meta.lane / meta.dev.
-//  - A Data/Event head is followed immediately by one Ext record (ts = id20<<32 | payload
+//  - A zone arrives as ONE record: `Zone`, carrying its start timestamp and duration. The
+//    receiver pairs the device's raw start/end markers per lane (they are RAII scopes on the
+//    device, so per lane they obey strict stack discipline) BEFORE delivery -- consumers never
+//    see an unpaired half.
+//  - A Zone is emitted when it CLOSES, so per lane, Zones arrive in END order: with nested
+//    zones the child precedes its parent and data.zone.start is NOT monotonic. start+duration
+//    is complete information; sort on start if your analysis needs open order.
+//  - Cross-lane and cross-socket interleaving is arbitrary; demux by meta.lane / meta.dev.
+//  - A Data/Event head is followed immediately by one Ext record (data.ext = id<<32 | payload
 //    word count) and then Cont records (one payload uint64 each, hi word first), with no
 //    other records interleaved.
-//  - ZoneTotal carries an accumulated duration sum in ts, not a timestamp.
-//  - Event ids are runtime values and must never be name-resolved; Data ids may be.
+//  - ZoneTotal carries an accumulated duration sum (data.sum), not a timestamp.
+//  - Every id is the FULL 27-bit structural zone id (hostdevcommon/profiler_zone_id.h) and
+//    resolves to a name from the emitting binary's own ELF via ZoneNameMirror below --
+//    zones, Data and Event alike. (Event used to carry a runtime value here; that value now
+//    rides Data payload, so an unnamed id is a bug, not a category.)
 //
-// The record is in-process only (never serialized), so bit-field layout portability is
-// not a concern; the static_asserts pin the size.
+// The record is in-process only (never serialized), so bit-field and union layout portability
+// is not a concern; the static_asserts pin the size.
 #pragma once
 
 #include <cstdint>
@@ -30,29 +39,39 @@
 namespace tt::tt_metal::perf_debug {
 
 enum class PerfDebugRecType : uint32_t {
-    ZoneStart = 1,
-    ZoneEnd = 2,
-    ZoneTotal = 3,
-    Data = 4,
-    Event = 5,
-    Ext = 6,
-    Cont = 7,
+    Zone = 1,       // a complete zone: data.zone = {start, duration}
+    ZoneTotal = 2,  // accumulated-duration zone: data.sum
+    Data = 3,       // point marker with payload: data.ts; payload follows via Ext + Cont
+    Event = 4,      // point marker, no payload: data.ts
+    Ext = 5,        // Data/Event continuation header: data.ext = (id << 32) | payload word count
+    Cont = 6,       // one uint64 of Data payload: data.payload
 };
 
 struct PerfDebugRecMeta {
-    uint32_t id : 16;  // zone srcloc hash / data-event id16
-    uint32_t lane : 10;
-    uint32_t dev : 3;
+    uint32_t spare : 16;
+    uint32_t lane : 10;  // which (core, RISC) stream: lane = core_index * 5 + risc
+    uint32_t dev : 3;    // device index into the capture context
     PerfDebugRecType type : 3;
 };
 static_assert(sizeof(PerfDebugRecMeta) == 4);
 
 struct PerfDebugRec {
-    uint64_t ts;
+    // The active member is decided by meta.type -- see the enum above.
+    union DataField {
+        uint64_t ts;       // Data / Event: head timestamp
+        uint64_t sum;      // ZoneTotal: accumulated duration
+        uint64_t ext;      // Ext: (id << 32) | payload word count
+        uint64_t payload;  // Cont: one payload uint64 (hi word first on the wire)
+        struct {
+            uint64_t start;     // device timestamp of the zone open
+            uint32_t duration;  // device cycles; saturates at UINT32_MAX (~3 s @ 1.35 GHz, counted)
+        } zone;                 // Zone
+    } data;
+    uint32_t id;  // full 27-bit structural zone id (tu_id << TT_ZONE_LOCAL_BITS | local)
     PerfDebugRecMeta meta;
     uint32_t prog;  // runtime host-id in force on this lane (0 when never set); exact per lane
 };
-static_assert(sizeof(PerfDebugRec) == 16);
+static_assert(sizeof(PerfDebugRec) == 32);
 static_assert(std::is_trivially_copyable_v<PerfDebugRec>);
 
 inline constexpr uint32_t kPerfDebugMaxLanes = 1u << 10;
