@@ -130,11 +130,11 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 #include "api/compute/experimental/rmsnorm.h"
 
 #if defined(TRISC_UNPACK)
-#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_top32_rm_api.h"
+#include "experimental/llk_unpack_A_top32_rm_api.h"
 #endif
 #if defined(TRISC_MATH)
-#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_top32_rm_api.h"
-#include "../kernel_includes/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_deepseek_top32_rm.h"
+#include "experimental/llk_math_top32_rm_api.h"
+#include "sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h"
 template <bool legacy_compat = true>
 ALWI void sampling_recip_tile_scalar(uint32_t idst) {
     SFPU_UNARY_CALL(
