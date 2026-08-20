@@ -51,10 +51,11 @@ private:
         ttsl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
-    // For a given MeshWorkload, a subgrid is unused if no programs are run on it.  Go signals
-    // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
-    // This function generates and writes dispatch commands forwarding go signals to these subgrids.
-    void write_go_signal_to_unused_sub_grids(
+    // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Dispatch sequences
+    // must be sent to this subgrid to ensure consistent global state across the Virtual Mesh.
+    // This function generates and writes dispatch commands forwarding go signal sequences to
+    // these subgrids.
+    void write_go_signal_sequences_to_unused_sub_grids(
         std::unordered_set<uint32_t>& chip_ids_in_workload,
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,

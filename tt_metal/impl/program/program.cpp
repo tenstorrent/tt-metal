@@ -265,10 +265,11 @@ KernelCompileDescriptor build_kernel_descriptor(
                     target.target_name + "__" + std::filesystem::path(target.objs[i]).filename().string() + ".ii";
                 const std::string ii_path = client_out_dir + "/" + ii_name;
                 // Preprocess with the EXACT compile flags via the shared argv builder + exec_command
-                // (posix_spawn, NO shell). A shell command string would mangle map-valued defines
-                // like -DKERNEL_COMPILE_TIME_ARG_MAP={"cb_in0",1},... (braces/quotes/commas/spaces)
-                // and drop named compile-time args. cwd = client_out_dir so -I. / -I.. resolve to
-                // the target + generated-files dirs, identical to the real compile env. -MMD (in
+                // (posix_spawn, NO shell). A shell command string would mangle defines carrying
+                // shell metacharacters, like -DFULL_KERNEL_NAME="<name>" (quotes/parens/commas).
+                // cwd = client_out_dir so -I. / -I.. resolve to the target + generated-files dirs,
+                // identical to the real compile env — which is also what lets the named-CT-arg-map
+                // header's bare -include resolve here. -MMD (in
                 // cflags) leaves a .d next to each .ii; the reuse-cache sidecar is built from those
                 // only after a successful compile (see JitBuildState::write_reuse_cache).
                 const auto args = tt::jit_build::utils::build_gpp_argv(

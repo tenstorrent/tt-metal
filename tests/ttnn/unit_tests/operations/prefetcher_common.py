@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-import pytest
 import torch
 import ttnn
 import math
@@ -24,6 +23,10 @@ from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 i
 )
 from tracy import signpost
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import get_core_ranges
+
+# Re-exported so the existing callers keep importing it from here; it lives in a leaf
+# module so tests that only need the skip gate can avoid this file's import chain.
+from tests.ttnn.unit_tests.operations.prefetcher_support import require_tensor_prefetcher
 
 
 def round_up(n, m):

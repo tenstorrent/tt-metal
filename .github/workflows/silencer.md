@@ -139,13 +139,11 @@ safe-outputs:
       - galaxy-e2e-tests
       - galaxy-sanity
       - galaxy-health
-      - t3000-perf-tests
       - t3000-e2e-tests
       - t3000-integration-tests
       - t3000-profiler-tests
       - single-card-profiler-tests
       - pipeline-select-profiler
-      - t3000-demo-tests
       - t3000-unit-tests
 
       - models-t1-e2e-tests
@@ -157,7 +155,6 @@ safe-outputs:
 
       - perf-device-models
       - single-card-ttnn-models-frequent-tests
-      - single-card-demo-tests
       - tt-metal-l2-nightly
       - vllm-model-tests
       - sanity-tests-debug
@@ -938,7 +935,7 @@ by category is only **where in that run's logs the evidence lives**:
   `build-artifact / Build Release` logs proves **nothing** here: that job never invokes the kernel
   compiler for these files, so the pattern reads as absent whether or not the fix is correct — a
   false-negative proof, which is exactly what went wrong on tenstorrent/tt-metal#52111. A non-gate
-  target like `t3000-demo-tests` is **not** weaker evidence than a gate for this category: it
+  target like `t3000-unit-tests` is **not** weaker evidence than a gate for this category: it
   recompiles the affected kernels through its **own test-execution steps** triggering JIT, which
   has nothing to do with `build-artifact.yaml`.
 - **Categories 3, 5 and 6** (runtime warnings, log spam, over-verbose messages) — in the

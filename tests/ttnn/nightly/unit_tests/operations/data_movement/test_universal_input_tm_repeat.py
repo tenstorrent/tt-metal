@@ -1051,3 +1051,135 @@ def test_repeat_composite_edge_cases(shape, repeat_shape, in_mc_fn, out_mc_fn, p
         input_mem_config=in_mc_fn(device),
         output_mem_config=out_mc_fn(device),
     )
+
+
+# Optional output tensor — one case per distinct prealloc path (no shape matrix).
+@pytest.mark.parametrize(
+    "layout",
+    [
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, id="RM"),
+        pytest.param(ttnn.TILE_LAYOUT, id="TILE"),
+    ],
+)
+def test_repeat_optional_output_tensor(device, layout):
+    """L1-interleaved direct-land happy path (one RM + one TILE)."""
+    shape = (1, 2, 32, 32)
+    repeat_shape = (1, 2, 1, 1)
+    out_shape = (1, 4, 32, 32)
+    torch_input = torch.arange(0, 1 * 2 * 32 * 32, dtype=torch.bfloat16).reshape(shape)
+    torch_result = torch_input.repeat(repeat_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    optional_output = ttnn.empty(out_shape, ttnn.bfloat16, layout, device, L1_INTERLEAVED)
+
+    output = ttnn.repeat(input_tensor, list(repeat_shape), optional_output_tensor=optional_output)
+    assert output.buffer_address() == optional_output.buffer_address()
+
+    assert_equal(torch_result, ttnn.to_torch(output))
+    assert_equal(torch_result, ttnn.to_torch(optional_output))
+
+
+def test_repeat_optional_output_aliases_input_raises(device, expect_error):
+    """Prealloc must be a distinct buffer; shared storage would corrupt on direct-write paths."""
+    shape = (1, 2, 32, 32)
+    torch_input = torch.arange(0, 1 * 2 * 32 * 32, dtype=torch.bfloat16).reshape(shape)
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    with expect_error(RuntimeError, "must not alias the input buffer"):
+        ttnn.repeat(input_tensor, [1, 1, 1, 1], optional_output_tensor=input_tensor)
+
+
+def test_repeat_optional_output_sharded_i2s(device):
+    """Sharded prealloc lands via interleaved_to_sharded(..., i2s_out)."""
+    shape = (1, 1, 64, 64)
+    repeat_shape = (1, 1, 1, 2)
+    out_shape = (1, 1, 64, 128)
+    torch_input = torch.arange(0, 1 * 1 * 64 * 64, dtype=torch.bfloat16).reshape(shape)
+    torch_result = torch_input.repeat(repeat_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    out_mc = _height_shard_config(out_shape, device, num_cores=2, layout=ttnn.TILE_LAYOUT)
+    optional_output = ttnn.empty(out_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, out_mc)
+
+    output = ttnn.repeat(input_tensor, list(repeat_shape), memory_config=out_mc, optional_output_tensor=optional_output)
+    assert output.buffer_address() == optional_output.buffer_address()
+    assert output.is_sharded()
+    assert output.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert_equal(torch_result, ttnn.to_torch(output))
+
+
+def test_repeat_optional_output_tile_rm_roundtrip_copy(device):
+    """TILE not tile-repeat-eligible → RM roundtrip then finalize_into_preallocated copy."""
+    # H=16 is not a multiple of TILE_HEIGHT, so is_tile_repeat_eligible is false.
+    shape = (1, 2, 16, 32)
+    repeat_shape = (1, 2, 1, 1)
+    out_shape = (1, 4, 16, 32)
+    torch_input = torch.arange(0, 1 * 2 * 16 * 32, dtype=torch.bfloat16).reshape(shape)
+    torch_result = torch_input.repeat(repeat_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    optional_output = ttnn.empty(out_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, L1_INTERLEAVED)
+
+    output = ttnn.repeat(input_tensor, list(repeat_shape), optional_output_tensor=optional_output)
+    assert output.buffer_address() == optional_output.buffer_address()
+    assert_equal(torch_result, ttnn.to_torch(output))
+    assert_equal(torch_result, ttnn.to_torch(optional_output))
+
+
+def test_repeat_optional_output_identity(device):
+    """All-ones repeat copies into the prealloc (no longer a bare return of input)."""
+    shape = (1, 2, 32, 32)
+    torch_input = torch.arange(0, 1 * 2 * 32 * 32, dtype=torch.bfloat16).reshape(shape)
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    optional_output = ttnn.empty(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, L1_INTERLEAVED)
+
+    output = ttnn.repeat(input_tensor, [1, 1, 1, 1], optional_output_tensor=optional_output)
+    assert output.buffer_address() == optional_output.buffer_address()
+    assert output.buffer_address() != input_tensor.buffer_address()
+    assert_equal(torch_input, ttnn.to_torch(output))
+    assert_equal(torch_input, ttnn.to_torch(optional_output))
+
+
+def test_repeat_optional_output_zero_reps(device):
+    """Zero-repetition + prealloc: zeros then finalize copy into the zero-volume dst."""
+    shape = (1, 1, 32, 32)
+    repeat_shape = (1, 0, 1, 1)
+    out_shape = (1, 0, 32, 32)
+    torch_input = torch.arange(0, 1 * 1 * 32 * 32, dtype=torch.bfloat16).reshape(shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    optional_output = ttnn.empty(out_shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, L1_INTERLEAVED)
+
+    output = ttnn.repeat(input_tensor, list(repeat_shape), optional_output_tensor=optional_output)
+    assert output.buffer_address() == optional_output.buffer_address()
+    got = ttnn.to_torch(output)
+    assert got.numel() == 0
+    assert tuple(got.shape) == out_shape
+
+
+def test_repeat_optional_output_mismatched_shard_spec_raises(device, expect_error):
+    """Explicit memory_config shard_spec must equal the prealloc's."""
+    shape = (1, 1, 64, 64)
+    repeat_shape = (1, 1, 1, 2)
+    out_shape = (1, 1, 64, 128)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=L1_INTERLEAVED
+    )
+    prealloc_mc = _height_shard_config(out_shape, device, num_cores=2, layout=ttnn.TILE_LAYOUT)
+    other_mc = _height_shard_config(out_shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT)
+    optional_output = ttnn.empty(out_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, prealloc_mc)
+
+    with expect_error(RuntimeError, "shard_spec must match"):
+        ttnn.repeat(input_tensor, list(repeat_shape), memory_config=other_mc, optional_output_tensor=optional_output)

@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_moe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -44,6 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     compare_recall,
     log_combine_mismatch_details,
@@ -70,6 +72,20 @@ _MOE_LAYER_IDX = 3
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
 # integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
 # Real traffic never approaches the worst case, so half-capacity is sufficient.
+# Fused routed-expert activation -> the TorchExpert reference that must match it.
+_TORCH_ROUTED_ACTIVATION = {
+    ttnn.RoutedExpertActivation.Silu: ACTIVATION_SILU,
+    ttnn.RoutedExpertActivation.SituGlu: ACTIVATION_SITU,
+}
+
+# ...and -> the upstream vendored model's hidden_act spelling. None leaves the variant config's own
+# hidden_act alone, which is what every SiLU model wants.
+_UPSTREAM_ACT = {
+    ttnn.RoutedExpertActivation.Silu: None,
+    ttnn.RoutedExpertActivation.SituGlu: "situ",
+}
+
+
 def run_model(
     variant,
     config,
@@ -93,6 +109,7 @@ def run_model(
     latent_use_norm=True,
     rms_norm_eps=1e-5,
     final_output_pcc=0.982,
+    routed_activation=ttnn.RoutedExpertActivation.Silu,
 ):
     """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
 
@@ -106,7 +123,15 @@ def run_model(
     mismatch on the skipped padded rows, and padded-row correctness is covered by the
     dedicated grouped_topk / routing_setup tests. HOST_ALL gates ignore padding entirely
     (TtMoe falls back to padding_config=None for non-DEVICE_FP32 gates).
+
+    ``routed_activation`` selects the fused routed-expert kernel's activation and the matching
+    torch reference. The shared expert always runs SiLU: no SiTU kernel exists outside the
+    routed-expert op, so both sides must stay on SiLU there for the comparison to mean anything.
     """
+    if routed_activation not in _TORCH_ROUTED_ACTIVATION or routed_activation not in _UPSTREAM_ACT:
+        raise ValueError(f"no torch reference for {routed_activation}; supported: {list(_TORCH_ROUTED_ACTIVATION)}")
+    torch_routed_activation = _TORCH_ROUTED_ACTIVATION[routed_activation]
+    upstream_activation = _UPSTREAM_ACT[routed_activation]
 
     # Scoped: only the linear-8 / 64-expert / HOST_ALL / pcc-check case OOMs without this.
     # Cached all-gather semaphores get placed at the wrong offset for that specific config.
@@ -338,9 +363,12 @@ def run_model(
             latent_weights=latent_weights,
             latent_use_norm=latent_use_norm,
             rms_norm_eps=rms_norm_eps,
-            # SiLU on both sides: the device has no SiTU kernel yet (#51335), and comparing against a
-            # SiTU reference would measure that gap rather than this dataflow.
-            activation="silu",
+            # Routed side matches whatever the fused kernel runs; the shared expert stays on SiLU
+            # (no SiTU kernel outside the routed-expert op).
+            activation=torch_routed_activation,
+            situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
+            situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
+            shared_activation=ACTIVATION_SILU,
         )
         profiler.end("torch_moe_creation")
 
@@ -372,6 +400,7 @@ def run_model(
         shared_expert_weights=shared_expert_weights,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_activation=routed_activation,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         gate_weights=gate_weights,
@@ -622,6 +651,9 @@ def run_model(
         shared_expert_weights=shared_expert_weights,
         latent_weights=latent_weights,
         x=x,
+        # Same routed/shared split the device runs; see run_reference_moe.
+        hidden_act=upstream_activation,
+        shared_hidden_act="silu" if upstream_activation is not None else None,
     )
     if ref_out is not None and tt_output is not None:
         logger.info("Running upstream MoE reference")
@@ -955,14 +987,13 @@ def test_kimi_k3_moe(
 ):
     """Kimi-K3 MoE: 896 experts / top-16 with the LatentMoE projections around the routed side.
 
-    Two deliberate limits on what this proves, both from the bring-up scope:
+    The routed experts run the checkpoint's SiTU-GLU on device
+    (``RoutedExpertActivation.SituGlu``, #51351), matched by a SiTU torch reference. The SHARED
+    expert stays on SiLU on both sides: the SiTU kernel is the routed-expert op's, and nothing
+    implements it at the shared expert's 6144 width, so holding both sides to SiLU there keeps
+    this a test of the dataflow rather than of a gap the device cannot close.
 
-      * **SiLU, not SiTU.** No TT kernel implements SiTU-GLU yet (issue #51335), so both the device and
-        the torch reference run SiLU. That keeps this an honest test of the dataflow -- dispatch and
-        combine at 896/top-16, the latent down/up projections, the latent RMSNorm, and the
-        routed/shared dimension split -- rather than a measurement of the missing activation. SiTU
-        itself is validated host-side against upstream ``KimiSparseMoeBlock`` in
-        ``tests/torch/test_moe_reference_comparison.py::test_kimi_k3_latent_moe_reference_pcc``.
+    One deliberate limit remains from the bring-up scope:
 
       * **Seeded random weights, not the checkpoint.** Everything routed is MXFP4 and no dequantizer
         exists yet, so device-vs-torch parity is checked on identical seeded weights. That is the same
@@ -997,4 +1028,5 @@ def test_kimi_k3_moe(
         latent_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
         rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
         final_output_pcc=0.965,
+        routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
     )

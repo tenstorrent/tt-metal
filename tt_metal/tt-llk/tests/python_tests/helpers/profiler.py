@@ -153,6 +153,10 @@ class ProfilerData:
         """Filter: Pack thread data"""
         return ProfilerData(self.df, self.mask & (self.df["thread"] == "pack"))
 
+    def sfpu(self) -> "ProfilerData":
+        """Filter: SFPU thread data"""
+        return ProfilerData(self.df, self.mask & (self.df["thread"] == "sfpu"))
+
     # Filter by type
     def zones(self) -> "ProfilerData":
         """Filter: Profiler zones"""
@@ -200,6 +204,17 @@ def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _sfpu_has_compute_zones(raw_data: pd.DataFrame) -> bool:
+    # Real 4-TRISC kernels emit INIT/TILE_LOOP on SFPU; sfpu_stub.h does not
+    # (trisc.cpp still emits KERNEL, which must not switch aggregation).
+    return bool(
+        (
+            (raw_data["thread"] == "sfpu")
+            & raw_data[MARKER].isin(("INIT", "TILE_LOOP"))
+        ).any()
+    )
+
+
 def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     raw_data = data.zones().raw()
 
@@ -214,6 +229,9 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
             "run_index must be explicitly set before computing L1-to-L1 stats. "
             "Set profiler_data.df['run_index'] = <run_number> after collecting data."
         )
+
+    if _sfpu_has_compute_zones(raw_data):
+        return _stats_l1_to_l1_four_trisc(raw_data)
 
     # Group by both marker and run_index to ensure events from the same run are paired
     groups = raw_data.groupby([MARKER, "run_index"])
@@ -254,6 +272,59 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     return _stats_timings(pd.concat(timings, ignore_index=True))
 
 
+def _parallel_zone_entries(
+    group: pd.DataFrame, thread: str, entry_type: str
+) -> pd.DataFrame:
+    return group[
+        (group["thread"] == thread) & (group["type"] == entry_type)
+    ].reset_index(drop=True)
+
+
+def _stats_l1_to_l1_four_trisc(raw_data: pd.DataFrame) -> pd.DataFrame:
+    prefix = PerfRunType.L1_TO_L1.name
+    timings = []
+    for (marker, run_index), group in raw_data.groupby([MARKER, "run_index"]):
+        fpu_start = _parallel_zone_entries(group, "unpack", "ZONE_START")
+        fpu_end = _parallel_zone_entries(group, "pack", "ZONE_END")
+        sfpu_start = _parallel_zone_entries(group, "sfpu", "ZONE_START")
+        sfpu_end = _parallel_zone_entries(group, "sfpu", "ZONE_END")
+
+        counts = {
+            "fpu_start": len(fpu_start),
+            "fpu_end": len(fpu_end),
+            "sfpu_start": len(sfpu_start),
+            "sfpu_end": len(sfpu_end),
+        }
+        if not counts["fpu_start"] or len(set(counts.values())) != 1:
+            raise ValueError(
+                "FPU and SFPU zones must be present and paired for "
+                f"4-TRISC L1_TO_L1 (marker={marker}, run_index={run_index}, "
+                f"counts={counts})"
+            )
+
+        fpu_duration = fpu_end["timestamp"] - fpu_start["timestamp"]
+        sfpu_duration = sfpu_end["timestamp"] - sfpu_start["timestamp"]
+        overall_start = pd.concat(
+            [fpu_start["timestamp"], sfpu_start["timestamp"]], axis=1
+        ).min(axis=1)
+        overall_end = pd.concat(
+            [fpu_end["timestamp"], sfpu_end["timestamp"]], axis=1
+        ).max(axis=1)
+
+        timings.append(
+            pd.DataFrame(
+                {
+                    MARKER: marker,
+                    f"{prefix}[FPU]": fpu_duration,
+                    f"{prefix}[SFPU]": sfpu_duration,
+                    prefix: overall_end - overall_start,
+                }
+            )
+        )
+
+    return _stats_timings(pd.concat(timings, ignore_index=True))
+
+
 def _stats_thread(stat: str, raw_thread: pd.DataFrame) -> pd.DataFrame:
     # WC build emits no zone events — skip wall_clock stats, counters provide values instead.
     if raw_thread.empty:
@@ -290,6 +361,10 @@ def _stats_math_isolate(data: ProfilerData) -> pd.DataFrame:
 
 def _stats_pack_isolate(data: ProfilerData) -> pd.DataFrame:
     return _stats_thread(PerfRunType.PACK_ISOLATE.name, data.pack().raw())
+
+
+def _stats_sfpu_isolate(data: ProfilerData) -> pd.DataFrame:
+    return _stats_thread(PerfRunType.SFPU_ISOLATE.name, data.sfpu().raw())
 
 
 def _stats_l1_congestion(data: ProfilerData) -> pd.DataFrame:
@@ -341,6 +416,7 @@ class Profiler:
         PerfRunType.UNPACK_ISOLATE: _stats_unpack_isolate,
         PerfRunType.MATH_ISOLATE: _stats_math_isolate,
         PerfRunType.PACK_ISOLATE: _stats_pack_isolate,
+        PerfRunType.SFPU_ISOLATE: _stats_sfpu_isolate,
         PerfRunType.L1_CONGESTION: _stats_l1_congestion,
     }
     SUPPORTED_RUNS = STATS_FUNCTION.keys()

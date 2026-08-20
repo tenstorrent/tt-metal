@@ -301,14 +301,12 @@ void kernel_main() {
             // Start Average Calc
             // Start Local Reduce
             dfb_input_mask.wait_front(mask_tiles_per_group);
-            for (std::uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                std::uint32_t out_block_h_actual, out_block_hw_actual;
+            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+                uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
-                    out_block_hw_actual = out_block_hw_last;
                 } else {
                     out_block_h_actual = out_block_h_normal;
-                    out_block_hw_actual = out_block_hw_normal;
                 }
 #ifdef TILIZE_IN
                 // Append this out-block; no pop, so the whole group stays available.
@@ -420,14 +418,12 @@ void kernel_main() {
 
             // Start Variance Calc
             // Start Local Reduce
-            for (std::uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                std::uint32_t out_block_h_actual, out_block_hw_actual;
+            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+                uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
-                    out_block_hw_actual = out_block_hw_last;
                 } else {
                     out_block_h_actual = out_block_h_normal;
-                    out_block_hw_actual = out_block_hw_normal;
                 }
                 std::uint32_t row_tile_base = out_block_index * out_block_h_normal;
 
@@ -613,14 +609,12 @@ void kernel_main() {
 
             std::uint32_t out_block_h_offset = 0;
             // Start Final Val Calc
-            for (std::uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                std::uint32_t out_block_h_actual, out_block_hw_actual;
+            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+                uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
-                    out_block_hw_actual = out_block_hw_last;
                 } else {
                     out_block_h_actual = out_block_h_normal;
-                    out_block_hw_actual = out_block_hw_normal;
                 }
 
 #ifndef TILIZE_IN
