@@ -661,6 +661,8 @@ Surgical `override_runtime_arguments` (the target cache-hit mechanism, §1.4):
 - `ttnn/cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_program_factory.cpp`
 - Hash-excluded scalar re-applied per dispatch:
   `ttnn/cpp/ttnn/operations/transformer/sdpa/device/sparse_sdpa_program_factory.cpp`
+- Complete override for a shape-agnostic key + CB refresh by `CBIndex`:
+  `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp`
 - Override done *wrong* (rebuild — do not copy): `eltwise/unary` and the other entries in
   `scripts/detect_override_rebuild_baseline.txt`
 
@@ -676,4 +678,5 @@ Declarative `WorkloadDescriptor` examples:
 Per-coordinate program (4-arg `create_descriptor`):
 - `ttnn/cpp/ttnn/operations/debug/device/apply_device_delay_device_operation.cpp`
 
-Full doctrine, reviewer checklist, and source map: `tech_reports/ttnn/descriptors_and_specs.md`.
+Full doctrine, reviewer checklist, and source map:
+<https://gist.github.com/dgomezTT/7584e4eb0dc6ddc5214f9a7e90e77181>.
