@@ -95,7 +95,7 @@ SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA
     const uint32_t mcast_dests = loopback ? num_dests_incl_ : num_dests_excl_;
     send_data_(src_l1, dst_l1, size, loopback, mcast_dests);
     signal_ready_(loopback, mcast_dests);  // the signal rides the same mode as the data
-    // The post-signal fence doubles as the source-L1 lifetime guard.
+    // The post-signal fence also provides source L1 protection.
     fence_<SOURCE_GUARD>(loopback);
     // Rotating sender: put our own flag cell back to INVALID now that the broadcast is flushed (the
     // fence above proved the cell is done as the set_multicast source). Otherwise this core's next
