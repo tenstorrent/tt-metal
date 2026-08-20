@@ -158,13 +158,12 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     uint32_t workers_per_dir = 1;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         // Two workers saturate a link: one cannot keep it fed, and past two they only contend on the NOC.
-        // Only tile shapes were swept past two workers, so the large-page ring exception below is untested
-        // here rather than ruled out.
+        // Never swept against the Blackhole value below.
         workers_per_dir = 2;
     } else if (arch == tt::ARCH::BLACKHOLE) {
-        // One worker (no mux) is far worse, and past two they only contend on the NOC. The exception is a
-        // ring with large pages, where a packet carries too few chunks to keep the link fed with two.
-        workers_per_dir = (is_ring && input_page_size >= 4096) ? 3 : 2;
+        // One worker (no mux) is far worse, and past three they only contend on the NOC. Swept over
+        // page sizes 64 B..8 KB on ring and line; three wins everywhere.
+        workers_per_dir = 3;
     }
 
     // Shrink core usage to fit available core grid. Shrink workers_per_link first, and then shrink num_links.
@@ -238,10 +237,15 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     //   chunk             -- the transfer unit, min(input page, output page). An input page is
     //                        split_factor chunks; an output page is output_chunks_per_page chunks.
     //   chunk id          -- a chunk's index in this device's contribution.
-    //   global            -- a chunk's index in the output tensor: chunk id + a row/stripe bias.
+    //   global            -- a chunk's index in the output tensor. Rows are strided: between them the
+    //                        output holds the other devices' stripes.
     //   seqno             -- a chunk's position in the emission order. This is what data_valid counts.
-    //   lane              -- residue class mod stride; the walk covers lane 0's chunks, then lane 1's.
-    //   run               -- consecutive chunks contiguous at the destination. Sent as one transfer.
+    //   stride            -- chunk step between neighbours in memory, from TensorAccessor.
+    //   lane              -- residue class mod stride, i.e. one line of chunks contiguous in memory.
+    //   xfer              -- chunks per transfer: the most that fits a packet and one NOC command.
+    //   tile              -- xfer * stride chunks. The walk reads each tile column-major, so a run is
+    //                        long yet consecutive runs sit in different banks.
+    //   run               -- one tile column: chunks contiguous at the destination, sent as one transfer.
     //   segment           -- one scatter-list entry in a packet.
     //   stripe            -- the chunks this device contributes per row of the output.
     //
@@ -251,8 +255,9 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     //                        chunk lands at a byte offset within a shared output page.
     //   split   (in > out) : split_factor chunks per input page, output_chunks_per_page = 1.
     //
-    // Host supplies geometry and each worker's slice. Where the runs are and how long they get comes
-    // from TensorAccessor::num_contiguous_pages in the kernel, so no layout is special-cased here.
+    // Host supplies geometry and each worker's slice. The walk order is two numbers the kernels derive
+    // themselves -- stride from TensorAccessor, xfer from the packet size -- so no layout is
+    // special-cased here, and reader and writer cannot disagree.
     ////////////////////////////////////////////////////////////////
 
     const auto& input_shape = input_tensor.padded_shape();
@@ -376,6 +381,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         cb0_id,                    // cb id
         cb_page_size,              // cb entry size
         do_init_barrier,           // wait for remote output allocation before relaying
+        packet_size,               // packet_size (sets the transfer size, hence the walk order)
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);

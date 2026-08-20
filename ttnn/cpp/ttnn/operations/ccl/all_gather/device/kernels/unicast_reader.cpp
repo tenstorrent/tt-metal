@@ -32,14 +32,14 @@ void kernel_main() {
     constexpr uint32_t cb0_id = get_compile_time_arg_val(5);
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(6);
     constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
-    constexpr auto input_tensor_args = TensorAccessorArgs<8>();
+    constexpr uint32_t packet_size = get_compile_time_arg_val(8);
+    constexpr auto input_tensor_args = TensorAccessorArgs<9>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
-    constexpr bool concat = output_chunks_per_page > 1;
     constexpr uint32_t chunks_per_cb_entry = cb_page_size / output_chunk_size;
-    // One NOC command per run needs the run to fit a burst; a chunk bigger than that takes the generic path.
-    constexpr bool burst_runs = output_chunk_size <= NOC_MAX_BURST_SIZE;
-    constexpr uint32_t max_burst_chunks = burst_runs ? NOC_MAX_BURST_SIZE / output_chunk_size : 1;
+    constexpr uint32_t xfer_max = chunks_per_transfer(packet_size, output_chunk_size);
+    // A chunk bigger than a burst cannot be one NOC command, so it takes the generic path.
+    constexpr bool one_command = output_chunk_size <= NOC_MAX_BURST_SIZE;
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -69,59 +69,36 @@ void kernel_main() {
     // RUN SETUP
     ///////////////////////////////////////////////////
 
-    // A run steps by the accessor's own stride; any other step lands in a different bank or shard. A stride
-    // longer than a stripe can never take a second step, so that falls back to plain page order.
-    // `packed` guards the transfer size: runs step by the aligned page size, but the CB is packed.
-    const uint32_t out_page_stride = output_tensor_accessor.contiguous_page_stride();
-    const bool out_packed =
-        output_tensor_accessor.get_aligned_page_size() == output_chunks_per_page * output_chunk_size;
-    const bool out_page_runs =
-        out_packed && (concat ? out_page_stride == 1 : out_page_stride <= output_chunks_per_stripe);
-    // Concat packs several chunks into an output page, so its walk has to stay in page order.
-    const uint32_t stride = (concat || !out_page_runs) ? 1u : out_page_stride;
+    const auto plan = walk_plan<output_chunks_per_page, output_chunk_size, xfer_max>(output_tensor_accessor);
+    // Iteration 0 reads our input, which yields runs only when it strides the way the walk does.
+    const auto in_src = run_source(
+        input_tensor_accessor.get_aligned_page_size() == split_factor * output_chunk_size,
+        split_factor,
+        input_tensor_accessor.contiguous_page_stride(),
+        plan.stride);
+    const uint32_t input_end_chunk = slice_first_chunk + slice_chunks;
 
-    const bool in_packed = input_tensor_accessor.get_aligned_page_size() == split_factor * output_chunk_size;
-    const bool in_page_runs = in_packed && input_tensor_accessor.contiguous_page_stride() == 1;
-    const uint32_t input_end_page = (slice_first_chunk + slice_chunks) / split_factor;
+    TiledWalk walk;
+    StripeMap<output_chunks_per_stripe, num_devices> map;
 
-    StripeWalk<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
-
-    auto output_run = [&]() -> uint32_t {
-        if constexpr (concat) {
-            // Chunks are packed inside an output page, so the intra-page run is always available.
-            uint32_t n = output_chunks_per_page - it.byte_off() / output_chunk_size;
-            if (out_page_runs) {
-                n += (output_tensor_accessor.num_contiguous_pages(it.page_id(), it.end_page_id()) - 1) *
-                     output_chunks_per_page;
-            }
-            return it.seqnos_in_chunk_ids(n);
-        } else {
-            // num_contiguous_pages already steps by the walk's stride, so this is a seqno count.
-            return out_page_runs ? output_tensor_accessor.num_contiguous_pages(it.page_id(), it.end_page_id()) : 1u;
-        }
+    auto input_addr = [&](uint32_t chunk) {
+        return input_tensor_accessor.get_noc_addr(
+            page_of<split_factor>(chunk), byte_off_of<split_factor, output_chunk_size>(chunk), noc.get_noc_id());
+    };
+    auto output_addr = [&](uint32_t global) {
+        return output_tensor_accessor.get_noc_addr(
+            page_of<output_chunks_per_page>(global),
+            byte_off_of<output_chunks_per_page, output_chunk_size>(global),
+            noc.get_noc_id());
     };
 
-    auto input_run = [&](uint32_t page) -> uint32_t {
-        uint32_t n = split_factor - it.chunk_id() % split_factor;  // rest of this input page
-        if (in_page_runs) {
-            n += (input_tensor_accessor.num_contiguous_pages(page, input_end_page) - 1) * split_factor;
-        }
-        return it.seqnos_in_chunk_ids(n);
-    };
-
-    // Debug-only: a run has to be linear. Checks page/offset truth, which is what a run claims.
-    auto run_is_linear = [&](uint32_t chunks, bool input_src) {
-        auto probe = it;
-        auto addr = [&] {
-            return input_src ? input_tensor_accessor.get_noc_addr(
-                                   probe.chunk_id() / split_factor,
-                                   (probe.chunk_id() % split_factor) * output_chunk_size,
-                                   noc.get_noc_id())
-                             : output_tensor_accessor.get_noc_addr(probe.page_id(), probe.byte_off(), noc.get_noc_id());
-        };
-        const uint64_t first = addr();
-        for (uint32_t k = 0; k < chunks; ++k) {
-            if (addr() != first + k * output_chunk_size) {
+    // Debug only: a run has to be one linear stretch of memory, which is what one transfer assumes.
+    auto run_is_linear = [&](uint32_t run, uint64_t first, bool from_input) {
+        auto probe = walk;
+        for (uint32_t i = 0; i < run; ++i) {
+            const uint32_t chunk = probe.chunk();
+            const uint64_t addr = from_input ? input_addr(chunk) : output_addr(map.at(chunk).global);
+            if (addr != first + i * output_chunk_size) {
                 return false;
             }
             probe.advance(1);
@@ -130,7 +107,7 @@ void kernel_main() {
     };
 
     auto read_run = [&](uint64_t src, uint32_t l1_write_addr, uint32_t chunks) {
-        if constexpr (burst_runs) {
+        if constexpr (one_command) {
             noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                 tensor_accessor::Page(src, 0),
                 CoreLocalMem<uint32_t>(l1_write_addr),
@@ -163,10 +140,13 @@ void kernel_main() {
         const bool last = (iter == num_iters - 1);
         const uint32_t skip = last ? final_skip : 0;
         const uint32_t take = last ? final_take : slice_chunks;
+        // The walk does not stop itself: past the slice it would emit another worker's chunks.
+        ASSERT(skip + take <= slice_chunks);
         const bool from_input = (iter == 0);
         // Where this read starts in the delivered-chunk stream. Iteration 0 reads local data, waits on nothing.
         const uint32_t base_seqno = from_input ? 0 : (iter - 1) * slice_chunks + skip;
-        it.init(stripe, slice_first_chunk, slice_chunks, skip, take, stride);
+        map.init(stripe);
+        walk.init(slice_first_chunk, slice_chunks, skip, plan.stride, plan.xfer);
 
         for (uint32_t chunks_read = 0; chunks_read < take;) {
             const uint32_t batch = std::min(chunks_per_cb_entry, take - chunks_read);
@@ -177,25 +157,30 @@ void kernel_main() {
             cb.reserve_back(1);
             uint32_t l1_write_addr = cb.get_write_ptr();
             for (uint32_t left = batch; left > 0;) {
+                const uint32_t chunk = walk.chunk();
+                // Only one chunk can go anyway, so skip the query: on a sharded tensor it loops over rank.
+                const uint32_t limit = std::min(walk.run_limit(), left);
                 uint64_t src;
-                uint32_t chunks;
+                uint32_t run;
                 if (from_input) {
-                    // Our own input, where chunk c is input page c / split_factor.
-                    const uint32_t page = it.chunk_id() / split_factor;
-                    src = input_tensor_accessor.get_noc_addr(
-                        page, (it.chunk_id() % split_factor) * output_chunk_size, noc.get_noc_id());
-                    chunks = input_run(page);
+                    src = input_addr(chunk);
+                    run = limit > 1
+                              ? contiguous_chunks<split_factor>(input_tensor_accessor, in_src, chunk, input_end_chunk)
+                              : 1u;
                 } else {
                     // What upstream relayed into our output.
-                    src = output_tensor_accessor.get_noc_addr(it.page_id(), it.byte_off(), noc.get_noc_id());
-                    chunks = output_run();
+                    const auto pos = map.at(chunk);
+                    src = output_addr(pos.global);
+                    run = limit > 1 ? contiguous_chunks<output_chunks_per_page>(
+                                          output_tensor_accessor, plan.out, pos.global, pos.row_end)
+                                    : 1u;
                 }
-                chunks = std::min(std::min(chunks, left), max_burst_chunks);
-                ASSERT(run_is_linear(chunks, from_input));
-                read_run(src, l1_write_addr, chunks);
-                l1_write_addr += chunks * output_chunk_size;
-                left -= chunks;
-                it.advance(chunks);
+                run = std::min(run, limit);
+                ASSERT(run_is_linear(run, src, from_input));
+                read_run(src, l1_write_addr, run);
+                l1_write_addr += run * output_chunk_size;
+                left -= run;
+                walk.advance(run);
             }
             noc.async_read_barrier();
             cb.push_back(1);

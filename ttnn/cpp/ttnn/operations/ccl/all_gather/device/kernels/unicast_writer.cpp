@@ -40,18 +40,13 @@ void kernel_main() {
     constexpr uint32_t data_valid_granularity = get_compile_time_arg_val(8);
     constexpr auto output_tensor_args = TensorAccessorArgs<9>();
 
-    constexpr bool concat = output_chunks_per_page > 1;
     constexpr uint32_t chunks_per_cb_entry = cb_page_size / output_chunk_size;
+    constexpr uint32_t xfer_max = chunks_per_transfer(packet_size, output_chunk_size);
+    // A chunk bigger than a burst cannot be one NOC command, so it takes the generic path.
+    constexpr bool one_command = output_chunk_size <= NOC_MAX_BURST_SIZE;
     // A run is emitted as one scatter chunk starting at its source offset within the packet, so every chunk
     // size has to keep source and destination NoC-write aligned.
     static_assert(output_chunk_size % 16 == 0, "chunk size must be a multiple of the NoC write alignment");
-
-    // Cap a run so it fits one packet and one NOC burst. Both floor to 1 for a chunk bigger than either,
-    // which FabricWriter and the generic write path then split.
-    constexpr bool burst_local = output_chunk_size <= NOC_MAX_BURST_SIZE;
-    constexpr uint32_t max_packet_chunks = std::max<uint32_t>(1, packet_size / output_chunk_size);
-    constexpr uint32_t max_local_chunks = burst_local ? NOC_MAX_BURST_SIZE / output_chunk_size : 1;
-    constexpr uint32_t max_run_chunks = std::min(max_packet_chunks, max_local_chunks);
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -126,49 +121,14 @@ void kernel_main() {
     // RUN SETUP
     ///////////////////////////////////////////////////
 
-    // See the reader for what these gate; both kernels must derive the same stride or their walks diverge.
-    const uint32_t out_page_stride = output_tensor_accessor.contiguous_page_stride();
-    const bool out_packed =
-        output_tensor_accessor.get_aligned_page_size() == output_chunks_per_page * output_chunk_size;
-    const bool out_page_runs =
-        out_packed && (concat ? out_page_stride == 1 : out_page_stride <= output_chunks_per_stripe);
-    const uint32_t stride = (concat || !out_page_runs) ? 1u : out_page_stride;
+    const auto plan = walk_plan<output_chunks_per_page, output_chunk_size, xfer_max>(output_tensor_accessor);
 
-    StripeWalk<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
-
-    auto output_run = [&]() -> uint32_t {
-        if constexpr (concat) {
-            uint32_t n = output_chunks_per_page - it.byte_off() / output_chunk_size;
-            if (out_page_runs) {
-                n += (output_tensor_accessor.num_contiguous_pages(it.page_id(), it.end_page_id()) - 1) *
-                     output_chunks_per_page;
-            }
-            return it.seqnos_in_chunk_ids(n);
-        } else {
-            // num_contiguous_pages already steps by the walk's stride, so this is a seqno count.
-            return out_page_runs ? output_tensor_accessor.num_contiguous_pages(it.page_id(), it.end_page_id()) : 1u;
-        }
-    };
-
-    // Debug-only: a run has to be linear. Checks page/offset truth; the fabric address follows it.
-    auto run_is_linear = [&](uint32_t chunks) {
-        auto probe = it;
-        auto addr = [&] {
-            return output_tensor_accessor.get_noc_addr(probe.page_id(), probe.byte_off(), noc.get_noc_id());
-        };
-        const uint64_t first = addr();
-        for (uint32_t k = 0; k < chunks; ++k) {
-            if (addr() != first + k * output_chunk_size) {
-                return false;
-            }
-            probe.advance(1);
-        }
-        return true;
-    };
+    TiledWalk walk;
+    StripeMap<output_chunks_per_stripe, num_devices> map;
 
     auto local_write = [&](uint32_t l1_read_addr, uint64_t dst, uint32_t chunks) {
         // Posted write on a separate VC so it doesn't contend with the fabric writes on the same NOC.
-        if constexpr (burst_local) {
+        if constexpr (one_command) {
             noc.async_write<NocOptions::POSTED | NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                 CoreLocalMem<uint32_t>(l1_read_addr),
                 tensor_accessor::Page(dst, 0),
@@ -198,9 +158,12 @@ void kernel_main() {
         // id, so that the positions data_valid counts still line up downstream.
         const uint32_t skip = last ? final_skip : 0;
         const uint32_t take = last ? final_take : slice_chunks;
+        // The walk does not stop itself: past the slice it would send another worker's chunks.
+        ASSERT(skip + take <= slice_chunks);
         const bool granular = (iter < num_granular_sends);  // downstream relays this stripe -> signal fine-grained
         const bool local_copy = (iter == 0) && (do_local_write != 0);
-        it.init(stripe, slice_first_chunk, slice_chunks, skip, take, stride);
+        map.init(stripe);
+        walk.init(slice_first_chunk, slice_chunks, skip, plan.stride, plan.xfer);
 
         uint32_t pending_chunks = 0, pending_pages = 0;
         for (uint32_t chunks_sent = 0; chunks_sent < take;) {
@@ -208,21 +171,29 @@ void kernel_main() {
             cb.wait_front(1);
             uint32_t l1_read_addr = cb.get_read_ptr();
             for (uint32_t left = batch; left > 0;) {
-                const uint32_t page = it.page_id();
-                const uint32_t off = it.byte_off();
-                uint32_t chunks = std::min(std::min(output_run(), left), max_run_chunks);
-                ASSERT(run_is_linear(chunks));
+                const auto pos = map.at(walk.chunk());
+                const uint32_t page = page_of<output_chunks_per_page>(pos.global);
+                const uint32_t off = byte_off_of<output_chunks_per_page, output_chunk_size>(pos.global);
+                // Only one chunk can go anyway, so skip the query: on a sharded tensor it loops over rank.
+                const uint32_t limit = std::min(walk.run_limit(), left);
+                uint32_t run = 1;
+                if (limit > 1) {
+                    run = std::min(
+                        contiguous_chunks<output_chunks_per_page>(
+                            output_tensor_accessor, plan.out, pos.global, pos.row_end),
+                        limit);
+                }
                 fabric.queue_segment(
                     l1_read_addr,
                     tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page, off),
-                    chunks * output_chunk_size);
+                    run * output_chunk_size);
                 if (local_copy) {
                     // Local data -> our output stripe (same address).
-                    local_write(l1_read_addr, output_tensor_accessor.get_noc_addr(page, off, noc.get_noc_id()), chunks);
+                    local_write(l1_read_addr, output_tensor_accessor.get_noc_addr(page, off, noc.get_noc_id()), run);
                 }
-                l1_read_addr += chunks * output_chunk_size;
-                left -= chunks;
-                it.advance(chunks);
+                l1_read_addr += run * output_chunk_size;
+                left -= run;
+                walk.advance(run);
             }
             if (local_copy) {
                 noc.async_writes_flushed<NocOptions::POSTED>();

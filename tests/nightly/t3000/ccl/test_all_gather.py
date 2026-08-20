@@ -1160,15 +1160,16 @@ def test_all_gather_page_indexing(
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, mem_config_input, mem_config_ag",
     [
-        # Contiguous-run paths of the all_gather kernels. A run is the consecutive chunks that land
-        # contiguously at the destination, sent as one transfer; TensorAccessor::num_contiguous_pages
-        # reports how many, stepping by contiguous_page_stride().
+        # Contiguous-run paths of the all_gather kernels. A run is one column of the walk's tile:
+        # chunks contiguous at the destination, sent as one transfer. stride comes from
+        # TensorAccessor::contiguous_page_stride(), xfer from the packet size.
         #
         # A long stripe is what lets a run form at all, so most cases gather on a non-last dim.
+        # Slice lengths rarely divide a tile, so every case also exercises the ragged last tile.
         #
         # stride = DRAM bank count, runs along one bank.
         ([1, 1, 512, 128], 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        # stride (L1 bank count) exceeds the stripe, so no second step fits: falls back to page order.
+        # stride (L1 bank count) exceeds the stripe, so no column can hold two chunks: page order.
         ([1, 1, 128, 128], 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
         # One-page-wide shard, so stride is the tensor row in pages, not 1. Easiest thing to get wrong.
         (
@@ -1194,7 +1195,7 @@ def test_all_gather_page_indexing(
         # concat (m=8) with k=4: chunks are packed inside an output page, so the run is intra-page.
         ([1, 1, 32, 2048], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_width_sharded(32, 64, 4), _l1_width_sharded(32, 512, 4)),
         # Padded output page (16B content, 32B DRAM page): a run would step by the aligned size while
-        # the CB is packed, so runs are off and every chunk goes on its own.
+        # the CB is packed, so xfer drops to 1, i.e. page order with a chunk per transfer.
         ([8, 1, 32, 16], 0, ttnn.ROW_MAJOR_LAYOUT, _dram_width_sharded(32, 16, 1), _dram_width_sharded(256, 8, 2)),
         # One input page per device, so workers outnumber pages and the trailing slices are empty.
         ([1, 1, 1, 256], -1, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
