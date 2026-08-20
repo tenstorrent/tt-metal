@@ -33,11 +33,8 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "hostdevcommon/common_values.hpp"
-// Semaphore ids fixed by the scan program factory (SemaphoreDescriptors, init 0). Must stay in
-// sync with the ids in chunk_gdn_phased_program_factory.cpp — drift compiles clean and deadlocks
-// at runtime; move to trailing compile-time args before this op is ever fused with another.
-constexpr uint32_t SEM_READY = 0;  // receivers -> sender: "my CB space for this chunk is reserved"
-constexpr uint32_t SEM_VALID = 1;  // sender -> receivers: "this chunk's shared data is in your CBs"
+// Semaphore ids (SEM_READY/SEM_VALID) arrive as the two trailing compile-time args after the
+// accessor chain — read in kernel_main below, so factory and kernel cannot drift.
 #endif
 
 constexpr uint32_t cb_dl = 11, cb_S = 8, cb_Tinv = 13;
@@ -64,6 +61,18 @@ void kernel_main() {
     constexpr auto dl_a = TensorAccessorArgs<kc_a.next_compile_time_args_offset()>();
     constexpr auto ti_a = TensorAccessorArgs<dl_a.next_compile_time_args_offset()>();
     constexpr auto s0_a = TensorAccessorArgs<ti_a.next_compile_time_args_offset()>();
+#endif
+
+#if defined(GDN_MCAST_SENDER) || defined(GDN_MCAST_RECEIVER)
+    // Handshake semaphore ids: the two trailing compile-time args the factory appends AFTER the
+    // TensorAccessorArgs chain (unconditionally, on every variant, so the offsets stay uniform;
+    // the plain reader has no semaphores and simply doesn't read them). s0_a is the LAST accessor
+    // on both the sender's 8-accessor chain and the receiver's 2-accessor chain, so the same
+    // offset expression is correct in both variants.
+    // SEM_READY: receivers -> sender: "my CB space for this chunk is reserved"
+    // SEM_VALID: sender -> receivers: "this chunk's shared data is in your CBs"
+    constexpr uint32_t SEM_READY = get_compile_time_arg_val(s0_a.next_compile_time_args_offset());
+    constexpr uint32_t SEM_VALID = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 1);
 #endif
 
     // This core handles head h, V-block vb (columns [vb*Vt, vb*Vt+Vt) of the full V dimension).
