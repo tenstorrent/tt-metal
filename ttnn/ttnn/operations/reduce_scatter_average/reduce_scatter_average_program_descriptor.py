@@ -127,7 +127,20 @@ def _build_device_program(
     noc_coords,
 ):
     """Build the single-dispatch ProgramDescriptor for device ``i``."""
-    (page_size, aligned_page_size, l1_alignment, P, Wt, slice_Wt, S, g, scaler_bits, scaler_is_fp32, dim) = quantities
+    (
+        page_size,
+        aligned_page_size,
+        l1_alignment,
+        P,
+        Wt,
+        slice_Wt,
+        slice_Ht,
+        S,
+        g,
+        scaler_bits,
+        scaler_is_fp32,
+        dim,
+    ) = quantities
     input_ta, gather_ta, output_ta = accessors
     fwd_noc, bwd_noc, reduce_noc = noc_coords
 
@@ -249,6 +262,7 @@ def _build_device_program(
             g,
             Wt,
             slice_Wt,
+            slice_Ht,
             P,
             dim,
             scaler_bits,
@@ -354,7 +368,7 @@ def create_mesh_program_descriptor(
     sem_bwd_addr: int,
 ) -> ttnn.MeshProgramDescriptor:
     """One ProgramDescriptor per mesh coordinate; ``dim`` is the CANONICAL (positive)
-    scatter dim (Phase-0: 3, gated upstream by SUPPORTED)."""
+    scatter dim (3 or 2, gated upstream by SUPPORTED)."""
     mesh_device = input_tensor.device()
     assert _num_line_devices(mesh_device) == num_devices
 
@@ -365,12 +379,31 @@ def create_mesh_program_descriptor(
 
     shape = list(input_tensor.shape)
     Wt = shape[3] // _TILE
+    Ht = shape[2] // _TILE
+    # Dim-aware slice quantities: the reduce reader uses slice_Wt for the dim=3 walk
+    # and slice_Ht for the dim=2 walk; the OTHER one is kernel-unused (validate()
+    # guarantees only shape[dim] is N*TILE-divisible, so the unused floor-division
+    # may legitimately be 0).
     slice_Wt = Wt // num_devices
-    S = P // num_devices  # output tiles per device (= Rt * slice_Wt)
+    slice_Ht = Ht // num_devices
+    S = P // num_devices  # output tiles per device (dim-independent: P is a product)
     g = _granule(S)
     scaler_bits, scaler_is_fp32 = _scaler_ct_args(input_tensor.dtype, num_devices)
 
-    quantities = (page_size, aligned_page_size, l1_alignment, P, Wt, slice_Wt, S, g, scaler_bits, scaler_is_fp32, dim)
+    quantities = (
+        page_size,
+        aligned_page_size,
+        l1_alignment,
+        P,
+        Wt,
+        slice_Wt,
+        slice_Ht,
+        S,
+        g,
+        scaler_bits,
+        scaler_is_fp32,
+        dim,
+    )
 
     accessors = (
         list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()),

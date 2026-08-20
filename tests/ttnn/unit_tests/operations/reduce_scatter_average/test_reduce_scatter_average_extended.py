@@ -35,7 +35,7 @@ PCC = {ttnn.float32: 0.999, ttnn.bfloat16: 0.99}
 LINEAR = ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear)
 
 
-def _make_input(mesh_device, shard_shape, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+def _make_input(mesh_device, shard_shape, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG, dim=3):
     num_devices = prod(tuple(mesh_device.shape))
     full_shape = (shard_shape[0] * num_devices, *shard_shape[1:])
     torch.manual_seed(7)
@@ -44,7 +44,7 @@ def _make_input(mesh_device, shard_shape, dtype, memory_config=ttnn.DRAM_MEMORY_
         torch_full = torch_full.to(torch.bfloat16)
     shards = torch_full.reshape(num_devices, *shard_shape).to(torch.float32)
     mean = shards.mean(dim=0)
-    oracle = list(mean.chunk(num_devices, dim=3))
+    oracle = list(mean.chunk(num_devices, dim=dim))
     input_tensor = ttnn.from_torch(
         torch_full,
         dtype=dtype,
@@ -129,8 +129,21 @@ def test_typed_refusals(mesh_device, topology):
 
     with pytest.raises(NotImplementedError):
         reduce_scatter_average(input_tensor, topology=ttnn.Topology.Ring)
-    with pytest.raises(NotImplementedError):
+
+    # dim=2 (and its -2 alias) entered SUPPORTED in Refinement 1 — they must NOT
+    # raise the typed refusal any more. On THIS input shape[2]=32 is not
+    # N*32-divisible, so passing the axis gate surfaces as the DOWNSTREAM
+    # structural ValueError (validate() ordering: axis gate strictly before the
+    # dim-dependent shape checks). End-to-end dim=2 success is covered by
+    # test_reduce_scatter_average_dim2.py.
+    with pytest.raises(ValueError):
         reduce_scatter_average(input_tensor, dim=2)
-    # dim=-2 canonicalizes to 2, which is out of SUPPORTED — same typed refusal.
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError):
         reduce_scatter_average(input_tensor, dim=-2)
+
+    # A dim=2-splittable input runs to completion — the axis value is genuinely
+    # supported, not merely re-typed.
+    dim2_input, dim2_oracle = _make_input(mesh_device, (1, 1, 32 * num_devices, 64), ttnn.bfloat16, dim=2)
+    out = reduce_scatter_average(dim2_input, dim=2, topology=topology)
+    ttnn.synchronize_device(mesh_device)
+    _check(out, dim2_oracle, ttnn.bfloat16, mesh_device)

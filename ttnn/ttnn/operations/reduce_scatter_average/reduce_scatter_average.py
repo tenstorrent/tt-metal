@@ -72,8 +72,9 @@ SUPPORTED = {
     # indices are already ring-modular).
     "topology": [_Topology.Linear],
     # Scatter dims, POSITIVE convention. Negative aliases are canonicalized BEFORE
-    # the membership test (-1 ≡ 3). dim=2 is a refinement candidate.
-    "dim": [3],
+    # the membership test (-1 ≡ 3, -2 ≡ 2). dim=2 landed in Refinement 1: the reduce
+    # reader walks the dim=2 slice as dense per-(batch, channel) tile-row runs.
+    "dim": [3, 2],
 }
 
 EXCLUSIONS: list = []
@@ -218,7 +219,7 @@ def reduce_scatter_average(
     Args:
         input_tensor: sharded across a MeshDevice line; each device holds one
             SAME-shape shard (distinct values). TILE_LAYOUT, interleaved.
-        dim: scatter dimension (Phase-0: 3; negative alias -1 accepted).
+        dim: scatter dimension (3 or 2; negative aliases -1 / -2 accepted).
         topology: Linear (Phase-0).
         output_tensor: optional pre-allocated output (shape = shard with
             ``[dim] / N``); written into and the SAME handle returned when supplied.

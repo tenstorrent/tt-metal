@@ -92,7 +92,7 @@ With `INVALID = []` and `EXCLUSIONS = []`, the 18 `xfail_expected` cells decompo
 6 `dim=2×Linear` (Refinement 1 alone) + 6 `dim=3×Ring` (Refinement 2 alone) + 6 `dim=2×Ring`
 (needs both). The two refinements close the entire remaining TARGET.
 
-### [ ] Refinement 1 — dim=2 scatter
+### [x] Refinement 1 — dim=2 scatter
 
 **Goal**: add `2` to `SUPPORTED["dim"]`, moving the **6** golden `dim=2 × Linear` cells
 (3 INPUTS × {bf16, f32}) from `xfail_expected` to passing (and flipping the 6 `dim=2 × Ring`

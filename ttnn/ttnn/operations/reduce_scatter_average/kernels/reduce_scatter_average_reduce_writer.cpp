@@ -6,8 +6,10 @@
 //
 // Drains cb_averaged in g-tile granules and writes the S averaged slice tiles to
 // the DENSE output tensor (pages 0..S-1). The compute kernel scales granules in
-// walker order — slice-row-major — which IS the output tensor's own row-major tile
-// order for a dim=3 slice, so the t-th tile drained maps to output page t. Pure
+// the reader's walker order, which IS the output tensor's own row-major tile order
+// for BOTH supported scatter dims (dim=3: slice_Wt columns of every row; dim=2:
+// dense per-(batch, channel) runs of slice_Ht*Wt tiles in channel order), so the
+// t-th tile drained maps to output page t and this kernel stays dim-agnostic. Pure
 // local NoC writes; no fabric, no semaphores.
 //
 // CT args: [cb_averaged, S, g] + output TensorAccessorArgs

@@ -17,8 +17,16 @@
 //     would serialize the directions (op_design.md "Arrival poll").
 //   Fwd arrival a carries the shard of chip (i - (1+a)) mod N; bwd arrival b that of
 //   chip (i + (1+b)) mod N (T1/T2, nearest-first). Every contribution is walked in
-//   the IDENTICAL SliceRowWalker order, which is what keeps add_tiles positionally
-//   aligned across passes (R11).
+//   the IDENTICAL dim-aware order, which is what keeps add_tiles positionally
+//   aligned across passes (R11) — AND that order equals the output tensor's own
+//   row-major tile order, which is what keeps the dense (dim-agnostic) writer valid:
+//     * dim=3: columns [i*slice_Wt, (i+1)*slice_Wt) of every tile row — one uniform
+//       SliceRowWalker run of S tiles (slice_Wt per row, row stride Wt).
+//     * dim=2: rows [i*slice_Ht, (i+1)*slice_Ht) per (batch, channel) — B*C DENSE
+//       runs of slice_Ht*Wt tiles (the walker degenerates: walk_slice_Wt = Wt),
+//       hopping Ht*Wt between channel blocks via bump_base. The run boundary need
+//       NOT align with the g-granule (e.g. multibatch (2,1,256,256)): the boundary
+//       is tracked PER TILE inside the granule loop — the CB protocol is untouched.
 //
 // Also fills cb_scaler once with the 1/N broadcast scalar: bf16 via
 // generate_bcast_unary_scalar (owns reserve/push); fp32 via the mirrored raw
@@ -28,7 +36,8 @@
 // Cache-reuse re-arm (R1): reset BOTH sem counters after all arrivals are consumed.
 //
 // CT args: [cb_contributions, cb_scaler, my_chip_id, ring_size, fwd_arrivals,
-//           bwd_arrivals, S, g, Wt, slice_Wt, P, dim, scaler_bits, scaler_is_fp32]
+//           bwd_arrivals, S, g, Wt, slice_Wt, slice_Ht, P, dim, scaler_bits,
+//           scaler_is_fp32]
 //          + input TensorAccessorArgs + gather TensorAccessorArgs
 // RT args: [input_addr, gather_buffer_addr, page_size, sem_fwd_addr, sem_bwd_addr]
 
@@ -48,21 +57,33 @@ void kernel_main() {
     constexpr uint32_t S = get_compile_time_arg_val(6);         // output tiles per device
     constexpr uint32_t g = get_compile_time_arg_val(7);         // CB granule (divides S)
     constexpr uint32_t Wt = get_compile_time_arg_val(8);        // shard tile-columns
-    constexpr uint32_t slice_Wt = get_compile_time_arg_val(9);  // output tile-columns
-    constexpr uint32_t P = get_compile_time_arg_val(10);        // tiles per shard
-    constexpr uint32_t dim = get_compile_time_arg_val(11);      // scatter dim
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(12);
-    constexpr uint32_t scaler_is_fp32 = get_compile_time_arg_val(13);
-    constexpr auto input_args = TensorAccessorArgs<14>();
+    constexpr uint32_t slice_Wt = get_compile_time_arg_val(9);  // output tile-columns (dim=3 walk)
+    constexpr uint32_t slice_Ht = get_compile_time_arg_val(10);  // output tile-rows (dim=2 walk)
+    constexpr uint32_t P = get_compile_time_arg_val(11);         // tiles per shard
+    constexpr uint32_t dim = get_compile_time_arg_val(12);       // scatter dim
+    constexpr uint32_t scaler_bits = get_compile_time_arg_val(13);
+    constexpr uint32_t scaler_is_fp32 = get_compile_time_arg_val(14);
+    constexpr auto input_args = TensorAccessorArgs<15>();
     constexpr auto gather_buffer_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
-    // R9: gate the scatter dim at compile time. The walk below (SliceRowWalker over an
-    // Rt x Wt grid, base = my_chip_id * slice_Wt) is the dim=3 shape; dim=2 is
-    // Refinement 2 and never reaches the kernel (host SUPPORTED gate).
+    // R9: gate the scatter dim at compile time. Refinement 1 implements dim=2 next to
+    // the Phase-0 dim=3; dim=1 is beyond TARGET and never reaches the kernel (host
+    // SUPPORTED gate).
     static_assert(sched::is_supported_scatter_dim(dim), "reduce_scatter_average: unsupported scatter dim");
-    static_assert(dim == 3, "reduce_scatter_average: Phase-0 implements dim=3 only (Refinement 2 adds dim=2)");
+    static_assert(dim == 3 || dim == 2, "reduce_scatter_average: dims 3 and 2 implemented (dim=1 beyond TARGET)");
     static_assert(g > 0 && S % g == 0, "reduce_scatter_average: granule must divide the slice tile count");
     static_assert(fwd_arrivals + bwd_arrivals + 1 == ring_size, "arrivals + own contribution must equal N");
+
+    // Dim-aware walk geometry (header comment): the walk decomposes into dense
+    // per-channel runs — dim=3 is the degenerate single run of S tiles (stride 0, so
+    // the boundary fire after the LAST tile is a behavioral no-op), dim=2 is B*C runs
+    // of slice_Ht*Wt tiles hopping a full Ht*Wt = slice_Ht*ring_size*Wt channel block.
+    constexpr uint32_t walk_slice_Wt = (dim == 2) ? Wt : slice_Wt;
+    constexpr uint32_t channel_slice_tiles = (dim == 2) ? slice_Ht * Wt : S;
+    constexpr uint32_t channel_stride = (dim == 2) ? slice_Ht * ring_size * Wt : 0;
+    static_assert(
+        channel_slice_tiles > 0 && S % channel_slice_tiles == 0,
+        "reduce_scatter_average: slice must decompose into whole per-channel runs");
 
     uint32_t ai = 0;
     const uint32_t input_addr = get_arg_val<uint32_t>(ai++);
@@ -88,15 +109,19 @@ void kernel_main() {
         generate_bcast_unary_scalar(cb_scaler, scaler_bits);  // owns reserve/push of 1 page
     }
 
-    // First tile of this device's slice within any shard's Rt x Wt tile grid.
-    constexpr uint32_t slice_base = sched::slice_tile_offset(dim, my_chip_id, 0, 0, slice_Wt);
+    // First tile of this device's slice within any shard's tile grid: dim=3 →
+    // my_chip_id * slice_Wt; dim=2 → my_chip_id * slice_Ht * Wt (the walker's
+    // slice_Wt IS the full Wt for a dim=2 slice, which spans every column).
+    constexpr uint32_t slice_base = sched::slice_tile_offset(dim, my_chip_id, 0, slice_Ht, walk_slice_Wt);
 
-    // One contribution = S tiles walked slice-row-major, streamed as S/g granules.
-    // The walk order is identical for every contribution (R11).
-    sched::SliceRowWalker walker(slice_Wt, Wt);
+    // One contribution = S tiles walked in the dim-aware per-channel-run order,
+    // streamed as S/g granules. The walk order is identical for every contribution
+    // (R11) and equals the output's row-major tile order (dense writer contract).
+    sched::SliceRowWalker walker(walk_slice_Wt, Wt);
     auto push_contribution = [&](const auto& src, uint32_t base) {
         walker.set_base(base);
         walker.reset_offsets(0, 0);
+        uint32_t tiles_in_channel = 0;
         for (uint32_t chunk = 0; chunk < S / g; ++chunk) {
             cb_reserve_back(cb_contributions, g);
             uint32_t l1 = get_write_ptr(cb_contributions);
@@ -104,6 +129,15 @@ void kernel_main() {
                 const uint32_t id = walker.next();  // returns AND advances — once per tile
                 noc_async_read(src.get_noc_addr(id), l1, page_size);
                 l1 += page_size;
+                // Per-(batch, channel) run hop, tracked PER TILE because the run
+                // boundary need not align with the g-granule boundary. dim=3: fires
+                // once after the last tile with stride 0 — a behavioral no-op (the
+                // next contribution re-seeds base/offsets anyway).
+                if (++tiles_in_channel == channel_slice_tiles) {
+                    walker.bump_base(channel_stride);
+                    walker.reset_offsets(0, 0);
+                    tiles_in_channel = 0;
+                }
             }
             noc_async_read_barrier();
             cb_push_back(cb_contributions, g);
