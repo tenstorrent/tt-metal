@@ -30,7 +30,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/reduce.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 namespace {

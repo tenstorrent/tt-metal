@@ -12,7 +12,7 @@
  * @brief Implementation of matmul_block helper function.
  *
  * Single pipeline handles both pack strategies:
- *   tile_order=SubblockMajor → sequential pack_tile_block, per-subblock reserve/push
+ *   tile_order=SubblockMajor → sequential pack_block, per-subblock reserve/push
  *   tile_order=TileRowMajor      → absolute-offset pack_tile<true>, per-row-group reserve/push
  *
  * Both modes share K-loop, reload, L1_ACC management, and pre/post callbacks.
@@ -53,7 +53,7 @@ ALWI void pack_subblock_row_strided(
  * from fifo_rd_ptr and land at DST[r * w], so the matmul/pack sees the same row-major
  * layout the contiguous (SubblockMajor) reload produces.
  *
- * One copy_block_matmul_partials per row (reads at fifo_rd_ptr + src_base; does NOT advance
+ * One copy_block per row (reads at fifo_rd_ptr + src_base; does NOT advance
  * it). Caller waits the whole fronted row group (col_base + (h-1)*row_stride + w tiles) and
  * pops it when done. col_base / row_stride match the spill.
  */
@@ -64,7 +64,7 @@ ALWI void copy_subblock_row_strided(
     uint32_t h,
     uint32_t w) {
     for (uint32_t r = 0; r < h; r++) {
-        copy_block_matmul_partials(src_cb_id, r * row_stride + col_base, r * w, w);
+        copy_block(src_cb_id, r * row_stride + col_base, r * w, w);
     }
 }
 
@@ -181,7 +181,10 @@ ALWI void matmul_block(
             PACK((pack_reconfig_data_format(interm_cb_id)));
         }
         if constexpr (init_mode == matmul_config::InitMode::Short) {
-            mm_block_init_short(
+            // ckernel:: disambiguates the LLK init from this namespace's matmul_block. matmul_block_init IS
+            // the short init (the old mm_block_init_short, renamed in #46346); the heavy one-time HW config
+            // is compute_kernel_hw_startup<SrcOrder::Reverse>, which the CALLER owns (see the .hpp contract).
+            ckernel::matmul_block_init(
                 in0_cb_id, in1_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_k);
         }
     }
@@ -243,7 +246,7 @@ ALWI void matmul_block(
                     reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
                     PACK((pack_reconfig_data_format(interm_cb_id)));
                 }
-                mm_block_init_short(
+                ckernel::matmul_block_init(
                     active_in0_cb_id,
                     in1_cb_id,
                     transpose,
@@ -331,11 +334,20 @@ ALWI void matmul_block(
                             }
                         } else {
                             interm_buf.wait_front(out_num_tiles);
-                            copy_block_matmul_partials(interm_cb_id, 0, 0, out_num_tiles);
+                            copy_block(interm_cb_id, 0, 0, out_num_tiles);
                             interm_buf.pop_front(out_num_tiles);
                         }
-                        mm_block_init_short_with_dt(
-                            in0_cb_id, in1_cb_id, interm_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_k);
+                        // The interm reload above left SrcA holding interm's format; matmul wants SrcA = in1
+                        // (matmul maps in0 -> SrcB, in1 -> SrcA). This pair is exactly what the removed
+                        // mm_block_init_short_with_dt(in0, in1, old_in1 = interm, ...) expanded to.
+                        reconfig_data_format_srca(interm_cb_id, in1_cb_id);
+                        ckernel::matmul_block_init(
+                            in0_cb_id,
+                            in1_cb_id,
+                            transpose,
+                            shape.out_subblock_w,
+                            shape.out_subblock_h,
+                            shape.in0_block_k);
                     }
 
                     // Compute the output sub-block. SKIP_COMPUTE (microbench) omits only the LLK call.
@@ -424,7 +436,7 @@ ALWI void matmul_block(
                         } else if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
                             pack_untilize_dest<untilize_block_ct_dim>(pack_target_id);
                         } else {
-                            pack_tile_block(0, pack_target_id, out_num_tiles);
+                            pack_block(0, pack_target_id, out_num_tiles);
                         }
 
                         tile_regs_release();
@@ -463,7 +475,7 @@ ALWI void matmul_block(
                             pack_subblock_row_strided(
                                 0, interm_cb_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
                         } else {
-                            pack_tile_block(0, interm_cb_id, out_num_tiles);
+                            pack_block(0, interm_cb_id, out_num_tiles);
                         }
                         tile_regs_release();
                         if constexpr (!spill_row_grouped && !caller_owns_pack_target) {
