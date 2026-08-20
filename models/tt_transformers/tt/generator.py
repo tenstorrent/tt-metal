@@ -217,9 +217,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         return ret
 
-    def warmup_model_prefill(
-        self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False, page_table=None
-    ):
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
@@ -253,20 +251,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         pre-compile) before its own prefill captures anything, then records it here once that prefill is
         done. Prefill traces are captured as they are prepared, so nothing else is pending by this point.
 
-        ``prefill_samples_on_device`` is accepted for call-site compatibility and is unused.
+        The arguments are accepted for call-site compatibility and are unused: recording binds only to
+        what was already prepared and stashed in ``_pending_decode_trace``.
         """
         if not self._defer_trace_recording:
             return
         try:
-            # Prepared up front by _prefill_forward_text_impl, before this call's prefill filled the KV
-            # cache -- the decode compile pass is a real decode step at position 0 with mock inputs, so
-            # preparing it here instead would write mock K/V over the prefilled cache.
-            if self._pending_decode_trace is None:
-                self._pending_decode_trace = self._prepare_decode_trace_for_warmup(
-                    kv_cache=kv_cache,
-                    page_table=page_table,
-                    on_device_sampling=can_sample_on_device,
-                )
+            # Deliberately no prepare fallback here: the decode trace was prepared up front by
+            # _prefill_forward_text_impl, before this call's prefill filled the KV cache. Preparing at
+            # this point instead would run the decode compile pass -- a real decode step at position 0
+            # with mock inputs -- over the prefilled cache, overwriting real K/V with mock values. If
+            # nothing was prepared (_prepare_decode_trace_for_warmup declined and returned None),
+            # recording is a no-op and the decode trace is set up lazily on the first decode step, as
+            # on main.
             self._record_pending_traces()
         finally:
             # Cleared even if recording raised, and the stash is dropped with it: leaving the latch armed
@@ -829,11 +826,21 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         """
         already_pending = self._deferred_finalize_args is not None
         try:
-            return self._prefill_forward_text_impl(*args, **kwargs)
-        finally:
-            if not already_pending and self._deferred_finalize_args is not None:
-                finalize_args, self._deferred_finalize_args = self._deferred_finalize_args, None
-                self.finalize_deferred_traces(**finalize_args)
+            result = self._prefill_forward_text_impl(*args, **kwargs)
+        except BaseException:
+            # A failed prefill must not capture traces while unwinding: the capture would bind whatever
+            # state the failure left behind, and an error raised during recording would mask the original
+            # exception. Drop the deferred state instead; the decode trace is then set up lazily on the
+            # first decode step, as on main.
+            if not already_pending:
+                self._deferred_finalize_args = None
+                self._defer_trace_recording = False
+                self._pending_decode_trace = None
+            raise
+        if not already_pending and self._deferred_finalize_args is not None:
+            finalize_args, self._deferred_finalize_args = self._deferred_finalize_args, None
+            self.finalize_deferred_traces(**finalize_args)
+        return result
 
     def _prefill_forward_text_impl(
         self,
@@ -874,20 +881,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             and getattr(self.model[0], "sampling", None) is not None
         )
         if warmup_prefill:
-            # warmup_prefill defaults to True, so the sweep's own nested calls land here too. Only the
-            # outermost call may stash these -- a nested one carries the sweep's batch-1 mock page table, and
-            # finalize would size the decode trace inputs for the wrong batch.
-            if self._deferred_finalize_args is None:
-                self._deferred_finalize_args = {
-                    "kv_cache": kv_cache,
-                    "page_table": page_table,
-                    "can_sample_on_device": on_device_sampling_enabled,
-                }
+            # No deferral on this path: warmup captures its traces immediately, as on main. The hoist
+            # below is only for the warmup-less path, where the first traced prefill call would otherwise
+            # capture a trace part way through and then set decode up behind it.
             self.warmup_model_prefill(
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
                 can_sample_on_device=on_device_sampling_enabled,
-                page_table=page_table,
             )
         elif (
             enable_trace
@@ -916,7 +916,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self._defer_trace_recording = True
             # Prepare decode before this call's prefill, not at the flush: the compile pass is a real decode
             # step at position 0 with mock inputs, so it writes mock K/V that the following prefill then
-            # overwrites. At the flush it would instead corrupt the prefilled cache.
+            # overwrites. At the flush it would instead corrupt the prefilled cache. The position-0 write
+            # relies on this being the first traced prefill call (nothing captured yet), so no earlier
+            # request can have left a cached prefix in these page-table rows -- a cached prefix
+            # (num_cached > 0) would not be rewritten by the prefill and would stay corrupted.
             self._prepare_decode_trace_once(
                 kv_cache=kv_cache,
                 page_table=page_table,
