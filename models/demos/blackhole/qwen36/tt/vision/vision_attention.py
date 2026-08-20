@@ -26,7 +26,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+from models.tt_transformers.tt.model_config import TensorGroup
 
 from .vision_ccl import all_reduce_replicated
 
@@ -122,12 +122,9 @@ class VisionAttention(LightweightModule):
         self.kv_cache_dtype = self.decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
         )
-        self.sdpa_prefill_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.SDPA_PREFILL, configuration=configuration
-        )
-        # NOTE: qkv/wo fidelity deliberately no longer comes from `decoders_optimizations`
-        # (LI_QKV_PREFILL / LI_O_PREFILL), whose `accuracy` preset is HiFi4 -- worthless on bfloat8_b
-        # weights and half the throughput. `vision_mm_plan` picks it per family instead.
+        # NOTE: qkv/wo/SDPA fidelity deliberately no longer comes from `decoders_optimizations`
+        # (LI_QKV_PREFILL / LI_O_PREFILL / SDPA_PREFILL), whose `accuracy` preset is HiFi4 -- worthless
+        # on bfloat8_b operands and half the throughput. `vision_mm_plan` / `vision_sdpa_plan` pick it.
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
@@ -334,7 +331,10 @@ class VisionAttention(LightweightModule):
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
-        if self.head_dim != self.padded_head_dim:
+        # Gate on the TENSOR, not on the config: `DropInVisionTransformer` already uploads cos/sin at
+        # `padded_head_dim`, so this is a no-op there. It used to fire on every block -- 27 identical
+        # pads per image, 2 FillPad ops each. Kept for callers that pass rot_mats at the real head_dim.
+        if rot_mats[0].shape[-1] != self.padded_head_dim:
             pad_dim = lambda x, v: ttnn.pad(
                 x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), v
             )
@@ -361,11 +361,19 @@ class VisionAttention(LightweightModule):
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
+        sdpa_plan = self.configuration.vision_sdpa_plan(seq_len, self.kv_cache_dtype)
+
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
-        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.kv_cache_dtype)
-        ttnn.deallocate(k_heads_1KSD)
+        # K matches Q and V unless the plan says otherwise. `kv_cache_dtype` used to decide this,
+        # which left K in bf16 -- and this cast a 213 us/block no-op -- in a tower that has no KV
+        # cache at all. Cast only when it actually changes the dtype.
+        if k_heads_1KSD.dtype != sdpa_plan.k_dtype:
+            k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=sdpa_plan.k_dtype)
+            ttnn.deallocate(k_heads_1KSD)
+        else:
+            k_heads_1KSD_8b = k_heads_1KSD
 
         v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(v_heads_1VSD)
@@ -377,8 +385,8 @@ class VisionAttention(LightweightModule):
             v_heads_1VSD_8b,
             is_causal=False,
             scale=self.scale,
-            compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-            program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
+            compute_kernel_config=sdpa_plan.compute_kernel_config,
+            program_config=sdpa_plan.program_config,
         )
 
         ttnn.deallocate(q_heads_1QSD_8b)
