@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 
 import pytest
@@ -17,6 +16,7 @@ from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_progra
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
+    collect_accuracy_and_determinism_results,
     assert_equal,
 )
 
@@ -230,43 +230,6 @@ def test_affine_exclusive_scan_contract_and_trace(
     ttnn.release_trace(device, trace_id)
 
 
-def _collect_accuracy_and_determinism_results(
-    device: ttnn.Device,
-    run: Callable[[], ttnn.Tensor],
-    *,
-    count: int = 3,
-) -> tuple[ttnn.Tensor, torch.Tensor, torch.Tensor]:
-    assert count > 1
-    reference_output = run()
-    mismatch_scratch = ttnn.empty(
-        reference_output.shape,
-        dtype=ttnn.bfloat16,
-        layout=reference_output.layout,
-        device=device,
-        memory_config=reference_output.memory_config(),
-    )
-    mismatch_marker = None
-    for _ in range(1, count):
-        output_tt = run()
-        ttnn.ne(reference_output, output_tt, dtype=ttnn.bfloat16, output_tensor=mismatch_scratch)
-        current_mismatch = ttnn.max(mismatch_scratch)
-        ttnn.deallocate(output_tt)
-        if mismatch_marker is None:
-            mismatch_marker = current_mismatch
-        else:
-            updated_marker = ttnn.maximum(mismatch_marker, current_mismatch)
-            ttnn.deallocate(mismatch_marker)
-            ttnn.deallocate(current_mismatch)
-            mismatch_marker = updated_marker
-
-    assert mismatch_marker is not None
-    reference_output_host = ttnn.to_torch(reference_output).clone()
-    mismatch_marker_host = ttnn.to_torch(mismatch_marker).clone()
-    ttnn.deallocate(mismatch_scratch)
-    ttnn.deallocate(mismatch_marker)
-    return reference_output, reference_output_host, mismatch_marker_host
-
-
 @pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])
 def test_affine_exclusive_scan_is_device_deterministic(device: ttnn.Device, summary_dtype: ttnn.DataType) -> None:
     case = _PRODUCTION_CASE
@@ -278,10 +241,10 @@ def test_affine_exclusive_scan_is_device_deterministic(device: ttnn.Device, summ
     )
     expected = _oracle(*host, case.batch_heads, case.groups_per_head)
 
-    def run() -> ttnn.Tensor:
-        return _run(*device_inputs, case.groups_per_head)
+    def run() -> tuple[ttnn.Tensor]:
+        return (_run(*device_inputs, case.groups_per_head),)
 
-    output_tt, output, mismatch_marker = _collect_accuracy_and_determinism_results(device, run)
+    (output_tt,), (output,), mismatch_marker = collect_accuracy_and_determinism_results(device, run)
     assert_equal(
         torch.zeros_like(mismatch_marker),
         mismatch_marker,
