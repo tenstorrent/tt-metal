@@ -831,6 +831,83 @@ ttnn's loops mean its static count understates what it actually issues. So the 2
 gap emphatically does NOT mean we execute 2.4x the instructions -- if anything the
 comparison flatters ttnn's dynamic count. **The wrapper is not where the missing 2x is.**
 
+### always_inline on TileSource::emit: tried, reverted
+
+The static analysis above suggested forcing the expression-tree leaf inline, since a
+640-byte function reached from 6 call sites in the hot path looks like an obvious win.
+It is not. Reproducibly, across a stash-and-repeat A/B:
+
+| | without | with |
+|---|---|---|
+| flash, 2 chunks | 51.61 us | 52.82 us |
+| flash, 4 chunks | 89.68 us | 89.50 us |
+
+2.3% slower where it moved at all. The mechanism is visible in the ELF and is the
+opposite of the intent: the 6 calls to `emit` do go away, but the two reconfig calls
+that live inside its branch get replicated at every inlined site, so **total calls go
+31 -> 43 and reconfig calls 12 -> 19**. `kernel_main` even shrinks slightly (8688 ->
+8220 bytes), so this is not a size effect. GCC's estimate was right and the attribute is
+reverted.
+
+The useful part is what that proves: **the `reconfigure` branch does not fold.** The
+hope was that inlining would let the caller's compile-time `Shape` bound turn
+`kEveryTile || i == 0` into a constant per unrolled iteration and delete the reconfig
+entirely. Instead the count went up, which means the branch survives as runtime work at
+every leaf of every tile of every pass. That makes reconfiguration a target in its own
+right rather than a side effect to be optimised away by inlining.
+
+### What to test next
+
+Ordered by expected value, with what each result would actually mean. Six candidates are
+already dead (SFPU math, CB plumbing, acquire batching, SFPU-side kind switching, DRAM
+buffering, wrapper codegen), and roughly half of flash's time is still unattributed.
+
+1. **Which thread is on the critical path.** Nothing so far establishes whether the math
+   thread is even the bottleneck; every measurement here has been whole-program device
+   time. If pack or unpack is the constraint, every conclusion about math costs is
+   advice about the wrong thread. Cheapest probe: make one thread's work strictly
+   cheaper (drop to a 1-leaf expression, or pack fewer tiles) and see which change moves
+   the total. This should come first because it decides whether the rest of the list is
+   pointed the right way.
+
+2. **matmul against SFPU, the switch flash actually makes.** PC_ALT alternates broadcast
+   and copy, both SFPU-side, and found switching free -- that result does NOT cover a
+   change of compute unit. Add a PC_ALT variant alternating matmul and copy. Related and
+   possibly the same finding: `llk_math_matmul_init` is a **1372-byte outlined function
+   with 4 call sites** in a kernel with 2 matmuls per chunk, so the question is whether
+   it is being re-run per matmul rather than hoisted. If it is, that is a large fixed
+   cost on every FPU pass and the fix is in `Strategy<FPUFusion>`.
+
+3. **Reconfiguration per leaf.** `kEveryTile` is `leaf_count > 1`, so a 2-leaf expression
+   reconfigures on EVERY tile while a 1-leaf reconfigures once. That is a controlled
+   experiment already latent in the design: compare a 1-leaf copy pass against a 2-leaf
+   add of two blocks at equal tile counts, and the difference is the per-tile reconfig
+   cost. Most of flash's passes are multi-leaf, so if this is expensive it is expensive
+   twelve times per chunk. The always_inline result above says the branch is real work.
+
+4. **Push granularity.** `store()` does one `cb_reserve_back(num_tiles)` and one
+   `cb_push_back(num_tiles)` around the whole block, so a downstream consumer cannot
+   start until the entire block is packed. Pushing per tile would let the next stage's
+   unpack overlap the current stage's pack -- these are different threads, so there is
+   real concurrency to win. Test by pushing per tile in one strategy and measuring.
+
+5. **Are we doing more Tensix work than ttnn at all?** The gap may be algorithmic rather
+   than overhead, and nothing here has checked. ttnn's `normalize_row_streaming` name
+   suggests it fuses the whole softmax normalisation into one streaming pass over DST,
+   where we spend 12 separate L1 round trips. Counting dynamic Tensix ops for the same
+   shape on both sides answers whether we are slower at the same work or doing more of
+   it -- and those call for completely different fixes.
+
+6. **CB count and L1 pressure.** flash declares 19 CBs. Whether the count itself costs
+   anything (config space, reserve/push bookkeeping) is untested and cheap to check with
+   a kernel that does fixed work through varying numbers of buffers. Low expected value,
+   listed because it is nearly free to rule out.
+
+7. **A hand-written metal kernel for the same math.** The definitive test of whether the
+   model's structure -- not its codegen, which the static analysis clears -- is what
+   costs. Expensive to write, and worth doing only if 1 through 5 leave the gap
+   unexplained, at which point it stops being optional.
+
 ### The full grid was never the interesting number
 
 ttnn on 64 cores is 13.8 us against 21 us on one, because at S=128 with a single head there are
