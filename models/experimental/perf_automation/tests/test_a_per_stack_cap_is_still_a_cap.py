@@ -37,13 +37,35 @@ def _clear(monkeypatch):
 
 
 def test_a_per_stack_cap_is_seen(monkeypatch):
-    from agent.layer_depth import active_depth_caps
+    """HOW MANY STACKS TO LOOK FOR IS THE MODEL'S ANSWER, not a bound. This probed range(8) -- a
+    number I picked -- which would miss the ninth cap on a model with nine stacks and ask after
+    seven names that cannot exist on a model with one. declared_sections counts the repeated-block
+    stacks off the checkpoint's own tensor names."""
+    import agent.layer_depth as LD
 
     _clear(monkeypatch)
     monkeypatch.setenv("TT_PERF_STACK0_LAYERS", "2")
     monkeypatch.setenv("TT_PERF_STACK1_LAYERS", "2")
+    monkeypatch.setattr(LD, "_declared_stack_count", lambda root: 2)
 
-    assert active_depth_caps() == {"TT_PERF_STACK0_LAYERS": 2, "TT_PERF_STACK1_LAYERS": 2}
+    assert LD.active_depth_caps(model_root="/anything") == {
+        "TT_PERF_STACK0_LAYERS": 2,
+        "TT_PERF_STACK1_LAYERS": 2,
+    }
+
+
+def test_the_stack_count_comes_from_the_model(monkeypatch):
+    import agent.layer_depth as LD
+
+    _clear(monkeypatch)
+    monkeypatch.setenv("TT_PERF_STACK8_LAYERS", "2")
+    monkeypatch.setattr(LD, "_declared_stack_count", lambda root: 9)
+    assert LD.active_depth_caps(model_root="/anything") == {
+        "TT_PERF_STACK8_LAYERS": 2
+    }, "a ninth stack's cap is missed by a fixed bound"
+
+    monkeypatch.setattr(LD, "_declared_stack_count", lambda root: 1)
+    assert LD.active_depth_caps(model_root="/anything") == {}
 
 
 def test_a_per_stage_cap_is_seen_when_the_model_declares_that_stage(monkeypatch):
@@ -84,9 +106,12 @@ def test_the_census_refuses_a_per_stack_capped_build(monkeypatch):
     """The case run 11 let through: TT_PERF_LAYERS unset, the stacks capped at 2."""
     from agent.weight_census import census_depth
 
+    import agent.layer_depth as LD
+
     _clear(monkeypatch)
     monkeypatch.setenv("TT_PERF_STACK0_LAYERS", "2")
     monkeypatch.setenv("TT_PERF_STACK1_LAYERS", "2")
+    monkeypatch.setattr(LD, "_declared_stack_count", lambda root: 2)
 
     got = census_depth()
     assert got != "all", "a per-stack capped census still reports itself as the whole model"
@@ -96,8 +121,11 @@ def test_the_census_refuses_a_per_stack_capped_build(monkeypatch):
 def test_the_marker_names_the_knob_that_shrank_the_build(monkeypatch):
     from agent.weight_census import census_depth
 
+    import agent.layer_depth as LD
+
     _clear(monkeypatch)
     monkeypatch.setenv("TT_PERF_STACK0_LAYERS", "8")
     monkeypatch.setenv("TT_PERF_STACK1_LAYERS", "2")
+    monkeypatch.setattr(LD, "_declared_stack_count", lambda root: 2)
 
     assert census_depth() == "TT_PERF_STACK1_LAYERS=2", "the tightest cap in force is not named"

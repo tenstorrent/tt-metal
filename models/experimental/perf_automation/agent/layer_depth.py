@@ -252,6 +252,25 @@ def stack_layers_var(i) -> str:
     return "TT_PERF_STACK%d_LAYERS" % int(i)
 
 
+def _declared_stack_count(model_root) -> int:
+    """How many repeated-block stacks this model has, from the checkpoint. 0 when it cannot be read.
+
+    Zero is right when nothing is readable: the positional caps are set by this tool, one per stack
+    it discovered, so a model whose stacks cannot be counted has none of them set either.
+    """
+    if model_root is None:
+        return 0
+    try:
+        from .checkpoint_sections import declared_sections
+        from .stack_survey import model_id_from_source
+
+        # The demo directory holds no weights -- they are in the shared cache -- so the count needs
+        # the hub id, which the model's own source names. Same resolution the tower split uses.
+        return len(declared_sections(str(model_root), str(model_id_from_source(model_root) or "")) or {})
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def active_depth_caps(environ=None, model_root=None, stages=None) -> dict:
     """Every depth cap in force, as {variable: layers}. Empty means full depth.
 
@@ -292,9 +311,12 @@ def active_depth_caps(environ=None, model_root=None, stages=None) -> dict:
         except Exception:  # noqa: BLE001 -- an unreadable source leaves the positional form below
             _stages = []
     names += [stage_layers_var(st) for st in _stages]
-    # The positional vocabulary the generator uses for a model that declares no stages. Bounded by
-    # the stacks a model can plausibly have; a cap set beyond it would also have no generated reader.
-    names += [stack_layers_var(i) for i in range(8)]
+    # THE POSITIONAL VOCABULARY, FOR AS MANY STACKS AS THE MODEL HAS. The generator emits
+    # TT_PERF_STACK{i}_LAYERS one per stack it discovered, so the count is the model's, not a bound
+    # to pick: declared_sections counts the repeated-block stacks straight off the checkpoint's own
+    # tensor names. This was range(8) -- a number I chose, which would have missed the ninth cap on
+    # a model with nine stacks and probed seven names that cannot exist on a model with one.
+    names += [stack_layers_var(i) for i in range(_declared_stack_count(model_root))]
 
     out: dict = {}
     for name in names:
