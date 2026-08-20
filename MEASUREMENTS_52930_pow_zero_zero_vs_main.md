@@ -1,8 +1,12 @@
 # Measurements — `pow(x, 0)`, accuracy and performance vs `main`
 
 Accuracy and performance of the kernel this branch changes, measured against the branch point
-rather than recalled from the original development run. Read-only record: no code, no test
-changes.
+rather than recalled from the original development run. Read-only record of the kernel delta.
+
+Remeasured 2026-08-20 after the review comment that pinned exponent `-0.0` in the committed
+edge sweep. That change is test-only — the kernel is unchanged — and the figures below
+reproduced: 3 pairs fixed on every format combination, every other pair byte-identical;
+`MATH_ISOLATE` **+3.50 % to +3.77 %** (median +3.57 %) on all 60 variants, 60/60 separated.
 
 | | |
 |---|---|
@@ -173,6 +177,15 @@ the fix retires — those cells now *assert* `0**0 == 1` rather than pinning the
 The **16 XPASS are identical on both trees** and are not this branch's: they are the
 pre-existing `negative_zero_golden` cases on div / xlogy / fmod / remainder. `SfpuElwpow`
 contributes none of them, before or after.
+
+After the review comment on missing `-0.0` exponent coverage, the committed edge sweep
+now cartesian-products Operand.B `(-0.0, 0.0, 1.0, 2.0)` with bases including `±2`, and
+`test_pow_edge_pairs_include_negative_zero_exponent` pins that stimulus host-side. Re-run
+on Wormhole: `binary_edges and SfpuElwpow` 12 passed / 0 xfailed / 0 xpassed (including
+`Float32→Float32 dest_acc=Yes both_zero`, which is the pipeline that delivers `-0.0`);
+`-k SfpuElwpow` still 79 passed; Blackhole compile 57 passed. The kernel was not edited
+for that comment, and the accuracy/perf figures above are the remeasure against the same
+`main` SHA.
 
 Blackhole compiles clean — 57 correctness variants and 64 perf variants — and carries the
 identical 4-instruction guard (§6). No BH silicon on this host, so no cycle figures.

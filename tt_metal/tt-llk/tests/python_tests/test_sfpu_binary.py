@@ -1479,7 +1479,10 @@ assert _BINARY_EDGE_OPS, (
 #   0 * -inf = NaN, exp(NaN) collapsed to +0, and the kernel's v_if(val < 0) then ran on a
 #   NaN -- undefined per VectorUnit's SFPSETCC contract, which is why the two inputs
 #   disagreed. calculate_sfpu_binary_power now ends in an IEEE pow(x, 0) == 1 guard, so
-#   SfpuElwpow no longer appears in the tables below.
+#   SfpuElwpow no longer appears in the tables below. The -0.0 exponent is a committed
+#   Operand.B edge in sfpu_domains._OP_OPERAND_EDGE_POINTS, cartesian-producted with
+#   ±2 on A, so both_zero now asserts 0**-0.0 as well as 0**0 and ordinary asserts
+#   (±2)**-0.0 -- the coverage that would go green-but-wrong if setsgn were dropped.
 #
 # Those groups are the classes the probe partitions into: documented is
 # _EDGE_CLASS_NEGATIVE_ZERO; open are _EDGE_CLASS_BOTH_ZERO (indeterminate forms)
