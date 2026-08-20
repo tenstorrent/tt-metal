@@ -642,10 +642,10 @@ rather than comparing our defaults against its cheaper ones:
 
 | | device time |
 |---|---|
-| ours: flash, 2 chunks, HiFi4 exact (metal defaults) | 69.0 us |
-| ours: flash, 2 chunks, HiFi2 approx | 54.3 us |
-| ours: flash, 4 chunks, HiFi4 exact | 112.7 us |
-| ours: flash, 4 chunks, HiFi2 approx | 95.0 us |
+| ours: flash, 2 chunks, HiFi4 exact (metal defaults) | 66.6 us |
+| ours: flash, 2 chunks, HiFi2 approx | 51.6 us |
+| ours: flash, 4 chunks, HiFi4 exact | 107.3 us |
+| ours: flash, 4 chunks, HiFi2 approx | 89.7 us |
 | ttnn SDPA, q32/k128, HiFi2 approx | 21.0 us |
 | ttnn SDPA, q128/k128, HiFi2 approx | 19.9 us |
 
@@ -657,8 +657,22 @@ from 3.9x, and the way it came down is worth more than the number.
 The first diagnosis recorded here was that per-pass circular-buffer overhead dominates, and it
 was wrong. `unified_kernels/passcost.cpp` exists to settle it: `out = in` through N identity
 passes, each `copy` into its own scratch CB, so with the math pinned at zero the slope in N is
-the cost of one L1 round trip plus its CB handshake. It is dead linear at **0.79 us per pass over
-8 tiles, or 0.099 us per tile per pass**.
+the cost of one L1 round trip plus its CB handshake. It is dead linear at **0.79 us per pass over 8 tiles**.
+
+Quoting that as 0.099 us per tile, as an earlier revision of this file did, hides the
+part that matters. Sweeping the WIDTH at a fixed pass count separates the two terms:
+
+| block width | one pass | per tile |
+|---|---|---|
+| 1 tile | 0.289 us | 0.289 |
+| 2 tiles | 0.367 us | 0.183 |
+| 4 tiles | 0.510 us | 0.128 |
+| 8 tiles | 0.793 us | 0.099 |
+
+A pass is **~0.217us fixed plus ~0.072us per tile**, and the fixed half is charged
+whatever the block. It is 27% of an 8-tile pass but 43% of the 4-tile vector passes that
+the online-softmax state update is made of, so per-tile averages understate what a
+narrow pass costs. Fusing narrow passes is worth more than fusing wide ones.
 
 Against that baseline, running the same one-load-one-pass-one-store structure with real math
 prices each SFPU op directly (8 tiles, one core, metal's default exact mode):
@@ -740,15 +754,34 @@ alternates broadcast and copy to make every pass change kind, and a broadcast le
 the unpacker in a mode the next SFPU op has to restore. It costs **+0.005us per pass**.
 Switching kinds is free.
 
-What passcost structurally does NOT have is DRAM traffic: it loads one block and
-everything after that is L1-resident, so its slope can never include a load. Flash
-reads K, V and mask per chunk and calls `.wait()` on each immediately. At 4 chunks that
-is 8 tiles of DRAM per chunk against an 11us shortfall, or ~1.4us per tile, which is
-the right order for an unhidden DRAM round trip. That makes prefetch the next thing to
-try -- the CBs are already double-buffered, but issuing chunk j+1's loads before
-computing chunk j is what would let the latency overlap. **Not yet measured, and stated
-as the leading candidate rather than a conclusion** -- the last three confident
-diagnoses in this file were all wrong, which is why each now comes with a number.
+### Double buffering works, and was missing where it mattered
+
+Sweeping every CB between one block of pages and two is the sanity check for that, and
+it turned up a live bug rather than confirming a working system: **flash shipped with
+its streaming CBs single-buffered.** Only m, l and o carried 2x, and that is an
+aliasing requirement -- `store()` reserves while the old value is still resident, so
+halving THOSE deadlocks -- not a pipelining choice. Giving K, V and mask a second block
+is worth a measured **5-6%** (54.3 -> 51.6us at 2 chunks, 95.0 -> 89.7us at 4) for L1
+pages and nothing else, with the error unchanged, so it is now the default.
+
+The same sweep shows no difference at all in unary or passcost, and that is the
+expected answer rather than a broken knob: 8 blocks of 1 tile through an exact recip
+comes to 11.73us either way, because the recip is ~9.5us of it and the DRAM reads are
+small enough to hide behind that whatever the reader is allowed to do. A second block
+only pays when there is latency to overlap.
+
+### Still unaccounted for
+
+Even with the fixed per-pass term above and the streaming fix, the parts do not sum to
+the whole: flash's 2-chunk shape models at ~28us against a measured 51.6. Five
+candidates are now dead with numbers attached -- SFPU math, CB plumbing, per-tile
+acquire batching, reconfiguration between passes, and DRAM buffering. The honest state
+is that roughly half of flash's time is not yet attributed to anything measured.
+
+The one switch NOT yet priced is the one flash actually makes most: PC_ALT alternates
+broadcast and copy, both SFPU-side, and found it free. It never tests matmul against
+SFPU, which is a change of compute unit and carries a `matmul_block_init`. That is the
+next measurement, and on current evidence it is the last cheap explanation left.
 
 ### The full grid was never the interesting number
 
