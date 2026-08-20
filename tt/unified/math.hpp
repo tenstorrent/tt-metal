@@ -1044,21 +1044,57 @@ struct Strategy<SFPUFusion> {
             expr::need_v<Node> <= kMaxDstTiles,
             "SFPU expression needs more DST slots than the hardware has; "
             "split it across an intermediate Storage");
-        // Who pays for a format reconfig. With ONE leaf the unpacker stays pointed at
-        // that buffer for the whole loop, so pointing it there once is enough and the
-        // common unary and single-operand cases cost nothing. With more than one leaf
-        // the leaves alternate, so every one has to re-point -- that is the price of a
-        // mixed-format tree being correct rather than quietly wrong.
+        // Who pays for a format reconfig, and how often.
+        //
+        // With ONE leaf the unpacker stays pointed at that buffer for the whole pass, so
+        // pointing it there once is enough -- the common unary and single-operand cases
+        // cost nothing and take the interleaved path below unchanged.
+        //
+        // With more than one leaf the leaves alternate, and the interleaved walk re-points
+        // the unpacker once per leaf per TILE. That was measured at 9.17us of a 51.6us
+        // flash kernel, of which the larger part is reprogramming the unpacker MOP, which
+        // metal offers no conditional form for. So a multi-leaf tree switches to the
+        // leaf-outer order (see expr.hpp): load every tile of one leaf before moving to the
+        // next, which pays the reconfiguration once per leaf per GROUP instead.
+        //
+        // The group is what DST can hold, since leaf-outer needs a slot per leaf per tile
+        // rather than need_v total. That is also what bounds when it is worth doing: a
+        // group of ONE reconfigures exactly as often as the interleaved walk, so a tree
+        // wide enough to leave no room for a second tile gains nothing and pays for the
+        // longer path -- measured at 5% slower on the five-leaf binary chain. Such trees,
+        // and any too wide to fit at all, take the interleaved walk, which is correct at
+        // any width.
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        constexpr bool kEveryTile = expr::leaf_count_v<Node> > 1;
+        constexpr uint32_t kLeaves = expr::leaf_slots_v<Node>;
+        constexpr bool kLeafOuter = kLeaves > 1 && kLeaves * 2 <= kMaxDstTiles;
         cb_reserve_back(cb_id, num_tiles);
-        for (uint32_t i = 0; i < num_tiles; ++i) {
-            ckernel::tile_regs_acquire();
-            expr::emit(node, i, kEveryTile || i == 0);
-            ckernel::tile_regs_commit();
-            ckernel::tile_regs_wait();
-            ckernel::pack_tile(expr::result_slot_v<Node>, cb_id);
-            ckernel::tile_regs_release();
+        if constexpr (kLeafOuter) {
+            constexpr uint32_t kPerAcquire = kMaxDstTiles / kLeaves;
+            for (uint32_t base = 0; base < num_tiles; base += kPerAcquire) {
+                const uint32_t remaining = num_tiles - base;
+                const uint32_t count = remaining < kPerAcquire ? remaining : kPerAcquire;
+                ckernel::tile_regs_acquire();
+                expr::load_leaves(node, base, count);
+                for (uint32_t k = 0; k < count; ++k) {
+                    expr::apply_ops(node, k * kLeaves);
+                }
+                ckernel::tile_regs_commit();
+                ckernel::tile_regs_wait();
+                for (uint32_t k = 0; k < count; ++k) {
+                    ckernel::pack_tile(k * kLeaves + expr::leaf_result_ofs_v<Node>, cb_id);
+                }
+                ckernel::tile_regs_release();
+            }
+        } else {
+            constexpr bool kEveryTile = expr::leaf_count_v<Node> > 1;
+            for (uint32_t i = 0; i < num_tiles; ++i) {
+                ckernel::tile_regs_acquire();
+                expr::emit(node, i, kEveryTile || i == 0);
+                ckernel::tile_regs_commit();
+                ckernel::tile_regs_wait();
+                ckernel::pack_tile(expr::result_slot_v<Node>, cb_id);
+                ckernel::tile_regs_release();
+            }
         }
         cb_push_back(cb_id, num_tiles);
 #else

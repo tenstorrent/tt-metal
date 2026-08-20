@@ -236,6 +236,84 @@ struct Emit<Base, Bin<Op, L, R>> {
     }
 };
 
+// ------------------------------------------------- leaf-outer emission ---
+//
+// The walk above interleaves loads and ops, which means the unpacker is re-pointed at
+// a different circular buffer between every pair of leaves -- once per leaf per TILE.
+// Measured on flash, that reconfiguration is 9.17us of a 51.6us kernel, and the
+// expensive half of it (reprogramming the unpacker MOP) has no conditional form to
+// hide behind. See unified_llama_prefill.md.
+//
+// So there is a second emission order: hoist the tile loop INSIDE the leaf walk. Load
+// every tile of leaf 0, then every tile of leaf 1, and only then apply the ops. The
+// reconfiguration count drops from leaves*tiles to leaves per group.
+//
+// The price is slots. `Emit` REUSES them -- a Bin folds into its left operand, so a
+// leaf's slot is overwritten by an op before a later leaf is read -- which is why this
+// order cannot share its allocation. Here every leaf gets its own slot, so a group of
+// G tiles needs G*leaf_count of them, against need_v for the interleaved walk.
+//
+// The allocation that makes the op phase work is: leaf j of tile k lives at
+// k*leaf_count + j, and a subtree folds into the slot of its LEFTMOST leaf. Subtrees
+// own disjoint leaf ranges, so folding left can never land on a slot another subtree
+// still needs. `J` threads that leftmost-leaf index down the walk.
+
+// Loads every tile of every leaf, leaf-outer, with ONE reconfigure per leaf.
+template <uint32_t Stride, uint32_t J, typename Node>
+struct LoadLeaves {  // leaf
+    static void run(const Node& n, uint32_t base_tile, uint32_t count) {
+        for (uint32_t k = 0; k < count; ++k) {
+            // Only the first tile of this leaf re-points the unpacker; the rest are
+            // already pointed at the right buffer. This is the whole point.
+            n.emit(k * Stride + J, base_tile + k, k == 0);
+        }
+    }
+};
+
+template <uint32_t Stride, uint32_t J, typename Op, typename C>
+struct LoadLeaves<Stride, J, Un<Op, C>> {
+    static void run(const Un<Op, C>& n, uint32_t base_tile, uint32_t count) {
+        LoadLeaves<Stride, J, C>::run(n.child, base_tile, count);
+    }
+};
+
+template <uint32_t Stride, uint32_t J, typename Op, typename L, typename R>
+struct LoadLeaves<Stride, J, Bin<Op, L, R>> {
+    static void run(const Bin<Op, L, R>& n, uint32_t base_tile, uint32_t count) {
+        LoadLeaves<Stride, J, L>::run(n.lhs, base_tile, count);
+        LoadLeaves<Stride, J + LeafCount<L>::value, R>::run(n.rhs, base_tile, count);
+    }
+};
+
+// Applies the ops for ONE tile whose leaves are already resident. `base` is the tile's
+// slot base and is a runtime value, which it can be because slots are runtime
+// arguments to emit and apply -- only the leaf OFFSETS have to be compile-time.
+template <uint32_t J, typename Node>
+struct ApplyOps {  // leaf: already loaded, nothing to do
+    static constexpr uint32_t result_ofs = J;
+    static void run(const Node&, uint32_t) {}
+};
+
+template <uint32_t J, typename Op, typename C>
+struct ApplyOps<J, Un<Op, C>> {
+    static constexpr uint32_t result_ofs = ApplyOps<J, C>::result_ofs;
+    static void run(const Un<Op, C>& n, uint32_t base) {
+        ApplyOps<J, C>::run(n.child, base);
+        Op::apply(base + result_ofs, base + result_ofs);
+    }
+};
+
+template <uint32_t J, typename Op, typename L, typename R>
+struct ApplyOps<J, Bin<Op, L, R>> {
+    static constexpr uint32_t kRightJ = J + LeafCount<L>::value;
+    static constexpr uint32_t result_ofs = ApplyOps<J, L>::result_ofs;
+    static void run(const Bin<Op, L, R>& n, uint32_t base) {
+        ApplyOps<J, L>::run(n.lhs, base);
+        ApplyOps<kRightJ, R>::run(n.rhs, base);
+        Op::apply(base + result_ofs, base + ApplyOps<kRightJ, R>::result_ofs, base + result_ofs);
+    }
+};
+
 // -------------------------------------------------------------- driver ---
 
 // DST slots this expression needs.
@@ -251,6 +329,27 @@ constexpr uint32_t result_slot_v = Emit<0, Node>::result;
 template <typename Node>
 void emit(const Node& node, uint32_t tile, bool reconfigure) {
     Emit<0, Node>::run(node, tile, reconfigure);
+}
+
+// Slots one tile of the leaf-outer layout occupies: one per leaf.
+template <typename Node>
+constexpr uint32_t leaf_slots_v = LeafCount<Node>::value;
+
+// Where a tile's result lands, relative to its slot base. The whole tree's leftmost
+// leaf is index 0, so this is 0 -- named rather than assumed.
+template <typename Node>
+constexpr uint32_t leaf_result_ofs_v = ApplyOps<0, Node>::result_ofs;
+
+// Load `count` tiles from `base_tile` on, leaf-outer. See LoadLeaves.
+template <typename Node>
+void load_leaves(const Node& node, uint32_t base_tile, uint32_t count) {
+    LoadLeaves<leaf_slots_v<Node>, 0, Node>::run(node, base_tile, count);
+}
+
+// Apply the ops for the tile whose slots start at `base`.
+template <typename Node>
+void apply_ops(const Node& node, uint32_t base) {
+    ApplyOps<0, Node>::run(node, base);
 }
 
 }  // namespace expr
