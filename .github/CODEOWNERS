@@ -75,7 +75,6 @@ tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @roseli-TT
 tests/pipeline_reorg/models_sweep_tests.yaml @mtairum @uaydonat @roseli-TT
 tests/pipeline_reorg/models_unit_tests.yaml @mtairum @uaydonat @roseli-TT
 tests/pipeline_reorg/vllm_model_tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
-tests/pipeline_reorg/ @roseli-TT @tdowdallTT
 tests/pipeline_reorg/ttsim-skip-list.yaml @roseli-TT @tdowdallTT @mcraigheadTT @tenstorrent-github-bot
 tests/scripts/ @tenstorrent/metalium-developers-infra
 tests/scripts/quasar @kstevensTT @fvranicTT @tenstorrent/metalium-developers-infra
