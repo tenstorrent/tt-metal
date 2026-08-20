@@ -262,14 +262,19 @@ struct SubOp : FpuBinary<FpuOp::Sub> {
     }
 };
 
-// The one op where the FPU is not a free win. Measured on test_unified_binary, max
-// relative error 0.01023 on the FPU against 0.00380 on the SFPU -- 2.7x worse, and past
-// the 0.01 that test gates at -- for 0.33us/tile against 1.12us, 3.4x faster. add and
-// sub have no such tension: the FPU is as accurate or better AND faster, so they need
-// no knob. This one is a real accuracy-for-speed trade, so it is opt-in rather than
-// decided here: -DTT_UNIFIED_FPU_MUL takes it.
+// The one op where the FPU is not a free win, and the trade is taken deliberately.
+// Measured: max relative error 0.01023 on the FPU against 0.00380 on the SFPU, 2.7x
+// worse, for 0.33us/tile against 1.12us, 3.4x faster. add and sub have no such tension
+// -- the FPU is as accurate or better AND faster -- so only this one is a choice.
+//
+// It defaults to the FPU because the cost does not propagate: flash's error is unchanged
+// to four decimals either way, since that kernel's error comes from approx exp and the
+// bfloat16 chain rather than from one multiply, while the time is worth 12-16% of it.
+// test_unified_binary pins BOTH numbers, so the difference is a checked fact rather than
+// a remark, and -DTT_UNIFIED_SFPU_MUL takes the accurate path back for a kernel that
+// needs it.
 struct MulOp : FpuBinary<FpuOp::Mul> {
-#if !defined(TT_UNIFIED_FPU_MUL)
+#if defined(TT_UNIFIED_SFPU_MUL)
     static constexpr bool fpu_capable = false;
 #endif
     static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
