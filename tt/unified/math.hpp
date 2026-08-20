@@ -152,6 +152,22 @@ struct MulOp {
     }
 };
 
+// An elementwise max, which the online softmax of a flash attention needs to fold a new
+// chunk's row maxima into the running ones. Not an operator: `max` is not spelled with
+// punctuation, so it gets a named function below.
+struct MaxOp {
+    static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        ckernel::binary_max_tile_init();
+        ckernel::binary_max_tile(lhs, rhs, out);
+#else
+        (void)lhs;
+        (void)rhs;
+        (void)out;
+#endif
+    }
+};
+
 struct DivOp {
     static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
@@ -421,6 +437,13 @@ using bcast_vec_shape = reduce_shape<SB, A>;
 // reject an operand a hardware path cannot take.
 template <typename T>
 struct always_false : std::false_type {};
+
+struct FPUFusion;
+
+// Whether a node's KIND is the FPU one. Keyed on the kind so future FPU ops inherit every
+// rule written against it.
+template <typename T>
+struct is_fpu_fusion : std::is_same<expr::kind_of_t<T>, FPUFusion> {};
 
 // --- Broadcast ---
 //
@@ -736,6 +759,20 @@ auto operator/(const A& a, const B& b) {
     return expr::Bin<DivOp, LN, RN>{{}, as_node(a), as_node(b)};
 }
 
+// The one binary spelled as a function rather than an operator. Same SFINAE as the
+// operators, and the same reason for rejecting an FPU fusion: it owns all of DST, so there
+// is nowhere to materialise the other side.
+template <typename A, typename B, typename = std::enable_if_t<is_operand<A>::value && is_operand<B>::value>>
+auto max_(const A& a, const B& b) {
+    static_assert(
+        !is_fpu_fusion<A>::value && !is_fpu_fusion<B>::value,
+        "an FPU fusion consumes all of DST, so it cannot be an operand of max_; store it to an "
+        "intermediate Storage first");
+    using LN = std::decay_t<decltype(as_node(a))>;
+    using RN = std::decay_t<decltype(as_node(b))>;
+    return expr::Bin<MaxOp, LN, RN>{{}, as_node(a), as_node(b)};
+}
+
 // relu() on a tree wraps it; relu() on an FPU node folds into that node's
 // epilogue chain instead. This per-kind dispatch is what a CRTP `Derived`
 // parameter would otherwise be threading through every combinator.
@@ -879,9 +916,6 @@ auto matmul(TileSource<SA> a, TileSource<SB> b) {
 // An FPU fusion cannot be an operand of a binary op: it already owns every DST
 // slot, so there is nowhere to materialise the other side. Keyed on the *kind*,
 // so future FPU ops inherit the rule without another overload.
-
-template <typename T>
-struct is_fpu_fusion : std::is_same<expr::kind_of_t<T>, FPUFusion> {};
 
 // The message lives in one place so the four guards below cannot drift.
 template <typename A>
