@@ -324,9 +324,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerLifecycleToleratesImba
     };
     auto tracked = distributed::MeshBuffer::create(replicated_config, global_config, mesh_device.get());
     if (trace_allocation_tracking_enabled()) {
-        EXPECT_TRUE(
-            mesh_device->impl().get_unsafe_tracked_ids(manager_a, shared_trace_id)
-                .contains(tracked->get_backing_buffer()->unique_id()));
+        EXPECT_TRUE(mesh_device->impl()
+                        .get_unsafe_tracked_ids(manager_a, shared_trace_id)
+                        .contains(tracked->get_backing_buffer()->unique_id()));
     }
 
     distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), shared_trace_id);
