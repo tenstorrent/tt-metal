@@ -482,16 +482,10 @@ def chunked_prefill_sdpa(
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
     )
-    # HiFi4 + FP32 dest-acc: restore the softmax-reduce precision #47311 removed.
-    # Matches the non-chunked prefill SDPA so long-context (>32768) prefill keeps
-    # the same accumulation precision as the short-seq path.
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        tt_q.device().arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
+    # Shared prefill SDPA fidelity/dest-acc policy — see
+    # prefill_sdpa_compute_kernel_config for the #47311 / #38306 tradeoff and the
+    # GEMMA4_PREFILL_SDPA_FIDELITY knob.
+    compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device())
 
     # Page table row for this user: [1, num_pages], int32, ROW_MAJOR.
     num_pages = page_table.shape[-1]
@@ -600,15 +594,9 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
     # older key is harmless — sliding_window_size masks it out.
     hist = ((sliding_window + 31) // 32) * 32
     stride = PREFILL_SLIDING_CHUNK_SIZE
-    # HiFi4 + FP32 dest-acc: restore the softmax-reduce precision #47311 removed,
-    # matching the non-chunked prefill SDPA on the long-context (>32768) path.
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        tt_q.device().arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
+    # Shared prefill SDPA fidelity/dest-acc policy — see
+    # prefill_sdpa_compute_kernel_config.
+    compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device())
 
     outs = []
     start = 0
@@ -800,6 +788,61 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
         tensor.deallocate(True)
         tensor = interleaved
     return ccl_allreduce(tensor, mesh_config, ccl_manager)
+
+
+def prefill_sdpa_compute_kernel_config(device):
+    """Compute-kernel config shared by every prefill SDPA call site.
+
+    All prefill SDPA paths pin fp32 dest-accumulation to restore the softmax
+    reduce's FP32 accumulation that #47311 removed. The *fidelity* that pairs with
+    it is a per-arch decision, which is why this is one function and an env knob
+    rather than five inline literals:
+
+      * ``hifi3`` (**default**) — HiFi3 + fp32 dest-acc, the runtime's own
+        recommendation for Wormhole under #38306. Measured *better* than the HiFi4
+        default, not merely safer; see the numbers below.
+      * ``hifi4`` — HiFi4 + fp32 dest-acc, the previous default. On **Wormhole B0
+        this is the combination #38306 covers**. SDPA does not call
+        ``verify_numerical_configuration`` (only matmul / reduction / softmax do),
+        so it never warned, which is why the exposure here went unnoticed while the
+        decode ``lm_head`` matmul was busy printing the warning for it.
+      * ``hifi4_nodest`` — HiFi4 without dest-acc: the other way out of #38306, at
+        the cost of the reduce precision #47311 removed. Also better than the old
+        default, but worse than ``hifi3``.
+
+    Why HiFi3 is the default. Measured on the per-layer PCC ladder
+    against the HF reference (31B, 1x8, len512 prefill), which is bit-deterministic
+    across repeats — three baseline runs returned 0.017292
+    identically, so these differences are real and not run-to-run noise:
+
+        hifi4 (old default)    total PCC lost 0.017292
+        hifi3                  total PCC lost 0.015299   (-11.5%)
+        hifi4_nodest           total PCC lost 0.015868   (-8.2%)
+
+    HiFi3 is also never the more expensive fidelity. Set
+    ``GEMMA4_PREFILL_SDPA_FIDELITY=hifi4`` to restore the previous default.
+
+    Do not score further A/Bs of this knob on end-to-end token counts: at the
+    sample sizes those cases run, a token rate cannot separate two fidelity
+    settings. Use the ladder, or the teacher-forcing decision-distance block.
+
+    Blackhole is unaffected by #38306; the default is the same there, since HiFi3
+    measured better on accuracy grounds independently of the bug.
+    """
+    mode = os.environ.get("GEMMA4_PREFILL_SDPA_FIDELITY", "hifi3").lower()
+    if mode == "hifi4":
+        fidelity, dest_acc = ttnn.MathFidelity.HiFi4, True
+    elif mode == "hifi4_nodest":
+        fidelity, dest_acc = ttnn.MathFidelity.HiFi4, False
+    else:
+        fidelity, dest_acc = ttnn.MathFidelity.HiFi3, True
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=dest_acc,
+        packer_l1_acc=False,
+    )
 
 
 def effective_block_size(k_cache, head_dim: int, num_kv_heads: int) -> int:

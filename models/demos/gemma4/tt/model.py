@@ -805,6 +805,7 @@ class Gemma4Model:
         chunk_page_table=None,
         allow_sharded_decode_logits=True,
         allow_sharded_prefill_logits=False,
+        layer_probe=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -828,6 +829,18 @@ class Gemma4Model:
             pli_device_tensors: optional list of pre-computed PLI device tensors (trace mode)
             position_idx_cache: optional [batch] int32 tensor for KV cache update (when position_idx is uint32)
             pli_combined: optional [1,1,n_layers,pli_size] device tensor of pre-computed PLI (decode)
+            layer_probe: optional ``fn(layer_idx, hidden_states)`` called with each
+                decoder layer's output, for building a per-layer PCC ladder against
+                HF, layer by layer. Also read from the
+                instance attribute ``self.layer_probe`` when this kwarg is not
+                given, which is how callers going through ``Gemma4Generator`` attach
+                one — the generator does not forward it. The callback gets the live
+                device tensor and must only read it; the graph keeps using it, and any
+                snapshot it takes has to land in DRAM (holding a sharded L1 copy
+                starves later programs' circular buffers). UNTRACED RUNS ONLY: a probe
+                that copies to host inside trace capture would bake a host readback
+                into the captured graph. ``None`` (the default) costs one
+                ``is not None`` test per layer and changes nothing.
             page_tables_per_layer: optional list of per-layer page tables, one
                 entry per decoder layer. When set, each layer's attention
                 receives ``page_tables_per_layer[i]`` instead of ``page_table``.
@@ -902,6 +915,12 @@ class Gemma4Model:
                 cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_2d, layout=ttnn.TILE_LAYOUT))
                 sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
                 decode_rope_presliced[lt] = (cos_pos, sin_pos)
+
+        # Explicit argument wins; otherwise fall back to an instance attribute, so
+        # callers that reach the model through Gemma4Generator (which does not
+        # forward this kwarg) can still attach a probe by setting
+        # ``generator.model[0].layer_probe``.
+        probe = layer_probe if layer_probe is not None else getattr(self, "layer_probe", None)
 
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
@@ -1009,6 +1028,9 @@ class Gemma4Model:
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
             )
+
+            if probe is not None:
+                probe(i, hidden_states)
 
             # For KV source layers during prefill, capture the K/V from the attention
             # The K/V are kept alive on device (not deallocated) when keep_kv=True
@@ -1915,6 +1937,7 @@ class Gemma4Model:
         pli_device_tensors=None,
         page_tables_per_layer=None,
         allow_sharded_prefill_logits=False,
+        layer_probe=None,
         **kwargs,
     ):
         """Prefill forward — Generator-compatible signature.
@@ -1967,6 +1990,7 @@ class Gemma4Model:
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
             allow_sharded_prefill_logits=allow_sharded_prefill_logits,
+            layer_probe=layer_probe,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):
@@ -2274,6 +2298,7 @@ class Gemma4Model:
         on_device_logits=False,
         pli_combined=None,
         page_tables_per_layer=None,
+        layer_probe=None,
     ):
         """Decode forward — matches tt_transformers Generator interface.
 
@@ -2348,6 +2373,7 @@ class Gemma4Model:
             # force the all-gather so argmax sees the full 262K vocab and not
             # device 0's 32K shard.
             allow_sharded_decode_logits=on_device_logits,
+            layer_probe=layer_probe,
         )
 
         if on_device_logits:

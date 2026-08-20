@@ -28,6 +28,7 @@ from .operations import (
     interleave_qkv_if_sharded,
     o_proj_input_memcfg,
     prefill_sdpa_act_memcfg,
+    prefill_sdpa_compute_kernel_config,
     prefill_sdpa_program_config,
     split_qkv_heads_prefill,
 )
@@ -555,13 +556,7 @@ def _prefill_forward_single(
         # rows [hist, hist+seq_len) are query positions [chunk_offset,
         # chunk_offset+seq_len) with their full window covered. The current
         # chunk's last ``sliding_window`` K/V become next chunk's tail.
-        sdpa_ckc = ttnn.init_device_compute_kernel_config(
-            tt_q.device().arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        sdpa_ckc = prefill_sdpa_compute_kernel_config(tt_q.device())
         hist = ((sliding_window + 31) // 32) * 32
         use_persistent_tail = isinstance(chunk_start_idx, ttnn.Tensor)
         if sliding_tail_in is not None:
@@ -722,16 +717,10 @@ def _prefill_forward_single(
             f"Non-chunked SDPA silently returns garbage above this length."
         )
     else:
-        # HiFi4 + FP32 dest-acc SDPA: restore the softmax-reduce precision #47311 removed
-        # (it dropped the reduce's forced-FP32 accumulation). fp32_dest_acc is safe on the
-        # prefill SDPA op (unlike the decode op, where it halves dest for head_dim=512).
-        sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            tt_q.device().arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        # fp32 dest-acc is safe on the prefill SDPA op (unlike the decode op, where
+        # it halves dest for head_dim=512). Fidelity policy and the #38306 caveat
+        # live in prefill_sdpa_compute_kernel_config.
+        sdpa_compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device())
         tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
             tt_q,
             tt_k,
@@ -942,15 +931,9 @@ def prefill_forward(
     tt_q = _ensure_dram_interleaved(tt_q)
     tt_k = _ensure_dram_interleaved(tt_k)
     tt_v = _ensure_dram_interleaved(tt_v)
-    # HiFi4 + FP32 dest-acc SDPA: restore softmax-reduce precision lost after #47311
-    # (forced-FP32 reduce accumulation removed).
-    sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        tt_q.device().arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
+    # Fidelity policy and the #38306 caveat live in
+    # prefill_sdpa_compute_kernel_config.
+    sdpa_compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device())
     tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
         tt_q,
         tt_k,

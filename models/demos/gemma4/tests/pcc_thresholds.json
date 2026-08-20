@@ -59,7 +59,9 @@
       "_comment_via_harness_full": "Same #47311 SDPA-reduce precision gap as E2B (pcc_thresholds ~0.986); measured ~0.985 on 12B/P150x8 full-attention via_harness. Tier-1 unit test — gate below measured.",
       "test_attention_paged_decode_via_harness[blackhole-full-1x8]": 0.984,
       "test_attention_paged_decode_via_harness[blackhole-sliding-1x8]": 0.98,
-      "test_sampling_log_probs_pcc[blackhole-1x8]": 0.999
+      "test_sampling_log_probs_pcc[blackhole-1x8]": 0.999,
+      "_comment_teacher_forcing_e2e": "Same default case as 31B (prefill_512-max_new_tokens_500). Floor 0.55 mirrors the 31B e2e gate so this node does not fall through to default 0.99, and inherits its staleness — see the 31B note. Measured on 12B at this length, WH T3K 1x8: worst step 0.741, mean 0.959 (/tmp/gemma4_tf_12b_p512_n500.log), so 12B has ~0.19 of headroom over this floor and 31B has none. Remeasure before tightening.",
+      "test_e2e_logits_pcc[wormhole_b0-prefill_512-max_new_tokens_500-1x8]": 0.55
     },
     "1x4": {
       "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.98,
@@ -180,7 +182,7 @@
       "test_lm_head_bfp8_weight_decode_batch32[blackhole-1x8]": 0.99,
       "test_sampling_log_probs_pcc[wormhole_b0-1x8]": 0.999,
       "test_sampling_log_probs_pcc[blackhole-1x8]": 0.999,
-      "_comment_teacher_forcing_e2e": "Default case is prefill_512-max_new_tokens_500 (tt-transformers TokenAccuracy lengths). Floor 0.55 was measured on 31B p128_n128 (worst step 0.5628); remeasure at the default lengths before tightening. test_full_model 0.98 is a ~6-token prompt, not this e2e path.",
+      "_comment_teacher_forcing_e2e": "STALE — this key names prefill_512-max_new_tokens_500 but 0.55 was measured at p128_n128 (worst step 0.5628). Measured at the key's own length on WH T3K 1x8: worst step 0.423845, mean 0.939216 (/tmp/gemma4_tf_31b_p512_n500.log), so this gate is a latent failure that has not been selected in a run yet. Rebase from a p512/n500 measurement rather than at the p128 value; do not lower it to whatever the next run happens to produce. Note also that a per-step full-vocab PCC is a weak gate here: 262k entries under tanh final_logit_softcapping(30.0) means row variance, not device error, dominates the number — prefer the KL / max|dlogit| block that test_teacher_forcing_e2e prints. test_full_model 0.98 is a ~6-token prompt, not this e2e path.",
       "test_e2e_logits_pcc[wormhole_b0-prefill_512-max_new_tokens_500-1x8]": 0.55
     }
   }
