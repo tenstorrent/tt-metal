@@ -173,3 +173,10 @@ tray_to_pcie_device_mapping.yaml
 # model bringup manifests and tensor artifacts
 bringup/artifacts
 model_tracer/traced_operations
+
+# tt-dm-codegen generator artifacts. The codegen builders symlink their kernel
+# templates in here so tt-metal's JIT can resolve them under TT_METAL_HOME; the
+# targets are absolute paths outside the repo, so committing them breaks
+# check-symlinks-valid and validate-metalium-includes everywhere else.
+**/codegen_templates/
+**/*.ttdm.lock
