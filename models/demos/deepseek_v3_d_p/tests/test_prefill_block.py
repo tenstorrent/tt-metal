@@ -55,6 +55,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_5K_PATH,
     PROMPT_25K_PATH,
     create_hf_model,
+    derive_mla_kvpe,
     extract_layer_state_dict,
     get_4d_causal_mask,
     load_and_compute_layer_by_layer,
@@ -297,6 +298,22 @@ def run_model(
             logger.info(f"Torch reference output shape: {torch_output.shape}")
             if ref_cache is not None:
                 ref_kvpe = hf_cache_layer_kv(ref_cache, layer_idx)[0]
+                # The vendored MLAReference caches the COMPRESSED MLA line -- [b, 1, seq,
+                # kv_lora_rank + qk_rope_head_dim] -- which is exactly what the device stores. A
+                # stock transformers attention (e.g. Mistral4Attention) caches EXPANDED per-head
+                # keys instead, so the shapes do not correspond at all and comp_pcc dies on a size
+                # mismatch. Rebuild the compressed line from the layer's own modules in that case;
+                # it is the same two ops the reference performs, not a re-implementation of
+                # attention.
+                expected_last = config.kv_lora_rank + config.qk_rope_head_dim
+                if ref_kvpe.shape[-1] != expected_last:
+                    logger.info(
+                        f"Reference caches expanded KV (last dim {ref_kvpe.shape[-1]} != {expected_last}); "
+                        "deriving the compressed MLA KVPE line from the layer instead"
+                    )
+                    ref_kvpe = derive_mla_kvpe(
+                        hf_model.layers[layer_idx], torch_input, layer_kwargs.get("position_embeddings"), config
+                    )
                 logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
             profiler.end("torch_reference")
 
