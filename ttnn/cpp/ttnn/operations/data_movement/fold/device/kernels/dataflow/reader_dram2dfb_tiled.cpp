@@ -10,13 +10,8 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
-void kernel_main() {
-    constexpr uint32_t tiles_per_channel_dim = get_arg(args::tiles_per_channel_dim);
-    constexpr uint32_t tiles_per_width_dim = get_arg(args::tiles_per_width_dim);
-
-    uint32_t start_block_id = get_arg(args::start_block_id);
-    uint32_t num_blocks = get_arg(args::num_blocks);
-
+template <uint32_t tiles_per_channel_dim, uint32_t tiles_per_width_dim>
+TT_KERNEL void reader(uint32_t start_block_id, uint32_t num_blocks) {
     // Initialize interleaved address generator for DRAM access
     const auto s = TensorAccessor(tensor::src);
 
