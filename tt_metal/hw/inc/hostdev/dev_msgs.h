@@ -70,6 +70,8 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
 #elif defined(COMPILE_FOR_DRISC)
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(DramProcessorTypes::COUNT);
+#elif defined(COMPILE_FOR_DISPATCH_ENGINE)
+constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(DispatchEngineProcessorTypes::COUNT);
 #else
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif

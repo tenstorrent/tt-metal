@@ -13,7 +13,6 @@
 
 #include "dropout_device_operation_types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::experimental::prim {
