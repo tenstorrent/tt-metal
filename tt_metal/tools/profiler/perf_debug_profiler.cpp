@@ -483,9 +483,12 @@ uint32_t perf_debug_dram_region_bytes_per_risc() {
     return static_cast<uint32_t>((want_bytes + 99) / 100);
 }
 
-// TT_METAL_PERF_DEBUG_NO_TRACY=1: drain and decode EXACTLY as normal (markers and stall zones are still
-// counted) but skip the Tracy push. Isolates the cost of the sink from the cost of read+decode -- if the
-// relay stops host-waiting with this on, the Tracy push is provably the bottleneck.
+// TT_METAL_STREAMING_PROFILER_TRACY=1: attach the Tracy sink. OFF BY DEFAULT -- the streaming profiler's
+// primary consumers are the registered ones (register_consumer / the ops CSV); Tracy is one more consumer
+// and an expensive one, so it is opt-in rather than something every capture pays for. (This inverts the
+// old TT_METAL_PERF_DEBUG_NO_TRACY.) Drain and decode run EXACTLY the same either way, which also makes
+// the off state the sink-cost ablation: if the relay stops host-waiting with Tracy off, the Tracy push is
+// provably the bottleneck.
 // TT_METAL_PERF_DEBUG_FILL_PCT: target span fill for the drainer's pacing controller, as a percent of a
 // span's live capacity (kNumRisc * ring words). 0 disables the loop and leaves the fixed
 // TT_METAL_PERF_DEBUG_DRISC_GAP behaviour.
@@ -529,12 +532,12 @@ uint32_t gap_max_cycles() {
     return v;
 }
 
-bool tracy_push_disabled() {
-    static const bool off = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_NO_TRACY");
+bool tracy_push_enabled() {
+    static const bool on = [] {
+        const char* s = std::getenv("TT_METAL_STREAMING_PROFILER_TRACY");
         return s != nullptr && *s != '\0' && *s != '0';
     }();
-    return off;
+    return on;
 }
 
 // ---- Host<->device clock sync -------------------------------------------------------------------------
@@ -932,7 +935,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
             }
         };
         receiver_ = std::make_unique<perf_debug::PerfDebugReceiver>(std::move(rcfg), std::move(rdevs));
-        if (!tracy_push_disabled()) {
+        if (tracy_push_enabled()) {
             tracy_consumer_ = std::make_unique<perf_debug::PerfDebugTracyConsumer>(tracy_.get());
             receiver_->add_consumer(
                 "tracy", [c = tracy_consumer_.get()](const perf_debug::PerfDebugRecordBatch& b) { (*c)(b); });
@@ -943,9 +946,11 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     if (!devices_.empty()) {
         log_info(
             tt::LogMetal,
-            "[perf-debug profiler] active on {} device(s): DRISC drain -> {} MiB D2H socket -> Tracy",
+            "[perf-debug profiler] active on {} device(s): DRISC drain -> {} MiB D2H socket -> {}",
             devices_.size(),
-            (static_cast<uint64_t>(kHRingWords) * 4) / (1024 * 1024));
+            (static_cast<uint64_t>(kHRingWords) * 4) / (1024 * 1024),
+            tracy_push_enabled() ? "registered consumers + Tracy"
+                                 : "registered consumers (Tracy off; opt in with TT_METAL_STREAMING_PROFILER_TRACY=1)");
     }
 }
 

@@ -2981,11 +2981,11 @@ void DeviceProfiler::pollDebugDumpResults(
 // path) rewinds the ring TAIL and breaks the continuous drain (~30x duplicate zones).
 //
 // Two such consumers exist and both are affected identically, because the hazard is the rewind, not who
-// is reading: TT_METAL_PERF_DEBUG_PROFILER (the DRISC drainer) and TT_METAL_DRISC_PROFILER (the
+// is reading: TT_METAL_STREAMING_PROFILER (the DRISC drainer) and TT_METAL_DRISC_PROFILER (the
 // DRISC drainer). Read once.
 static bool external_ring_drainer_active() {
     static const bool active = [] {
-        for (const char* var : {"TT_METAL_PERF_DEBUG_PROFILER", "TT_METAL_DRISC_PROFILER"}) {
+        for (const char* var : {"TT_METAL_STREAMING_PROFILER", "TT_METAL_DRISC_PROFILER"}) {
             const char* s = std::getenv(var);
             if (s != nullptr && *s != '\0' && *s != '0') {
                 return true;

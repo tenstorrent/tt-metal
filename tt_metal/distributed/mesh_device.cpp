@@ -1528,14 +1528,14 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
     // run), and its shutdown interleaves with dispatch teardown.
     // NOTE: TT_METAL_NO_RT_PROFILER is read NOWHERE in the tree -- it never disabled anything. This gate
     // is the actual off switch, keyed on the same variable that turns the drain path on.
-    const char* pd = std::getenv("TT_METAL_PERF_DEBUG_PROFILER");
+    const char* pd = std::getenv("TT_METAL_STREAMING_PROFILER");
     if (pd != nullptr && *pd != '\0' && *pd != '0') {
         log_info(tt::LogMetal, "[perf-debug profiler] enabled -- legacy realtime profiler is disabled for this run.");
         return;
     }
     // Same exclusion, for the DRISC drainer. It is the successor to the drainer consumer and reads the very
     // same SPSC rings, so it cannot share them with RealtimeProfilerManager either. This needs its own
-    // variable rather than reusing TT_METAL_PERF_DEBUG_PROFILER, because that one does double duty: it
+    // variable rather than reusing TT_METAL_STREAMING_PROFILER, because that one does double duty: it
     // also BOOTS the drainer (init_perf_debug_profiler), which would just swap one competing consumer for
     // another. Producers on, no built-in consumer -- the drainer is supplied externally.
     const char* dd = std::getenv("TT_METAL_DRISC_PROFILER");
@@ -1552,7 +1552,9 @@ void MeshDeviceImpl::init_perf_debug_profiler(const std::shared_ptr<MeshDevice>&
     }
     // Opt-in: the drainer device-zone profiler boots the device-side drainer and spawns host drain threads.
     // Off by default so it never contends with a standalone drainer bring-up or the standard profiler.
-    const char* s = std::getenv("TT_METAL_PERF_DEBUG_PROFILER");
+    // TT_METAL_STREAMING_PROFILER also implies TT_METAL_DEVICE_PROFILER (rtoptions), so this one switch
+    // arms the producers too.
+    const char* s = std::getenv("TT_METAL_STREAMING_PROFILER");
     if (s == nullptr || *s == '\0' || *s == '0') {
         return;
     }
