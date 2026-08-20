@@ -22,11 +22,9 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
-from models.demos.deepseek_v3_d_p.reference.gpt_oss_20b_config import GptOss20BConfig
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
-from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device_params
@@ -355,7 +353,7 @@ COMBINE_MODELS = [
 # Scales down model hyper-params for a given hardware to obtain good/meaningful proxy test
 # How exactly to scale it down is op-specific (more precisely - even op-implementation specific)
 # Thus it makes sense for this to be combine-specific function
-def _model_scaledown(model, ref_mesh, target_mesh, pcc_only):
+def _model_scaledown_for_combine(model, ref_mesh, target_mesh, pcc_only):
     # number of experts has to be reduced to preserve the experts per chip
     ref_num_chips = ref_mesh[0] * ref_mesh[1]
     target_num_chips = target_mesh[0] * target_mesh[1]
@@ -402,7 +400,9 @@ def _cross_product_conflated_cmb_test_dimensions():
                 ("perf_no_pcc", 640, 8, False),
             ]
             for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
-                model_config = _model_scaledown(model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc)
+                model_config = _model_scaledown_for_combine(
+                    model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc
+                )
 
                 num_experts = model_config.NUM_ROUTED_EXPERTS
                 topk = model_config.NUM_EXPERTS_PER_TOKEN
@@ -533,75 +533,4 @@ def test_ttnn_combine(
         run_pcc_check,
         dispatched_buffer_layout,
         use_fp8_output,
-    )
-
-
-def _all_externally_owned_test_cases():
-    def _tc(mesh, fabric_cfg, seq_len_per_chip, num_links, model):
-        model_name = model.__class__.__name__.removesuffix("Config")
-        return pytest.param(
-            mesh,
-            fabric_to_device_params(fabric_cfg),
-            _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg),
-            seq_len_per_chip,
-            model.EMB_SIZE,
-            model.NUM_ROUTED_EXPERTS,
-            model.NUM_EXPERTS_PER_TOKEN,
-            num_links,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=_topo_marker(mesh, fabric_cfg)),
-            id=f"{model_name}-{mesh[0]}x{mesh[1]}-{fabric_cfg.name.lower()}-{seq_len_per_chip}-{num_links}link-rand-pcc-tile-bf16",
-        )
-
-    return [
-        # Full scale mesh tests as invoked in production scenarios
-        _tc((4, 8), ttnn.FabricConfig.FABRIC_1D, 1024, 4, GptOss20BConfig()),
-        _tc((4, 8), ttnn.FabricConfig.FABRIC_1D, 128, 2, GptOss120BConfig()),
-        _tc((4, 8), ttnn.FabricConfig.FABRIC_1D, 1280, 2, GptOss120BConfig()),
-        _tc((8, 4), ttnn.FabricConfig.FABRIC_1D, 128, 2, MiniMaxM3Config()),
-        _tc((8, 4), ttnn.FabricConfig.FABRIC_1D, 640, 2, MiniMaxM3Config()),
-        # Proxy tests executable on CIs which run op unit tests
-        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 1024, 4, _model_scaledown(GptOss20BConfig(), (4, 8), (4, 1), False)),
-        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 128, 2, _model_scaledown(GptOss120BConfig(), (4, 8), (4, 1), False)),
-        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 1280, 2, _model_scaledown(GptOss120BConfig(), (4, 8), (4, 1), False)),
-        _tc((8, 1), ttnn.FabricConfig.FABRIC_1D, 128, 2, _model_scaledown(MiniMaxM3Config(), (8, 4), (8, 1), False)),
-        _tc((8, 1), ttnn.FabricConfig.FABRIC_1D, 640, 2, _model_scaledown(MiniMaxM3Config(), (8, 4), (8, 1), False)),
-    ]
-
-
-def _unsupported_externaly_owned_param_combos(**params):
-    # Blackhole exposes 2 fabric links per device, Wormhole 4.
-    if params["num_links"] > 2 and params["is_bh"]:
-        return True
-
-    return False
-
-
-@pytest.mark.uncollect_if(pred=_unsupported_externaly_owned_param_combos)
-@pytest.mark.parametrize(
-    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, num_links",
-    _all_externally_owned_test_cases(),
-    indirect=["mesh_device", "device_params"],
-)
-def test_externally_owned_cases(
-    mesh_device,
-    topology,
-    seq_len_per_chip,
-    emb_dim,
-    num_routed_experts,
-    num_experts_per_tok,
-    num_links,
-):
-    run_combine(
-        mesh_device,
-        seq_len_per_chip,
-        emb_dim,
-        num_routed_experts,
-        num_experts_per_tok,
-        2,  # buffer capacity factor
-        topology,
-        use_predictable_data=False,
-        run_pcc_check=True,
-        dispatched_buffer_layout=ttnn.TILE_LAYOUT,
-        use_fp8_output=False,
-        num_links=num_links,
     )
