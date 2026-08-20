@@ -136,7 +136,7 @@ inline volatile uint32_t tt_l1_ptr* control() { return reinterpret_cast<volatile
 // Quasar core type is running. Independent of FD_BENCH_COUNT_INSTRET; both accumulate in whatever unit
 // bench_cycle() currently returns.
 #ifndef FD_BENCH_PF_FETCH_WAYPOINTS
-#define FD_BENCH_PF_FETCH_WAYPOINTS 1
+#define FD_BENCH_PF_FETCH_WAYPOINTS 0
 #endif
 
 #if FD_BENCH_PF_CHUNK_WAYPOINTS && !FD_BENCH_PF_TIMELINE

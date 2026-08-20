@@ -1005,7 +1005,10 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
 #if FD_BENCH_PF_TIMELINE
     fd_copy_bench::pf_mark(fd_copy_bench::kPfHeaderEnter, fd_copy_bench::bench_cycle());
 #endif
-    volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
+    // Aligned overlay instead of the packed struct -- same bytes, but word loads rather than
+    // byte-at-a-time reassembly. See cq_commands.hpp.
+    ASSERT((cmd_ptr & 7) == 0);  // the overlay's alignment requirement; see cq_commands.hpp
+    volatile CQPrefetchRelayInlineCmdAligned tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchRelayInlineCmdAligned>(cmd_ptr);
 
     uint32_t length = load_aligned<uint32_t>(&cmd->relay_inline.length);
     uintptr_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
