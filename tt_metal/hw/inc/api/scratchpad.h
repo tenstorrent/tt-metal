@@ -9,8 +9,44 @@
 
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
-#include "api/scratchpad_binding_token.h"
+#include "api/llk_operand_members.h"
 #include "experimental/kernel_args.h"
+
+template <typename T>
+class Scratchpad;
+
+// Opaque handle for a Program-scope scratchpad binding (declared in kernel_bindings_generated.h).
+// The user will never directly interact with this type.
+//
+// The user's host code declares an accessor_name when binding a scratchpad to a kernel.
+// The user then uses that accessor_name to construct a Scratchpad in the kernel code.
+//
+// Usage example:
+//   // (Host code declares "my_scratchpad_name" as the scratchpad accessor name for this kernel.)
+//   // In the kernel code:
+//   Scratchpad<int32_t> my_pad(scratch::my_scratchpad_name);
+//
+// Here my_scratchpad_name is a constexpr ScratchpadBindingToken, auto-included in
+// kernel_bindings_generated.h.
+class ScratchpadBindingToken {
+public:
+    explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
+        crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
+
+    // A scratchpad used as an LLK operand additionally bakes its format + face grid for a future
+    // to_llk_mem_descriptor(ScratchpadBindingToken). That converter was dropped in the rebase onto main;
+    // see llk_operand.h. Plain working memory uses the two-arg form.
+    constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes, LlkOperandMembers llk) noexcept :
+        crta_offset_(crta_offset), size_in_bytes_(size_in_bytes), llk_(llk) {}
+
+private:
+    template <typename T>
+    friend class Scratchpad;
+
+    uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
+    uint32_t size_in_bytes_;  // static per-node size
+    LlkOperandMembers llk_{};
+};
 
 /**
  * @brief Kernel-side typed span over a Program-scope scratchpad.
