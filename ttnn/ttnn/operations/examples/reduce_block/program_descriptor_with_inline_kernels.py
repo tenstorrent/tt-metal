@@ -257,10 +257,10 @@ void kernel_main() {
 
 
 # =============================================================================
-# Helper kernel — the reduce library over the general (Ht, Wt, NC) block, AVG pool. The `algo` CT arg
+# Helper kernel — the reduce library over the general (Ht, Wt, NC) block, producing a mean. The `algo` CT arg
 # selects the library datapath: 0 = ReduceTile (Auto default, FPU matmul-with-ones), 1 = AccumulateViaAdd.
-# `policy` selects one of the four ReduceInputPolicy values for BOTH datapaths; `avg_direct` makes the
-# AccumulateViaAdd path use reduce<AVG> (geometry 1/N) instead of reduce_mean (explicit N).
+# `policy` selects one of the four ReduceInputPolicy values for BOTH datapaths. AccumulateViaAdd is SUM-only,
+# so its mean uses reduce_mean with an explicit caller-supplied N.
 #
 # The per-iter reduce dispatch is hoisted into a TEMPLATE (do_reduce_block) so `if constexpr (algo)` GENUINELY
 # discards the dead branch. kernel_main is not a template, so an `if constexpr (algo)` there would still
@@ -268,8 +268,7 @@ void kernel_main() {
 # AccumulateViaAdd branch with e.g. POLICY=WaitUpfrontNoPop or dim=col+stream and trip the fast-path
 # static_asserts, breaking the reduce_tile kernel compile. In a template, the discarded branch is not
 # instantiated, so each build compiles only its own algo's reduce().
-# CT args: [Ht, Wt, NC, dim, kernel_iters, out_tiles, algo, partial_elems, policy_id, recfg, row_stride,
-#           n_reduced, avg_direct]
+# CT args: [Ht, Wt, NC, dim, kernel_iters, out_tiles, algo, partial_elems, policy_id, recfg, row_stride, n_reduced]
 # =============================================================================
 _HELPER_BLOCK_KERNEL = r"""
 #include <cstdint>
@@ -284,7 +283,7 @@ constexpr uint32_t cb_in = 0, cb_scaler = 1, cb_out = 16;
 
 // Templated so `if constexpr (algo)` discards the dead branch (see the header note). Each build instantiates
 // exactly one algo's reduce(), so a policy/dim invalid for the OTHER algo never trips its static_asserts.
-template <uint32_t algo, uint32_t dim, uint32_t policy_id, uint32_t avg_direct>
+template <uint32_t algo, uint32_t dim, uint32_t policy_id>
 ALWI void do_reduce_block(
     [[maybe_unused]] uint32_t iter,
     compute_kernel_lib::ReduceInputBlockShape shape,
@@ -306,24 +305,14 @@ ALWI void do_reduce_block(
     using RECFG = ReduceDataFormatReconfigMode;
     if constexpr (algo == 1u) {
         // AccumulateViaAdd. recfg==1 exercises RECFG::NONE after the first call (reusing the first call's
-        // config). avg_direct==1: reduce<AVG> derives 1/N from geometry; else reduce_mean applies the explicit
-        // caller N (which is cross-chunk / uneven-shard safe).
+        // config). reduce_mean runs the SUM-only datapath and applies the explicit caller N.
         const bool none_now = (recfg == 1u) && (iter > 0u);
-        if constexpr (avg_direct == 1u) {
-            if (none_now)
-                reduce<PoolType::AVG, RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::NONE, ReduceFp32Mode::Fast, ALG>(
-                    shape, ml, NoAccumulation{}, NoOp{}, ps);
-            else
-                reduce<PoolType::AVG, RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::INPUT_AND_OUTPUT, ReduceFp32Mode::Fast, ALG>(
-                    shape, ml, NoAccumulation{}, NoOp{}, ps);
-        } else {
-            if (none_now)
-                reduce_mean<RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::NONE, ReduceFp32Mode::Fast, ALG>(
-                    shape, n_reduced, ml, NoAccumulation{}, ps);
-            else
-                reduce_mean<RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::INPUT_AND_OUTPUT, ReduceFp32Mode::Fast, ALG>(
-                    shape, n_reduced, ml, NoAccumulation{}, ps);
-        }
+        if (none_now)
+            reduce_mean<RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::NONE, ReduceFp32Mode::Fast, ALG>(
+                shape, n_reduced, ml, NoAccumulation{}, ps);
+        else
+            reduce_mean<RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::INPUT_AND_OUTPUT, ReduceFp32Mode::Fast, ALG>(
+                shape, n_reduced, ml, NoAccumulation{}, ps);
     } else {
         // ReduceTile: AVG via the reader-computed 1/N scaler.
         reduce<PoolType::AVG, RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::INPUT_AND_OUTPUT, ReduceFp32Mode::Fast, ALG>(
@@ -345,15 +334,14 @@ void kernel_main() {
     constexpr uint32_t recfg = get_compile_time_arg_val(9);  // 1 = ReduceDataFormatReconfigMode::NONE after 1st call
     constexpr uint32_t row_stride = get_compile_time_arg_val(10);  // tile pitch per row (0=contiguous=Wt)
     constexpr uint32_t n_reduced = get_compile_time_arg_val(11);  // real elems/output = the AccumulateViaAdd mean 1/N
-    constexpr uint32_t avg_direct = get_compile_time_arg_val(12);  // 1 = AccumulateViaAdd uses reduce<AVG> direct
     constexpr uint32_t row_pitch = (row_stride > 0u) ? row_stride : Wt;
     constexpr uint32_t in_tiles = Ht * row_pitch * NC;  // resident block incl. padded rows
     constexpr bool pops_input = (policy_id <= 1u);  // Bulk + WaitAndPop pop the input; no-pop policies do not
 
     using namespace compute_kernel_lib;
-    // AccumulateViaAdd partial: 0/1 mask tile at scaler-CB index 0 + valid element count for the mean.
+    // AccumulateViaAdd partial: one 0/1 mask tile at scaler-CB index 0.
     const ReducePartialScaler PS =
-        (partial_elems > 0u) ? ReducePartialScaler::partial_mask(partial_elems, 0) : ReducePartialScaler::none();
+        (partial_elems > 0u) ? ReducePartialScaler::only_partial() : ReducePartialScaler::none();
     const auto SHAPE = ReduceInputBlockShape::of(Ht, Wt, NC);
     const auto ML = (row_stride > 0u) ? ReduceInputMemoryLayout::with_row_stride(row_stride)
                                       : ReduceInputMemoryLayout::contiguous();
@@ -379,7 +367,7 @@ void kernel_main() {
             cb_reserve_back(cb_in, in_tiles);
             cb_push_back(cb_in, in_tiles);  // resident sharded input -> re-arm each iter
         }
-        do_reduce_block<algo, dim, policy_id, avg_direct>(iter, SHAPE, ML, PS, n_reduced, recfg);
+        do_reduce_block<algo, dim, policy_id>(iter, SHAPE, ML, PS, n_reduced, recfg);
         if (iter + 1 < kernel_iters) {
             cb_wait_front(cb_out, out_tiles);
             cb_pop_front(cb_out, out_tiles);
@@ -466,7 +454,7 @@ void kernel_main() {
                                             : (reload_id == 4u) ? AccumulateReloadMode::CopySeedZeroPair
                                                                 : AccumulateReloadMode::CopySeedPairs;
     const ReducePartialScaler PS =
-        (partial_elems > 0u) ? ReducePartialScaler::partial_mask(partial_elems, 0) : ReducePartialScaler::none();
+        (partial_elems > 0u) ? ReducePartialScaler::only_partial() : ReducePartialScaler::none();
     const auto SHAPE = ReduceInputBlockShape::of(Ht, Wt, NC);
     const auto ML = (row_stride > 0u) ? ReduceInputMemoryLayout::with_row_stride(row_stride)
                                       : ReduceInputMemoryLayout::contiguous();
@@ -631,7 +619,6 @@ def create_program_descriptor(
     partial_elems=0,
     stream=False,
     policy="bulk",
-    avg_direct=False,
     reconfig=None,
     row_stride=0,
 ):
@@ -670,8 +657,6 @@ def create_program_descriptor(
         # example wiring for those is proven on the bulk policy).
         if policy in _NO_POP and (partial_elems or row_stride):
             raise ValueError("no-pop policies are exercised aligned + contiguous in this example")
-    if avg_direct and variant != "accumulate_via_add":
-        raise ValueError("avg_direct (reduce<AVG> geometry 1/N) is an accumulate_via_add lever")
     if reconfig not in (None, "none_after_first"):
         raise ValueError(f"reconfig must be None or 'none_after_first', got {reconfig!r}")
     if reconfig and variant != "accumulate_via_add":
@@ -726,9 +711,9 @@ def create_program_descriptor(
         )
         return ttnn.ProgramDescriptor(kernels=[mask, compute], semaphores=[], cbs=cbs)
 
-    # library paths (reduce_tile = algo 0 -> Auto/ReduceTile matmul-reduce; accumulate_via_add = algo 1 ->
-    # the opt-in AccumulateViaAdd). AccumulateViaAdd ignores the AVG scaler for aligned reduces (computes
-    # 1/N itself); for a PARTIAL reduce it consumes a 0/1 MASK tile from the scaler CB instead.
+    # Library paths: reduce_tile = algo 0 -> Auto/ReduceTile matmul-reduce; accumulate_via_add = algo 1 ->
+    # the opt-in SUM-only AccumulateViaAdd followed by reduce_mean's explicit 1/N. For a partial reduce,
+    # AccumulateViaAdd consumes a 0/1 mask tile from the scaler CB.
     algo = 1 if path == "accumulate_via_add" else 0
     use_mask = bool(partial_elems)
     if partial_elems:
@@ -754,7 +739,6 @@ def create_program_descriptor(
             int(reconfig == "none_after_first"),
             row_stride,
             _mean_n(dim, Ht, Wt, partial_elems),
-            int(avg_direct),
         ],
         config=ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
     )
@@ -783,7 +767,6 @@ def run_op(
     partial_elems=0,
     stream=False,
     policy="bulk",
-    avg_direct=False,
     reconfig=None,
     row_stride=0,
 ):
@@ -809,7 +792,6 @@ def run_op(
         partial_elems=partial_elems,
         stream=stream,
         policy=policy,
-        avg_direct=avg_direct,
         reconfig=reconfig,
         row_stride=row_stride,
     )

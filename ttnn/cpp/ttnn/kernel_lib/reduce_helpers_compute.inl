@@ -167,10 +167,11 @@ ALWI bool dfb_unpacks_to_dest(uint32_t dfb_id) {
 // Each output tile is produced independently: sum its reduce-dim tiles into DST[0] with pairwise
 // add_tiles(acc_to_dest) (parity resolved at the seed — copy_tile one tile when the count is odd, add
 // the first pair when even, no phantom zero tile), finalize within the tile on the SFPU (sfpu_reduce
-// SUM, which reads DST in place), and for AVG multiply by 1/N once. One DST register per output tile, so
-// an arbitrary (Ht, Wt, NC) block is handled without the REDUCE_COL DST/chunk limit.
+// SUM, which reads DST in place). One DST register per output tile, so an arbitrary (Ht, Wt, NC) block is
+// handled without the REDUCE_COL DST/chunk limit.
 //
-// Restrictions (enforced by reduce()): float SUM, or standalone AVG (1/N derived from tile geometry).
+// Restrictions (enforced by reduce()): float SUM only. Mean reductions use reduce_mean(), which applies an
+// explicit caller-supplied 1/N after this SUM path.
 // ALL FOUR ReduceInputPolicy values are supported — BulkWaitBulkPop / WaitUpfrontNoPop / NoWaitNoPop index a
 // resident block; WaitAndPopPerTile streams the reduce dim through DST. should_pop policies (Bulk / WaitAndPop)
 // pop the input and pack per output; no-pop policies (WaitUpfront / NoWait) leave the input resident and
@@ -178,13 +179,12 @@ ALWI bool dfb_unpacks_to_dest(uint32_t dfb_id) {
 // (sfpu_reduce_init) is hoisted OUT of the per-output loop; only the light MOP inits (add_tiles/copy) run per
 // output.
 //
-// PARTIAL (non-tile-aligned) reduce dims — ROW/COL only, signalled by partial_scaler.valid_reduce_dim_elements
-// (= P valid elements in the LAST reduce-dim tile): the last tile is folded in with a DEST-ACCUMULATING
-// masked broadcast-mul (0/1 mask tile at scaler_dfb_id[last_tile_scaler_idx]; row-0 mask for ROW,
-// col-0 for COL) via fold_partial_last(), so the padding contributes 0. The bulk stays pure add_tiles
-// (fidelity-flat, 2 tiles/op); only the one partial tile is a (fidelity-affected) mul, and a mean divides by
-// the true count (full_cnt*32 + P). The bcast shorthands overwrite DEST (clear_fp32_dst_acc=true), so the
-// accumulating variant is the LLK directly with acc_to_dest=1 at init and clear_fp32_dst_acc=false at the op.
+// PARTIAL (non-tile-aligned) reduce dims — ROW/COL only, signalled by partial_scaler.use_partial: the last tile
+// is folded in with a DEST-ACCUMULATING masked broadcast-mul (0/1 mask at
+// scaler_dfb_id[partial_tile_idx]; row-0 mask for ROW, col-0 for COL) via fold_partial_last(), so the padding
+// contributes 0. The bulk stays pure add_tiles (fidelity-flat, 2 tiles/op); only the one partial tile is a
+// (fidelity-affected) mul. The bcast shorthands overwrite DEST (clear_fp32_dst_acc=true), so the accumulating
+// variant is the LLK directly with acc_to_dest=1 at init and clear_fp32_dst_acc=false at the op.
 // Partial is supported standalone (any should_pop / no-pop policy), under ROW streaming, and folded into
 // cross-call Accumulate (ROW/COL). SCALAR partial is rejected (a 2-D corner mask a single row/col tile can't
 // encode).
@@ -196,10 +196,9 @@ ALWI bool dfb_unpacks_to_dest(uint32_t dfb_id) {
 //   even -> ONE dest reload: copy the accumulator into DST as the seed, then add the new tiles in pairs.
 //   odd  -> no reload: seed with the first pair of new tiles and make the LAST add's second operand the
 //           accumulator (the large running sum lands once, at the end — better numerics than seeding with it).
-// The within-tile finalize (sfpu_reduce [+ 1/N for AVG] + post_reduce_op) runs only when accumulate.is_last();
+// The within-tile finalize (sfpu_reduce + post_reduce_op) runs only when accumulate.is_last();
 // non-last chunks pack the raw partial sum back to the output CB (which the caller points at the accumulator).
 template <
-    PoolType reduce_type,
     ReduceDim reduce_dim,
     uint32_t input_dfb_id,
     uint32_t scaler_dfb_id,
@@ -252,12 +251,10 @@ ALWI void reduce_accumulate_via_add(
     const uint32_t n_out = is_row ? (Ht * NC) : (is_col ? (Wt * NC) : NC);
 
     // This datapath produces a SUM (per output tile). The mean is NOT computed here — normalization is a
-    // caller-owned quantity (the true reduced-element count is a property of the whole logical reduction,
-    // not of a single call's tile geometry, and it cannot be derived across cross-call accumulate chunks or
-    // for uneven shards). Callers get a mean via compute_kernel_lib::reduce_mean, which runs this SUM and
+    // caller-owned quantity. Callers get a mean via compute_kernel_lib::reduce_mean, which runs this SUM and
     // applies 1/N with a caller-supplied N in a finalize post_reduce_op.
-    const bool has_partial = (partial_scaler.valid_reduce_dim_elements > 0);
-    const uint32_t mask_idx = partial_scaler.last_tile_scaler_idx;
+    const bool has_partial = partial_scaler.use_partial;
+    const uint32_t mask_idx = partial_scaler.partial_tile_idx;
     const uint32_t full_cnt = has_partial ? (cnt - 1u) : cnt;  // tiles summed via pure add_tiles
 
     DataflowBuffer input_dfb(input_dfb_id), scaler_dfb(scaler_dfb_id), output_dfb(output_dfb_id);
@@ -572,23 +569,9 @@ ALWI void reduce_accumulate_via_add(
                     sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_ROW>(0, 1, 1);
                     sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_COL>(0, 1, 1);
                 }
-                // Standalone AVG: divide by the element count from tile geometry (aligned ROW/COL = cnt*32,
-                // SCALAR = Ht*Wt*1024, partial ROW/COL = full_cnt*32 + P). Emits the same sfpu_reduce ->
-                // mul_unary_tile sequence as reduce_mean, so reduce<AVG> and reduce_mean are bit-identical for
-                // the standalone case. Cross-chunk / sharded / uneven mean uses reduce_mean (caller N); AVG +
-                // Accumulate is rejected in reduce() (the geometry N cannot span chunks).
-                if constexpr (reduce_type == PoolType::AVG) {
-                    const uint32_t n_geom =
-                        (is_row || is_col) ? (full_cnt * 32u + partial_scaler.valid_reduce_dim_elements)
-                                           : (cnt * 1024u);
-                    float inv_f = 1.0f / static_cast<float>(n_geom);
-                    uint32_t inv_bits = 0;
-                    __builtin_memcpy(&inv_bits, &inv_f, sizeof(inv_bits));
-                    mul_unary_tile(0, inv_bits);  // no binop_with_scalar init needed after sfpu_reduce
-                }
             }
-            // DST now holds the reduced value (raw SUM, or the mean for AVG). A caller post_reduce_op (e.g.
-            // reduce_mean's caller 1/N, or recip for softmax) then sees the finalized value.
+            // DST now holds the reduced SUM. A caller post_reduce_op (e.g. reduce_mean's caller 1/N, or recip
+            // for softmax) then sees the finalized value.
             post_reduce_op(0);
         }
 
@@ -811,30 +794,17 @@ ALWI void reduce(
         (algorithm == ReduceAlgorithm::Auto) ? ReduceAlgorithm::ReduceTile : algorithm;
     if constexpr (resolved_algorithm == ReduceAlgorithm::AccumulateViaAdd) {
         static_assert(
-            reduce_type == PoolType::SUM || reduce_type == PoolType::AVG,
-            "AccumulateViaAdd computes SUM, or standalone AVG (1/N derived from tile geometry: aligned ROW/COL "
-            "= cnt*32, SCALAR = Ht*Wt*1024, partial ROW/COL = full_cnt*32 + P). A cross-chunk / sharded / uneven "
-            "mean must use compute_kernel_lib::reduce_mean (caller-supplied N — not derivable from one call's "
-            "geometry). MAX/MIN are not expressible via additive accumulate; use ReduceTile.");
+            reduce_type == PoolType::SUM,
+            "AccumulateViaAdd computes SUM only. Use compute_kernel_lib::reduce_mean for a mean; it runs this "
+            "SUM path and applies an explicit caller-supplied 1/N. MAX/MIN are not expressible via additive "
+            "accumulate; use ReduceTile.");
         static_assert(
             reduce_format != DataFormat::Int32,
             "AccumulateViaAdd: float only (add_tiles + sfpu_reduce). Int32 must use ReduceTile.");
-        // ReduceWithinTile::Skip drops the within-tile collapse, so the geometry-derived 1/N has nothing to
-        // divide: AVG's N counts elements ALONG the collapsed axis. Sum + a caller post_reduce_op instead.
-        static_assert(
-            within_tile == ReduceWithinTile::Collapse || reduce_type == PoolType::SUM,
-            "AccumulateViaAdd + ReduceWithinTile::Skip: SUM only. AVG's 1/N is derived from tile geometry "
-            "along the axis being collapsed, which Skip does not collapse — use SUM and apply the scale in a "
-            "post_reduce_op (or fold it into the reduce scaler).");
         // All four ReduceInputPolicy values are supported: BulkWaitBulkPop / WaitUpfrontNoPop / NoWaitNoPop
         // index a resident block (should_pop vs bulk-reserve output); WaitAndPopPerTile streams the reduce dim.
         // Cross-call Accumulate (CB accumulator holding the RAW partial sum, folded into the pairwise add):
-        // SUM only (the internal AVG 1/N is per-call and cannot span chunks — use SUM + a 1/N post_reduce_op
-        // on the last chunk), BulkWaitBulkPop only, and tile-aligned only (asserted below).
-        static_assert(
-            !is_accumulate_v<AccumulateT> || reduce_type == PoolType::SUM,
-            "AccumulateViaAdd + Accumulate: SUM only. For a cross-chunk mean, use SUM and apply 1/N in a "
-            "post_reduce_op on the last chunk (see reduce_rm).");
+        // BulkWaitBulkPop only. A cross-chunk mean uses reduce_mean with the grand-total N on the last chunk.
         static_assert(
             !is_accumulate_v<AccumulateT> || input_policy == ReduceInputPolicy::BulkWaitBulkPop,
             "AccumulateViaAdd + Accumulate: BulkWaitBulkPop only (the accumulator fold indexes a resident "
@@ -849,11 +819,11 @@ ALWI void reduce(
         // Streaming (WaitAndPopPerTile) + partial is supported for ROW (the masked last tile folds in as the
         // final streamed op). COL streaming is rejected above; SCALAR partial is rejected below.
         // Partial (non-tile-aligned) reduce dims are supported for ROW/COL under BulkWaitBulkPop (the last
-        // reduce-dim tile is folded in with a masked accumulating broadcast-mul; valid_reduce_dim_elements =
-        // P + a 0/1 mask tile in scaler_dfb). REDUCE_SCALAR can be partial in BOTH axes at once (a single
-        // row/col mask can't express the corner), so it is rejected — use ReduceTile.
+        // reduce-dim tile is folded in with a masked accumulating broadcast-mul and a 0/1 mask tile in
+        // scaler_dfb). REDUCE_SCALAR can be partial in BOTH axes at once (a single row/col mask can't express
+        // the corner), so it is rejected — use ReduceTile.
         if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
-            ASSERT(partial_scaler.valid_reduce_dim_elements == 0);
+            ASSERT(!partial_scaler.use_partial);
         }
         // Cross-call Accumulate + partial is supported for ROW/COL (the masked last tile folds into each
         // chunk's sum via fold_partial_last). SCALAR partial is rejected above (622-ish) regardless of accumulate.
@@ -872,7 +842,6 @@ ALWI void reduce(
             }
         }
         detail::reduce_accumulate_via_add<
-            reduce_type,
             reduce_dim,
             input_dfb_id,
             scaler_dfb_id,
@@ -954,9 +923,9 @@ ALWI void reduce(
     // Partial scaler: REDUCE_SCALAR can't use it (applies the scaler twice).
     // Other reduce dims may add a partial-fill tile at index >0; wait for both.
     if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
-        ASSERT(partial_scaler.last_tile_scaler_idx == 0);
+        ASSERT(!partial_scaler.use_partial);
     }
-    scaler_dfb.wait_front(partial_scaler.last_tile_scaler_idx + 1);
+    scaler_dfb.wait_front(partial_scaler.scaler_tile_count());
     if constexpr (is_sfpu) {
         PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(output_dfb_id)));
     }
@@ -1107,7 +1076,7 @@ ALWI void reduce(
                         }
                     } else {
                         // Last W-tile picks up the partial scaler when one was prepared by the reader.
-                        const uint32_t scaler_idx = (wt == Wt - 1) ? partial_scaler.last_tile_scaler_idx : 0;
+                        const uint32_t scaler_idx = (wt == Wt - 1) ? partial_scaler.partial_scaler_idx() : 0;
                         if constexpr (waits_per_tile(input_policy)) {
                             // One-at-a-time: wait/pop per tile
                             input_dfb.wait_front(onetile);
@@ -1226,7 +1195,7 @@ ALWI void reduce(
                     // Base dst_index: from accumulation config or 0 for multi-column output
                     uint32_t dst_idx = get_dst_index(accumulate);
                     // Last H-tile picks up the partial scaler when one was prepared by the reader.
-                    const uint32_t scaler_idx = (ht == Ht - 1) ? partial_scaler.last_tile_scaler_idx : 0;
+                    [[maybe_unused]] const uint32_t scaler_idx = (ht == Ht - 1) ? partial_scaler.partial_scaler_idx() : 0;
                     for (uint32_t i = wt; i < chunk_end; ++i) {
                         if constexpr (is_sfpu) {
                             const bool is_first_tile = detail::sfpu_is_first_tile(ht, accumulate);

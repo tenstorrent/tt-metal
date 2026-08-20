@@ -925,42 +925,6 @@ def test_reduce_block_policy_parity(device):
                     )
 
 
-def test_reduce_block_avg_direct(device):
-    """reduce<AVG, ..., AccumulateViaAdd> derives 1/N from tile geometry and must be BIT-IDENTICAL to reduce_mean
-    (same sfpu_reduce -> mul_unary_tile with the same 1/N bits) and correct vs the fp64 golden. This is the AVG
-    API-parity lever (so a future Auto can route AVG to the fast path for the standalone full-block case)."""
-    for dim in DIMS:
-        for Ht, Wt, NC in _SHAPES[dim]:
-            x, golden = _make_input(device, dim, Ht, Wt, NC)
-            for accum in ("fp32", "bf16"):
-                direct = run_op(
-                    x,
-                    variant="accumulate_via_add",
-                    dim=dim,
-                    Ht=Ht,
-                    Wt=Wt,
-                    NC=NC,
-                    accum=accum,
-                    kernel_iters=2,
-                    avg_direct=True,
-                )
-                mean = run_op(  # reduce_mean (explicit caller N)
-                    x,
-                    variant="accumulate_via_add",
-                    dim=dim,
-                    Ht=Ht,
-                    Wt=Wt,
-                    NC=NC,
-                    accum=accum,
-                    kernel_iters=2,
-                )
-                lbl = f"{dim}/{accum} {Ht}x{Wt}x{NC}"
-                _check(direct, golden, dim, accum, "avg_direct " + lbl)
-                d = (_readout(direct, dim) - _readout(mean, dim)).abs().max().item()
-                logger.info(f"avg_direct {lbl:24s} vs reduce_mean d={d}")
-                assert d == 0.0, f"avg_direct != reduce_mean for {lbl}: {d} (expected bit-identical)"
-
-
 def test_reduce_block_partial_stream(device):
     """ROW partial under WaitAndPopPerTile streaming: the pure-add part streams full_cnt tiles through DST, then
     the masked last tile folds in as the final streamed op. Includes the full_cnt==0 edge (Wt=1: the whole

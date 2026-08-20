@@ -124,10 +124,8 @@ enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNo
  *   via the scaler, cross-call accumulation, all input policies).
  *
  * - AccumulateViaAdd: sum the reduce-dim tiles into ONE DST register with pairwise FPU add_tiles(acc_to_dest),
- *   then finalize within the tile on the SFPU (sfpu_reduce) and, for AVG, apply 1/N with a single SFPU
- *   scalar-multiply. One DST register per output tile, so it handles an arbitrary block without the
- *   REDUCE_COL DST/chunk limit; it wins for wide reduces (many tiles per output) and is more accurate for
- *   AVG / scalar.
+ *   then finalize within the tile on the SFPU (sfpu_reduce). One DST register per output tile, so it handles
+ *   an arbitrary block without the REDUCE_COL DST/chunk limit and wins for wide reduces (many tiles per output).
  *   Boots like every reduce — compute_kernel_hw_startup(cb_in, cb_scaler, cb_out) once at kernel start (see the
  *   file-level note); reduce() runs no heavy per-call hw_configure — per call it does only light format reconfig
  *   (per reconfig_mode) + the SFPU-macro load, exactly like ReduceTile relies on boot + light reduce_init.
@@ -157,9 +155,8 @@ enum class ReduceAlgorithm { Auto, ReduceTile, AccumulateViaAdd };
  *
  * CONTRACT — Skip is valid ONLY with `ReduceAlgorithm::AccumulateViaAdd` and `PoolType::SUM`.
  * Both are asserted. Note `ReduceAlgorithm::Auto` resolves to ReduceTile, so `Auto` + `Skip` does NOT
- * compile: request AccumulateViaAdd EXPLICITLY. AVG and MAX are both rejected — see below for AVG; MAX
- * because the accumulate datapath's cross-tile step is an add, so "skip the collapse" has no meaning for
- * a max reduction.
+ * compile: request AccumulateViaAdd EXPLICITLY. AVG and MAX are both rejected: use reduce_mean() for a mean;
+ * MAX is not expressible because the accumulate datapath's cross-tile step is an add.
  *
  * AccumulateViaAdd is two distinct steps: (1) sum the reduce-dim TILES into one DST register with pairwise
  * add_tiles(acc_to_dest), then (2) collapse the 32 lanes INSIDE that tile with sfpu_reduce. Step (2) is only
@@ -171,8 +168,7 @@ enum class ReduceAlgorithm { Auto, ReduceTile, AccumulateViaAdd };
  * it removes an SFPU pass per output tile.
  *
  * With Skip, DST holds the raw cross-tile SUM and `post_reduce_op` still runs on it (so a caller 1/N, eps-add
- * or rsqrt composes exactly as before). AVG is rejected: its 1/N is derived from tile geometry, which only
- * means anything once the axis has actually been collapsed — use SUM plus a post_reduce_op.
+ * or rsqrt composes exactly as before).
  *
  * ReduceTile cannot express Skip: there the reduce_tile matmul-with-ones IS the collapse, so there is nothing
  * to skip (asserted).
@@ -292,46 +288,52 @@ struct ReduceInputBlockShape {
 /**
  * @brief Partial-scaler descriptor for non-tile-aligned reduce dimensions
  *
- * When the reduce dimension is not a multiple of TILE_DIM, the reader emits
- * TWO scaler tiles into scaler_cb: tile 0 has the full scaler (all positions
- * filled), and tile 1 has the partial scaler (only the valid positions filled,
- * the rest zeroed). The compute kernel must use tile 1 for the *last* tile
- * along the reduce dimension and tile 0 for every other tile.
+ * ReduceTile and AccumulateViaAdd mask padding differently:
  *
- * This struct selects which scaler-tile index to use on the last reduce-dim
- * iteration. The default (`none()`) keeps the legacy behavior of using tile 0
- * everywhere. Use `last_tile_at(1)` (or any non-zero idx) to switch to the
- * partial scaler on the last tile.
+ * - ReduceTile: the reader emits a full scaler followed by a partial scaler.
+ *   `with_partial()` selects the second scaler for the last tile along the
+ *   reduce dimension.
+ * - AccumulateViaAdd: the reader emits only a 0/1 mask tile at scaler-CB index 0.
+ *   `only_partial()` selects that tile for the last input tile.
  *
- * Pair with dataflow_kernel_lib::prepare_partial_reduce_scalers (or
- * calculate_and_prepare_partial_reduce_scalers) on the reader side.
+ * In both cases the padding lanes multiply by zero and contribute nothing.
+ * The default (`none()`) is the tile-aligned path.
  *
- * REDUCE_SCALAR does not support partial scalers — it applies the scaler
- * twice (row then col), which a single partial tile cannot encode. The
- * runtime asserts that REDUCE_SCALAR callers pass none().
+ * Pair `with_partial()` with dataflow_kernel_lib::prepare_partial_reduce_scalers
+ * (or calculate_and_prepare_partial_reduce_scalers). Pair `only_partial()` with
+ * dataflow_kernel_lib::prepare_reduce_mask.
+ *
+ * REDUCE_SCALAR does not support either partial representation: ReduceTile
+ * applies its scaler twice (row then col), while one AccumulateViaAdd row/column
+ * mask cannot encode a 2-D partial corner.
+ *
+ * The ReduceTile SFPU path (see is_sfpu_reduce_path) folds tiles without reading
+ * the scaler CB, so it cannot honor `with_partial()` either.
+ *
+ * IMPORTANT: `with_partial()` describes the last tile of this reduce() call. If
+ * the caller collapses several tiles into one before calling ReduceTile, masking
+ * that combined tile would also erase valid lanes from earlier tiles. Mask the
+ * ragged tile before accumulating instead; AccumulateViaAdd's `only_partial()`
+ * path does exactly that.
  *
  * Usage:
  *   constexpr auto partial = has_partial
- *       ? ReducePartialScaler::last_tile_at(1)
+ *       ? ReducePartialScaler::with_partial()
  *       : ReducePartialScaler::none();
  *   reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, shape, ..., partial);
  */
 struct ReducePartialScaler {
-    // ReduceTile: scaler-tile index to use for the LAST reduce-dim iteration. 0 = no partial (use tile 0
-    // everywhere); >0 = index of the partial scaler tile.
-    // AccumulateViaAdd: index of the 0/1 MASK tile in the scaler CB (may be 0).
-    std::uint32_t last_tile_scaler_idx = 0;
-    // AccumulateViaAdd only: valid reduce-dim elements in the LAST tile (1..31). >0 signals a partial
-    // reduce and gives the true count for the mean's 1/N. 0 = tile-aligned (unused by ReduceTile).
-    std::uint32_t valid_reduce_dim_elements = 0;
+    // Whether the last reduce-dim tile needs a partial scaler or mask.
+    bool use_partial = false;
+    // Index of that tile: 0 for a mask-only CB, 1 for a [full, partial] scaler pair.
+    std::uint32_t partial_tile_idx = 0;
 
-    static constexpr ReducePartialScaler none() { return {0, 0}; }
-    static constexpr ReducePartialScaler last_tile_at(std::uint32_t idx = 1) { return {idx, 0}; }
-    // AccumulateViaAdd: `valid` real elements in the last reduce-dim tile; 0/1 mask tile at scaler-CB index
-    // `mask_idx`.
-    static constexpr ReducePartialScaler partial_mask(std::uint32_t valid, std::uint32_t mask_idx = 0) {
-        return {mask_idx, valid};
-    }
+    static constexpr ReducePartialScaler none() { return {false, 0}; }
+    static constexpr ReducePartialScaler with_partial() { return {true, 1}; }
+    static constexpr ReducePartialScaler only_partial() { return {true, 0}; }
+
+    constexpr std::uint32_t scaler_tile_count() const { return partial_tile_idx + 1; }
+    constexpr std::uint32_t partial_scaler_idx() const { return partial_tile_idx; }
 };
 
 /**
@@ -363,6 +365,11 @@ struct AccumulationConfig {
  * - MAX + REDUCE_SCALAR: the running max cannot be reproduced by the copy_tile reload.
  * - MAX + REDUCE_ROW on Quasar: the reload needs a within-16x16-face transpose that
  *   copy_tile_to_dst_init_short asserts against on Quasar.
+ *
+ * NOTE on ReducePartialScaler: partial metadata applies to the last reduce-dim tile of
+ * EACH reduce() call, not of the whole accumulated reduction. When only the final chunk
+ * is short, pass with_partial() (ReduceTile) or only_partial() (AccumulateViaAdd) on that
+ * call only and none() on the others.
  *
  * Usage:
  *   const auto cfg = AccumulationConfig::with_cb(cb_accum);
@@ -516,11 +523,11 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  * is NoWaitNoPop or WaitUpfrontNoPop.
  * @param accumulate Accumulation configuration (default: NoAccumulation)
  * @param post_reduce_op Callback after each reduction (default: NoOp)
- * @param partial_scaler Partial-scaler selector for non-tile-aligned reduce
- *        dimensions (default: ReducePartialScaler::none()). When set to
- *        last_tile_at(idx), the helper waits for `idx + 1` scaler tiles and
- *        uses scaler tile `idx` for the last reduce-dim iteration. Pair with
- *        dataflow_kernel_lib::prepare_partial_reduce_scalers on the reader.
+ * @param partial_scaler Partial-scaler descriptor for non-tile-aligned reduce
+ *        dimensions (default: ReducePartialScaler::none()). Use with_partial()
+ *        with ReduceTile when the reader emits [full, partial], or only_partial()
+ *        with AccumulateViaAdd when the reader emits a 0/1 mask tile.
+ *        Not supported for REDUCE_SCALAR or the Int32 SFPU reduce path.
  *
  * @example
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
