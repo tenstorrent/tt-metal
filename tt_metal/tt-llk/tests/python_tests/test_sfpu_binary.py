@@ -812,6 +812,27 @@ def test_fresh_cpp_binary_atan2(formats, dest_acc, mathop, fresh_cpp_impl):
 
 
 @parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    mathop=[MathOperation.SfpuAtan2],
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[0, 2],
+)
+def test_fitted_cpp_binary_atan2(formats, dest_acc, mathop, fresh_cpp_impl):
+    """A/B the fitted atan2 (tt-polynomial-fitter frontier atan winner
+    atan_p8_s1_uniform_basis applied to the octant-reduced ratio, quadrant
+    fixup as in fresh_cpp/atan2.h; provenance in fresh_cpp/atan2_fitted.h)
+    against the production minimax kernel; identical [-5, 5] stimuli,
+    TRUE-atan2 golden, suite tolerance + PCC gate."""
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0),
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     mathop=[MathOperation.SfpuBitwiseAnd],
     dest_acc=[DestAccumulation.Yes],
