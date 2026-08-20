@@ -499,6 +499,7 @@ class RowParallelLinear(Module):
         # Branch addition kept over main: the H3 / Qwen3-VL layers pass an explicit config for
         # the sites that need more precision than the shared default.
         compute_kernel_config=None,
+        mm_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     ):
         super().__init__()
 
@@ -508,6 +509,7 @@ class RowParallelLinear(Module):
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
+        self.mm_memory_config = mm_memory_config
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
@@ -666,7 +668,7 @@ class RowParallelLinear(Module):
             multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
             **get_fused_mmrs_config(M, K, N, core_grid, self.ccl_manager.num_links),
             bias=self.bias.data if self.bias is not None else None,
-            memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            memory_config_mm=self.mm_memory_config,
             rs_intermediate_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             topology=self.ccl_manager.topology,
