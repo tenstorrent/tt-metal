@@ -1,0 +1,795 @@
+
+==============================================================================
+### [PRODUCER-ONLY DFB]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:394: !endpoint_info.consumers.empty()
+info:
+DFB 'out' has no consumer
+backtrace:
+ --- void tt::assert::detail::tt_throw<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&>::t, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f8e55066633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f8e57b01879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f8e57b00e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f8e57afb388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f8e57af47f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char
+
+==============================================================================
+### [UNBOUND TENSOR PARAMETER]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/ttnn/cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp:45: spec_program.tensor_arg_indices.contains(param.unique_id)
+info:
+TensorParameter 'orphan' has no entry in tensor_args
+backtrace:
+ --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> const&>, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> const&> const&, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> const&)
+ --- ttnn::operations::generic::GenericOpDeviceOperation::validate_on_program_cache_miss(ttnn::operations::generic::operation_attributes_t const&, ttnn::operations::generic::tensor_args_t const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x213) [0x7f8e57afb323]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f8e57af47f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag>, unsigned int> const&)
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7c9171) [0x7f8e58306171]
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x2fc965) [0x7f8e57e39965]
+ --- /localdev/mstaletovic/tt-metal/python_env/bin/pyth
+
+==============================================================================
+### [TWO ACCESSOR NAMES, ONE DFB, ONE KERNEL]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:369: !role_already_bound
+info:
+Kernel 'reader' has two PRODUCER bindings to DFB 'in_a' under different accessor names. Within a kernel a DFB may be bound at most once per role (the only multi-binding form is the self-loop pair: one PRODUCER + one CONSUMER). To refer to one buffer by multiple names in kernel code, alias the handle (constexpr auto x = dfb::y) instead of adding a second binding.
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa47f1a) [0x7f8e5508df1a]
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f8e55066633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f8e57b01879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f8e57b00e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f8e57afb388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f8e57af47f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag>, unsigned int> const&)
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7c9171) [0x7f8e58306171]
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x2fc965) [0x7f8e57e39965]
+ --- /localdev/mstaletovic/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x561d09b476d6]
+ --- /local
+
+==============================================================================
+### [STAGE DFB PRODUCER-ONLY (self-loop half-declared)]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:394: !endpoint_info.consumers.empty()
+info:
+DFB 'stage' has no consumer
+backtrace:
+ --- void tt::assert::detail::tt_throw<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&>::t, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f8e55066633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f8e57b01879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f8e57b00e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f8e57afb388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f8e57af47f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::ch
+
+==============================================================================
+### [KERNEL NAMES AN UNBOUND dfb::out2]
+==============================================================================
+TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/impl/program/program.cpp:340: tt::exception
+info:
+Failed to generate binaries for compute TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/jit_build/build.cpp:70: tt::exception
+info:
+trisc0 build failed. Log: In file included from ../chlkc_unpack.cpp:5,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp: In function 'void kernel_main()':
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:20:34: error: 'out2' is not a member of 'dfb'; did you mean 'out'?
+   20 |     DataflowBuffer dfb_out2(dfb::out2);
+      |                                  ^~~~
+      |                                  out
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:26:26: warning: 'void ckernel::binary_op_init_common(uint32_t, uint32_t, uint32_t, uint32_t)' is deprecated: Use compute_kernel_hw_startup(icb0, icb1, ocb) once at kernel start, then add_init/sub_init/mul_init(icb0, icb1). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+   26 |     binary_op_init_common(dfb::in_a, dfb::in_b, dfb::out);
+      |     ~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:9:
+/localdev/mstaletovic/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:481:1: note: declared here
+  481 | binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+      | ^~~~~~~~~~~~~~~~~~~~~
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:27:19: warning: 'void ckernel::mul_tiles_init(uint32_t, uint32_t, uint32_t)' is deprecated: Renamed to mul_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+   27 |     mul_tiles_init(dfb::in_a, dfb::in_b);
+      |     ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+/localdev/mstaletovic/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:517:101: note: declared here
+  517 | [[deprecated("Renamed to mul_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_tiles_init(
+      |
+
+==============================================================================
+### [DFB DECLARED BUT BOUND BY NOBODY (200 MB)]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:402: collected.dfb_endpoints.contains(dfb.unique_id)
+info:
+DFB 'never_bound' is defined but not bound by any kernel
+backtrace:
+ --- void tt::assert::detail::tt_throw<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&>::t, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f8e55066633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f8e57b01879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f8e57b00e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f8e57afb388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f8e57af47f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongT
+
+==============================================================================
+### [TT_KERNEL NTTP + if constexpr NAMING AN UNBOUND dfb::out2]
+==============================================================================
+TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/impl/program/program.cpp:340: tt::exception
+info:
+Failed to generate binaries for reader_ttk TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/jit_build/build.cpp:70: tt::exception
+info:
+ncrisc build failed. Log: In file included from ../kernel_includes.hpp:3,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/reader_ttk.cpp: In function 'void read_pairs(uint32_t, uint32_t)':
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/reader_ttk.cpp:27:37: error: 'out2' is not a member of 'dfb'; did you mean 'tt::out2'? [-Wtemplate-body]
+   27 |         DataflowBuffer dfb_opt(dfb::out2);
+      |                                     ^~~~
+In file included from /localdev/mstaletovic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:16,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/mstaletovic/tt-metal/tt_metal/hostdevcommon/api/hostdevcommon/kernel_structs.h:155:5: note: 'tt::out2' declared here
+  155 |     out2 = 18,
+      |     ^~~~
+
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x11048c8) [0x7f8e56c598c8]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc1b5cf) [0x7f8e552615cf]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d458) [0x7f8e55283458]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d3de) [0x7f8e552833de]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x8054df) [0x7f8e54e4b4df]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8) [0x7f8e93515ea8]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x805339) [0x7f8e54e4b339]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d22e) [0x7f8e5528322e]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93f245) [0x7f8e54f85245]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93dd50) [0x7f8e54f83d50]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93d238) [0x7f8e54f83238]
+ --- /lib/x86_64-linux-gnu/libstdc++
+
+==============================================================================
+### [TT_KERNEL SIGNATURE vs HOST SCHEMA MISMATCH]
+==============================================================================
+TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/impl/program/program.cpp:340: tt::exception
+info:
+Failed to generate binaries for reader_ttk TT_KERNEL entry 'read_pairs': template parameters do not match the registered compile-time arguments.
+  template parameter(s) with no matching registered compile-time argument: touch_optional
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9f7c68) [0x7f8e5503dc68]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9cf39b) [0x7f8e5501539b]
+ --- tt::tt_metal::JitBuildCache::build_once(unsigned long, std::function<void ()> const&)
+ --- tt::tt_metal::jit_build_once(unsigned long, std::function<void ()> const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9cf115) [0x7f8e55015115]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9cf49b) [0x7f8e5501549b]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d458) [0x7f8e55283458]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d3de) [0x7f8e552833de]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x8054df) [0x7f8e54e4b4df]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8) [0x7f8e93515ea8]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x805339) [0x7f8e54e4b339]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d22e) [0x7f8e5528322e]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93f245) [0x7f8e54f85245]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93dd50) [0x7f8e54f83d50]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93d238) [0x7f8e54f83238]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xdc253) [0x7f8e90d2c253]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x94a83) [0x7f8e93510a83]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x126890) [0x7f8e935a2890]
+
+
+==============================================================================
+### [PRODUCER-ONLY DFB]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:394: !endpoint_info.consumers.empty()
+info:
+DFB 'out' has no consumer
+backtrace:
+ --- void tt::assert::detail::tt_throw<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&>::t, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f6df784d633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f6dfa2e8879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f6dfa2e7e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f6dfa2e2388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f6dfa2db7f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char
+
+==============================================================================
+### [UNBOUND TENSOR PARAMETER]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/ttnn/cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp:45: spec_program.tensor_arg_indices.contains(param.unique_id)
+info:
+TensorParameter 'orphan' has no entry in tensor_args
+backtrace:
+ --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> const&>, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> const&> const&, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> const&)
+ --- ttnn::operations::generic::GenericOpDeviceOperation::validate_on_program_cache_miss(ttnn::operations::generic::operation_attributes_t const&, ttnn::operations::generic::tensor_args_t const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x213) [0x7f6dfa2e2323]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f6dfa2db7f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag>, unsigned int> const&)
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7c9171) [0x7f6dfaaed171]
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x2fc965) [0x7f6dfa620965]
+ --- /localdev/mstaletovic/tt-metal/python_env/bin/pyth
+
+==============================================================================
+### [TWO ACCESSOR NAMES, ONE DFB, ONE KERNEL]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:369: !role_already_bound
+info:
+Kernel 'reader' has two PRODUCER bindings to DFB 'in_a' under different accessor names. Within a kernel a DFB may be bound at most once per role (the only multi-binding form is the self-loop pair: one PRODUCER + one CONSUMER). To refer to one buffer by multiple names in kernel code, alias the handle (constexpr auto x = dfb::y) instead of adding a second binding.
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa47f1a) [0x7f6df7874f1a]
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f6df784d633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f6dfa2e8879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f6dfa2e7e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f6dfa2e2388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f6dfa2db7f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag>, unsigned int> const&)
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7c9171) [0x7f6dfaaed171]
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x2fc965) [0x7f6dfa620965]
+ --- /localdev/mstaletovic/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x55f8a5dfb6d6]
+ --- /local
+
+==============================================================================
+### [STAGE DFB PRODUCER-ONLY (self-loop half-declared)]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:394: !endpoint_info.consumers.empty()
+info:
+DFB 'stage' has no consumer
+backtrace:
+ --- void tt::assert::detail::tt_throw<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&>::t, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f6df784d633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f6dfa2e8879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f6dfa2e7e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f6dfa2e2388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f6dfa2db7f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::ch
+
+==============================================================================
+### [KERNEL NAMES AN UNBOUND dfb::out2]
+==============================================================================
+TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/impl/program/program.cpp:340: tt::exception
+info:
+Failed to generate binaries for compute TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/jit_build/build.cpp:70: tt::exception
+info:
+trisc0 build failed. Log: In file included from ../chlkc_unpack.cpp:5,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp: In function 'void kernel_main()':
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:20:34: error: 'out2' is not a member of 'dfb'; did you mean 'out'?
+   20 |     DataflowBuffer dfb_out2(dfb::out2);
+      |                                  ^~~~
+      |                                  out
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:26:26: warning: 'void ckernel::binary_op_init_common(uint32_t, uint32_t, uint32_t, uint32_t)' is deprecated: Use compute_kernel_hw_startup(icb0, icb1, ocb) once at kernel start, then add_init/sub_init/mul_init(icb0, icb1). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+   26 |     binary_op_init_common(dfb::in_a, dfb::in_b, dfb::out);
+      |     ~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:9:
+/localdev/mstaletovic/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:481:1: note: declared here
+  481 | binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+      | ^~~~~~~~~~~~~~~~~~~~~
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:27:19: warning: 'void ckernel::mul_tiles_init(uint32_t, uint32_t, uint32_t)' is deprecated: Renamed to mul_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+   27 |     mul_tiles_init(dfb::in_a, dfb::in_b);
+      |     ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+/localdev/mstaletovic/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:517:101: note: declared here
+  517 | [[deprecated("Renamed to mul_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_tiles_init(
+      |
+
+==============================================================================
+### [DFB DECLARED BUT BOUND BY NOBODY (200 MB)]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:402: collected.dfb_endpoints.contains(dfb.unique_id)
+info:
+DFB 'never_bound' is defined but not bound by any kernel
+backtrace:
+ --- void tt::assert::detail::tt_throw<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&>::t, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f6df784d633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f6dfa2e8879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f6dfa2e7e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f6dfa2e2388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f6dfa2db7f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongT
+
+==============================================================================
+### [TT_KERNEL NTTP + if constexpr NAMING AN UNBOUND dfb::out2]
+==============================================================================
+TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/impl/program/program.cpp:340: tt::exception
+info:
+Failed to generate binaries for reader_ttk TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/jit_build/build.cpp:70: tt::exception
+info:
+ncrisc build failed. Log: In file included from ../kernel_includes.hpp:3,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/reader_ttk.cpp: In function 'void read_pairs(uint32_t, uint32_t)':
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/reader_ttk.cpp:27:37: error: 'out2' is not a member of 'dfb'; did you mean 'tt::out2'? [-Wtemplate-body]
+   27 |         DataflowBuffer dfb_opt(dfb::out2);
+      |                                     ^~~~
+In file included from /localdev/mstaletovic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:16,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/mstaletovic/tt-metal/tt_metal/hostdevcommon/api/hostdevcommon/kernel_structs.h:155:5: note: 'tt::out2' declared here
+  155 |     out2 = 18,
+      |     ^~~~
+
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x11048c8) [0x7f6df94408c8]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc1b5cf) [0x7f6df7a485cf]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d458) [0x7f6df7a6a458]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d3de) [0x7f6df7a6a3de]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x8054df) [0x7f6df76324df]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8) [0x7f6e35c4eea8]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x805339) [0x7f6df7632339]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d22e) [0x7f6df7a6a22e]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93f245) [0x7f6df776c245]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93dd50) [0x7f6df776ad50]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93d238) [0x7f6df776a238]
+ --- /lib/x86_64-linux-gnu/libstdc++
+
+==============================================================================
+### [TT_KERNEL SIGNATURE vs HOST SCHEMA MISMATCH]
+==============================================================================
+TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/impl/program/program.cpp:340: tt::exception
+info:
+Failed to generate binaries for reader_ttk TT_KERNEL entry 'read_pairs': template parameters do not match the registered compile-time arguments.
+  template parameter(s) with no matching registered compile-time argument: touch_optional
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9f7c68) [0x7f6df7824c68]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9cf39b) [0x7f6df77fc39b]
+ --- tt::tt_metal::JitBuildCache::build_once(unsigned long, std::function<void ()> const&)
+ --- tt::tt_metal::jit_build_once(unsigned long, std::function<void ()> const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9cf115) [0x7f6df77fc115]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9cf49b) [0x7f6df77fc49b]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d458) [0x7f6df7a6a458]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d3de) [0x7f6df7a6a3de]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x8054df) [0x7f6df76324df]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8) [0x7f6e35c4eea8]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x805339) [0x7f6df7632339]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d22e) [0x7f6df7a6a22e]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93f245) [0x7f6df776c245]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93dd50) [0x7f6df776ad50]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93d238) [0x7f6df776a238]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xdc253) [0x7f6e33365253]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x94a83) [0x7f6e35c49a83]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x126890) [0x7f6e35cdb890]
+
+
+==============================================================================
+### [TWO COMPUTE KERNELSPECS OVERLAPPING ON ONE NODE]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1406: false
+info:
+Local DFB 'in_a' is malformed at node 0-0: 1 producer instance(s) ('reader') and 2 consumer instance(s) ('compute_g1', 'compute_g2'). A local DFB lives in shared SRAM on each node, so every node it is instantiated on must run exactly one producer and one consumer kernel instance. Multiple same-role kernel instances land on this node — their placements overlap; give each disjoint nodes.
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa487e8) [0x7f21088757e8]
+ --- tt::tt_metal::experimental::ValidateProgramSpec(tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::CollectedSpecData const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20647) [0x7f210884d647]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f210b2e8879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f210b2e7e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f210b2e2388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f210b2db7f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag>, unsigned int> const&)
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7c9171) [0x7f210baed171]
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x2fc965) [0x7f210b620965]
+ --- /localdev/mstaletovic/tt-metal/python_env/
+
+==============================================================================
+### [TWO COMPUTE KERNELSPECS OVERLAPPING ON ONE NODE]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1406: false
+info:
+Local DFB 'in_a' is malformed at node 0-0: 1 producer instance(s) ('reader') and 2 consumer instance(s) ('compute_g1', 'compute_g2'). A local DFB lives in shared SRAM on each node, so every node it is instantiated on must run exactly one producer and one consumer kernel instance. Multiple same-role kernel instances land on this node — their placements overlap; give each disjoint nodes.
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa487e8) [0x7fd80221a7e8]
+ --- tt::tt_metal::experimental::ValidateProgramSpec(tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::CollectedSpecData const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20647) [0x7fd8021f2647]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7fd804c8d879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7fd804c8ce66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7fd804c87388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7fd804c807f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag>, unsigned int> const&)
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7c9171) [0x7fd805492171]
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x2fc965) [0x7fd804fc5965]
+ --- /localdev/mstaletovic/tt-metal/python_env/
+
+==============================================================================
+### [TWO COMPUTE KERNELSPECS OVERLAPPING ON ONE NODE]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1406: false
+info:
+Local DFB 'in_a' is malformed at node 0-0: 1 producer instance(s) ('reader') and 2 consumer instance(s) ('compute_g1', 'compute_g2'). A local DFB lives in shared SRAM on each node, so every node it is instantiated on must run exactly one producer and one consumer kernel instance. Multiple same-role kernel instances land on this node — their placements overlap; give each disjoint nodes.
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa487e8) [0x7fc715e337e8]
+ --- tt::tt_metal::experimental::ValidateProgramSpec(tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::CollectedSpecData const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20647) [0x7fc715e0b647]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7fc7188a6879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7fc7188a5e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7fc7188a0388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7fc7188997f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag>, unsigned int> const&)
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7c9171) [0x7fc7190ab171]
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x2fc965) [0x7fc718bde965]
+ --- /localdev/mstaletovic/tt-metal/python_env/
+
+==============================================================================
+### [TWO COMPUTE KERNELSPECS OVERLAPPING ON ONE NODE]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:1406: false
+info:
+Local DFB 'in_a' is malformed at node 0-0: 1 producer instance(s) ('reader') and 2 consumer instance(s) ('compute_g1', 'compute_g2'). A local DFB lives in shared SRAM on each node, so every node it is instantiated on must run exactly one producer and one consumer kernel instance. Multiple same-role kernel instances land on this node — their placements overlap; give each disjoint nodes.
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa487e8) [0x7f0f02c337e8]
+ --- tt::tt_metal::experimental::ValidateProgramSpec(tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::CollectedSpecData const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20647) [0x7f0f02c0b647]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f0f056a6879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f0f056a5e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f0f056a0388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f0f056997f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag>, unsigned int> const&)
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7c9171) [0x7f0f05eab171]
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x2fc965) [0x7f0f059de965]
+ --- /localdev/mstaletovic/tt-metal/python_env/
+
+==============================================================================
+### [PRODUCER-ONLY DFB]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:394: !endpoint_info.consumers.empty()
+info:
+DFB 'out' has no consumer
+backtrace:
+ --- void tt::assert::detail::tt_throw<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&>::t, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f5e74c4d633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f5e776e8879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f5e776e7e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f5e776e2388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f5e776db7f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char
+
+==============================================================================
+### [UNBOUND TENSOR PARAMETER]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/ttnn/cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp:45: spec_program.tensor_arg_indices.contains(param.unique_id)
+info:
+TensorParameter 'orphan' has no entry in tensor_args
+backtrace:
+ --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> const&>, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> const&> const&, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> const&)
+ --- ttnn::operations::generic::GenericOpDeviceOperation::validate_on_program_cache_miss(ttnn::operations::generic::operation_attributes_t const&, ttnn::operations::generic::tensor_args_t const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x213) [0x7f5e776e2323]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f5e776db7f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag>, unsigned int> const&)
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7c9171) [0x7f5e77eed171]
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x2fc965) [0x7f5e77a20965]
+ --- /localdev/mstaletovic/tt-metal/python_env/bin/pyth
+
+==============================================================================
+### [TWO ACCESSOR NAMES, ONE DFB, ONE KERNEL]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:369: !role_already_bound
+info:
+Kernel 'reader' has two PRODUCER bindings to DFB 'in_a' under different accessor names. Within a kernel a DFB may be bound at most once per role (the only multi-binding form is the self-loop pair: one PRODUCER + one CONSUMER). To refer to one buffer by multiple names in kernel code, alias the handle (constexpr auto x = dfb::y) instead of adding a second binding.
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa47f1a) [0x7f5e74c74f1a]
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f5e74c4d633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f5e776e8879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f5e776e7e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f5e776e2388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f5e776db7f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag>, unsigned int> const&)
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7c9171) [0x7f5e77eed171]
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x2fc965) [0x7f5e77a20965]
+ --- /localdev/mstaletovic/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x55a46e6ba6d6]
+ --- /local
+
+==============================================================================
+### [STAGE DFB PRODUCER-ONLY (self-loop half-declared)]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:394: !endpoint_info.consumers.empty()
+info:
+DFB 'stage' has no consumer
+backtrace:
+ --- void tt::assert::detail::tt_throw<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&>::t, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f5e74c4d633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f5e776e8879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f5e776e7e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f5e776e2388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f5e776db7f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::ch
+
+==============================================================================
+### [KERNEL NAMES AN UNBOUND dfb::out2]
+==============================================================================
+TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/impl/program/program.cpp:340: tt::exception
+info:
+Failed to generate binaries for compute TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/jit_build/build.cpp:70: tt::exception
+info:
+trisc0 build failed. Log: In file included from ../chlkc_unpack.cpp:5,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp: In function 'void kernel_main()':
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:20:34: error: 'out2' is not a member of 'dfb'; did you mean 'out'?
+   20 |     DataflowBuffer dfb_out2(dfb::out2);
+      |                                  ^~~~
+      |                                  out
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:26:26: warning: 'void ckernel::binary_op_init_common(uint32_t, uint32_t, uint32_t, uint32_t)' is deprecated: Use compute_kernel_hw_startup(icb0, icb1, ocb) once at kernel start, then add_init/sub_init/mul_init(icb0, icb1). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+   26 |     binary_op_init_common(dfb::in_a, dfb::in_b, dfb::out);
+      |     ~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:9:
+/localdev/mstaletovic/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:481:1: note: declared here
+  481 | binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+      | ^~~~~~~~~~~~~~~~~~~~~
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:27:19: warning: 'void ckernel::mul_tiles_init(uint32_t, uint32_t, uint32_t)' is deprecated: Renamed to mul_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+   27 |     mul_tiles_init(dfb::in_a, dfb::in_b);
+      |     ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+/localdev/mstaletovic/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:517:101: note: declared here
+  517 | [[deprecated("Renamed to mul_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_tiles_init(
+      |
+
+==============================================================================
+### [DFB DECLARED BUT BOUND BY NOBODY (200 MB)]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:402: collected.dfb_endpoints.contains(dfb.unique_id)
+info:
+DFB 'never_bound' is defined but not bound by any kernel
+backtrace:
+ --- void tt::assert::detail::tt_throw<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&>::t, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f5e74c4d633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f5e776e8879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f5e776e7e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f5e776e2388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f5e776db7f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongT
+
+==============================================================================
+### [TT_KERNEL NTTP + if constexpr NAMING AN UNBOUND dfb::out2]
+==============================================================================
+TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/impl/program/program.cpp:340: tt::exception
+info:
+Failed to generate binaries for reader_ttk TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/jit_build/build.cpp:70: tt::exception
+info:
+ncrisc build failed. Log: In file included from ../kernel_includes.hpp:3,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/reader_ttk.cpp: In function 'void read_pairs(uint32_t, uint32_t)':
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/reader_ttk.cpp:27:37: error: 'out2' is not a member of 'dfb'; did you mean 'tt::out2'? [-Wtemplate-body]
+   27 |         DataflowBuffer dfb_opt(dfb::out2);
+      |                                     ^~~~
+In file included from /localdev/mstaletovic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:16,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/mstaletovic/tt-metal/tt_metal/hostdevcommon/api/hostdevcommon/kernel_structs.h:155:5: note: 'tt::out2' declared here
+  155 |     out2 = 18,
+      |     ^~~~
+
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x11048c8) [0x7f5e768408c8]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc1b5cf) [0x7f5e74e485cf]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d458) [0x7f5e74e6a458]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d3de) [0x7f5e74e6a3de]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x8054df) [0x7f5e74a324df]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8) [0x7f5eb3014ea8]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x805339) [0x7f5e74a32339]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d22e) [0x7f5e74e6a22e]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93f245) [0x7f5e74b6c245]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93dd50) [0x7f5e74b6ad50]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93d238) [0x7f5e74b6a238]
+ --- /lib/x86_64-linux-gnu/libstdc++
+
+==============================================================================
+### [TT_KERNEL SIGNATURE vs HOST SCHEMA MISMATCH]
+==============================================================================
+TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/impl/program/program.cpp:340: tt::exception
+info:
+Failed to generate binaries for reader_ttk TT_KERNEL entry 'read_pairs': template parameters do not match the registered compile-time arguments.
+  template parameter(s) with no matching registered compile-time argument: touch_optional
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9f7c68) [0x7f5e74c24c68]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9cf39b) [0x7f5e74bfc39b]
+ --- tt::tt_metal::JitBuildCache::build_once(unsigned long, std::function<void ()> const&)
+ --- tt::tt_metal::jit_build_once(unsigned long, std::function<void ()> const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9cf115) [0x7f5e74bfc115]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9cf49b) [0x7f5e74bfc49b]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d458) [0x7f5e74e6a458]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d3de) [0x7f5e74e6a3de]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x8054df) [0x7f5e74a324df]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8) [0x7f5eb3014ea8]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x805339) [0x7f5e74a32339]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d22e) [0x7f5e74e6a22e]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93f245) [0x7f5e74b6c245]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93dd50) [0x7f5e74b6ad50]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93d238) [0x7f5e74b6a238]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xdc253) [0x7f5eb072b253]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x94a83) [0x7f5eb300fa83]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x126890) [0x7f5eb30a1890]
+
+
+==============================================================================
+### [PRODUCER-ONLY DFB]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:394: !endpoint_info.consumers.empty()
+info:
+DFB 'out' has no consumer
+backtrace:
+ --- void tt::assert::detail::tt_throw<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&>::t, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f867f266633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f8681d01879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f8681d00e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f8681cfb388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f8681cf47f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char
+
+==============================================================================
+### [UNBOUND TENSOR PARAMETER]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/ttnn/cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp:45: spec_program.tensor_arg_indices.contains(param.unique_id)
+info:
+TensorParameter 'orphan' has no entry in tensor_args
+backtrace:
+ --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> const&>, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> const&> const&, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag> const&)
+ --- ttnn::operations::generic::GenericOpDeviceOperation::validate_on_program_cache_miss(ttnn::operations::generic::operation_attributes_t const&, ttnn::operations::generic::tensor_args_t const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x213) [0x7f8681cfb323]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f8681cf47f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag>, unsigned int> const&)
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7c9171) [0x7f8682506171]
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x2fc965) [0x7f8682039965]
+ --- /localdev/mstaletovic/tt-metal/python_env/bin/pyth
+
+==============================================================================
+### [TWO ACCESSOR NAMES, ONE DFB, ONE KERNEL]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:369: !role_already_bound
+info:
+Kernel 'reader' has two PRODUCER bindings to DFB 'in_a' under different accessor names. Within a kernel a DFB may be bound at most once per role (the only multi-binding form is the self-loop pair: one PRODUCER + one CONSUMER). To refer to one buffer by multiple names in kernel code, alias the handle (constexpr auto x = dfb::y) instead of adding a second binding.
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa47f1a) [0x7f867f28df1a]
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f867f266633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f8681d01879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f8681d00e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f8681cfb388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f8681cf47f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::TensorParamNameTag>, unsigned int> const&)
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x7c9171) [0x7f8682506171]
+ --- /localdev/mstaletovic/tt-metal/ttnn/ttnn/_ttnn.so(+0x2fc965) [0x7f8682039965]
+ --- /localdev/mstaletovic/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x564786c446d6]
+ --- /local
+
+==============================================================================
+### [STAGE DFB PRODUCER-ONLY (self-loop half-declared)]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:394: !endpoint_info.consumers.empty()
+info:
+DFB 'stage' has no consumer
+backtrace:
+ --- void tt::assert::detail::tt_throw<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&>::t, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f867f266633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f8681d01879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f8681d00e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f8681cfb388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f8681cf47f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongType<std::__cxx11::basic_string<char, std::ch
+
+==============================================================================
+### [KERNEL NAMES AN UNBOUND dfb::out2]
+==============================================================================
+TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/impl/program/program.cpp:340: tt::exception
+info:
+Failed to generate binaries for compute TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/jit_build/build.cpp:70: tt::exception
+info:
+trisc0 build failed. Log: In file included from ../chlkc_unpack.cpp:5,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp: In function 'void kernel_main()':
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:20:34: error: 'out2' is not a member of 'dfb'; did you mean 'out'?
+   20 |     DataflowBuffer dfb_out2(dfb::out2);
+      |                                  ^~~~
+      |                                  out
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:26:26: warning: 'void ckernel::binary_op_init_common(uint32_t, uint32_t, uint32_t, uint32_t)' is deprecated: Use compute_kernel_hw_startup(icb0, icb1, ocb) once at kernel start, then add_init/sub_init/mul_init(icb0, icb1). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+   26 |     binary_op_init_common(dfb::in_a, dfb::in_b, dfb::out);
+      |     ~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:9:
+/localdev/mstaletovic/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:481:1: note: declared here
+  481 | binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+      | ^~~~~~~~~~~~~~~~~~~~~
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/compute.cpp:27:19: warning: 'void ckernel::mul_tiles_init(uint32_t, uint32_t, uint32_t)' is deprecated: Renamed to mul_init(). This will be removed after September 15th, 2026. [-Wdeprecated-declarations]
+   27 |     mul_tiles_init(dfb::in_a, dfb::in_b);
+      |     ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~
+/localdev/mstaletovic/tt-metal/tt_metal/hw/inc/api/compute/eltwise_binary.h:517:101: note: declared here
+  517 | [[deprecated("Renamed to mul_init(). This will be removed after September 15th, 2026.")]] ALWI void mul_tiles_init(
+      |
+
+==============================================================================
+### [DFB DECLARED BUT BOUND BY NOBODY (200 MB)]
+==============================================================================
+TT_FATAL @ /localdev/mstaletovic/tt-metal/tt_metal/impl/metal2_host_api/program_spec.cpp:402: collected.dfb_endpoints.contains(dfb.unique_id)
+info:
+DFB 'never_bound' is defined but not bound by any kernel
+backtrace:
+ --- void tt::assert::detail::tt_throw<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >(char const*, int, char const*, char const*, fmt::v11::fstring<ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&>::t, ttsl::StrongType<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, tt::tt_metal::experimental::KernelSpecNameTag> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ --- tt::tt_metal::experimental::CollectSpecData(tt::tt_metal::experimental::ProgramSpec const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xa20633) [0x7f867f266633]
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fac879) [0x7f8681d01879]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1fabe66) [0x7f8681d00e66]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x278) [0x7f8681cfb388]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2d6) [0x7f8681cf47f6]
+ --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::ProgramSpec const&, tt::tt_metal::experimental::ProgramRunArgs const&, tt::tt_metal::experimental::Table<ttsl::StrongT
+
+==============================================================================
+### [TT_KERNEL NTTP + if constexpr NAMING AN UNBOUND dfb::out2]
+==============================================================================
+TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/impl/program/program.cpp:340: tt::exception
+info:
+Failed to generate binaries for reader_ttk TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/jit_build/build.cpp:70: tt::exception
+info:
+ncrisc build failed. Log: In file included from ../kernel_includes.hpp:3,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/reader_ttk.cpp: In function 'void read_pairs(uint32_t, uint32_t)':
+/localdev/mstaletovic/tt-metal/tests/ttnn/unit_tests/operations/metal2_play/me/kernels/reader_ttk.cpp:27:37: error: 'out2' is not a member of 'dfb'; did you mean 'tt::out2'? [-Wtemplate-body]
+   27 |         DataflowBuffer dfb_opt(dfb::out2);
+      |                                     ^~~~
+In file included from /localdev/mstaletovic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:16,
+                 from /localdev/mstaletovic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/mstaletovic/tt-metal/tt_metal/hostdevcommon/api/hostdevcommon/kernel_structs.h:155:5: note: 'tt::out2' declared here
+  155 |     out2 = 18,
+      |     ^~~~
+
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/_ttnncpp.so(+0x11048c8) [0x7f8680e598c8]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc1b5cf) [0x7f867f4615cf]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d458) [0x7f867f483458]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d3de) [0x7f867f4833de]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x8054df) [0x7f867f04b4df]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8) [0x7f86bd727ea8]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x805339) [0x7f867f04b339]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d22e) [0x7f867f48322e]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93f245) [0x7f867f185245]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93dd50) [0x7f867f183d50]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93d238) [0x7f867f183238]
+ --- /lib/x86_64-linux-gnu/libstdc++
+
+==============================================================================
+### [TT_KERNEL SIGNATURE vs HOST SCHEMA MISMATCH]
+==============================================================================
+TT_THROW @ /localdev/mstaletovic/tt-metal/tt_metal/impl/program/program.cpp:340: tt::exception
+info:
+Failed to generate binaries for reader_ttk TT_KERNEL entry 'read_pairs': template parameters do not match the registered compile-time arguments.
+  template parameter(s) with no matching registered compile-time argument: touch_optional
+backtrace:
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9f7c68) [0x7f867f23dc68]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9cf39b) [0x7f867f21539b]
+ --- tt::tt_metal::JitBuildCache::build_once(unsigned long, std::function<void ()> const&)
+ --- tt::tt_metal::jit_build_once(unsigned long, std::function<void ()> const&)
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9cf115) [0x7f867f215115]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x9cf49b) [0x7f867f21549b]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d458) [0x7f867f483458]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d3de) [0x7f867f4833de]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x8054df) [0x7f867f04b4df]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8) [0x7f86bd727ea8]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x805339) [0x7f867f04b339]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0xc3d22e) [0x7f867f48322e]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93f245) [0x7f867f185245]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93dd50) [0x7f867f183d50]
+ --- /localdev/mstaletovic/tt-metal/build_Release/lib/libtt_metal.so(+0x93d238) [0x7f867f183238]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xdc253) [0x7f86baf3e253]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x94a83) [0x7f86bd722a83]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x126890) [0x7f86bd7b4890]
