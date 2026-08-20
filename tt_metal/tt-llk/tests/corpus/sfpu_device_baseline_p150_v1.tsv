@@ -62,7 +62,7 @@
 #      ON set), CD crossloop-hoist, CA drain-backedge/init-hoist, CF residency peel +
 #      TU value reuse + iadd/divp2 audits).  First silicon = the pin-13 full sweep;
 #      pre-registered movers in REVIEW_RECORD-8e87fba0e35f.
-#  14. 01aed0d8d58d… (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — the pin-14
+#  14. 01aed0d8d58d… — the pin-14
 #      overnight-swarm union (sfpi-gcc staging/pin14 3ca94518817 on the census fix
 #      e0754714a5b: CG rooting + CJ twins lift the wave-9 quarantine; CI mul24
 #      admission, CU int-abs, CP bw-witness, CK planner-launch effects, CN repr-prop,
@@ -70,6 +70,14 @@
 #      flags default-off, measured as knob legs).  Driver 5d3742f58472….  Installed
 #      via pin-install-fast (gate-proven binaries, PIN_REVIEW-3ca94518817a).  First
 #      silicon = the pin-14 full sweep.
+#  15. c5bf1bf9aa2c9a36f210a3656b9ea40e6350f2387e760d138e431fe70b557393 (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — the pin-15
+#      crown-jewel union (sfpi-gcc f5aa5bbf676b90ca4f2045edf6613658b76fd0db: DK census fail-closed, DL latency
+#      audits + capture-rotation widening, DN ccmask/int-abs completions, DM
+#      residency widenings, DS/DT arsenals, DQ list scheduler, DP lreg allocator,
+#      DR bnb-MILP + hygiene + TRUE-DEFAULT leg).  Driver 0ce0f02f5033afb45e3a90c40b5e67857684767c3ed59f61eaddfd0b53f5577a.  ON set
+#      UNCHANGED at 25; new flags (list-schedule, lreg-alloc [+dst-layout-32b
+#      harness wiring], pressure-schedule+milp) are Init(0) on-plus knob legs.
+#      First silicon = the pin-15 measurement pass (MEASUREMENT-PLAN-PIN15.md).
 # SIM PAIRING: from pin 7 onward the CRAQ oracle is the CORRECTED craq-sim 9f324140 pair —
 # bh 32489dda4fd6… (CURRENT sweep_2x2.conf PINNED_SIM_BH_SHA256), wh 8f0079a9a16c… (CURRENT
 # sweep_2x2.conf PINNED_SIM_WH_SHA256); conf_lint.sh R6 enforces the bh anchor and

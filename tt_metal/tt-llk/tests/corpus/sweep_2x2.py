@@ -499,6 +499,37 @@ KNOBS = {
     # launches (prices-but-refuses at the current calibration).  Its A/B
     # is the existing replay-hoist knob leg on the typecast row (added
     # to the knob-silicon row list in sweep_2x2.conf).
+    # ---- pin-15 NEW default-off flags (lane DZ prep): knob legs ONLY,
+    # on-plus mode.  Deliberately NOT in the reviewed ON set — ON-set
+    # promotion is a separate reviewed step carrying its own R9 union
+    # fire witness (owner order: allocator/scheduler/milp measured via
+    # on-plus knob legs first, promotion only after silicon).
+    # DQ (list-scheduler): deterministic DAG list scheduler over typed-
+    # effect dependence graphs of audited straight-line SFPU regions;
+    # oracle gap-0 on all four P/Q arsenal kernels; corpus ON delta
+    # exactly 1 row (welford snapshot TU) CRAQ 16/16 bit-exact.
+    # Target rows: welford, lcm-fresh (round-chain stall class).
+    "list-schedule": "-mtt-tensix-optimize-list-schedule",
+    # DP (lreg-allocator): DSATUR-color the LREG interference graph and
+    # spill selected webs through proven-free 32-bit Dst scratch rows
+    # when pressure exceeds 8; refusals keep lreg-pressure-exceeded
+    # byte-identically.  The companion -mtt-tensix-dst-layout-32b
+    # declaration is NOT part of this token: the harness derives it
+    # per-kernel from the node id's dest-accumulation mode
+    # (dst_layout_flags — falsely declaring it on a 16-bit kernel is
+    # documented SILENT WRONG OUTPUT, so only explicit dest_acc:Yes
+    # nodes get it, fail-closed; see selftest_dst_layout_32b.py).
+    # Target rows: lcm-fresh, xielu-fresh (pressure>8 shapes).
+    "lreg-alloc": "-mtt-tensix-optimize-lreg-alloc",
+    # DR (milp-and-hygiene): the pressure scheduler with the vendored
+    # exact branch-and-bound backend (always compiled; lp_solve is a
+    # cross-check only, so codegen is byte-identical across build
+    # configs).  Both tokens ride together: the milp selector alone is
+    # inert without the pressure-schedule pass flag.  Fires only on
+    # pressure>8 regions — most rows honestly record
+    # REFUSAL_BYTE_IDENTICAL.
+    "milp": "-mtt-tensix-optimize-pressure-schedule "
+    "-mtt-tensix-pressure-schedule-use-milp",
 }
 # Per-knob leg MODE (see the KNOBS comment).  Every key must be a KNOBS
 # key; absent = "solo".  The three seeded drop-one knobs are the known
@@ -524,6 +555,13 @@ KNOB_MODES = {
     "int-abs": "on-plus",
     "lut-select-leaf-ext": "on-plus",
     "repr-prop": "on-plus",
+    # pin-15 crown-jewel booking flags (lane DZ): shapes only materialize
+    # on the reviewed-ON baseline (the allocator/scheduler act on the
+    # post-ON pipeline's regions), so the booking A/B is (ON + flag) vs
+    # plain ON — the same reasoning as the pin-14 on-plus seeds.
+    "list-schedule": "on-plus",
+    "lreg-alloc": "on-plus",
+    "milp": "on-plus",
 }
 
 
