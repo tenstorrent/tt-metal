@@ -173,3 +173,5 @@ tray_to_pcie_device_mapping.yaml
 # model bringup manifests and tensor artifacts
 bringup/artifacts
 model_tracer/traced_operations
+tt_metal/tt-llk/tests/.venv
+tt_metal/tt-llk/tests/sfpi
