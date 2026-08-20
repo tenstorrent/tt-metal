@@ -60,6 +60,8 @@ BASELINE="$HERE/sfpu_device_baseline_${CHIP_CLASS}_v1.tsv"
 # any existing root recorded under a DIFFERENT toolchain pin and fails closed
 # on unknown provenance; a same-pin root resumes as before.  SWEEP_DATE stays
 # the manual root-name override (the refusal suggests a free one).
+bash "$HERE/selftest_sweep_wrapper_lib.sh" > /tmp/nightly-selftest-wrapper-lib.$$ 2>&1 \
+  || { echo "FATAL: sweep_wrapper_lib self-test failed:"; cat /tmp/nightly-selftest-wrapper-lib.$$; rm -f /tmp/nightly-selftest-wrapper-lib.$$; exit 2; }
 # shellcheck source=sweep_wrapper_lib.sh
 source "$HERE/sweep_wrapper_lib.sh" || { echo "FATAL: sweep_wrapper_lib.sh missing/broken"; exit 2; }
 evidence_root_guard "$EV" "$PINNED_CC1PLUS_SHA256" "nightly_bh_sweep.sh" || exit 3
@@ -95,6 +97,7 @@ python3 "$HERE/selftest_batched_silicon.py" > "$EV/selftest-batched-silicon.txt"
   || GATE_SELFTEST_RC=1
 # Record the conf-lint verdict (already enforced above, pre-source) in-evidence.
 { mv /tmp/nightly-selftest-conf-lint.$$ "$EV/selftest-conf-lint.txt" 2>/dev/null || true; }
+{ mv /tmp/nightly-selftest-wrapper-lib.$$ "$EV/selftest-wrapper-lib.txt" 2>/dev/null || true; }
 bash "$HERE/conf_lint.sh" > "$EV/conf-lint.txt" 2>&1 || GATE_SELFTEST_RC=1
 if [ "$GATE_SELFTEST_RC" -ne 0 ]; then
   echo "FATAL: gate self-tests failed (see $EV/selftest-*.txt) — refusing to sweep"

@@ -51,6 +51,8 @@ BASELINE="$HERE/sfpu_device_baseline_${CHIP_CLASS}_v1.tsv"
 # any existing root recorded under a DIFFERENT toolchain pin and fails closed
 # on unknown provenance; a same-pin root resumes as before.  SWEEP_DATE stays
 # the manual root-name override (the refusal suggests a free one).
+bash "$HERE/selftest_sweep_wrapper_lib.sh" > /tmp/weekly-selftest-wrapper-lib.$$ 2>&1 \
+  || { echo "FATAL: sweep_wrapper_lib self-test failed:"; cat /tmp/weekly-selftest-wrapper-lib.$$; rm -f /tmp/weekly-selftest-wrapper-lib.$$; exit 2; }
 # shellcheck source=sweep_wrapper_lib.sh
 source "$HERE/sweep_wrapper_lib.sh" || { echo "FATAL: sweep_wrapper_lib.sh missing/broken"; exit 2; }
 evidence_root_guard "$EV" "$PINNED_CC1PLUS_SHA256" "weekly_bh_sweep.sh" || exit 3
@@ -74,6 +76,7 @@ python3 "$HERE/selftest_sweep_2x2_report.py" > "$EV/selftest-report-gate.txt" 2>
 python3 "$HERE/selftest_enforcement_gates.py" > "$EV/selftest-enforcement-gates.txt" 2>&1 \
   || { echo "FATAL: enforcement-gates self-test failed (see $EV/selftest-enforcement-gates.txt)"; exit 2; }
 { mv /tmp/weekly-selftest-conf-lint.$$ "$EV/selftest-conf-lint.txt" 2>/dev/null || true; }
+{ mv /tmp/weekly-selftest-wrapper-lib.$$ "$EV/selftest-wrapper-lib.txt" 2>/dev/null || true; }
 bash "$HERE/conf_lint.sh" > "$EV/conf-lint.txt" 2>&1 \
   || { echo "FATAL: conf-lint refused (see $EV/conf-lint.txt)"; exit 2; }
 
