@@ -255,7 +255,7 @@ class SharedMLP:
         k = int(hidden_states.shape[-1])
         n = int(self.gate_up_proj.shape[-1])
         # 12B long-4k (M=4096, K=N=3840): cutoff-reshape+LoFi beats auto+LoFi
-        # ~1.11x (test_prefill_matmul_4096_12b_isolate, PCC≥0.9998 vs HiFi2).
+        # ~1.11x in isolation (PCC≥0.9998 vs HiFi2).
         # At M=2048 (31B T3K chunks) auto+LoFi still wins — keep that path.
         if should_prefill_long_2d(m) and m >= 4096:
             act, owned = self._prepare_prefill_act(hidden_states, None)

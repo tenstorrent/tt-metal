@@ -152,9 +152,8 @@ _BLOCK_SIZE = 64
 
 # Baselined to measured 31B p128_n128 behaviour, not a correctness target.
 # ``test_full_model`` 0.98 PCC is a ~6-token prompt; at 128 tokens the same
-# ``ttnn_prefill_forward`` path matches the generator
-# (``test_prefill_path_parity``) and last-row PCC vs HF is seq-length bfp8
-# accumulation, not an e2e-path leak.
+# ``ttnn_prefill_forward`` path matches the generator, and last-row PCC vs HF
+# is seq-length bfp8 accumulation, not an e2e-path leak.
 _MIN_TOP1_AGREEMENT = float(os.getenv("GEMMA4_TF_MIN_TOP1", "0.75"))
 _MIN_TOP5_AGREEMENT = float(os.getenv("GEMMA4_TF_MIN_TOP5", "0.92"))
 
