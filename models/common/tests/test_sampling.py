@@ -20,7 +20,7 @@ from models.common.sampling import (
 )
 from models.common.sampling.generator import _hash_request_seed_to_device_seed, _mark_trace_buffers_corruptible
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole
 
 
 def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
@@ -1294,3 +1294,137 @@ def test_topk_route_mirror_parity(mesh_device, shape, k, expected):
     expected_here = expected and ttnn.device.is_blackhole(mesh_device)
     assert topk_would_route_to_large_indices(x, k, mesh_device) is expected_here
     ttnn.deallocate(x)
+
+
+@pytest.mark.parametrize(
+    "vocab_size",
+    [
+        # Blackhole routes ttnn.topk onto topk_large_indices for this width (one full-row
+        # call, no vocab split); other archs cover the split/stock path with the same
+        # guarantee. Production Llama3 vocab.
+        pytest.param(128256, id="v128256"),
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_greedy_tied_max_picks_lowest_index(vocab_size, mesh_device):
+    """Greedy rows must resolve an exact-value tie at the maximum to the LOWEST global index.
+
+    This is the determinism contract that _adjust_values_for_tiebreak provides: among the
+    GATHERED candidates, the lowest-global-index tied maximum wins. The tie plateau here
+    (4 tokens) fits inside every per-shard top-k, so the lowest tied index is always
+    gathered and the sampled token must be TIE_START exactly, for every user, on every
+    path (routed full-row BH, chunked stock split, WH).
+
+    A plateau WIDER than a shard's k additionally requires the top-k itself to keep the
+    lowest indices (stable=True gather completeness) -- see the KNOWN LIMITATION note in
+    _adjust_values_for_tiebreak.
+    """
+    batch_size = 32
+    TIE_START = 777  # deliberately not 0: index 0 could win by zero-initialized accident
+    TIE_LEN = 4
+
+    sampler = TTSampling(
+        args=SimpleNamespace(
+            vocab_size=vocab_size,
+            padded_vocab_size=vocab_size,
+            max_batch_size=batch_size,
+            max_top_k=32,
+            cluster_shape=(1, 1),
+        ),
+        mesh_device=mesh_device,
+        tt_ccl=None,
+        k=torch.ones(batch_size),  # greedy: top-1
+        p=torch.zeros(batch_size),
+        temp=torch.ones(batch_size),
+    )
+    assert not sampler.force_argmax_sampling
+
+    torch.manual_seed(7)
+    # Tail strictly below the tie plateau (all values in [-2, -1)); plateau tied at 0.0.
+    logits_host = torch.rand(1, 1, batch_size, vocab_size) - 2.0
+    logits_host[..., TIE_START : TIE_START + TIE_LEN] = 0.0
+    logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
+    tokens_tt, _log_probs = sampler(logits_tt)
+    tokens = ttnn.to_torch(tokens_tt).flatten()[:batch_size].long()
+
+    mismatched = [(u, int(tokens[u])) for u in range(batch_size) if int(tokens[u]) != TIE_START]
+    assert not mismatched, (
+        f"{len(mismatched)}/{batch_size} greedy users did not pick the lowest tied index "
+        f"{TIE_START}: {mismatched[:8]}"
+    )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="topk_large_indices routing is Blackhole-only")
+@pytest.mark.parametrize(
+    "vocab_size",
+    [
+        # Production Llama3 vocab: non-pow2 and over the stock op's 64K single-call cap,
+        # so the relaxed full-row call routes to the topk_large_indices composite.
+        pytest.param(128256, id="v128256_routed_full_row"),
+        # Non-pow2 mid-size vocab (GPT-2 padded family): fits a stock call width-wise but
+        # is structurally ineligible for the multi-core bitonic, so the full row routes too.
+        pytest.param(50304, id="v50304_routed_full_row"),
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_routed_full_row_topk_end_to_end(vocab_size, mesh_device):
+    """End-to-end TTSampling over the ROUTED full-row ttnn.topk path (Blackhole only).
+
+    With sub_core_grid_topk=None at a routing-eligible width, TTSampling replaces the
+    single-device vocab split with one full-row ttnn.topk that takes the Blackhole
+    topk_large_indices composite. Greedy (top-1) users must still sample a row maximum
+    of the bf16 logits, and every token must be a valid global vocab position -- i.e.
+    the routed indices are global, not per-chunk.
+    """
+    from models.common.sampling._utils import topk_would_route_to_large_indices
+
+    torch.manual_seed(42)
+    batch_size = 32
+
+    sampler = TTSampling(
+        args=SimpleNamespace(
+            vocab_size=vocab_size,
+            padded_vocab_size=vocab_size,
+            max_batch_size=batch_size,
+            max_top_k=32,
+            cluster_shape=(1, 1),
+        ),
+        mesh_device=mesh_device,
+        tt_ccl=None,
+        k=torch.ones(batch_size),  # top-1
+        p=torch.zeros(batch_size),
+        temp=torch.ones(batch_size),
+    )
+    assert sampler.multi_step_reduction
+    assert sampler.sub_core_grid_topk is None
+    assert not sampler.force_argmax_sampling
+
+    logits_host = torch.randn(1, 1, batch_size, vocab_size)
+    logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    # The exact gate the forward pass evaluates: this parametrization must route.
+    assert topk_would_route_to_large_indices(
+        logits_tt, sampler._num_vocab_splits * sampler.max_top_k, mesh_device
+    ), "test premise broken: this cell no longer routes -- update the parametrization"
+
+    logits_bf16 = ttnn.to_torch(logits_tt).float().reshape(batch_size, vocab_size)
+
+    tokens_tt, _log_probs = sampler(logits_tt)
+    tokens = ttnn.to_torch(tokens_tt).flatten()[:batch_size].long()
+
+    row_max = logits_bf16.max(dim=-1).values
+    failures = []
+    for user in range(batch_size):
+        token = int(tokens[user])
+        if not 0 <= token < vocab_size:
+            failures.append(f"  user {user}: token {token} outside [0, {vocab_size})")
+            continue
+        value = logits_bf16[user, token].item()
+        if value < row_max[user].item():
+            failures.append(
+                f"  user {user}: token {token} has logit {value:.6f}, but the row maximum is "
+                f"{row_max[user].item():.6f} at index {int(logits_bf16[user].argmax())}"
+            )
+
+    header = f"{len(failures)}/{batch_size} users did not sample the row maximum (vocab_size={vocab_size})"
+    assert not failures, header + ":\n" + "\n".join(failures)
