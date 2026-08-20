@@ -3288,6 +3288,281 @@ exit $RC
             return "parity"
         return "loss"
 
+    _RAG_ORDER = {"GREEN": 0, "YELLOW": 1, "RED": 2}
+
+    @classmethod
+    def _worst_rag(cls, a, b):
+        return a if cls._RAG_ORDER[a] >= cls._RAG_ORDER[b] else b
+
+    @staticmethod
+    def _row_class(r):
+        """WIN/PARITY/LOSS band for a row's streamed verdict (the sem-vs-hand
+        sign convention the scoreboard uses: <-0.5% win, <=+0.5% parity)."""
+        c = r.get("cells") or {}
+        if any(v == "REFUSAL_BYTE_IDENTICAL" for v in c.values()):
+            return "REFUSAL"
+        v = r.get("vs_hand_pct")
+        if isinstance(v, (int, float)):
+            return "WIN" if v < -0.5 else ("PARITY" if v <= 0.5 else "LOSS")
+        return "UNMEASURED"
+
+    def _row_verdict(self, r, baseline, base_classes, prev):
+        """The per-row acceptance computation of report(), factored out so
+        the silicon phase can STREAM each row's verdict the moment its
+        cells complete (ROW-VERDICT.json) and the final REPORT.md is an
+        aggregation of the IDENTICAL logic — the row line is byte-equal
+        whether computed at completion time or at the end.  Pure over
+        (result row, baseline, prev): no self.reds side effects, so
+        streaming + final aggregation never double-book a RED.
+
+        Returns {'scope', 'verdicts', 'col', 'rag'} (rag is row-local;
+        report() folds it into the run verdict with _worst_rag)."""
+        max_abs_drift_pct = getattr(self.a, "max_abs_drift_pct", 10.0)
+        red_loss_growth_pct = getattr(self.a, "red_loss_growth_pct", 5.0)
+        max_drift_pct = getattr(self.a, "max_drift_pct", 5.0)
+        allow_win_to_parity = getattr(self.a, "allow_win_to_parity", False)
+        verdicts = []
+        rag = "GREEN"
+        c = r.get("cells", {})
+        scope = r.get("scope") or f"{r['marker']}_MATH_ISOLATE_PER_TILE"
+        r = dict(r, scope=scope)
+        expected = base_classes.get((r["corpus_id"], scope)) or self._derived_class(
+            baseline, r
+        )
+        # acceptance 1 (class-aware, D4): a refusal is GREEN only when the
+        # baseline class is refusal (or the row has no baseline history).
+        # A row whose baseline carries a measured WIN that now collapses
+        # to a byte-identical refusal is a total-refusal regression: RED.
+        if c.get("sem_off") == "REFUSAL_BYTE_IDENTICAL":
+            if expected == "win":
+                verdicts.append(
+                    "WIN→REFUSAL FLIP (baseline class win, now "
+                    "byte-identical refusal — planner stopped firing): RED"
+                )
+                rag = "RED"
+            elif expected in ("parity", "loss"):
+                verdicts.append(
+                    f"{expected.upper()}→REFUSAL: flagged notice "
+                    "(measured baseline row now refuses): YELLOW"
+                )
+                if rag == "GREEN":
+                    rag = "YELLOW"
+            elif expected == "refusal":
+                verdicts.append(
+                    "refusal byte-identical (baseline class refusal): GREEN"
+                )
+            else:
+                verdicts.append("refusal byte-identical (no baseline history): GREEN")
+        elif expected == "refusal" and any(
+            isinstance(v, (int, float)) for v in c.values()
+        ):
+            # refusal -> changed: not a regression by itself, but a class
+            # transition that must be surfaced, never silently blessed.
+            verdicts.append(
+                "REFUSAL→CHANGED: flagged notice (baseline expects a "
+                "byte-identical refusal, OFF/ON now differs and was "
+                "measured): YELLOW"
+            )
+            if rag == "GREEN":
+                rag = "YELLOW"
+        # acceptance 1b: INVALID_MARKER cells can never gate GREEN.
+        if any(v == "INVALID_MARKER" for v in c.values()):
+            verdicts.append(
+                "INVALID_MARKER cell(s) — reading below the payload "
+                "issue-slot lower bound (KERNEL marker required): RED"
+            )
+            rag = "RED"
+        # acceptance 1d (enforcement layer): a macro-launch row with an
+        # EMPTY issue_slot_lb is RED — the §1 issue-slot check silently
+        # no-ops on empty lb, under exactly the fire-and-forget shapes
+        # that need it (wave-6 V3).
+        if any("EMPTY issue_slot_lb" in n for n in r.get("notes", [])):
+            verdicts.append(
+                "MACRO-LAUNCH ROW WITHOUT issue_slot_lb — HANDOFF §1 "
+                "metric caveat unenforceable on this row's cells: RED"
+            )
+            rag = "RED"
+        # acceptance 1c (finding sweep_2x2.py:1276): a cell with baseline
+        # history that produced NO parsable metric this run is
+        # INVALID_METRIC RED — a profiler/post-CSV or marker rename must
+        # never turn the nightly permanently GREEN while measuring
+        # nothing.  Withheld/blocked rows already carry their own RED.
+        blocked = any(
+            "STOP" in n or "COMPILE_FAIL" in n or "withheld" in n or "DRY-RUN" in n
+            for n in r.get("notes", [])
+        )
+        if not blocked:
+            dead = sorted(
+                cell
+                for cell, v in c.items()
+                if v is None
+                and baseline.get((r["corpus_id"], scope, cell_selector(r, cell)))
+            )
+            numeric_any = any(isinstance(v, (int, float)) for v in c.values())
+            refused = any(v == "REFUSAL_BYTE_IDENTICAL" for v in c.values())
+            if dead:
+                verdicts.append(
+                    f"INVALID_METRIC — cell(s) {', '.join(dead)} have "
+                    "baseline history but produced no parsable metric "
+                    "(marker/post-CSV drift?): RED"
+                )
+                rag = "RED"
+            elif expected and c and not numeric_any and not refused:
+                verdicts.append(
+                    "INVALID_METRIC — row has baseline class history but "
+                    "every cell is unparsable/None: RED"
+                )
+                rag = "RED"
+        # acceptance 2a (findings sweep_2x2.py:1222/:1181): per-cell
+        # ABSOLUTE cycle drift vs the baseline's min-aggregated cycles.
+        # Ratio-only acceptance is blind to uniform slowdowns (both legs
+        # +50% keeps every ratio) and never checks the hand leg on
+        # refusal rows.  Slowdowns beyond --max-abs-drift-pct are RED;
+        # improvements beyond it are YELLOW (stale baseline — reviewed
+        # update needed), never silently blessed.
+        for cell in sorted(c):
+            val = c[cell]
+            if not isinstance(val, (int, float)):
+                continue
+            base = baseline.get((r["corpus_id"], scope, cell_selector(r, cell)))
+            if not base or not min(base):
+                continue
+            abs_pct = 100.0 * (val - min(base)) / min(base)
+            if abs_pct > max_abs_drift_pct:
+                verdicts.append(
+                    f"{cell} ABS CYCLES {min(base):g}→{val:g} "
+                    f"({abs_pct:+.2f}% > {max_abs_drift_pct:g}%): RED"
+                )
+                rag = "RED"
+            elif abs_pct < -max_abs_drift_pct:
+                verdicts.append(
+                    f"{cell} abs cycles improved {min(base):g}→{val:g} "
+                    f"({abs_pct:+.2f}%; baseline stale — reviewed update "
+                    "needed): YELLOW"
+                )
+                if rag == "GREEN":
+                    rag = "YELLOW"
+        # acceptance 2: win-sign preservation vs baseline
+        for name, key in (("causal", "causal_pct"), ("vs_hand", "vs_hand_pct")):
+            if key not in r:
+                continue
+            base_pair = None
+            if r["kind"] == "pinpair":
+                if name == "causal":
+                    continue
+                on = baseline.get((r["corpus_id"], scope, "generated"))
+                hand = baseline.get((r["corpus_id"], scope, "handwritten_replay"))
+                base_pair = (min(hand), min(on)) if on and hand else None
+            elif name == "causal":
+                off = baseline.get((r["corpus_id"], scope, cell_selector(r, "sem_off")))
+                on = baseline.get((r["corpus_id"], scope, cell_selector(r, "sem_on")))
+                base_pair = (min(off), min(on)) if off and on else None
+            else:
+                on = baseline.get((r["corpus_id"], scope, cell_selector(r, "sem_on")))
+                hand = baseline.get(
+                    (r["corpus_id"], scope, cell_selector(r, "hand_on"))
+                )
+                base_pair = (min(hand), min(on)) if on and hand else None
+            if not base_pair or not base_pair[0]:
+                verdicts.append(f"{name} {r[key]:+.2f}% (no baseline row)")
+                continue
+            base_pct = 100.0 * (base_pair[1] - base_pair[0]) / base_pair[0]
+            drift = abs(r[key] - base_pct)
+            if base_pct < 0 <= r[key]:  # win-sign flip (causal or vs-hand)
+                verdicts.append(
+                    f"{name} WIN→LOSS FLIP {base_pct:+.2f}%→{r[key]:+.2f}%: RED"
+                )
+                rag = "RED"
+            elif base_pct <= -0.5 and r[key] > -0.5:
+                # Finding sweep_2x2.py:1259 (fixture C): a real win
+                # (class band <= -0.5%) eroding into the parity band is a
+                # regression, not drift — RED by default; a full flip to
+                # >= 0 is caught above.
+                tag = "YELLOW" if allow_win_to_parity else "RED"
+                verdicts.append(
+                    f"{name} WIN→PARITY {base_pct:+.2f}%→{r[key]:+.2f}%: {tag}"
+                )
+                if tag == "RED":
+                    rag = "RED"
+                elif rag == "GREEN":
+                    rag = "YELLOW"
+            elif base_pct > 0.5 and (r[key] - base_pct) > red_loss_growth_pct:
+                # Finding sweep_2x2.py:1259 (fixture D): an existing loss
+                # growing beyond --red-loss-growth-pct percentage points
+                # is RED (exit 1), not an unalertable YELLOW.
+                verdicts.append(
+                    f"{name} LOSS GREW {base_pct:+.2f}%→{r[key]:+.2f}% "
+                    f"(+{r[key] - base_pct:.2f}pp > "
+                    f"{red_loss_growth_pct:g}pp): RED"
+                )
+                rag = "RED"
+            elif drift > max_drift_pct:
+                verdicts.append(f"{name} drift {base_pct:+.2f}%→{r[key]:+.2f}%: YELLOW")
+                if rag == "GREEN":
+                    rag = "YELLOW"
+            else:
+                verdicts.append(
+                    f"{name} {r[key]:+.2f}% vs baseline {base_pct:+.2f}%: GREEN"
+                )
+        if r["op"] in prev and "causal_pct" in r and "causal_pct" in prev[r["op"]]:
+            verdicts.append(
+                f"prev-run causal {prev[r['op']]['causal_pct']:+.2f}%→{r['causal_pct']:+.2f}%"
+            )
+        if any("STOP" in n or "COMPILE_FAIL" in n for n in r.get("notes", [])):
+            verdicts.append("correctness/compile failure: RED")
+            rag = "RED"
+        # Verdict column carries YELLOW too (adversarial missed item:
+        # a YELLOW row displaying 'ok' hid the one channel YELLOW has).
+        col = (
+            "RED"
+            if any("RED" in v for v in verdicts)
+            else ("YELLOW" if any("YELLOW" in v for v in verdicts) else "ok")
+        )
+        return {"scope": scope, "verdicts": verdicts, "col": col, "rag": rag}
+
+    def _report_row_line(self, r, row):
+        """The REPORT.md table line for one row verdict (shared by the
+        streamed ROW-VERDICT.json and the final aggregation — byte-equal)."""
+        return (
+            f"| {r['op']} | {row['col']} | "
+            f"{'; '.join(row['verdicts']) or 'no silicon cells this run'} |"
+        )
+
+    def _emit_row_verdict(self, result):
+        """FIRST-CLASS ROW VERDICT STREAMING: write
+        <evidence-root>/<op>/ROW-VERDICT.json the moment the row's silicon
+        cells complete — the same computation report() applies at the end
+        (cycles per leg, vs_hand %, WIN/PARITY/LOSS class, baseline drift
+        verdicts), per row, at completion time.  The final REPORT.md is an
+        aggregation of the identical _row_verdict logic."""
+        if not hasattr(self, "_stream_ctx"):
+            baseline, base_classes = self._load_baseline(
+                getattr(self.a, "baseline", None)
+            )
+            self._stream_ctx = (baseline, base_classes, self._load_prev_results())
+        baseline, base_classes, prev = self._stream_ctx
+        row = self._row_verdict(result, baseline, base_classes, prev)
+        payload = {
+            "op": result["op"],
+            "corpus_id": result.get("corpus_id"),
+            "scope": row["scope"],
+            "cells": result.get("cells", {}),
+            "runs": result.get("runs", {}),
+            "notes": result.get("notes", []),
+            "causal_pct": result.get("causal_pct"),
+            "vs_hand_pct": result.get("vs_hand_pct"),
+            "class": self._row_class(result),
+            "verdict": row["col"],
+            "rag": row["rag"],
+            "details": row["verdicts"],
+            "baseline": str(getattr(self.a, "baseline", "") or ""),
+            "report_row": self._report_row_line(result, row),
+        }
+        out = self.ev / result["op"] / "ROW-VERDICT.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2) + "\n")
+        return payload
+
     def _load_prev_results(self):
         """Previous-run results for the report's drift annotation: the
         NEWEST --prev-run root that carries a scoreboard.json (roots are
@@ -3319,218 +3594,12 @@ exit $RC
         ]
         rag = "GREEN"
         for r in results:
-            verdicts = []
-            c = r.get("cells", {})
-            scope = r.get("scope") or f"{r['marker']}_MATH_ISOLATE_PER_TILE"
-            r = dict(r, scope=scope)
-            expected = base_classes.get((r["corpus_id"], scope)) or self._derived_class(
-                baseline, r
-            )
-            # acceptance 1 (class-aware, D4): a refusal is GREEN only when the
-            # baseline class is refusal (or the row has no baseline history).
-            # A row whose baseline carries a measured WIN that now collapses
-            # to a byte-identical refusal is a total-refusal regression: RED.
-            if c.get("sem_off") == "REFUSAL_BYTE_IDENTICAL":
-                if expected == "win":
-                    verdicts.append(
-                        "WIN→REFUSAL FLIP (baseline class win, now "
-                        "byte-identical refusal — planner stopped firing): RED"
-                    )
-                    rag = "RED"
-                elif expected in ("parity", "loss"):
-                    verdicts.append(
-                        f"{expected.upper()}→REFUSAL: flagged notice "
-                        "(measured baseline row now refuses): YELLOW"
-                    )
-                    if rag == "GREEN":
-                        rag = "YELLOW"
-                elif expected == "refusal":
-                    verdicts.append(
-                        "refusal byte-identical (baseline class refusal): GREEN"
-                    )
-                else:
-                    verdicts.append(
-                        "refusal byte-identical (no baseline history): GREEN"
-                    )
-            elif expected == "refusal" and any(
-                isinstance(v, (int, float)) for v in c.values()
-            ):
-                # refusal -> changed: not a regression by itself, but a class
-                # transition that must be surfaced, never silently blessed.
-                verdicts.append(
-                    "REFUSAL→CHANGED: flagged notice (baseline expects a "
-                    "byte-identical refusal, OFF/ON now differs and was "
-                    "measured): YELLOW"
-                )
-                if rag == "GREEN":
-                    rag = "YELLOW"
-            # acceptance 1b: INVALID_MARKER cells can never gate GREEN.
-            if any(v == "INVALID_MARKER" for v in c.values()):
-                verdicts.append(
-                    "INVALID_MARKER cell(s) — reading below the payload "
-                    "issue-slot lower bound (KERNEL marker required): RED"
-                )
-                rag = "RED"
-            # acceptance 1d (enforcement layer): a macro-launch row with an
-            # EMPTY issue_slot_lb is RED — the §1 issue-slot check silently
-            # no-ops on empty lb, under exactly the fire-and-forget shapes
-            # that need it (wave-6 V3).
-            if any("EMPTY issue_slot_lb" in n for n in r.get("notes", [])):
-                verdicts.append(
-                    "MACRO-LAUNCH ROW WITHOUT issue_slot_lb — HANDOFF §1 "
-                    "metric caveat unenforceable on this row's cells: RED"
-                )
-                rag = "RED"
-            # acceptance 1c (finding sweep_2x2.py:1276): a cell with baseline
-            # history that produced NO parsable metric this run is
-            # INVALID_METRIC RED — a profiler/post-CSV or marker rename must
-            # never turn the nightly permanently GREEN while measuring
-            # nothing.  Withheld/blocked rows already carry their own RED.
-            blocked = any(
-                "STOP" in n or "COMPILE_FAIL" in n or "withheld" in n or "DRY-RUN" in n
-                for n in r.get("notes", [])
-            )
-            if not blocked:
-                dead = sorted(
-                    cell
-                    for cell, v in c.items()
-                    if v is None
-                    and baseline.get((r["corpus_id"], scope, cell_selector(r, cell)))
-                )
-                numeric_any = any(isinstance(v, (int, float)) for v in c.values())
-                refused = any(v == "REFUSAL_BYTE_IDENTICAL" for v in c.values())
-                if dead:
-                    verdicts.append(
-                        f"INVALID_METRIC — cell(s) {', '.join(dead)} have "
-                        "baseline history but produced no parsable metric "
-                        "(marker/post-CSV drift?): RED"
-                    )
-                    rag = "RED"
-                elif expected and c and not numeric_any and not refused:
-                    verdicts.append(
-                        "INVALID_METRIC — row has baseline class history but "
-                        "every cell is unparsable/None: RED"
-                    )
-                    rag = "RED"
-            # acceptance 2a (findings sweep_2x2.py:1222/:1181): per-cell
-            # ABSOLUTE cycle drift vs the baseline's min-aggregated cycles.
-            # Ratio-only acceptance is blind to uniform slowdowns (both legs
-            # +50% keeps every ratio) and never checks the hand leg on
-            # refusal rows.  Slowdowns beyond --max-abs-drift-pct are RED;
-            # improvements beyond it are YELLOW (stale baseline — reviewed
-            # update needed), never silently blessed.
-            for cell in sorted(c):
-                val = c[cell]
-                if not isinstance(val, (int, float)):
-                    continue
-                base = baseline.get((r["corpus_id"], scope, cell_selector(r, cell)))
-                if not base or not min(base):
-                    continue
-                abs_pct = 100.0 * (val - min(base)) / min(base)
-                if abs_pct > self.a.max_abs_drift_pct:
-                    verdicts.append(
-                        f"{cell} ABS CYCLES {min(base):g}→{val:g} "
-                        f"({abs_pct:+.2f}% > {self.a.max_abs_drift_pct:g}%): RED"
-                    )
-                    rag = "RED"
-                elif abs_pct < -self.a.max_abs_drift_pct:
-                    verdicts.append(
-                        f"{cell} abs cycles improved {min(base):g}→{val:g} "
-                        f"({abs_pct:+.2f}%; baseline stale — reviewed update "
-                        "needed): YELLOW"
-                    )
-                    if rag == "GREEN":
-                        rag = "YELLOW"
-            # acceptance 2: win-sign preservation vs baseline
-            for name, key in (("causal", "causal_pct"), ("vs_hand", "vs_hand_pct")):
-                if key not in r:
-                    continue
-                base_pair = None
-                if r["kind"] == "pinpair":
-                    if name == "causal":
-                        continue
-                    on = baseline.get((r["corpus_id"], scope, "generated"))
-                    hand = baseline.get((r["corpus_id"], scope, "handwritten_replay"))
-                    base_pair = (min(hand), min(on)) if on and hand else None
-                elif name == "causal":
-                    off = baseline.get(
-                        (r["corpus_id"], scope, cell_selector(r, "sem_off"))
-                    )
-                    on = baseline.get(
-                        (r["corpus_id"], scope, cell_selector(r, "sem_on"))
-                    )
-                    base_pair = (min(off), min(on)) if off and on else None
-                else:
-                    on = baseline.get(
-                        (r["corpus_id"], scope, cell_selector(r, "sem_on"))
-                    )
-                    hand = baseline.get(
-                        (r["corpus_id"], scope, cell_selector(r, "hand_on"))
-                    )
-                    base_pair = (min(hand), min(on)) if on and hand else None
-                if not base_pair or not base_pair[0]:
-                    verdicts.append(f"{name} {r[key]:+.2f}% (no baseline row)")
-                    continue
-                base_pct = 100.0 * (base_pair[1] - base_pair[0]) / base_pair[0]
-                drift = abs(r[key] - base_pct)
-                if base_pct < 0 <= r[key]:  # win-sign flip (causal or vs-hand)
-                    verdicts.append(
-                        f"{name} WIN→LOSS FLIP {base_pct:+.2f}%→{r[key]:+.2f}%: RED"
-                    )
-                    rag = "RED"
-                elif base_pct <= -0.5 and r[key] > -0.5:
-                    # Finding sweep_2x2.py:1259 (fixture C): a real win
-                    # (class band <= -0.5%) eroding into the parity band is a
-                    # regression, not drift — RED by default; a full flip to
-                    # >= 0 is caught above.
-                    tag = "YELLOW" if self.a.allow_win_to_parity else "RED"
-                    verdicts.append(
-                        f"{name} WIN→PARITY {base_pct:+.2f}%→{r[key]:+.2f}%: {tag}"
-                    )
-                    if tag == "RED":
-                        rag = "RED"
-                    elif rag == "GREEN":
-                        rag = "YELLOW"
-                elif (
-                    base_pct > 0.5 and (r[key] - base_pct) > self.a.red_loss_growth_pct
-                ):
-                    # Finding sweep_2x2.py:1259 (fixture D): an existing loss
-                    # growing beyond --red-loss-growth-pct percentage points
-                    # is RED (exit 1), not an unalertable YELLOW.
-                    verdicts.append(
-                        f"{name} LOSS GREW {base_pct:+.2f}%→{r[key]:+.2f}% "
-                        f"(+{r[key] - base_pct:.2f}pp > "
-                        f"{self.a.red_loss_growth_pct:g}pp): RED"
-                    )
-                    rag = "RED"
-                elif drift > self.a.max_drift_pct:
-                    verdicts.append(
-                        f"{name} drift {base_pct:+.2f}%→{r[key]:+.2f}%: YELLOW"
-                    )
-                    if rag == "GREEN":
-                        rag = "YELLOW"
-                else:
-                    verdicts.append(
-                        f"{name} {r[key]:+.2f}% vs baseline {base_pct:+.2f}%: GREEN"
-                    )
-            if r["op"] in prev and "causal_pct" in r and "causal_pct" in prev[r["op"]]:
-                verdicts.append(
-                    f"prev-run causal {prev[r['op']]['causal_pct']:+.2f}%→{r['causal_pct']:+.2f}%"
-                )
-            if any("STOP" in n or "COMPILE_FAIL" in n for n in r.get("notes", [])):
-                verdicts.append("correctness/compile failure: RED")
-                rag = "RED"
-            # Verdict column carries YELLOW too (adversarial missed item:
-            # a YELLOW row displaying 'ok' hid the one channel YELLOW has).
-            col = (
-                "RED"
-                if any("RED" in v for v in verdicts)
-                else ("YELLOW" if any("YELLOW" in v for v in verdicts) else "ok")
-            )
-            lines.append(
-                f"| {r['op']} | {col} | "
-                f"{'; '.join(verdicts) or 'no silicon cells this run'} |"
-            )
+            # Per-row verdict via the SAME factored computation the silicon
+            # phase streams into ROW-VERDICT.json at row completion — the
+            # final report is an aggregation of those verdicts, byte-equal.
+            row = self._row_verdict(r, baseline, base_classes, prev)
+            rag = self._worst_rag(rag, row["rag"])
+            lines.append(self._report_row_line(r, row))
         for s in skips:
             lines.append(f"| {s['op']} | SKIP | {s['reason']} |")
         if self.reds:
@@ -3559,9 +3628,15 @@ exit $RC
         for s in slots:
             if s[0] == "withheld":
                 results.append(s[1])
+                self._emit_row_verdict(s[1])
                 continue
             _tag, row, classifications, attribution = s
-            results.append(self.silicon(row, classifications))
+            result = self.silicon(row, classifications)
+            results.append(result)
+            # FIRST-CLASS ROW VERDICT STREAMING: the row's verdict lands in
+            # <op>/ROW-VERDICT.json the moment its cells are assembled —
+            # REPORT.md later aggregates the identical computation.
+            self._emit_row_verdict(result)
             # Weekly per-knob silicon legs run BEHIND the main BH CRAQ
             # gate (D3) and add their own per-knob classify/CRAQ/
             # correctness pipeline inside knob_silicon().  They stay on
