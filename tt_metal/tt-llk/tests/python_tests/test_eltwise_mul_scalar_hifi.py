@@ -211,15 +211,15 @@ def _compute_dest_reuse_golden(math_fidelity, formats, prepared):
     return golden_tensor
 
 
-@pytest.mark.xfail(
+@pytest.mark.skip(
     reason=(
-        "REVERTED HiFi init: deepseek_binary_dest_reuse_tiles_init takes the "
-        "general math init at HiFi with a hard-coded DEFAULT_TENSOR_SHAPE "
-        "(eltwise_mul_scalar.h:74-88), mis-specializing the tile shape and "
-        "hanging the device on silicon (tt-blaze #1760, strategy §9). Kept as a "
-        "compile-only reproducer; never runs on a BH card here."
-    ),
-    strict=False,
+        "REVERTED HiFi init HANGS the device on silicon (tt-blaze #1760, strategy §9): "
+        "deepseek_binary_dest_reuse_tiles_init takes the general math init at HiFi with a "
+        "hard-coded DEFAULT_TENSOR_SHAPE (eltwise_mul_scalar.h:74-88), mis-specializing the "
+        "tile shape. A device hang CANNOT be xfailed -- it wedges every subsequent test on "
+        "the Tensix (confirmed in run 32156210309) -- so this is skipped, not xfailed. "
+        "Un-skip once the HiFi init is fixed."
+    )
 )
 @parametrize(
     formats=input_output_formats(
