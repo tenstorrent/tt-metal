@@ -151,6 +151,10 @@ inline void mul_binary_tile_init() {}
 inline void mul_binary_tile(uint32_t a, uint32_t b, uint32_t o) {
     T("      mul_binary_tile(dst" + n(a) + ",dst" + n(b) + " -> dst" + n(o) + ")");
 }
+inline void binary_max_tile_init() {}
+inline void binary_max_tile(uint32_t a, uint32_t b, uint32_t o) {
+    T("      binary_max_tile(dst" + n(a) + ",dst" + n(b) + " -> dst" + n(o) + ")");
+}
 inline void div_binary_tile_init() {}
 inline void div_binary_tile(uint32_t a, uint32_t b, uint32_t o) {
     T("      div_binary_tile(dst" + n(a) + ",dst" + n(b) + " -> dst" + n(o) + ")");
@@ -630,9 +634,13 @@ static bool report(const char* title) {
         printf("  %s\n", s.c_str());
     }
     bool bad = false;
-    for (int cb = 0; cb <= 4; ++cb) {
+    // Every circular buffer the model uses, not 0..4: the output CB is 16 and the
+    // accumulator's is 24. And the tag needs the COMMA, because every trace line writes
+    // "cb3,2" -- the page count follows the id. Matching "cb3)" matched nothing at all,
+    // which made this whole check vacuous for as long as it has existed.
+    for (int cb = 0; cb < 32; ++cb) {
         int res = 0, push = 0, wait = 0, pop = 0;
-        std::string tag = "cb" + n(cb) + ")";
+        std::string tag = "(cb" + n(cb) + ",";
         for (auto& s : trace) {
             if (s.find(tag) == std::string::npos) {
                 continue;
@@ -649,6 +657,17 @@ static bool report(const char* title) {
         }
         if (res || push || wait || pop) {
             bool ok = (res == push) && (wait == pop);
+
+            // And for a buffer this thread both PRODUCES and CONSUMES, every pushed block
+            // must be waited on exactly once. reserve==push with wait==pop says nothing about
+            // whether the two sides agree: a state buffer written once and read twice
+            // balances on both counts and still waits for pages that are gone. Only checked
+            // when both halves are on this thread -- for a cross-thread buffer each thread
+            // legitimately sees one half.
+            const bool intra_thread = res > 0 && wait > 0;
+            const bool matched = !intra_thread || push == wait;
+            ok = ok && matched;
+
             bad |= !ok;
             printf(
                 "  [cb%d] reserve=%d push=%d | wait=%d pop=%d -> %s\n",
@@ -657,7 +676,7 @@ static bool report(const char* title) {
                 push,
                 wait,
                 pop,
-                ok ? "balanced" : "*** IMBALANCED ***");
+                ok ? "balanced" : (matched ? "*** IMBALANCED ***" : "*** PUSH/WAIT MISMATCH ***"));
         }
     }
     printf("  RESULT: %s\n", bad ? "*** PROTOCOL IMBALANCE ***" : "protocol balanced");
