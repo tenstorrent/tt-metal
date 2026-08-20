@@ -22,36 +22,6 @@
 // kernel's untilize call sequence exactly, nor can it skip phantom tile-rows.
 // The body below is the same wait/write/barrier/pop shape, driven by this op's
 // loop nest.
-//
-// HELPER SUBSTITUTION 2 - ONE-PACKET DISPATCH.  Neither drain goes through
-// `noc_async_write_page` / `noc_async_write_tile`.  Both call `noc_async_write<BOUND>`
-// with a COMPILE-TIME size bound as the template `max_page_size`, which is the only
-// thing that selects the ONE-PACKET NoC dispatch
-// (`if constexpr (max_page_size <= NOC_MAX_BURST_SIZE)` -> `noc_async_write_one_packet`,
-// dataflow_api.h:838) over the ANY-LENGTH one (`ncrisc_noc_fast_write_any_len`, whose
-// body is a runtime `while (len_bytes > NOC_MAX_BURST_SIZE)` chunking loop).  Dropping
-// that dispatch measured 12.0% on the isolated writer (13.7% on the isolated reader) at
-// 2 KB pages; the bake-off is in perf_experiments/stateful_noc/.
-//
-// CAPABILITY gap, not ergonomics: `noc_async_write_page` hard-codes
-// `noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>` (dataflow_api.h:1258), so no
-// call site that names a page id can reach the one-packet path even when it knows the
-// page size at compile time (this kernel is handed it as compile-time arg 17,
-// IN_TILE_BYTES).  `TensorAccessor` exposes only per-page `get_noc_addr` and
-// `PagesAddressIteratorInterleaved` is by its own docs "accessor.get_noc_addr for each
-// page without complex optimizations" (pages_address_iterator.h:267), so there is no
-// surface that expresses "issue this page SET".  The actionable fix is a `max_page_size`
-// template parameter on `noc_async_write_page`, or a `pages_affine(acc, first_page, n)`
-// page-run iterator owning both the one-packet dispatch and the constant advance.
-//
-// The bound is an UPPER bound, so the polarity is right: above NOC_MAX_BURST_SIZE the
-// any-length form is selected automatically (the hardware primitive cannot take a
-// larger transfer).  That matters because nothing checks the size at runtime -
-// sanitize.h has no burst-size rule, so an oversized one-packet write would be silent
-// corruption.  Every TILE page (bf16 2048, fp32 4096, bfloat8_b 1088) is under the bound
-// on both Wormhole (8192) and Blackhole (16384), so on the TILE path the fallback folds
-// out of the binary entirely; only the ROW_MAJOR stick chunk can exceed it (very large
-// W), and there the fallback is live.  See the two *_BYTES constants below.
 
 #include <stdint.h>
 
@@ -108,15 +78,6 @@ constexpr uint32_t SPLIT_SECOND = IN_TILE_BYTES - SPLIT_FIRST;
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t NUM_SCALE_CHUNKS = Wt_core / WT_SCALE_BLOCK;
 
-// --- ONE-PACKET size bounds (see the header) ----------------------------------
-// TILE output: exactly one page per transaction, always within a burst.
-constexpr uint32_t OUT_PAGE_BYTES = IN_TILE_BYTES;
-// ROW_MAJOR output: `nw * 32 * elem_size` per stick, clamped to the row width.
-// `nw` is Wt_core in Regime A and the W-chunk width in Regime B - both compile-time.
-constexpr uint32_t RM_MAX_NW = REGIME_A ? Wt_core : WT_SCALE_BLOCK;
-constexpr uint32_t RM_PADDED_MAX = RM_MAX_NW * TILE_DIM * ELEM_SIZE;
-constexpr uint32_t RM_CHUNK_MAX_BYTES = RM_PADDED_MAX < ROW_BYTES ? RM_PADDED_MAX : ROW_BYTES;
-
 constexpr auto output_args = TensorAccessorArgs<30>();
 
 FORCE_INLINE uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
@@ -150,17 +111,12 @@ void kernel_main() {
                 const uint32_t row_base = (rt0 + r) * ROW_STRIDE + W_OFFSET + w0;
                 for (uint32_t w = 0; w < nw; ++w) {
                     if constexpr (!SKIP_DM_PAYLOAD) {
-                        // ONE-PACKET page write (see the header): the size is a
-                        // template argument, not just a value.  IN_TILE_BYTES is the
-                        // accessor's aligned page size - the same equality the L1
-                        // stride already relies on, ASSERTed under --dev.
-                        ASSERT(out_acc.get_aligned_page_size() == IN_TILE_BYTES);
-                        const uint32_t src_t = addr + w * IN_TILE_BYTES;
                         if constexpr (COALESCE) {
-                            noc_async_write<OUT_PAGE_BYTES>(src_t, out_acc.get_noc_addr(row_base + w), OUT_PAGE_BYTES);
+                            noc_async_write_tile(row_base + w, out_acc, addr + w * IN_TILE_BYTES);
                         } else {  // lever B5/B6 off-arm: two aligned partial-page transactions
-                            noc_async_write<SPLIT_FIRST>(src_t, out_acc.get_noc_addr(row_base + w), SPLIT_FIRST);
-                            noc_async_write<SPLIT_SECOND>(
+                            const uint32_t src_t = addr + w * IN_TILE_BYTES;
+                            noc_async_write(src_t, out_acc.get_noc_addr(row_base + w), SPLIT_FIRST);
+                            noc_async_write(
                                 src_t + SPLIT_FIRST, out_acc.get_noc_addr(row_base + w, SPLIT_FIRST), SPLIT_SECOND);
                         }
                     }
@@ -195,11 +151,7 @@ void kernel_main() {
                 MaybeDeviceZoneScope("wr_issue");
                 for (uint32_t r = 0; r < nrows; ++r) {
                     if constexpr (!SKIP_DM_PAYLOAD) {
-                        // ONE-PACKET when the chunk is provably within a burst, the
-                        // any-length form when it is not - selected at compile time
-                        // by RM_CHUNK_MAX_BYTES (see the header).
-                        ASSERT(chunk_bytes <= RM_CHUNK_MAX_BYTES);
-                        noc_async_write<RM_CHUNK_MAX_BYTES>(src, out_acc.get_noc_addr(row0 + r, byte_off), chunk_bytes);
+                        noc_async_write(src, out_acc.get_noc_addr(row0 + r, byte_off), chunk_bytes);
                     }
                     if constexpr (!BARRIER_PER_BLOCK) {
                         noc_async_write_barrier();  // lever B7 off-arm

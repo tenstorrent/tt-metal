@@ -84,50 +84,6 @@
 //    is not a style preference: raw for the direction no helper expresses, helper
 //    for the direction it does.  Do not "restore" the gather to a helper - there
 //    is none - and do not hand-roll the broadcast.
-//
-// 5. ONE-PACKET DISPATCH.  The INPUT reads (`read_tiles`, `read_sticks`) do not
-//    go through `noc_async_read_page` / `noc_async_read_tile`.  They call
-//    `noc_async_read<BOUND>` with a COMPILE-TIME size bound as the template
-//    `max_page_size`, which is the only thing that selects the ONE-PACKET NoC
-//    dispatch (`if constexpr (max_page_size <= NOC_MAX_BURST_SIZE)` ->
-//    `noc_async_read_one_packet`, dataflow_api.h:566) over the ANY-LENGTH one
-//    (`ncrisc_noc_fast_read_any_len`, whose body is a runtime
-//    `while (len_bytes > NOC_MAX_BURST_SIZE)` chunking loop).  Dropping that
-//    dispatch measured 13.7% on the isolated reader and 12.0% on the isolated
-//    writer at 2 KB pages; the isolated bake-off is in
-//    perf_experiments/stateful_noc/.
-//
-//    This is a CAPABILITY gap, not an ergonomic bypass: the whole page-granular
-//    API family hard-codes the any-length form -
-//        noc_async_read_page  -> noc_async_read <NOC_MAX_BURST_SIZE + 1, false>
-//                                (dataflow_api.h:1074)
-//        noc_async_write_page -> noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>
-//                                (dataflow_api.h:1258)
-//    so NO call site that names a page id can reach the one-packet path, even
-//    when it knows the page size at compile time (this kernel is handed it as
-//    compile-time arg 17, IN_TILE_BYTES).  `TensorAccessor` exposes only
-//    per-page `get_noc_addr`, and `PagesAddressIteratorInterleaved` is by its own
-//    docs "accessor.get_noc_addr for each page without complex optimizations"
-//    (pages_address_iterator.h:267) - no surface expresses "issue this page SET".
-//    The actionable form of the gap is either a `max_page_size` template
-//    parameter on `noc_async_read_page`/`_write_page`, or a
-//    `pages_affine(acc, first_page, n)` page-run iterator that owns both the
-//    one-packet dispatch and the constant address advance.  Until one of those
-//    exists the dispatch selection has to live at the call site.
-//
-//    POLARITY, and why the bound is safe.  `max_page_size` is an UPPER BOUND, so
-//    a call stays correct at any size: a bound above NOC_MAX_BURST_SIZE selects
-//    the any-length form automatically, which is exactly the `inexpressible`
-//    carve-out (the hardware primitive does not accept a larger transfer).  That
-//    direction matters because NOTHING checks the size at runtime - sanitize.h
-//    carries no burst-size rule, so an oversized one-packet transfer would be
-//    silent corruption, and the compile-time bound is the only guard.  On the
-//    TILE path every supported page (bf16 2048, fp32 4096, bfloat8_b 1088) is
-//    under the bound on both Wormhole (8192) and Blackhole (16384), so the
-//    fallback folds away entirely and the any-length call is GONE.  On the
-//    ROW_MAJOR stick path the chunk is `nw * 32 * elem_size` clamped to
-//    ROW_BYTES, which CAN exceed the burst size at very large W, and there the
-//    fallback is live - see RM_CHUNK_MAX_BYTES below.
 
 #include <stdint.h>
 
@@ -273,28 +229,6 @@ constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t NUM_REDUCE_CHUNKS = Wt_core / WT_REDUCE_BLOCK;
 constexpr uint32_t NUM_SCALE_CHUNKS = Wt_core / WT_SCALE_BLOCK;
 constexpr uint32_t LAST_RT = Rt - 1;
-
-// --- ONE-PACKET size bounds (header justification #5) ------------------------
-// Each is a compile-time UPPER BOUND on the bytes the matching read passes, and
-// is handed to `noc_async_read` as its `max_page_size` template argument.  At or
-// below NOC_MAX_BURST_SIZE that selects `noc_async_read_one_packet`; above it the
-// any-length form is selected automatically, which is the whole carve-out.
-//
-// TILE input: exactly one page.  Every supported page (1088 / 2048 / 4096) is
-// under the burst size on both archs, so the any-length form is unreachable here
-// and the fallback folds out of the binary.
-constexpr uint32_t IN_PAGE_BYTES = IN_TILE_BYTES;
-//
-// ROW_MAJOR input: `read_sticks` moves `nw * 32 * elem_size` bytes per stick,
-// clamped to the tensor's row width.  `nw` is Wt_core on the single-chunk plans
-// (Regime A, and the W-split arm, which reads its whole column slice in one call)
-// and the W-chunk width in Regime B - both compile-time.  This bound is the only
-// place the burst size can actually bite: at bf16 it needs ROW_BYTES > 16 KB on
-// Blackhole (W > 8192), and there the any-length form is the correct answer.
-constexpr uint32_t RM_MAX_NW =
-    (REGIME_A || W_SPLIT) ? Wt_core : (WT_REDUCE_BLOCK > WT_SCALE_BLOCK ? WT_REDUCE_BLOCK : WT_SCALE_BLOCK);
-constexpr uint32_t RM_PADDED_MAX = RM_MAX_NW * TILE_DIM * ELEM_SIZE;
-constexpr uint32_t RM_CHUNK_MAX_BYTES = RM_PADDED_MAX < ROW_BYTES ? RM_PADDED_MAX : ROW_BYTES;
 
 constexpr auto input_args = TensorAccessorArgs<30>();
 [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
@@ -442,17 +376,11 @@ void kernel_main() {
                 const uint32_t row_base = umin(rt0 + r, LAST_RT) * ROW_STRIDE + W_OFFSET + w0;
                 for (uint32_t w = 0; w < nw; ++w) {
                     if constexpr (!SKIP_DM_PAYLOAD) {
-                        // ONE-PACKET page read (header justification #5).  The size
-                        // is a template argument, not just a value: that is what
-                        // drops the any-length dispatch.  `IN_TILE_BYTES` is the
-                        // accessor's aligned page size - the same equality the L1
-                        // stride below already relies on, ASSERTed under --dev.
-                        ASSERT(in_acc.get_aligned_page_size() == IN_TILE_BYTES);
                         if constexpr (COALESCE) {
-                            noc_async_read<IN_PAGE_BYTES>(in_acc.get_noc_addr(row_base + w), addr, IN_PAGE_BYTES);
+                            noc_async_read_tile(row_base + w, in_acc, addr);
                         } else {  // lever B5/B6 off-arm: two aligned partial-page transactions
-                            noc_async_read<SPLIT_FIRST>(in_acc.get_noc_addr(row_base + w), addr, SPLIT_FIRST);
-                            noc_async_read<SPLIT_SECOND>(
+                            noc_async_read(in_acc.get_noc_addr(row_base + w), addr, SPLIT_FIRST);
+                            noc_async_read(
                                 in_acc.get_noc_addr(row_base + w, SPLIT_FIRST), addr + SPLIT_FIRST, SPLIT_SECOND);
                         }
                     }
@@ -488,11 +416,7 @@ void kernel_main() {
             MaybeDeviceZoneScope("rd_in_issue");
             for (uint32_t r = 0; r < nrows; ++r) {
                 if constexpr (!SKIP_DM_PAYLOAD) {
-                    // ONE-PACKET when the chunk is provably within a burst, the
-                    // any-length form when it is not - selected at compile time by
-                    // RM_CHUNK_MAX_BYTES (header justification #5).
-                    ASSERT(chunk_bytes <= RM_CHUNK_MAX_BYTES);
-                    noc_async_read<RM_CHUNK_MAX_BYTES>(in_acc.get_noc_addr(row0 + r, byte_off), dst, chunk_bytes);
+                    noc_async_read(in_acc.get_noc_addr(row0 + r, byte_off), dst, chunk_bytes);
                 }
                 if constexpr (!BARRIER_PER_BLOCK) {
                     noc_async_read_barrier();  // lever B7 off-arm
