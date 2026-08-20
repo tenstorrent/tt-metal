@@ -95,6 +95,8 @@ python3 "$HERE/selftest_witness_preflight.py" > "$EV/selftest-witness-preflight.
   || GATE_SELFTEST_RC=1
 python3 "$HERE/selftest_batched_silicon.py" > "$EV/selftest-batched-silicon.txt" 2>&1 \
   || GATE_SELFTEST_RC=1
+python3 "$HERE/selftest_sweep_core_overhaul.py" > "$EV/selftest-sweep-core-overhaul.txt" 2>&1 \
+  || GATE_SELFTEST_RC=1
 # Record the conf-lint verdict (already enforced above, pre-source) in-evidence.
 { mv /tmp/nightly-selftest-conf-lint.$$ "$EV/selftest-conf-lint.txt" 2>/dev/null || true; }
 { mv /tmp/nightly-selftest-wrapper-lib.$$ "$EV/selftest-wrapper-lib.txt" 2>/dev/null || true; }

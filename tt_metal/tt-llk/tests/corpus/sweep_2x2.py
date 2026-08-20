@@ -164,6 +164,32 @@ Batch robustness (laneCH, storm-first-silicon lesson):
     per (row, selector, tag), verdict content is identical serial vs
     concurrent, and SWEEP_CLASSIFY_WORKERS=1 keeps them fully sequential.
 
+Pipeline overhaul (laneDC, owner-ordered, 2026-08-20 — SPEED with every
+trust anchor byte-identical in semantics):
+  1. CLASSIFY/SILICON PIPELINING (default; --no-pipeline escape): the phase
+     barrier is gone — rows admit to silicon in priority-ordered ROLLING
+     WAVES as their classify (and CRAQ, when phased) verdicts complete,
+     while a background gating thread keeps classifying later waves.  The
+     batch planner handles incremental admission by re-planning per wave
+     (session dirs silicon-batches/w<i>/); flocked device serialization,
+     per-session provenance, keyed gates and refusal logic are the same
+     code (_gate_one_row/_gate_rows/_batched_silicon), merely re-scheduled.
+  2. ROW PRIORITY SCHEDULING: rows expected to have DIFFERING OFF/ON .text
+     (something to measure) classify and measure first; expected
+     byte-identical re-baseline rows last; --priority-ops jumps the queue
+     entirely.  The expectation is a queue hint (prior verdicts/baseline
+     class) — a wrong hint costs only position.  Results stream by value.
+  3. CROSS-PIN CELL REUSE: --prev-run takes evidence root(s) (comma list,
+     newest first) and the resume prober now probes them — a device leg
+     whose jobkey AND archived .text hash set match THIS run's classify
+     output adopts the prior silicon instead of re-running (REUSED_FROM.txt
+     marker + scoreboard reused_cells: provenance visible, never silent).
+  4. FIRST-CLASS ROW VERDICT STREAMING: <evidence-root>/<op>/
+     ROW-VERDICT.json lands the moment a row's cells are assembled —
+     cycles per leg, causal/vs_hand %, WIN/PARITY/LOSS band, baseline
+     drift — via the same _row_verdict computation REPORT.md aggregates at
+     the end (row lines byte-equal).
+
 Typical one-command full sweep:
   python3 tt_metal/tt-llk/tests/corpus/sweep_2x2.py \
     --evidence-root ~/sfpi-uplift/sweep-2x2/evidence-$(date +%Y%m%d) \
@@ -722,6 +748,82 @@ class Sweep:
                     + ",".join(r["op"] for r in self.deferred)
                 )
         self.reds = []
+        self.reused = []  # cross-run adopted device cells (provenance)
+        # --priority-ops sanity: a typo'd op must fail loudly, never
+        # silently deprioritize everything.  Ops deferred by the schedule
+        # filter stay deferred (priority reorders, it never resurrects).
+        prio = getattr(args, "priority_ops", None) or []
+        known = {r["op"] for r in self.rows} | {r["op"] for r in self.deferred}
+        missing = set(prio) - known
+        if missing:
+            sys.exit(f"unknown ops in --priority-ops: {','.join(sorted(missing))}")
+        live = {r["op"] for r in self.rows}
+        for op in prio:
+            if op not in live:
+                print(
+                    f"priority: op {op} is schedule-deferred this run — "
+                    "priority reorders the queue, it never resurrects a "
+                    "deferred row"
+                )
+
+    # ---------------- row priority scheduling ----------------
+    def _expected_identical(self, row, base_classes):
+        """Best-effort hint that this row's OFF/ON legs will be
+        byte-identical (nothing to measure — a re-baseline row).  Sources,
+        in order: a classify verdict already on disk for this run root or
+        any --prev-run root (read UNKEYED — this is a QUEUE hint, never a
+        trust decision: the keyed classify verdict still decides every
+        refusal and every device cell exactly as before), then the
+        baseline's expected class (refusal == byte-identical history).  A
+        wrong hint costs only queue position."""
+        if row["kind"] == "pinpair":
+            return False  # single pinned leg: always a measured A/B
+        sel = "sem-perf" if row["nodes"].get("sem-perf") else "sem-corr"
+        if not row["nodes"].get(sel):
+            return False
+        for root in [self.ev] + self._prev_roots():
+            vf = pathlib.Path(root) / row["op"] / "classify" / sel / "verdict.json"
+            if not vf.is_file():
+                continue
+            try:
+                v = json.loads(vf.read_text())
+            except ValueError:
+                continue
+            if v.get("status") == "OK" and v.get("all") in ("IDENTICAL", "CHANGED"):
+                return v["all"] == "IDENTICAL"
+        return base_classes.get((row["corpus_id"], row_scope(row))) == "refusal"
+
+    def _order_rows(self):
+        """ROW PRIORITY SCHEDULING (owner order, pipeline overhaul): rows
+        with something to MEASURE classify and reach silicon first —
+        results stream by value, not alphabetically/config order.
+
+        Order: (0) --priority-ops, in the order given (they jump the queue
+        entirely); (1) rows expected to have DIFFERING OFF/ON .text hashes
+        (or unknown — never guessed identical); (2) rows expected
+        byte-identical (re-baseline rows) last.  Stable within each tier
+        (config order).  The expectation is a hint from prior classify
+        verdicts/baseline class; actual verdicts are computed exactly as
+        before and correctness is unaffected by a wrong hint."""
+        prio = list(getattr(self.a, "priority_ops", None) or [])
+        baseline, base_classes = self._load_baseline(getattr(self.a, "baseline", None))
+
+        def key(i):
+            row = self.rows[i]
+            if row["op"] in prio:
+                return (0, prio.index(row["op"]), i)
+            if self._expected_identical(row, base_classes):
+                return (2, 0, i)
+            return (1, 0, i)
+
+        order = sorted(range(len(self.rows)), key=key)
+        self.rows = [self.rows[i] for i in order]
+        tiers = {(0): "priority", (1): "measure", (2): "re-baseline"}
+        desc = ",".join(
+            f"{r['op']}[{tiers[key(i)[0]]}]" for i, r in enumerate(self.rows)
+        )
+        if self.rows:
+            print(f"row priority order: {desc}")
 
     @staticmethod
     def _find_python(venv):
@@ -1798,6 +1900,13 @@ class Sweep:
             "tag": tag,
             "mode": "batched" if batched else "serial",
         }
+        # Cross-run adoption (laneDA fix): with no local evidence for this
+        # leg, probe the --prev-run root(s) and adopt a jobkey- and
+        # .text-hash-matched green cell into this run's root (REUSED_FROM
+        # marker written).  The adopted cell then flows through the very
+        # resume validation below — adoption can never bypass it.
+        if not (work / "rc.txt").is_file() and not self.a.force:
+            self._adopt_prev_cell(work, jobkey, expected_texts)
         # Resume skips only GREEN jobs whose (node, flags, extra_env) jobkey
         # matches AND whose archived .text hash set equals what THIS run's
         # compiler produces for the same node/flags (from the classify
@@ -2174,11 +2283,20 @@ exit $RC
             "mode": "batched",
         }
 
-    def _job_cached(self, job):
-        """Quiet twin of _device_job's keyed hash-matched resume check."""
-        if self.a.force:
-            return False
-        work = job["work"]
+    def _prev_roots(self):
+        """--prev-run evidence roots as a list (newest first).  Accepts the
+        legacy single-Path form (older wrappers/selftests) and None."""
+        prev = getattr(self.a, "prev_run", None)
+        if not prev:
+            return []
+        return list(prev) if isinstance(prev, (list, tuple)) else [prev]
+
+    def _cell_green(self, work, jobkey, expected_texts):
+        """The keyed hash-matched cell validity check (one evidence dir):
+        green rc + 'passed' log, jobkey equality, and archived .text set ==
+        THIS run's classify hashes.  expected_texts=None never validates.
+        Shared verbatim by the local resume and the cross-run adoption
+        probe so reuse can never be weaker than resume."""
         if not (work / "rc.txt").is_file():
             return False
         try:
@@ -2191,12 +2309,64 @@ exit $RC
             cached_key = json.loads((work / "jobkey.json").read_text())
         except (ValueError, OSError):
             return False
-        if cached_key != self._job_key(job):
+        if cached_key != jobkey:
             return False
+        if expected_texts is None or not (work / "TEXT_HASHES.txt").is_file():
+            return False
+        return self._texts_of(work / "TEXT_HASHES.txt") == expected_texts
+
+    def _adopt_prev_cell(self, work, jobkey, expected_texts):
+        """Cross-run/cross-pin silicon cell reuse (laneDA root cause:
+        --prev-run fed ONLY the scoreboard annotator while the resume prober
+        looked at the current run root alone, so byte-identical OFF/hand
+        cells re-ran every pin).  Probe each --prev-run root (newest first)
+        for this leg's evidence at the SAME relative path and adopt it iff
+        it passes the EXACT checks the local resume applies (_cell_green:
+        green rc + jobkey equality + .text set == THIS run's classify
+        hashes — a cc1plus bump that changes the bytes can never reuse).
+        Adoption COPIES the evidence into this run's root (self-contained,
+        SHA256SUMS-covered) and writes a REUSED_FROM.txt marker beside it —
+        provenance visible, never silent.  Returns the source root or None.
+        """
+        if expected_texts is None or getattr(self.a, "force", False):
+            return None
+        try:
+            rel = work.relative_to(self.ev)
+        except ValueError:
+            return None
+        for root in self._prev_roots():
+            prev = pathlib.Path(root)
+            if prev.resolve() == self.ev.resolve():
+                continue
+            src = prev / rel
+            if not self._cell_green(src, jobkey, expected_texts):
+                continue
+            shutil.rmtree(work, ignore_errors=True)
+            shutil.copytree(src, work)
+            (work / "REUSED_FROM.txt").write_text(
+                f"reused-from:{prev}\nleg:{rel}\n"
+                "checks: jobkey equality (node/flags/extra_env/tag/mode) + "
+                "archived .text hash set == this run's classify hashes + "
+                "green rc/'passed' log\n"
+            )
+            if not hasattr(self, "reused"):
+                self.reused = []
+            self.reused.append({"leg": str(rel), "reused_from": str(prev)})
+            print(f"reuse: {rel} reused-from:{prev} (jobkey + .text hash-matched)")
+            return prev
+        return None
+
+    def _job_cached(self, job):
+        """Quiet twin of _device_job's keyed hash-matched resume check,
+        extended with the --prev-run cross-run adoption probe."""
+        if self.a.force:
+            return False
+        work = job["work"]
+        jobkey = self._job_key(job)
         exp = self._classify_texts(job["row"], job["sel"], job["leg"])
-        if exp is None or not (work / "TEXT_HASHES.txt").is_file():
-            return False
-        return self._texts_of(work / "TEXT_HASHES.txt") == exp
+        if self._cell_green(work, jobkey, exp):
+            return True
+        return self._adopt_prev_cell(work, jobkey, exp) is not None
 
     def _batched_leg_verdict(self, row, sel, label, leg, work, jobkey, expected_texts):
         """Assembly-side verdict on evidence the batched executor produced
@@ -2616,10 +2786,15 @@ exit $RC
         )
         self._split_batch_session(sdir, jobs, session_rc, gctx)
 
-    def _batched_silicon(self, gated):
+    def _batched_silicon(self, gated, wave=None):
         """Executor entry: gated = [(row, classifications)] rows the silicon
         gates admitted.  Produces every pending leg's evidence; assembly
-        (silicon()) then consumes it via the keyed resume path."""
+        (silicon()) then consumes it via the keyed resume path.
+
+        `wave` scopes the session dirs (silicon-batches/<wave>/...) under
+        pipelined rolling admission: each admitted wave is re-planned and
+        executed independently, so group dir names never collide across
+        waves while per-LEG evidence stays at its one canonical path."""
         jobs = []
         for row, cls in gated:
             jobs.extend(self._silicon_jobs(row, cls))
@@ -2637,6 +2812,8 @@ exit $RC
 
         gkeys = sorted(groups, key=gorder)
         broot = self.ev / "silicon-batches"
+        if wave is not None:
+            broot = broot / str(wave)
         broot.mkdir(parents=True, exist_ok=True)
         gnames = {
             key: f"g{i}-{hashlib.sha256((key[0] + repr(key[1])).encode()).hexdigest()[:8]}"
@@ -3079,6 +3256,9 @@ exit $RC
             "results": results,
             "skips": skips,
             "reds": self.reds,
+            # cross-run adopted device cells (also marked per-leg by
+            # REUSED_FROM.txt in each adopted evidence dir)
+            "reused_cells": getattr(self, "reused", []),
         }
         (self.ev / "scoreboard.json").write_text(json.dumps(payload, indent=2) + "\n")
         cc1 = self.info["cc1plus_sha256"]
@@ -3216,20 +3396,305 @@ exit $RC
             return "parity"
         return "loss"
 
+    _RAG_ORDER = {"GREEN": 0, "YELLOW": 1, "RED": 2}
+
+    @classmethod
+    def _worst_rag(cls, a, b):
+        return a if cls._RAG_ORDER[a] >= cls._RAG_ORDER[b] else b
+
+    @staticmethod
+    def _row_class(r):
+        """WIN/PARITY/LOSS band for a row's streamed verdict (the sem-vs-hand
+        sign convention the scoreboard uses: <-0.5% win, <=+0.5% parity)."""
+        c = r.get("cells") or {}
+        if any(v == "REFUSAL_BYTE_IDENTICAL" for v in c.values()):
+            return "REFUSAL"
+        v = r.get("vs_hand_pct")
+        if isinstance(v, (int, float)):
+            return "WIN" if v < -0.5 else ("PARITY" if v <= 0.5 else "LOSS")
+        return "UNMEASURED"
+
+    def _row_verdict(self, r, baseline, base_classes, prev):
+        """The per-row acceptance computation of report(), factored out so
+        the silicon phase can STREAM each row's verdict the moment its
+        cells complete (ROW-VERDICT.json) and the final REPORT.md is an
+        aggregation of the IDENTICAL logic — the row line is byte-equal
+        whether computed at completion time or at the end.  Pure over
+        (result row, baseline, prev): no self.reds side effects, so
+        streaming + final aggregation never double-book a RED.
+
+        Returns {'scope', 'verdicts', 'col', 'rag'} (rag is row-local;
+        report() folds it into the run verdict with _worst_rag)."""
+        max_abs_drift_pct = getattr(self.a, "max_abs_drift_pct", 10.0)
+        red_loss_growth_pct = getattr(self.a, "red_loss_growth_pct", 5.0)
+        max_drift_pct = getattr(self.a, "max_drift_pct", 5.0)
+        allow_win_to_parity = getattr(self.a, "allow_win_to_parity", False)
+        verdicts = []
+        rag = "GREEN"
+        c = r.get("cells", {})
+        scope = r.get("scope") or f"{r['marker']}_MATH_ISOLATE_PER_TILE"
+        r = dict(r, scope=scope)
+        expected = base_classes.get((r["corpus_id"], scope)) or self._derived_class(
+            baseline, r
+        )
+        # acceptance 1 (class-aware, D4): a refusal is GREEN only when the
+        # baseline class is refusal (or the row has no baseline history).
+        # A row whose baseline carries a measured WIN that now collapses
+        # to a byte-identical refusal is a total-refusal regression: RED.
+        if c.get("sem_off") == "REFUSAL_BYTE_IDENTICAL":
+            if expected == "win":
+                verdicts.append(
+                    "WIN→REFUSAL FLIP (baseline class win, now "
+                    "byte-identical refusal — planner stopped firing): RED"
+                )
+                rag = "RED"
+            elif expected in ("parity", "loss"):
+                verdicts.append(
+                    f"{expected.upper()}→REFUSAL: flagged notice "
+                    "(measured baseline row now refuses): YELLOW"
+                )
+                if rag == "GREEN":
+                    rag = "YELLOW"
+            elif expected == "refusal":
+                verdicts.append(
+                    "refusal byte-identical (baseline class refusal): GREEN"
+                )
+            else:
+                verdicts.append("refusal byte-identical (no baseline history): GREEN")
+        elif expected == "refusal" and any(
+            isinstance(v, (int, float)) for v in c.values()
+        ):
+            # refusal -> changed: not a regression by itself, but a class
+            # transition that must be surfaced, never silently blessed.
+            verdicts.append(
+                "REFUSAL→CHANGED: flagged notice (baseline expects a "
+                "byte-identical refusal, OFF/ON now differs and was "
+                "measured): YELLOW"
+            )
+            if rag == "GREEN":
+                rag = "YELLOW"
+        # acceptance 1b: INVALID_MARKER cells can never gate GREEN.
+        if any(v == "INVALID_MARKER" for v in c.values()):
+            verdicts.append(
+                "INVALID_MARKER cell(s) — reading below the payload "
+                "issue-slot lower bound (KERNEL marker required): RED"
+            )
+            rag = "RED"
+        # acceptance 1d (enforcement layer): a macro-launch row with an
+        # EMPTY issue_slot_lb is RED — the §1 issue-slot check silently
+        # no-ops on empty lb, under exactly the fire-and-forget shapes
+        # that need it (wave-6 V3).
+        if any("EMPTY issue_slot_lb" in n for n in r.get("notes", [])):
+            verdicts.append(
+                "MACRO-LAUNCH ROW WITHOUT issue_slot_lb — HANDOFF §1 "
+                "metric caveat unenforceable on this row's cells: RED"
+            )
+            rag = "RED"
+        # acceptance 1c (finding sweep_2x2.py:1276): a cell with baseline
+        # history that produced NO parsable metric this run is
+        # INVALID_METRIC RED — a profiler/post-CSV or marker rename must
+        # never turn the nightly permanently GREEN while measuring
+        # nothing.  Withheld/blocked rows already carry their own RED.
+        blocked = any(
+            "STOP" in n or "COMPILE_FAIL" in n or "withheld" in n or "DRY-RUN" in n
+            for n in r.get("notes", [])
+        )
+        if not blocked:
+            dead = sorted(
+                cell
+                for cell, v in c.items()
+                if v is None
+                and baseline.get((r["corpus_id"], scope, cell_selector(r, cell)))
+            )
+            numeric_any = any(isinstance(v, (int, float)) for v in c.values())
+            refused = any(v == "REFUSAL_BYTE_IDENTICAL" for v in c.values())
+            if dead:
+                verdicts.append(
+                    f"INVALID_METRIC — cell(s) {', '.join(dead)} have "
+                    "baseline history but produced no parsable metric "
+                    "(marker/post-CSV drift?): RED"
+                )
+                rag = "RED"
+            elif expected and c and not numeric_any and not refused:
+                verdicts.append(
+                    "INVALID_METRIC — row has baseline class history but "
+                    "every cell is unparsable/None: RED"
+                )
+                rag = "RED"
+        # acceptance 2a (findings sweep_2x2.py:1222/:1181): per-cell
+        # ABSOLUTE cycle drift vs the baseline's min-aggregated cycles.
+        # Ratio-only acceptance is blind to uniform slowdowns (both legs
+        # +50% keeps every ratio) and never checks the hand leg on
+        # refusal rows.  Slowdowns beyond --max-abs-drift-pct are RED;
+        # improvements beyond it are YELLOW (stale baseline — reviewed
+        # update needed), never silently blessed.
+        for cell in sorted(c):
+            val = c[cell]
+            if not isinstance(val, (int, float)):
+                continue
+            base = baseline.get((r["corpus_id"], scope, cell_selector(r, cell)))
+            if not base or not min(base):
+                continue
+            abs_pct = 100.0 * (val - min(base)) / min(base)
+            if abs_pct > max_abs_drift_pct:
+                verdicts.append(
+                    f"{cell} ABS CYCLES {min(base):g}→{val:g} "
+                    f"({abs_pct:+.2f}% > {max_abs_drift_pct:g}%): RED"
+                )
+                rag = "RED"
+            elif abs_pct < -max_abs_drift_pct:
+                verdicts.append(
+                    f"{cell} abs cycles improved {min(base):g}→{val:g} "
+                    f"({abs_pct:+.2f}%; baseline stale — reviewed update "
+                    "needed): YELLOW"
+                )
+                if rag == "GREEN":
+                    rag = "YELLOW"
+        # acceptance 2: win-sign preservation vs baseline
+        for name, key in (("causal", "causal_pct"), ("vs_hand", "vs_hand_pct")):
+            if key not in r:
+                continue
+            base_pair = None
+            if r["kind"] == "pinpair":
+                if name == "causal":
+                    continue
+                on = baseline.get((r["corpus_id"], scope, "generated"))
+                hand = baseline.get((r["corpus_id"], scope, "handwritten_replay"))
+                base_pair = (min(hand), min(on)) if on and hand else None
+            elif name == "causal":
+                off = baseline.get((r["corpus_id"], scope, cell_selector(r, "sem_off")))
+                on = baseline.get((r["corpus_id"], scope, cell_selector(r, "sem_on")))
+                base_pair = (min(off), min(on)) if off and on else None
+            else:
+                on = baseline.get((r["corpus_id"], scope, cell_selector(r, "sem_on")))
+                hand = baseline.get(
+                    (r["corpus_id"], scope, cell_selector(r, "hand_on"))
+                )
+                base_pair = (min(hand), min(on)) if on and hand else None
+            if not base_pair or not base_pair[0]:
+                verdicts.append(f"{name} {r[key]:+.2f}% (no baseline row)")
+                continue
+            base_pct = 100.0 * (base_pair[1] - base_pair[0]) / base_pair[0]
+            drift = abs(r[key] - base_pct)
+            if base_pct < 0 <= r[key]:  # win-sign flip (causal or vs-hand)
+                verdicts.append(
+                    f"{name} WIN→LOSS FLIP {base_pct:+.2f}%→{r[key]:+.2f}%: RED"
+                )
+                rag = "RED"
+            elif base_pct <= -0.5 and r[key] > -0.5:
+                # Finding sweep_2x2.py:1259 (fixture C): a real win
+                # (class band <= -0.5%) eroding into the parity band is a
+                # regression, not drift — RED by default; a full flip to
+                # >= 0 is caught above.
+                tag = "YELLOW" if allow_win_to_parity else "RED"
+                verdicts.append(
+                    f"{name} WIN→PARITY {base_pct:+.2f}%→{r[key]:+.2f}%: {tag}"
+                )
+                if tag == "RED":
+                    rag = "RED"
+                elif rag == "GREEN":
+                    rag = "YELLOW"
+            elif base_pct > 0.5 and (r[key] - base_pct) > red_loss_growth_pct:
+                # Finding sweep_2x2.py:1259 (fixture D): an existing loss
+                # growing beyond --red-loss-growth-pct percentage points
+                # is RED (exit 1), not an unalertable YELLOW.
+                verdicts.append(
+                    f"{name} LOSS GREW {base_pct:+.2f}%→{r[key]:+.2f}% "
+                    f"(+{r[key] - base_pct:.2f}pp > "
+                    f"{red_loss_growth_pct:g}pp): RED"
+                )
+                rag = "RED"
+            elif drift > max_drift_pct:
+                verdicts.append(f"{name} drift {base_pct:+.2f}%→{r[key]:+.2f}%: YELLOW")
+                if rag == "GREEN":
+                    rag = "YELLOW"
+            else:
+                verdicts.append(
+                    f"{name} {r[key]:+.2f}% vs baseline {base_pct:+.2f}%: GREEN"
+                )
+        if r["op"] in prev and "causal_pct" in r and "causal_pct" in prev[r["op"]]:
+            verdicts.append(
+                f"prev-run causal {prev[r['op']]['causal_pct']:+.2f}%→{r['causal_pct']:+.2f}%"
+            )
+        if any("STOP" in n or "COMPILE_FAIL" in n for n in r.get("notes", [])):
+            verdicts.append("correctness/compile failure: RED")
+            rag = "RED"
+        # Verdict column carries YELLOW too (adversarial missed item:
+        # a YELLOW row displaying 'ok' hid the one channel YELLOW has).
+        col = (
+            "RED"
+            if any("RED" in v for v in verdicts)
+            else ("YELLOW" if any("YELLOW" in v for v in verdicts) else "ok")
+        )
+        return {"scope": scope, "verdicts": verdicts, "col": col, "rag": rag}
+
+    def _report_row_line(self, r, row):
+        """The REPORT.md table line for one row verdict (shared by the
+        streamed ROW-VERDICT.json and the final aggregation — byte-equal)."""
+        return (
+            f"| {r['op']} | {row['col']} | "
+            f"{'; '.join(row['verdicts']) or 'no silicon cells this run'} |"
+        )
+
+    def _emit_row_verdict(self, result):
+        """FIRST-CLASS ROW VERDICT STREAMING: write
+        <evidence-root>/<op>/ROW-VERDICT.json the moment the row's silicon
+        cells complete — the same computation report() applies at the end
+        (cycles per leg, vs_hand %, WIN/PARITY/LOSS class, baseline drift
+        verdicts), per row, at completion time.  The final REPORT.md is an
+        aggregation of the identical _row_verdict logic."""
+        if not hasattr(self, "_stream_ctx"):
+            baseline, base_classes = self._load_baseline(
+                getattr(self.a, "baseline", None)
+            )
+            self._stream_ctx = (baseline, base_classes, self._load_prev_results())
+        baseline, base_classes, prev = self._stream_ctx
+        row = self._row_verdict(result, baseline, base_classes, prev)
+        payload = {
+            "op": result["op"],
+            "corpus_id": result.get("corpus_id"),
+            "scope": row["scope"],
+            "cells": result.get("cells", {}),
+            "runs": result.get("runs", {}),
+            "notes": result.get("notes", []),
+            "causal_pct": result.get("causal_pct"),
+            "vs_hand_pct": result.get("vs_hand_pct"),
+            "class": self._row_class(result),
+            "verdict": row["col"],
+            "rag": row["rag"],
+            "details": row["verdicts"],
+            "baseline": str(getattr(self.a, "baseline", "") or ""),
+            "report_row": self._report_row_line(result, row),
+        }
+        out = self.ev / result["op"] / "ROW-VERDICT.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2) + "\n")
+        return payload
+
+    def _load_prev_results(self):
+        """Previous-run results for the report's drift annotation: the
+        NEWEST --prev-run root that carries a scoreboard.json (roots are
+        given newest first)."""
+        prev = {}
+        for root in self._prev_roots():
+            sb = pathlib.Path(root) / "scoreboard.json"
+            if not sb.is_file():
+                continue
+            for r in json.loads(sb.read_text()).get("results", []):
+                prev[r["op"]] = r
+            break
+        return prev
+
     def report(self, results, skips):
         baseline, base_classes = self._load_baseline(self.a.baseline)
-        prev = {}
-        if self.a.prev_run and (self.a.prev_run / "scoreboard.json").is_file():
-            for r in json.loads((self.a.prev_run / "scoreboard.json").read_text()).get(
-                "results", []
-            ):
-                prev[r["op"]] = r
+        prev = self._load_prev_results()
+        prev_desc = ",".join(str(p) for p in self._prev_roots()) or "none"
         lines = [
             "# 2x2 sweep report",
             "",
             f"- run: `{self.ev}`",
             f"- baseline: `{self.a.baseline or 'none'}`",
-            f"- previous run: `{self.a.prev_run or 'none'}`",
+            f"- previous run: `{prev_desc}`",
             f"- {craq_gate_taint(getattr(self.a, 'skip_craq_gate', False))}",
             "",
             "| op | verdict | detail |",
@@ -3237,218 +3702,12 @@ exit $RC
         ]
         rag = "GREEN"
         for r in results:
-            verdicts = []
-            c = r.get("cells", {})
-            scope = r.get("scope") or f"{r['marker']}_MATH_ISOLATE_PER_TILE"
-            r = dict(r, scope=scope)
-            expected = base_classes.get((r["corpus_id"], scope)) or self._derived_class(
-                baseline, r
-            )
-            # acceptance 1 (class-aware, D4): a refusal is GREEN only when the
-            # baseline class is refusal (or the row has no baseline history).
-            # A row whose baseline carries a measured WIN that now collapses
-            # to a byte-identical refusal is a total-refusal regression: RED.
-            if c.get("sem_off") == "REFUSAL_BYTE_IDENTICAL":
-                if expected == "win":
-                    verdicts.append(
-                        "WIN→REFUSAL FLIP (baseline class win, now "
-                        "byte-identical refusal — planner stopped firing): RED"
-                    )
-                    rag = "RED"
-                elif expected in ("parity", "loss"):
-                    verdicts.append(
-                        f"{expected.upper()}→REFUSAL: flagged notice "
-                        "(measured baseline row now refuses): YELLOW"
-                    )
-                    if rag == "GREEN":
-                        rag = "YELLOW"
-                elif expected == "refusal":
-                    verdicts.append(
-                        "refusal byte-identical (baseline class refusal): GREEN"
-                    )
-                else:
-                    verdicts.append(
-                        "refusal byte-identical (no baseline history): GREEN"
-                    )
-            elif expected == "refusal" and any(
-                isinstance(v, (int, float)) for v in c.values()
-            ):
-                # refusal -> changed: not a regression by itself, but a class
-                # transition that must be surfaced, never silently blessed.
-                verdicts.append(
-                    "REFUSAL→CHANGED: flagged notice (baseline expects a "
-                    "byte-identical refusal, OFF/ON now differs and was "
-                    "measured): YELLOW"
-                )
-                if rag == "GREEN":
-                    rag = "YELLOW"
-            # acceptance 1b: INVALID_MARKER cells can never gate GREEN.
-            if any(v == "INVALID_MARKER" for v in c.values()):
-                verdicts.append(
-                    "INVALID_MARKER cell(s) — reading below the payload "
-                    "issue-slot lower bound (KERNEL marker required): RED"
-                )
-                rag = "RED"
-            # acceptance 1d (enforcement layer): a macro-launch row with an
-            # EMPTY issue_slot_lb is RED — the §1 issue-slot check silently
-            # no-ops on empty lb, under exactly the fire-and-forget shapes
-            # that need it (wave-6 V3).
-            if any("EMPTY issue_slot_lb" in n for n in r.get("notes", [])):
-                verdicts.append(
-                    "MACRO-LAUNCH ROW WITHOUT issue_slot_lb — HANDOFF §1 "
-                    "metric caveat unenforceable on this row's cells: RED"
-                )
-                rag = "RED"
-            # acceptance 1c (finding sweep_2x2.py:1276): a cell with baseline
-            # history that produced NO parsable metric this run is
-            # INVALID_METRIC RED — a profiler/post-CSV or marker rename must
-            # never turn the nightly permanently GREEN while measuring
-            # nothing.  Withheld/blocked rows already carry their own RED.
-            blocked = any(
-                "STOP" in n or "COMPILE_FAIL" in n or "withheld" in n or "DRY-RUN" in n
-                for n in r.get("notes", [])
-            )
-            if not blocked:
-                dead = sorted(
-                    cell
-                    for cell, v in c.items()
-                    if v is None
-                    and baseline.get((r["corpus_id"], scope, cell_selector(r, cell)))
-                )
-                numeric_any = any(isinstance(v, (int, float)) for v in c.values())
-                refused = any(v == "REFUSAL_BYTE_IDENTICAL" for v in c.values())
-                if dead:
-                    verdicts.append(
-                        f"INVALID_METRIC — cell(s) {', '.join(dead)} have "
-                        "baseline history but produced no parsable metric "
-                        "(marker/post-CSV drift?): RED"
-                    )
-                    rag = "RED"
-                elif expected and c and not numeric_any and not refused:
-                    verdicts.append(
-                        "INVALID_METRIC — row has baseline class history but "
-                        "every cell is unparsable/None: RED"
-                    )
-                    rag = "RED"
-            # acceptance 2a (findings sweep_2x2.py:1222/:1181): per-cell
-            # ABSOLUTE cycle drift vs the baseline's min-aggregated cycles.
-            # Ratio-only acceptance is blind to uniform slowdowns (both legs
-            # +50% keeps every ratio) and never checks the hand leg on
-            # refusal rows.  Slowdowns beyond --max-abs-drift-pct are RED;
-            # improvements beyond it are YELLOW (stale baseline — reviewed
-            # update needed), never silently blessed.
-            for cell in sorted(c):
-                val = c[cell]
-                if not isinstance(val, (int, float)):
-                    continue
-                base = baseline.get((r["corpus_id"], scope, cell_selector(r, cell)))
-                if not base or not min(base):
-                    continue
-                abs_pct = 100.0 * (val - min(base)) / min(base)
-                if abs_pct > self.a.max_abs_drift_pct:
-                    verdicts.append(
-                        f"{cell} ABS CYCLES {min(base):g}→{val:g} "
-                        f"({abs_pct:+.2f}% > {self.a.max_abs_drift_pct:g}%): RED"
-                    )
-                    rag = "RED"
-                elif abs_pct < -self.a.max_abs_drift_pct:
-                    verdicts.append(
-                        f"{cell} abs cycles improved {min(base):g}→{val:g} "
-                        f"({abs_pct:+.2f}%; baseline stale — reviewed update "
-                        "needed): YELLOW"
-                    )
-                    if rag == "GREEN":
-                        rag = "YELLOW"
-            # acceptance 2: win-sign preservation vs baseline
-            for name, key in (("causal", "causal_pct"), ("vs_hand", "vs_hand_pct")):
-                if key not in r:
-                    continue
-                base_pair = None
-                if r["kind"] == "pinpair":
-                    if name == "causal":
-                        continue
-                    on = baseline.get((r["corpus_id"], scope, "generated"))
-                    hand = baseline.get((r["corpus_id"], scope, "handwritten_replay"))
-                    base_pair = (min(hand), min(on)) if on and hand else None
-                elif name == "causal":
-                    off = baseline.get(
-                        (r["corpus_id"], scope, cell_selector(r, "sem_off"))
-                    )
-                    on = baseline.get(
-                        (r["corpus_id"], scope, cell_selector(r, "sem_on"))
-                    )
-                    base_pair = (min(off), min(on)) if off and on else None
-                else:
-                    on = baseline.get(
-                        (r["corpus_id"], scope, cell_selector(r, "sem_on"))
-                    )
-                    hand = baseline.get(
-                        (r["corpus_id"], scope, cell_selector(r, "hand_on"))
-                    )
-                    base_pair = (min(hand), min(on)) if on and hand else None
-                if not base_pair or not base_pair[0]:
-                    verdicts.append(f"{name} {r[key]:+.2f}% (no baseline row)")
-                    continue
-                base_pct = 100.0 * (base_pair[1] - base_pair[0]) / base_pair[0]
-                drift = abs(r[key] - base_pct)
-                if base_pct < 0 <= r[key]:  # win-sign flip (causal or vs-hand)
-                    verdicts.append(
-                        f"{name} WIN→LOSS FLIP {base_pct:+.2f}%→{r[key]:+.2f}%: RED"
-                    )
-                    rag = "RED"
-                elif base_pct <= -0.5 and r[key] > -0.5:
-                    # Finding sweep_2x2.py:1259 (fixture C): a real win
-                    # (class band <= -0.5%) eroding into the parity band is a
-                    # regression, not drift — RED by default; a full flip to
-                    # >= 0 is caught above.
-                    tag = "YELLOW" if self.a.allow_win_to_parity else "RED"
-                    verdicts.append(
-                        f"{name} WIN→PARITY {base_pct:+.2f}%→{r[key]:+.2f}%: {tag}"
-                    )
-                    if tag == "RED":
-                        rag = "RED"
-                    elif rag == "GREEN":
-                        rag = "YELLOW"
-                elif (
-                    base_pct > 0.5 and (r[key] - base_pct) > self.a.red_loss_growth_pct
-                ):
-                    # Finding sweep_2x2.py:1259 (fixture D): an existing loss
-                    # growing beyond --red-loss-growth-pct percentage points
-                    # is RED (exit 1), not an unalertable YELLOW.
-                    verdicts.append(
-                        f"{name} LOSS GREW {base_pct:+.2f}%→{r[key]:+.2f}% "
-                        f"(+{r[key] - base_pct:.2f}pp > "
-                        f"{self.a.red_loss_growth_pct:g}pp): RED"
-                    )
-                    rag = "RED"
-                elif drift > self.a.max_drift_pct:
-                    verdicts.append(
-                        f"{name} drift {base_pct:+.2f}%→{r[key]:+.2f}%: YELLOW"
-                    )
-                    if rag == "GREEN":
-                        rag = "YELLOW"
-                else:
-                    verdicts.append(
-                        f"{name} {r[key]:+.2f}% vs baseline {base_pct:+.2f}%: GREEN"
-                    )
-            if r["op"] in prev and "causal_pct" in r and "causal_pct" in prev[r["op"]]:
-                verdicts.append(
-                    f"prev-run causal {prev[r['op']]['causal_pct']:+.2f}%→{r['causal_pct']:+.2f}%"
-                )
-            if any("STOP" in n or "COMPILE_FAIL" in n for n in r.get("notes", [])):
-                verdicts.append("correctness/compile failure: RED")
-                rag = "RED"
-            # Verdict column carries YELLOW too (adversarial missed item:
-            # a YELLOW row displaying 'ok' hid the one channel YELLOW has).
-            col = (
-                "RED"
-                if any("RED" in v for v in verdicts)
-                else ("YELLOW" if any("YELLOW" in v for v in verdicts) else "ok")
-            )
-            lines.append(
-                f"| {r['op']} | {col} | "
-                f"{'; '.join(verdicts) or 'no silicon cells this run'} |"
-            )
+            # Per-row verdict via the SAME factored computation the silicon
+            # phase streams into ROW-VERDICT.json at row completion — the
+            # final report is an aggregation of those verdicts, byte-equal.
+            row = self._row_verdict(r, baseline, base_classes, prev)
+            rag = self._worst_rag(rag, row["rag"])
+            lines.append(self._report_row_line(r, row))
         for s in skips:
             lines.append(f"| {s['op']} | SKIP | {s['reason']} |")
         if self.reds:
@@ -3460,7 +3719,7 @@ exit $RC
         return rag
 
     # ---------------- main flow ----------------
-    def _silicon_phase(self, slots):
+    def _silicon_phase(self, slots, wave=None):
         """Execute + assemble the silicon phase for the gated rows, in row
         order.  slots entries: ("withheld", <result>) pass straight through
         to the results list; ("go", row, classifications, attribution) rows
@@ -3469,17 +3728,24 @@ exit $RC
         note and STOP decision from the per-leg evidence via the keyed
         hash-matched resume path, so batched and serial runs share one
         assembly code path.  Factored out of run() so the batched-vs-legacy
-        layout selftest can drive it without a toolchain."""
+        layout selftest can drive it without a toolchain.  `wave` scopes
+        the batched session dirs under pipelined rolling admission."""
         gated = [(s[1], s[2]) for s in slots if s[0] == "go"]
         if self.exec_mode == "batched" and gated:
-            self._batched_silicon(gated)
+            self._batched_silicon(gated, wave=wave)
         results = []
         for s in slots:
             if s[0] == "withheld":
                 results.append(s[1])
+                self._emit_row_verdict(s[1])
                 continue
             _tag, row, classifications, attribution = s
-            results.append(self.silicon(row, classifications))
+            result = self.silicon(row, classifications)
+            results.append(result)
+            # FIRST-CLASS ROW VERDICT STREAMING: the row's verdict lands in
+            # <op>/ROW-VERDICT.json the moment its cells are assembled —
+            # REPORT.md later aggregates the identical computation.
+            self._emit_row_verdict(result)
             # Weekly per-knob silicon legs run BEHIND the main BH CRAQ
             # gate (D3) and add their own per-knob classify/CRAQ/
             # correctness pipeline inside knob_silicon().  They stay on
@@ -3488,9 +3754,262 @@ exit $RC
                 self.knob_silicon(row, attribution)
         return results
 
+    def _classify_prewarm(self, rows, phases):
+        """Batched classify prewarm (owner order 2026-08-19; laneCH session
+        batching) for the given rows: every (row, selector) classify is
+        independent — its work dir, logs, and verdict file are disjoint —
+        so the pending ones compile here in BATCHED producer sessions
+        (chunked per flag set, per-node outcome attribution via the
+        in-tree pytest plugin); the sequential gating loop then resumes
+        every verdict hash-matched from cache.  Errors surface exactly as
+        before: a cached COMPILE_FAIL verdict replays identically, and any
+        leg the batch could not prove falls back to the legacy solo
+        compile inside classify()."""
+        if "classify" not in phases or getattr(self.a, "classify_workers", 1) <= 1:
+            return
+        self.verify_toolchain("classify")
+        prewarm = []
+        for row in rows:
+            if row["kind"] == "skip":
+                continue
+            p_legs = (
+                (("default", row["pin_flags"]),) if row["kind"] == "pinpair" else None
+            )
+            for sel in SELECTORS:
+                if row["nodes"][sel]:
+                    prewarm.append((row, sel, p_legs))
+        if prewarm:
+            unproven = self._batched_classify(prewarm)
+            # Legs the chunks could not prove used to compile one at a
+            # time inside the gating loop; dispatch them through the pool
+            # as CONCURRENT legacy-solo sessions instead (laneDB: identical
+            # sessions, identical verdicts — only the scheduling changes).
+            self._solo_classify_pool(unproven, "batched-classify fallback")
+        if self.a.knob_attribution:
+            # Knob-attribution prewarm (owner order 2026-08-20, laneDB):
+            # attribute_knobs runs len(KNOBS) solo classify verdicts per
+            # CHANGED row inside the sequential gating loop — the
+            # serialized stretch that dominated weekly classify
+            # wall-clock.  Mirror its gating EXACTLY (non-pinpair,
+            # perf-else-corr selector, main verdict CHANGED) and compile
+            # the same verdict set concurrently; the gating loop then
+            # resumes every one hash-matched from cache.  Rows whose main
+            # verdict is still unwritten (solo-pool spec raised) simply
+            # stay serial-legacy in the loop.  Under pipelined rolling
+            # admission this runs per WAVE, so knob prewarm overlaps the
+            # earlier waves' silicon exactly like the main classify.
+            knob_specs = []
+            for row in rows:
+                if row["kind"] in ("skip", "pinpair"):
+                    continue
+                sel = "sem-perf" if row["nodes"]["sem-perf"] else "sem-corr"
+                if not row["nodes"][sel]:
+                    continue
+                cached = self._classify_cached(
+                    self.ev / row["op"] / "classify" / sel
+                )
+                if cached is None or cached.get("all") != "CHANGED":
+                    continue
+                for knob, flag in KNOBS.items():
+                    knob_specs.append(
+                        (
+                            row,
+                            sel,
+                            (("off", OFF_FLAGS), ("knob", f"{OFF_FLAGS} {flag}")),
+                            f"knobs/{knob}",
+                        )
+                    )
+            self._solo_classify_pool(knob_specs, "knob attribution")
+
+    def _gate_one_row(self, row, phases):
+        """Classify/CRAQ/attribution for ONE row — verbatim the legacy
+        pass-1 per-row body (unchanged semantics), factored so the
+        pipelined gating thread and the legacy loop share one code path.
+        Returns the prelim triple (row, classifications, attribution)."""
+        # pinpair rows classify/CRAQ a single pinned-flag leg per selector.
+        pin_legs = (
+            (("default", row["pin_flags"]),) if row["kind"] == "pinpair" else None
+        )
+        classifications = {}
+        if "classify" in phases:
+            self.verify_toolchain("classify")
+            for sel in SELECTORS:
+                if row["nodes"][sel]:
+                    classifications[sel] = (
+                        self.classify(row, sel, legs=pin_legs)
+                        if pin_legs
+                        else self.classify(row, sel)
+                    )
+        if "craq" in phases:
+            self.verify_toolchain("craq")
+            for arch in row["craq_archs"].split(","):
+                for sel in ("sem-corr", "hand-corr"):
+                    if row["nodes"][sel]:
+                        if pin_legs:
+                            self.craq(row, sel, arch.strip(), legs_spec=pin_legs)
+                        else:
+                            self.craq(row, sel, arch.strip())
+        attribution = None
+        if self.a.knob_attribution and "classify" in phases:
+            attribution = self.attribute_knobs(row, classifications)
+        return (row, classifications, attribution)
+
+    def _gate_rows(self, prelim):
+        """Gate every row BEFORE any device work (same rules, same REDs as
+        the legacy flow): keyed classify evidence required, keyed BH CRAQ
+        gate required.  `slots` keeps the row order so the results list is
+        unchanged vs the legacy loop.  Returns ordered slots:
+        ("withheld", result) | ("go", row, classifications, attribution)."""
+        slots = []
+        for row, classifications, attribution in prelim:
+            # Silicon runs only on classify evidence KEYED to this run
+            # (finding sweep_2x2.py:1341: with classify skipped,
+            # classifications={} disabled the byte-identical refusal
+            # logic and every hash-match).  A resumed evidence root
+            # supplies verdicts only if their cc1plus/tt-metal keys
+            # match; otherwise the row is withheld RED.
+            missing_cls = []
+            for sel in SELECTORS:
+                if row["nodes"][sel] and sel not in classifications:
+                    keyed = self._load_keyed_classification(row, sel)
+                    if keyed is None:
+                        missing_cls.append(sel)
+                    else:
+                        classifications[sel] = keyed
+            if missing_cls:
+                self.reds.append(
+                    f"{row['op']}: silicon withheld — no classify evidence "
+                    f"keyed to this toolchain/tree for "
+                    f"{','.join(missing_cls)} (run the classify phase)"
+                )
+                slots.append(
+                    (
+                        "withheld",
+                        dict(
+                            self._result_skeleton(row, classifications),
+                            notes=[
+                                "silicon withheld: classify evidence missing "
+                                "or keyed to another toolchain/tree"
+                            ],
+                        ),
+                    )
+                )
+                continue
+            # Keyed BH CRAQ gate: stale-toolchain greens never open it.
+            gate = self._bh_craq_gate(row)
+            if not gate and not self.a.skip_craq_gate:
+                self.reds.append(
+                    f"{row['op']}: silicon withheld — paired BH CRAQ not green"
+                )
+                if attribution and row["op"] in (self.a.knob_silicon_rows or []):
+                    self.reds.append(
+                        f"{row['op']}: knob silicon withheld — main BH CRAQ gate not green"
+                    )
+                slots.append(
+                    (
+                        "withheld",
+                        dict(
+                            self._result_skeleton(row, classifications),
+                            notes=["silicon withheld: BH CRAQ gate not green"],
+                        ),
+                    )
+                )
+                continue
+            slots.append(("go", row, classifications, attribution))
+        return slots
+
+    # ------------- classify/silicon pipelining (rolling admission) -------
+    _FIRST_WAVE_ROWS = 3
+
+    def _admission_waves(self, rows):
+        """Rolling admission groups over the priority-ordered rows.  Wave 0
+        is deliberately small — the --priority-ops rows when given (they
+        are a prefix of the priority order), else the first
+        _FIRST_WAVE_ROWS rows — so device work begins minutes after
+        launch; later waves take --admit-wave-rows rows each."""
+        if not rows:
+            return []
+        prio = set(getattr(self.a, "priority_ops", None) or [])
+        first_n = sum(1 for r in rows if r["op"] in prio) or min(
+            self._FIRST_WAVE_ROWS, len(rows)
+        )
+        step = max(1, int(getattr(self.a, "admit_wave_rows", 8) or 8))
+        waves = [rows[:first_n]]
+        i = first_n
+        while i < len(rows):
+            waves.append(rows[i : i + step])
+            i += step
+        return waves
+
+    def _pipeline_run(self, phases, rows):
+        """CLASSIFY/SILICON PIPELINING (owner order — kill the phase
+        barrier): silicon starts on rows whose classify (and CRAQ, when in
+        phases) verdicts are complete while classify continues on the
+        rest, so device work begins minutes after launch instead of hours.
+
+        A background GATING thread processes admission waves in priority
+        order — batched classify prewarm per wave, then the verbatim
+        per-row classify/CRAQ/attribution (_gate_one_row) and the verbatim
+        keyed gates (_gate_rows) — and publishes each wave's slots.  The
+        MAIN thread consumes admitted waves as they land: the batch
+        planner handles incremental row admission by RE-PLANNING per wave
+        (rolling groups; session dirs scoped silicon-batches/w<i>/), and
+        per-row assembly + ROW-VERDICT streaming run immediately.  Trust
+        anchors are untouched in semantics: same classify/CRAQ code, same
+        keyed gates, same flocked device serialization and per-session
+        provenance inside _batched_silicon, same assembly path.  Evidence
+        writes are disjoint between the threads (classify/craq dirs of
+        not-yet-admitted rows vs silicon dirs of admitted rows).  A gating
+        failure — including SystemExit from a mid-run toolchain swap check
+        — is forwarded to the main thread and re-raised, never swallowed.
+        """
+        import queue as queue_mod
+        import threading
+
+        waves = self._admission_waves(rows)
+        q = queue_mod.Queue()
+        print(
+            f"pipeline: {sum(len(w) for w in waves)} row(s) in "
+            f"{len(waves)} admission wave(s): "
+            + " | ".join(",".join(r["op"] for r in w) for w in waves)
+        )
+
+        def gate():
+            try:
+                for wi, wave in enumerate(waves):
+                    self._classify_prewarm(wave, phases)
+                    prelim = [self._gate_one_row(row, phases) for row in wave]
+                    q.put(("wave", wi, self._gate_rows(prelim)))
+                q.put(("done", None, None))
+            except BaseException as exc:  # incl. SystemExit: forward, re-raise
+                q.put(("fatal", None, exc))
+
+        t = threading.Thread(target=gate, name="sweep-gating", daemon=True)
+        t.start()
+        results = []
+        while True:
+            kind, wi, payload = q.get()
+            if kind == "fatal":
+                raise payload
+            if kind == "done":
+                break
+            print(
+                f"pipeline: wave w{wi} admitted ({len(payload)} row "
+                "slot(s)) — silicon executes now while later waves keep "
+                "classifying"
+            )
+            results.extend(self._silicon_phase(payload, wave=f"w{wi}"))
+        t.join()
+        return results
+
     def run(self):
         phases = self.a.phases
         self.preflight()
+        # ROW PRIORITY SCHEDULING: measure-first order (priority ops, then
+        # expected-changed, then expected-byte-identical re-baseline rows).
+        # Every downstream list (results, scoreboard, report rows, streamed
+        # ROW-VERDICTs) follows this order — results stream by value.
+        self._order_rows()
         results, skips = [], []
         # Schedule deferrals are machine-readable skips in every scoreboard —
         # a weekly row absent from the nightly report would be the silent-
@@ -3506,77 +4025,7 @@ exit $RC
                     "full sweep)",
                 }
             )
-        # Pass 1: classify/CRAQ/attribution per row (unchanged semantics);
-        # rows that reach the silicon phase are GATED here and executed by
-        # the batched executor between gating and per-row assembly (the
-        # assembly pass computes every cell/ratio/STOP through the legacy
-        # silicon() code, consuming the executor's per-leg evidence via the
-        # keyed hash-matched resume path).
-        prelim = []  # ordered: ("row", row, classifications, attribution)
-        if "classify" in phases and getattr(self.a, "classify_workers", 1) > 1:
-            # Batched classify prewarm (owner order 2026-08-19; laneCH
-            # session batching): every (row, selector) classify is
-            # independent — its work dir, logs, and verdict file are
-            # disjoint — so compile the pending ones here in BATCHED
-            # producer sessions (chunked per flag set, per-node outcome
-            # attribution via the in-tree pytest plugin); the sequential
-            # row loop below then resumes every verdict hash-matched from
-            # cache.  Errors surface in the loop exactly as before: a
-            # cached COMPILE_FAIL verdict replays identically, and any leg
-            # the batch could not prove falls back to the legacy solo
-            # compile inside classify().
-            self.verify_toolchain("classify")
-            prewarm = []
-            for row in self.rows:
-                if row["kind"] == "skip":
-                    continue
-                p_legs = (
-                    (("default", row["pin_flags"]),)
-                    if row["kind"] == "pinpair"
-                    else None
-                )
-                for sel in SELECTORS:
-                    if row["nodes"][sel]:
-                        prewarm.append((row, sel, p_legs))
-            unproven = self._batched_classify(prewarm)
-            # Legs the chunks could not prove used to compile one at a
-            # time inside the row loop; dispatch them through the pool as
-            # CONCURRENT legacy-solo sessions instead (identical sessions,
-            # identical verdicts — only the scheduling changes).
-            self._solo_classify_pool(unproven, "batched-classify fallback")
-            if self.a.knob_attribution:
-                # Knob-attribution prewarm (owner order 2026-08-20,
-                # laneDB): attribute_knobs runs len(KNOBS) solo classify
-                # verdicts per CHANGED row inside the sequential row loop
-                # — the serialized stretch that dominated weekly classify
-                # wall-clock.  Mirror its gating EXACTLY (non-pinpair,
-                # perf-else-corr selector, main verdict CHANGED) and
-                # compile the same verdict set concurrently; the row loop
-                # then resumes every one hash-matched from cache.  Rows
-                # whose main verdict is still unwritten (solo-pool spec
-                # raised) simply stay serial-legacy in the loop.
-                knob_specs = []
-                for row in self.rows:
-                    if row["kind"] in ("skip", "pinpair"):
-                        continue
-                    sel = "sem-perf" if row["nodes"]["sem-perf"] else "sem-corr"
-                    if not row["nodes"][sel]:
-                        continue
-                    cached = self._classify_cached(
-                        self.ev / row["op"] / "classify" / sel
-                    )
-                    if cached is None or cached.get("all") != "CHANGED":
-                        continue
-                    for knob, flag in KNOBS.items():
-                        knob_specs.append(
-                            (
-                                row,
-                                sel,
-                                (("off", OFF_FLAGS), ("knob", f"{OFF_FLAGS} {flag}")),
-                                f"knobs/{knob}",
-                            )
-                        )
-                self._solo_classify_pool(knob_specs, "knob attribution")
+        live = []
         for row in self.rows:
             if row["kind"] == "skip":
                 skips.append(
@@ -3587,110 +4036,51 @@ exit $RC
                         "reason": row["note"],
                     }
                 )
-                continue
-            # pinpair rows classify/CRAQ a single pinned-flag leg per selector.
-            pin_legs = (
-                (("default", row["pin_flags"]),) if row["kind"] == "pinpair" else None
-            )
-            classifications = {}
-            if "classify" in phases:
-                self.verify_toolchain("classify")
-                for sel in SELECTORS:
-                    if row["nodes"][sel]:
-                        classifications[sel] = (
-                            self.classify(row, sel, legs=pin_legs)
-                            if pin_legs
-                            else self.classify(row, sel)
-                        )
-            if "craq" in phases:
-                self.verify_toolchain("craq")
-                for arch in row["craq_archs"].split(","):
-                    for sel in ("sem-corr", "hand-corr"):
-                        if row["nodes"][sel]:
-                            if pin_legs:
-                                self.craq(row, sel, arch.strip(), legs_spec=pin_legs)
-                            else:
-                                self.craq(row, sel, arch.strip())
-            attribution = None
-            if self.a.knob_attribution and "classify" in phases:
-                attribution = self.attribute_knobs(row, classifications)
-            prelim.append((row, classifications, attribution))
-        if "silicon" not in phases:
-            for row, classifications, _attr in prelim:
-                results.append(self._result_skeleton(row, classifications))
-        elif not self.a.allow_hardware:
-            for row, _cls, _attr in prelim:
-                skips.append(
-                    {
-                        "op": row["op"],
-                        "corpus_id": row["corpus_id"],
-                        "status": "SKIP_HARDWARE_NOT_AUTHORIZED",
-                        "reason": "silicon phase requires --allow-hardware",
-                    }
-                )
-        else:
+            else:
+                live.append(row)
+        # CLASSIFY/SILICON PIPELINING is the default whenever this run both
+        # classifies and executes silicon with the batched executor: the
+        # phase barrier (classify EVERY row, then device work) is replaced
+        # by rolling admission.  Resume-shaped runs (--phases without
+        # classify), --serial-legacy, --no-pipeline and non-hardware runs
+        # keep the legacy phase-barrier flow (semantics identical either
+        # way — the pipeline only reorders WHEN gated rows reach the
+        # executor, never what gates them).
+        pipelined = (
+            "silicon" in phases
+            and self.a.allow_hardware
+            and "classify" in phases
+            and self.exec_mode == "batched"
+            and not getattr(self.a, "no_pipeline", False)
+            and bool(live)
+        )
+        if pipelined:
             self.verify_toolchain("silicon")
-            # Gate every row BEFORE any device work (same rules, same REDs
-            # as the per-row flow): keyed classify evidence required, keyed
-            # BH CRAQ gate required.  `slots` keeps the row order so the
-            # results list is unchanged vs the legacy loop.
-            slots = []  # ("withheld", result) | ("go", row, cls, attribution)
-            for row, classifications, attribution in prelim:
-                # Silicon runs only on classify evidence KEYED to this run
-                # (finding sweep_2x2.py:1341: with classify skipped,
-                # classifications={} disabled the byte-identical refusal
-                # logic and every hash-match).  A resumed evidence root
-                # supplies verdicts only if their cc1plus/tt-metal keys
-                # match; otherwise the row is withheld RED.
-                missing_cls = []
-                for sel in SELECTORS:
-                    if row["nodes"][sel] and sel not in classifications:
-                        keyed = self._load_keyed_classification(row, sel)
-                        if keyed is None:
-                            missing_cls.append(sel)
-                        else:
-                            classifications[sel] = keyed
-                if missing_cls:
-                    self.reds.append(
-                        f"{row['op']}: silicon withheld — no classify evidence "
-                        f"keyed to this toolchain/tree for "
-                        f"{','.join(missing_cls)} (run the classify phase)"
+            results.extend(self._pipeline_run(phases, live))
+        else:
+            if "silicon" in phases and self.a.allow_hardware and live:
+                print(
+                    "pipeline: legacy phase-barrier flow (--no-pipeline, "
+                    "--serial-legacy, or a resume without the classify phase)"
+                )
+            self._classify_prewarm(live, phases)
+            prelim = [self._gate_one_row(row, phases) for row in live]
+            if "silicon" not in phases:
+                for row, classifications, _attr in prelim:
+                    results.append(self._result_skeleton(row, classifications))
+            elif not self.a.allow_hardware:
+                for row, _cls, _attr in prelim:
+                    skips.append(
+                        {
+                            "op": row["op"],
+                            "corpus_id": row["corpus_id"],
+                            "status": "SKIP_HARDWARE_NOT_AUTHORIZED",
+                            "reason": "silicon phase requires --allow-hardware",
+                        }
                     )
-                    slots.append(
-                        (
-                            "withheld",
-                            dict(
-                                self._result_skeleton(row, classifications),
-                                notes=[
-                                    "silicon withheld: classify evidence missing "
-                                    "or keyed to another toolchain/tree"
-                                ],
-                            ),
-                        )
-                    )
-                    continue
-                # Keyed BH CRAQ gate: stale-toolchain greens never open it.
-                gate = self._bh_craq_gate(row)
-                if not gate and not self.a.skip_craq_gate:
-                    self.reds.append(
-                        f"{row['op']}: silicon withheld — paired BH CRAQ not green"
-                    )
-                    if attribution and row["op"] in (self.a.knob_silicon_rows or []):
-                        self.reds.append(
-                            f"{row['op']}: knob silicon withheld — main BH CRAQ gate not green"
-                        )
-                    slots.append(
-                        (
-                            "withheld",
-                            dict(
-                                self._result_skeleton(row, classifications),
-                                notes=["silicon withheld: BH CRAQ gate not green"],
-                            ),
-                        )
-                    )
-                    continue
-                slots.append(("go", row, classifications, attribution))
-            results.extend(self._silicon_phase(slots))
+            else:
+                self.verify_toolchain("silicon")
+                results.extend(self._silicon_phase(self._gate_rows(prelim)))
         self.emit_scoreboard(results, skips)
         rag = "GREEN"
         if "report" in phases:
@@ -3712,6 +4102,17 @@ def main():
         type=lambda s: s.split(","),
         default=None,
         help="comma list of op rows (default: all config rows)",
+    )
+    ap.add_argument(
+        "--priority-ops",
+        type=lambda s: s.split(","),
+        default=None,
+        help="comma list of op rows that JUMP the queue entirely (classified "
+        "and measured first, in the order given); remaining rows order by "
+        "expected value — rows whose OFF/ON .text hashes are expected to "
+        "DIFFER first, expected byte-identical re-baseline rows last "
+        "(hint from prior classify verdicts/baseline class; a wrong hint "
+        "costs only queue position, never correctness)",
     )
     ap.add_argument(
         "--phases",
@@ -3760,8 +4161,14 @@ def main():
     )
     ap.add_argument(
         "--prev-run",
-        type=pathlib.Path,
-        help="previous evidence root for drift comparison",
+        type=lambda s: [pathlib.Path(x) for x in s.split(",") if x],
+        help="previous evidence root(s), comma list NEWEST FIRST: the newest "
+        "feeds the report's drift comparison, and EVERY root is probed for "
+        "cross-pin silicon cell reuse — a leg whose jobkey (node/flags/"
+        "extra_env/tag/mode) matches and whose archived .text hash set "
+        "equals THIS run's classify hashes is adopted instead of re-run, "
+        "copied into this run's evidence with a REUSED_FROM.txt marker "
+        "(provenance visible, never silent)",
     )
     ap.add_argument("--max-drift-pct", type=float, default=5.0)
     ap.add_argument(
@@ -3835,6 +4242,22 @@ def main():
         "--dry-run",
         action="store_true",
         help="print device jobs instead of running them",
+    )
+    ap.add_argument(
+        "--no-pipeline",
+        action="store_true",
+        help="ESCAPE: disable classify/silicon pipelining (rolling wave "
+        "admission) and run the legacy phase barrier — classify EVERY row, "
+        "then all device work; gating/refusal/provenance semantics are "
+        "identical either way",
+    )
+    ap.add_argument(
+        "--admit-wave-rows",
+        type=int,
+        default=8,
+        help="pipelined rolling admission: rows per gating wave after the "
+        "first (the first wave is the --priority-ops list, else "
+        f"{Sweep._FIRST_WAVE_ROWS} rows, so device work starts early)",
     )
     ap.add_argument(
         "--serial-legacy",
