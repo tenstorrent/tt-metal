@@ -16,13 +16,15 @@ Ground-truth text defaults to *A Tale of Two Cities* (same corpus as
 ``models/tt_transformers/tests/generate_reference_hf.py``). Override with
 ``GEMMA4_TF_TEXT_FILE``.
 
-Predictions scored, for a prompt of ``P`` tokens and ``N`` decode steps:
+Predictions scored, for ``prefill_len`` prompt tokens and ``max_new_tokens``
+decode steps:
 
-  * **prefill** — 1 prediction. Prefill over tokens ``0..P-1`` predicts token
-    ``P``.
-  * **decode**  — ``N`` predictions. Step ``j`` is fed ground-truth token
-    ``P+j`` at position ``P+j`` and predicts token ``P+j+1``.
-  * **e2e**     — the ``N+1`` combined.
+  * **prefill** — 1 prediction. Prefill over tokens ``0..prefill_len-1`` predicts
+    token ``prefill_len``.
+  * **decode**  — ``max_new_tokens`` predictions. Step ``j`` is fed ground-truth
+    token ``prefill_len+j`` at position ``prefill_len+j`` and predicts token
+    ``prefill_len+j+1``.
+  * **e2e**     — the ``max_new_tokens+1`` combined.
 
 Each is reported top-1 and top-5, against two references:
 
@@ -81,7 +83,8 @@ Tests in this module:
     forced step, mirroring ``models/tt_transformers/tests/test_model.py``.
 
 Run. Test ids are ``[wormhole_b0-<case>-<mesh>]``, e.g.
-``test_teacher_forcing_e2e[wormhole_b0-p128_n128-1x8]``:
+``test_teacher_forcing_e2e[wormhole_b0-prefill_512-max_new_tokens_500-1x8]``
+(default: 512-token prefill, 500 max-new-tokens). Use ``--timeout=0``:
 
   HF_MODEL=google/gemma-4-31B-it MESH_DEVICE=1x8 GEMMA4_HF_DEVICE_MAP=auto \\
     pytest models/demos/gemma4/tests/unit/test_teacher_forcing_e2e.py -k 1x8 -sv --timeout=0
@@ -89,16 +92,13 @@ Run. Test ids are ``[wormhole_b0-<case>-<mesh>]``, e.g.
   # token accuracy only -- select by node id, NOT by ``-k``. The module filename
   # is itself a keyword, so ``-k test_teacher_forcing_e2e`` also matches every
   # test_e2e_logits_pcc case in this file.
-  pytest .../test_teacher_forcing_e2e.py::test_teacher_forcing_e2e -k 1x8 -sv
+  pytest .../test_teacher_forcing_e2e.py::test_teacher_forcing_e2e -k 1x8 -sv --timeout=0
 
   # logit PCC only (this name is unique, so -k is safe)
-  pytest .../test_teacher_forcing_e2e.py -k "test_e2e_logits_pcc and 1x8" -sv
+  pytest .../test_teacher_forcing_e2e.py -k "test_e2e_logits_pcc and 1x8" -sv --timeout=0
 
   # one exact case
-  pytest ".../test_teacher_forcing_e2e.py::test_teacher_forcing_e2e[wormhole_b0-p128_n128-1x8]" -sv
-
-  # tt-transformers-style 512 prefill + 500 decode (long run — use --timeout=0)
-  GEMMA4_TF_CASES="512,500" pytest ".../test_teacher_forcing_e2e.py::test_teacher_forcing_e2e[wormhole_b0-p512_n500-1x8]" -sv --timeout=0
+  pytest ".../test_teacher_forcing_e2e.py::test_teacher_forcing_e2e[wormhole_b0-prefill_512-max_new_tokens_500-1x8]" -sv --timeout=0
 """
 
 from __future__ import annotations
@@ -127,33 +127,19 @@ from ..test_factory import (
     skip_if_config_only_checkpoint,
 )
 
-
-# (prompt_len, max_new_tokens) — prompt_len + max_new_tokens + 1 tokens are
-# consumed, since the final decode step still needs a ground-truth target.
-# Override for ad-hoc runs: GEMMA4_TF_CASES="512,500" or "128,64;512,500".
-def _parse_tf_cases():
-    raw = os.getenv("GEMMA4_TF_CASES", "").strip()
-    if not raw:
-        return [(64, 64), (128, 128)]
-    out = []
-    for chunk in raw.split(";"):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        p, n = chunk.split(",")
-        out.append((int(p.strip()), int(n.strip())))
-    return out or [(64, 64), (128, 128)]
-
-
-_CASES = _parse_tf_cases()
-_CASE_IDS = [f"p{p}_n{n}" for p, n in _CASES]
+# Prefill length + decode steps. Total tokens consumed = prefill_len + max_new_tokens + 1
+# (final decode step still needs a ground-truth target). Default matches
+# tt-transformers TokenAccuracy. Add ``pytest.param(...)`` rows to collect more cases.
+_TF_LENGTHS = [
+    pytest.param(512, 500, id="prefill_512-max_new_tokens_500"),
+]
 
 _BLOCK_SIZE = 64
 
-# Baselined to measured 31B p128_n128 behaviour, not a correctness target.
-# ``test_full_model`` 0.98 PCC is a ~6-token prompt; at 128 tokens the same
-# ``ttnn_prefill_forward`` path matches the generator, and last-row PCC vs HF
-# is seq-length bfp8 accumulation, not an e2e-path leak.
+# Agreement floors for the accuracy assertion — not a correctness target.
+# ``test_full_model`` 0.98 PCC is a ~6-token prompt; longer teacher-forced
+# sequences (default prefill_len=512) accumulate bfp8 error, so these gates
+# stay below that. Raise only after remeasuring the default case.
 _MIN_TOP1_AGREEMENT = float(os.getenv("GEMMA4_TF_MIN_TOP1", "0.75"))
 _MIN_TOP5_AGREEMENT = float(os.getenv("GEMMA4_TF_MIN_TOP5", "0.92"))
 
@@ -227,7 +213,7 @@ def _build_tokens(tokenizer, total_len):
     return torch.tensor(ids[:total_len], dtype=torch.int32).unsqueeze(0)
 
 
-def _log_parameters(*, model_path, mesh_device, model_args, prompt_len, max_new_tokens, precision):
+def _log_parameters(*, model_path, mesh_device, model_args, prefill_len, max_new_tokens, precision):
     """Print every parameter that can move the accuracy numbers.
 
     Weight dtype, math fidelity and the CCL/matmul env knobs all change
@@ -263,8 +249,8 @@ def _log_parameters(*, model_path, mesh_device, model_args, prompt_len, max_new_
     logger.info("  num_hidden_layers   : {}", model_args.num_hidden_layers)
     logger.info("  vocab_size          : {}", model_args.vocab_size)
     logger.info("  sliding_window      : {}", getattr(model_args, "sliding_window", None))
-    logger.info("  prompt_len (P)      : {}", prompt_len)
-    logger.info("  max_new_tokens (N)  : {}", max_new_tokens)
+    logger.info("  prefill_len         : {}", prefill_len)
+    logger.info("  max_new_tokens      : {}", max_new_tokens)
     logger.info("  predictions scored  : {}  (1 prefill + {} decode)", max_new_tokens + 1, max_new_tokens)
     logger.info("  text source         : {}", os.getenv("GEMMA4_TF_TEXT_FILE") or _TALE_OF_TWO_CITIES)
     logger.info("  top_k               : {}", _TOP_K)
@@ -295,14 +281,14 @@ def _as_row(logits):
     return out.reshape(-1, out.shape[-1])[-1]
 
 
-def _run_teacher_forced_e2e(generator, tt_kv_cache, page_table, tokens, prompt_len, max_new_tokens):
+def _run_teacher_forced_e2e(generator, tt_kv_cache, page_table, tokens, prefill_len, max_new_tokens):
     """Prefill the prompt, then decode ``max_new_tokens`` steps feeding truth back.
 
     Returns the TT logits rows for each scored prediction, in order:
-    ``[prefill] + [decode_0 .. decode_{N-1}]``.
+    ``[prefill] + [decode_0 .. decode_{max_new_tokens-1}]``.
     """
-    prompt = tokens[:, :prompt_len]
-    prompt_lens = torch.tensor([prompt_len], dtype=torch.long)
+    prompt = tokens[:, :prefill_len]
+    prompt_lens = torch.tensor([prefill_len], dtype=torch.long)
 
     rows = []
 
@@ -319,11 +305,11 @@ def _run_teacher_forced_e2e(generator, tt_kv_cache, page_table, tokens, prompt_l
     )
     rows.append(_as_row(prefill_out))
 
-    # Decode step j is fed ground-truth token P+j at position P+j, and predicts
-    # P+j+1 — this substitution is the teacher forcing.
-    current_pos = torch.tensor([prompt_len], dtype=torch.long)
+    # Decode step j is fed ground-truth token prefill_len+j at that position and
+    # predicts prefill_len+j+1 — this substitution is the teacher forcing.
+    current_pos = torch.tensor([prefill_len], dtype=torch.long)
     for j in range(max_new_tokens):
-        forced = tokens[:, prompt_len + j].reshape(1, 1).long()
+        forced = tokens[:, prefill_len + j].reshape(1, 1).long()
         decode_out, _ = generator.decode_forward(
             forced,
             current_pos,
@@ -338,14 +324,14 @@ def _run_teacher_forced_e2e(generator, tt_kv_cache, page_table, tokens, prompt_l
     return torch.stack(rows, dim=0)
 
 
-def _hf_reference_rows(model_path, tokens, prompt_len, max_new_tokens):
+def _hf_reference_rows(model_path, tokens, prefill_len, max_new_tokens):
     """HF logits rows aligned to the TT predictions.
 
-    TT prediction ``i`` predicts token ``prompt_len + i``, which HF produces at
-    row ``prompt_len + i - 1``. One HF forward covers every row, because HF
+    TT prediction ``i`` predicts token ``prefill_len + i``, which HF produces at
+    row ``prefill_len + i - 1``. One HF forward covers every row, because HF
     prefill is itself teacher-forced by causal masking.
     """
-    end = prompt_len + max_new_tokens
+    end = prefill_len + max_new_tokens
     # Same loader as test_demo_v2_hf_reference (bf16, trust_remote_code,
     # GEMMA4_HF_DEVICE_MAP) so both tests score against an identically loaded HF.
     hf_model = load_hf_reference_model(model_path)
@@ -353,7 +339,7 @@ def _hf_reference_rows(model_path, tokens, prompt_len, max_new_tokens):
         device = hf_reference_model_device(hf_model)
         with torch.no_grad():
             out = hf_model(tokens[:, :end].long().to(device))
-        return out.logits[0, prompt_len - 1 : end, :].float().cpu()
+        return out.logits[0, prefill_len - 1 : end, :].float().cpu()
     finally:
         del hf_model
 
@@ -618,16 +604,16 @@ def _log_per_step_pcc(pccs, *, limit=8):
     logger.info("  worst step {:<11} PCC={:.6f}", worst_where, worst_pcc)
 
 
-def _prepare_teacher_forcing_run(prompt_len, max_new_tokens, mesh_device, request):
+def _prepare_teacher_forcing_run(prefill_len, max_new_tokens, mesh_device, request):
     """Shared setup for token-accuracy and logit-PCC teacher-forced e2e tests."""
     skip_if_config_only_checkpoint()
 
     max_prefill = request.config.getoption("--max-prefill")
-    if prompt_len > max_prefill:
-        pytest.skip(f"prompt_len={prompt_len} > --max-prefill={max_prefill}")
+    if prefill_len > max_prefill:
+        pytest.skip(f"prefill_len={prefill_len} > --max-prefill={max_prefill}")
 
     model_path = _get_model_path()
-    total_len = prompt_len + max_new_tokens + 1
+    total_len = prefill_len + max_new_tokens + 1
     max_seq_len = max(4096, ((total_len + _BLOCK_SIZE - 1) // _BLOCK_SIZE) * _BLOCK_SIZE)
 
     paged_cfg = PagedAttentionConfig(
@@ -649,7 +635,7 @@ def _prepare_teacher_forcing_run(prompt_len, max_new_tokens, mesh_device, reques
         model_path=model_path,
         mesh_device=mesh_device,
         model_args=model_args,
-        prompt_len=prompt_len,
+        prefill_len=prefill_len,
         max_new_tokens=max_new_tokens,
         precision=precision,
     )
@@ -664,13 +650,13 @@ def _prepare_teacher_forcing_run(prompt_len, max_new_tokens, mesh_device, reques
         greedy_only=True,
     )
 
-    tt_rows = _run_teacher_forced_e2e(generator, tt_kv_cache, page_table, tokens, prompt_len, max_new_tokens)
-    hf_rows = _hf_reference_rows(model_path, tokens, prompt_len, max_new_tokens)
+    tt_rows = _run_teacher_forced_e2e(generator, tt_kv_cache, page_table, tokens, prefill_len, max_new_tokens)
+    hf_rows = _hf_reference_rows(model_path, tokens, prefill_len, max_new_tokens)
 
     vocab = int(model_args.vocab_size)
     tt_rows = tt_rows[:, :vocab]
     hf_rows = hf_rows[:, :vocab]
-    truth = tokens[0, prompt_len : prompt_len + tt_rows.shape[0]].long()
+    truth = tokens[0, prefill_len : prefill_len + tt_rows.shape[0]].long()
 
     return {
         "model_path": model_path,
@@ -678,17 +664,17 @@ def _prepare_teacher_forcing_run(prompt_len, max_new_tokens, mesh_device, reques
         "tt_rows": tt_rows,
         "hf_rows": hf_rows,
         "truth": truth,
-        "prompt_len": prompt_len,
+        "prefill_len": prefill_len,
         "max_new_tokens": max_new_tokens,
     }
 
 
 @pytest.mark.timeout(3600)
 @parametrize_mesh_with_fabric()
-@pytest.mark.parametrize("prompt_len,max_new_tokens", _CASES, ids=_CASE_IDS)
-def test_teacher_forcing_e2e(prompt_len, max_new_tokens, mesh_device, reset_seeds, request):
+@pytest.mark.parametrize("prefill_len,max_new_tokens", _TF_LENGTHS)
+def test_teacher_forcing_e2e(prefill_len, max_new_tokens, mesh_device, reset_seeds, request):
     """Score prefill + every teacher-forced decode step, top-1 and top-5."""
-    run = _prepare_teacher_forcing_run(prompt_len, max_new_tokens, mesh_device, request)
+    run = _prepare_teacher_forcing_run(prefill_len, max_new_tokens, mesh_device, request)
     tt_rows = run["tt_rows"]
     hf_rows = run["hf_rows"]
     truth = run["truth"]
@@ -698,7 +684,12 @@ def test_teacher_forcing_e2e(prompt_len, max_new_tokens, mesh_device, reset_seed
     pccs = _logit_pccs(tt_rows, hf_rows)
 
     logger.info("=" * 78)
-    logger.info("Teacher-forced accuracy — P={} N={} ({} predictions)", prompt_len, max_new_tokens, tt_rows.shape[0])
+    logger.info(
+        "Teacher-forced accuracy — prefill_len={} max_new_tokens={} ({} predictions)",
+        prefill_len,
+        max_new_tokens,
+        tt_rows.shape[0],
+    )
     logger.info("=" * 78)
     _log_segment("prefill", r, tt_rows, hf_rows, truth, slice(0, 1))
     _log_segment("decode", r, tt_rows, hf_rows, truth, slice(1, None))
@@ -747,10 +738,10 @@ def test_teacher_forcing_e2e(prompt_len, max_new_tokens, mesh_device, reset_seed
 @pytest.mark.gemma4_hf_direct_parity
 @pytest.mark.timeout(3600)
 @parametrize_mesh_with_fabric()
-@pytest.mark.parametrize("prompt_len,max_new_tokens", _CASES, ids=_CASE_IDS)
-def test_e2e_logits_pcc(prompt_len, max_new_tokens, mesh_device, reset_seeds, request):
+@pytest.mark.parametrize("prefill_len,max_new_tokens", _TF_LENGTHS)
+def test_e2e_logits_pcc(prefill_len, max_new_tokens, mesh_device, reset_seeds, request):
     """Assert full-vocab logit PCC (TT vs HF) at every teacher-forced step."""
-    run = _prepare_teacher_forcing_run(prompt_len, max_new_tokens, mesh_device, request)
+    run = _prepare_teacher_forcing_run(prefill_len, max_new_tokens, mesh_device, request)
     tt_rows = run["tt_rows"]
     hf_rows = run["hf_rows"]
 
@@ -759,8 +750,8 @@ def test_e2e_logits_pcc(prompt_len, max_new_tokens, mesh_device, reset_seeds, re
 
     logger.info("=" * 78)
     logger.info(
-        "Teacher-forced logit PCC — P={} N={} ({} steps, threshold={:.4f})",
-        prompt_len,
+        "Teacher-forced logit PCC — prefill_len={} max_new_tokens={} ({} steps, threshold={:.4f})",
+        prefill_len,
         max_new_tokens,
         len(pccs),
         pcc_threshold,
