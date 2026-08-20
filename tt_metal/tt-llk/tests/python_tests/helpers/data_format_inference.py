@@ -257,6 +257,17 @@ def infer_pack_in(
             )
 
         if unpack_out.is_integer():
+            if (
+                unpack_out == DataFormat.Int16
+                and is_fp32_dest_acc_en == DestAccumulation.Yes
+                and not unpacking_to_dest
+            ):
+                # Int16 cannot reach a 32-bit Dest through FPU datacopy. Typecast
+                # remains valid because it uses the direct Unpack-to-Dest path,
+                # where SFPU overwrites the narrow representation with Int32.
+                raise ValueError(
+                    "Quasar does not support Int16 to 32-bit Dest through the FPU path"
+                )
             # When the dest register is in 32-bit mode, the packer input format is 32-bit
             return (
                 DataFormat.Int32
