@@ -19,7 +19,7 @@
 //   0            in base address
 //   1            out base address
 //
-// Defines: one of UN_SQRT, UN_RSQRT, UN_CHAIN; recip is the default.
+// Defines: one of UN_SQRT, UN_RSQRT, UN_EXP, UN_CHAIN; recip is the default.
 
 #include <tt/unified/core>
 
@@ -32,6 +32,8 @@ constexpr uint32_t kCbOut = 16;
 #define UN_APPLY(x) u::sqrt_(x)
 #elif defined(UN_RSQRT)
 #define UN_APPLY(x) u::rsqrt(x)
+#elif defined(UN_EXP)
+#define UN_APPLY(x) u::exp_(x)
 #elif defined(UN_CHAIN)
 #define UN_APPLY(x) u::recip(u::sqrt_(x))
 #else

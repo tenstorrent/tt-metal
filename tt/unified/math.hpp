@@ -181,12 +181,33 @@ struct DivOp {
     }
 };
 
+// The ComputeConfigDescriptor's math_approx_mode arrives in the compute build as
+// metal's generated `constexpr bool APPROX`. exp is the one op here that takes the
+// approximation as an explicit template parameter and defaults it to false, so
+// passing APPROX is what makes that config flag mean anything -- left off,
+// math_approx_mode=true silently bought nothing. Measured on one Wormhole core,
+// exact exp costs 0.67us per tile against 0.10us for the L1 round trip that carries
+// it, so this is the difference that shows up in a profile. sqrt_tile_init already
+// reads APPROX internally; recip and rsqrt expose no such knob, which is why only
+// exp is threaded here.
+//
+// APPROX is declared only on the math TRISC: metal's own uses of it sit inside
+// MATH(), which expands to nothing on the unpack and pack threads, so the name never
+// has to resolve there. Ours is a template argument at the call site, which does have
+// to resolve on all three -- and off the math thread the call body is discarded
+// anyway, so the value carried there is immaterial.
+#if defined(TRISC_MATH)
+constexpr bool kMathApprox = APPROX;
+#else
+constexpr bool kMathApprox = false;
+#endif
+
 struct ExpOp {
     static void apply(uint32_t src, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         (void)src;  // == out; SFPU unaries work in place
-        ckernel::exp_tile_init();
-        ckernel::exp_tile(out);
+        ckernel::exp_tile_init<kMathApprox>();
+        ckernel::exp_tile<kMathApprox>(out);
 #else
         (void)src;
         (void)out;
