@@ -64,9 +64,12 @@ jobs:
 
               // A manual replay/test must target a real "Sanity tests" push-on-main
               // failure -- otherwise this would confidently post a Slack message
-              // built from an unrelated or successful run.
+              // built from an unrelated or successful run. Check the workflow file
+              // path, not `run.name`: sanity-tests.yaml sets a dynamic `run-name`
+              // (e.g. "Sanity tests (push) SKUs[WH,Sim]"), so an exact-name check
+              // would reject every real run, including the one this validates against.
               const problems = [];
-              if (run.name !== 'Sanity tests') problems.push(`workflow is "${run.name}", not "Sanity tests"`);
+              if (run.path !== '.github/workflows/sanity-tests.yaml') problems.push(`workflow is "${run.path}", not "sanity-tests.yaml"`);
               if (run.event !== 'push') problems.push(`event is "${run.event}", not "push"`);
               if (run.head_branch !== 'main') problems.push(`head_branch is "${run.head_branch}", not "main"`);
               if (run.conclusion !== 'failure') problems.push(`conclusion is "${run.conclusion}", not "failure"`);
