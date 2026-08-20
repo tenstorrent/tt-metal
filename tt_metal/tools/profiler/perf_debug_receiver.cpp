@@ -113,10 +113,10 @@ PerfDebugReceiver::PerfDebugReceiver(ReceiverConfig config, std::vector<Receiver
     cfg_(std::move(config)), devices_(std::move(devices)) {
     TT_FATAL(devices_.size() <= kPerfDebugMaxDevices, "record dev field holds {} devices", kPerfDebugMaxDevices);
     // The scalar decode packs meta through the bit-field; the AVX2 path packs it by hand, so pin the layout.
-    const PerfDebugRecMeta meta_probe{0, 5, 2, PerfDebugRecType::ZoneEnd};
+    const PerfDebugRawRecMeta meta_probe{0, 5, 2, PerfDebugRawRecType::ZoneEnd};
     TT_FATAL(
         std::bit_cast<uint32_t>(meta_probe) == ((5u << 16) | (2u << 26) | (2u << 29)),
-        "PerfDebugRecMeta bit-field layout does not match the vectorized packer");
+        "PerfDebugRawRecMeta bit-field layout does not match the vectorized packer");
     no_decode_ = env_flag("TT_METAL_PERF_DEBUG_NO_DECODE");
     read_only_ = env_flag("TT_METAL_PERF_DEBUG_READ_ONLY");
     stall_only_ = env_flag("TT_METAL_PERF_DEBUG_STALL_ONLY");
@@ -140,7 +140,7 @@ PerfDebugReceiver::PerfDebugReceiver(ReceiverConfig config, std::vector<Receiver
             s->sock = dev.sockets[sk].get();
             s->dev = d;
             s->sock_idx = sk;
-            s->ring = std::make_unique<BroadcastRing<PerfDebugRec>>(ring_recs);
+            s->ring = std::make_unique<BroadcastRing<PerfDebugRawRec>>(ring_recs);
             s->decode.reset(dev.num_cores);
             s->decode.core_of_xy = dev.core_of_xy;
             s->last_zone_ts.assign(nl, 0);
@@ -247,9 +247,9 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     uint64_t* const last_ts = s.last_zone_ts.data();
 
     auto emit = [&](uint32_t lane, uint32_t type, uint32_t zone_id, uint64_t ts, uint32_t prog) {
-        PerfDebugRecType rt = PerfDebugRecType::ZoneTotal;
+        PerfDebugRawRecType rt = PerfDebugRawRecType::ZoneTotal;
         if (type != PP_ZONE_TOTAL) {
-            rt = type == PP_ZONE_START ? PerfDebugRecType::ZoneStart : PerfDebugRecType::ZoneEnd;
+            rt = type == PP_ZONE_START ? PerfDebugRawRecType::ZoneStart : PerfDebugRawRecType::ZoneEnd;
             zone_markers++;
             // PRODUCER-STALL, matched by ELF-resolved NAME via the id table: a producer RISC blocked on
             // a FULL ring. STALL_ONLY mode only -- on a normal run this per-marker probe is redundant
@@ -267,7 +267,7 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
             max_ts = ts;
         }
         if (sink) {
-            w.emit_store(pos++, PerfDebugRec{ts, zone_id, {0, lane, dev, rt}, prog});
+            w.emit_store(pos++, PerfDebugRawRec{ts, zone_id, {0, lane, dev, rt}, prog});
         }
     };
     auto emit_data = [&](uint32_t lane,
@@ -280,14 +280,15 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         if (!sink) {
             return;
         }
-        const PerfDebugRecType rt = type == PP_DATA ? PerfDebugRecType::Data : PerfDebugRecType::Event;
-        w.emit_store(pos++, PerfDebugRec{ts, id, {0, lane, dev, rt}, prog});
+        const PerfDebugRawRecType rt = type == PP_DATA ? PerfDebugRawRecType::Data : PerfDebugRawRecType::Event;
+        w.emit_store(pos++, PerfDebugRawRec{ts, id, {0, lane, dev, rt}, prog});
         w.emit_store(
-            pos++, PerfDebugRec{(static_cast<uint64_t>(id) << 32) | n, 0, {0, lane, dev, PerfDebugRecType::Ext}, prog});
+            pos++,
+            PerfDebugRawRec{(static_cast<uint64_t>(id) << 32) | n, 0, {0, lane, dev, PerfDebugRawRecType::Ext}, prog});
         for (uint32_t k = 0; k < (n + 1) / 2; k++) {
             const uint64_t hi = payload[2 * k];
             const uint64_t lo = (2 * k + 1 < n) ? payload[2 * k + 1] : 0;
-            w.emit_store(pos++, PerfDebugRec{(hi << 32) | lo, 0, {0, lane, dev, PerfDebugRecType::Cont}, prog});
+            w.emit_store(pos++, PerfDebugRawRec{(hi << 32) | lo, 0, {0, lane, dev, PerfDebugRawRecType::Cont}, prog});
         }
     };
 
@@ -339,7 +340,7 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         if (slot0 + 8 <= ring_mask + 1) {
             // One address computation for the whole block; slots are contiguous unless it wraps the
             // power-of-two ring (once per full ring lap -- the else path).
-            auto* q = reinterpret_cast<long long*>(ring_base + slot0 * sizeof(PerfDebugRec));
+            auto* q = reinterpret_cast<long long*>(ring_base + slot0 * sizeof(PerfDebugRawRec));
             for (int k = 0; k < 8; k++, q += 3) {
                 _mm_stream_si64(q + 0, static_cast<long long>(th_hi | w1_arr[k]));
                 _mm_stream_si64(q + 1, static_cast<long long>((static_cast<uint64_t>(meta_arr[k]) << 32) | id_arr[k]));
@@ -531,6 +532,18 @@ PerfDebugConsumerHandle PerfDebugReceiver::add_consumer(std::string name, PerfDe
     return consumers_.back()->handle;
 }
 
+PerfDebugConsumerHandle PerfDebugReceiver::add_raw_consumer(std::string name, PerfDebugRawRecordCallback cb) {
+    TT_FATAL(!t_in_consumer, "add_raw_consumer must not be called from a consumer callback");
+    std::lock_guard<std::mutex> lk(consumers_mu_);
+    auto c = std::make_unique<Consumer>();
+    c->name = std::move(name);
+    c->raw_cb = std::move(cb);
+    c->handle = next_handle_++;
+    c->thread = std::thread(&PerfDebugReceiver::consumer_thread, this, std::ref(*c));
+    consumers_.push_back(std::move(c));
+    return consumers_.back()->handle;
+}
+
 void PerfDebugReceiver::remove_consumer(PerfDebugConsumerHandle handle) {
     TT_FATAL(!t_in_consumer, "remove_consumer must not be called from a consumer callback");
     std::unique_ptr<Consumer> victim;
@@ -557,28 +570,114 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
     const std::string name = "pd-con:" + c.name;
     tracy::SetThreadName(name.c_str());
     t_in_consumer = true;
-    std::vector<BroadcastRing<PerfDebugRec>::Reader> readers;
+    std::vector<BroadcastRing<PerfDebugRawRec>::Reader> readers;
     readers.reserve(streams_.size());
     for (auto& s : streams_) {
         readers.push_back(s->ring->make_reader());
     }
-    std::vector<PerfDebugRec> scratch(kConsumerScratchRecs);
+    std::vector<PerfDebugRawRec> scratch(kConsumerScratchRecs);
     std::vector<uint64_t> last_dropped(readers.size(), 0);
+    // ---- The pairing stage (public consumers only) ------------------------------------------------
+    // Zones are RAII scopes on the device, so per lane the raw stream obeys strict stack discipline:
+    // push on ZoneStart, pop on ZoneEnd, and the pop's mate is the matching open. One stack per
+    // (dev, lane), owned by THIS thread -- every consumer thread reads the whole ring independently,
+    // so there is no sharing and no lock. A Zone record is emitted at END time; everything else
+    // converts 1:1. All pairing cost lands here, on the consumer's own thread, never on decode.
+    struct OpenZone {
+        uint64_t ts;
+        uint32_t id;
+        uint32_t prog;
+    };
+    std::vector<std::vector<OpenZone>> stacks;
+    if (c.raw_cb == nullptr) {
+        stacks.resize(ctx_.devices.size() * kPerfDebugMaxLanes);
+    }
+    std::vector<PerfDebugRec> out;
+    out.reserve(kConsumerScratchRecs);
+    uint64_t unmatched_ends = 0;  // ZoneEnd with an empty stack (only possible after ring drops)
+    uint64_t id_mismatches = 0;   // ZoneEnd whose id differs from the matching open: trust neither, drop
+    uint64_t dur_saturated = 0;   // durations clamped to UINT32_MAX (~3 s of device time)
+    auto pair_batch = [&](std::span<const PerfDebugRawRec> got) {
+        out.clear();
+        for (const PerfDebugRawRec& r : got) {
+            const uint32_t si = r.meta.dev * kPerfDebugMaxLanes + r.meta.lane;
+            switch (r.meta.type) {
+                case PerfDebugRawRecType::ZoneStart: stacks[si].push_back({r.ts, r.id, r.prog}); break;
+                case PerfDebugRawRecType::ZoneEnd: {
+                    if (stacks[si].empty()) {
+                        unmatched_ends++;
+                        break;
+                    }
+                    const OpenZone open = stacks[si].back();
+                    stacks[si].pop_back();
+                    if (open.id != r.id) {
+                        id_mismatches++;  // corrupt pair: emitting under either id would mislabel it
+                        break;
+                    }
+                    const uint64_t dur = r.ts - open.ts;
+                    uint32_t dur32 = static_cast<uint32_t>(dur);
+                    if (dur > 0xFFFFFFFFull) {
+                        dur_saturated++;
+                        dur32 = 0xFFFFFFFFu;
+                    }
+                    PerfDebugRec& o = out.emplace_back();
+                    o.data.zone = {open.ts, dur32};
+                    o.id = open.id;
+                    o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::Zone};
+                    o.prog = open.prog;
+                    break;
+                }
+                case PerfDebugRawRecType::ZoneTotal: {
+                    PerfDebugRec& o = out.emplace_back();
+                    o.data.sum = r.ts;
+                    o.id = r.id;
+                    o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::ZoneTotal};
+                    o.prog = r.prog;
+                    break;
+                }
+                default: {  // Data / Event / Ext / Cont: 1:1
+                    PerfDebugRec& o = out.emplace_back();
+                    o.data.ts = r.ts;
+                    o.id = r.id;
+                    PerfDebugRecType t = PerfDebugRecType::Data;
+                    if (r.meta.type == PerfDebugRawRecType::Event) {
+                        t = PerfDebugRecType::Event;
+                    } else if (r.meta.type == PerfDebugRawRecType::Ext) {
+                        t = PerfDebugRecType::Ext;
+                    } else if (r.meta.type == PerfDebugRawRecType::Cont) {
+                        t = PerfDebugRecType::Cont;
+                    }
+                    o.meta = {0, r.meta.lane, r.meta.dev, t};
+                    o.prog = r.prog;
+                    break;
+                }
+            }
+        }
+    };
     IdleBackoff backoff(kConsumerSleepCapUs);
     for (;;) {
         bool any = false;
         for (size_t r = 0; r < readers.size(); r++) {
-            auto got = readers[r].read_batch(std::span<PerfDebugRec>(scratch));
+            auto got = readers[r].read_batch(std::span<PerfDebugRawRec>(scratch));
             if (got.empty()) {
                 continue;
             }
             any = true;
-            c.delivered += got.size();
             const uint64_t dropped = readers[r].dropped();
-            const PerfDebugRecordBatch batch{got, dropped - last_dropped[r], &ctx_};
+            const uint64_t dropped_delta = dropped - last_dropped[r];
             last_dropped[r] = dropped;
             try {
-                c.cb(batch);
+                if (c.raw_cb != nullptr) {
+                    c.delivered += got.size();
+                    c.raw_cb(PerfDebugRawRecordBatch{got, dropped_delta, &ctx_});
+                } else {
+                    pair_batch(got);
+                    if (out.empty() && dropped_delta == 0) {
+                        continue;  // a batch of nothing but ZoneStarts; the Zones come with their ends
+                    }
+                    c.delivered += out.size();
+                    c.cb(PerfDebugRecordBatch{std::span<const PerfDebugRec>(out), dropped_delta, &ctx_});
+                }
             } catch (const std::exception& e) {
                 log_warning(tt::LogMetal, "[perf-debug receiver] consumer \"{}\" threw: {}", c.name, e.what());
             }
@@ -595,6 +694,24 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
     c.dropped = 0;
     for (auto& r : readers) {
         c.dropped += r.dropped();
+    }
+    // A lossless capture ends with every stack empty: the producers close every scope they open, and
+    // the quiesce path drains to the last marker. Leftover opens mean records were lost (ring drops
+    // for THIS consumer) or a start/end pair was corrupted -- say so rather than ending silently.
+    uint64_t leftover_opens = 0;
+    for (const auto& st : stacks) {
+        leftover_opens += st.size();
+    }
+    if (leftover_opens != 0 || unmatched_ends != 0 || id_mismatches != 0 || dur_saturated != 0) {
+        log_warning(
+            tt::LogMetal,
+            "[perf-debug receiver] consumer \"{}\" pairing: {} zones left OPEN at shutdown, {} unmatched ends, "
+            "{} start/end id mismatches, {} saturated durations [all MUST be 0 on a lossless capture]",
+            c.name,
+            leftover_opens,
+            unmatched_ends,
+            id_mismatches,
+            dur_saturated);
     }
 }
 

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Perf-debug host receiver: D2H socket streams -> in-place frame decode -> 24 B records
-// emitted DIRECTLY into per-stream BroadcastRings -> registered consumers.
+// Perf-debug host receiver: D2H socket streams -> in-place frame decode -> 24 B raw records
+// emitted DIRECTLY into per-stream BroadcastRings -> per-consumer pairing -> registered consumers.
 //
 // Decode threads fuse poll + in-place decode + ack: frames are decoded out of the pinned
 // FIFO itself (no staging copy), records are stored straight into ring slots (no batch
@@ -12,6 +12,15 @@
 // stream keeps each ring single-writer. Each registered consumer gets its own thread with
 // one reader per ring; a lagging consumer drops its own oldest records (counted) -- the
 // only place on the host where records can drop.
+//
+// TWO record types, deliberately: the RING carries the raw 24 B record the decode hot path
+// emits (separate ZoneStart/ZoneEnd markers, exactly what the device produced -- the AVX2
+// packer and the all-NT-store discipline depend on this layout, do not widen it), while
+// consumers receive the PUBLIC 32 B PerfDebugRec, whose zones are already PAIRED: each
+// consumer's delivery thread runs a per-(dev, lane) stack between the ring read and the
+// callback, converting start/end pairs into single Zone records. Pairing is per delivery
+// thread on purpose -- no shared state, no locks, and its cost lands on the consumer's
+// thread, never on decode.
 #pragma once
 
 #include <atomic>
@@ -20,6 +29,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -37,6 +47,50 @@ template <typename T>
 class BroadcastRing;
 
 namespace perf_debug {
+
+// ---- RAW ring record: receiver-internal, NOT the consumer contract --------------------------------
+//
+// This is the record the decode hot path emits and the BroadcastRing carries: the device's own
+// start/end markers, unpaired, 24 B. Its field and bit layout (lane at 16, dev at 26, type at 29;
+// ZoneStart=1 / ZoneEnd=2) are pinned by the receiver's vectorized packer and by the all-NT-store
+// discipline in broadcast_ring.hpp -- widening or reordering it is a measured multi-x decode
+// regression, which is why the public PerfDebugRec is a SEPARATE type built after the ring.
+// The only consumer-facing use is the raw path below, which exists solely for the built-in Tracy
+// sink (its timeline encodes nesting through start/end interleaving, which pairing destroys).
+enum class PerfDebugRawRecType : uint32_t {
+    ZoneStart = 1,
+    ZoneEnd = 2,
+    ZoneTotal = 3,
+    Data = 4,
+    Event = 5,
+    Ext = 6,
+    Cont = 7,
+};
+
+struct PerfDebugRawRecMeta {
+    uint32_t spare : 16;
+    uint32_t lane : 10;
+    uint32_t dev : 3;
+    PerfDebugRawRecType type : 3;
+};
+static_assert(sizeof(PerfDebugRawRecMeta) == 4);
+
+struct PerfDebugRawRec {
+    uint64_t ts;
+    uint32_t id;  // full 27-bit structural zone id
+    PerfDebugRawRecMeta meta;
+    uint32_t prog;
+};
+static_assert(sizeof(PerfDebugRawRec) == 24);
+static_assert(std::is_trivially_copyable_v<PerfDebugRawRec>);
+
+struct PerfDebugRawRecordBatch {
+    std::span<const PerfDebugRawRec> records;  // oldest first; valid only for the duration of the call
+    uint64_t dropped_delta = 0;
+    const PerfDebugCaptureContext* context = nullptr;
+};
+
+using PerfDebugRawRecordCallback = std::function<void(const PerfDebugRawRecordBatch&)>;
 
 struct ReceiverDeviceConfig {
     uint32_t chip_id = 0;
@@ -65,6 +119,11 @@ public:
     void start();
 
     PerfDebugConsumerHandle add_consumer(std::string name, PerfDebugRecordCallback cb);
+    // INTERNAL: subscribe to the raw ring stream (unpaired start/end markers), bypassing the
+    // pairing stage. Exists solely for the built-in Tracy sink, whose timeline encodes nesting
+    // through start/end push interleaving -- end-ordered Zone records cannot reproduce it. Not
+    // part of the public consumer contract; everything else registers through register_consumer.
+    PerfDebugConsumerHandle add_raw_consumer(std::string name, PerfDebugRawRecordCallback cb);
     void remove_consumer(PerfDebugConsumerHandle handle);
 
     // Every drainer owning (device, socket) has published done, which implies the device saw
@@ -118,7 +177,7 @@ private:
         distributed::D2HSocket* sock = nullptr;
         uint32_t dev = 0;
         uint32_t sock_idx = 0;
-        std::unique_ptr<BroadcastRing<PerfDebugRec>> ring;
+        std::unique_ptr<BroadcastRing<PerfDebugRawRec>> ring;
         profiler::SpanDecodeState decode;
         StallIdMirror stall_ids;
         std::vector<uint64_t> last_zone_ts;  // per lane, order invariant (must never regress)
@@ -138,7 +197,8 @@ private:
 
     struct Consumer {
         std::string name;
-        PerfDebugRecordCallback cb;
+        PerfDebugRecordCallback cb;         // paired (public) path; empty for raw consumers
+        PerfDebugRawRecordCallback raw_cb;  // raw path (Tracy sink only); empty for public consumers
         PerfDebugConsumerHandle handle = 0;
         std::atomic<int> mode{0};  // 0 = run, 1 = drain-then-stop, 2 = stop-now
         uint64_t delivered = 0;

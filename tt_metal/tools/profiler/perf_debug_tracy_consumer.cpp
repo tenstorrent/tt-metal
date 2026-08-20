@@ -63,7 +63,7 @@ void PerfDebugTracyConsumer::flush_event(const PerfDebugCaptureContext& ctx) {
     handler_->HandleWorkerEvent(pkt);
 }
 
-void PerfDebugTracyConsumer::operator()(const PerfDebugRecordBatch& batch) {
+void PerfDebugTracyConsumer::operator()(const PerfDebugRawRecordBatch& batch) {
     const PerfDebugCaptureContext& ctx = *batch.context;
     if (ts_base_.size() < ctx.devices.size()) {
         ts_base_.resize(ctx.devices.size(), 0);
@@ -72,9 +72,9 @@ void PerfDebugTracyConsumer::operator()(const PerfDebugRecordBatch& batch) {
     // the table GROWS throughout a model run -- a one-shot snapshot would be taken when it holds a
     // fraction of its final size.
     names_.refresh();
-    for (const PerfDebugRec& r : batch.records) {
+    for (const PerfDebugRawRec& r : batch.records) {
         const auto type = r.meta.type;
-        if (type == PerfDebugRecType::Cont) {
+        if (type == PerfDebugRawRecType::Cont) {
             if (pend_.active && pend_.got < kMaxEventValues) {
                 pend_.vals[pend_.got++] = r.ts;
             }
@@ -83,7 +83,7 @@ void PerfDebugTracyConsumer::operator()(const PerfDebugRecordBatch& batch) {
             }
             continue;
         }
-        if (type == PerfDebugRecType::Ext) {
+        if (type == PerfDebugRawRecType::Ext) {
             if (pend_.active) {
                 pend_.want = (static_cast<uint32_t>(r.ts) + 1) / 2;
                 if (pend_.want == 0) {
@@ -93,13 +93,13 @@ void PerfDebugTracyConsumer::operator()(const PerfDebugRecordBatch& batch) {
             continue;
         }
         flush_event(ctx);  // any non-continuation record terminates a truncated predecessor
-        if (type == PerfDebugRecType::ZoneTotal) {
+        if (type == PerfDebugRawRecType::ZoneTotal) {
             continue;
         }
         if (ts_base_[r.meta.dev] == 0) {
             ts_base_[r.meta.dev] = r.ts;
         }
-        if (type == PerfDebugRecType::Data || type == PerfDebugRecType::Event) {
+        if (type == PerfDebugRawRecType::Data || type == PerfDebugRawRecType::Event) {
             pend_ = PendingEvent{};
             pend_.active = true;
             pend_.dev = r.meta.dev;
@@ -131,7 +131,7 @@ void PerfDebugTracyConsumer::operator()(const PerfDebugRecordBatch& batch) {
         }
         const uint64_t base = dev.clock_synced ? 0 : ts_base_[r.meta.dev];
         pkt.timestamp = r.ts >= base ? r.ts - base : 0;
-        pkt.is_start = type == PerfDebugRecType::ZoneStart;
+        pkt.is_start = type == PerfDebugRawRecType::ZoneStart;
         handler_->HandleWorkerZone(pkt);
     }
 }

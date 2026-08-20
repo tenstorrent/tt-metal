@@ -22,8 +22,7 @@ void PerfDebugOpsCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
     }
     names_.refresh();
     for (const PerfDebugRec& rec : batch.records) {
-        const auto type = rec.meta.type;
-        if ((type != PerfDebugRecType::ZoneStart && type != PerfDebugRecType::ZoneEnd) || rec.prog == 0) {
+        if (rec.meta.type != PerfDebugRecType::Zone || rec.prog == 0) {
             continue;
         }
         ZoneClass cls = ZoneClass::Unseen;
@@ -42,27 +41,28 @@ void PerfDebugOpsCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
         }
         constexpr uint32_t kLaneShift = 32;
         constexpr uint32_t kDevShift = kLaneShift + std::bit_width(kPerfDebugMaxLanes - 1u);
+        // Execution splitting: a Zone record IS one completed kernel-wrapper pair, so counting Zones per
+        // (dev, lane, prog) is exactly the old completed-pairs counter -- the wrapper zone never
+        // self-nests, so the k-th Zone on a lane for a given prog is execution k.
         uint32_t& completed = pair_count_
             [(static_cast<uint64_t>(rec.meta.dev) << kDevShift) | (static_cast<uint64_t>(rec.meta.lane) << kLaneShift) |
              rec.prog];
         OpAgg& op = ops_[{rec.meta.dev, rec.prog, completed}];
-        const uint64_t ts = rec.ts;
+        completed++;
+        const uint64_t start = rec.data.zone.start;
+        const uint64_t end = start + rec.data.zone.duration;
         const uint32_t risc = rec.meta.lane % kNumRisc;
         auto& core = op.cores[rec.meta.lane / kNumRisc];
-        if (type == PerfDebugRecType::ZoneStart) {
-            op.k_start = std::min(op.k_start, ts);
-            op.k_start_last = std::max(op.k_start_last, ts);
-            if (risc <= 1) {
-                op.dm_start = std::min(op.dm_start, ts);
-            }
-            op.risc_start[risc] = std::min(op.risc_start[risc], ts);
-            core.first = core.first == 0 ? ts : std::min(core.first, ts);
-        } else {
-            op.k_end = std::max(op.k_end, ts);
-            op.risc_end[risc] = std::max(op.risc_end[risc], ts);
-            core.second = std::max(core.second, ts);
-            completed++;
+        op.k_start = std::min(op.k_start, start);
+        op.k_start_last = std::max(op.k_start_last, start);
+        if (risc <= 1) {
+            op.dm_start = std::min(op.dm_start, start);
         }
+        op.risc_start[risc] = std::min(op.risc_start[risc], start);
+        core.first = core.first == 0 ? start : std::min(core.first, start);
+        op.k_end = std::max(op.k_end, end);
+        op.risc_end[risc] = std::max(op.risc_end[risc], end);
+        core.second = std::max(core.second, end);
     }
 }
 
