@@ -84,9 +84,21 @@ NT_DIM = 1  # number of V head-dim tiles (== num_tiles_v in sdpa.h)
 DEFINED_LANES = NT_DIM * ELEMENTS_PER_TILE
 
 _XFAIL_REASON = (
-    "sdpa_custom_mm_reuse_dest_srcb numeric result unverified without a Blackhole "
-    "card: the row-unit SrcB read from DEST vs tile-unit datacopy preload needs BH "
-    "confirmation. xfail records coverage while keeping the suite green."
+    "sdpa_custom_mm_reuse_dest_srcb numeric golden is unverified. Two driver defects "
+    "were fixed on ttsim so the op now runs to completion and writes a real matmul-"
+    "magnitude output: (1) the FPU/SFPU input handshake -- the math header "
+    "unconditionally waits on + gets UNPACK_MATH_DONE once per K iter regardless of "
+    "signal_output, so the standalone op deadlocked (fixed: the pack thread now posts "
+    "KT_DIM producer tokens, the reduce_block_max_test.cpp cross-layer pattern); and "
+    "(2) the pack tile base (DST_INDEX=128 lands the O accumulator at physical DEST "
+    "tile 2, not tile 4 -- the DEST_TARGET offset is in 64-datum units -- so the old "
+    "DST_TILE=4 packed an all-zero tile). What remains unverified is the numeric "
+    "golden: the op reads P as 16-row DEST bands via MOVD2B into a 16x16 SrcB face and "
+    "the unpacker feeds V faces via CFGSHIFTMASK, and the defined output is a single "
+    "16x16 face (not the [1,32] tile the header comment implies). No standard "
+    "MatmulGolden reorder matches (best structural PCC ~0.42 on ttsim), so the exact "
+    "DEST-band -> SrcB -> MVMUL face correspondence needs BH p100a confirmation before "
+    "a hard assert. xfail records coverage while keeping the suite green."
 )
 
 

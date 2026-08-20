@@ -72,16 +72,24 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 
-// The reuse matmul addresses DEST in ROW units: it reads SrcB from P at
-// (src_index + i*16) for K-chunk i, and accumulates O at dst_index. A datacopy,
-// by contrast, addresses DEST in TILE units (one 32x32 tile == 32 rows). So a
-// P K-chunk (16 rows) is HALF a datacopy tile, and ceil(KT_DIM/2) datacopy tiles
-// hold all KT_DIM P chunks. SRC_INDEX/DST_INDEX below are the ROW bases the
-// matmul uses; SRC_TILE/DST_TILE are the corresponding datacopy/pack TILE bases.
-constexpr std::uint32_t SRC_INDEX = 0;      // P row base (SrcB source)
+// DEST addressing: the reuse matmul writes src_index/dst_index straight into the
+// math DEST_TARGET_REG "Offset" field (TT_SETC16 DEST_TARGET_REG_CFG_MATH_Offset).
+// That field is NOT a 32-row tile index: it counts DEST in half-tile (64-datum)
+// units, so physical_tile = index / 64. The K-chunk stride src_index + i*8*2 puts
+// chunk i at 16-datum granularity (chunk 0 at datum 0, chunk 1 at datum 16), i.e.
+// both KT_DIM=2 chunks live inside physical tile 0 -- exactly one datacopy tile.
+// The pack/datacopy LLKs, by contrast, address DEST in whole 32x32 TILE units.
+// SRC_INDEX/DST_INDEX are the DEST_TARGET_REG offsets the matmul consumes;
+// SRC_TILE/DST_TILE are the matching datacopy/pack tile bases (= offset / 64).
+//
+// The DST_TILE=2 (from DST_INDEX=128 -> tile 2) mapping was pinned on ttsim by
+// packing all of DEST and finding the O accumulator at physical tile 2 (a
+// tile-0 preload of P plus a tile-2 O accumulator, non-overlapping). Confirm the
+// 64-datum offset unit on a BH p100a before trusting the exact placement.
+constexpr std::uint32_t SRC_INDEX = 0;      // P DEST_TARGET offset (SrcB source) -> tile 0
 constexpr std::uint32_t SRC_TILE  = 0;      // P tile base for datacopy preload
-constexpr std::uint32_t DST_INDEX = 32 * 4; // O row base: 4 tiles (128 rows) down
-constexpr std::uint32_t DST_TILE  = 4;      // O tile base for pack (= DST_INDEX/32)
+constexpr std::uint32_t DST_INDEX = 64 * 2; // O DEST_TARGET offset -> physical tile 2
+constexpr std::uint32_t DST_TILE  = 2;      // O tile base for pack (= DST_INDEX / 64)
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -200,9 +208,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
+
+    // Producer half of the SFPU->FPU input handshake. The math header consumes
+    // UNPACK_MATH_DONE (aliased SFPU_FPU) once per K iteration -- a wait_on_zero +
+    // t6_semaphore_get pair gated only on input_granularity, NOT on signal_output.
+    // In a real SDPA chunk the SFPU exp producer posts this token to tell the FPU
+    // "P is ready in DEST for K-chunk i"; the reuse matmul is the CONSUMER half of a
+    // cross-layer handshake (see the semaphore-handshake-audit skill and the
+    // llk_unpack_AB_reduce_custom_runtime consumer). With no SFPU partner in this
+    // standalone test the math thread would wait_on_zero forever, so this spectator
+    // pack thread stands in for the SFPU producer and posts KT_DIM tokens up front --
+    // exactly the reduce_block_max_test.cpp pattern. Posting before wait_for_math_done
+    // (and before the math waits drain them) keeps the value >=1 until each get lands.
+    t6_semaphore_init(ckernel::semaphore::UNPACK_MATH_DONE, 0, KT_DIM);
+    for (std::uint32_t i = 0; i < KT_DIM; ++i)
+    {
+        t6_semaphore_post<>(ckernel::semaphore::UNPACK_MATH_DONE);
+    }
+
     _llk_packer_wait_for_math_done_();
 
-    // Pack the NT_DIM output tiles starting at tile base DST_TILE (= DST_INDEX/32).
+    // Pack the NT_DIM output tiles starting at tile base DST_TILE.
     for (std::uint32_t i = 0; i < NT_DIM; ++i)
     {
         _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_TILE + i, L1_ADDRESS(params.buffer_Res[i]));

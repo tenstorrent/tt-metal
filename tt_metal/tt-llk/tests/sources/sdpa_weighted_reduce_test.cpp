@@ -49,8 +49,22 @@
 // constant Q. Then every output lane is analytically identical, independent of the exact
 // face/lane mapping:
 //     out[p] = sum_{h=0..7} W * Q = 8 * W * Q      (p = 0..31)
-// The .py asserts ONLY DEST logical row 0 (the op's single defined output row) against 8*W*Q,
-// per the "validate only defined lanes" rule. All other rows are undefined and not checked.
+// The .py asserts ONLY the lanes this driver provably defines against 8*W*Q, per the
+// "validate only defined lanes" rule.
+//
+// WHICH LANES THIS DRIVER DEFINES (plain-pack path, no api/ helpers here)
+// ----------------------------------------------------------------------
+// This test runs the header's MATH core verbatim but packs with a standard full-tile _llk_pack_
+// instead of the header's raw two-PACR face-stepping pack. Under that path:
+//   - MVMUL #1 (ADDR_MOD_6) writes the reduced row into DEST row 0, cols 0..15 == logical row 0
+//     cols 0..15 (Dest face0 row 0).
+//   - ADDR_MOD_6 then advances DEST by 8 rows (dest.incr = 8), so MVMUL #2 (qk face1) writes DEST
+//     row 8 -- still inside face0, NOT physical face1 (DEST rows 16..31), which is where logical
+//     row 0 cols 16..31 lives. The header's real pack reaches that face1 data via a custom
+//     face-stepping addrmod; a plain full-tile pack does not, and that Dest<->face mapping is BH
+//     hardware detail we cannot validate here.
+// So the .py checks logical row 0 columns 0..15 (the 16 lanes MVMUL #1 defines). Columns 16..31
+// of that row -- and every other row -- are undefined by this MATH+plain-pack path.
 
 #include <cstdint>
 

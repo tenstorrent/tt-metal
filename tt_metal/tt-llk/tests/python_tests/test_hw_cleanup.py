@@ -23,6 +23,7 @@ Blackhole-only; there is no BH card in this environment, so this is validated by
 a clean Blackhole compile plus the identity golden below.
 """
 
+import pytest
 import torch
 from conftest import blackhole_only
 from helpers.format_config import DataFormat
@@ -35,7 +36,20 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import NUM_FACES, TILE_COUNT
 from helpers.utils import passed_test
 
-pytestmark = blackhole_only
+# WEDGES REAL BLACKHOLE — skipped on all backends. In bit-exact run 32360115349
+# hw_cleanup hit TENSIX-TIMED-OUT (Math/Unpacker/Packer) and cascaded timeouts into
+# every later test. ttsim cannot model it either (UnimplementedFunctionality:
+# tensix_cfg_wr32 reg=281 — the cfg-bank reprogram). So it can't be validated locally
+# and it hangs hardware. Unclear yet whether the wedge is our teardown driver
+# (incomplete pack re-init after the deliberate MOP/stride poison) or the promoted
+# hw_cleanup LLK itself (#53296, mailbox rendezvous). Needs a BH-card debug session.
+# TODO: root-cause and un-skip; if it's the LLK, flag to pmilenkovic on #53296.
+pytestmark = [
+    blackhole_only,
+    pytest.mark.skip(
+        reason="Wedges real BH (run 32360115349); ttsim can't model cfg reg 281. Needs BH-card debug."
+    ),
+]
 
 # Single config: the canonical geometry cleanup itself restores (one 32x32 tile,
 # four faces, Float16_b in and out).

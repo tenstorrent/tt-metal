@@ -24,9 +24,25 @@ every output lane is analytically identical regardless of the exact face/lane gr
 
     out[p] = sum_{h=0..7} W * Q = NUM_HEADS * W * Q      (NUM_HEADS == 8)
 
-Only DEST logical row 0 (the op's single defined output row) is asserted against that constant,
-per the "validate only defined lanes" rule. Every other row is left undefined by the op and is
-not checked.
+DEFINED-LANE SCOPE (why only 16 columns are checked)
+-----------------------------------------------------
+This tt-llk unit test cannot include the api/ helpers the header's raw two-PACR face-stepping
+pack relies on, so its C++ driver runs the header's MATH core verbatim (the two TTI_MVMUL) and
+then does a standard full-tile _llk_pack_ (see sources/sdpa_weighted_reduce_test.cpp). Under that
+path only ONE lane group is provably defined:
+
+  - MVMUL #1 (ADDR_MOD_6) writes the reduced row into DEST row 0, cols 0..15 == logical row 0,
+    cols 0..15 (Dest face0 row 0).
+  - ADDR_MOD_6 then advances DEST by 8 rows, so MVMUL #2 (qk face1) writes DEST row 8 -- still
+    inside face0, NOT the physical face1 (DEST rows 16..31) that carries logical row 0 cols
+    16..31. The header's real pack reaches that data with a custom face-stepping addrmod; a plain
+    full-tile pack does not, and that Dest<->face mapping is Blackhole hardware detail we cannot
+    validate here (no BH card).
+
+So, per the "validate only defined lanes" rule, we assert logical row 0 columns 0..15 (the 16
+lanes MVMUL #1 defines) against NUM_HEADS * W * Q. Columns 16..31 of that row -- and every other
+row -- are undefined by this MATH+plain-pack path and are not checked. (The sibling
+test_sdpa_reduce_row.py likewise checks only its single defined lane, column 0.)
 """
 
 import torch
@@ -52,6 +68,10 @@ from helpers.utils import passed_test
 
 # The header reduces over exactly 8 head weights: weights[1, 8], qk[8, 32]. Fixed by the op.
 NUM_HEADS = 8
+
+# One Dest face is 16 columns wide. MVMUL #1 defines exactly logical row 0, cols 0..15 (face0);
+# see the "DEFINED-LANE SCOPE" note in the module docstring for why only these 16 lanes are checked.
+FACE_WIDTH = 16
 
 # Constants that fill the weights (W) and qk (Q) tiles. Chosen small so NUM_HEADS * W * Q stays
 # exactly representable in Float16_b, with one pair exercising a non-trivial magnitude.
@@ -116,8 +136,9 @@ def test_sdpa_weighted_reduce(
     # out[p] = sum_{h=0..7} W * Q = NUM_HEADS * W * Q, identical for every column p of row 0.
     reduced_value = float(weight_value) * float(qk_value) * NUM_HEADS
 
-    # The op defines only DEST logical row 0 (all 32 columns). A golden row vector of the reduced
-    # value is sufficient; every other row is undefined and not asserted.
+    # Golden row of the reduced value. Only the first FACE_WIDTH lanes (logical row 0, cols 0..15)
+    # are asserted -- the lanes MVMUL #1 provably defines under this MATH+plain-pack path; see the
+    # "DEFINED-LANE SCOPE" note in the module docstring.
     golden_row = torch.full((TILE_DIM,), reduced_value, dtype=torch_format)
     # *******************************************************
 
@@ -146,10 +167,11 @@ def test_sdpa_weighted_reduce(
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
 
-    # Validate ONLY DEST logical row 0 (the op's single defined output row). Every other row is
-    # undefined by the op and is not checked.
+    # Validate ONLY the lanes the test's MATH core provably defines: logical row 0, columns 0..15.
+    # See the golden-derivation note below and the C++ driver header for why only these 16 lanes
+    # are defined here; every other lane is undefined by this MATH+plain-pack path and not checked.
     assert passed_test(
-        golden_row,
-        res_tensor[0, :],
+        golden_row[:FACE_WIDTH],
+        res_tensor[0, :FACE_WIDTH],
         formats.output_format,
     )

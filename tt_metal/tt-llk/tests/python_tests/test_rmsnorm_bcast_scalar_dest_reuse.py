@@ -34,7 +34,11 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
+from helpers.golden_generators import (
+    EltwiseBinaryGolden,
+    TransposeGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import (
     DestAccumulation,
     MathFidelity,
@@ -61,6 +65,20 @@ from helpers.utils import passed_test
 # Must match SCALAR_SEED in sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp
 # bit-for-bit. 0.5 is exact in bf16/fp16/fp32.
 RMSNORM_SCALAR_SEED = 0.5
+
+# The C++ harness seeds DEST[SRC_INDEX] with the SFPU _calculate_fill_ microcode
+# called with ITERATIONS=2. Each SFPU iteration writes one 32-lane vector, and the
+# SFPU DEST address walk covers every face of the tile, so the seed lands in the
+# first 2 * 32 = 64 elements (the first 4 of the 16 rows) of EACH 16x16 face, NOT
+# the whole face and NOT just the first face. This per-face footprint matters for
+# the ELWMUL golden (see below): MUL accumulates into DEST, so the leftover seed
+# offsets exactly these first 64 output lanes of every face of tile 0.
+RMSNORM_SEED_FILL_ITERATIONS = 2
+RMSNORM_SFPU_LANES_PER_ITER = 32
+RMSNORM_SEED_FOOTPRINT_PER_FACE = (
+    RMSNORM_SEED_FILL_ITERATIONS * RMSNORM_SFPU_LANES_PER_ITER
+)
+RMSNORM_ELEMENTS_PER_FACE = 256
 
 # Full 32x32 tile (num_faces=4) plus tiny tiles 16x32 (num_faces=2) and
 # 16x16 (num_faces=1). Only num_faces varies; face_r_dim/face_c_dim stay at 16.
@@ -142,6 +160,23 @@ def test_rmsnorm_bcast_scalar_dest_reuse(
         spec_A=StimuliSpec.uniform(low=-1.0, high=1.0),
     )
 
+    # When unpack_full_transpose is set the rmsnorm unpack path transposes the
+    # tile as it streams it into SrcA: both transpose_of_faces (rearrange the 4
+    # faces f0,f1,f2,f3 -> f0,f2,f1,f3) and within_face_16x16_transpose (transpose
+    # each 16x16 face). That is a whole-tile transpose, so the FPU sees A^T, not A.
+    # The scalar is uniform, so (A op s)^T == (A^T) op s; model it by transposing
+    # the golden's A the same way before the eltwise op. This path is only swept
+    # for num_tiles==1 / num_faces==4 (the 32x32 tile), per the LLK's asserts.
+    golden_A = src_A
+    if unpack_full_transpose:
+        transpose_golden = get_golden_generator(TransposeGolden)
+        golden_A = transpose_golden.transpose_within_faces(
+            src_A, formats.input_format, input_dimensions, num_faces=4
+        )
+        golden_A = transpose_golden.transpose_faces(
+            golden_A, formats.input_format, input_dimensions, num_faces=4
+        )
+
     # The device gets only operand A; the scalar operand is produced on-device by
     # the SFPU fill seed (a uniform RMSNORM_SCALAR_SEED tile). Model that scalar
     # in the golden as a full-tile constant B so EltwiseBinaryGolden applies the
@@ -155,7 +190,7 @@ def test_rmsnorm_bcast_scalar_dest_reuse(
     binary_golden = get_golden_generator(EltwiseBinaryGolden)
     golden_tensor = binary_golden(
         math_op,
-        src_A,
+        golden_A,
         src_B_scalar,
         formats.output_format,
         math_fidelity,
@@ -164,6 +199,29 @@ def test_rmsnorm_bcast_scalar_dest_reuse(
         input_format_B=None,
         tile_shape=tile_shape,
     )
+
+    # The ELWMUL FPU op is a multiply-*accumulate* into DEST: the product A*s is
+    # added to whatever the destination tile already holds. ELWADD instead
+    # overwrites DEST, so it is unaffected. With clear_dest=True the header zeroes
+    # the DEST half first, so MUL sees 0 and produces a pure product. But with
+    # clear_dest=False the very first output tile (DST_BASE == SRC_INDEX == 0)
+    # still holds the seeded scalar that we filled to feed the broadcast, so those
+    # output lanes come back as (A*s + s). The seed fill only wrote the first
+    # RMSNORM_SEED_FOOTPRINT_PER_FACE (64) lanes of *each* face of tile 0
+    # (ITERATIONS=2, see above); the rest of tile 0 -- and all of tiles 1..n-1,
+    # which were never seeded -- start at 0 and are the pure product. Model the
+    # leftover-seed accumulation on exactly the seeded prefix of every face of
+    # tile 0. (The transpose path is num_tiles==1 only and, being a whole-tile
+    # transpose, the seeded DEST prefix is applied after the op in output-lane
+    # order, i.e. it is not transposed.)
+    if math_op == MathOperation.Elwmul and not clear_dest:
+        golden_tensor = golden_tensor.clone()
+        num_faces_tile0 = tile_shape.total_num_faces()
+        seed = torch.tensor(RMSNORM_SCALAR_SEED, dtype=golden_tensor.dtype)
+        for face in range(num_faces_tile0):
+            base = face * RMSNORM_ELEMENTS_PER_FACE
+            end = base + RMSNORM_SEED_FOOTPRINT_PER_FACE
+            golden_tensor[base:end] = golden_tensor[base:end] + seed
 
     configuration = TestConfig(
         "sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp",

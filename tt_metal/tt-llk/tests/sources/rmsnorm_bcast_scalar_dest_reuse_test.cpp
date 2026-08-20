@@ -123,6 +123,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_A_src,
         formats.unpack_A_dst);
 
+    // The rmsnorm unpack MOP issues real UNPACR(SrcA, ...) ops to stream the input
+    // tile into SrcA (the DEST scalar comes in on SrcB via MOVD2B in MATH). But the
+    // op init above (llk_unpack_A_rmsnorm.h) programs the ADC X-end on unpacker B
+    // (UNP_SEL = SCALAR ? UNP_B), never on unpacker A. Because _llk_unpack_hw_configure_
+    // does NOT set the X-end (it is owned by the op init per llk_unpack_common.h:137),
+    // UNP_A's X-end is left at its reset value and only the first datum of each SrcA
+    // row is unpacked -> SrcA is zero except lane 0. In the real ttnn flow a prior
+    // op's init leaves UNP_A's X-end at a full face; this standalone harness has no
+    // such predecessor, so program the full-face X-end on UNP_A here before the fetch.
+    // (Root cause is a defect in the promoted llk_unpack_A_rmsnorm.h init: its MOP
+    // reads SrcA but it configures the X-end on SrcB -- see headerBugSuspected.)
+    ckernel::unpacker::config_unpacker_x_end<p_setadc::UNP_A>(tensor_shape.face_r_dim);
+
     // Single unpack call streams all TILE_CNT tiles into SrcA: the rmsnorm unpack
     // MOP z-increments through num_tiles * num_faces faces from one L1 base
     // address, in lockstep with the FPU MOP consuming them. MATH pairs each face
