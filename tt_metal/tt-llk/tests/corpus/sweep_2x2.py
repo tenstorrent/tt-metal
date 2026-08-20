@@ -723,6 +723,81 @@ class Sweep:
                 )
         self.reds = []
         self.reused = []  # cross-run adopted device cells (provenance)
+        # --priority-ops sanity: a typo'd op must fail loudly, never
+        # silently deprioritize everything.  Ops deferred by the schedule
+        # filter stay deferred (priority reorders, it never resurrects).
+        prio = getattr(args, "priority_ops", None) or []
+        known = {r["op"] for r in self.rows} | {r["op"] for r in self.deferred}
+        missing = set(prio) - known
+        if missing:
+            sys.exit(f"unknown ops in --priority-ops: {','.join(sorted(missing))}")
+        live = {r["op"] for r in self.rows}
+        for op in prio:
+            if op not in live:
+                print(
+                    f"priority: op {op} is schedule-deferred this run — "
+                    "priority reorders the queue, it never resurrects a "
+                    "deferred row"
+                )
+
+    # ---------------- row priority scheduling ----------------
+    def _expected_identical(self, row, base_classes):
+        """Best-effort hint that this row's OFF/ON legs will be
+        byte-identical (nothing to measure — a re-baseline row).  Sources,
+        in order: a classify verdict already on disk for this run root or
+        any --prev-run root (read UNKEYED — this is a QUEUE hint, never a
+        trust decision: the keyed classify verdict still decides every
+        refusal and every device cell exactly as before), then the
+        baseline's expected class (refusal == byte-identical history).  A
+        wrong hint costs only queue position."""
+        if row["kind"] == "pinpair":
+            return False  # single pinned leg: always a measured A/B
+        sel = "sem-perf" if row["nodes"].get("sem-perf") else "sem-corr"
+        if not row["nodes"].get(sel):
+            return False
+        for root in [self.ev] + self._prev_roots():
+            vf = pathlib.Path(root) / row["op"] / "classify" / sel / "verdict.json"
+            if not vf.is_file():
+                continue
+            try:
+                v = json.loads(vf.read_text())
+            except ValueError:
+                continue
+            if v.get("status") == "OK" and v.get("all") in ("IDENTICAL", "CHANGED"):
+                return v["all"] == "IDENTICAL"
+        return base_classes.get((row["corpus_id"], row_scope(row))) == "refusal"
+
+    def _order_rows(self):
+        """ROW PRIORITY SCHEDULING (owner order, pipeline overhaul): rows
+        with something to MEASURE classify and reach silicon first —
+        results stream by value, not alphabetically/config order.
+
+        Order: (0) --priority-ops, in the order given (they jump the queue
+        entirely); (1) rows expected to have DIFFERING OFF/ON .text hashes
+        (or unknown — never guessed identical); (2) rows expected
+        byte-identical (re-baseline rows) last.  Stable within each tier
+        (config order).  The expectation is a hint from prior classify
+        verdicts/baseline class; actual verdicts are computed exactly as
+        before and correctness is unaffected by a wrong hint."""
+        prio = list(getattr(self.a, "priority_ops", None) or [])
+        baseline, base_classes = self._load_baseline(getattr(self.a, "baseline", None))
+
+        def key(i):
+            row = self.rows[i]
+            if row["op"] in prio:
+                return (0, prio.index(row["op"]), i)
+            if self._expected_identical(row, base_classes):
+                return (2, 0, i)
+            return (1, 0, i)
+
+        order = sorted(range(len(self.rows)), key=key)
+        self.rows = [self.rows[i] for i in order]
+        tiers = {(0): "priority", (1): "measure", (2): "re-baseline"}
+        desc = ",".join(
+            f"{r['op']}[{tiers[key(i)[0]]}]" for i, r in enumerate(self.rows)
+        )
+        if self.rows:
+            print(f"row priority order: {desc}")
 
     @staticmethod
     def _find_python(venv):
@@ -3648,6 +3723,11 @@ exit $RC
     def run(self):
         phases = self.a.phases
         self.preflight()
+        # ROW PRIORITY SCHEDULING: measure-first order (priority ops, then
+        # expected-changed, then expected-byte-identical re-baseline rows).
+        # Every downstream list (results, scoreboard, report rows, streamed
+        # ROW-VERDICTs) follows this order — results stream by value.
+        self._order_rows()
         results, skips = [], []
         # Schedule deferrals are machine-readable skips in every scoreboard —
         # a weekly row absent from the nightly report would be the silent-
@@ -3869,6 +3949,17 @@ def main():
         type=lambda s: s.split(","),
         default=None,
         help="comma list of op rows (default: all config rows)",
+    )
+    ap.add_argument(
+        "--priority-ops",
+        type=lambda s: s.split(","),
+        default=None,
+        help="comma list of op rows that JUMP the queue entirely (classified "
+        "and measured first, in the order given); remaining rows order by "
+        "expected value — rows whose OFF/ON .text hashes are expected to "
+        "DIFFER first, expected byte-identical re-baseline rows last "
+        "(hint from prior classify verdicts/baseline class; a wrong hint "
+        "costs only queue position, never correctness)",
     )
     ap.add_argument(
         "--phases",
