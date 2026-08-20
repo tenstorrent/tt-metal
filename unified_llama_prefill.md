@@ -856,19 +856,64 @@ entirely. Instead the count went up, which means the branch survives as runtime 
 every leaf of every tile of every pass. That makes reconfiguration a target in its own
 right rather than a side effect to be optimised away by inlining.
 
+### Which thread is the bottleneck: the math TRISC
+
+Answered directly rather than by inference. The build already has `ENABLE_TRACY=ON`, so
+metal's device profiler gives per-RISC kernel spans, and `TT_METAL_PROFILER_SUM=1` adds
+its own accumulating stall zones -- `CB-COMPUTE-WAIT-FRONT` on unpack and
+`CB-COMPUTE-RESERVE-BACK` on pack. Profiling costs about 1% here (a 50.98us span against
+51.63us unprofiled), so the numbers can be read at face value. flash, 2 chunks, HiFi2 +
+approx, one core:
+
+| thread | span | measured stall | slack |
+|---|---|---|---|
+| NCRISC (reader) | 9.02 us | -- | **idle for 42 us** |
+| TRISC_0 (unpack) | 49.48 us | 21.17 us on `cb_wait_front` | 21 us |
+| TRISC_1 (math) | **50.04 us** | **none measurable** | **none** |
+| TRISC_2 (pack) | 49.74 us | 0.59 us on `cb_reserve_back` | 0.6 us |
+| BRISC (writer) | 50.55 us | -- | waits at the end |
+
+**The math thread is the constraint**, at 50.04us of a 50.98us kernel with no measurable
+stall. The reasoning that separates it from pack, which also looks ~96% occupied, is a
+zone placed on `tile_regs_acquire` -- where math blocks if pack has not released DST.
+That came to **0.47us**. Math is not waiting for pack, so pack is not the constraint;
+pack's apparent busyness is mostly `tile_regs_wait`, which is not a CB zone and so is
+counted as busy. Unpack has 21us of slack and the reader has 42us.
+
+Two hypotheses die here. **DRAM is not the bottleneck** -- the reader finishes its loads
+in the first 9us and idles for the remaining 82% of the kernel, which also explains why
+double buffering the streaming CBs was worth only 5%. And the DRAM prefetch idea recorded
+earlier as "the leading candidate" is now dead; it was wrong, like the three before it.
+
+**And the math thread is not busy with arithmetic.** The per-op costs model ~28us of real
+work for this shape against ~50us of occupancy. Putting a sum zone on the reconfiguration
+branch inside `TileSource::emit` prices it at **9.46us, stable to 0.01us across three
+runs**, against **1.78us** for the `copy_tile` it guards -- reconfiguration costs over
+five times the work it protects. Some of that is the zone's own overhead, which the
+CPTILE number bounds at under 1.8us, so call it 8us net: **roughly 16% of the kernel
+spent re-pointing the unpacker.** That is the same reconfiguration the always_inline
+experiment proved cannot be folded away, and it is now measured rather than suspected.
+
+Repeating this: `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_SUM=1`, with
+`DeviceZoneScopedSumN1/N2` around the region of interest and the define injected by
+rebinding `unified_program` in the test module, so no test or library source is touched
+for a commit. One trap worth knowing -- there are only **two sum slots per RISC**, and
+metal's built-in CB zones occupy one on unpack and one on pack, so a custom zone can
+silently land on an unexpected thread. Slot contention is why the first attempt attributed
+a pack-side zone to unpack.
+
 ### What to test next
 
 Ordered by expected value, with what each result would actually mean. Six candidates are
 already dead (SFPU math, CB plumbing, acquire batching, SFPU-side kind switching, DRAM
 buffering, wrapper codegen), and roughly half of flash's time is still unattributed.
 
-1. **Which thread is on the critical path.** Nothing so far establishes whether the math
-   thread is even the bottleneck; every measurement here has been whole-program device
-   time. If pack or unpack is the constraint, every conclusion about math costs is
-   advice about the wrong thread. Cheapest probe: make one thread's work strictly
-   cheaper (drop to a 1-leaf expression, or pack fewer tiles) and see which change moves
-   the total. This should come first because it decides whether the rest of the list is
-   pointed the right way.
+1. ~~**Which thread is on the critical path.**~~ **Answered above: the math TRISC**, at
+   98% occupancy with no measurable stall, while unpack has 21us of slack and the reader
+   idles for 42us. This re-ranks everything below it: work that shortens the math
+   thread's critical path counts, and work that helps unpack, pack or the reader does
+   not. It also promotes item 3 to the top, since reconfiguration is now measured at
+   ~8us of math-thread time.
 
 2. **matmul against SFPU, the switch flash actually makes.** PC_ALT alternates broadcast
    and copy, both SFPU-side, and found switching free -- that result does NOT cover a
