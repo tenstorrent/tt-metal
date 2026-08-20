@@ -937,11 +937,11 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         receiver_ = std::make_unique<perf_debug::PerfDebugReceiver>(std::move(rcfg), std::move(rdevs));
         if (tracy_push_enabled()) {
             tracy_consumer_ = std::make_unique<perf_debug::PerfDebugTracyConsumer>(tracy_.get());
-            // The Tracy sink rides the receiver's INTERNAL raw stream: its timeline encodes nesting
-            // through begin/end push interleaving, which the public paired (Zone-only) contract
-            // cannot reproduce. See PerfDebugRawRec in perf_debug_receiver.hpp.
-            receiver_->add_raw_consumer(
-                "tracy", [c = tracy_consumer_.get()](const perf_debug::PerfDebugRawRecordBatch& b) { (*c)(b); });
+            // An ordinary paired-contract consumer, like the ops CSV. Zones arrive END-ordered, so
+            // the consumer buffers them and reconstructs Tracy's begin/end push order in a teardown
+            // flush -- see perf_debug_tracy_consumer.hpp.
+            receiver_->add_consumer(
+                "tracy", [c = tracy_consumer_.get()](const perf_debug::PerfDebugRecordBatch& b) { (*c)(b); });
         }
         perf_debug::attach_registered_consumers(*receiver_);
         receiver_->start();

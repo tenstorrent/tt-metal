@@ -532,18 +532,6 @@ PerfDebugConsumerHandle PerfDebugReceiver::add_consumer(std::string name, PerfDe
     return consumers_.back()->handle;
 }
 
-PerfDebugConsumerHandle PerfDebugReceiver::add_raw_consumer(std::string name, PerfDebugRawRecordCallback cb) {
-    TT_FATAL(!t_in_consumer, "add_raw_consumer must not be called from a consumer callback");
-    std::lock_guard<std::mutex> lk(consumers_mu_);
-    auto c = std::make_unique<Consumer>();
-    c->name = std::move(name);
-    c->raw_cb = std::move(cb);
-    c->handle = next_handle_++;
-    c->thread = std::thread(&PerfDebugReceiver::consumer_thread, this, std::ref(*c));
-    consumers_.push_back(std::move(c));
-    return consumers_.back()->handle;
-}
-
 void PerfDebugReceiver::remove_consumer(PerfDebugConsumerHandle handle) {
     TT_FATAL(!t_in_consumer, "remove_consumer must not be called from a consumer callback");
     std::unique_ptr<Consumer> victim;
@@ -577,7 +565,7 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
     }
     std::vector<PerfDebugRawRec> scratch(kConsumerScratchRecs);
     std::vector<uint64_t> last_dropped(readers.size(), 0);
-    // ---- The pairing stage (public consumers only) ------------------------------------------------
+    // ---- The pairing stage ------------------------------------------------------------------------
     // Zones are RAII scopes on the device, so per lane the raw stream obeys strict stack discipline:
     // push on ZoneStart, pop on ZoneEnd, and the pop's mate is the matching open. One stack per
     // (dev, lane), owned by THIS thread -- every consumer thread reads the whole ring independently,
@@ -589,9 +577,7 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
         uint32_t prog;
     };
     std::vector<std::vector<OpenZone>> stacks;
-    if (c.raw_cb == nullptr) {
-        stacks.resize(ctx_.devices.size() * kPerfDebugMaxLanes);
-    }
+    stacks.resize(ctx_.devices.size() * kPerfDebugMaxLanes);
     std::vector<PerfDebugRec> out;
     out.reserve(kConsumerScratchRecs);
     uint64_t unmatched_ends = 0;  // ZoneEnd with an empty stack (only possible after ring drops)
@@ -660,17 +646,12 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
             const uint64_t dropped_delta = dropped - last_dropped[r];
             last_dropped[r] = dropped;
             try {
-                if (c.raw_cb != nullptr) {
-                    c.delivered += got.size();
-                    c.raw_cb(PerfDebugRawRecordBatch{got, dropped_delta, &ctx_});
-                } else {
-                    pair_batch(got);
-                    if (out.empty() && dropped_delta == 0) {
-                        continue;  // a batch of nothing but ZoneStarts; the Zones come with their ends
-                    }
-                    c.delivered += out.size();
-                    c.cb(PerfDebugRecordBatch{std::span<const PerfDebugRec>(out), dropped_delta, &ctx_});
+                pair_batch(got);
+                if (out.empty() && dropped_delta == 0) {
+                    continue;  // a batch of nothing but ZoneStarts; the Zones come with their ends
                 }
+                c.delivered += out.size();
+                c.cb(PerfDebugRecordBatch{std::span<const PerfDebugRec>(out), dropped_delta, &ctx_});
             } catch (const std::exception& e) {
                 log_warning(tt::LogMetal, "[perf-debug receiver] consumer \"{}\" threw: {}", c.name, e.what());
             }

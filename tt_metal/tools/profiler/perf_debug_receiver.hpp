@@ -16,7 +16,7 @@
 // TWO record types, deliberately: the RING carries the raw 24 B record the decode hot path
 // emits (separate ZoneStart/ZoneEnd markers, exactly what the device produced -- the AVX2
 // packer and the all-NT-store discipline depend on this layout, do not widen it), while
-// consumers receive the PUBLIC 32 B PerfDebugRec, whose zones are already PAIRED: each
+// consumers receive the PUBLIC 32 B PerfDebugRec, whose zones are already PAIRED: every
 // consumer's delivery thread runs a per-(dev, lane) stack between the ring read and the
 // callback, converting start/end pairs into single Zone records. Pairing is per delivery
 // thread on purpose -- no shared state, no locks, and its cost lands on the consumer's
@@ -55,8 +55,8 @@ namespace perf_debug {
 // ZoneStart=1 / ZoneEnd=2) are pinned by the receiver's vectorized packer and by the all-NT-store
 // discipline in broadcast_ring.hpp -- widening or reordering it is a measured multi-x decode
 // regression, which is why the public PerfDebugRec is a SEPARATE type built after the ring.
-// The only consumer-facing use is the raw path below, which exists solely for the built-in Tracy
-// sink (its timeline encodes nesting through start/end interleaving, which pairing destroys).
+// Receiver-internal only: every consumer, the built-in Tracy sink included, receives the public
+// paired record.
 enum class PerfDebugRawRecType : uint32_t {
     ZoneStart = 1,
     ZoneEnd = 2,
@@ -83,14 +83,6 @@ struct PerfDebugRawRec {
 };
 static_assert(sizeof(PerfDebugRawRec) == 24);
 static_assert(std::is_trivially_copyable_v<PerfDebugRawRec>);
-
-struct PerfDebugRawRecordBatch {
-    std::span<const PerfDebugRawRec> records;  // oldest first; valid only for the duration of the call
-    uint64_t dropped_delta = 0;
-    const PerfDebugCaptureContext* context = nullptr;
-};
-
-using PerfDebugRawRecordCallback = std::function<void(const PerfDebugRawRecordBatch&)>;
 
 struct ReceiverDeviceConfig {
     uint32_t chip_id = 0;
@@ -119,11 +111,6 @@ public:
     void start();
 
     PerfDebugConsumerHandle add_consumer(std::string name, PerfDebugRecordCallback cb);
-    // INTERNAL: subscribe to the raw ring stream (unpaired start/end markers), bypassing the
-    // pairing stage. Exists solely for the built-in Tracy sink, whose timeline encodes nesting
-    // through start/end push interleaving -- end-ordered Zone records cannot reproduce it. Not
-    // part of the public consumer contract; everything else registers through register_consumer.
-    PerfDebugConsumerHandle add_raw_consumer(std::string name, PerfDebugRawRecordCallback cb);
     void remove_consumer(PerfDebugConsumerHandle handle);
 
     // Every drainer owning (device, socket) has published done, which implies the device saw
@@ -197,8 +184,7 @@ private:
 
     struct Consumer {
         std::string name;
-        PerfDebugRecordCallback cb;         // paired (public) path; empty for raw consumers
-        PerfDebugRawRecordCallback raw_cb;  // raw path (Tracy sink only); empty for public consumers
+        PerfDebugRecordCallback cb;
         PerfDebugConsumerHandle handle = 0;
         std::atomic<int> mode{0};  // 0 = run, 1 = drain-then-stop, 2 = stop-now
         uint64_t delivered = 0;
