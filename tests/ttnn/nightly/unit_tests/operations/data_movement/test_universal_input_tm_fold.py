@@ -763,15 +763,28 @@ def test_fold_specless_matching_layout_preserves_input_geometry(
 
 # COL_MAJOR sharded input + cross-layout specless override — fresh-synth inherits input's orientation (was silently ROW_MAJOR before).
 @pytest.mark.parametrize(
-    "override_layout",
+    "override_layout, shape",
     [
-        pytest.param(ttnn.TensorMemoryLayout.WIDTH_SHARDED, id="H_col_major_in_W_override"),
-        pytest.param(ttnn.TensorMemoryLayout.BLOCK_SHARDED, id="H_col_major_in_B_override"),
+        pytest.param(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (1, 16, 16, 64),
+            id="H_col_major_in_W_override",
+        ),
+        pytest.param(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (1, 16, 16, 64),
+            id="H_col_major_in_B_override",
+        ),
+        # Produces an asymmetric block-shard grid, making a COL_MAJOR axis swap observable on both WH and BH.
+        pytest.param(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (1, 4, 4, 64),
+            id="H_col_major_in_B_override_asymmetric_grid",
+        ),
     ],
 )
-def test_fold_specless_cross_layout_override_inherits_input_orientation(override_layout, device):
+def test_fold_specless_cross_layout_override_inherits_input_orientation(override_layout, shape, device):
     """Cross-layout fresh-synth branch must inherit input's orientation, not silently emit ROW_MAJOR."""
-    shape = (1, 16, 16, 64)
     in_mc = _height_shard_rm(shape, device, orientation=ttnn.ShardOrientation.COL_MAJOR)
     out_mc = ttnn.MemoryConfig(override_layout, ttnn.BufferType.L1)
     torch.manual_seed(0)

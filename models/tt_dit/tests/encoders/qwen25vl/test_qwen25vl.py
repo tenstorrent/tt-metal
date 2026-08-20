@@ -23,6 +23,7 @@ from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
+from ....utils.test import line_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
@@ -211,8 +212,8 @@ def test_qwen25vl_text_encoder(
 
 @pytest.mark.parametrize(
     "mesh_device , submesh_shape",
-    [[(2, 4), (1, 4)], [(4, 8), (1, 4)]],
-    ids=["2x4_1x4", "4x8_1x4"],
+    [[(2, 2), (1, 2)], [(2, 4), (1, 4)], [(4, 8), (1, 4)]],
+    ids=["2x2_1x2", "2x4_1x4", "4x8_1x4"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -226,7 +227,8 @@ def test_qwen25vl_text_encoder(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 31000000}],
+    [{**line_params_req_exact_devices, "trace_region_size": 31000000}],
+    ids=["line"],
     indirect=True,
 )
 def test_qwen25vl_encoder_pair(

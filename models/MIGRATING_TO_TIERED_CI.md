@@ -189,8 +189,7 @@ keys. Common values:
 If your model is currently running in any of:
 
 - `tests/pipeline_reorg/t3k_e2e_tests.yaml`,
-  `t3k_unit_tests.yaml`, `t3k_demo_tests.yaml`, `t3k_perf_tests.yaml`,
-  `t3k_integration_tests.yaml`
+  `t3k_unit_tests.yaml`, `t3k_integration_tests.yaml`
 - `tests/pipeline_reorg/galaxy_*_tests.yaml`
 - `tests/pipeline_reorg/blackhole_demo_tests.yaml`
 - single-card / standalone workflow files
