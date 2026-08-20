@@ -417,6 +417,11 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     // with; NV == 1 keeps the plain reader on every core (today's behavior, bit-exact either way).
     const bool do_mcast = attrs.use_mcast && sdist.NV > 1;
 
+    // Handshake semaphore ids. Passed to the reader as its two trailing compile-time args (below),
+    // so the kernel-side constants can never drift from the SemaphoreDescriptor ids here.
+    constexpr uint32_t sem_ready_id = 0;
+    constexpr uint32_t sem_valid_id = 1;
+
     const uint32_t nbuf_in = (do_mcast && sdist.NV >= 4) ? 2u : 1u;
     add_cb(pcb::u, cv, nbuf_in);  // v_beta
     add_cb(pcb::w, ck, nbuf_in);  // kd
@@ -455,12 +460,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
         // AFTER its write barrier, since its copy is the async mcast payload source). Replay
         // safety does not hinge on the end state: receivers reset valid before every ready inc,
         // and dispatch re-initializes semaphore values on every enqueue.
-        // Ids are mirrored as SEM_READY/SEM_VALID constants in reader_chunk_gdn_scan.cpp — keep
-        // in sync (move to trailing compile-time args before fusing this op with anything).
-        desc.semaphores.push_back(
-            SemaphoreDescriptor{.id = 0, .core_type = tt::CoreType::WORKER, .core_ranges = cores, .initial_value = 0});
-        desc.semaphores.push_back(
-            SemaphoreDescriptor{.id = 1, .core_type = tt::CoreType::WORKER, .core_ranges = cores, .initial_value = 0});
+        // Ids reach reader_chunk_gdn_scan.cpp as its two trailing compile-time args (appended
+        // after the accessor chains below) — no kernel-side mirror constants to keep in sync.
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = sem_ready_id, .core_type = tt::CoreType::WORKER, .core_ranges = cores, .initial_value = 0});
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = sem_valid_id, .core_type = tt::CoreType::WORKER, .core_ranges = cores, .initial_value = 0});
     }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
@@ -477,6 +482,11 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     TensorAccessorArgs(*in.dl.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.t_inv.buffer()).append_to(reader_ct);
     TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct);
+    // Trailing compile-time args AFTER the accessor chain: the handshake semaphore ids. Appended
+    // unconditionally — the plain (no-mcast) reader has no semaphores and ignores them — so the
+    // trailing-arg offsets stay uniform across all three reader compile variants.
+    reader_ct.push_back(sem_ready_id);
+    reader_ct.push_back(sem_valid_id);
 
     // Mcast receivers read only their private V-sliced tensors (v_beta, s0) from DRAM; the shared
     // block arrives over the NoC. Their accessor chain therefore has just those two blocks.
@@ -485,6 +495,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
         receiver_ct = ct_args;
         TensorAccessorArgs(*in.v_beta.buffer()).append_to(receiver_ct);
         TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(receiver_ct);
+        receiver_ct.push_back(sem_ready_id);
+        receiver_ct.push_back(sem_valid_id);
     }
 
     std::vector<uint32_t> writer_ct = ct_args;
