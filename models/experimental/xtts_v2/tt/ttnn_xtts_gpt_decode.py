@@ -31,13 +31,17 @@ from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import TTNNGPTConfig, TTNNGPTC
 DECODE_IN0_BLOCK_W = 4  # tiles of the K reduction per step; see _decode_matmul_cfg
 
 
-def _decode_matmul_cfg(device, K, N):
+def _decode_matmul_cfg(device, K, N, fused_activation=None):
     """1D-multicast matmul config for a single-token (M=1) decode linear.
 
     Spreads N across the largest usable core grid and cuts the K reduction into
     DECODE_IN0_BLOCK_W-tile chunks, so the weight stream pipelines against the math. Returns None
     when the shapes cannot express one, leaving ttnn's own heuristic in place. per_core_M=1 makes
-    these DECODE ONLY — prefill shares _linear/_mlp and passes nothing."""
+    these DECODE ONLY — prefill shares _linear/_mlp and passes nothing.
+
+    fused_activation folds an elementwise op into the matmul. Passing `activation=` to ttnn.linear
+    alongside an explicit program_config does NOT fuse — it runs a second kernel — so the config
+    is where it has to go."""
     Kt, Nt = K // 32, N // 32
     g = device.compute_with_storage_grid_size()
     rows = next((r for r in range(g.y, 0, -1) if Nt % (g.x * r) == 0), None)
@@ -52,7 +56,7 @@ def _decode_matmul_cfg(device, K, N):
         per_core_M=1,
         per_core_N=per_core_N,
         fuse_batch=True,
-        fused_activation=None,
+        fused_activation=fused_activation,
         mcast_in0=True,
     )
 
@@ -188,8 +192,9 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         self.data_mapper = self.mesh_mapper if data_mapper is None else data_mapper
         self.ln_sharded = True  # single-token decode: use the width-sharded LayerNorm path
         b0 = self.params["blocks"][0]
-        self._prg = {  # decode-only matmul configs, keyed by weight
-            n: _decode_matmul_cfg(device, *tuple(b0[n]["weight"].shape)[-2:])
+        gelu = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, False)  # False = not the fast approximation
+        self._prg = {  # decode-only matmul configs, keyed by weight; c_fc carries its gelu
+            n: _decode_matmul_cfg(device, *tuple(b0[n]["weight"].shape)[-2:], gelu if n == "c_fc" else None)
             for n in ("c_attn", "attn_proj", "c_fc", "mlp_proj")
         }
         # BUG-1: sdpa_decode is wrong when the KV-cache length is an odd number of 32-tiles;

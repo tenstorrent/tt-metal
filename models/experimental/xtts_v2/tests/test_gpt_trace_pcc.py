@@ -40,6 +40,7 @@ def run_trace_pcc(device):
     # correct and so passes the gate below while costing throughput. Catch it here.
     missing = [n for n, c in dec._prg.items() if c is None]
     assert not missing, f"decode matmuls fell back to the default program config: {missing}"
+    assert dec._prg["c_fc"].fused_activation, "c_fc lost its fused gelu, which costs a second kernel"
 
     dec.capture()
     latents = traced_decode_sequence(dec, inputs_embeds)  # driver owns the I/O + loop

@@ -204,14 +204,17 @@ class TTNNGPTCore:
         return out
 
     def _mlp(self, x, block, prg_fc=None, prg_proj=None):
-        # c_fc + gelu_new fused into one linear(activation="gelu") — matches the base
-        # TTIR->TTNN lowering the compiler emits (validated to match the separate
-        # tanh-gelu at PCC ~0.9999993). Avoids a standalone elementwise gelu kernel.
+        # c_fc + gelu_new folded into the matmul — matches the base TTIR->TTNN lowering the
+        # compiler emits (validated to match the separate tanh-gelu at PCC ~0.9999993), and avoids
+        # a standalone elementwise gelu kernel. Decode carries it in prg_fc's fused_activation;
+        # prefill has no prg, where the string form folds in on its own. Passing the string
+        # ALONGSIDE an explicit program_config does NOT fuse — it adds a second kernel — so use
+        # the string only when the config is not already carrying the activation.
         h = ttnn.linear(
             x,
             block["c_fc"]["weight"],
             bias=block["c_fc"]["bias"],
-            activation="gelu",
+            activation=None if prg_fc is not None and prg_fc.fused_activation else "gelu",
             compute_kernel_config=self.compute_kernel_config,
             program_config=prg_fc,
         )

@@ -128,6 +128,10 @@ first-ever run when kernels build from scratch.
 - **Repeated input degenerates.** The same sentence several times over makes the model lose
   its place: measured near-silence and then nonsense partway through a 27 s utterance, while
   varied prose of the same length is clean. Lowering the repetition penalty only moves it.
+- **Very short input over-runs.** A three-word prompt makes the model invent ~1.5 s of babble
+  after the text before it stops — measured on every seed tried, and reproduced by the CPU
+  reference generating on its own, so it is the model rather than this port. A six-word
+  sentence does not. Give it a sentence, not a fragment.
 - Sampling is stochastic (coqui defaults: temperature 0.75, top-k 50, top-p 0.85,
   repetition penalty 10); fix `seed` for reproducible output.
 - **Reference-clip quality drives output quality.** Use a clean, mono clip of **~6 s**
