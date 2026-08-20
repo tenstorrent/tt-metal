@@ -129,20 +129,8 @@ def in_prefill_l1_matmul_band(m: int) -> bool:
 
 # Matmul shapes (M, K, N) whose tuned prefill program config does not fit this
 # device's L1. Populated on the first attempt, then consulted to skip straight to
-# auto — see ``linear_l1_safe``. Exposed for tests, which assert it stays EMPTY
-# on the shipped meshes.
+# auto — see ``linear_l1_safe``.
 _L1_FALLBACK_SHAPES: set = set()
-
-
-def l1_fallback_shapes():
-    """(M, K, N) shapes that fell back from a tuned prefill config to ttnn auto."""
-    return frozenset(_L1_FALLBACK_SHAPES)
-
-
-def reset_l1_fallback_shapes():
-    """Forget every cached fallback verdict, so the next call re-attempts the tuned
-    config. For tests that must observe the attempt rather than a cached skip."""
-    _L1_FALLBACK_SHAPES.clear()
 
 
 def linear_l1_safe(x, weight, *, program_config=None, memory_config=None, compute_kernel_config=None):
@@ -475,11 +463,11 @@ def _prefill_hifi4_ckc():
 def prefill_linear_above_cutoff(x, weight, *, out_memory_config=None):
     """``ttnn.linear`` with cutoff-sized 2D CBs when M exceeds ``_PREFILL_CUTOFF``.
 
-    Isolation (``test_prefill_matmul_2048_isolate``, WH 1x8, HiFi2, bfp8):
+    Isolation measurement (WH 1x8, HiFi2, bfp8):
     down 2048×2688×5376 auto 1672µs → reshape 1198µs (1.42x); o_proj 2048×1024×5376
     646µs → 576µs (1.12x). gate_up / QKV at M=2048: auto already wins.
 
-    12B ``test_prefill_matmul_4096_12b_isolate`` (M=4096, K=N=3840): gate_up
+    12B isolation (M=4096, K=N=3840): gate_up
     reshape+LoFi 1976µs vs auto+LoFi 2199µs (1.11x, PCC 0.99985). SharedMLP
     uses this path only for ``m >= 4096`` so 31B's 2048-chunk auto+LoFi stays.
 
