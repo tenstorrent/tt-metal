@@ -1,14 +1,14 @@
 # tt-llk blaze promotions — everything still to do
 
-Single actionable index of what is left, with a plan per item. **Pruned 2026-08-20**: closed
-items are no longer listed here at all. What is done, with results and the findings that came
-out of it, lives in [`BLAZE_PROMOTION_TESTS_DONE.md`](BLAZE_PROMOTION_TESTS_DONE.md) — including
-the four test items closed between 2026-08-18 and 2026-08-20 (`set_dst_write_addr_offset`,
-`mul_reduce_scalar` re-entry, plain `custom_mm`, `top32_rm`) that earlier versions of this
-document tracked as A2, A3, A4, A6, D2 and D3.
+Single actionable index of what is left, with a plan per item. **Everything in this document is
+outstanding**: closed items are removed rather than struck through, and what is done — results,
+sweeps, and the findings that came out of building them — lives in
+[`BLAZE_PROMOTION_TESTS_DONE.md`](BLAZE_PROMOTION_TESTS_DONE.md). Item letters are therefore not
+contiguous; the gaps are closed work, and the DONE document is where they went.
 
 - **Forensic detail** for A5 stays in
-  [`blaze_llk_promotion_test_strategy.md`](blaze_llk_promotion_test_strategy.md) §9.
+  [`blaze_llk_promotion_test_strategy.md`](blaze_llk_promotion_test_strategy.md) §9; §3 there
+  covers the `mul_reduce_scalar` dead ends behind C4. Bare "§n" below means that document.
 - All three promotion PRs (**#52709, #52713, #52727**) have merged, so nothing below is blocked
   on a promotion landing.
 
@@ -30,7 +30,7 @@ references the symbol. State verified against the tree on 2026-08-20.
 | **C3** | `topk_xl` → `eltwise_binary` reconfig escape | **defect**, pre-existing | unknown | needs an owner |
 | **C4** | `mul_reduce_scalar` re-entry needs a DEST-section boundary | **defect** | unknown | needs an owner |
 | **C5** | OOB metadata read shipped to main with #52727 | **defect** | minutes | needs the fix cherry-picked |
-| **C6** | `top32_rm` 32-bit unpack: partial chunk sorts against stale Dest | **defect**, NEW | ~0.5 d | needs an owner (xfail pins it) |
+| **C6** | `top32_rm` 32-bit unpack: partial chunk sorts against stale Dest | **defect** | ~0.5 d | needs an owner (xfail pins it) |
 | **D1** | `mul_reduce_scalar_chunked_tile` ships with no caller | cleanup | — | C4 decides it |
 | **E** | PR mechanics — title and body | chore | minutes | — |
 | **F** | `test_matmul_custom_compressed` intermittent — host/BRISC desync | **defect**, nightly-only | unknown | needs an owner |
@@ -47,9 +47,7 @@ metadata (E), and one intermittent-failure investigation (F).
 
 ### A1'. `custom_mm` (plain) — `read_transposed`, and the top of the `kt_dim` range
 
-`transpose` and `split_acc`/`finalize` are done (64 variants passing; see the DONE document for
-what the flags actually change and how each axis was shown to discriminate). Two smaller things
-were never in A1's plan and are what is left of the family:
+Two things, neither of them in the original plan for this family:
 
 **1. `read_transposed` (~2 h, unblocked).** A *different* flag from `transpose`, and easy to
 conflate with it: `transpose` transposes each in1 tile inside SrcA, while `read_transposed`
@@ -69,9 +67,7 @@ the ct output tiles are all live in DEST and half-sync holds 8 bf16 tiles. The d
 
 ### A2''. `top32_rm` — the metal wrapper layer, and one shape the hardware cannot do
 
-The mixed 1024+tail shape is done: the pre-sorted mode now finishes a row that is not a
-multiple of 1024, at rows 1088 and 1152 (see the DONE document). Two things remain, and the
-second is new information rather than leftover work:
+Two things, the second of which is a hardware limit rather than missing work:
 
 **1. The metal wrapper layer (B1-shaped, needs an owner).** The 7
 `llk_math_deepseek_top32_rm_*` wrappers are on main with no caller — they arrived with #52713,
@@ -116,26 +112,12 @@ diverge, every existing test keeps passing. Copilot raised the same point indepe
 **Plan.** A compute-kernel test under `tests/tt_metal/` that calls the real entry points. ~1 d,
 but it needs an owner who works in that tree.
 
-**An interim guard is already in place**, and it is not a substitute for the above:
-`tests/python_tests/test_custom_mm_uninit_parity.py` — a device-free static gate that runs in
-the smoke job which already collects the whole `python_tests` directory. It asserts two things:
-
-- the two compute-API uninit bodies are still byte-identical modulo comments (divergence); and
-- the driver's replicated `DENSE_WSTRIDE` / `DEFAULT_WSTRIDE` expressions are still the ones
-  the headers use (staleness) — the driver hardcodes them, so if a header changes the driver
-  keeps asserting the old behaviour *and passes*, because it programs that stride itself.
-
-Both mutation-checked: dropping the `restore_tile_pack_mop` branch from
-`compressed_custom_mm.h` fails the first with a diff naming the missing branch; changing the
-driver's `DENSE_WSTRIDE` to `* 4` fails the second.
-
-**This does not close B1.** A text match cannot say the functions *work*, only that they still
-say the same thing. The metal-side test calling the real entry points is still wanted, and is
-still the item that needs an owner. What the guard buys is that divergence now fails loudly
-instead of silently, which was the specific risk.
-
-**Note.** The commit that documented `restore_tile_pack_mop` was dropped in the 2026-08-19
-rebase — main's merged #52727 has no such flag at all, so there was nothing left to document.
+**What exists already, and why it does not close this.** `test_custom_mm_uninit_parity.py` is a
+device-free static gate that fails loudly if the two uninit bodies diverge or if the driver's
+replicated W-stride expressions drift from the headers (detail in the DONE document). A text
+match cannot say the functions *work*, only that they still say the same thing, so the
+metal-side test calling the real entry points is still the item — the guard only removes the
+silent-failure mode.
 
 ---
 
@@ -159,8 +141,9 @@ restores 2048 where 4096 is correct. Measured at 0.25 match.
   but changes a signature that `matmul.hpp`, `flash_mla.hpp`, `dram_streaming_matmul*.hpp` and
   `matmul_custom_compressed_kernel.cpp` all call.
 
-The `xfail` in `test_custom_mm_uninit_restore.py` flips to XPASS when either lands — **and as of
-`e94b5dd0fbe` that is actually true**; see Correction 1.
+The `xfail` in `test_custom_mm_uninit_restore.py` flips to XPASS when either lands. It is a real
+detector, not a label: it uses the marker form, so the body builds and runs and the comparison
+actually happens under XFAIL.
 
 ### C2. The `eltwise_mul_scalar` HiFi workaround's mechanism does not survive review
 
@@ -191,10 +174,10 @@ owner. See also F, which may or may not be the same thing.
 
 ### C4. `mul_reduce_scalar` re-entry needs a DEST-section boundary — **defect**
 
-Located by the `mul_reduce_scalar_chunked_tile` investigation. `b59c5df50aa` adds a ~40-line driver
-(`tests/sources/mul_reduce_scalar_reenter_test.cpp` +
-`tests/python_tests/test_mul_reduce_scalar_reenter.py`) that runs the known-good non-chunked
-sequence twice over the same input. On BH p100a:
+Located by the `mul_reduce_scalar_chunked_tile` investigation. The reproducer is in the tree —
+`tests/sources/mul_reduce_scalar_reenter_test.cpp` +
+`tests/python_tests/test_mul_reduce_scalar_reenter.py`, a ~40-line driver that runs the
+known-good non-chunked sequence twice over the same input. On BH p100a:
 
 | Configuration | Result |
 |---|---|
@@ -251,7 +234,7 @@ carrying it in the meantime.
 
 ---
 
-### C6. A partially-filled chunk on `top32_rm`'s 32-bit unpack branch sorts against stale Dest — **defect, NEW**
+### C6. A partially-filled chunk on `top32_rm`'s 32-bit unpack branch sorts against stale Dest — **defect**
 
 `llk_unpack_A_top32_rm_api.h` forks on the src format. The 16-bit branch has the unpacker clear
 SrcA to -infinity (`TTI_UNPACR_NOP ... CLR_SRC_NEGINF`) before unpacking, so a chunk that fills
@@ -311,21 +294,10 @@ partial chunk is 16-bit only.
 
 ---
 
-## F. Intermittent `test_matmul_custom_compressed` failures — diagnosed, needs an owner
+## F. Intermittent `test_matmul_custom_compressed` failures — needs an owner
 
-Was an unidentified single failure; now characterised. Six back-to-back runs of the suite on
-BH p100a:
-
-| run | outcome |
-|---|---|
-| 1 | 588 passed |
-| 2 | **hang** (exit 5) in `test_matmul_custom_compressed_clustered` |
-| 3 | 2 failed — build-tree race, see below |
-| 4 | 3 failed (`TTException`) in `test_matmul_custom_compressed_single` |
-| 5 | **hang** (exit 5) in `test_matmul_custom_compressed_interleaved` |
-| 6 | 588 passed |
-
-**It is a hang, not a golden mismatch.** `run_test.sh`'s triage on run 2 caught the state:
+**Diagnosed; what is left is the fix.** Under repeated runs of the suite on BH p100a the failure
+reproduces roughly 2 in 6, and `run_test.sh`'s triage caught the state:
 
 ```
 Unpacker/Math/Packer mailboxes = 0x0 (KERNEL_STARTED)
@@ -334,48 +306,30 @@ BRISC       pc=0x368, unchanged  (spinning)
 BriscCounter=0x118 (280)   host Python counter: 281
 ```
 
-All three TRISCs sit in soft reset while BRISC spins one command behind the host — a host↔BRISC
-command desync, not an LLK compute bug. `get_tensix_state` then failed to halt BRISC, so the
-device was already unresponsive.
+All three TRISCs sit in soft reset while BRISC spins one command behind the host — a **host↔BRISC
+command-protocol desync**, not an LLK compute bug. `get_tensix_state` then failed to halt BRISC,
+so the device was already unresponsive.
 
-**It does not affect the PR gate.** Every failing variant reproduced —
-`clustered`, `interleaved`, `single` — is `@pytest.mark.nightly`, and the gate filters
-`not nightly`. It would affect a nightly run.
+**The symptom has two shapes, and this is the part an owner will otherwise miss.** As well as
+hanging, the same suite has produced a **wrong answer**: `shape=(1, 64, 32), formats=('bfp4',)`
+at PCC -0.033, 587/588, which did not reproduce (that variant passes 17/17 in isolation, and the
+suite then passes 588/588). Looking only for a hang will miss half of it.
 
-**Two caveats on this reproduction, both important:**
+**Scope.** Every failing variant reproduced — `clustered`, `interleaved`, `single` — is
+`@pytest.mark.nightly`, and the PR gate filters `not nightly`. So this affects nightly runs, not
+the gate.
 
-1. **Back-to-back runs are not how CI runs it,** and may be the aggravating factor rather than
-   an independent trigger. Runs 1 and 6 were clean; the failures cluster in the middle.
-2. **Run 3 is not a real failure.** It hit
-   `test_matmul_custom_compressed_metadata_word_boundary` with
-   `ld: cannot open output file .../elf/pack.elf: No such file or directory` — a `/tmp/tt-llk-build`
-   tree race left behind when run 2's hang handler killed the process tree mid-compile. An
-   artifact of looping, not a defect, but worth knowing since it is the one failure that landed
-   on a gate-visible (non-nightly) test.
-
-**Six runs also wedged the device** (`PcieHangError`, all devices unhealthy), needing
-`tt-smi -r`. That is the sanctioned remedy here per the tt-llk notes — a runtime timeout, not a
-reconfig escape — but it means this reproduction is not free, and whoever repeats it should
-expect to reset.
-
-**The symptom has two shapes, which matters for whoever looks.** On 2026-08-20 this suite also
-produced a **wrong answer** rather than a hang: `shape=(1, 64, 32), formats=('bfp4',)` at
-**PCC -0.033**, 587/588, in the first run after a device-contention incident. It did not
-reproduce — that variant passes 17/17 in isolation and the suite then passes 588/588 — and
-nothing in that day's change set is on the compressed path. Recorded as Finding 12b in the DONE
-document. Looking only for a hang will miss half of it.
-
-**Still needs an owner**, and it is a well-specified ask: a host/BRISC command-protocol desync
-under repeated kernel launches, reproducible ~2 in 6 on p100a, with the triage output above.
-Whether it is the same phenomenon as C3's reconfig escape is still unproven — C3 is a golden
-mismatch under a specific test ordering, this is primarily a hang, so they are probably
-different.
+**Before reproducing it yourself:** back-to-back runs are not how CI runs it and may be the
+aggravating factor rather than an independent trigger; and it wedges the device
+(`PcieHangError`, all devices unhealthy) often enough that you should expect to `tt-smi -r`
+between attempts. That is the sanctioned remedy for a runtime timeout here — not for a reconfig
+escape. Whether this is the same phenomenon as C3 is still unproven: C3 is a golden mismatch
+under a specific test ordering, this is primarily a hang, so they are probably different.
 
 ## Environment setup, for whoever picks this up next
 
-The tt-llk suite does not run out of the box on a fresh dev box, and none of the three blockers
-is documented in `tests/README.md`. All three are one-time setup, not open work — kept here
-because each presents as something worse than it is:
+One-time setup, kept here because none of it is in `tests/README.md` and each blocker presents
+as something worse than it is:
 
 **The short version: run `source tests/setup_external_testing_env.sh`.** §8 of the DONE
 document already says so, and it does the whole job — creates `tests/.venv`, installs
