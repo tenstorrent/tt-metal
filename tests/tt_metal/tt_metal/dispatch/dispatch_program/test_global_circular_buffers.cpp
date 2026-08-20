@@ -89,12 +89,14 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
 
     for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping) {
         auto sender_noc_coords = mesh_device->worker_core_from_logical_core(sender_core);
+        // Row-wise, to match how the GCB itself flattens each sender's receivers: a receiver's index
+        // in this vector is its credit slot, which orders the sender's NOC XY table.
+        const auto& receiver_cores_vec =
+            corerange_to_cores(receiver_cores, /*max_cores=*/std::nullopt, /*row_wise=*/true);
         std::vector<CoreCoord> receiver_noc_coords;
-        for (const auto& receiver_core_range : receiver_cores.ranges()) {
-            const auto& receiver_cores_vec = corerange_to_cores(receiver_core_range);
-            for (const auto& receiver_core : receiver_cores_vec) {
-                receiver_noc_coords.push_back(mesh_device->worker_core_from_logical_core(receiver_core));
-            }
+        receiver_noc_coords.reserve(receiver_cores_vec.size());
+        for (const auto& receiver_core : receiver_cores_vec) {
+            receiver_noc_coords.push_back(mesh_device->worker_core_from_logical_core(receiver_core));
         }
         std::vector<uint32_t> sender_runtime_args(11 + (receiver_noc_coords.size() * 2));
         uint32_t sender_args_idx = 0;

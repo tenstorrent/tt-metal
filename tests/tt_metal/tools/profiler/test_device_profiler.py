@@ -1199,7 +1199,22 @@ def test_noc_event_profiler():
 
     with open(expected_trace_file, "r") as nocTraceJson:
         noc_trace_data = json.load(nocTraceJson)
-        assert len(noc_trace_data) == 8
+        # Zone-marker entries carry no "type" key, so default it rather than indexing.
+        event_types = [event.get("type", "") for event in noc_trace_data]
+
+        # The example kernel's read and write are what NPE consumes; they must always be traced.
+        assert "READ" in event_types, f"missing READ event: {event_types}"
+        assert "WRITE_" in event_types, f"missing WRITE_ event: {event_types}"
+
+        # Barrier/flush/semaphore/inline-write events serve only the NOC debug tool and are compiled out of plain
+        # NOC tracing (see KernelProfilerNocEventMetadata::isDebugOnlyEventType), so the kernel's two barriers
+        # contribute nothing here. That is why this count is 4 (2 zone markers + READ + WRITE_) and not 8.
+        # Debug-mode coverage lives in the C++ unit_tests_noc_debugging suite instead: enabling
+        # TT_METAL_NOC_DEBUG_DUMP routes events into NOCDebugState and no noc trace JSON is written at all.
+        assert not any(
+            "BARRIER" in event_type for event_type in event_types
+        ), f"plain NOC tracing must not record barrier events, got: {event_types}"
+        assert len(noc_trace_data) == 4, f"unexpected noc trace events: {event_types}"
 
 
 @skip_for_blackhole()

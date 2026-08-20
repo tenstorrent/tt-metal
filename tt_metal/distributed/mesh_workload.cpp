@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <mesh_buffer.hpp>
+#include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt_stl/fmt.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
@@ -107,9 +108,15 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // 1. Compile Kernel Binaries
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
-    if (programs_.size() == 1) {
+    // This runs on every enqueue, not just the first. Once the workload has been finalized its
+    // programs are already compiled and laid out, so compile_program is a flag check per program;
+    // handing those to the thread pool costs a worker wake-up and a join for no work. Only the
+    // first compile of a multi-program workload does enough to be worth parallelizing.
+    if (programs_.size() == 1 || this->is_finalized()) {
         // Compile from main thread for homogeneous workloads
-        this->compile_program(programs_.begin()->first, mesh_device);
+        for (auto& [device_range, _] : programs_) {
+            this->compile_program(device_range, mesh_device);
+        }
     } else {
         for (auto& [device_range, _] : programs_) {
             // Multi-Threaded Compile: Useful for heterogeneous MeshWorkloads
@@ -161,6 +168,14 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
             ReplicatedBufferConfig global_kernel_bin_buf_config = {
                 .size = max_kernel_bin_buf_size,
             };
+            // Cache hits normally reuse an initialized workload, but initialization is lazy: a cached workload whose
+            // first enqueue did not reach this point can still allocate its kernel binary buffer on a later hit. Tag
+            // the allocation at its source so program-cache filtering does not depend on which dispatch path got here.
+            // Preserve the richer op-specific context installed by TTNN on the normal cache-miss path.
+            std::optional<AllocationContextGuard> program_cache_context;
+            if (!current_allocation_context().starts_with("program_cache:")) {
+                program_cache_context.emplace("program_cache: kernel binaries");
+            }
             kernel_bin_buf_ =
                 MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
             // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
