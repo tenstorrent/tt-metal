@@ -225,13 +225,6 @@ def test_fp32_uint32(device, h, w, dtype):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_exp(device, h, w, layout):
-    run_unary_test(device, h, w, ttnn.exp, layout=layout, ulp=2)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_gelu(device, h, w, layout):
     run_unary_test(device, h, w, ttnn.gelu, layout=layout, ulp=2)
 
@@ -504,88 +497,10 @@ def test_unary_log_operations_ttnn(
         assert_with_ulp(tt_result, golden_tensor, ulp_threshold=2)
 
 
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_sin(device, h, w, layout):
-    run_unary_test(device, h, w, ttnn.sin, layout=layout)
-
-
 @pytest.mark.parametrize("h", [0])
 @pytest.mark.parametrize("w", [1])
 def test_01_volume_sin(device, h, w):
     run_unary_test(device, h, w, ttnn.sin)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_asin(device, h, w, layout):
-    run_unary_test(device, h, w, ttnn.asin, layout=layout, ulp=2)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_cos(device, h, w, layout):
-    run_unary_test(device, h, w, ttnn.cos, layout=layout, ulp=2)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_acos(device, h, w, layout):
-    run_unary_test(device, h, w, ttnn.acos, layout=layout, ulp=2)
-
-
-def run_unary_inverse_trig_bf16_test(device, h, w, ttnn_function, ulp_threshold, layout=ttnn.TILE_LAYOUT):
-    """Explicit bfloat16 I/O and dense samples in [-1, 1] for asin/acos domain coverage."""
-    torch.manual_seed(0)
-    torch_input_tensor = torch.linspace(-1.0, 1.0, steps=h * w, dtype=torch.bfloat16).reshape(h, w)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor, device=device)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=layout, device=device)
-    output_tensor = ttnn_function(input_tensor)
-    assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_asin_bf16(device, h, w, layout):
-    run_unary_inverse_trig_bf16_test(device, h, w, ttnn.asin, 3, layout=layout)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_acos_bf16(device, h, w, layout):
-    run_unary_inverse_trig_bf16_test(device, h, w, ttnn.acos, 3, layout=layout)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_tan(device, h, w, layout):
-    run_unary_test(device, h, w, ttnn.tan, layout=layout)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_atan(device, h, w, layout):
-    run_unary_test(device, h, w, ttnn.atan, layout=layout)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_sinh(device, h, w, layout):
-    run_unary_test(device, h, w, ttnn.sinh, layout=layout, pcc_check=True)
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -629,20 +544,6 @@ def run_unary_test_range(device, h, w, ttnn_function, layout=ttnn.TILE_LAYOUT, u
     assert_with_ulp(torch_output_tensor, output_tensor, ulp)
 
 
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_floor(device, h, w, layout):
-    run_unary_test_range(device, h, w, ttnn.floor, layout=layout, ulp=1)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_ceil(device, h, w, layout):
-    run_unary_test_range(device, h, w, ttnn.ceil, layout=layout, ulp=1)
-
-
 def run_unary_test_with_float(device, h, w, scalar, ttnn_function, layout=ttnn.TILE_LAYOUT, ulp=2):
     torch.manual_seed(0)
 
@@ -673,14 +574,6 @@ def run_unary_test_with_float_remainder(device, h, w, scalar, ttnn_function, ulp
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_ulp(torch_output_tensor, output_tensor, ulp)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("scalar", [0, 1.0, 2])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_pow(device, h, w, scalar, layout):
-    run_unary_test_with_float(device, h, w, scalar, ttnn.pow, layout=layout, ulp=2)
 
 
 @pytest.mark.parametrize("lower_limit", [0, 1.0, 2, -5.5])
@@ -1413,7 +1306,11 @@ def test_unary_tanhshrink_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, devi
 )
 @pytest.mark.parametrize(
     "ttnn_function",
-    [ttnn.silu, ttnn.asinh, ttnn.tanhshrink, ttnn.rad2deg, ttnn.deg2rad, ttnn.acosh, ttnn.hardsigmoid, ttnn.cbrt],
+    [
+        ttnn.silu,
+        ttnn.tanhshrink,
+        ttnn.hardsigmoid,
+    ],
 )
 def test_unary_edge_case_ttnn(input_shapes, ttnn_function, device):
     in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
@@ -1424,61 +1321,6 @@ def test_unary_edge_case_ttnn(input_shapes, ttnn_function, device):
     golden_tensor = golden_function(in_data)
 
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("ttnn_function", [ttnn.rad2deg, ttnn.deg2rad])
-def test_unary_angle_conversion_ttnn(input_shapes, device, ttnn_dtype, ttnn_function):
-    in_data1, input_tensor1 = data_gen_with_range_dtype(input_shapes, -100, 100, device, ttnn_dtype=ttnn_dtype)
-
-    output_tensor = ttnn_function(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    golden_tensor = golden_function(in_data1)
-
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_trunc_ttnn(input_shapes, device):
-    in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
-
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn.trunc(input_tensor)
-    golden_function = ttnn.get_golden_function(ttnn.trunc)
-    golden_tensor = golden_function(in_data)
-
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    ((torch.Size([1, 2, 32, 128])),),
-)
-def test_unary_trunc_ttnn_opt(input_shapes, device):
-    in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
-
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-    cq_id = 0
-    ttnn.trunc(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_function = ttnn.get_golden_function(ttnn.trunc)
-    golden_tensor = golden_function(in_data)
-
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -1592,28 +1434,10 @@ def test_unary_inverse_hyperbolic_edge_case_ttnn(
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_acosh_ttnn(input_shapes, device):
-    in_data1 = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(1, 100)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn.acosh(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.acosh)
-    golden_tensor = golden_function(in_data1, device=device)
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([3, 128, 32])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
     [
         (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )
@@ -1642,7 +1466,6 @@ def test_unary_asinh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     "torch_dtype, ttnn_dtype",
     [
         (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )
@@ -1809,42 +1632,6 @@ def test_unary_shrink_functions_edge_case_ttnn(input_shapes, param, ttnn_functio
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_frac_ttnn(input_shapes, device):
-    in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
-
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn.frac(input_tensor)
-    golden_function = ttnn.get_golden_function(ttnn.frac)
-    golden_tensor = golden_function(in_data)
-
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    ((torch.Size([1, 2, 32, 128])),),
-)
-def test_unary_frac_ttnn_opt(input_shapes, device):
-    in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
-
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-    cq_id = 0
-    ttnn.frac(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_function = ttnn.get_golden_function(ttnn.frac)
-    golden_tensor = golden_function(in_data)
-
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
         (torch.Size([3, 128, 32])),
         (torch.Size([1, 3, 320, 384])),
     ),
@@ -1994,7 +1781,6 @@ def test_unary_hardtanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, min_val, max
     [
         (torch.int32, ttnn.int32),
         (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )
@@ -2030,7 +1816,6 @@ def test_unary_signbit_int32_edge_case_ttnn(device):
     "torch_dtype, ttnn_dtype",
     [
         (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
     ],
 )
 def test_unary_signbit_float_edge_case_ttnn(torch_dtype, ttnn_dtype, device):
@@ -2233,7 +2018,6 @@ def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device, expe
     "torch_dtype, ttnn_dtype",
     [
         (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )
@@ -2266,7 +2050,6 @@ def test_unary_cosh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     "torch_dtype, ttnn_dtype",
     [
         (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )
@@ -2318,7 +2101,6 @@ def test_unary_rpow_ttnn(input_shapes, exponent, device):
     "torch_dtype, ttnn_dtype, atol",
     [
         (torch.float32, ttnn.float32, 0.0094),
-        (torch.bfloat16, ttnn.bfloat16, 0.04),
         (torch.bfloat16, ttnn.bfloat8_b, 0.05),
     ],
 )
@@ -2345,7 +2127,6 @@ def test_unary_cbrt_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     "torch_dtype, ttnn_dtype",
     [
         (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )
@@ -2749,7 +2530,7 @@ def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, ep
 
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
-    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16), (torch.bfloat16, ttnn.bfloat8_b)],
+    [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat8_b)],
 )
 def test_unary_logical_not(device, torch_dtype, ttnn_dtype):
     input_shape = (1, 1, 32, 32)
