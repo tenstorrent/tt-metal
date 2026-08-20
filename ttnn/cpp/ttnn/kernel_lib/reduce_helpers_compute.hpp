@@ -151,11 +151,10 @@ struct ReduceInputBlockShape {
  * partial scaler for the *last* tile along the reduce dimension, so the padding
  * lanes multiply by zero and contribute nothing.
  *
- * This struct describes the scaler-CB layout. The default (`none()`) keeps the
- * legacy behavior of using one full scaler tile. Use `last_tile()` when the CB
- * contains [full, partial].
+ * The default (`none()`) keeps the legacy behavior of using one full scaler
+ * tile. Use `with_partial()` when the CB contains [full, partial].
  *
- * Pair last_tile() with dataflow_kernel_lib::prepare_partial_reduce_scalers
+ * Pair with_partial() with dataflow_kernel_lib::prepare_partial_reduce_scalers
  * (or calculate_and_prepare_partial_reduce_scalers) on the reader side.
  *
  * REDUCE_SCALAR does not support partial scalers — it applies the scaler
@@ -177,24 +176,18 @@ struct ReduceInputBlockShape {
  *
  * Usage:
  *   constexpr auto partial = has_partial
- *       ? ReducePartialScaler::last_tile()
+ *       ? ReducePartialScaler::with_partial()
  *       : ReducePartialScaler::none();
  *   reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, shape, ..., partial);
  */
-enum class ReducePartialScalerMode : uint8_t {
-    None,
-    LastTile,
-};
-
 struct ReducePartialScaler {
-    ReducePartialScalerMode mode = ReducePartialScalerMode::None;
+    bool use_partial = false;
 
-    static constexpr ReducePartialScaler none() { return {ReducePartialScalerMode::None}; }
-    static constexpr ReducePartialScaler last_tile() { return {ReducePartialScalerMode::LastTile}; }
+    static constexpr ReducePartialScaler none() { return {false}; }
+    static constexpr ReducePartialScaler with_partial() { return {true}; }
 
-    constexpr bool uses_partial() const { return mode != ReducePartialScalerMode::None; }
-    constexpr uint32_t scaler_tile_count() const { return mode == ReducePartialScalerMode::LastTile ? 2 : 1; }
-    constexpr uint32_t partial_scaler_idx() const { return mode == ReducePartialScalerMode::LastTile ? 1 : 0; }
+    constexpr uint32_t scaler_tile_count() const { return use_partial ? 2 : 1; }
+    constexpr uint32_t partial_scaler_idx() const { return use_partial ? 1 : 0; }
 };
 
 /**
@@ -230,8 +223,8 @@ struct AccumulationConfig {
  * NOTE on ReducePartialScaler: a partial scaler applies to the last reduce-dim tile of
  * EACH reduce() call, not of the whole accumulated reduction. Combining the two is only
  * correct when every chunk's last tile is genuinely partial. For a streaming reduce where
- * only the final block is short, pass the partial scaler on the LAST call only and
- * ReducePartialScaler::none() on the others.
+ * only the final block is short, pass ReducePartialScaler::with_partial() on the LAST call only
+ * and ReducePartialScaler::none() on the others.
  *
  * Usage:
  *   const auto cfg = AccumulationConfig::with_cb(cb_accum);
@@ -369,8 +362,8 @@ struct NoOp {
  * is NoWaitNoPop or WaitUpfrontNoPop.
  * @param accumulate Accumulation configuration (default: NoAccumulation)
  * @param post_reduce_op Callback after each reduction (default: NoOp)
- * @param partial_scaler Partial-scaler selector for non-tile-aligned reduce
- *        dimensions (default: ReducePartialScaler::none()). Use last_tile()
+ * @param partial_scaler Partial-scaler descriptor for non-tile-aligned reduce
+ *        dimensions (default: ReducePartialScaler::none()). Use with_partial()
  *        when the reader emits [full, partial].
  *        Not supported for REDUCE_SCALAR or the Int32 SFPU reduce path.
  *

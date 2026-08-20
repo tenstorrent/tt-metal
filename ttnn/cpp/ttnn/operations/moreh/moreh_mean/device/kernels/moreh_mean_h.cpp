@@ -23,7 +23,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::input, dfb::input, dfb::out);
 
-    constexpr auto partial_scaler = do_mask_h ? compute_kernel_lib::ReducePartialScaler::last_tile()
+    constexpr auto partial_scaler = do_mask_h ? compute_kernel_lib::ReducePartialScaler::with_partial()
                                               : compute_kernel_lib::ReducePartialScaler::none();
 
     for (uint32_t nc = 0; nc < NC; nc++) {

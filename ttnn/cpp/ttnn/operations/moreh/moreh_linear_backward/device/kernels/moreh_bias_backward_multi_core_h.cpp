@@ -99,7 +99,7 @@ void kernel_main() {
         if (do_mask_h) {
             // The partial scaler applies to the last H tile of each reduce() call and every batch
             // ends with the ragged H tile, so reduce a batch at a time and accumulate across them.
-            const auto partial = compute_kernel_lib::ReducePartialScaler::last_tile();
+            const auto partial = compute_kernel_lib::ReducePartialScaler::with_partial();
             for (uint32_t b = 0; b < batch_num; ++b) {
                 if (b + 1 < batch_num) {
                     reduce_column_chunk<cb_intermed1>(Ht, b, partial);

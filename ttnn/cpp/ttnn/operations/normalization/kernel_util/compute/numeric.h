@@ -90,13 +90,13 @@ inline void drain_block_padding(uint32_t dfb_id, uint32_t num_tiles, uint32_t bl
 }
 
 /**
- * @brief The partial-scaler selector for a reduce of `N` elements over `tile_width`-wide tiles.
+ * @brief The partial-scaler descriptor for a reduce of `N` elements over `tile_width`-wide tiles.
  *
  * The reader emits a second, partial-fill scaler tile when the last tile along the reduce dimension
  * is ragged; reduce<> applies it to that tile so the padding columns contribute nothing.
  */
 inline compute_kernel_lib::ReducePartialScaler partial_scaler_for(uint32_t N, uint32_t tile_width) {
-    return (N % tile_width > 0) ? compute_kernel_lib::ReducePartialScaler::last_tile()
+    return (N % tile_width > 0) ? compute_kernel_lib::ReducePartialScaler::with_partial()
                                 : compute_kernel_lib::ReducePartialScaler::none();
 }
 

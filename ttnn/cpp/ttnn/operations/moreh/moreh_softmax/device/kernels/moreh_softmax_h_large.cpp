@@ -41,7 +41,7 @@ void kernel_main() {
     constexpr std::uint32_t mask_h = get_arg(args::mask_h);
     constexpr std::uint32_t TILE_H = 32;
     constexpr bool do_partial_h = mask_h < TILE_H;
-    constexpr auto max_partial_scaler = do_partial_h ? compute_kernel_lib::ReducePartialScaler::last_tile()
+    constexpr auto max_partial_scaler = do_partial_h ? compute_kernel_lib::ReducePartialScaler::with_partial()
                                                      : compute_kernel_lib::ReducePartialScaler::none();
 
     for (std::uint32_t n = 0; n < N; ++n) {
