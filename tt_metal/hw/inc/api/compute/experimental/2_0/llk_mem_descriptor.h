@@ -106,4 +106,6 @@ constexpr LLKMemDescriptor to_llk_mem_descriptor(Cb<CbId> /*cb*/) {
 }  // namespace experimental
 }  // namespace ckernel
 
+// The Metal 2.0 BindingToken overloads of to_llk_mem_descriptor. Included last (they need the complete
+// LLKMemDescriptor above) so a kernel including only this header still picks them up.
 #include "api/compute/experimental/2_0/binding_token_llk.h"

@@ -41,7 +41,7 @@
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel_source.hpp"
-#include "impl/metal2_host_api/llk_operand_facts.hpp"
+#include "llk_operand_facts.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal {
@@ -115,18 +115,10 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         LlkOperandFacts facts;
     };
     vector<DfbEntry> dfb_entries;
-    settings.process_dataflow_buffer_binding_handles([&dfb_entries](
-                                                         const string& name,
-                                                         uint16_t id,
-                                                         uint8_t hw_format,
-                                                         uint8_t face_r_dim,
-                                                         uint8_t face_c_dim,
-                                                         uint8_t num_faces_r_dim,
-                                                         uint8_t num_faces_c_dim,
-                                                         bool present) {
-        dfb_entries.push_back(
-            {name, id, LlkOperandFacts{hw_format, face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim, present}});
-    });
+    settings.process_dataflow_buffer_binding_handles(
+        [&dfb_entries](const string& name, uint16_t id, const LlkOperandFacts& facts) {
+            dfb_entries.push_back({name, id, facts});
+        });
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Get the semaphore bindings from the settings callback
@@ -146,23 +138,13 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         LlkOperandFacts facts;
     };
     vector<TaEntry> ta_entries;
-    settings.process_tensor_binding_handles([&ta_entries](
-                                                const string& name,
-                                                uint32_t cta_offset,
-                                                uint32_t addr_crta_offset,
-                                                uint32_t /*num_rt_words*/,
-                                                uint8_t hw_format,
-                                                uint8_t face_r_dim,
-                                                uint8_t face_c_dim,
-                                                uint8_t num_faces_r_dim,
-                                                uint8_t num_faces_c_dim,
-                                                bool present) {
-        ta_entries.push_back(
-            {name,
-             cta_offset,
-             addr_crta_offset,
-             LlkOperandFacts{hw_format, face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim, present}});
-    });
+    settings.process_tensor_binding_handles(
+        [&ta_entries](
+            const string& name,
+            uint32_t cta_offset,
+            uint32_t addr_crta_offset,
+            uint32_t /*num_rt_words*/,
+            const LlkOperandFacts& facts) { ta_entries.push_back({name, cta_offset, addr_crta_offset, facts}); });
 
     // Get the scratchpad bindings from the settings callback.
     // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
@@ -174,22 +156,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         LlkOperandFacts facts;
     };
     vector<ScratchEntry> scratch_entries;
-    settings.process_scratchpad_binding_handles([&scratch_entries](
-                                                    const string& name,
-                                                    uint32_t size_bytes,
-                                                    uint32_t addr_crta_word,
-                                                    uint8_t hw_format,
-                                                    uint8_t face_r_dim,
-                                                    uint8_t face_c_dim,
-                                                    uint8_t num_faces_r_dim,
-                                                    uint8_t num_faces_c_dim,
-                                                    bool present) {
-        scratch_entries.push_back(
-            {name,
-             size_bytes,
-             addr_crta_word,
-             LlkOperandFacts{hw_format, face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim, present}});
-    });
+    settings.process_scratchpad_binding_handles(
+        [&scratch_entries](
+            const string& name, uint32_t size_bytes, uint32_t addr_crta_word, const LlkOperandFacts& facts) {
+            scratch_entries.push_back({name, size_bytes, addr_crta_word, facts});
+        });
 
     // Emit the header content:
     //  - DFB binding tokens are emitted into the dfb namespace
@@ -233,23 +204,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
         content << "\n";
 
-        auto emit_llk_members = [](const LlkOperandFacts& f) {
-            return fmt::format(
-                "{{.format = {}u, .face_r_dim = {}u, .face_c_dim = {}u, "
-                ".num_faces_r_dim = {}u, .num_faces_c_dim = {}u}}",
-                f.hw_format,
-                f.face_r_dim,
-                f.face_c_dim,
-                f.num_faces_r_dim,
-                f.num_faces_c_dim);
-        };
-
         if (!dfb_entries.empty()) {
             content << "namespace dfb {\n";
             for (const auto& entry : dfb_entries) {
                 if (entry.facts.present) {
                     content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << ", "
-                            << emit_llk_members(entry.facts) << "};\n";
+                            << format_llk_operand_members(entry.facts) << "};\n";
                 } else {
                     content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
                 }
@@ -277,8 +237,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             for (const auto& entry : ta_entries) {
                 content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
                         << "u, " << entry.addr_crta_offset << "u>;\n";
-                content << "constexpr " << entry.name << "_t " << entry.name << "{" << emit_llk_members(entry.facts)
-                        << "};\n";
+                content << "constexpr " << entry.name << "_t " << entry.name << "{"
+                        << format_llk_operand_members(entry.facts) << "};\n";
             }
             content << "}  // namespace tensor\n";
         }
@@ -294,7 +254,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             for (const auto& entry : scratch_entries) {
                 if (entry.facts.present) {
                     content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
-                            << entry.size_bytes << "u, " << emit_llk_members(entry.facts) << "};\n";
+                            << entry.size_bytes << "u, " << format_llk_operand_members(entry.facts) << "};\n";
                 } else {
                     content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
                             << entry.size_bytes << "u};\n";
@@ -667,16 +627,15 @@ void emit_formats_array(
         fmt::join(arr, ","));
 }
 
-using hw_format_t = std::underlying_type_t<DataFormat>;
-
 void emit_formats_array(
     std::ostream& out,
     std::string_view array_type,
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    auto as_int = [](DataFormat f) -> hw_format_t { return host_data_format_to_hw(f); };
-    emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
+    // Emit the HW encoding, not the host enum value — the same remap the binding tokens bake in.
+    auto as_hw = [](DataFormat f) { return host_data_format_to_hw(f); };
+    emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_hw));
 }
 
 std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data_formats(
@@ -878,8 +837,8 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_num_faces_rc_dim
     std::vector<uint32_t> r_dims(n);
     std::vector<uint32_t> c_dims(n);
     for (size_t i = 0; i < n; ++i) {
-        const FaceGridDims grid =
-            compute_face_grid_dims(tile_r_dim_arr[i], tile_c_dim_arr[i], face_r_dim_arr[i], num_faces_arr[i]);
+        const FaceGridDims grid = compute_face_grid_dims(
+            tile_r_dim_arr[i], tile_c_dim_arr[i], face_r_dim_arr[i], num_faces_arr[i], fmt::format("CB {}", i));
         r_dims[i] = grid.num_faces_r_dim;
         c_dims[i] = grid.num_faces_c_dim;
     }

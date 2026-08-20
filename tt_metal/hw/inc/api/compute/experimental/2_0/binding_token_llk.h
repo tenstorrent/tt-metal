@@ -4,6 +4,15 @@
 
 #pragma once
 
+// Metal 2.0 BindingToken -> LLKMemDescriptor. Each token carries the operand's format and face grid as
+// constexpr members (baked by headergen), so these fold to constants with no CB/DFB slot lookup.
+//
+// Converting a token whose host object declared no data format is undefined: there is deliberately no
+// presence check here, and the members read back as the token's defaults.
+//
+// llk_mem_descriptor.h includes this header from its bottom (these overloads need a complete
+// LLKMemDescriptor); the include below closes the cycle so this header also works when included first.
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
 #include "api/dataflow/dfb_binding_token.h"
 #include "api/scratchpad_binding_token.h"
 #include "api/tensor/tensor_binding_token.h"
