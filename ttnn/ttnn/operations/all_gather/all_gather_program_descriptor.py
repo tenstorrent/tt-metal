@@ -50,7 +50,7 @@ def _round_up(value: int, mult: int) -> int:
 
 
 def _append_fabric_rt_args(rt_args_ref, src_id, neighbor_id, program, core, is_forward):
-    """Mirror ttnn::ccl::dataflow::append_ccl_fabric_rt_args.
+    """Mirror ttnn::ccl::dataflow::build_ccl_fabric_rt_args.
 
     After the call the block beginning at the current rt_args length is:
         [has_forward][<forward conn args> if fwd][has_backward][<backward conn args> if bwd]

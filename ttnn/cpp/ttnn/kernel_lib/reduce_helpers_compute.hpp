@@ -16,6 +16,11 @@
  * - Column reduction (REDUCE_COL): Reduces H dimension, outputs Wt tiles per batch
  * - Scalar reduction (REDUCE_SCALAR): Reduces both H and W, outputs 1 tile per batch
  *
+ * NOT this header: elementwise accumulation of whole tile-blocks ACROSS CBs
+ * (out[i] = a[i] + b[i], the arithmetic inside every CCL reduction collective) is a
+ * different LLK op with a different shape — see accumulate_helpers_compute.hpp
+ * (BlockAccumulate / sum_blocks). This header reduces WITHIN a tensor along a dimension.
+ *
  * This library hides the complexity of:
  * - tile_regs_acquire/commit/wait/release DST register management
  * - reduce_init/reduce_uninit initialization
