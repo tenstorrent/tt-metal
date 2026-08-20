@@ -1,0 +1,29 @@
+# Canonical-branch provenance record (answers wave-10 owner-question 1)
+
+Date: 2026-08-20. Author: swarm orchestrator session (nkapre-authorized).
+
+## Question 1 — who moved tt-metal `nkapre/sfpi`?
+
+The fast-forward `a89594fe2738 → e6375987677f` (2026-08-20, this repo) and the sfpi-repo
+fast-forward `4f0ebd4 → cd5b59a` were executed by the swarm orchestrator **on an explicit
+owner order**, not unilaterally. Sequence, as recorded in the session ledger before execution:
+
+1. Lane CP (wave-9 chronic remediation) found the frozen-branch root cause and raised the
+   owner-ask: "fast-forward tt-metal nkapre/sfpi → work tip (verified pure ff) or amend
+   HANDOFF §2."
+2. The ask was put to the owner verbatim as decision item 4; the owner replied "sure ok do it"
+   (2026-08-20, session transcript; ledger entry "OWNER DECISIONS EXECUTED" written at
+   execution time).
+3. The orchestrator verified pure fast-forward (`git merge-base --is-ancestor`) and pushed.
+
+Standing owner directive since (2026-08-20): **"keep everything in nkapre/sfpi"** — the
+canonical branch is kept fast-forwarded to the integration tip at every merge from now on;
+this record's own merge commit is the first executed under that rule.
+
+## Question 2 — the CRAQ ruling (straight-silicon default)
+
+Pending explicit owner ratification, asked 2026-08-20: either HANDOFF §1(3) is amended to
+match the operating reality (straight silicon, CRAQ demoted to debug oracle, `--skip-craq-gate`
+taint line now enforced by the merged taint-marker gate) or the sim gate is restored. This
+record will be superseded by the owner's answer; until then the taint marker makes every
+skip explicit and auditable.
