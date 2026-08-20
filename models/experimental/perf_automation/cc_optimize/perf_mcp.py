@@ -5286,6 +5286,156 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
     }
 
 
+def _fold_gate(prof: dict, attempts: list) -> dict | None:
+    """One op fingerprint evaluated many times per layer -- fold the repeats into one wider matmul.
+
+    THE DISCRIMINATOR IS SELF-NORMALISING, which is what makes this detectable at all. A high call
+    count is not evidence: EVERY matmul in a 30-layer model runs 30 times. What distinguishes a
+    foldable repeat from ordinary per-layer recurrence is running MORE than once per layer -- and the
+    per-layer baseline does not have to be looked up, because the profile states it. top_ops groups
+    by (op_code, shape, memory), so the modal count across fingerprints IS "once per layer per item":
+    the great majority of ops run exactly that often. A fingerprint whose count is an integer multiple
+    of that mode is being evaluated several times within one layer.
+
+    Deriving the baseline from the profile rather than from depth x items matters practically: depth
+    needs the checkpoint and items needs <stage>_trace_items, which means importing the pipeline,
+    which needs a device this gate does not have. The mode needs neither.
+
+    WHAT IT CATCHES. Two projections of identical shape applied to the same input share a fingerprint
+    and run 2x per layer -- a SwiGLU gate/up pair is the standard case, and concatenating them into
+    one wider matmul is the standard fix. A per-head or per-frame matmul runs heads x or frames x and
+    folds into a batched call.
+
+    A CANDIDATE, NOT A VERDICT. The gate can see that something recurs within a layer; it cannot see
+    whether the operands are concatenable or whether a data dependency forbids it. That is what the
+    attempt establishes, and 'none: <evidence>' is a legitimate outcome the cap will accept.
+
+    Same shape as _decode_gate and _conv_gate: applicability, detector, measured-win exit, cap.
+    """
+    ops = [o for o in (prof.get("open_ops") or []) if int(o.get("count") or 0) > 0]
+    if len(ops) < 3:
+        return None  # too few fingerprints for a mode to mean anything
+    counts = [int(o.get("count") or 0) for o in ops]
+    baseline = max(set(counts), key=lambda c: (counts.count(c), -c))
+    if baseline < 1:
+        return None
+    mult = max(2, int(os.environ.get("PERF_MCP_FOLD_MIN_MULTIPLE", "2") or "2"))
+    cands = [
+        o
+        for o in ops
+        if int(o["count"]) >= baseline * mult and int(o["count"]) % baseline == 0 and float(o.get("gap_ms") or 0.0) > 0
+    ]
+    if not cands:
+        return None  # (1) not applicable: nothing recurs within a layer
+    gap = sum(float(o.get("gap_ms") or 0.0) for o in cands)
+    if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
+        return None
+    _kinds = ("fold", "structural-fold")
+    clean = [a for a in attempts if (a.get("kernel_kind") or "").lower() in _kinds]
+    if any(_ledger().is_win(a) for a in clean):  # (2) measured win clears it
+        return None
+    wedged = sum(1 for a in _load_attempts() if (a.get("kernel_kind") or "").lower() in _kinds and a.get("wedged"))
+    if (len(clean) + wedged) >= int(os.environ.get("PERF_MCP_MAX_FOLD_ATTEMPTS", "3") or "3"):
+        return None  # (3) capped
+    worst = max(cands, key=lambda o: float(o.get("gap_ms") or 0.0))
+    return {
+        "op": str(worst.get("op_code") or "repeated_op"),
+        "op_class": str(worst.get("bucket") or "matmul"),
+        "gap_ms": round(gap, 4),
+        "bound_by": worst.get("bound_by"),
+        "grid": worst.get("grid"),
+        "weight_dtype": worst.get("weight_dtype"),
+        "next_rung": "structural-fold",
+        "reason": (
+            "FOLD THE REPEATS -- a structural lever, and it comes BEFORE the kernel rungs. %r runs %d "
+            "times while most op fingerprints in this profile run %d, so it is evaluated %dx per layer "
+            "rather than once. Folding those calls into ONE wider matmul (concatenate the weights along "
+            "the output dim and slice the result, or batch them into a single call) removes %d-1 "
+            "dispatches per layer and gives the remaining matmul a larger, better-shaped problem. Two "
+            "projections of the same shape on the same input -- a SwiGLU gate/up pair is the usual case "
+            "-- are the textbook instance; a per-head or per-frame matmul is the other. Check FIRST that "
+            "the operands are actually concatenable and that no data dependency orders them: if they are "
+            "not, record_kernel_attempt(op=%r,'fold',measured_ms,False,note='none: <why not foldable>') "
+            "and this clears. Otherwise fold it, measure, and record -- this gate clears ONLY on a "
+            "MEASURED reduction."
+        )
+        % (
+            str(worst.get("op_code") or ""),
+            int(worst.get("count") or 0),
+            baseline,
+            int(worst.get("count") or 0) // baseline,
+            int(worst.get("count") or 0) // baseline,
+            str(worst.get("op_code") or "repeated_op"),
+        ),
+    }
+
+
+_SLICE_MARKERS = ("slice", "gather", "concat", "split", "transpose", "permute", "reshape", "index")
+
+
+def _order_gate(prof: dict, attempts: list) -> dict | None:
+    """A projection sitting next to a slice/gather -- try the other order and measure.
+
+    The two orders are not equivalent in cost. Projecting the whole tensor and then slicing does
+    full-width math and throws part of it away; slicing first does narrower math but moves data to
+    do it. Which wins depends on the ratio and on where the tensors live, and the honest answer is
+    that nobody can tell from the shapes alone -- so measure both. The catalogue currently PRESCRIBES
+    instead: 03 section 5 picks one of three head-split strategies "by regime", which is a rule where
+    an experiment belongs.
+
+    THE ADJACENCY IS REAL DATA, not a guess. tracy_tool._neighbours reads the capture in execution
+    order (GLOBAL CALL COUNT) and records the most common op either side of each fingerprint, so
+    "this projection feeds a slice" is an observation about what ran. Most-common, so a one-off
+    pairing at a stack boundary does not trigger it.
+
+    Same four parts as the other gates: applicability, detector, measured-win exit, cap.
+    """
+    cands = []
+    for o in prof.get("open_ops") or []:
+        code = str(o.get("op_code") or "").lower()
+        if "matmul" not in code and "linear" not in code:
+            continue
+        nxt, prv = str(o.get("next_op") or "").lower(), str(o.get("prev_op") or "").lower()
+        if any(m in nxt for m in _SLICE_MARKERS) or any(m in prv for m in _SLICE_MARKERS):
+            if float(o.get("gap_ms") or 0.0) > 0:
+                cands.append(o)
+    if not cands:
+        return None  # (1) not applicable: no projection is adjacent to a slice/gather
+    gap = sum(float(o.get("gap_ms") or 0.0) for o in cands)
+    if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
+        return None
+    _kinds = ("order", "structural-order")
+    clean = [a for a in attempts if (a.get("kernel_kind") or "").lower() in _kinds]
+    if any(_ledger().is_win(a) for a in clean):  # (2)
+        return None
+    wedged = sum(1 for a in _load_attempts() if (a.get("kernel_kind") or "").lower() in _kinds and a.get("wedged"))
+    if (len(clean) + wedged) >= int(os.environ.get("PERF_MCP_MAX_ORDER_ATTEMPTS", "3") or "3"):
+        return None  # (3)
+    worst = max(cands, key=lambda o: float(o.get("gap_ms") or 0.0))
+    _pair = str(worst.get("next_op") or worst.get("prev_op") or "the adjacent reshape")
+    return {
+        "op": str(worst.get("op_code") or "projection"),
+        "op_class": str(worst.get("bucket") or "matmul"),
+        "gap_ms": round(gap, 4),
+        "bound_by": worst.get("bound_by"),
+        "grid": worst.get("grid"),
+        "weight_dtype": worst.get("weight_dtype"),
+        "next_rung": "structural-order",
+        "reason": (
+            "TRY BOTH ORDERS -- a structural lever, ahead of the kernel rungs. %r runs immediately "
+            "beside %r in the capture. Projecting the full width and then slicing does math you throw "
+            "away; slicing or gathering first does narrower math but moves data to do it. Which is "
+            "cheaper depends on the width ratio and on where the tensors live, and it is NOT decidable "
+            "from the shapes -- so measure both orders and keep the faster. If the order is forced (a "
+            "data dependency, or the slice is what produces the projection's input), that is a real "
+            "answer: record_kernel_attempt(op=%r,'order',measured_ms,False,note='none: order is "
+            "forced because <reason>') and this clears. Otherwise swap them, check_pcc, measure, and "
+            "record -- this gate clears ONLY on a MEASURED reduction."
+        )
+        % (str(worst.get("op_code") or ""), _pair, str(worst.get("op_code") or "projection")),
+    }
+
+
 def _conv_gate(prof: dict, attempts: list) -> dict | None:
     """MANDATORY conv weight preparation, for a model that actually has convs.
 
@@ -5841,6 +5991,12 @@ def termination_check() -> dict:
     conv_block = _conv_gate(prof, attempts)
     if conv_block:
         blocking.append(conv_block)
+    fold_block = _fold_gate(prof, attempts)
+    if fold_block:
+        blocking.append(fold_block)
+    order_block = _order_gate(prof, attempts)
+    if order_block:
+        blocking.append(order_block)
     blocking.sort(key=lambda b: -(b.get("eff_gap_ms") or b.get("gap_ms") or 0.0))
     can_stop = not blocking
     # AND NOTHING MATERIAL MAY BE UNTRIED. `blocking` empties as each op's checklist fills, so an op

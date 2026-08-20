@@ -376,6 +376,42 @@ def _raw_index(raw_csv: str | Path) -> dict[int, dict[str, str]]:
     return out
 
 
+def _fingerprint(rep: dict, raw: dict) -> tuple:
+    """The identity _top_ops groups by: (op code, shape, input memory). Shared so the neighbour pass
+    keys on exactly the same thing the op rows do."""
+    return (rep.get("OP Code", ""), _op_shape(raw), normalize_memory(raw.get("INPUT_0_MEMORY", "")))
+
+
+def _neighbours(ordered: list) -> dict:
+    """What ran immediately before and after each fingerprint, most common first.
+
+    ADJACENCY IS IN THE CAPTURE AND WAS BEING THROWN AWAY. The report rows arrive in execution order
+    (GLOBAL CALL COUNT, which _raw_index already joins on), and grouping by op_class discards it --
+    so nothing downstream could ask "what does this op feed into", even though the playbook teaches
+    that exact technique by hand (09 section 5, "Identify a mystery op by its neighbors").
+
+    Most common, not all: an op appearing once per layer has the same neighbours every layer, so the
+    mode is the structural answer and the occasional odd pairing at a stack boundary is noise.
+    Returns {fingerprint: {"prev": op_code, "next": op_code}}.
+    """
+    from collections import Counter
+
+    prev_c: dict[tuple, Counter] = {}
+    next_c: dict[tuple, Counter] = {}
+    for i, (fp, _code) in enumerate(ordered):
+        if i > 0:
+            prev_c.setdefault(fp, Counter())[ordered[i - 1][1]] += 1
+        if i + 1 < len(ordered):
+            next_c.setdefault(fp, Counter())[ordered[i + 1][1]] += 1
+    out: dict[tuple, dict] = {}
+    for fp in set(prev_c) | set(next_c):
+        out[fp] = {
+            "prev": (prev_c.get(fp) or Counter()).most_common(1)[0][0] if prev_c.get(fp) else "",
+            "next": (next_c.get(fp) or Counter()).most_common(1)[0][0] if next_c.get(fp) else "",
+        }
+    return out
+
+
 def build_buckets(
     report_csv: str | Path,
     raw_csv: str | Path,
@@ -387,6 +423,7 @@ def build_buckets(
         report_rows = list(csv.DictReader(f))
 
     groups: dict[str, list[dict[str, Any]]] = {}
+    _ordered: list[tuple] = []  # (fingerprint, op_code) in execution order -- see _neighbours
     for rep in report_rows:
         op_code = rep.get("OP Code", "")
         if base_op_code(op_code) in SIGNPOST_CODES or not op_code:
@@ -395,6 +432,8 @@ def build_buckets(
         gcc = _to_float(rep.get("Global Call Count", ""))
         raw = raw_by_gcc.get(int(gcc)) if gcc is not None else None
         groups.setdefault(op_class, []).append({"report": rep, "raw": raw or {}})
+        _ordered.append((_fingerprint(rep, raw or {}), op_code))
+    _nbrs = _neighbours(_ordered)
 
     buckets: list[dict[str, Any]] = []
     total_ms = 0.0
@@ -436,6 +475,7 @@ def build_buckets(
                 "_bounds": bounds,
                 "_fids": fids,
                 "_mems": mems,
+                "_nbrs": _nbrs,
                 "lever_state": parse_lever_state(rep0["raw"].get("ATTRIBUTES", "")),
             }
         )
@@ -474,7 +514,7 @@ def build_buckets(
                 "dispatch_gap_ms": round(sum(b["_gaps"]) / 1e6, 4) if b["_gaps"] else 0.0,
                 "layout_churn_ms": round(churn_ms, 4),
                 "layout_churn_count": churn_n,
-                "top_ops": _top_ops(b["members"], available_cores),
+                "top_ops": _top_ops(b["members"], available_cores, neighbours=b.get("_nbrs")),
                 # WHICH DEFINITION PRODUCED THESE MS. Two figures may only be differenced when they
                 # measure the same thing; a per-core reading and a cross-core one both call
                 # themselves device_ms. Carried per bucket so a later comparison can refuse rather
@@ -535,7 +575,9 @@ def _op_bytes(raw: dict) -> float:
     return sum(_tensor_bytes(raw, p) for p in ("INPUT_0", "INPUT_1", "INPUT_2", "OUTPUT_0"))
 
 
-def _top_ops(members: list[dict[str, Any]], available_cores: int, k: int | None = None) -> list[dict[str, Any]]:
+def _top_ops(
+    members: list[dict[str, Any]], available_cores: int, k: int | None = None, neighbours: dict | None = None
+) -> list[dict[str, Any]]:
     """EVERY distinct op in the bucket, by fingerprint (op + shape + memory), ranked by device-ms.
 
     This returned out[:6]. Everything past the sixth fingerprint was folded into the bucket total and
@@ -557,7 +599,8 @@ def _top_ops(members: list[dict[str, Any]], available_cores: int, k: int | None 
         shape = _op_shape(raw)
         mem = normalize_memory(raw.get("INPUT_0_MEMORY", ""))
         op = rep.get("OP Code", "")
-        key = (op, shape, mem)
+        key = _fingerprint(rep, raw)
+        _nb = (neighbours or {}).get(key) or {}
         g = groups.setdefault(
             key,
             {
@@ -570,6 +613,9 @@ def _top_ops(members: list[dict[str, Any]], available_cores: int, k: int | None 
                 "cores": int(_to_float(rep.get("Cores")) or 0),
                 "grid": normalize_grid(_to_float(rep.get("Cores")) or 0.0, available_cores),
                 "fidelity": normalize_fidelity(raw.get("MATH FIDELITY", "")),
+                # what ran either side of this op, most common -- see _neighbours
+                "prev_op": _nb.get("prev", ""),
+                "next_op": _nb.get("next", ""),
             },
         )
         g["count"] += 1

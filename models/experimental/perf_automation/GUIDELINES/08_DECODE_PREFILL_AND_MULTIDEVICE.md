@@ -326,13 +326,24 @@ lever_type: structural
 
 **Fires when:** host-bound because each new token grows the sequence by 1 → a **fresh kernel
 compile every step** (JIT cache misses dominate wall time). Fix: **pad the decode length to a
-fixed bucket** (e.g. 64/128/256) so the decoder kernels compile **once** and every step reuses
-them:
+fixed bucket** derived from the lengths this model runs, so the decoder kernels compile **once** and
+every step reuses them:
 ```python
-BUCKETS = (64, 128, 256, 512)
+# DERIVE THE LADDER FROM THIS MODEL. A fixed tuple like (64, 128, 256, 512) is a ladder borrowed
+# from whatever model it was written for: on a 1500-frame audio encoder every rung is below the
+# real length and the bucketing does nothing, and on a 32-token model the first rung already
+# doubles the work. Build it from the lengths THIS model actually runs.
+TILE = 32                                     # tile height; a shape off the tile cannot shard cleanly
+longest = max(max_new_tokens, kv_capacity)    # what the model itself declares it must reach
+BUCKETS = tuple(sorted({((n + TILE - 1) // TILE) * TILE          # tile-align every rung
+                        for n in (longest, longest // 2, longest // 4) if n > 0}))
 bucket_len = next(b for b in BUCKETS if b >= max_new_tokens)   # constant shape
 # build decoder inputs/masks at bucket_len; generate up to bucket_len, stop at EOS.
 ```
+
+Two rungs are usually enough. Each extra bucket is another kernel compile, so the ladder should be
+the shortest one that keeps the padding waste acceptable for the lengths this model is asked for --
+not a long ladder that compiles kernels no request will ever use.
 Masking must hide the padding so PCC/token output is unchanged. This is a prerequisite for
 trace (§11): a trace requires a constant shape, so bucket FIRST, then capture.
 

@@ -67,9 +67,26 @@ def _seq_retry_candidates(err: str, current_seq: int) -> list[int]:
             scaled = int(round(current_seq * wanted_mt / cur_mt))
             if scaled > current_seq:
                 cands.append(scaled)
-    for s in (256, 384, 512, 768):
-        if s > current_seq and s not in cands:
-            cands.append(s)
+    # DERIVED FROM THIS MODEL'S OWN SEQUENCE, NOT A LADDER BORROWED FROM ANOTHER.
+    #
+    # This was `for s in (256, 384, 512, 768)`, four numbers that came from whichever model was in
+    # hand when it was written. On a model whose sequence is 1500 every one of them is below
+    # current_seq and the loop contributes nothing; on a model at 64 it jumps straight to 4x. The
+    # scaling branch above is already model-derived -- it reads block_h/num_cores_r/Mt out of the
+    # error and computes what the shard actually wants -- and this fallback exists only for when the
+    # error did not carry those numbers.
+    #
+    # So grow from what the model is actually running: the next tile boundary, then 1.5x, 2x, 3x,
+    # each tile-aligned because a sequence that is not a multiple of the tile height cannot shard
+    # cleanly and would only produce the same class of failure again. TILE is a hardware constant
+    # (agent/tp.py), not a model one.
+    from .tp import TILE
+
+    if current_seq > 0:
+        _next_tile = ((current_seq // TILE) + 1) * TILE
+        for s in (_next_tile, *(int(round(current_seq * f / TILE)) * TILE for f in (1.5, 2, 3))):
+            if s > current_seq and s not in cands:
+                cands.append(s)
     return cands
 
 

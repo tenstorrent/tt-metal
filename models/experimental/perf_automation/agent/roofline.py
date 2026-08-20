@@ -287,6 +287,9 @@ def residual_report(profile: dict[str, Any], env: dict[str, Any]) -> dict[str, A
                 "fidelity": o.get("fidelity"),
                 "memory": o.get("memory"),
                 "weight_dtype": o.get("weight_dtype"),
+                # execution-order neighbours, preserved through bucketing -- see tracy_tool._neighbours
+                "prev_op": o.get("prev_op"),
+                "next_op": o.get("next_op"),
                 "at_floor": at_floor,
             }
         )
