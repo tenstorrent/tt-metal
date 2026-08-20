@@ -293,10 +293,11 @@ TEST_F(UnitMeshFixture, HalfGrid3Plus3DFBsOnDevice) {
         {.kernel = m2::KernelSpecName{"cons_b"}, .runtime_arg_values = rtas(node_b)},
     };
     const uint32_t words = num_entries * entry_size / sizeof(uint32_t);
+    auto& cq = this->device().mesh_command_queue();
     std::vector<std::vector<uint32_t>> expected(per_half * 2);
     for (uint32_t i = 0; i < per_half * 2; ++i) {
         expected[i] = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, words);
-        slow_dispatch::WriteToBuffer(inputs[i].mesh_buffer(), expected[i]);
+        distributed::EnqueueWriteMeshBuffer(cq, inputs[i].mesh_buffer(), expected[i], /*blocking=*/true);
         m2_writeshard_barrier_uint32(this->device(), inputs[i], expected[i]);
         params.tensor_args.insert({m2::TensorParamName{"in_" + std::to_string(i)}, std::cref(inputs[i])});
         params.tensor_args.insert({m2::TensorParamName{"out_" + std::to_string(i)}, std::cref(outputs[i])});
@@ -307,7 +308,7 @@ TEST_F(UnitMeshFixture, HalfGrid3Plus3DFBsOnDevice) {
 
     for (uint32_t i = 0; i < per_half * 2; ++i) {
         std::vector<uint32_t> got;
-        slow_dispatch::ReadFromBuffer(outputs[i].mesh_buffer(), got);
+        distributed::EnqueueReadMeshBuffer(cq, got, outputs[i].mesh_buffer(), /*blocking=*/true);
         EXPECT_EQ(got, expected[i]) << "DFB " << i << " round-trip mismatch";
     }
 }
@@ -444,16 +445,17 @@ TEST_F(UnitMeshFixture, HalfGridOnDeviceDataflow1DFBEach) {
     const uint32_t words = num_entries * entry_size / sizeof(uint32_t);
     auto input_a = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, words);
     auto input_b = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, words);
-    slow_dispatch::WriteToBuffer(in_a.mesh_buffer(), input_a);
-    slow_dispatch::WriteToBuffer(in_b.mesh_buffer(), input_b);
+    auto& cq = this->device().mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, in_a.mesh_buffer(), input_a, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(cq, in_b.mesh_buffer(), input_b, /*blocking=*/true);
     m2_writeshard_barrier_uint32(this->device(), in_a, input_a);
     m2_writeshard_barrier_uint32(this->device(), in_b, input_b);
 
     slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_a, result_b;
-    slow_dispatch::ReadFromBuffer(out_a.mesh_buffer(), result_a);
-    slow_dispatch::ReadFromBuffer(out_b.mesh_buffer(), result_b);
+    distributed::EnqueueReadMeshBuffer(cq, result_a, out_a.mesh_buffer(), /*blocking=*/true);
+    distributed::EnqueueReadMeshBuffer(cq, result_b, out_b.mesh_buffer(), /*blocking=*/true);
     EXPECT_EQ(result_a, input_a) << "left-half DFB round-trip mismatch";
     EXPECT_EQ(result_b, input_b) << "right-half DFB round-trip mismatch";
 }

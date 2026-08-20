@@ -87,7 +87,7 @@ bool reader_only(
     ////////////////////////////////////////////////////////////////////////////
 
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
-    slow_dispatch::WriteToBuffer(*input_dram_buffer, inputs);
+    distributed::EnqueueWriteMeshBuffer(cq, *input_dram_buffer, inputs, /*blocking=*/true);
 
     tt_metal::SetRuntimeArgs(
         program_,
@@ -174,7 +174,7 @@ bool writer_only(
     distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
-    slow_dispatch::ReadFromBuffer(*output_dram_buffer, dest_buffer_data);
+    distributed::EnqueueReadMeshBuffer(cq, dest_buffer_data, *output_dram_buffer, /*blocking=*/true);
     pass &= (dest_buffer_data == inputs);
     if (not pass) {
         std::cout << "Mismatch at Core: " << writer_core.str() << std::endl;
@@ -207,7 +207,8 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
 
     std::vector<uint32_t> inputs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
-    slow_dispatch::WriteToBuffer(*input_dram_buffer, inputs);
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, *input_dram_buffer, inputs, /*blocking=*/true);
 
     // DRAM buffer is configured with page_size = byte_size (whole buffer),
     // so aligned_page_size() returns the whole-buffer stride, not per-tile.
@@ -312,7 +313,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     slow_dispatch::LaunchProgram(*mesh_device, program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> dest_buffer_data;
-    slow_dispatch::ReadFromBuffer(*output_dram_buffer, dest_buffer_data);
+    distributed::EnqueueReadMeshBuffer(cq, dest_buffer_data, *output_dram_buffer, /*blocking=*/true);
     return inputs == dest_buffer_data;
 }
 struct ReaderDatacopyWriterConfig {
@@ -355,7 +356,8 @@ static ReaderDatacopyWriterContext setup_reader_datacopy_writer_context(
 
     ctx.inputs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -1.0f, 1.0f, ctx.byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
-    slow_dispatch::WriteToBuffer(*ctx.input_dram_buffer, ctx.inputs);
+    distributed::EnqueueWriteMeshBuffer(
+        mesh_device->mesh_command_queue(), *ctx.input_dram_buffer, ctx.inputs, /*blocking=*/true);
 
     // DRAM buffer uses page_size = byte_size (whole-buffer), so derive the
     // per-tile DRAM stride directly from byte_size / num_tiles.
@@ -366,7 +368,11 @@ static ReaderDatacopyWriterContext setup_reader_datacopy_writer_context(
 
 static bool verify_reader_datacopy_writer_output(const ReaderDatacopyWriterContext& ctx) {
     std::vector<uint32_t> dest_buffer_data;
-    slow_dispatch::ReadFromBuffer(*ctx.output_dram_buffer, dest_buffer_data);
+    distributed::EnqueueReadMeshBuffer(
+        ctx.output_dram_buffer->device()->mesh_command_queue(),
+        dest_buffer_data,
+        *ctx.output_dram_buffer,
+        /*blocking=*/true);
     return ctx.inputs == dest_buffer_data;
 }
 

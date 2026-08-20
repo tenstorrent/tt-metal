@@ -89,12 +89,13 @@ TEST_F(UnitMeshFixture, MatmulSingleTileOutputInL1) {
     auto activations_tile_layout =
         convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(tensor.get_values()));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-    slow_dispatch::WriteToBuffer(*src0_dram_buffer, activations);
+    auto& cq = this->device().mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, *src0_dram_buffer, activations, /*blocking=*/true);
 
     auto identity = create_identity_matrix(32, 32, 32);
     auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-    slow_dispatch::WriteToBuffer(*src1_dram_buffer, weights);
+    distributed::EnqueueWriteMeshBuffer(cq, *src1_dram_buffer, weights, /*blocking=*/true);
 
     SetRuntimeArgs(
         program,
@@ -119,7 +120,7 @@ TEST_F(UnitMeshFixture, MatmulSingleTileOutputInL1) {
     slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    slow_dispatch::ReadFromBuffer(*dst_l1_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, *dst_l1_buffer, /*blocking=*/true);
 
     // Validation
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);

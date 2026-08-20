@@ -96,7 +96,8 @@ TEST_F(UnitMeshFixture, DramCopySticksMultiCore) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        slow_dispatch::WriteToBuffer(*src_dram_buffer, src_vec);
+        distributed::EnqueueWriteMeshBuffer(
+            this->device().mesh_command_queue(), *src_dram_buffer, src_vec, /*blocking=*/true);
 
         std::cout << "Num cores " << num_cores_r * num_cores_c << std::endl;
         uint32_t core_index = 0;
@@ -118,7 +119,8 @@ TEST_F(UnitMeshFixture, DramCopySticksMultiCore) {
 
         slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
         // std::vector<uint32_t> result_vec;
-        // slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);
+        // distributed::EnqueueReadMeshBuffer(this->device().mesh_command_queue(), result_vec, *dst_dram_buffer,
+        // /*blocking=*/true);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

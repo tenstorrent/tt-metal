@@ -49,7 +49,8 @@ TEST_F(UnitMeshFixture, DramLoopbackSingleCore) {
     // Execute
     std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
         dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    slow_dispatch::WriteToBuffer(*input_dram_buffer, input_vec);
+    auto& cq = this->device().mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, *input_dram_buffer, input_vec, /*blocking=*/true);
 
     SetRuntimeArgs(
         program,
@@ -60,7 +61,7 @@ TEST_F(UnitMeshFixture, DramLoopbackSingleCore) {
     slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    slow_dispatch::ReadFromBuffer(*output_dram_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, *output_dram_buffer, /*blocking=*/true);
 
     // Validation
     EXPECT_EQ(input_vec, result_vec);

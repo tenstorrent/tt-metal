@@ -123,13 +123,14 @@ static void run_a1_pipeline(distributed::MeshDevice& mesh_device, A1Transform tr
     auto input = (transform == A1Transform::Relu)
                      ? create_random_vector_of_bfloat16(total_bytes, 1.0f, 0xA1A1)   // positive only
                      : create_random_vector_of_bfloat16(total_bytes, 2.0f, 0xA1A1);  // [-1,1]
-    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, in_tensor.mesh_buffer(), input, /*blocking=*/true);
     m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
 
     slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> output;
-    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    distributed::EnqueueReadMeshBuffer(cq, output, out_tensor.mesh_buffer(), /*blocking=*/true);
 
     if (transform == A1Transform::Relu) {
         // Positive bf16 inputs → relu identity, allow bf16 tolerance.
@@ -222,7 +223,8 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
 
     const uint32_t total_words = entry_size * total_tiles / sizeof(uint32_t);
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, total_words);
-    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, in_tensor.mesh_buffer(), input, /*blocking=*/true);
     m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
 
     for (uint32_t iter = 0; iter < num_iterations; ++iter) {
@@ -230,7 +232,7 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
     }
 
     std::vector<uint32_t> output;
-    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    distributed::EnqueueReadMeshBuffer(cq, output, out_tensor.mesh_buffer(), /*blocking=*/true);
     EXPECT_EQ(input, output) << "M2 DM→DFB→DM identity mismatch";
 }
 
@@ -359,13 +361,14 @@ TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     m2::SetProgramRunArgs(program, params);
 
     auto input = create_random_vector_of_bfloat16(kPushTiles * kEntrySize, 1.0f, 0xD1D1);
-    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    auto& cq = this->device().mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, in_tensor.mesh_buffer(), input, /*blocking=*/true);
     m2_writeshard_barrier_uint32(this->device(), in_tensor, input);
 
     slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> output;
-    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    distributed::EnqueueReadMeshBuffer(cq, output, out_tensor.mesh_buffer(), /*blocking=*/true);
 
     // Diagnostic: on mismatch, dump first divergent tile + per-tile histogram so
     // we can characterize the failure mode (all-zeros from start, wrap-point only, etc.).
@@ -590,13 +593,14 @@ TEST_F(UnitMeshFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
     m2::SetProgramRunArgs(program, params);
 
     auto input = create_constant_vector_of_bfloat16(2 * entries_per_core * entry_size, 1.0f);
-    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    auto& cq = this->device().mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, in_tensor.mesh_buffer(), input, /*blocking=*/true);
     m2_writeshard_barrier_uint32(this->device(), in_tensor, input);
 
     slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> output;
-    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    distributed::EnqueueReadMeshBuffer(cq, output, out_tensor.mesh_buffer(), /*blocking=*/true);
     // For the m2 version we just verify the shared DFB ran end-to-end on core B.
     // The "two DfbGroups" assertion from the legacy test depends on inspecting
     // program.impl() before LaunchProgram; we keep that for the legacy test and

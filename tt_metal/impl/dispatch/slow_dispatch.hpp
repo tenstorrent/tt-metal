@@ -9,15 +9,12 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal::slow_dispatch {
 
-// MeshDevice-aware L1 / DRAM channel / MeshBuffer access for unit meshes.
+// MeshDevice-aware L1 / DRAM channel access for unit meshes.
 //
 // WriteToDeviceL1/ReadFromDeviceL1 and DRAM channel APIs index the cluster by IDevice::id(),
 // which for MeshDevice is a logical mesh id — not a chip id. These helpers require a unit mesh
@@ -27,20 +24,6 @@ inline IDevice* physical_device_from_unit_mesh(distributed::MeshDevice& unit_mes
     TT_FATAL(
         unit_mesh.num_devices() == 1, "Expected a unit MeshDevice (num_devices == 1), got {}", unit_mesh.num_devices());
     return unit_mesh.get_devices().at(0);
-}
-
-// MeshBuffer host↔device transfer for a unit mesh (coord (0, 0)). Prefer these over
-// detail::WriteToBuffer/ReadFromBuffer on MeshBuffer::get_reference_buffer().
-template <typename DType>
-inline void WriteToBuffer(const distributed::MeshBuffer& unit_mesh_buffer, const std::vector<DType>& host_buffer) {
-    (void)physical_device_from_unit_mesh(*unit_mesh_buffer.device());
-    detail::WriteToBuffer(*unit_mesh_buffer.get_reference_buffer(), host_buffer);
-}
-
-template <typename DType>
-inline void ReadFromBuffer(const distributed::MeshBuffer& unit_mesh_buffer, std::vector<DType>& host_buffer) {
-    (void)physical_device_from_unit_mesh(*unit_mesh_buffer.device());
-    detail::ReadFromBuffer(*unit_mesh_buffer.get_reference_buffer(), host_buffer);
 }
 
 inline bool WriteToL1(

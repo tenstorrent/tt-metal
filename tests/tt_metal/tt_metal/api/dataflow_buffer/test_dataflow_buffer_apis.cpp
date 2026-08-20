@@ -176,7 +176,8 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     input[1] = tile0_val1;
     input[words_per_entry + 0] = tile1_val0;
     input[words_per_entry + 1] = tile1_val1;
-    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    distributed::EnqueueWriteMeshBuffer(
+        this->device().mesh_command_queue(), in_tensor.mesh_buffer(), input, /*blocking=*/true);
 
     std::vector<DataT> result_init(expected_scalar_reads.size(), 0u);
     slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), result_l1_addr, result_init);
