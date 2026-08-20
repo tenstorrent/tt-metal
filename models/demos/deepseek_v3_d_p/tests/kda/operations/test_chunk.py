@@ -136,8 +136,7 @@ def test_chunk_recurrence_rejects_nonproduction_contract(device: ttnn.Device, ex
     invalid_constants = ops._ChunkConstants(
         constants.eye,
         constants.tril,
-        constants.ones,
-        _to_device(torch.zeros(1, 1, dim, 3 * dim), device, ttnn.bfloat16),
+        _to_device(torch.ones(1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE), device, ttnn.bfloat16),
     )
     with expect_error(AssertionError, "^$"):
         run(valid_inputs, chunk_constants=invalid_constants)
