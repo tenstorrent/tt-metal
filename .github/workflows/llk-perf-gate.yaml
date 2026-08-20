@@ -1,5 +1,22 @@
 name: "LLK perf gate"
 
+# LLK Performance Regression Gate
+#
+# WHAT: Catches kernel performance regressions at PR merge time by comparing
+# measurements against a baseline from main. Blocks PRs if regressions exceed
+# threshold (2% slower AND 30+ cycles slower per point).
+#
+# WHY: LLK kernels are hand-optimized for latency. Small regressions accumulate
+# and degrade performance over time. The gate prevents silent degradation by
+# gating every commit on measurable perf metrics.
+#
+# CURRENT STATE: Measures L1_TO_L1 (unpack+math+pack) by default, extensible
+# to individual isolate modes (MATH_ISOLATE, UNPACK_ISOLATE, PACK_ISOLATE).
+# Thresholds derived from 5-run noise baselines on Blackhole and Wormhole.
+#
+# BASELINE UPDATES: After merge to main, the sanity workflow re-runs perf tests
+# and publishes new baseline to Snowflake. Next PR's gate compares against it.
+#
 # Triggered on LLK PRs after compile and measure complete
 on:
   workflow_run:
