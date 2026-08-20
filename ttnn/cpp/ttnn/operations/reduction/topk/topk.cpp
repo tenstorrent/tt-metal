@@ -310,7 +310,16 @@ bool should_route_to_topk_large_indices(
                                                        !is_pow2 ||
                                                        padded_width < ttnn::prim::constants::multi_core_min_width;
         const bool wide_arm = multicore_structurally_ineligible && padded_width >= small_k_route_min_padded_width;
-        if (!wide_arm) {
+        // Bitonic-band arm: pow2 widths in [8192, 65535) with k <= 64 ARE
+        // eligible for the stock multi-core bitonic, but the routed composite
+        // measures faster there as well (p150a, Tracy device kernel duration,
+        // 3 trials, full prep+op+finish+slice chain): 32x8192 k=50 263.5 ->
+        // 67.4 us, 32x32768 k=64 333.8 -> 178.6 us. The bitonic's serial
+        // final gather-merge stage scales with num_cores * k while the routed
+        // chain stays column-parallel end to end.
+        const bool bitonic_band_arm = is_pow2 && padded_width >= ttnn::prim::constants::multi_core_min_width &&
+                                      padded_width < std::numeric_limits<uint16_t>::max();
+        if (!wide_arm && !bitonic_band_arm) {
             return false;
         }
     }

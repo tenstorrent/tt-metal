@@ -616,6 +616,16 @@ def test_topk_large_k_routed(k, W, device):
     run_topk_large_k_routed_test(1, 1, 32, W, k, device)
 
 
+@pytest.mark.skipif(not is_blackhole(), reason="large-k routing is Blackhole-only")
+@pytest.mark.parametrize("k, W", [(32, 8192), (50, 8192), (64, 32768)])
+def test_topk_small_k_routed_bitonic_band(k, W, device):
+    # Bitonic-band arm of the small-k route: pow2 widths in [8192, 65535) with
+    # k <= 64 are eligible for the stock multi-core bitonic but route to the
+    # topk_large_indices composite (measured faster; see topk.cpp). k=50
+    # exercises the k % 16 != 0 rounding tail inside the band.
+    run_topk_large_k_routed_test(1, 1, 32, W, k, device)
+
+
 @pytest.mark.skipif(
     not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
 )
@@ -784,8 +794,17 @@ def test_topk_large_k_routing_engages(device):
     ttnn.topk(ttnn_input, 96, dim=-1, largest=True, sorted=True)
     assert ran_large_indices(ttnn.graph.end_graph_capture())
 
-    # Stock shape (k=32, pow2 width >= 8192 -> multi-core bitonic eligible):
-    # the routed op must NOT appear.
+    # Bitonic-band shape (k=32, pow2 width in [8192, 65535)): eligible for the
+    # stock multi-core bitonic, but the bitonic-band arm routes it too.
     ttnn.graph.begin_graph_capture()
     ttnn.topk(ttnn_input, 32, dim=-1, largest=True, sorted=True)
+    assert ran_large_indices(ttnn.graph.end_graph_capture())
+
+    # Stock probe: an explicit sub_core_grids request declines routing (the
+    # routed pipeline ignores custom core grids), so the same shape must run
+    # the stock device op.
+    grid = device.compute_with_storage_grid_size()
+    full_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    ttnn.graph.begin_graph_capture()
+    ttnn.topk(ttnn_input, 32, dim=-1, largest=True, sorted=True, sub_core_grids=full_grid)
     assert not ran_large_indices(ttnn.graph.end_graph_capture())
