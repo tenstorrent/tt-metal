@@ -62,6 +62,13 @@
 
 #include "topk_large_indices_chunk_skip.hpp"
 
+#ifdef THRESHOLD_FILTER
+#include "topk_large_indices_threshold_filter.hpp"
+#ifndef TF_MIN_CHUNKS
+#define TF_MIN_CHUNKS 8
+#endif
+#endif
+
 // Data-dependent chunk-skip early-out (row-parallel path only; see
 // topk_large_indices_chunk_skip.hpp for design + soundness proof).
 // One-line A/B toggle: flip to false to reproduce the pre-skip kernel
@@ -150,6 +157,11 @@ void kernel_main() {
     constexpr uint32_t indices_cb = get_compile_time_arg_val(1);
     constexpr uint32_t K = get_compile_time_arg_val(2);
     constexpr uint32_t USER_K = get_compile_time_arg_val(3);
+#ifdef THRESHOLD_FILTER
+    constexpr uint32_t cb_surv_comp = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_surv_dense = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_tf_ctrl = get_compile_time_arg_val(6);
+#endif
 #endif
 
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
@@ -308,6 +320,216 @@ void kernel_main() {
     constexpr uint32_t slot1 = sequence_tiles;
 #endif
 
+    namespace skip = topk_large_indices_chunk_skip;
+
+#ifdef THRESHOLD_FILTER
+    // ==================================================================
+    // TWO-PASS THRESHOLD-FILTER row body (see
+    // topk_large_indices_threshold_filter.hpp for the full design).
+    // The classic body below stays compiled as the per-row RETRY fallback
+    // and as the narrow-valid_length path.
+    // ==================================================================
+    namespace tf = topk_large_indices_threshold_filter;
+    static_assert(K == 2048, "THRESHOLD_FILTER requires the llk_k=2048 window");
+    const uint32_t sample_rank = get_arg_val<uint32_t>(3);
+    const uint32_t tf_epoch = get_arg_val<uint32_t>(4);
+
+    compute_kernel_hw_startup(input_cb, indices_cb);
+    skip::chunk_skip_configure();  // DST MMIO window for the T read (MATH)
+    // Establish DEST_ACCESS_CFG remap_addrs+swizzle_32b ONCE at kernel start,
+    // exactly like the non-TF body's kernel-start pack_untilize_dest_init
+    // does. The whole engine (SFPU stores in the scan mask, materialize, and
+    // the untilize pack) operates under this ambient state; a reset-fresh
+    // chip defaults it OFF and the first row per core face-scrambles
+    // (silicon-diagnosed: post-reset-only corruption, sticky-correct after).
+    MATH((llk_math_reconfig_remap(true)));
+
+    CircularBuffer input_cb_obj(input_cb);
+    CircularBuffer indices_cb_obj(indices_cb);
+    CircularBuffer surv_comp_obj(cb_surv_comp);
+    CircularBuffer surv_dense_obj(cb_surv_dense);
+    // The ctrl-word base address: MATH (TRISC1) has no cb_interface, so
+    // UNPACK reads it and mails it over the T0->T1 hardware mailbox once at
+    // kernel start (before any copy-path dst_index mail traffic).
+    uint32_t tf_ctrl_base = 0;
+    // UNPACK threads initialize only fifo_rd_ptr (cb_init_write=false in the
+    // TRISC firmware); fifo_wr_ptr reads 0 there. The CB carries no traffic,
+    // so rd == base always. PACK is a write-init thread: wr == base.
+    UNPACK((tf_ctrl_base = get_local_cb_interface(cb_tf_ctrl).fifo_rd_ptr << cb_addr_shift));
+    UNPACK((ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, tf_ctrl_base)));
+    MATH((tf_ctrl_base = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId)));
+    PACK((tf_ctrl_base = get_local_cb_interface(cb_tf_ctrl).fifo_wr_ptr << cb_addr_shift));
+    volatile uint32_t* tf_ctrl = reinterpret_cast<volatile uint32_t*>(tf_ctrl_base);
+
+    const bool tf_active = (sample_rank != 0) && (num_chunks >= TF_MIN_CHUNKS);
+    uint32_t folded_published = 0;  // cumulative dense chunks consumed (tracks tf_ctrl[1])
+
+    // Classic row body (RETRY fallback + narrow launches). Mirrors the
+    // pre-threshold classic path, with the pack_untilize init scoped per row
+    // (the scan phase needs the plain pack MOP between epilogues).
+    auto classic_row = [&](uint32_t row_chunks, uint32_t row_tail) {
+        tile_regs_acquire();
+        topk_xl_separate_indices_row_major_init_static<0, 0>();
+        const uint32_t first_chunk_elements = (row_chunks == 1) ? row_tail : K;
+        process_chunk<K>(input_cb_obj, slot0, first_chunk_elements, false, 0);
+        if (row_chunks == 1) {
+            topk_xl_init<K, false>();
+            topk_xl_stamp_seq_ranks<K>(slot0);
+            topk_xl_rebuild<K, false>(slot0, false);
+        }
+        for (uint32_t chunk = 1; chunk < row_chunks; ++chunk) {
+            const uint32_t active_elements = (chunk + 1 == row_chunks) ? row_tail : K;
+            process_chunk<K>(input_cb_obj, slot1, active_elements, true, chunk);
+            topk_xl_init<K, false>();
+            topk_xl_merge<K, false>(slot0);
+            topk_xl_rebuild<K, false>(slot0, false);
+        }
+        mark_neginf_indices<K>(slot0);
+        materialize_index_rank_order<K>(slot0, indices_cb);
+        // BEFORE the commit: the init's MATH-side remap toggle
+        // (_llk_math_reconfig_remap_) waits for previously COMMITTED packs
+        // only -- called after the commit it races the untilize pack it is
+        // meant to configure (first-untilize-after-reset face scramble,
+        // silicon-diagnosed).
+        pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
+        tile_regs_commit();
+        tile_regs_wait();
+        indices_cb_obj.reserve_back(1);
+        pack_untilize_dest<tiles_per_sequence, tiles_per_sequence>(indices_cb, 1, 0, slot0 + tiles_per_sequence);
+        pack_untilize_uninit(indices_cb);
+        indices_cb_obj.push_back(1);
+        tile_regs_release();
+    };
+
+    // Fold one parser-published dense survivor chunk into the row-fused
+    // survivor at DST 4-5 (adopt into 4-5 directly on the first fold).
+    auto fold_one = [&](uint32_t& row_folds) {
+        surv_dense_obj.wait_front(2);
+        copy_tile_to_dst_init_short_with_dt(input_cb, cb_surv_dense);
+        const bool adopt = (row_folds == 0);
+        const uint32_t base = adopt ? 4u : 6u;
+        copy_tile(cb_surv_dense, 0, base);
+        copy_tile(cb_surv_dense, 1, base + 1);
+        surv_dense_obj.pop_front(2);
+        topk_xl_init<K, true>();
+        topk_xl_local_sort<K>(base, !adopt);
+        if (!adopt) {
+            topk_xl_merge<K, true>(4);
+            topk_xl_rebuild<K, true>(4, false);
+        }
+        ++row_folds;
+        ++folded_published;
+    };
+
+    // Fold-count decisions MUST be single-sourced: MATH and UNPACK reading
+    // the (monotone, writer-published) ctrl word at different instants can
+    // disagree by one whole fold, desynchronizing the copy path's T1->T0
+    // dst_index handshake (silicon-diagnosed wedge: BRISC=CWFW, TRISC1=MWDD).
+    // MATH decides and mails the count to UNPACK -- the chunk-skip pattern.
+    // PACK never folds: every fold_one component is a no-op on TRISC2.
+    auto fold_available = [&](uint32_t& row_folds) {
+        uint32_t n_new = 0;
+        MATH(({
+            const uint32_t published = tf::ctrl_value(tf_epoch, tf_ctrl[1]);
+            n_new = (published > folded_published) ? (published - folded_published) : 0;
+            ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, n_new);
+        }));
+        UNPACK((n_new = ckernel::mailbox_read(ckernel::ThreadId::MathThreadId)));
+        for (uint32_t i = 0; i < n_new; ++i) {
+            fold_one(row_folds);
+        }
+    };
+
+    for (uint32_t row = 0; row < num_rows; ++row) {
+        if (!tf_active) {
+            classic_row(num_chunks, tail_elements);
+            continue;
+        }
+
+        uint32_t row_folds = 0;
+
+        tile_regs_acquire();
+        // ---- SAMPLE: classic single-chunk pipeline at slot 0, then the
+        // rank-r T read through the MMIO window ----
+        topk_xl_separate_indices_row_major_init_static<0, 0>();
+        process_chunk<K>(input_cb_obj, slot0, K, false, 0);
+        topk_xl_init<K, false>();
+        topk_xl_stamp_seq_ranks<K>(slot0);
+        topk_xl_rebuild<K, false>(slot0, false);
+
+        uint32_t t_fused = 0;
+        MATH(({
+            ckernel::tensix_sync();
+            volatile uint32_t* mm = reinterpret_cast<volatile uint32_t*>(RISCV_DEST_START_ADDR);
+            const uint32_t t_bits = mm[skip::rank_to_values_word<K>(sample_rank - 1)];
+            const uint32_t t16 = t_bits >> 16;
+            t_fused = (t16 << 16) | ((t16 & 0x8000u) ? 0xFFFFu : 0x0000u);
+            // NEGATIVE T declines the filter for this row: the branchless
+            // T<0 mask leaks ~0.02% of survivors near specific magnitudes
+            // (open bug, silicon-observed on all-negative rows); forcing
+            // T=+inf zeroes every lane, the writer counts < k, and the row
+            // takes the exact classic RETRY path. T >= 0 rows (every
+            // measured production class) are unaffected.
+            if (t16 & 0x8000u) {
+                t_fused = 0x7F800000u;
+            }
+        }));
+        PACK((tf::tf_zc_set(true)));
+
+        // ---- SCAN (fold available dense chunks BEFORE each chunk's pack
+        // reservation; with the dense CB sized to kDenseCap the parser never
+        // blocks, so this ordering is deadlock-free by construction) ----
+        for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+            fold_available(row_folds);
+            const uint32_t active_elements = (chunk + 1 == num_chunks) ? tail_elements : K;
+            copy_chunk<K>(input_cb_obj, 6, active_elements);
+            tf::tf_mask_stamp(6, t_fused);
+            tile_regs_commit();
+            tile_regs_wait();
+            surv_comp_obj.reserve_back(2 * tf::kCompPagesPerTile);
+            pack_tile<true>(6, cb_surv_comp, 0);
+            pack_tile<true>(7, cb_surv_comp, tf::kCompPagesPerTile);
+            surv_comp_obj.push_back(2 * tf::kCompPagesPerTile);
+            tile_regs_release();
+            tile_regs_acquire();
+        }
+
+        // ---- decision + drain ----
+        const uint32_t want_ok = tf::decision_value(row, tf::kDecOk);
+        uint32_t dec;
+        do {
+            dec = tf::ctrl_value(tf_epoch, tf_ctrl[0]);
+        } while (dec < want_ok);
+        fold_available(row_folds);
+        PACK((tf::tf_zc_set(false)));
+
+        if (dec == want_ok) {
+            // ---- TF epilogue at base 4 (the writer remaps the dense-split
+            // indices through its side table) ----
+            topk_xl_separate_indices_row_major_global_init();
+            topk_xl_separate_indices_row_major_global<K>(4);
+            mark_neginf_indices<K>(4);
+            materialize_index_rank_order<K>(4, indices_cb);
+            // Same pre-commit placement as classic_row (remap race; see above).
+            pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
+            tile_regs_commit();
+            tile_regs_wait();
+            indices_cb_obj.reserve_back(1);
+            pack_untilize_dest<tiles_per_sequence, tiles_per_sequence>(indices_cb, 1, 0, 4 + tiles_per_sequence);
+            pack_untilize_uninit(indices_cb);
+            indices_cb_obj.push_back(1);
+            tile_regs_release();
+        } else {
+            // ---- RETRY: close the scan window and rerun the row classically
+            // on the reader's re-streamed chunks ----
+            tile_regs_commit();
+            tile_regs_wait();
+            tile_regs_release();
+            classic_row(num_chunks, tail_elements);
+        }
+    }
+
+#else  // !THRESHOLD_FILTER
     namespace skip = topk_large_indices_chunk_skip;
 
     compute_kernel_hw_startup(input_cb, indices_cb);
@@ -476,6 +698,7 @@ void kernel_main() {
 
         tile_regs_release();
     }
+#endif  // !THRESHOLD_FILTER
 
 #endif  // TOPK_TREE
 }

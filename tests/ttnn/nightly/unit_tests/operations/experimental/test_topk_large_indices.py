@@ -190,6 +190,43 @@ def test_topk_large_indices_row_major_parallelizes_640_rows(device, k):
     _assert_topk_matches_torch(torch_input, tt_indices, k)
 
 
+def test_topk_large_indices_row_major_threshold_filter_long_rows(device):
+    # THRESHOLD_FILTER regime (k > 1024, >= 128 physical chunks): 130 rows
+    # put one row on every worker so the sample/scan/parse/fold pipeline runs
+    # at full grid, and the selected value multiset must stay bit-exact vs
+    # torch under the non-stable tie contract (indices may differ on ties).
+    torch.manual_seed(7)
+    num_rows, n, k = 130, 262144, 2048
+    torch_input = torch.randn(num_rows, n, dtype=torch.bfloat16)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+    _assert_index_metadata(tt_indices, [num_rows, k])
+    idx = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)
+    ref_vals, _ = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
+    for r in range(num_rows):
+        assert idx[r].unique().numel() == k
+        got = torch.sort(torch_input[r].float()[idx[r]], descending=True).values
+        assert torch.equal(got, ref_vals[r])
+
+
+def test_topk_large_indices_row_major_threshold_filter_valid_length_and_retry(device):
+    # valid_length shrink inside a threshold-filter program plus the all-tie
+    # RETRY backstop (every element ties with the sampled threshold, the
+    # survivor capacity overflows, and the row must fall back to the exact
+    # classic body).
+    num_rows, n, k, valid = 130, 262144, 2048, 131072
+    torch_input = torch.full((num_rows, n), 0.5, dtype=torch.bfloat16)
+    torch_input[:, valid:] = 99.0  # beyond valid_length: must never be selected
+    tt_indices = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device), k=k, valid_length=valid
+    )
+    _assert_index_metadata(tt_indices, [num_rows, k])
+    idx = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)
+    assert (idx < valid).all()
+    for r in range(num_rows):
+        assert idx[r].unique().numel() == k
+        assert torch.equal(torch_input[r][idx[r]].float(), torch.full((k,), 0.5))
+
+
 def test_topk_large_indices_row_major_640_rows_51200_k1536(device):
     num_rows = 640
     n = 51200

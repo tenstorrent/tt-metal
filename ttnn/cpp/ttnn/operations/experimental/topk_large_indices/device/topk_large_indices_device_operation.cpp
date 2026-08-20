@@ -132,6 +132,13 @@ program::ColumnSplitConfig column_split_config_for(
     // choices per (k, width, rows, grid) and fixed-shape callers compile
     // once. Explicit (internal) num_slices still bypasses the model and pins
     // P directly (the hybrid wrapper's remainder window).
+    // THRESHOLD_FILTER rows scan at a fraction of the classic per-chunk cost
+    // the rect model assumes; whenever the TF mode fires on the row-parallel
+    // path, keep it (mirrors the hybrid wrapper's TF guard).
+    if (program::compute_body_mode(attrs.k, n, attrs.stable) ==
+        program::ComputeBodyMode::ThresholdFilter) {
+        return program::ColumnSplitConfig{};
+    }
     return program::compute_column_split_config(
         attrs.k, n, num_rows, grid, attrs.num_slices, /*allow_multi_row=*/true);
 }
@@ -184,7 +191,7 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         // hash carries NO width term there -- growing-prefill callers never
         // recompile crossing the old 65536 fused boundary. For smaller k the
         // mode still folds in the <= 32-chunk fused bit, the only width term.
-        static_cast<uint32_t>(program::compute_body_mode(attrs.k, input.logical_shape()[-1])));
+        static_cast<uint32_t>(program::compute_body_mode(attrs.k, input.logical_shape()[-1], attrs.stable)));
 }
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(
@@ -253,7 +260,11 @@ struct HybridSplit {
     uint32_t remainder_slices;
 };
 std::optional<HybridSplit> hybrid_row_split(
-    const Tensor& input, uint32_t k, std::optional<uint32_t> num_slices, std::optional<uint32_t> valid_length) {
+    const Tensor& input,
+    uint32_t k,
+    std::optional<uint32_t> num_slices,
+    std::optional<uint32_t> valid_length,
+    bool stable) {
     if (num_slices.has_value()) {
         // An internal caller already chose an explicit P: keep its single launch.
         return std::nullopt;
@@ -298,6 +309,13 @@ std::optional<HybridSplit> hybrid_row_split(
     // well ahead of the row-parallel wave (2204us/row-set at that shape), so
     // the split stays profitable at any valid_length. Runtime slice
     // rebalancing from valid_length is the follow-up that recovers the gap.
+    // THRESHOLD_FILTER rows scan at a fraction of the classic per-chunk cost;
+    // the rect remainder would DOMINATE the makespan instead of hiding in it.
+    // Keep the single row-parallel launch whenever the TF mode fires.
+    if (operations::experimental::topk_large_indices::program::compute_body_mode(k, n, stable) ==
+        operations::experimental::topk_large_indices::program::ComputeBodyMode::ThresholdFilter) {
+        return std::nullopt;
+    }
     const auto cfg = operations::experimental::topk_large_indices::program::compute_column_split_config(
         k, searched, r2, grid, std::nullopt, /*allow_multi_row=*/true);
     if (!cfg.enabled || cfg.num_rects < 2) {
@@ -314,7 +332,7 @@ std::optional<HybridSplit> hybrid_row_split(
 
 Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length, bool stable) {
     using Op = operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation;
-    if (const auto split = hybrid_row_split(input_tensor, k, std::nullopt, valid_length)) {
+    if (const auto split = hybrid_row_split(input_tensor, k, std::nullopt, valid_length, stable)) {
         auto run = [&](uint32_t start, uint32_t count, std::optional<uint32_t> window_slices) {
             auto [attrs, args] = Op::invoke(input_tensor, k, valid_length, window_slices, start, count, stable);
             return ttnn::device_operation::launch<Op>(attrs, args);

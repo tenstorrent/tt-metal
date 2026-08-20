@@ -75,8 +75,8 @@ bool fused_e2e_gate(uint32_t k, uint32_t input_last_dim);
 //     the width term leaves program selection entirely for this class.
 //   FusedE2E -- smaller k with <= 32 chunks (fused end-to-end).
 //   Classic -- smaller k, wider rows (keeps the chunk-skip, which pays there).
-enum class ComputeBodyMode : uint32_t { Classic = 0, FusedE2E = 1, FusedSegmented = 2 };
-ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim);
+enum class ComputeBodyMode : uint32_t { Classic = 0, FusedE2E = 1, FusedSegmented = 2, ThresholdFilter = 3 };
+ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim, bool stable);
 
 ColumnSplitConfig compute_column_split_config(
     uint32_t k,

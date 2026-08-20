@@ -41,6 +41,13 @@
 #include "api/dataflow/noc_semaphore.h"
 #endif
 
+#ifdef THRESHOLD_FILTER
+#include "topk_large_indices_threshold_filter.hpp"
+#ifndef TF_MIN_CHUNKS
+#define TF_MIN_CHUNKS 8
+#endif
+#endif
+
 namespace {
 
 template <uint32_t source_slices_per_row, uint32_t output_slices_per_row, uint32_t slice_bytes>
@@ -264,6 +271,10 @@ void kernel_main() {
     const uint32_t indices_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_row = get_arg_val<uint32_t>(1);
     const uint32_t num_rows = get_arg_val<uint32_t>(2);
+#ifdef THRESHOLD_FILTER
+    const uint32_t num_chunks = get_arg_val<uint32_t>(3);
+    const uint32_t tf_epoch = get_arg_val<uint32_t>(4);
+#endif
 
     constexpr uint32_t cb_indices = get_compile_time_arg_val(0);
     constexpr uint32_t cb_indices_scratch = get_compile_time_arg_val(1);
@@ -272,11 +283,140 @@ void kernel_main() {
     constexpr uint32_t output_slices_per_row = get_compile_time_arg_val(4);
     constexpr uint32_t indices_slice_bytes = get_compile_time_arg_val(5);
     constexpr auto indices_args = TensorAccessorArgs<6>();
+#ifdef THRESHOLD_FILTER
+    constexpr uint32_t cb_surv_comp = get_compile_time_arg_val(indices_args.next_compile_time_args_offset());
+    constexpr uint32_t cb_surv_dense = get_compile_time_arg_val(indices_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t cb_tf_ctrl = get_compile_time_arg_val(indices_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t cb_tf_side = get_compile_time_arg_val(indices_args.next_compile_time_args_offset() + 3);
+    constexpr uint32_t tf_user_k = get_compile_time_arg_val(indices_args.next_compile_time_args_offset() + 4);
+#endif
 
     const auto indices = TensorAccessor(indices_args, indices_addr, indices_page_bytes);
     CircularBuffer indices_cb(cb_indices);
     Noc noc;
 
+#ifdef THRESHOLD_FILTER
+    namespace tf = topk_large_indices_threshold_filter;
+    static_assert(source_slices_per_row == 128, "THRESHOLD_FILTER requires the llk_k=2048 window");
+    const bool tf_active = num_chunks >= TF_MIN_CHUNKS;
+    CircularBuffer indices_scratch_cb(cb_indices_scratch);
+    CircularBuffer surv_comp_cb(cb_surv_comp);
+    CircularBuffer surv_dense_cb(cb_surv_dense);
+    CircularBuffer tf_ctrl_cb(cb_tf_ctrl);
+    CircularBuffer tf_side_cb(cb_tf_side);
+    volatile tt_l1_ptr uint32_t* tf_ctrl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tf_ctrl_cb.get_write_ptr());
+    volatile tt_l1_ptr uint32_t* tf_side = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tf_side_cb.get_write_ptr());
+    uint32_t dense_pushed_total = 0;
+    tf_ctrl[0] = 0;
+    tf_ctrl[1] = 0;
+
+    for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
+        const uint32_t row = start_row + local_row;
+        bool tf_ok = false;
+        if (tf_active) {
+            // ---- parse this row's compressed scan output ----
+            constexpr uint32_t comp_pages_per_chunk = 2 * tf::kCompPagesPerTile;
+            uint32_t count = 0;
+            uint32_t d = 0;  // dense chunks emitted this row
+            uint32_t j = 0;  // fill of the current dense chunk
+            bool overflow = false;
+            volatile tt_l1_ptr uint32_t* dense_ptr = nullptr;
+            for (uint32_t c = 0; c < num_chunks; ++c) {
+                surv_comp_cb.wait_front(comp_pages_per_chunk);
+                const uint32_t base = surv_comp_cb.get_read_ptr();
+                for (uint32_t tile = 0; tile < 2; ++tile) {
+                    const uint32_t tbase = base + tile * tf::kCompPagesPerTile * 4096u;
+                    volatile tt_l1_ptr uint16_t* rsi = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tbase);
+                    volatile tt_l1_ptr uint32_t* data =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tbase + tf::kRss * 16u);
+                    const uint32_t elem_base = c * 2048u + tile * 1024u;
+                    // Augmented datums live in 36-word groups: 32 datum
+                    // words + a 16B block of 4-bit zero-run counters (partial
+                    // groups padded to the full 36). Survivors carry their
+                    // DST word position in the stamp low half, so the hot
+                    // path is a plain nonzero scan -- no counter reads, no
+                    // position arithmetic. aug = RSI[16] (16 PACR rows/tile).
+                    uint32_t aug = rsi[16];
+                    if (aug > 1024u) {
+                        aug = 0;  // defensive: never walk garbage
+                    }
+                    for (uint32_t a = 0; a < aug; ++a) {
+                        const uint32_t w = data[(a >> 5) * 36u + (a & 31u)];
+                        if (w != 0) {
+                            ++count;
+                            if (!overflow) {
+                                if (j == 0) {
+                                    surv_dense_cb.reserve_back(2);
+                                    dense_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                        surv_dense_cb.get_write_ptr());
+                                }
+                                // Re-stamp [v16 | (d+1)<<11 | j]; the true
+                                // row-major index comes from the scan stamp
+                                // (word position in tile; the DST word order
+                                // IS the linear element order --
+                                // silicon-verified by the survivor-all probe).
+                                dense_ptr[j] = (w & 0xFFFF0000u) | ((d + 1) << 11) | j;
+                                tf_side[d * 2048u + tf::rm2048(j)] = elem_base + (w & 0x3FFu);
+                                ++j;
+                                if (j == 2048) {
+                                    surv_dense_cb.push_back(2);
+                                    ++dense_pushed_total;
+                                    tf_ctrl[1] = tf::ctrl_word(tf_epoch, dense_pushed_total);
+                                    ++d;
+                                    j = 0;
+                                    if (d == tf::kDenseCap) {
+                                        overflow = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                surv_comp_cb.pop_front(comp_pages_per_chunk);
+            }
+            // flush the partial dense chunk
+            if (!overflow && j > 0) {
+                for (uint32_t f = j; f < 2048; ++f) {
+                    dense_ptr[f] = 0xFF800000u;  // -inf, payload 0
+                }
+                surv_dense_cb.push_back(2);
+                ++dense_pushed_total;
+                tf_ctrl[1] = tf::ctrl_word(tf_epoch, dense_pushed_total);
+                ++d;
+            }
+            tf_ok = !overflow && (count >= tf_user_k) && (d > 0);
+            tf_ctrl[0] = tf::ctrl_word(tf_epoch, tf::decision_value(local_row, tf_ok ? tf::kDecOk : tf::kDecRetry));
+        }
+
+        // ---- output the row ----
+        indices_cb.wait_front(1);
+        indices_scratch_cb.reserve_back(1);
+        copy_row_to_scratch<source_slices_per_row, output_slices_per_row, indices_slice_bytes>(
+            indices_cb, indices_scratch_cb, noc);
+        indices_cb.pop_front(1);
+        if (tf_active && tf_ok) {
+            // remap dense-split indices through the side table
+            volatile tt_l1_ptr uint32_t* words =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(indices_scratch_cb.get_write_ptr());
+            const uint32_t out_words = indices_page_bytes / 4u;
+            for (uint32_t i = 0; i < out_words; ++i) {
+                const uint32_t v = words[i];
+                if (v != 0xFFFFFFFFu) {
+                    words[i] = tf_side[v - 2048u];
+                }
+            }
+        }
+        indices_scratch_cb.push_back(1);
+        indices_scratch_cb.wait_front(1);
+        noc.async_write(
+            indices_scratch_cb, indices, indices_page_bytes, {.offset_bytes = 0}, {.page_id = row, .offset_bytes = 0});
+        noc.async_writes_flushed();
+        indices_scratch_cb.pop_front(1);
+    }
+
+    noc.async_write_barrier();
+}
+#else
     if constexpr (source_slices_per_row == 32) {
         for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
             const uint32_t row = start_row + local_row;
@@ -298,5 +438,7 @@ void kernel_main() {
 
     noc.async_write_barrier();
 }
+#endif  // THRESHOLD_FILTER
+
 
 #endif  // TOPK_TREE

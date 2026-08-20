@@ -11,6 +11,8 @@
 #include <tt-metalium/work_split.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <map>
 #include <optional>
 #include <string>
@@ -126,6 +128,9 @@ tt::tt_metal::KernelHandle create_reader_kernel(
     std::map<std::string, std::string> defines) {
     std::vector<uint32_t> reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
     interleaved_accessor_args(input).append_to(reader_compile_args);
+    if (defines.count("THRESHOLD_FILTER")) {
+        reader_compile_args.push_back(tt::CBIndex::c_5);  // cb_tf_ctrl
+    }
     return tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader.cpp",
@@ -170,6 +175,16 @@ void set_runtime_args(
     const auto num_rows_per_core_group_2 = std::get<5>(work_split);
     TT_FATAL(num_active_cores > 0, "topk_large_indices requires at least one row of work");
 
+    // Per-launch epoch nonce for the threshold-filter ctrl words (stale-L1
+    // safety; see the kernel header). Same value for every core of a launch;
+    // consecutive launches always differ.
+    // Seeded per process: the writer also zeroes the ctrl words at kernel
+    // entry, so cross-process epoch collisions are already harmless -- the
+    // random seed just removes the every-process-starts-at-1 pattern.
+    static std::atomic<uint32_t> tf_epoch_counter{
+        static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count())};
+    const uint32_t tf_epoch = (tf_epoch_counter.fetch_add(1, std::memory_order_relaxed) % 0xFFFFu) + 1;
+
     uint32_t start_row = 0;
     for (const auto& core : shared.cores) {
         const uint32_t rows =
@@ -190,11 +205,29 @@ void set_runtime_args(
              rows,
              runtime_args.num_chunks,
              runtime_args.input_tail_chunk_bytes,
-             runtime_args.input_row_bytes});
+             runtime_args.input_row_bytes,
+             tf_epoch});
+        // Threshold-filter sample rank r: chosen so E[survivors] ~= 2*k for
+        // ANY distribution (distribution-free order statistic; m = 2048
+        // samples). Runtime-only (depends on valid_length); non-TF kernels
+        // ignore the extra arg.
+        const uint32_t search_len =
+            (runtime_args.num_chunks - 1) * to_uint32(llk_target_k) + runtime_args.tail_elements;
+        uint32_t sample_rank = 0;
+        if (search_len > 0) {
+            const uint64_t r64 = (2ull * attrs.k * 2049ull + search_len - 1) / search_len;
+            sample_rank = static_cast<uint32_t>(std::min<uint64_t>(std::max<uint64_t>(r64, 32), 1024));
+        }
         tt::tt_metal::SetRuntimeArgs(
-            program, shared.compute_kernel_id, core, {rows, runtime_args.num_chunks, runtime_args.tail_elements});
+            program,
+            shared.compute_kernel_id,
+            core,
+            {rows, runtime_args.num_chunks, runtime_args.tail_elements, sample_rank, tf_epoch});
         tt::tt_metal::SetRuntimeArgs(
-            program, shared.writer_kernel_id, core, {indices.buffer()->address(), start_row, rows});
+            program,
+            shared.writer_kernel_id,
+            core,
+            {indices.buffer()->address(), start_row, rows, runtime_args.num_chunks, tf_epoch});
 
         start_row += rows;
     }
@@ -217,6 +250,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const auto llk_target_k = snap_to_llk_target_k(k);
     const uint32_t llk_k = to_uint32(llk_target_k);
     const uint32_t tiles_per_sequence = (llk_k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
+
+    const ComputeBodyMode body_mode = compute_body_mode(k, input.logical_shape()[-1], operation_attributes.stable);
 
     const auto grid = input.device()->compute_with_storage_grid_size();
     const CoreRangeSet all_cores(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
@@ -250,8 +285,38 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         cb_indices,
         cb_indices_scratch);
 
+    // Threshold-filter CBs (created unconditionally sized only in TF mode;
+    // other modes skip creation entirely -- the mode is part of the hash).
+    constexpr uint32_t cb_surv_comp = tt::CBIndex::c_3;
+    constexpr uint32_t cb_surv_dense = tt::CBIndex::c_4;
+    constexpr uint32_t cb_tf_ctrl = tt::CBIndex::c_5;
+    constexpr uint32_t cb_tf_side = tt::CBIndex::c_6;
+    std::map<std::string, std::string> dm_defines;
+    if (body_mode == ComputeBodyMode::ThresholdFilter) {
+        dm_defines["THRESHOLD_FILTER"] = "1";
+        constexpr uint32_t comp_pages_per_tile = 2;   // kCompPagesPerTile
+        constexpr uint32_t dense_cap = 8;             // kDenseCap
+        const auto surv_comp_cfg =
+            tt::tt_metal::CircularBufferConfig(
+                2 * 2 * comp_pages_per_tile * 4096, {{cb_surv_comp, tt::DataFormat::UInt32}})
+                .set_page_size(cb_surv_comp, 4096);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, surv_comp_cfg);
+        const auto surv_dense_cfg =
+            tt::tt_metal::CircularBufferConfig(dense_cap * 2 * 4096, {{cb_surv_dense, tt::DataFormat::UInt32}})
+                .set_page_size(cb_surv_dense, 4096);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, surv_dense_cfg);
+        const auto tf_ctrl_cfg =
+            tt::tt_metal::CircularBufferConfig(64, {{cb_tf_ctrl, tt::DataFormat::UInt32}})
+                .set_page_size(cb_tf_ctrl, 64);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, tf_ctrl_cfg);
+        const auto tf_side_cfg =
+            tt::tt_metal::CircularBufferConfig(dense_cap * 2048 * 4, {{cb_tf_side, tt::DataFormat::UInt32}})
+                .set_page_size(cb_tf_side, dense_cap * 2048 * 4);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, tf_side_cfg);
+    }
+
     auto reader_kernel = create_reader_kernel(
-        program, all_cores, input, cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence, /*defines=*/{});
+        program, all_cores, input, cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence, dm_defines);
 
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k};
     // User-requested k (<= llk_k): the data-dependent chunk-skip early-out in
@@ -259,6 +324,10 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     // survivor (not the llk_k-th), which is what makes skipping profitable at
     // small k. attrs.k is already part of the program hash.
     compute_compile_args.push_back(k);
+    // Threshold-filter CB ids (compile args 4..6; only read under the define).
+    compute_compile_args.push_back(tt::CBIndex::c_3);
+    compute_compile_args.push_back(tt::CBIndex::c_4);
+    compute_compile_args.push_back(tt::CBIndex::c_5);
     // Fused end-to-end merge/rebuild: stay in the fused [bf16|u16] word through
     // every merge/rebuild and split once per row, recovering the global index
     // from a per-chunk stamp in bits [15:11]. Sound only when every possible
@@ -266,7 +335,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     // FULL logical width (valid_length can only shrink the runtime count).
     // Derived from shape, so it is mirrored into compute_program_hash.
     std::map<std::string, std::string> compute_defines;
-    switch (compute_body_mode(k, input.logical_shape()[-1])) {
+    switch (body_mode) {
+        case ComputeBodyMode::ThresholdFilter: compute_defines["THRESHOLD_FILTER"] = "1"; break;
         case ComputeBodyMode::FusedSegmented: compute_defines["FUSED_SEGMENTED"] = "1"; break;
         case ComputeBodyMode::FusedE2E: compute_defines["FUSED_E2E"] = "1"; break;
         case ComputeBodyMode::Classic: break;
@@ -296,12 +366,19 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         output_slices_per_row,
         indices_slice_bytes};
     interleaved_accessor_args(indices).append_to(writer_compile_args);
+    if (body_mode == ComputeBodyMode::ThresholdFilter) {
+        writer_compile_args.push_back(cb_surv_comp);
+        writer_compile_args.push_back(cb_surv_dense);
+        writer_compile_args.push_back(cb_tf_ctrl);
+        writer_compile_args.push_back(cb_tf_side);
+        writer_compile_args.push_back(k);
+    }
 
     auto writer_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_args, dm_defines));
 
     TopkLargeIndicesSharedVariables shared{
         .reader_kernel_id = reader_kernel,
@@ -455,12 +532,29 @@ bool fused_e2e_gate(uint32_t k, uint32_t input_last_dim) {
     return tt::div_up(input_last_dim, to_uint32(snap_to_llk_target_k(k))) <= 32;
 }
 
-ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim) {
+ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim, bool stable) {
     // See the header. The k >= 1024 floor keeps the classic body (and its
     // chunk-skip, arming at chunk >= k/4) for small-k wide rows where skip is
     // a measured win; at k >= 1024 skip is provably dead at any realistic
     // width, so the segmented body strictly wins at every width.
+    //
+    // THRESHOLD_FILTER (two-pass sample/scan/filter, see
+    // kernels/topk_large_indices_threshold_filter.hpp): selected for the
+    // llk_k=2048 window on LONG physical rows only. Silicon (p150a): the
+    // scan runs ~3.8us/chunk steady-state vs ~13.5us/chunk classic and
+    // ~5.7us/chunk hybrid-effective, but per-row fixed costs (sample ~15us,
+    // folds, epilogue) plus the early-chunk reader ramp mean short rows lose
+    // to the rectangle/tree engine (anchor 32x65536: rect 131us vs TF 305us;
+    // Pavle 160x1M v512K: hybrid 2934us vs TF 1966us). 128 physical chunks
+    // (256K elements) is the measured crossover class. stable=True declines
+    // (the scan does not preserve the rank-stamp discipline) and keeps the
+    // segmented body.
     constexpr uint32_t fused_segmented_min_user_k = 1024;
+    constexpr uint32_t threshold_filter_min_chunks = 128;
+    if (k > fused_segmented_min_user_k && !stable &&
+        tt::div_up(input_last_dim, to_uint32(LlkTargetK::K2048)) >= threshold_filter_min_chunks) {
+        return ComputeBodyMode::ThresholdFilter;
+    }
     if (k >= fused_segmented_min_user_k) {
         return ComputeBodyMode::FusedSegmented;
     }
