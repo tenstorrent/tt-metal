@@ -172,28 +172,22 @@ def create_assistant_model(
     return assistant_args, model
 
 
-_DEFAULT_SHORT_PREFILL_BUCKETS = (96, 128)
-
-
 def get_gemma4_padded_prefill_len(seq_len: int) -> int:
-    """Pad prefill ISL to the next Gemma4 kernel bucket.
+    """Pad prefill ISL to the next kernel bucket (default: tt_transformers policy).
 
-    Short prompts (e.g. the batch-1 demo at ~87 tokens) otherwise pay the full
-    128-wide kernel via ``get_padded_prefill_len``. A 96 bucket trims that
-    padding tax while keeping long-ISL power-of-2 policy unchanged.
-
-    Override short buckets with ``GEMMA4_SHORT_PREFILL_BUCKETS=64,96,128``
-    (comma-separated, ascending tile-multiple lengths).
+    By default this matches ``get_padded_prefill_len`` so prefill Metal Trace
+    buckets warmed at startup (128, 512, …) replay at runtime. Opt into shorter
+    buckets with ``GEMMA4_SHORT_PREFILL_BUCKETS=96,128`` only when the same
+    lengths are listed in ``GEMMA4_TRACE_PREFILL_SEQ_LENS`` — otherwise prefill
+    pays a cold eager compile on the first request (TTFT seconds, not ms).
     """
     seq_len = int(seq_len)
     override = os.environ.get("GEMMA4_SHORT_PREFILL_BUCKETS")
     if override:
         buckets = tuple(int(x.strip()) for x in override.split(",") if x.strip())
-    else:
-        buckets = _DEFAULT_SHORT_PREFILL_BUCKETS
-    for bucket in buckets:
-        if seq_len <= bucket:
-            return bucket
+        for bucket in buckets:
+            if seq_len <= bucket:
+                return bucket
     from models.tt_transformers.tt.common import get_padded_prefill_len
 
     return get_padded_prefill_len(seq_len)
