@@ -20,6 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.utils.expert_dtypes import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, allocate_dflash_kv_cache
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
@@ -42,7 +43,7 @@ class TtPrefillRuntimeConfig:
     capacity_factor: int = 2
     gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL
     routed_expert_activations_dtype: ttnn.DataType = ttnn.bfloat8_b
-    routed_expert_weights_dtype: ttnn.DataType = ttnn.bfloat4_b
+    routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
     shared_expert_activations_dtype: ttnn.DataType = ttnn.bfloat16
     shared_expert_weights_dtype: ttnn.DataType = ttnn.bfloat8_b
     weight_cache_path: Optional[Path] = None
@@ -184,6 +185,9 @@ class TtPrefillRuntime:
                 # to look for the latent-projection cache files and would call an incomplete cache
                 # complete. model_cfg is already in hand two lines up.
                 model_cfg=model_cfg,
+                # Must be the dtype the experts will be BUILT at, or a cache at another dtype
+                # reports complete and the placeholder is loaded as the weights.
+                routed_expert_weights_dtype=self.config.routed_expert_weights_dtype,
             ):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
             else:
