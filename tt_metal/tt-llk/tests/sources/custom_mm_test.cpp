@@ -124,8 +124,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-    // split_acc=false, dense_packing=false, transpose=false. operandB_face_r_dim = in0 M.
-    _llk_math_custom_mm_init_<false /* transpose */, false /* split_acc */, false /* dense_packing */>(params.in0_face_r_dim, CT_DIM);
+    // split_acc=false, dense_packing=true, transpose=false. operandB_face_r_dim = in0 M.
+    // dense_packing MUST be true: the pack thread reads the ct output tiles with the
+    // dense-packing W-stride (consecutive tiles 32 DEST rows apart), so the math must lay
+    // them out 32 rows apart too (ADDR_MOD_2 DEST incr = 32, not 64). With dense_packing
+    // false the math strides output tiles 64 rows apart, so pack reads tile i>0 from the
+    // wrong DEST offset -- tile 0 is correct but every later tile is corrupt. Matches the
+    // proven compressed sibling (matmul_custom_compressed_test.cpp), which passes
+    // dense_packing=true for the identical pack setup.
+    _llk_math_custom_mm_init_<false /* transpose */, false /* split_acc */, true /* dense_packing */>(params.in0_face_r_dim, CT_DIM);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
@@ -158,7 +165,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_init_<PackMode::Default, false /*zero_output*/, false /*skip_addrmod_config*/, true /*skip_packer_strides*/>(
         formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2);
+    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
 
     _llk_packer_wait_for_math_done_();
 
@@ -169,7 +176,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2);
+    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
 }
 
 #endif

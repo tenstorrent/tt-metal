@@ -187,8 +187,24 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc):
 
     golden = golden.reshape(M, N).to(torch_out)
 
+    # K-aware absolute floor (Float16_b / bf16 dest only): the single LoFi MVMUL
+    # accumulates the K-deep sum in a bf16 dest, so rounding noise grows ~linearly per
+    # k-tile -- a floor on small outputs that Float16_b's default atol (0.05) is too tight
+    # for at kt>=4. Scale it by kt * mean|nonzero golden| (never below default; rtol/PCC
+    # unchanged, PCC is the real gate and stays ~0.99999). This mirrors the proven
+    # compressed sibling (compressed_utils.run_compressed). Float32 dest accumulates in
+    # fp32, so its noise is negligible and it keeps the default (tighter) atol.
+    custom_atol = None
+    if out_format == DataFormat.Float16_b:
+        FLOAT16B_DEFAULT_ATOL = 0.05
+        ACC_ATOL_PER_KT = 0.005
+        active_golden = golden.abs()
+        active_golden = active_golden[active_golden > 0]
+        mean_active = active_golden.mean().item() if active_golden.numel() else 0.0
+        custom_atol = max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * kt * mean_active)
+
     assert passed_test(
-        golden, res_tensor, out_format, print_pcc=True
+        golden, res_tensor, out_format, custom_atol=custom_atol, print_pcc=True
     ), f"custom_mm matmul failed for M={M} kt={kt} ct={ct} formats={formats}"
 
 
