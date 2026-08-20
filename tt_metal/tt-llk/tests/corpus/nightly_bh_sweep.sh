@@ -54,6 +54,16 @@ EV="$EVIDENCE_ROOT/nightly-$DATE"
 BASELINE="$HERE/sfpu_device_baseline_${CHIP_CLASS}_v1.tsv"
 [ -f "$BASELINE" ] || { echo "FATAL: no baseline for chip class '$CHIP_CLASS' ($BASELINE)"; exit 2; }
 
+# Evidence-root collision guard (incident 2026-08-20: the pin-14 weekly's
+# date-derived root collided with the existing pin-12 weekly-20260820 — 15
+# minutes of pin-14 classify wrote into pin-12 evidence).  The guard refuses
+# any existing root recorded under a DIFFERENT toolchain pin and fails closed
+# on unknown provenance; a same-pin root resumes as before.  SWEEP_DATE stays
+# the manual root-name override (the refusal suggests a free one).
+# shellcheck source=sweep_wrapper_lib.sh
+source "$HERE/sweep_wrapper_lib.sh" || { echo "FATAL: sweep_wrapper_lib.sh missing/broken"; exit 2; }
+evidence_root_guard "$EV" "$PINNED_CC1PLUS_SHA256" "nightly_bh_sweep.sh" || exit 3
+
 # Previous nightly run for before/after drift (newest dated dir that is not us).
 PREV=$(ls -d "$EVIDENCE_ROOT"/nightly-* 2>/dev/null | grep -vx "$EV" | sort | tail -1 || true)
 
