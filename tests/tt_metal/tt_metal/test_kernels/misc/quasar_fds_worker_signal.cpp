@@ -77,8 +77,7 @@ void kernel_main() {
     status[quasar_fds_test::kSlotResult] = go_received ? quasar_fds_test::kComplete : quasar_fds_test::kTimeout;
     // Make the status words visible to the host, which reads them after the program completes. The
     // real completion path does need its data ordered before the done, but this is not a test of
-    // that: these are local stores that no reader consumes on seeing the done. See
-    // quasar_fds_worker_ordered_write.cpp for the test that does exercise it.
+    // that: these are local stores that no reader consumes on seeing the done.
     flush_l2_cache_range(l1_address, quasar_fds_test::kNumSlots * sizeof(uint32_t));
 
     if (go_received) {

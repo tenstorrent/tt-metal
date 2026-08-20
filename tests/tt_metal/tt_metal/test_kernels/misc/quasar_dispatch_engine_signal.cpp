@@ -46,8 +46,7 @@ void kernel_main() {
     status[quasar_fds_test::kSlotStarted] = quasar_fds_test::kStarted;
     // Make the status word visible to the host, which reads it after the program completes. This is
     // not a demonstration of ordering against the go signal: the write is local to this core and
-    // nothing here reads it on observing a signal. See quasar_fds_worker_ordered_write.cpp for the
-    // test that does exercise that.
+    // nothing here reads it on observing a signal.
     flush_l2_cache_range(l1_address, quasar_fds_test::kNumSlots * sizeof(uint32_t));
 
     overlay::FdsDispatch::fds_config_filter_length(kNoDeglitchFilter);
