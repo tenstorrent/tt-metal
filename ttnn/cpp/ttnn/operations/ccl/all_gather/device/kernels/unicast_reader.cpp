@@ -91,20 +91,7 @@ void kernel_main() {
             byte_off_of<output_chunks_per_page, output_chunk_size>(global),
             noc.get_noc_id());
     };
-
-    // Debug only: a run has to be one linear stretch of memory, which is what one transfer assumes.
-    auto run_is_linear = [&](uint32_t run, uint64_t first, bool from_input) {
-        auto probe = walk;
-        for (uint32_t i = 0; i < run; ++i) {
-            const uint32_t chunk = probe.chunk();
-            const uint64_t addr = from_input ? input_addr(chunk) : output_addr(map.at(chunk).global);
-            if (addr != first + i * output_chunk_size) {
-                return false;
-            }
-            probe.advance(1);
-        }
-        return true;
-    };
+    auto run_addr = [&](uint32_t chunk) { return output_addr(map.at(chunk).global); };
 
     auto read_run = [&](uint64_t src, uint32_t l1_write_addr, uint32_t chunks) {
         if constexpr (one_command) {
@@ -158,25 +145,20 @@ void kernel_main() {
             uint32_t l1_write_addr = cb.get_write_ptr();
             for (uint32_t left = batch; left > 0;) {
                 const uint32_t chunk = walk.chunk();
-                // Only one chunk can go anyway, so skip the query: on a sharded tensor it loops over rank.
-                const uint32_t limit = std::min(walk.run_limit(), left);
                 uint64_t src;
                 uint32_t run;
                 if (from_input) {
                     src = input_addr(chunk);
-                    run = limit > 1
-                              ? contiguous_chunks<split_factor>(input_tensor_accessor, in_src, chunk, input_end_chunk)
-                              : 1u;
+                    run = next_run<split_factor>(walk, input_tensor_accessor, in_src, chunk, input_end_chunk, left);
+                    ASSERT(run_is_linear(walk, run, output_chunk_size, src, input_addr));
                 } else {
                     // What upstream relayed into our output.
                     const auto pos = map.at(chunk);
                     src = output_addr(pos.global);
-                    run = limit > 1 ? contiguous_chunks<output_chunks_per_page>(
-                                          output_tensor_accessor, plan.out, pos.global, pos.row_end)
-                                    : 1u;
+                    run = next_run<output_chunks_per_page>(
+                        walk, output_tensor_accessor, plan.out, pos.global, pos.row_end, left);
+                    ASSERT(run_is_linear(walk, run, output_chunk_size, src, run_addr));
                 }
-                run = std::min(run, limit);
-                ASSERT(run_is_linear(run, src, from_input));
                 read_run(src, l1_write_addr, run);
                 l1_write_addr += run * output_chunk_size;
                 left -= run;

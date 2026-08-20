@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/page.h"
 #include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -13,9 +14,6 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 
 #include <cstdint>
-#include <array>
-#include <type_traits>
-#include <utility>
 
 #include "multicast_common.hpp"
 
@@ -28,7 +26,7 @@ void kernel_main() {
     constexpr uint32_t output_chunk_size = get_compile_time_arg_val(0);
     constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(1);
     constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(2);
-    constexpr uint32_t output_page_stripe_jump = get_compile_time_arg_val(3);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(3);
     constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t packet_size = get_compile_time_arg_val(6);
@@ -38,19 +36,21 @@ void kernel_main() {
     constexpr auto output_tensor_args = TensorAccessorArgs<10>();
 
     constexpr bool enable_fabric = (num_connections > 0);
-    constexpr uint32_t output_page_size = output_chunks_per_page * output_chunk_size;
-    constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
+    constexpr uint32_t chunks_per_cb_entry = cb_page_size / output_chunk_size;
+    constexpr uint32_t xfer_max = chunks_per_transfer(packet_size, output_chunk_size);
+    // A chunk bigger than a burst cannot be one NOC command, so it takes the generic path.
+    constexpr bool one_command = output_chunk_size <= NOC_MAX_BURST_SIZE;
+    // A run is emitted as one scatter chunk starting at its source offset within the packet, so every chunk
+    // size has to keep source and destination NoC-write aligned.
+    static_assert(output_chunk_size % 16 == 0, "chunk size must be a multiple of the NoC write alignment");
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
     ///////////////////////////////////////////////////
     size_t arg_idx = 0;
     const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const uint32_t output_page_id_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_chunk_in_stripe_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_page_byte_offset = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_page_byte_offset_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_output_chunks = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t slice_first_chunk = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t slice_chunks = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
     const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
@@ -159,65 +159,73 @@ void kernel_main() {
     // MAIN
     ///////////////////////////////////////////////////
 
-    // "iterator" for output_tensor:
-    //   byte_offset++ within an output page -> chunk++ -> stripe+=jump
-    // (see the "Page indexing" glossary in all_gather_multicast_factory.cpp)
-    // Returns {output_page_id, byte_offset} for the current chunk, then advances.
-    // Supports any gather dim, any N-D shape, any shard spec.
-    uint32_t output_page_id = output_page_id_start;
-    uint32_t output_page_byte_off = output_page_byte_offset_start;
-    uint32_t output_chunks_sent = 0;
-    uint32_t output_chunk_in_stripe = output_chunk_in_stripe_start;
-    auto valid_output_chunk = [&]() __attribute__((always_inline)) { return output_chunks_sent < num_output_chunks; };
-    auto next_output_chunk = [&]() __attribute__((always_inline)) {
-        std::pair<uint32_t, uint32_t> loc{output_page_id, output_page_byte_off};
-        output_chunks_sent++;
-        if (++output_chunk_in_stripe == output_chunks_per_stripe) {
-            output_chunk_in_stripe = 0;
-            output_page_id += output_page_stripe_jump;
-            output_page_byte_off = output_page_byte_offset;
-        } else {
-            output_page_byte_off += output_chunk_size;
-            if (output_page_byte_off == output_page_size) {
-                output_page_byte_off = 0;
-                output_page_id++;
-            }
-        }
-        return loc;
+    const auto plan = walk_plan<output_chunks_per_page, output_chunk_size, xfer_max>(output_tensor_accessor);
+
+    TiledWalk walk;
+    walk.init(slice_first_chunk, slice_chunks, 0, plan.stride, plan.xfer);
+    StripeMap<output_chunks_per_stripe, num_devices> map;
+    map.init(device_idx);
+
+    auto output_addr = [&](uint32_t global) {
+        return output_tensor_accessor.get_noc_addr(
+            page_of<output_chunks_per_page>(global),
+            byte_off_of<output_chunks_per_page, output_chunk_size>(global),
+            noc.get_noc_id());
     };
+    auto run_addr = [&](uint32_t chunk) { return output_addr(map.at(chunk).global); };
 
-    while (valid_output_chunk()) {
-        cb.wait_front(1);
-        auto l1_read_addr = cb.get_read_ptr();
-
-        for (uint32_t i = 0; i < outputs_per_cb_page && valid_output_chunk(); ++i) {
-            auto [page_id, page_byte_offset] = next_output_chunk();
-            // Fabric write
-            auto fabric_tensor_page_addr =
-                tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, page_byte_offset);
-            if constexpr (enable_fabric) {
-                fabric.async_write(l1_read_addr, fabric_tensor_page_addr);
-            }
-
-            // Local write.
-            // For local writes use posted writes (to skip waiting for ack) on different virtual channel
-            // (to avoid interfering with Fabric writes on same noc)
+    auto local_write = [&](uint32_t l1_read_addr, uint64_t dst, uint32_t chunks) {
+        // Posted write on a separate VC so it doesn't contend with the fabric writes on the same NOC.
+        if constexpr (one_command) {
+            noc.async_write<NocOptions::POSTED | NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+                CoreLocalMem<uint32_t>(l1_read_addr),
+                tensor_accessor::Page(dst, 0),
+                chunks * output_chunk_size,
+                {},
+                {},
+                {.vc = NOC_UNICAST_WRITE_VC + 1});
+        } else {
             noc.async_write<NocOptions::POSTED | NocOptions::CUSTOM_VC>(
                 CoreLocalMem<uint32_t>(l1_read_addr),
-                output_tensor_accessor,
+                tensor_accessor::Page(dst, 0),
                 output_chunk_size,
                 {},
-                {.page_id = page_id, .offset_bytes = page_byte_offset},
+                {},
                 {.vc = NOC_UNICAST_WRITE_VC + 1});
+        }
+    };
 
-            l1_read_addr += output_chunk_size;
+    for (uint32_t chunks_sent = 0; chunks_sent < slice_chunks;) {
+        const uint32_t batch = std::min(chunks_per_cb_entry, slice_chunks - chunks_sent);
+        cb.wait_front(1);
+        uint32_t l1_read_addr = cb.get_read_ptr();
+
+        for (uint32_t left = batch; left > 0;) {
+            const auto pos = map.at(walk.chunk());
+            const uint32_t run =
+                next_run<output_chunks_per_page>(walk, output_tensor_accessor, plan.out, pos.global, pos.row_end, left);
+            const uint64_t dst = output_addr(pos.global);
+            ASSERT(run_is_linear(walk, run, output_chunk_size, dst, run_addr));
+            if constexpr (enable_fabric) {
+                const uint32_t page = page_of<output_chunks_per_page>(pos.global);
+                const uint32_t off = byte_off_of<output_chunks_per_page, output_chunk_size>(pos.global);
+                fabric.queue_segment(
+                    l1_read_addr,
+                    tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page, off),
+                    run * output_chunk_size);
+            }
+            local_write(l1_read_addr, dst, run);
+            l1_read_addr += run * output_chunk_size;
+            left -= run;
+            walk.advance(run);
         }
 
         noc.async_writes_flushed<NocOptions::POSTED>();  // wait for local writes
         if constexpr (enable_fabric) {
-            fabric.async_writes_flushed();  // wait for Fabric writes
+            fabric.flush_packet_and_wait();  // wait for Fabric writes
         }
         cb.pop_front(1);
+        chunks_sent += batch;
     }
 
     ///////////////////////////////////////////////////

@@ -294,9 +294,9 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     ::ttnn::ccl::validate_packet_size(arch, packet_size, output_chunk_size);
 
     // --- CB sizing ---
-    // A CB entry holds a whole number of packets, so a packet is never cut short at the entry
-    // boundary. Rounded to whole input pages (split) or output pages (concat) so a run is not cut
-    // there either; one of those two counts is always 1.
+    // A CB entry holds a whole number of packet loads, and of input pages (split) or output pages
+    // (concat), so the entry boundary never cuts a page; one of those two counts is always 1. A packet
+    // can still end early: broken contiguity can fill its scatter chunks before its payload.
     const uint32_t chunks_per_group = std::max(split_factor, output_chunks_per_page);
     uint32_t chunks_per_packet = std::max(1u, packet_size / output_chunk_size);
     chunks_per_packet = std::max(chunks_per_group, (chunks_per_packet / chunks_per_group) * chunks_per_group);

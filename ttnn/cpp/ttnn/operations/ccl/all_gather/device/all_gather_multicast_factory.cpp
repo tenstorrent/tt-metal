@@ -210,13 +210,10 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // Glossary:
     //   input page     -- one page of the input tensor.
     //   output page    -- one page of the output tensor (the real buffer page).
-    //   chunk          -- one NOC write = min(input_page, output_page) bytes. An input
+    //   chunk          -- the transfer unit, min(input_page, output_page). An input
     //                     page = split_factor chunks; an output page = output_chunks_per_page
-    //                     chunks. The kernel iterator walks chunks.
-    //   stripe         -- a run of consecutive chunks this device writes before
-    //                     jumping past other devices' contributions.
-    //   stripe jump    -- value the kernel adds to output_page_id at the stripe
-    //                     boundary.
+    //                     chunks.
+    //   stripe         -- the chunks this device contributes per row of the output.
     //
     // Three copy modes, picked by input vs output page sizes:
     //   matched (in == out): 1 chunk per input page, output_chunks_per_page = 1.
@@ -224,11 +221,9 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     //                        chunk lands at a byte offset within a shared output page.
     //   split   (in > out) : split_factor chunks per input page, output_chunks_per_page = 1.
     //
-    // Kernel is a dumb chunk iterator. Iteration pattern is:
-    //   byte_offset++ within an output page -> chunk++ -> stripe+=jump
-    //
-    // Host derives the iterator parameters from input/output page sizes, gather dim,
-    // and device index.
+    // Host supplies geometry and each worker's slice. The kernels derive the walk order
+    // themselves from TensorAccessor and the packet size (see kernels/gather_walk.hpp), so no
+    // layout is special-cased here.
     ////////////////////////////////////////////////////////////////
 
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
@@ -265,16 +260,18 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     ::ttnn::ccl::validate_packet_size(input_tensor.device()->arch(), packet_size, output_chunk_size);
 
     // --- CB sizing ---
-    // cb_page_size is a multiple of input_page_size, which is itself a multiple of
-    // output_chunk_size = min(input, output), so the kernel increments both
-    // the cb_read_ptr and cb_write_ptr cleanly.
-    const uint32_t pages_per_packet = std::max(1u, packet_size / input_page_size);
-    uint32_t cb_page_size = input_page_size * pages_per_packet;
+    // A CB entry holds a whole number of packet loads, and of input pages (split) or output pages
+    // (concat), so the entry boundary never cuts a page; one of those two counts is always 1. A packet
+    // can still end early: broken contiguity can fill its scatter chunks before its payload.
+    const uint32_t chunks_per_group = std::max(split_factor, output_chunks_per_page);
+    uint32_t chunks_per_packet = std::max(1u, packet_size / output_chunk_size);
+    chunks_per_packet = std::max(chunks_per_group, (chunks_per_packet / chunks_per_group) * chunks_per_group);
+    uint32_t cb_page_size = chunks_per_packet * output_chunk_size;
     uint32_t cb_depth = 3;
 
-    // Perf hack: pack multiple pages into a single CB page to reduce CB sync frequency between reader and
-    // writer. Note this increases effective CB depth. Row-major is safe too: an integer multiplier preserves
-    // the multiple-of-input_page_size property above.
+    // Perf hack: pack multiple packets into a single CB page to reduce CB sync frequency between reader and
+    // writer. Note this increases effective CB depth. An integer multiplier preserves the whole-packet and
+    // whole-page properties above.
     // Empirically determined heuristic, works well for all tensor sizes
     const uint32_t ideal_multiplier = (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) ? 4 : 3;
     const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
@@ -312,21 +309,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
 
     // Stripe = this device's contiguous run of chunks per row = input_pages_per_stripe
     // * split_factor. Measured in chunks (not output pages) so multi-shard concat works:
-    // a stripe's chunks are laid across output pages via the inner byte-offset counter
-    // and may straddle pages.
+    // a stripe's chunks are laid across output pages and may straddle pages.
     const uint32_t output_chunks_per_stripe = input_pages_per_stripe * split_factor;
-    const uint32_t stripe_distance_chunks = num_devices * output_chunks_per_stripe;
-    const uint32_t output_pages_per_row = stripe_distance_chunks / output_chunks_per_page;
-    // This device's chunk phase within the output page. Constant across rows because
-    // output_chunks_per_page divides stripe_distance_chunks (valid output sharding).
-    const uint32_t off_start_chunks = (device_idx * output_chunks_per_stripe) % output_chunks_per_page;
-    // Page carries accumulated while walking one full stripe.
-    const uint32_t in_stripe_carries = (off_start_chunks + output_chunks_per_stripe - 1) / output_chunks_per_page;
-    // Value added to output_page_id at the stripe boundary (jump to this device's run
-    // in the next row): pages_per_row minus the carries already taken within the stripe.
-    const uint32_t output_page_stripe_jump = output_pages_per_row - in_stripe_carries;
-    // Per-device byte offset phase the iterator resets to at each stripe boundary.
-    const uint32_t output_page_byte_offset = off_start_chunks * output_chunk_size;
     TT_FATAL(output_chunks_per_stripe > 0, "output_chunks_per_stripe must be > 0");
 
     ////////////////////////////////////////////////////////////////
@@ -344,15 +328,15 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // KERNEL CREATION
     // Reader (covers forward directions E-line + S-rect)
     std::vector<uint32_t> reader_compile_args = {
-        input_page_size,                 // input tensor page size
+        split_factor,                    // chunks per input page (1 unless split)
         output_chunk_size,               // NOC write size = min(input, output)
         output_chunks_per_page,          // chunks per output buffer page (1 unless concat)
-        output_chunks_per_stripe,        // stripe length in chunks (before a stripe jump)
-        output_page_stripe_jump,         // value added to output_page_id at stripe boundary
+        output_chunks_per_stripe,        // stripe length in chunks
+        num_devices,                     // device count (stripe indexing)
         cb0_id,                          // cb id
         cb_depth,                        // cb depth
         cb_page_size,                    // cb entry size
-        packet_size,                     // packet_size
+        packet_size,                     // packet_size (sets the transfer size, hence the walk order)
         load_balance_across_alt_routes,  // load_balance_across_alt_routes
         (e_hops > 0) + (s_hops > 0),     // num_connections
         do_init_barrier,                 // do_init_barrier
@@ -364,11 +348,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     std::vector<uint32_t> writer_compile_args = {
         output_chunk_size,               // NOC write size = min(input, output)
         output_chunks_per_page,          // chunks per output buffer page (1 unless concat)
-        output_chunks_per_stripe,        // stripe length in chunks (before a stripe jump)
-        output_page_stripe_jump,         // value added to output_page_id at stripe boundary
+        output_chunks_per_stripe,        // stripe length in chunks
+        num_devices,                     // device count (stripe indexing)
         cb0_id,                          // cb id
         cb_page_size,                    // cb entry size
-        packet_size,                     // packet_size
+        packet_size,                     // packet_size (sets the transfer size, hence the walk order)
         load_balance_across_alt_routes,  // load_balance_across_alt_routes
         (w_hops > 0) + (n_hops > 0),     // num_connections
         do_init_barrier,                 // do_init_barrier
@@ -408,17 +392,6 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         uint32_t local_output_start = input_tile_id_start * split_factor;
         uint32_t local_output_end = input_tile_id_end * split_factor;
         uint32_t num_worker_output_chunks = local_output_end - local_output_start;
-        // s_start = global chunk index of this worker's first write:
-        //     stripe_index  = local / output_chunks_per_stripe
-        //     pos_in_stripe = local % output_chunks_per_stripe
-        //     s_start       = stripe_index * stripe_distance_chunks    (skip other devices' rows)
-        //                   + device_idx   * output_chunks_per_stripe  (this device's run in the row)
-        //                   + pos_in_stripe
-        uint32_t s_start = (local_output_start / output_chunks_per_stripe) * stripe_distance_chunks +
-                           device_idx * output_chunks_per_stripe + local_output_start % output_chunks_per_stripe;
-        uint32_t output_page_id_start = s_start / output_chunks_per_page;
-        uint32_t output_page_byte_offset_start = (s_start % output_chunks_per_page) * output_chunk_size;
-        uint32_t output_chunk_in_stripe_start = local_output_start % output_chunks_per_stripe;
 
         // Per-link barrier fan-in = N-1 in every case. Every other chip sends me one atomic_inc:
         //   1D: e_hops + w_hops (or n_hops + s_hops) along the active axis = axis_size - 1.
@@ -429,14 +402,9 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),   // input tensor address
             output_tensor.buffer()->address(),  // output tensor address
-            input_tile_id_start,                // input_page_id_start
-            input_tile_id_end,                  // input_page_id_end
-            output_page_id_start,               // output page start
-            output_chunk_in_stripe_start,       // initial chunk position within stripe
-            output_page_byte_offset,            // per-device offset phase (reset at stripe boundary)
-            output_page_byte_offset_start,      // worker's initial byte offset within output page
-            num_worker_output_chunks,           // number of output chunks for this worker
-            device_idx,                         // this device's index
+            local_output_start,                 // this worker's slice start (chunk id)
+            num_worker_output_chunks,           // this worker's slice length (chunks)
+            device_idx,                         // this device's index (initial stripe)
             barrier_sem.address(),              // barrier_sem L1 address
             virtual_core.x,                     // barrier_sem location (core.x)
             virtual_core.y,                     // barrier_sem location (core.y)
@@ -476,12 +444,9 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
 
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),  // output tensor address
-            output_page_id_start,               // output page start
-            output_chunk_in_stripe_start,       // initial chunk position within stripe
-            output_page_byte_offset,            // per-device offset phase (reset at stripe boundary)
-            output_page_byte_offset_start,      // worker's initial byte offset within output page
-            num_worker_output_chunks,           // number of output chunks for this worker
-            device_idx,                         // this device's index
+            local_output_start,                 // this worker's slice start (chunk id)
+            num_worker_output_chunks,           // this worker's slice length (chunks)
+            device_idx,                         // this device's index (initial stripe)
             barrier_sem.address(),              // barrier_sem L1 address
             virtual_core.x,                     // barrier_sem location (core.x)
             virtual_core.y,                     // barrier_sem location (core.y)
@@ -547,15 +512,15 @@ void AllGatherMulticastFactory::override_runtime_arguments(
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
         for (const auto& core : shared_vars.worker_cores) {
-            // reader: [0]=input_addr, [1]=output_addr, [10]=barrier_sem
+            // reader: [0]=input_addr, [1]=output_addr, [5]=barrier_sem
             auto& reader_args = reader_args_by_core[core.x][core.y];
             reader_args[0] = input_addr;
             reader_args[1] = output_addr;
-            reader_args[10] = barrier_sem_addr;
-            // writer: [0]=output_addr, [7]=barrier_sem
+            reader_args[5] = barrier_sem_addr;
+            // writer: [0]=output_addr, [4]=barrier_sem
             auto& writer_args = writer_args_by_core[core.x][core.y];
             writer_args[0] = output_addr;
-            writer_args[7] = barrier_sem_addr;
+            writer_args[4] = barrier_sem_addr;
         }
     }
 }

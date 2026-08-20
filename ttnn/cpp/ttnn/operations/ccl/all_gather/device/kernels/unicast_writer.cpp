@@ -126,6 +126,14 @@ void kernel_main() {
     TiledWalk walk;
     StripeMap<output_chunks_per_stripe, num_devices> map;
 
+    auto run_addr = [&](uint32_t chunk) {
+        const uint32_t global = map.at(chunk).global;
+        return output_tensor_accessor.get_noc_addr(
+            page_of<output_chunks_per_page>(global),
+            byte_off_of<output_chunks_per_page, output_chunk_size>(global),
+            noc.get_noc_id());
+    };
+
     auto local_write = [&](uint32_t l1_read_addr, uint64_t dst, uint32_t chunks) {
         // Posted write on a separate VC so it doesn't contend with the fabric writes on the same NOC.
         if constexpr (one_command) {
@@ -174,15 +182,9 @@ void kernel_main() {
                 const auto pos = map.at(walk.chunk());
                 const uint32_t page = page_of<output_chunks_per_page>(pos.global);
                 const uint32_t off = byte_off_of<output_chunks_per_page, output_chunk_size>(pos.global);
-                // Only one chunk can go anyway, so skip the query: on a sharded tensor it loops over rank.
-                const uint32_t limit = std::min(walk.run_limit(), left);
-                uint32_t run = 1;
-                if (limit > 1) {
-                    run = std::min(
-                        contiguous_chunks<output_chunks_per_page>(
-                            output_tensor_accessor, plan.out, pos.global, pos.row_end),
-                        limit);
-                }
+                const uint32_t run = next_run<output_chunks_per_page>(
+                    walk, output_tensor_accessor, plan.out, pos.global, pos.row_end, left);
+                ASSERT(run_is_linear(walk, run, output_chunk_size, run_addr(walk.chunk()), run_addr));
                 fabric.queue_segment(
                     l1_read_addr,
                     tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page, off),
