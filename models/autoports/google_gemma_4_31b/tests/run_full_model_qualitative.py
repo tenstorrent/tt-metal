@@ -481,8 +481,16 @@ def run(args: argparse.Namespace) -> None:
         return
     prompts = _load_prompts(args.prompt_source)
     tokenizer = AutoTokenizer.from_pretrained(args.hf_model, local_files_only=True, trust_remote_code=True)
+    # The base checkpoint has no chat template, so prompts are rendered as raw
+    # completions. The instruction-tuned checkpoint ships one; keep raw rendering
+    # there too, because this harness compares TT output against an HF reference
+    # run on the same token ids, and a completion continuation is a valid probe for
+    # either checkpoint. Log it rather than refusing, so -it can be exercised.
     if tokenizer.chat_template:
-        raise RuntimeError("google/gemma-4-31B unexpectedly acquired a chat template; update prompt rendering")
+        print(
+            f"note: {args.hf_model} defines a chat template; rendering raw completions anyway "
+            "(both sides of the comparison use the same token ids)"
+        )
 
     rendered = []
     for prompt_id, prompt in enumerate(prompts):
