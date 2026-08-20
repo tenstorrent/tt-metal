@@ -70,7 +70,7 @@ def grid_transpose(k, sk, dt):
     return v.permute(2, 1, 0, 3).reshape(dt * TILE, sk * TILE)
 
 
-def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None):
+def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, stream_buffering=2):
     assert sk_total % num_chunks == 0
     sk = sk_total // num_chunks
     S_q, S_k, D = sq * TILE, sk_total * TILE, dt * TILE
@@ -131,9 +131,14 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None):
     scores_pages, out_pages, vec_pages = sq * sk, sq * dt, sq
     cbs = [
         make_cb(CB["q"], core_ranges, num_pages=sq * dt),
-        make_cb(CB["k"], core_ranges, num_pages=dt * sk),
-        make_cb(CB["v"], core_ranges, num_pages=sk * dt),
-        make_cb(CB["mask"], core_ranges, num_pages=scores_pages),
+        # Streamed per chunk, so these are the only CBs where a second block lets the
+        # reader run ahead of the compute. Worth a measured 5-6%, for L1 pages and
+        # nothing else -- these shipped single-buffered, which is what a single/double
+        # sweep turned up. The state CBs below are a different matter: their 2x is an
+        # aliasing requirement, and halving THEM deadlocks.
+        make_cb(CB["k"], core_ranges, num_pages=stream_buffering * dt * sk),
+        make_cb(CB["v"], core_ranges, num_pages=stream_buffering * sk * dt),
+        make_cb(CB["mask"], core_ranges, num_pages=stream_buffering * scores_pages),
         make_cb(CB["one"], core_ranges, num_pages=1),
         make_cb(CB["scores"], core_ranges, num_pages=scores_pages),
         make_cb(CB["masked"], core_ranges, num_pages=scores_pages),
