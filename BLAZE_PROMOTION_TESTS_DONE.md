@@ -784,5 +784,94 @@ a bracket-free `--k`); and `tests/.venv` must be created with
 `source ./setup_external_testing_env.sh` — `setup_testing_env.sh` alone only fetches SFPI
 and assumes the Docker image's Python environment.
 
+**Measured cost of ignoring the first sentence (2026-08-20).** A background plain
+`pytest test_matmul_custom_compressed.py test_topk_xl.py` was left running while a
+`run_test.sh` run took the device. Result: **137 failures out of 688 and a `TENSIX TIMED OUT`**
+(BRISC command poll, python counter 1239 vs brisc 157). Serially afterwards the same two suites
+are **100/100** and **588/588**. The `flock` inside `run_test.sh` is what makes concurrent
+agents' numbers mean anything; without it the failure mode is a large, entirely spurious
+failure count that reads exactly like a real regression — and it also leaves the device in a
+state where the *next* run can produce a one-off wrong answer (Finding 12b).
+
+
+---
+
+## 9. `top32_rm` sort family (#52713) — DONE
+
+Unblocked by #52713 merging; landed 2026-08-20 in `5b768385ee1` (plain path) and `edcdc8f4157`
+(pre-sorted path). `tests/sources/top32_rm_test.cpp` +
+`tests/python_tests/test_top32_rm.py`. **BH p100a: 10 passed.**
+
+Before this, **every** entry point the family exposes was uncalled from `tests/sources`, and
+`_top32_rm_init_` looked covered on a grep only because its sole occurrence in the test tree was
+inside a comment in `sort_headers_coexist_test.cpp`.
+
+### Both of the consumer's modes
+
+| Mode | Entry points | Shape |
+|---|---|---|
+| plain (`< 1024`) | `_llk_unpack_A_top32_rm_init_`/`_`, `_llk_math_top32_rm_init_`/`_`, `_top32_rm_init_`, `_bitonic_top32_phases_steps_`, `_bitonic_top32_merge_`, `_bitonic_top32_rebuild_` | `top32_rm_dev_compute.cpp`: 64 row-major elements at a time into a Dest **column**, sort, merge the running top32 across tiles |
+| pre-sorted (`>= 1024`) | `_bitonic_top32_of_1024_rm_pre_sorted_{prep,combine,final}_` | `top32_rm_dev_compute_v2.cpp`: whole 32x32 tiles transposed into Dest, 16 columns reduced at once |
+
+Sweep: plain at row lengths 64 / 128 / 160 / 256 x `dest_acc` No / Yes (8 variants, Float16_b);
+pre-sorted at 1024 / 2048 (2 variants, Float32).
+
+### What made it non-obvious
+
+`_llk_unpack_A_top32_rm_` takes 64 consecutive **row-major** elements — not a tilized tile — and
+lands them in the first COLUMN of 64 Dest rows, 16 per face, transposed within the face. That
+column is what the bitonic sort addresses, with distances in Dest ROWS (8/16/32/64). The index
+operand must sit exactly +2 tiles away because `load16`/`store16` hardcode
+`dst_indices_offset = 128`, and the pack side narrows the packer to one datum per row
+(`SETADCXX PAC`) to turn the surviving column back into 32 contiguous L1 elements.
+
+The pre-sorted mode does not use the family's unpack at all: it goes through `transpose_tile`'s
+LLK sequence, where `transpose_of_faces` is always on but the within-face 16x16 transpose and
+`acc_to_dest` belong to the **non**-32-bit path only — on the 32-bit path the within-face half is
+`_llk_math_transpose_dest_` on the math thread, and `acc_to_dest` with `unpack_to_dest` is
+static_asserted out (`llk_unpack_A.h:64`). Init interleaving follows the consumer: the
+datacopy/transpose init is reinstated before each chunk's transposes while the SFPU family init
+runs once, which is coherent because `_top32_rm_init_` owns `ADDR_MOD_6` and the SFPU control
+register's index-tracking bit while the datacopy owns the MOP and the other ADDR_MODs.
+
+### Two deliberate deviations from the consumer
+
+- **One format for both operands.** The consumer runs bf16 values + uint32 indices, needing a
+  srcA reconfig between the two unpacks and a pack reconfig on the way out. The test carries
+  indices as floats holding the integer itself, so it measures the sort rather than the reconfig
+  sequence — C3 already owns the reconfig question. In the plain mode that caps the row at 256
+  (bf16 has 8 mantissa bits); the pre-sorted mode is Float32, where it does not bind.
+- **Distinct values straddling zero.** Distinct means "the top 32" determines the indices, so
+  indices are asserted **exactly** rather than tolerating hardware tie order the way
+  `test_topk.py` has to. Straddling zero makes the -inf padding load-bearing: a 32-element tail
+  chunk fills two faces and the other two arrive as -inf from `CLR_SRC_NEGINF`, so with
+  non-negative stimuli the `row=160` case would pass on padding alone.
+
+**`dest_acc` turned out to be a real axis.** It selects the index word width inside the sort
+(`InstrModLoadStore::INT32` vs `LO16`) *and* the Dest-move opcode in
+`llk_math_top32_rm_configure_mop` (ELWADD against a zeroed SrcB at fp32 Dest, MOVA2D otherwise).
+The consumer only ever builds fp32 Dest, so the `dest_acc=No` cells are the first exercise the
+16-bit half of this family has had — and they pass.
+
+### Discrimination (Finding 13)
+
+- Plain: rebuilding the driver with a 4-byte chunk stride instead of 2 makes it re-read
+  overlapping chunks, and the answer comes back `[63, 62, 61, 59, 57, ...]` against a golden of
+  `[63, 62, 61, 60, 59, ...]`. Both assertions fire.
+- Pre-sorted: discriminates by construction at 2048, which is why that length is in the sweep —
+  the tiebreak is a permutation over all 64 runs, so **17 of the 32 winning indices land in the
+  second 1024-chunk**. A driver that dropped the second chunk, or a `combine` that did not merge
+  across tiles, cannot produce that answer. The 1024 case is the complement: one tile, prep then
+  final, no combine at all.
+
+### Regression run for the 2026-08-20 change set
+
+Serially through `run_test.sh` on BH p100a, all PASS: `test_top32_rm.py` **10**;
+`test_rmsnorm_bcast_scalar_dest_reuse.py` 114 (+114 skipped);
+`test_sfpu_sampling.py` 63 (+97 skipped); `test_custom_mm_uninit_restore.py` 7 (+8 skipped,
+**1 xfailed** — C1, expected); `test_custom_mm_uninit_parity.py` 2;
+`test_matmul_custom_mm.py` 32; `test_sort_headers_coexist.py` 2;
+`test_set_dst_write_addr_offset.py` 14 (+14 skipped); `test_topk_xl.py` 100;
+`test_matmul_custom_compressed.py` 588.
 
 ---
