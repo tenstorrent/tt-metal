@@ -369,6 +369,12 @@ from ttnn.types import (
     FaceGeometry,
     compute_program_descriptor_hash,
     TensorAccessorArgs,
+    Mcast1D,
+    Mcast1DShape,
+    Mcast1DSenderPlacement,
+    Mcast2D,
+    McastConfig,
+    McastDataReady,
 )
 
 from ttnn.device import (
