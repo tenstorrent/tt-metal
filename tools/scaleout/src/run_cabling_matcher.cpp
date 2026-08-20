@@ -23,9 +23,11 @@ namespace {
 struct Config {
     std::string cabling_path;
     std::string deployment_path;
+    std::string fsd_path;
     std::string pattern_cabling_path;
     std::string pattern_deployment_path;
     std::string pattern_template;
+    std::string pattern_fsd_path;
     TierScope tier = TierScope::Full;
     MatchOptions options;
 };
@@ -50,7 +52,8 @@ Config parse_arguments(int argc, char** argv) {
         "Find a cabling scheme inside another cabling scheme.\n\n"
         "The pattern is a cabling descriptor, or one graph_template out of one, and the target is the\n"
         "descriptor to search. A match is an assignment of pattern hosts to target hosts under which\n"
-        "every pattern cable is a cable the target actually has.");
+        "every pattern cable is a cable the target actually has. Either side can instead be a factory\n"
+        "system descriptor, which asks whether a built system implements the scheme, or more than it.");
 
     options.add_options()(
         "c,cabling",
@@ -59,6 +62,10 @@ Config parse_arguments(int argc, char** argv) {
         "d,deployment",
         "Target deployment descriptor (.textproto). Without it, target hosts are named host_0..host_N-1 and "
         "--cabling must be a single file",
+        cxxopts::value<std::string>()->default_value(""))(
+        "f,fsd",
+        "Target factory system descriptor (.textproto), in place of --cabling. Its ethernet channels are folded "
+        "back into the ports they belong to, so the comparison is in the same terms either way",
         cxxopts::value<std::string>()->default_value(""))(
         "p,pattern-cabling",
         "Pattern cabling descriptor (.textproto). Defaults to --cabling, which asks whether a template of a "
@@ -71,6 +78,10 @@ Config parse_arguments(int argc, char** argv) {
         "pattern-deployment",
         "Deployment descriptor for the pattern; only valid without --pattern-template, since a template is "
         "instantiated with synthetic hosts",
+        cxxopts::value<std::string>()->default_value(""))(
+        "pattern-fsd",
+        "Factory system descriptor to use as the pattern, in place of --pattern-cabling. Asks whether one built "
+        "system's wiring is reproduced in another",
         cxxopts::value<std::string>()->default_value(""))(
         "i,identity",
         "How strictly ports must correspond: strict (same port id), chip (same ASIC reached, treating a port "
@@ -110,16 +121,20 @@ Config parse_arguments(int argc, char** argv) {
         std::cout << "  " << argv[0] << " -c system.textproto -t bh_galaxy_sp\n";
         std::cout << "  # Does the superpod template recur elsewhere in the system it came from?\n\n";
         std::cout << "  " << argv[0] << " -c st_sc36.textproto -p sc36.textproto -t bh_glx_pod --identity chip\n";
-        std::cout << "  # Does an SC36 pod sit inside an ST-SC36 system, comparing chips rather than port ids?\n";
+        std::cout << "  # Does an SC36 pod sit inside an ST-SC36 system, comparing chips rather than port ids?\n\n";
+        std::cout << "  " << argv[0] << " -f built_system.textproto -p sc36.textproto -t bh_glx_pod\n";
+        std::cout << "  # Does a built system, as recorded in its FSD, implement the SC36 pod scheme?\n";
         exit(0);
     }
 
     Config config;
     config.cabling_path = result["cabling"].as<std::string>();
     config.deployment_path = result["deployment"].as<std::string>();
+    config.fsd_path = result["fsd"].as<std::string>();
     config.pattern_cabling_path = result["pattern-cabling"].as<std::string>();
     config.pattern_deployment_path = result["pattern-deployment"].as<std::string>();
     config.pattern_template = result["pattern-template"].as<std::string>();
+    config.pattern_fsd_path = result["pattern-fsd"].as<std::string>();
 
     // Listing what a descriptor offers is a question about one file, so it needs neither a target to
     // search nor a template to look for.
@@ -136,10 +151,29 @@ Config parse_arguments(int argc, char** argv) {
         exit(0);
     }
 
-    if (config.cabling_path.empty()) {
-        throw std::invalid_argument("--cabling is required");
+    // Each side comes from one kind of descriptor, and a factory system descriptor already says which
+    // hosts it is about, so it takes neither a deployment nor a template.
+    if (!config.fsd_path.empty()) {
+        if (!config.cabling_path.empty() || !config.deployment_path.empty()) {
+            throw std::invalid_argument(
+                "--fsd is the target on its own; it cannot be combined with --cabling or --deployment");
+        }
+    } else if (config.cabling_path.empty()) {
+        throw std::invalid_argument("A target is required, given with --cabling or --fsd");
     }
-    if (config.pattern_cabling_path.empty()) {
+
+    if (!config.pattern_fsd_path.empty()) {
+        if (!config.pattern_cabling_path.empty() || !config.pattern_deployment_path.empty() ||
+            !config.pattern_template.empty()) {
+            throw std::invalid_argument(
+                "--pattern-fsd is the pattern on its own; it cannot be combined with --pattern-cabling, "
+                "--pattern-deployment or --pattern-template");
+        }
+    } else if (config.pattern_cabling_path.empty()) {
+        if (config.cabling_path.empty()) {
+            throw std::invalid_argument(
+                "With an --fsd target the pattern must be given explicitly, using --pattern-cabling or --pattern-fsd");
+        }
         config.pattern_cabling_path = config.cabling_path;
         if (config.pattern_template.empty()) {
             throw std::invalid_argument(
@@ -147,9 +181,11 @@ Config parse_arguments(int argc, char** argv) {
                 "--pattern-template to say which part of it to look for");
         }
     }
-    for (const auto& path : {config.cabling_path, config.pattern_cabling_path}) {
-        if (!std::filesystem::exists(path)) {
-            throw std::invalid_argument("Cabling descriptor path not found: '" + path + "'");
+
+    for (const auto& path :
+         {config.cabling_path, config.fsd_path, config.pattern_cabling_path, config.pattern_fsd_path}) {
+        if (!path.empty() && !std::filesystem::exists(path)) {
+            throw std::invalid_argument("Descriptor path not found: '" + path + "'");
         }
     }
 
@@ -167,6 +203,14 @@ Config parse_arguments(int argc, char** argv) {
         "tier", result["tier"].as<std::string>(), {{"full", TierScope::Full}, {"own-level", TierScope::OwnLevel}});
     config.options.max_matches = result["max-matches"].as<size_t>();
     config.options.allow_disconnected = result["allow-disconnected"].as<bool>();
+
+    // A factory system descriptor records the cables a system has, not which tier of a hierarchy
+    // called for them, so there is no level to scope a pattern to.
+    if (config.tier == TierScope::OwnLevel && !config.pattern_fsd_path.empty()) {
+        throw std::invalid_argument(
+            "--tier own-level needs a pattern that declares cables at levels, which a factory system descriptor "
+            "does not; use --pattern-cabling with --pattern-template instead");
+    }
     return config;
 }
 
@@ -176,22 +220,30 @@ int main(int argc, char** argv) {
     try {
         Config config = parse_arguments(argc, argv);
 
-        std::string pattern_label = config.pattern_cabling_path;
-        if (!config.pattern_template.empty()) {
-            pattern_label += " :: " + config.pattern_template;
-        }
-        if (config.tier == TierScope::OwnLevel) {
-            pattern_label += " (own level only)";
-        }
+        MatchGraph pattern = [&] {
+            if (!config.pattern_fsd_path.empty()) {
+                return MatchGraph::from_fsd(config.pattern_fsd_path, config.pattern_fsd_path + " (fsd)");
+            }
+            std::string label = config.pattern_cabling_path;
+            if (!config.pattern_template.empty()) {
+                label += " :: " + config.pattern_template;
+            }
+            if (config.tier == TierScope::OwnLevel) {
+                label += " (own level only)";
+            }
+            return MatchGraph::load(
+                config.pattern_cabling_path,
+                config.pattern_deployment_path,
+                config.pattern_template,
+                config.tier,
+                label);
+        }();
 
-        MatchGraph pattern = MatchGraph::load(
-            config.pattern_cabling_path,
-            config.pattern_deployment_path,
-            config.pattern_template,
-            config.tier,
-            pattern_label);
         MatchGraph target =
-            MatchGraph::load(config.cabling_path, config.deployment_path, "", TierScope::Full, config.cabling_path);
+            config.fsd_path.empty()
+                ? MatchGraph::load(
+                      config.cabling_path, config.deployment_path, "", TierScope::Full, config.cabling_path)
+                : MatchGraph::from_fsd(config.fsd_path, config.fsd_path + " (fsd)");
 
         MatchResult result = match(pattern, target, config.options);
         std::cout << format_result(pattern, target, result, config.options);
