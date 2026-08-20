@@ -41,6 +41,11 @@ on:
           - distilbert
           - squeezebert
           - mnist-mlp
+          - "[tt-train] tinyllama_1_1b_ddp32"
+          # - "[tt-train] llama_8b_tp8_ddp4"
+          - "[tt-train] qwen3_1_7b_ddp32"
+          - "[tt-train] tiny_deepseek_v3_ddp32"
+          - "[tt-train] llama_70b_tp8_fsdp4"
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -59,6 +64,7 @@ on:
           - "bh_p300 (P300)"
           - "bh_quietbox_2 (BH QB2)"
           - "bh_galaxy (BH Galaxy)"
+          - "bh_sc1 (BH SC1)"
       platform:
         required: false
         type: choice
@@ -135,6 +141,7 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-inplace-wheel: true
+      skip-tt-train: false
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   models-e2e-tests:
