@@ -62,8 +62,6 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     float beta1,
     float beta2,
     float epsilon,
-    bool amsgrad,
-    ttml::metal::StochasticRounding stochastic_rounding,
-    std::optional<uint32_t> stochastic_rounding_seed);
+    bool amsgrad);
 
 }  // namespace ttnn::prim

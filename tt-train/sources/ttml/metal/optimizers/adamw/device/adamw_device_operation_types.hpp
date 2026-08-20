@@ -36,7 +36,8 @@ struct tensor_args_t {
 
     // Single-element f32 tensors carrying the step-varying scalars (see
     // ttml::metal::adamw_tensor_scalars). Engaged together; when set, the
-    // lr / beta*_pow / weight_decay attributes are ignored.
+    // lr / beta*_pow / weight_decay attributes are ignored and stochastic
+    // rounding must be disabled.
     std::optional<ttnn::Tensor> step_size = std::nullopt;
     std::optional<ttnn::Tensor> inv_sqrt_bc2 = std::nullopt;
     std::optional<ttnn::Tensor> decay_factor = std::nullopt;

@@ -93,6 +93,11 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
             tensor_args.step_size.has_value() == tensor_args.decay_factor.has_value(),
         "step_size, inv_sqrt_bc2 and decay_factor must be provided together");
     if (tensor_args.step_size.has_value()) {
+        // Stochastic rounding needs a fresh seed as a per-step compute runtime argument,
+        // which defeats the point of taking the step-varying scalars as device tensors.
+        TT_FATAL(
+            args.stochastic_rounding == StochasticRounding::Disabled,
+            "Stochastic rounding is not supported when the step-varying scalars are passed as tensors");
         for (const auto& [tensor, name] :
              {std::pair{tensor_args.step_size, "step_size"},
               std::pair{tensor_args.inv_sqrt_bc2, "inv_sqrt_bc2"},
@@ -199,18 +204,15 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     float beta1,
     float beta2,
     float epsilon,
-    bool amsgrad,
-    ttml::metal::StochasticRounding stochastic_rounding,
-    std::optional<uint32_t> stochastic_rounding_seed) {
+    bool amsgrad) {
     using OperationType = ttml::metal::optimizers::adamw::device::AdamWDeviceOperation;
 
+    // Stochastic rounding is left at its Disabled default: see ttml::metal::adamw_tensor_scalars.
     auto operation_attributes = OperationType::operation_attributes_t{
         .beta1 = beta1,
         .beta2 = beta2,
         .epsilon = epsilon,
         .amsgrad = amsgrad,
-        .stochastic_rounding = stochastic_rounding,
-        .stochastic_rounding_seed = stochastic_rounding_seed,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .param = param,

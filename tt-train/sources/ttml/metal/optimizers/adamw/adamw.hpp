@@ -30,6 +30,11 @@ ttnn::Tensor adamw(
 //   step_size    = lr / (1 - beta1^t)
 //   inv_sqrt_bc2 = 1 / sqrt(1 - beta2^t)
 //   decay_factor = 1 - lr * weight_decay
+//
+// Stochastic rounding is deliberately not offered on this overload. It needs a
+// fresh host-drawn seed every step, delivered as a compute runtime argument --
+// exactly the per-step host work this overload exists to remove. Use the
+// float-scalar `adamw` above when stochastic rounding is required.
 ttnn::Tensor adamw_tensor_scalars(
     const ttnn::Tensor& param_in,
     const ttnn::Tensor& grad,
@@ -41,8 +46,6 @@ ttnn::Tensor adamw_tensor_scalars(
     const ttnn::Tensor& decay_factor,
     float beta1,
     float beta2,
-    float epsilon,
-    StochasticRounding stochastic_rounding = StochasticRounding::Disabled,
-    std::optional<uint32_t> stochastic_rounding_seed = std::nullopt);
+    float epsilon);
 
 }  // namespace ttml::metal
