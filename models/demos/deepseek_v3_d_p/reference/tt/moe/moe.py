@@ -216,9 +216,9 @@ class TorchMoe(nn.Module):
             activation / situ_beta / situ_linear_beta: GLU activation for the ROUTED experts, and
                 for the shared expert unless shared_activation overrides it. Defaults to "silu".
                 Kimi-K3's routed experts run "situ" on device (RoutedExpertActivation.SituGlu).
-            shared_activation: GLU activation for the SHARED expert; defaults to activation. K3 needs
-                the split because its checkpoint uses SiTU for both but the device has a SiTU kernel
-                for the routed expert only, so the shared side must stay on SiLU to compare.
+            shared_activation: GLU activation for the SHARED expert; defaults to activation. K3 runs
+                SiTU on both sides now (#53625), so it needs no override -- the knob stays for the
+                Wormhole case, where the shared expert has no SiTU and must compare against SiLU.
         """
         super().__init__()
 

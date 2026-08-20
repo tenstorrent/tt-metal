@@ -103,11 +103,16 @@ class KimiK3Config:
     ATTN_RES_BLOCK_SIZE = 12
 
     LATENT_MOE_USE_NORM = True
-    # The routed experts run the checkpoint's SiTU-GLU on device (#51351). Spelled as a string
-    # because this config is torch-only; ROUTED_EXPERT_ACTIVATION_BY_NAME maps it onto the kernel
-    # enum. Routed only: the shared expert and the dense FFN have no SiTU kernel and stay on SiLU.
+    # All three FFN sites run the checkpoint's SiTU-GLU on device: routed experts (#51351), and the
+    # shared expert / layer-0 dense FFN (#53625). Spelled as strings because this config is
+    # torch-only -- ROUTED_EXPERT_ACTIVATION_BY_NAME maps the routed one onto the fused kernel's
+    # enum, while the other two are consumed as-is by TtSharedExpert / TtFfn, which compose SiTU
+    # from Python-level ttnn ops (there is no fused kernel at 6144 / 33792 wide).
     ROUTED_EXPERT_ACTIVATION = "situ"
-    # Must match SituGluConfigKimi, which the fused routed-expert kernel bakes in.
+    SHARED_EXPERT_ACTIVATION = "situ"
+    DENSE_FFN_ACTIVATION = "situ"
+    # Must match SituGluConfigKimi, which the fused routed-expert kernel bakes in; the two composed
+    # sites read these directly, so all three activations stay on one pair of betas.
     ACTIVATION_SITU_BETA = 4.0
     ACTIVATION_SITU_LINEAR_BETA = 25.0
 
@@ -195,7 +200,9 @@ def kimi_k3_hf_config(max_seq: int = 8192):
         routed_expert_hidden_size=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
         latent_moe_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
         # The checkpoint says "situ", but consumers of this field index ACT2FN with it, which has
-        # no "situ" entry. The routed expert selects SiTU through RoutedExpertActivation instead.
+        # no "situ" entry. The device path selects SiTU out of band instead: the routed expert
+        # through RoutedExpertActivation, the shared expert and dense FFN through
+        # SHARED_EXPERT_ACTIVATION / DENSE_FFN_ACTIVATION.
         hidden_act="silu",
         activation_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
         activation_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,

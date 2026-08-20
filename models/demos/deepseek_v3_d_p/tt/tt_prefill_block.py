@@ -17,6 +17,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, 
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
@@ -385,6 +386,11 @@ class TtPrefillBlock(LightweightModule):
                 topology=tp_topology,  # dense FFN all-gather/reduce-scatter run on the TP axis
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.ffn",
+                # Same rule as the MoE shared expert in _build_moe: only Kimi-K3 names a
+                # non-SiLU activation here (#53625).
+                activation=getattr(model_cfg, "DENSE_FFN_ACTIVATION", ACTIVATION_SILU),
+                situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
+                situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
                 **_dense_ffn_kwargs,
             )
 
@@ -462,6 +468,11 @@ class TtPrefillBlock(LightweightModule):
             ],
             shared_expert_activations_dtype=shared_expert_activations_dtype,
             shared_expert_weights_dtype=shared_expert_weights_dtype,
+            # Kimi-K3 names "situ" here too (#53625); every other config defaults to SiLU. The
+            # betas are only read on the SiTU path, so getattr(None) is fine for everyone else.
+            shared_expert_activation=getattr(model_cfg, "SHARED_EXPERT_ACTIVATION", ACTIVATION_SILU),
+            shared_expert_situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
+            shared_expert_situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
             gate_fallback_mode=gate_fallback_mode,
             n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,

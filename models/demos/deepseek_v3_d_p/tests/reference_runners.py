@@ -53,9 +53,9 @@ def run_reference_moe(
 
     ``hidden_act`` overrides the config's GLU activation; ``shared_hidden_act`` overrides it for the
     shared expert alone. The upstream block picks one activation for routed and shared alike, but a
-    device may implement the two halves differently (Kimi-K3: SiTU-GLU in the fused routed-expert
-    kernel, SiLU for the shared expert), and this reference is only a fair cross-check if it splits
-    the same way.
+    device may implement the two halves differently, and this reference is only a fair cross-check
+    if it splits the same way. Kimi-K3 on Blackhole runs SiTU-GLU on both halves (#53625) and so
+    passes the same value twice; the split still matters on Wormhole, which has no SiTU at all.
     """
     if variant.reference_moe_cls is None:
         return None
