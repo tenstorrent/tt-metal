@@ -68,7 +68,7 @@ conftest.py @tenstorrent/metalium-developers-infra
 
 # test scripts
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
-tests/pipeline_reorg/ @roseli-TT @tdowdallTT
+tests/pipeline_reorg/ @roseli-TT @tdowdallTT @tenstorrent-github-bot
 tests/pipeline_reorg/blaze_models_prefill_tests.yaml @mbezuljTT @mtairum @roseli-TT
 tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @uaydonat @roseli-TT
 tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @roseli-TT
@@ -210,9 +210,9 @@ tt_metal/tools/profiler/tracy_debug_categories.txt @mo-tenstorrent @akerteszTT @
 tt_metal/tools/profiler/tracy_debug_zones.hpp @mo-tenstorrent @akerteszTT @yusufbashiTT
 
 # metal misc
-tt_metal/sfpi-info.sh @nathan-TT @tenstorrent/metalium-developers-infra
-tt_metal/sfpi-version @nathan-TT @tenstorrent/metalium-developers-infra
-tt_metal/ttsim-version @mcraigheadTT
+tt_metal/sfpi-info.sh @nathan-TT @tenstorrent/metalium-developers-infra @tenstorrent-github-bot
+tt_metal/sfpi-version @nathan-TT @tenstorrent/metalium-developers-infra @tenstorrent-github-bot
+tt_metal/ttsim-version @mcraigheadTT @tenstorrent-github-bot
 tt_metal/**/profiler/**/CMakeLists.txt @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
@@ -224,7 +224,7 @@ tt_metal/**/dprint* @tenstorrent/metalium-developers-triage
 tt_metal/**/inspector* @tenstorrent/metalium-developers-triage
 
 # LLK in-tree (tt_metal/tt-llk/) — mirrors tenstorrent/tt-llk CODEOWNERS
-tt_metal/third_party/umd @broskoTT @pjanevskiTT @tenstorrent/umd-admins
+tt_metal/third_party/umd @broskoTT @pjanevskiTT @tenstorrent/umd-admins @tenstorrent-github-bot
 tt_metal/tt-llk/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT
 tt_metal/tt-llk/.claude/ @nstamatovicTT @njokovicTT
 tt_metal/tt-llk/.cursor/ @nstamatovicTT @njokovicTT
@@ -610,7 +610,7 @@ models/vllm_test_utils/ @viktorpusTT @tchedaTT @uaydonat
 
 # tracy
 tools/tracy/ @mo-tenstorrent @akerteszTT
-tt_metal/third_party/tracy @mo-tenstorrent @akerteszTT
+tt_metal/third_party/tracy @mo-tenstorrent @akerteszTT @tenstorrent-github-bot
 
 tools/scripts/ @mtairum
 
