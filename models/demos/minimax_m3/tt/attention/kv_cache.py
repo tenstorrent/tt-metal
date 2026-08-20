@@ -15,11 +15,6 @@ from models.demos.common.prefill.adapter import KvCaches
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 BH_NUM_DRAM_BANKS = 8
 
-# Request-mode device-valued slot metadata: same flag as the cache-read slot slice (prefill.py). When on,
-# the KV write takes update_padded_kv_cache's traceable tensor form so the write slot rides a device tensor
-# and a captured trace re-targets any user's slot. Default off = host-scalar write, unchanged.
-_DEVICE_SLOT_SLICE = os.environ.get("PREFILL_DEVICE_SLOT_SLICE", "0") == "1"
-
 
 @dataclass
 class MiniMaxKVCache(KvCaches):
@@ -45,7 +40,7 @@ class MiniMaxKVCache(KvCaches):
     max_seq_len: int
     sp: int
 
-    # Device-valued slot metadata for request-mode tracing (PREFILL_DEVICE_SLOT_SLICE=1). A captured trace
+    # Device-valued slot metadata for request-mode tracing (populated only when num_users > 1). A captured trace
     # reads these tensors by address, so an in-place host update (set_read_user) re-targets the user's slot
     # WITHOUT recapture. `_slot_frozen` is set around trace capture so the captured forward only reads them
     # (a host copy inside a trace is illegal); the warm forward pre-sets the values.
@@ -221,11 +216,11 @@ def _write_one(kv_cache, cache, tensor, *, slot_idx, layer_idx, num_layers, kv_a
     needed (the original stays live for the attention op that follows). At ``kv_actual % 32 == 0`` chunk
     boundaries the per-device write offset is contiguous (block-cyclic degenerates to a reshape).
 
-    PREFILL_DEVICE_SLOT_SLICE=1 takes the op's traceable tensor form: slot/kv_actual are read on-device
+    With more than one user this takes the op's traceable tensor form: slot/kv_actual are read on-device
     from persistent scalars (kv_cache), so a captured trace re-targets the write slot per user.
     """
     src = tensor if tensor.dtype == cache.dtype else ttnn.typecast(tensor, cache.dtype)
-    if _DEVICE_SLOT_SLICE:
+    if kv_cache.num_users > 1:
         mesh_device = cache.device()
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             cache,
