@@ -96,6 +96,9 @@ Run. Test ids are ``[wormhole_b0-<case>-<mesh>]``, e.g.
 
   # one exact case
   pytest ".../test_teacher_forcing_e2e.py::test_teacher_forcing_e2e[wormhole_b0-p128_n128-1x8]" -sv
+
+  # tt-transformers-style 512 prefill + 500 decode (long run — use --timeout=0)
+  GEMMA4_TF_CASES="512,500" pytest ".../test_teacher_forcing_e2e.py::test_teacher_forcing_e2e[wormhole_b0-p512_n500-1x8]" -sv --timeout=0
 """
 
 from __future__ import annotations
@@ -124,9 +127,25 @@ from ..test_factory import (
     skip_if_config_only_checkpoint,
 )
 
+
 # (prompt_len, max_new_tokens) — prompt_len + max_new_tokens + 1 tokens are
 # consumed, since the final decode step still needs a ground-truth target.
-_CASES = [(64, 64), (128, 128)]
+# Override for ad-hoc runs: GEMMA4_TF_CASES="512,500" or "128,64;512,500".
+def _parse_tf_cases():
+    raw = os.getenv("GEMMA4_TF_CASES", "").strip()
+    if not raw:
+        return [(64, 64), (128, 128)]
+    out = []
+    for chunk in raw.split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        p, n = chunk.split(",")
+        out.append((int(p.strip()), int(n.strip())))
+    return out or [(64, 64), (128, 128)]
+
+
+_CASES = _parse_tf_cases()
 _CASE_IDS = [f"p{p}_n{n}" for p, n in _CASES]
 
 _BLOCK_SIZE = 64
