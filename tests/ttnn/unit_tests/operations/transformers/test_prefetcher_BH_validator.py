@@ -442,7 +442,6 @@ def _setup_weight_and_pdfb_recv_contig(
     N,
     dtype,
     recv_per_bank,
-    num_layers,
     dual_senders=False,
     distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
 ):
@@ -511,7 +510,7 @@ def test_validator_pdfb_recv_contig(device, K, N, dtype, recv_per_bank, num_laye
     Batched only: PersistentDFB delivery does not support the streaming rotation yet, so FIFO
     position == physical block."""
     tt_weight, pdfb, _push_page_size, ring_size = _setup_weight_and_pdfb_recv_contig(
-        device, K, N, dtype, recv_per_bank, num_layers, dual_senders=dual_senders
+        device, K, N, dtype, recv_per_bank, dual_senders=dual_senders
     )
     with tensor_prefetcher_session(device):
         ttnn.experimental.queue_tensor_prefetcher_request(
@@ -535,7 +534,6 @@ def test_validator_pdfb_recv_contig_shard_contiguous(device, K, N, dtype, recv_p
         N,
         dtype,
         recv_per_bank,
-        num_layers=1,
         distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
     )
     with tensor_prefetcher_session(device):
@@ -553,9 +551,7 @@ def test_validator_pdfb_cursor_persists_across_requests(device, K, N, dtype, rec
     receiver's durable credit counter. The second request must therefore resume where the first
     stopped, which this only detects because the validator expects block b of layer 2 in the slot
     following layer 1's."""
-    tt_weight, pdfb, _push_page_size, ring_size = _setup_weight_and_pdfb_recv_contig(
-        device, K, N, dtype, recv_per_bank, num_layers=2
-    )
+    tt_weight, pdfb, _push_page_size, ring_size = _setup_weight_and_pdfb_recv_contig(device, K, N, dtype, recv_per_bank)
     with tensor_prefetcher_session(device):
         ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], persistent_dfb=pdfb)
         ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], persistent_dfb=pdfb)
@@ -567,9 +563,7 @@ def test_validator_pdfb_cursor_persists_across_requests(device, K, N, dtype, rec
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
 def test_validator_pdfb_rejects_mismatched_entry_size(device, K, N, dtype, recv_per_bank, expect_error):
     """entry_size must equal the tensor's per-receiver block size: this transport never resizes."""
-    tt_weight, _pdfb, push_page_size, ring_size = _setup_weight_and_pdfb_recv_contig(
-        device, K, N, dtype, recv_per_bank, num_layers=1
-    )
+    tt_weight, _pdfb, push_page_size, ring_size = _setup_weight_and_pdfb_recv_contig(device, K, N, dtype, recv_per_bank)
     num_dram_banks = device.dram_grid_size().x
     ring_cols = _ring_grid_cols(num_dram_banks, ring_size)
     bank_to_receivers = [
@@ -592,9 +586,7 @@ def test_validator_pdfb_rejects_mismatched_entry_size(device, K, N, dtype, recv_
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
 def test_validator_pdfb_rejects_streaming_rotation(device, K, N, dtype, recv_per_bank, expect_error):
     """The streaming rotation is not supported over PersistentDFB yet."""
-    tt_weight, pdfb, _push_page_size, ring_size = _setup_weight_and_pdfb_recv_contig(
-        device, K, N, dtype, recv_per_bank, num_layers=1
-    )
+    tt_weight, pdfb, _push_page_size, ring_size = _setup_weight_and_pdfb_recv_contig(device, K, N, dtype, recv_per_bank)
     rotation = [(g + 1) % ring_size for g in range(ring_size)]
     with tensor_prefetcher_session(device):
         with expect_error(RuntimeError, "streaming rotation"):

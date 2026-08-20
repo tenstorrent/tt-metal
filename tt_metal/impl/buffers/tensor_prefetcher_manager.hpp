@@ -154,15 +154,13 @@ private:
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>* mapping = nullptr;
         // DRISC L1 base of the target's per-sender state (header field target_state_addr).
         uint32_t state_addr = 0;
-        // TensorPrefetcherTransport for every tensor in the request.
-        uint32_t transport = 0;
+        // Transport for every tensor in the request.
+        TensorPrefetcherTransport transport = TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB;
         // Per-receiver ring capacity in bytes; a tensor's page_bytes_per_recv must fit.
         uint32_t per_recv_capacity_bytes = 0;
         // PersistentDFB only: the fixed entry size every tensor must match. 0 for a GCB, which
         // resizes its remote CB per tensor instead.
         uint32_t fixed_entry_size = 0;
-        // Per-sender bank-local slab indices, needed only when a tensor streams.
-        std::vector<std::vector<uint32_t>> slab_indices;
     };
 
     void worker_loop();

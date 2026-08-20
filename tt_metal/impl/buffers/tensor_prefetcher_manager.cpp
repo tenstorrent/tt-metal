@@ -8,6 +8,7 @@
 #include "distributed/mesh_command_queue_base.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
+#include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/buffers/persistent_dfb_dram_sender_internal.hpp"
 #include "impl/buffers/h2d_socket_internal.hpp"
 
@@ -390,6 +391,36 @@ TensorPrefetcherTensorLayout compute_tensor_layout(
     return compute_tensor_layout_recv_contig(t, block_count, stage_third, context_id);
 }
 
+// Preconditions of the first-cut PersistentDFB delivery path: receiver-contiguous, batched, and one
+// fixed entry size. They are properties of the page stream the sender produces, so they are checked
+// against the computed layout rather than against the caller's spec -- which is why this runs here,
+// after compute_tensor_layout, rather than in queue().
+void validate_persistent_dfb_delivery(
+    const TensorPrefetcherTensorLayout& layout,
+    const experimental::TensorPrefetcherInput& input,
+    uint32_t fixed_entry_size,
+    uint32_t tensor_idx) {
+    TT_FATAL(
+        layout.layout_mode == static_cast<uint32_t>(LayoutMode::ReceiverContiguous),
+        "Tensor prefetcher: PersistentDFB delivery supports receiver-contiguous tensors only, but input tensor {} "
+        "resolved to the K-row-major layout. Shard it so each receiver owns a disjoint contiguous shard.",
+        tensor_idx);
+    TT_FATAL(
+        input.rotation.empty(),
+        "Tensor prefetcher: PersistentDFB delivery does not support the streaming rotation yet; input tensor {} was "
+        "queued with a {}-entry rotation table.",
+        tensor_idx,
+        input.rotation.size());
+    TT_FATAL(
+        layout.page_bytes_per_recv == fixed_entry_size,
+        "Tensor prefetcher: input tensor {} pushes {} B per receiver per block, but the PersistentDFB was created "
+        "with entry_size {} B. This transport does not resize mid-flight, so create the PersistentDFB with "
+        "entry_size == the tensor's per-receiver block size.",
+        tensor_idx,
+        layout.page_bytes_per_recv,
+        fixed_entry_size);
+}
+
 }  // namespace
 
 TensorPrefetcherManager::TensorPrefetcherManager(
@@ -427,7 +458,6 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
     target.state_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(gcb));
     target.transport = TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB;
     target.per_recv_capacity_bytes = gcb.size();
-    target.slab_indices = experimental::receiver_slab_indices(gcb);
     return target;
 }
 
@@ -439,7 +469,6 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
     target.transport = TENSOR_PREFETCHER_TRANSPORT_PERSISTENT_DFB;
     target.per_recv_capacity_bytes = experimental::persistent_dfb_ring_size(persistent_dfb);
     target.fixed_entry_size = experimental::persistent_dfb_entry_size(persistent_dfb);
-    target.slab_indices = experimental::persistent_dfb_receiver_slab_indices(persistent_dfb);
     return target;
 }
 
@@ -685,11 +714,11 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     }
     const uint32_t layout_stride = kLayoutBytes + max_receivers * static_cast<uint32_t>(sizeof(uint32_t));
 
-    // Per-GCB-sender bank-local slab index map, needed only when a tensor streams. The GCB owns the
-    // recv_index_base accounting, so the slab indices come from its experimental accessor (single
-    // source of truth) rather than being re-derived here. It is order-agnostic: this function maps
-    // each receiver's (bank, slab index) to a global receiver position per tensor using that
-    // tensor's shard distribution.
+    // Per-sender bank-local slab index map, needed only when a tensor streams -- so it is built
+    // inside the guard below rather than for every request. It comes from the shared
+    // receiver_slab_indices_per_sender so both transports and the consumer agree on slab numbering;
+    // it is order-agnostic, and this function maps each receiver's (bank, slab index) to a global
+    // receiver position per tensor using that tensor's shard distribution.
     bool any_streaming = false;
     for (const auto& input : data_tensors) {
         if (!input.rotation.empty()) {
@@ -699,12 +728,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     }
     std::vector<std::vector<uint32_t>> slab_idx_by_sender;
     if (any_streaming) {
-        slab_idx_by_sender = target.slab_indices;
-        TT_FATAL(
-            slab_idx_by_sender.size() == mapping.size(),
-            "Tensor prefetcher: target returned {} sender slab-index lists for {} sender mappings",
-            slab_idx_by_sender.size(),
-            mapping.size());
+        slab_idx_by_sender = receiver_slab_indices_per_sender(mapping);
 
         // Both the strided and contiguous (bank, slab index) -> global position formulas are
         // bijections onto [0, total_receivers) only when the DRAM banks are dense 0..num_banks-1 and
@@ -812,43 +836,15 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         TT_FATAL(
             layout.layout_mode != static_cast<uint32_t>(LayoutMode::KRowMajor) || krow_compatible_mapping,
             "Tensor prefetcher: K-row-major input tensor {} requires exactly one primary sender per DRAM bank; "
-            "the supplied GCB uses a split or incompatible sender topology.",
+            "the supplied target uses a split or incompatible sender topology.",
             tensor_idx);
 
         if (target.transport == TENSOR_PREFETCHER_TRANSPORT_PERSISTENT_DFB) {
-            // First-cut PersistentDFB delivery: receiver-contiguous, batched, one fixed entry size.
-            // These are properties of the page stream the sender produces, so they are checked
-            // against the computed layout rather than against the caller's spec.
-            TT_FATAL(
-                layout.layout_mode == static_cast<uint32_t>(LayoutMode::ReceiverContiguous),
-                "Tensor prefetcher: PersistentDFB delivery supports receiver-contiguous tensors only, but input "
-                "tensor {} resolved to the K-row-major layout. Shard it so each receiver owns a disjoint "
-                "contiguous shard.",
-                tensor_idx);
-            TT_FATAL(
-                !streaming,
-                "Tensor prefetcher: PersistentDFB delivery does not support the streaming rotation yet; input "
-                "tensor {} was queued with a {}-entry rotation table.",
-                tensor_idx,
-                input.rotation.size());
-            TT_FATAL(
-                layout.page_bytes_per_recv == target.fixed_entry_size,
-                "Tensor prefetcher: input tensor {} pushes {} B per receiver per block, but the PersistentDFB was "
-                "created with entry_size {} B. This transport does not resize mid-flight, so create the "
-                "PersistentDFB with entry_size == the tensor's per-receiver block size.",
-                tensor_idx,
-                layout.page_bytes_per_recv,
-                target.fixed_entry_size);
-            TT_FATAL(
-                target.per_recv_capacity_bytes % layout.page_bytes_per_recv == 0,
-                "Tensor prefetcher: PersistentDFB ring ({} B per receiver) must be a whole number of {} B entries; "
-                "a partial trailing entry would need the padding-credit path this sender omits.",
-                target.per_recv_capacity_bytes,
-                layout.page_bytes_per_recv);
+            validate_persistent_dfb_delivery(layout, input, target.fixed_entry_size, tensor_idx);
         }
 
-        // The sender's free-space poll counts whole per-receiver pages; if the GCB's per-receiver
-        // fifo can't hold even one full page the poll never reaches a usable block and the DRISC
+        // The sender's free-space poll counts whole per-receiver pages; if the target's per-receiver
+        // ring can't hold even one full page the poll never reaches a usable block and the DRISC
         // kernel hangs. Guard it here (applies to both layouts).
         TT_FATAL(
             target.per_recv_capacity_bytes >= layout.page_bytes_per_recv,
@@ -918,7 +914,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         std::vector<uint8_t> templ(aligned_page_bytes, 0);
         auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(templ.data());
         header->base.cmd_id = DRAM_PREFETCHER_CMD_PREFETCH;
-        header->prefetch.transport = static_cast<TensorPrefetcherTransport>(target.transport);
+        header->prefetch.transport = target.transport;
         header->prefetch.num_entries = static_cast<uint16_t>(plan.entries.size());
         header->prefetch.num_layouts = static_cast<uint32_t>(plan.slots.size());
         header->prefetch.target_state_addr = target.state_addr;

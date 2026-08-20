@@ -21,7 +21,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <variant>
 #include <vector>
@@ -38,9 +37,14 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
+// Which programmable-core type the senders live on. It decides one thing: whether the senders
+// join all_cores_ (the set the ring and config buffers are sharded over).
+enum class SenderDomain { Worker, Dram };
+
 void initialize_persistent_dfb(
     IDevice* device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+    SenderDomain sender_domain,
     CoreRangeSet& sender_cores_out,
     CoreRangeSet& receiver_cores_out,
     CoreRangeSet& all_cores_out,
@@ -70,10 +74,18 @@ void initialize_persistent_dfb(
         num_receiver_cores == receiver_cores_out.num_cores(),
         "Duplicate receiver cores detected across sender groups (receiver sets must be disjoint)");
 
-    all_cores_out = sender_cores_out.merge(receiver_cores_out);
-    TT_FATAL(
-        all_cores_out.num_cores() == num_sender_cores + num_receiver_cores,
-        "Sender and receiver core sets must be disjoint");
+    if (sender_domain == SenderDomain::Worker) {
+        all_cores_out = sender_cores_out.merge(receiver_cores_out);
+        TT_FATAL(
+            all_cores_out.num_cores() == num_sender_cores + num_receiver_cores,
+            "Sender and receiver core sets must be disjoint");
+    } else {
+        // DRAM senders hold no slice of the ring, and their logical coords live in a different
+        // space than the worker receivers' -- so they must not join all_cores_, and a
+        // sender/receiver disjointness check across the two spaces would be comparing unrelated
+        // coordinates. Physical NoC coords can never collide across programmable-core types.
+        all_cores_out = receiver_cores_out;
+    }
 
     max_num_receivers_per_sender_out = max_receivers;
 }
@@ -101,51 +113,6 @@ struct PersistentConfigPageLayout {
     uint32_t page_size;
 };
 
-// DRAM-sender variant of initialize_persistent_dfb. Senders are DRAM cores, so their logical
-// coords live in a different space than the worker receivers': they must not be merged into
-// all_cores_ (which backs the receiver-sharded ring and config buffers), and a sender/receiver
-// disjointness check across the two spaces would be comparing unrelated coordinates.
-void initialize_dram_sender_persistent_dfb(
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
-    CoreRangeSet& sender_cores_out,
-    CoreRangeSet& receiver_cores_out,
-    CoreRangeSet& all_cores_out,
-    uint32_t& max_num_receivers_per_sender_out) {
-    const uint32_t num_sender_cores = sender_receiver_mapping.size();
-    TT_FATAL(num_sender_cores > 0, "At least one DRAM sender required");
-
-    uint32_t num_receiver_cores = 0;
-    uint32_t max_receivers = 0;
-    std::vector<CoreRange> sender_ranges;
-    sender_ranges.reserve(num_sender_cores);
-
-    for (const auto& [sender_core, receiver_set] : sender_receiver_mapping) {
-        const uint32_t n = receiver_set.num_cores();
-        TT_FATAL(n > 0, "DRAM sender core {} must have a non-empty receiver set", sender_core.str());
-        num_receiver_cores += n;
-        max_receivers = std::max(max_receivers, n);
-        sender_ranges.emplace_back(sender_core);
-        receiver_cores_out = receiver_cores_out.merge(receiver_set);
-    }
-
-    sender_cores_out = CoreRangeSet(sender_ranges);
-    TT_FATAL(
-        num_sender_cores == sender_cores_out.num_cores(),
-        "Duplicate DRAM sender cores in sender_receiver_mapping ({} entries collapsed to {} cores)",
-        num_sender_cores,
-        sender_cores_out.num_cores());
-    TT_FATAL(
-        num_receiver_cores == receiver_cores_out.num_cores(),
-        "Duplicate receiver cores detected across DRAM sender groups (receiver sets must be disjoint): {} receivers "
-        "across senders collapsed to {} distinct cores",
-        num_receiver_cores,
-        receiver_cores_out.num_cores());
-
-    // Receivers only: DRAM senders hold no slice of the ring.
-    all_cores_out = receiver_cores_out;
-    max_num_receivers_per_sender_out = max_receivers;
-}
-
 PersistentConfigPageLayout compute_persistent_config_page_layout(
     uint32_t max_num_receivers_per_sender, uint32_t l1_alignment) {
     const uint32_t noc_xy_offset = persistent_dfb_noc_xy_byte_offset();
@@ -169,7 +136,13 @@ PersistentDFB::PersistentDFB(
     entry_size_(entry_size),
     num_entries_(num_entries) {
     initialize_persistent_dfb(
-        device, sender_receiver_mapping, sender_cores_, receiver_cores_, all_cores_, max_num_receivers_per_sender_);
+        device,
+        sender_receiver_mapping,
+        SenderDomain::Worker,
+        sender_cores_,
+        receiver_cores_,
+        all_cores_,
+        max_num_receivers_per_sender_);
     setup_buffers(buffer_type);
 }
 
@@ -193,8 +166,14 @@ PersistentDFB::PersistentDFB(
         "DRAM-sender PersistentDFB requires programmable DRAM cores, which auto-enable on Blackhole with firmware "
         ">= 19.12.0.0 and either no harvested DRAM channels or a single device");
 
-    initialize_dram_sender_persistent_dfb(
-        sender_receiver_mapping, sender_cores_, receiver_cores_, all_cores_, max_num_receivers_per_sender_);
+    initialize_persistent_dfb(
+        mesh_device,
+        sender_receiver_mapping,
+        SenderDomain::Dram,
+        sender_cores_,
+        receiver_cores_,
+        all_cores_,
+        max_num_receivers_per_sender_);
 
     // Physical worker NOC XY of each sender's receivers. Row-wise, matching the dual-sender
     // ceil/floor split (select_from_corerangeset with row_wise=true) and the consumer's receiver
@@ -210,14 +189,12 @@ PersistentDFB::PersistentDFB(
         receiver_coords_per_sender_.push_back(std::move(phys));
     }
 
-    setup_dram_sender_buffers(buffer_type);
+    setup_dram_sender_buffers(mesh_device, buffer_type);
 }
 
-void PersistentDFB::setup_dram_sender_buffers(BufferType buffer_type) {
+void PersistentDFB::setup_dram_sender_buffers(distributed::MeshDevice* mesh_device, BufferType buffer_type) {
     validate_entry_geometry(device_, entry_size_, num_entries_, buffer_type);
 
-    auto* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_);
-    TT_FATAL(mesh_device != nullptr, "DRAM-sender PersistentDFB lost its MeshDevice");
     const auto context_id = mesh_device->impl().get_context_id();
     const uint32_t l1_alignment = MetalContext::instance(context_id).hal().get_alignment(HalMemType::L1);
     TT_FATAL(
@@ -634,10 +611,6 @@ struct PersistentDfbDramSenderInternals {
     }
 
     static DeviceAddr sender_state_drisc_l1_base(const PersistentDFB& pdfb) { return pdfb.sender_state_drisc_l1_base_; }
-
-    static const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const PersistentDFB& pdfb) {
-        return pdfb.receiver_coords_per_sender_;
-    }
 };
 
 }  // namespace persistent_dfb_dram_sender
@@ -670,8 +643,6 @@ uint32_t persistent_dfb_ring_size(const PersistentDFB& persistent_dfb) { return 
 
 uint32_t persistent_dfb_buffer_address(const PersistentDFB& persistent_dfb) { return persistent_dfb.buffer_address(); }
 
-uint32_t persistent_dfb_config_address(const PersistentDFB& persistent_dfb) { return persistent_dfb.config_address(); }
-
 const CoreRangeSet& persistent_dfb_receiver_cores(const PersistentDFB& persistent_dfb) {
     return persistent_dfb.receiver_cores();
 }
@@ -689,23 +660,8 @@ DeviceAddr persistent_dfb_sender_state_drisc_l1_base(const PersistentDFB& persis
     return persistent_dfb_dram_sender::PersistentDfbDramSenderInternals::sender_state_drisc_l1_base(persistent_dfb);
 }
 
-const std::vector<std::vector<CoreCoord>>& persistent_dfb_receiver_coords_per_sender(
-    const PersistentDFB& persistent_dfb) {
-    return persistent_dfb_dram_sender::PersistentDfbDramSenderInternals::receiver_coords_per_sender(persistent_dfb);
-}
-
 std::vector<std::vector<uint32_t>> persistent_dfb_receiver_slab_indices(const PersistentDFB& persistent_dfb) {
-    const auto& mapping = persistent_dfb.sender_receiver_core_mapping();
-    const std::vector<uint32_t> bases = recv_index_bases_per_sender(mapping);
-    std::vector<std::vector<uint32_t>> slab(mapping.size());
-    for (size_t s = 0; s < mapping.size(); ++s) {
-        const uint32_t n = mapping[s].second.num_cores();
-        slab[s].resize(n);
-        for (uint32_t r = 0; r < n; ++r) {
-            slab[s][r] = bases[s] + r;
-        }
-    }
-    return slab;
+    return receiver_slab_indices_per_sender(persistent_dfb.sender_receiver_core_mapping());
 }
 
 }  // namespace tt::tt_metal::experimental

@@ -21,8 +21,6 @@
 
 #include <unordered_map>
 
-#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
-
 namespace ttnn::operations::experimental::test {
 
 namespace {

@@ -5,12 +5,10 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/experimental/persistent_dfb.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 

@@ -99,4 +99,26 @@ inline std::vector<uint32_t> recv_index_bases_per_sender(
     return bases;
 }
 
+// Per-sender bank-local slab indices: entry [s][r] is the slab index (recv_index_base + r) that
+// sender s's local receiver r reads, in mapping order.
+//
+// Order-agnostic on purpose: mapping a receiver's (bank, slab index) to a global position depends on
+// the tensor's shard distribution (ROUND_ROBIN_1D strided vs CONTIGUOUS_1D contiguous), which a
+// ring-matmul consumer treats as a "ring position". That is the caller's concept, not the
+// transport's, so callers read the raw slab indices and permute them themselves. Well-defined
+// regardless of bank density or per-bank uniformity.
+inline std::vector<std::vector<uint32_t>> receiver_slab_indices_per_sender(
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& mapping) {
+    const std::vector<uint32_t> bases = recv_index_bases_per_sender(mapping);
+    std::vector<std::vector<uint32_t>> slab(mapping.size());
+    for (size_t s = 0; s < mapping.size(); ++s) {
+        const uint32_t n = mapping[s].second.num_cores();
+        slab[s].resize(n);
+        for (uint32_t r = 0; r < n; ++r) {
+            slab[s][r] = bases[s] + r;
+        }
+    }
+    return slab;
+}
+
 }  // namespace tt::tt_metal

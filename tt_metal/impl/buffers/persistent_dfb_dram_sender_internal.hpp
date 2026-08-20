@@ -30,11 +30,6 @@ namespace tt::tt_metal::experimental {
 // PersistentDFBs.
 DeviceAddr persistent_dfb_sender_state_drisc_l1_base(const PersistentDFB& persistent_dfb);
 
-// Physical worker NOC XY for each sender's receivers, in bank-local slab order. Empty for
-// worker-sender PersistentDFBs.
-const std::vector<std::vector<CoreCoord>>& persistent_dfb_receiver_coords_per_sender(
-    const PersistentDFB& persistent_dfb);
-
 // Per-sender bank-local slab indices: entry [s][r] is the slab index (recv_index_base + r) that
 // sender s's local receiver r reads, in sender_receiver_core_mapping() order. Same contract (and
 // same underlying helper) as the GlobalCircularBuffer accessor of this name, including its

@@ -14,7 +14,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/distributed.hpp>
-#include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 #include <variant>
@@ -22,6 +21,7 @@
 namespace tt::tt_metal {
 
 class Buffer;
+class DriscL1Allocation;
 class IDevice;
 class Program;
 
@@ -76,7 +76,6 @@ public:
     uint32_t credit_reset_offset() const { return credit_reset_offset_; }
     uint32_t credit_reset_size() const { return credit_reset_size_; }
     const std::vector<uint32_t>& config_page(const CoreCoord& core) const;
-    uint32_t max_num_receivers_per_sender() const { return max_num_receivers_per_sender_; }
 
     const CoreRangeSet& sender_cores() const;
     const CoreRangeSet& receiver_cores() const;
@@ -123,7 +122,7 @@ private:
 
     // DRAM-sender only: allocate the DRISC-L1 sender blocks, build the receiver config pages
     // (whose ack targets point into DRISC L1), and stamp both sides.
-    void setup_dram_sender_buffers(BufferType buffer_type);
+    void setup_dram_sender_buffers(distributed::MeshDevice* mesh_device, BufferType buffer_type);
     void build_dram_sender_receiver_config_pages();
     void initialize_dram_sender_state(distributed::MeshDevice* mesh_device);
 

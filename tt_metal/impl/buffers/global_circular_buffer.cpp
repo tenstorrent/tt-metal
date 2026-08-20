@@ -21,13 +21,11 @@
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
-#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -469,21 +467,7 @@ const std::vector<std::vector<CoreCoord>>& GlobalCircularBufferDramSenderInterna
 
 std::vector<std::vector<uint32_t>> GlobalCircularBufferDramSenderInternals::receiver_slab_indices(
     const GlobalCircularBuffer& gcb) {
-    // Order-agnostic: just the bank-local slab index (recv_index_base + r) each receiver reads.
-    // The caller maps (bank, slab index) -> a global position using the tensor's shard
-    // distribution; that ordering is not a GCB concept, so it is not applied here. This is always
-    // well-defined regardless of bank density/uniformity.
-    const auto& mapping = gcb.sender_receiver_core_mapping();
-    const std::vector<uint32_t> bases = recv_index_bases_per_sender(mapping);
-    std::vector<std::vector<uint32_t>> slab(mapping.size());
-    for (size_t s = 0; s < mapping.size(); ++s) {
-        const uint32_t n = mapping[s].second.num_cores();
-        slab[s].resize(n);
-        for (uint32_t r = 0; r < n; ++r) {
-            slab[s][r] = bases[s] + r;
-        }
-    }
-    return slab;
+    return receiver_slab_indices_per_sender(gcb.sender_receiver_core_mapping());
 }
 
 }  // namespace global_circular_buffer_dram_sender

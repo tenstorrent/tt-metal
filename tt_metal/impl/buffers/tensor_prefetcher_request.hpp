@@ -145,15 +145,16 @@ struct TensorPrefetcherBaseCmd {
 // one-byte base (mirrors the pad fields in cq_commands.hpp commands); the resulting
 // 12-byte header then keeps the entry table 4-byte aligned.
 struct TensorPrefetcherPrefetchCmd {
-    // Occupies what used to be a pure alignment pad, so the header stays 12 bytes.
+    // Fits in the byte that pads cmd_id out to the 32-bit fields, so the header stays 12 bytes and
+    // the entry table that follows stays 4-byte aligned.
     TensorPrefetcherTransport transport;
     uint16_t num_entries;  // number of valid TensorPrefetcherEntry entries
     uint32_t num_layouts;  // number of valid TensorPrefetcherTensorLayout table entries
-    // DRISC L1 base of the target's per-sender state, whose meaning follows each tensor's
-    // transport: a DramSenderStateBlock for TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB, or a
+    // DRISC L1 base of the target's per-sender state, whose meaning follows the `transport` above:
+    // a DramSenderStateBlock for TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB, or a
     // PersistentDfbDramSenderState (prefix + config page) for
     // TENSOR_PREFETCHER_TRANSPORT_PERSISTENT_DFB. One address per request, so all tensors in a
-    // request must target the same object.
+    // request target the same object.
     uint32_t target_state_addr;
 } __attribute__((packed));
 

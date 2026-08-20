@@ -29,7 +29,6 @@
 
 namespace tt::tt_metal {
 
-class Buffer;
 class Program;
 
 namespace distributed {
@@ -75,7 +74,6 @@ uint32_t persistent_dfb_entry_size(const PersistentDFB& persistent_dfb);
 uint32_t persistent_dfb_num_entries(const PersistentDFB& persistent_dfb);
 uint32_t persistent_dfb_ring_size(const PersistentDFB& persistent_dfb);
 uint32_t persistent_dfb_buffer_address(const PersistentDFB& persistent_dfb);
-uint32_t persistent_dfb_config_address(const PersistentDFB& persistent_dfb);
 const CoreRangeSet& persistent_dfb_receiver_cores(const PersistentDFB& persistent_dfb);
 const CoreRangeSet& persistent_dfb_sender_cores(const PersistentDFB& persistent_dfb);
 const std::vector<std::pair<CoreCoord, CoreRangeSet>>& persistent_dfb_sender_receiver_core_mapping(

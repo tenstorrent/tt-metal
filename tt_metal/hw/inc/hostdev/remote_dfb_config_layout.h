@@ -27,7 +27,8 @@
 //   word[5]  applied_entry_size    // epoch + last successful resize
 //   word[6]  noc_xy_offset         // page-relative → word[9]
 //   word[7]  pages_sent_offset
-//   word[8]  pages_acked_offset
+//   word[8]  pages_acked_offset      // delta to the peer's counter base; for a DRAM sender this
+//                                  // crosses L1 address spaces and may wrap (uint32 arithmetic)
 //   + sender NOC XY table + L1-aligned sent/acked pairs
 //   + receiver sender XY after header
 

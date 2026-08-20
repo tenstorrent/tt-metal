@@ -7,8 +7,6 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include <tt_stl/assert.hpp>
-
 #include "ttnn-nanobind/bind_function.hpp"
 #include "dram_prefetcher_consumer.hpp"
 #include "dram_prefetcher_validator.hpp"
