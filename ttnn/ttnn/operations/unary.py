@@ -381,8 +381,9 @@ ttnn.attach_golden_function(ttnn.hardtanh, golden_function=_golden_function_hard
 def _golden_function_leaky_relu(input_tensor_a, *args, negative_slope=0.01, **kwargs):
     import torch
 
-    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
-        # Unsigned inputs are non-negative, so leaky ReLU is the identity.
+    if input_tensor_a.dtype == torch.uint8 or integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Torch has no unsigned leaky ReLU kernel, while unsigned inputs are always non-negative.
+        # Return the identity for UInt8/UInt16/UInt32 to match the device implementation.
         return input_tensor_a
     return torch.nn.functional.leaky_relu(input_tensor_a, negative_slope=negative_slope)
 
