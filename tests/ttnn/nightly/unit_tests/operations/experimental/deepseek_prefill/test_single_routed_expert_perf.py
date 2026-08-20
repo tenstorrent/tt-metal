@@ -56,7 +56,8 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
     ("glm_51", 0): 3_902,
     ("glm_51", 128): 186_733,
     ("glm_51", 256): 194_294,
-    ("glm_51", 512): 245_483,
+    # Re-centred after the L1_ACC packer drain (f7884c9): this case dropped to ~235 us.
+    ("glm_51", 512): 235_304,
     ("glm_51", 1024): 352_270,
     ("glm_51", 2048): 576_240,
     ("glm_51", 4096): 1_129_544,
