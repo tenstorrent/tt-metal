@@ -97,9 +97,9 @@ _SFPU_CHAIN_KERNEL = (
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/sfpu.hpp"
 """
     + _ZONE_MACRO
     + r"""
@@ -168,9 +168,9 @@ _FPU_SFPU_KERNEL = (
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/sfpu.hpp"
 """
     + _ZONE_MACRO
     + r"""
@@ -243,8 +243,8 @@ _REDUCE_RECIP_KERNEL = (
 #include "api/compute/reduce.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 """
     + _ZONE_MACRO
