@@ -215,7 +215,56 @@ def create_hf_model(variant, config, num_layers, n_routed_experts=None):
     return model.eval().to(torch.bfloat16)
 
 
-def decoder_layer_kwargs(hf_layer, hf_model, hidden_states, attention_mask, position_ids, cache, use_cache=True):
+def reference_rope(hf_model, hidden_states, position_ids):
+    """The reference ``(cos, sin)``, built in fp32 from the CONFIG rather than copied from the model.
+
+    A reference instantiated in bf16 carries a bf16 ``inv_freq`` buffer and ``.float()`` cannot
+    recover the lost bits; the resulting ~4.4e-4 frequency error is a phase error that grows with
+    position. Depends only on the positions, so build it once per run.
+    """
+    rotary = getattr(hf_model, "rotary_emb", None)
+    assert rotary is not None, f"{type(hf_model).__name__} exposes no rotary_emb to build rope from"
+    try:
+        rotary_f32 = type(rotary)(config=hf_model.config).float()
+    except Exception:  # a rotary that does not take `config=`; the bf16 buffer is then unavoidable
+        rotary_f32 = deepcopy(rotary).float()
+    # `forward` reads this tensor only for device and dtype (transformers 5.12), so pass a view --
+    # a full fp32 copy of the hidden states is ~251 MB at seq 15360.
+    probe = hidden_states[:1, :1].float()
+    with torch.no_grad():
+        return rotary_f32(probe, position_ids)
+
+
+def layer_wants_position_embeddings(hf_layer) -> bool:
+    """Does this reference decoder layer take ``position_embeddings``?
+
+    The predicate that decides whether a rope table has to be built at all. Layers differ across
+    transformers generations: a transformers-5.x layer (e.g. Mistral4) REQUIRES the caller to pass
+    ``(cos, sin)``, while an older or vendored layer (e.g. DeepSeekV3) computes rope internally from
+    ``position_ids`` and exposes no top-level ``rotary_emb`` to build one from. Asking the signature
+    keeps both working; assuming either shape breaks the other.
+    """
+    return "position_embeddings" in inspect.signature(hf_layer.forward).parameters
+
+
+def reference_position_embeddings(hf_model, hidden_states, position_ids, num_layers: int):
+    """The reference rope table for a whole run, or ``None`` when no layer takes one.
+
+    Built once: it depends only on the positions, and building per layer would construct a rotary
+    module and a full fp32 copy of the hidden states each time (~251 MB at seq 15360).
+
+    Returns None rather than raising for a reference whose layers compute rope internally --
+    DeepSeekV3's vendored layer does, and its model exposes no top-level ``rotary_emb``, so asking
+    unconditionally asserted on exactly the models that never needed a table.
+    """
+    if not num_layers or not layer_wants_position_embeddings(hf_model.layers[0]):
+        return None
+    return reference_rope(hf_model, hidden_states, position_ids)
+
+
+def decoder_layer_kwargs(
+    hf_layer, hf_model, hidden_states, attention_mask, position_ids, cache, use_cache=True, position_embeddings=None
+):
     """Keyword arguments for calling one reference decoder layer, bound to ITS OWN signature.
 
     Reference layers differ across transformers generations and getting it wrong fails in two
@@ -227,10 +276,8 @@ def decoder_layer_kwargs(hf_layer, hf_model, hidden_states, attention_mask, posi
       * transformers >= 5 moved rope to the MODEL level and made ``position_embeddings`` required, so
         omitting it raises ``TypeError: cannot unpack non-iterable NoneType`` from inside attention.
 
-    Rope is built and evaluated in FLOAT32 and cast down. Computing it in bf16 loses the low bits of
-    ``position * inv_freq``, so the phase error grows with position -- measured on Mistral at
-    qk_rope_head_dim=64 it holds to ~2k tokens then falls off (0.99997 at seq 512, 0.958 at 5120),
-    which reads exactly like a device bug and is not one.
+    Pass ``position_embeddings`` from ``reference_rope`` -- it depends only on the positions, so
+    building it per layer is wasted work. Omitted, it is built here for this one call.
     """
     params = inspect.signature(hf_layer.forward).parameters
     kwargs = {
@@ -239,15 +286,12 @@ def decoder_layer_kwargs(hf_layer, hf_model, hidden_states, attention_mask, posi
         "use_cache": use_cache,
     }
     kwargs["past_key_values" if "past_key_values" in params else "past_key_value"] = cache
-    if "position_embeddings" in params:
-        rotary = getattr(hf_model, "rotary_emb", None)
-        assert rotary is not None, (
-            f"{type(hf_layer).__name__} requires position_embeddings but "
-            f"{type(hf_model).__name__} exposes no rotary_emb to build them from"
+    if "position_embeddings" in params:  # == layer_wants_position_embeddings(hf_layer)
+        cos, sin = (
+            position_embeddings
+            if position_embeddings is not None
+            else reference_rope(hf_model, hidden_states, position_ids)
         )
-        rotary_f32 = deepcopy(rotary).float()
-        with torch.no_grad():
-            cos, sin = rotary_f32(hidden_states.float(), position_ids)
         kwargs["position_embeddings"] = (cos.to(hidden_states.dtype), sin.to(hidden_states.dtype))
     return kwargs
 
@@ -771,6 +815,16 @@ def load_and_compute_layer_by_layer(
     first_k_dense = config.first_k_dense_replace
     n_routed = config.n_routed_experts
 
+    # Once for the whole reference: identical across layers, and each build would otherwise construct
+    # a rotary module and a full fp32 copy of the hidden states.
+    #
+    # Only when a layer actually takes position_embeddings. A vendored reference such as DeepSeekV3
+    # computes rope internally and exposes no top-level rotary_emb, so building this unconditionally
+    # asserts on exactly the models that never needed it.
+    ref_position_embeddings = (
+        reference_position_embeddings(hf_model, h_ref, position_ids, num_layers) if compute_reference else None
+    )
+
     for i in range(num_layers):
         logger.info(f"Processing layer {i}/{num_layers}...")
 
@@ -783,7 +837,13 @@ def load_and_compute_layer_by_layer(
 
             layer_input = h_ref
             layer_kwargs = decoder_layer_kwargs(
-                hf_model.layers[i], hf_model, h_ref, attention_mask, position_ids, ref_cache
+                hf_model.layers[i],
+                hf_model,
+                h_ref,
+                attention_mask,
+                position_ids,
+                ref_cache,
+                position_embeddings=ref_position_embeddings,
             )
             with torch.no_grad():
                 layer_out = hf_model.layers[i](layer_input, **layer_kwargs)
