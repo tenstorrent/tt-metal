@@ -8,6 +8,15 @@
 
 #include "api/llk_operand_members.h"
 
+class ScratchpadBindingToken;
+
+namespace ckernel {
+namespace experimental {
+struct LLKMemDescriptor;
+constexpr LLKMemDescriptor to_llk_mem_descriptor(ScratchpadBindingToken);
+}  // namespace experimental
+}  // namespace ckernel
+
 // Forward declaration only: the token grants Scratchpad<T> access to its members, but nothing
 // in this header needs the definition. Defined in api/scratchpad.h.
 template <typename T>
@@ -41,6 +50,8 @@ public:
 private:
     template <typename T>
     friend class Scratchpad;
+    friend constexpr ckernel::experimental::LLKMemDescriptor ckernel::experimental::to_llk_mem_descriptor(
+        ScratchpadBindingToken);
 
     uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
     uint32_t size_in_bytes_;  // static per-node size
