@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-07-24-v1"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-08-01-v5"
 UNKNOWN_RUNNER = "(unknown runner)"
 
 OSC_SEQUENCE_RE = re.compile(r"\x1b\].*?\x1b\\")
@@ -35,6 +35,9 @@ FABRIC_LINK_MISMATCH_RE = re.compile(
     r"\S+\s+to\s+\S+\s+only\s+has\s+\d+\s+channels",
     re.IGNORECASE,
 )
+OUT_OF_DISK_HARD_RE = re.compile(r"(no\s+space\s+left\s+on\s+device|enospc)", re.IGNORECASE)
+DISK_USAGE_RE = re.compile(r"disk\s+usage\s+is\s+(?P<percent>\d{1,3})\s*%", re.IGNORECASE)
+DISK_USAGE_HIGH_RE = re.compile(r"disk\s+usage\s+is\s+high", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -136,6 +139,18 @@ ERROR_SIGNATURES = (
         key="FAILED_RESET_FOUND",
         label="Failed reset",
         needle="Unable to reset board successfully",
+        case_sensitive=False,
+    ),
+    ErrorSignature(
+        key="PHYSICAL_DISCOVERY_FAILURE_FOUND",
+        label="Physical discovery failure",
+        pattern=r"Physical\s+Discovery\s+found\s+\d+\s+missing\s+channel\s+connections?",
+        case_sensitive=False,
+    ),
+    ErrorSignature(
+        key="PHYSICAL_CHIP_NOT_FOUND",
+        label="Physical chip not found",
+        pattern=r"Physical\s+chip\s+id\s+\d+\s+(?:is\s+)?not\s+found\s+in\s+(?:the\s+)?control\s+plane\s+chip\s+mapping",
         case_sensitive=False,
     ),
 )
@@ -453,6 +468,9 @@ def strip_terminal_sequences(value: str) -> str:
 
 
 def signature_found(log_text: str, signature: ErrorSignature) -> bool:
+    if signature.key == "OUT_OF_DISK_FOUND":
+        return out_of_disk_signature_found(log_text)
+
     if signature.pattern:
         flags = 0 if signature.case_sensitive else re.IGNORECASE
         return re.search(signature.pattern, log_text, flags=flags) is not None
@@ -463,6 +481,23 @@ def signature_found(log_text: str, signature: ErrorSignature) -> bool:
     if signature.case_sensitive:
         return signature.needle in log_text
     return signature.needle.lower() in log_text.lower()
+
+
+def out_of_disk_signature_found(log_text: str) -> bool:
+    plain_log_text = strip_terminal_sequences(log_text)
+    if OUT_OF_DISK_HARD_RE.search(plain_log_text):
+        return True
+
+    disk_pressure_signals: list[tuple[int, bool]] = []
+    for match in DISK_USAGE_RE.finditer(plain_log_text):
+        percent = int(match.group("percent"))
+        disk_pressure_signals.append((match.start(), percent >= 90))
+
+    disk_pressure_signals.extend((match.start(), True) for match in DISK_USAGE_HIGH_RE.finditer(plain_log_text))
+    if not disk_pressure_signals:
+        return False
+
+    return max(disk_pressure_signals, key=lambda signal: signal[0])[1]
 
 
 def format_fabric_node(mesh: str, device: str) -> str:

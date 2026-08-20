@@ -166,6 +166,10 @@ struct SanitizerSettings {
     std::optional<bool> internal = std::nullopt;
 };
 
+// Not a limit: the value TT_METAL_TDP_LIMIT_WATTS carries to ask for the board default back rather
+// than a specific limit. Firmware only accepts limits in [50, 500] W, so zero is free to mean this.
+inline constexpr uint32_t TDP_LIMIT_RESTORE_DEFAULT_SENTINEL = 0;
+
 class RunTimeOptions {
     std::string root_dir;
 
@@ -231,10 +235,16 @@ class RunTimeOptions {
     // should remain the same size as normal, unlike with null_kernels.
     bool kernels_early_return = false;
 
+    // Temporary: rdcycle DFB init timing in device firmware. Deprecate once profiler covers this.
+    bool measure_dfb_init_time_enabled = false;
+
     bool clear_l1 = false;
     bool clear_dram = false;
 
     size_t pinned_memory_cache_limit_bytes = 4ULL * 1024 * 1024 * 1024;
+
+    // Firmware throttler TDP limit [W] to apply when the cluster opens, or the restore sentinel.
+    std::optional<uint32_t> tdp_limit_watts;
 
     bool skip_loading_fw = false;
 
@@ -395,6 +405,13 @@ class RunTimeOptions {
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
 
+    // Process-start trace allocation tracker settings. These are static because
+    // environment variables are process-wide and the hot-path accessors do not
+    // belong to a particular MetalContext.
+    inline static bool trace_allocation_tracking_enabled_ = false;
+    inline static bool trace_allocation_diagnostics_enabled_ = false;
+    inline static bool trace_allocation_skip_program_cache_enabled_ = false;
+
     // Disable shared memory tracking for tt-smi
     bool shm_tracking_disabled = false;
     bool shm_verbose = false;
@@ -490,6 +507,12 @@ public:
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
+
+    static bool get_trace_allocation_tracking_enabled() { return trace_allocation_tracking_enabled_; }
+    static bool get_trace_allocation_diagnostics_enabled() { return trace_allocation_diagnostics_enabled_; }
+    static bool get_trace_allocation_skip_program_cache_enabled() {
+        return trace_allocation_skip_program_cache_enabled_;
+    }
 
     bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
     bool get_shm_verbose() const { return shm_verbose; }
@@ -603,10 +626,11 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
+            get_measure_dfb_init_time_enabled(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode());
@@ -656,6 +680,8 @@ public:
     void set_kernels_early_return(bool v) { kernels_early_return = v; }
     bool get_kernels_early_return() const { return kernels_early_return; }
 
+    bool get_measure_dfb_init_time_enabled() const { return measure_dfb_init_time_enabled; }
+
     bool get_clear_l1() const { return clear_l1; }
     void set_clear_l1(bool clear) { clear_l1 = clear; }
 
@@ -664,6 +690,9 @@ public:
 
     size_t get_pinned_memory_cache_limit_bytes() const { return pinned_memory_cache_limit_bytes; }
     void set_pinned_memory_cache_limit_bytes(size_t limit_bytes) { pinned_memory_cache_limit_bytes = limit_bytes; }
+
+    std::optional<uint32_t> get_tdp_limit_watts() const { return tdp_limit_watts; }
+    void set_tdp_limit_watts(std::optional<uint32_t> limit_watts) { tdp_limit_watts = limit_watts; }
 
     std::string get_visible_devices() const { return visible_devices; }
     std::string get_arch_name() const { return arch_name; }

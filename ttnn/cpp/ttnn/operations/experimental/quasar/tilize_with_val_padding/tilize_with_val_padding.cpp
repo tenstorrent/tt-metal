@@ -71,7 +71,7 @@ namespace ttnn::operations::experimental::quasar {
 ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
-    const tt::tt_metal::PadValue pad_value,
+    const ttnn::PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore,
@@ -125,7 +125,7 @@ ttnn::Tensor tilize_with_val_padding(
 ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<uint32_t>& output_padded_shape,
-    const tt::tt_metal::PadValue pad_value,
+    const ttnn::PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore,
@@ -181,7 +181,7 @@ ttnn::Tensor tilize_with_zero_padding(
         return create_device_tensor(spec, input_tensor.device());
     }
 
-    tt::tt_metal::PadValue pad_value;
+    ttnn::PadValue pad_value;
     if (input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::FLOAT32) {
         pad_value = 0.0f;
     } else {

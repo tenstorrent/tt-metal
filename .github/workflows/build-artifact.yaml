@@ -48,6 +48,11 @@ on:
         type: boolean
         default: true
         description: "Make resulting debian packages available in the workflow"
+      use-system-sfpi:
+        required: false
+        type: boolean
+        default: false
+        description: "Use the SFPI toolchain already staged in the docker image instead of downloading it. Only safe for internal CI consumption: skips producing the tt-metalium-jit package, so leave false for release/publish builds whose packages need to be self-contained."
       build-ttnn-import-artifact:
         required: false
         type: boolean
@@ -222,6 +227,11 @@ on:
         type: boolean
         default: false
         description: "Package the wheel from the compiled tree (no second compile) instead of the manylinux build-wheel job; in-family CI consumers only"
+      use-system-sfpi:
+        required: false
+        type: boolean
+        default: false
+        description: "Use the SFPI toolchain already staged in the docker image instead of downloading it. Only safe for internal CI consumption: skips producing the tt-metalium-jit package, so leave false for release/publish builds whose packages need to be self-contained."
       architecture:
         required: false
         type: string
@@ -650,6 +660,11 @@ jobs:
             "--configure-only"
           )
 
+          echo "Use system SFPI: ${{ inputs.use-system-sfpi }}"
+          if [ "${{ inputs.use-system-sfpi }}" = "true" ]; then
+            build_args+=("--use-system-sfpi")
+          fi
+
           echo "Build tracy: ${{ inputs.tracy }}"
           if [ "${{ inputs.tracy }}" = "false" ]; then
             build_args+=("--disable-profiler")
@@ -740,18 +755,24 @@ jobs:
         run: |
           CCACHE_STATS=$(ccache -sv)
           echo "$CCACHE_STATS"
-          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '<details><summary>CCache Summary</summary>' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "$CCACHE_STATS" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '</details>' >> $GITHUB_STEP_SUMMARY
 
           # Surface remote storage stats and errors from the ccache log.
           # Uses a filter script to avoid overflowing the 1024k step summary limit.
           if [ -f /tmp/ccache.log ]; then
-            echo '## CCache Remote Storage' >> $GITHUB_STEP_SUMMARY
+            echo '<details><summary>CCache Remote Storage</summary>' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             .github/scripts/ccache_log_filter.sh /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '</details>' >> $GITHUB_STEP_SUMMARY
           fi
 
           # Helper debug log — only written when CCACHE_S3_DEBUG=true enables CRSH_LOGFILE.
@@ -760,12 +781,15 @@ jobs:
             head -30 /tmp/ccache-storage-s3.log
             echo "=== ccache-storage-s3 log (last 80 lines) ==="
             tail -80 /tmp/ccache-storage-s3.log
-            echo '## CCache Storage Helper Log' >> $GITHUB_STEP_SUMMARY
+            echo '<details><summary>CCache Storage Helper Log</summary>' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             head -30 /tmp/ccache-storage-s3.log >> $GITHUB_STEP_SUMMARY
             echo '--- (last 200 lines) ---' >> $GITHUB_STEP_SUMMARY
             tail -200 /tmp/ccache-storage-s3.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '</details>' >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: ☁️ Upload packages
@@ -815,11 +839,14 @@ jobs:
           # self-contained; targets manylinux_2_35 (ubuntu 22.04 glibc) = in-family only.
           LD_LIBRARY_PATH=/work/build/lib auditwheel repair -w /work/wheelhouse /work/wheelhouse-raw/*.whl
           echo "Repaired wheel(s):"; ls -1sh /work/wheelhouse/*.whl
-          # Name it like the build-wheel job so consumers treat it identically.
+          # Name it like the build-wheel job so consumers treat it identically. Includes the
+          # Python version so two in-place builds (e.g. Ubuntu 22.04 cp310 + 24.04 cp312) in the
+          # same run don't collide on the same artifact name.
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
-          ARTIFACT_NAME="ttnn-dist-inplace-${{ inputs.build-type }}${TRACY_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
+          PYTHON_VERSION_NODOT=$(echo "${{ needs.parse-platform.outputs.python-version }}" | tr -d '.')
+          ARTIFACT_NAME="ttnn-dist-inplace-cp${PYTHON_VERSION_NODOT}-${{ inputs.build-type }}${TRACY_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: ☁️ Upload wheel package

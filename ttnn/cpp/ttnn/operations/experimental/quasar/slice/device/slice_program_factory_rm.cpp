@@ -297,7 +297,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
                  {"start_id", "num_sticks_per_core", "num_sticks_per_core_read", "num_read_per_barrier"},
              .common_runtime_arg_names =
                  {"addr_offset", "padded_stick_size", "unpadded_stick_size", "stick_size_offset", "misalignment"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
         .advanced_options = {.num_runtime_varargs = num_dims, .num_common_runtime_varargs = 2 * num_dims},
     };
 
@@ -320,7 +321,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
                   "num_read_per_barrier",
                   "start_id",
                   "page_size_override"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // --- Per-core runtime args ---

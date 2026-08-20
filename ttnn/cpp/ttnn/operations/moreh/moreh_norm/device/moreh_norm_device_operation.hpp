@@ -7,7 +7,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm {
 
@@ -30,22 +30,24 @@ struct MorehNormOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
+    // Metal 2.0 program factories (ProgramSpecFactoryConcept). Selected by reduced-dim position in
+    // select_program_factory: dim == rank-1 -> W, dim == rank-2 -> H, otherwise NC.
     struct ProgramFactoryWOther {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
     };
 
     struct ProgramFactoryHOther {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
     };
 
     struct ProgramFactoryNCOther {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);

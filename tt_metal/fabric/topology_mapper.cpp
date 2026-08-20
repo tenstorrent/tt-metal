@@ -458,11 +458,17 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
 
         config.pinnings = pinning_groups_;
 
-        // Append MGD pinnings when available (same many-to-many group shape).
+        // PGD<->MGD matching wants pins already keyed by mesh. Start from the MGD map and merge galaxy
+        // corner pins (pinning_groups_) into the same buckets. CSP still uses the flat config.pinnings list.
+        ::tt::tt_metal::experimental::tt_fabric::PinningsByMesh pinnings_by_mesh;
         if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
-            const auto& mgd_pinnings = mesh_graph_.get_mesh_graph_descriptor().get_pinnings();
-            config.pinnings.insert(config.pinnings.end(), mgd_pinnings.begin(), mgd_pinnings.end());
+            const auto& mgd = mesh_graph_.get_mesh_graph_descriptor();
+            pinnings_by_mesh = mgd.get_pinnings();
+            for (const auto& [_, groups] : mgd.get_pinnings()) {
+                config.pinnings.insert(config.pinnings.end(), groups.begin(), groups.end());
+            }
         }
+        ::tt::tt_metal::experimental::tt_fabric::merge_pinnings_by_mesh(pinnings_by_mesh, pinning_groups_);
 
         ::tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph adjacency_map_physical_multi_mesh;
         // If using an MGD, try and match with PGD to consume preferred pinnings from the PGD for better mapping
@@ -476,7 +482,7 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
                         asic_id_to_mesh_rank,
                         *pgd,
                         mesh_graph_.get_mesh_graph_descriptor(),
-                        std::optional{config.pinnings});
+                        pinnings_by_mesh);
             } else {
                 log_debug(
                     tt::LogFabric,
@@ -714,6 +720,7 @@ void TopologyMapper::broadcast_chip_info_to_hosts(const std::vector<std::size_t>
     std::vector<int> target_ranks;
     if (target_rank == -1) {
         // Broadcast to all peers (excluding self)
+        target_ranks.reserve(world_size - 1);
         for (std::size_t peer = 0; peer < world_size; ++peer) {
             if (peer != my_rank) {
                 target_ranks.push_back(peer);
@@ -750,6 +757,7 @@ void TopologyMapper::broadcast_chip_info_to_hosts(const std::vector<std::size_t>
 
     // Collect entries to broadcast based on host ranks filter
     std::vector<const MappedChipInfo*> entries_to_broadcast;
+    entries_to_broadcast.reserve(chip_topology_mapping_.size());
     std::unordered_set<std::size_t> host_rank_set(host_ranks.begin(), host_ranks.end());
     const auto& host_to_rank_map = physical_system_descriptor_.get_host_to_rank_map();
     for (const auto& info : chip_topology_mapping_) {
@@ -1635,6 +1643,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
 
     // Extract ASIC IDs from the descriptors map
     std::vector<tt::tt_metal::AsicID> all_asic_ids;
+    all_asic_ids.reserve(total_number_of_chips);
     for (const auto& [asic_id, _] : physical_system_descriptor.get_asic_descriptors()) {
         all_asic_ids.push_back(asic_id);
     }

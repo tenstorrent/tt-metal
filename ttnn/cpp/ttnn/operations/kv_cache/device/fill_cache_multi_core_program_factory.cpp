@@ -112,8 +112,8 @@ ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
     uint32_t num_blocks_of_work = input_tensor.padded_shape()[1] * input_tensor.padded_shape()[-2] / TILE_HEIGHT;
 
     // Wt is the only shape-derived geometry create_descriptor still needs directly; the
-    // batch_idx/update_idx-dependent cache_start_id lives in compute_fill_cache_start_ids so the
-    // cache-miss and cache-hit (get_dynamic_runtime_args) paths share one source of truth.
+    // batch_idx/update_idx-dependent cache_start_id lives in compute_fill_cache_start_ids, shared
+    // with override_runtime_arguments.
     uint32_t Wt = cache_tensor.padded_shape()[-1] / TILE_WIDTH;
     tt::tt_metal::IDevice* device = input_tensor.device();
 
@@ -217,12 +217,12 @@ ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
     // Per-core runtime args. src/dst base addresses are declared as Buffer* bindings so the
-    // framework patches the (possibly reallocated) addresses directly on cache hits (fast path).
-    // The per-core writer cache_start_id derives from operation_attributes (batch_idx, update_idx)
-    // which UpdateKVCacheOperation::compute_program_hash deliberately excludes from the
-    // program-cache key, so it is NOT stable across cache hits: it is re-patched every dispatch by
-    // UpdateKVCacheOperation::get_dynamic_runtime_args. compute_fill_cache_start_ids is the shared
-    // single source of truth for the work-split and cache_start_id formula so the two paths agree.
+    // descriptor carries the buffer identity; on a cache hit override_runtime_arguments below
+    // re-applies the (possibly reallocated) addresses. The per-core writer cache_start_id derives
+    // from operation_attributes (batch_idx, update_idx) which
+    // UpdateKVCacheOperation::compute_program_hash deliberately excludes from the program-cache key,
+    // so it is NOT stable across cache hits either. compute_fill_cache_start_ids is the single
+    // source of truth for the work-split and cache_start_id formula.
     const auto start_ids = compute_fill_cache_start_ids(operation_attributes, tensor_args);
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
         const CoreCoord& core = cores.at(i);
@@ -257,6 +257,48 @@ ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
     desc.kernels.push_back(std::move(writer_desc));
 
     return desc;
+}
+
+void FillCacheMultiCoreProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const KvCacheParams& operation_attributes,
+    const KvCacheInputs& tensor_args,
+    Tensor& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Runs on EVERY program-cache hit, so it patches the cached program in place and never calls
+    // create_descriptor(): that would pay the cache-miss host cost (work-split, CoreRangeSet,
+    // TensorAccessorArgs, kernel-source strings, a fresh per-core arg vector) on a hit.
+    // Kernel push order in create_descriptor: reader(0), writer(1).
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    constexpr uint32_t kReaderSrcAddrArgIdx = 0;
+    constexpr uint32_t kWriterDstAddrArgIdx = 0;
+    constexpr uint32_t kWriterCacheStartIdArgIdx = 2;
+
+    // Buffer-address slots: create_descriptor emplaces these as Buffer*, and this hook supersedes
+    // resolve_bindings, so re-applying them is ours. The cache tensor is also the output (in-place).
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = tensor_args.cache.buffer();
+    const uint32_t src_addr = src_buffer->address();
+    const uint32_t dst_addr = dst_buffer->address();
+
+    // Same helper create_descriptor uses: identical core set, order and cache_start_id formula.
+    // Everything else (reader args 1-2, writer arg 1) is num_blocks_per_core/num_blocks_written * Wt
+    // — pure work-split/shape values, and the shapes are in the hash, so a hit means they match.
+    for (const auto& [core, cache_start_id] : compute_fill_cache_start_ids(operation_attributes, tensor_args)) {
+        tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx, core)[kReaderSrcAddrArgIdx] = src_addr;
+        auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, core);
+        writer_args[kWriterDstAddrArgIdx] = dst_addr;
+        writer_args[kWriterCacheStartIdArgIdx] = cache_start_id;
+    }
+
+    // desc.cbs[0] is globally allocated on the input buffer for sharded inputs (whether the input is
+    // sharded is hashed, so the cached program has the dynamic CB iff we take this branch). CB
+    // positions in program.circular_buffers() match desc.cbs, as in apply_descriptor_runtime_args.
+    if (tensor_args.input.shard_spec().has_value()) {
+        constexpr uint32_t kSrc0CbPos = 0;
+        UpdateDynamicCircularBufferAddress(program, program.circular_buffers()[kSrc0CbPos]->id(), *src_buffer);
+    }
 }
 
 }  // namespace ttnn::prim

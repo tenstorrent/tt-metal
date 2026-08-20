@@ -82,9 +82,9 @@ Tensor bcast(
     auto padded_shape_a = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor_a.padded_shape());
     auto padded_shape_b = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor_b.padded_shape());
     Tensor formatted_a = ttnn::tilize_with_val_padding(
-        input_tensor_a, padded_shape_a, tt::tt_metal::PadValue(0.0f), input_tensor_a.memory_config());
+        input_tensor_a, padded_shape_a, ttnn::PadValue(0.0f), input_tensor_a.memory_config());
     Tensor formatted_b = ttnn::tilize_with_val_padding(
-        input_tensor_b, padded_shape_b, tt::tt_metal::PadValue(0.0f), input_tensor_b.memory_config());
+        input_tensor_b, padded_shape_b, ttnn::PadValue(0.0f), input_tensor_b.memory_config());
 
     // in_place is set to false because inputs are already transformed to formatted_a/formatted_b,
     // so the original input tensors cannot be modified in-place anyway

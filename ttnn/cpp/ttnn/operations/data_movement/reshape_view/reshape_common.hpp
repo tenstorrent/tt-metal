@@ -7,8 +7,9 @@
 #include <tt-metalium/shape.hpp>
 #include <tt_stl/span.hpp>
 
-#include <variant>
 #include <cstdint>
+
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -16,4 +17,4 @@ tt::tt_metal::Shape infer_dims_for_reshape(const ttnn::Tensor& tensor, ttsl::Spa
 
 }  // namespace ttnn::operations::data_movement::detail
 
-using PadValue = std::variant<uint32_t, float>;
+using PadValue = ttnn::PadValue;

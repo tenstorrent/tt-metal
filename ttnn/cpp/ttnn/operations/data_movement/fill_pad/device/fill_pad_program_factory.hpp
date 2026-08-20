@@ -41,7 +41,7 @@ inline uint32_t pack_fill_value(T fill_value) {
 // Float DataTypes (FLOAT32, BFLOAT16) keep the full float32 bit pattern — the
 // compute kernel reconstructs it via fill_tile_bitcast and the downstream
 // packer handles the bf16 narrowing.
-inline uint32_t pack_fill_value_for_dtype(ttnn::DataType dtype, const tt::tt_metal::PadValue& pad_value) {
+inline uint32_t pack_fill_value_for_dtype(ttnn::DataType dtype, const ttnn::PadValue& pad_value) {
     // PadValue's uint32_t arm carries an integer value / raw 32-bit pattern (e.g. reduce's int32 pad
     // sentinels, which are not float-representable); the float arm carries a numeric float value (the
     // default for prod, reshape, slice, ...). Mirrors tilize_with_val_padding's get_packed_value.

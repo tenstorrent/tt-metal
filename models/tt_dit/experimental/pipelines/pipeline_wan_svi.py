@@ -8,6 +8,9 @@ Chains short I2V clips into long videos with latent-space continuity.
 See ``experimental/models/Wan2_2_SVI.md`` for the regime parameters,
 upstream-workflow comparison, and the documented scheduler gap.
 """
+
+from __future__ import annotations
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Literal, Optional, Union
@@ -21,7 +24,6 @@ import ttnn
 from models.tt_dit.experimental.pipelines.pipeline_wan_lora import LoRASpec, WanPipelineI2VLora
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
-from models.tt_dit.solvers import EulerSolver, UniPCSolver, UniPCVariant
 
 Regime = Literal["python", "comfyui"]
 
@@ -89,16 +91,8 @@ class WanPipelineSVI(WanPipelineI2VLora):
             config=config,
             lora_high=lora_high,
             lora_low=lora_low,
+            scheduler=scheduler,
         )
-        # Override the base's scheduler/solver — breaks tracing.
-        self._scheduler = scheduler
-        if isinstance(scheduler, FlowMatchEulerDiscreteScheduler):
-            self._solver = EulerSolver()
-        else:
-            self._solver = UniPCSolver(
-                order=scheduler.config.solver_order,
-                variant=UniPCVariant(scheduler.config.solver_type),
-            )
 
     @staticmethod
     def _configure_regime(
@@ -145,51 +139,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
                 prediction_type="flow_prediction",
                 flow_shift=shift,
             ),
-        )
-
-    @classmethod
-    def create_pipeline(
-        cls,
-        *,
-        mesh_device: ttnn.MeshDevice,
-        height: int = 480,
-        width: int = 832,
-        num_frames: int = 81,
-        num_links: int | None = None,
-        dynamic_load: bool | None = None,
-        topology: ttnn.Topology | None = None,
-        is_fsdp: bool | None = None,
-        svi_high: str,
-        svi_low: str,
-        lightx2v_high: Optional[str] = None,
-        lightx2v_low: Optional[str] = None,
-        regime: Regime = "python",
-        num_motion_latent: int = 1,
-        num_overlap_frame: int = 4,
-    ) -> WanPipelineSVI:
-        config = WanPipelineConfig.default(
-            mesh_shape=mesh_device.shape,
-            checkpoint_name=WanPipelineI2VLora.BASE_DIFFUSERS_REPO,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            num_links=num_links,
-            topology=topology,
-            dynamic_load=dynamic_load,
-            is_fsdp=is_fsdp,
-            boundary_ratio=0.875,
-            model_type="i2v",
-        )
-        return cls(
-            device=mesh_device,
-            config=config,
-            svi_high=svi_high,
-            svi_low=svi_low,
-            lightx2v_high=lightx2v_high,
-            lightx2v_low=lightx2v_low,
-            regime=regime,
-            num_motion_latent=num_motion_latent,
-            num_overlap_frame=num_overlap_frame,
         )
 
     def __call__(

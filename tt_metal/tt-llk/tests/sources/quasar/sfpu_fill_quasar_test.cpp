@@ -24,7 +24,7 @@ using namespace ckernel;
 //   T0 unpack: stage buffer_A from L1 into DEST via the unpack-to-dest path.
 //              The data is a placeholder — the SFPU overwrites every DEST lane.
 //   T1 math:   run _calculate_fill_int_ / _calculate_fill_ to write the constant
-//              (FILL_INT_VALUE or FILL_CONST) into every DEST lane.
+//              5 into every DEST lane.
 //   T2 pack:   pack the filled DEST tile out to buffer_Res in L1.
 
 // Returns true when the unpack source format is one of the integer formats supported
@@ -36,6 +36,7 @@ inline bool is_int_fill_format(DataFormat fmt)
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -46,8 +47,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t buf_desc_id = 0; // T0 source descriptor slot for buffer_A
-    const std::uint32_t num_tiles   = params.TILE_CNT;
 
     // DEST DVALID handshake: T0 is the producer, T1 (SFPU) and T2 (PACK) are the consumers.
     // fill always uses unpack_to_dest (SFPU test — no FPU datacopy path).
@@ -65,27 +64,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // Source descriptor: buffer_A in L1, L1-side format = formats.unpack_A_src,
-    // face geometry from the harness.
-    buffer_descriptor_u bd_val = {0};
-
-    bd_val.f.l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
-    bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-    bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = params.num_faces;
-
-    // TDMA descriptor: bind the buffer descriptor to slot 0; reg_data_format =
-    // unpack_A_dst is the DEST-side (post-conversion) format.
-    tdma_descriptor_t td_val;
-    td_val.buf_desc        = bd_val;
-    td_val.buf_desc_id     = buf_desc_id;
-    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
-    _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
+    // face geometry from the harness. reg_data_format = unpack_A_dst is the
+    // DEST-side (post-conversion) format.
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+        ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
 
     // Configure unpacker → init unary operand path → unpack tile 0 from L1 into DEST.
-    _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles);
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, ckernel::DEFAULT_TENSOR_SHAPE);
+    _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
+    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
 
     // Release DEST section to the SFPU consumer.
     _llk_unpack_dest_dvalid_section_done_<dest_sync>();
@@ -133,28 +121,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if (is_int_fill)
     {
-        // Int path: _calculate_fill_int_ writes FILL_INT_VALUE to every element of Dest
+        // Int path: _calculate_fill_int_ writes 5 to every element of Dest
         // via SFPLOADI + SFPSTORE; the SFPMEM store mode is selected by FILL_INT_FORMAT
         // at compile time (no runtime dispatch).
-        constexpr std::uint32_t FILL_INT_VALUE = 5;
-
-        // Walk every tile in DEST starting at DST_INDEX, filling all lanes with FILL_INT_VALUE.
+        // Fill every DEST lane in each tile with integer value 5.
         for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
         {
             SFPU_UNARY_CALL(
-                dest_sync, is_fp32_dest_acc_en, _calculate_fill_int_, (FILL_INT_FORMAT, SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC, FILL_INT_VALUE);
+                dest_sync, is_fp32_dest_acc_en, _calculate_fill_int_, (FILL_INT_FORMAT, SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC, 5 /*value*/);
         }
     }
     else
     {
         // Float path: _calculate_fill_ uses SFPU DEFAULT store mode, which supports
         // all float formats (Float16, Float16_b, Float32).
-        constexpr float FILL_CONST = 5.0f;
-
-        // Walk every tile in DEST starting at DST_INDEX, filling all lanes with FILL_CONST.
+        // Walk every tile in DEST starting at DST_INDEX, filling all lanes with 5.0f.
         for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
         {
-            SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_fill_, (SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC, FILL_CONST);
+            SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_fill_, (SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC, 5.0f /*value*/);
         }
     }
 
@@ -172,6 +156,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cfg_defines.h"
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -181,33 +166,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    std::uint32_t const buf_desc_id        = 8; // T2 destination descriptor slot for buffer_Res
-    const std::uint32_t num_tiles_per_pack = params.TILE_CNT;
 
     // PACK is the final consumer of the DEST DVALID chain.
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
     // Destination descriptor: buffer_Res in L1, L1-side format = formats.pack_dst,
-    // face geometry from the harness.
-    buffer_descriptor_u bd_val = {0};
-    bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_Res[0]);
-    bd_val.f.format            = static_cast<std::uint8_t>(formats.pack_dst);
-    bd_val.f.x_dim             = params.TEST_FACE_C_DIM;
-    bd_val.f.y_dim             = params.TEST_FACE_R_DIM;
-    bd_val.f.z_dim             = params.num_faces;
-
-    // TDMA descriptor: bind buffer_Res to slot 8; reg_data_format = pack_src is
-    // the DEST-side format the packer reads.
-    tdma_descriptor_t tdma_desc;
-    tdma_desc.buf_desc        = bd_val;
-    tdma_desc.buf_desc_id     = buf_desc_id;
-    tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
-    _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
+    // face geometry from the harness. reg_data_format = pack_src is the DEST-side
+    // format the packer reads.
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+        ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
 
     // Configure pack engine 0 → init → pack tile from DST_INDEX into buffer_Res → release section.
-    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
-    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
-    _llk_pack_(params.DST_INDEX, 0, ckernel::DEFAULT_TENSOR_SHAPE);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
+    _llk_pack_(params.DST_INDEX, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 #endif

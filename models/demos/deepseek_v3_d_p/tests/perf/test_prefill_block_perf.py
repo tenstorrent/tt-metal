@@ -104,7 +104,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         ),
         (
             f"pytest {_TEST_PATH} -k 'mesh-2x4-2link and layer3 and gate_device and no_ref and isl_6k4'",
-            36_777_010,  # Re-centered 2026-07-27 for two stacked speedups now in the tree -- BOTH
+            35_655_993,  # Re-centered 2026-07-27 for two stacked speedups now in the tree -- BOTH
             # the in-place direct-write change (drop the separate output buffer + per-layer fill;
             # measured 50.61 ms alone) AND #47536 (update_padded_kv_cache RM/fp8; measured 51.29 ms
             # alone). The combined 2x4-2link number can't be measured on the galaxy, so the target is
@@ -122,7 +122,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         # with a wide margin so the first run will pass and surface the measured number.
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-8x4 and layer0 and gate_device and no_ref and isl_25k'",
-            25_862_584,  # Recalibrated 2026-06-10 on bh-glx-110-c08u02 (with FABRIC_2D init flush=false change).
+            23_148_850,  # Recalibrated 2026-07-30 on bh-glx-110-c08u02 (with FABRIC_2D init flush=false change).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer0_dense_fabric2d",
             1,

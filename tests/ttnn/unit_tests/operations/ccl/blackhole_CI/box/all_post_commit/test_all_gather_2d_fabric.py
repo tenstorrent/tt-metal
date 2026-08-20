@@ -60,3 +60,36 @@ def test_all_gather_2d_fabric(
         enable_trace=enable_trace,
         num_iters=num_iters,
     )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "trace_region_size": 90112,
+            "require_exact_physical_num_devices": True,
+        }
+    ],
+    indirect=True,
+)
+def test_all_gather_async_fabric_2d_folded_line(mesh_device):
+    """A logical four-device line folded onto QB's physical 2D cycle."""
+    run_all_gather_impl(
+        mesh_device,
+        ag_output_shape=[1, 1, 128, 128],
+        dim=3,
+        ag_input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mem_config_input=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_ag=ttnn.DRAM_MEMORY_CONFIG,
+        num_links=2,
+        all_gather_topology=ttnn.Topology.Linear,
+        num_iters=1,
+        enable_trace=False,
+        cluster_axis=1,
+        use_barrier=True,
+        use_persistent_buffers=False,
+        all_gather_function=ttnn.experimental.all_gather_async,
+    )

@@ -26,6 +26,7 @@ class MeshTensor;
 
 namespace distributed {
 class MeshDevice;
+class MeshCommandQueue;
 class MeshCoordinateRangeSet;
 }  // namespace distributed
 
@@ -37,10 +38,9 @@ class GlobalCircularBuffer;
 struct TensorPrefetcherConfig {};
 
 // Returns true if the Tensor prefetcher is supported on `mesh_device`, i.e.
-// programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0 and
-// either no harvested DRAM channels or a single device). When this returns false,
-// StartTensorPrefetcher would TT_FATAL, so callers (e.g. tests) can use this
-// to skip rather than fail.
+// programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0).
+// When this returns false, StartTensorPrefetcher would TT_FATAL, so callers
+// (e.g. tests) can use this to skip rather than fail.
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
 
 // One prefetch work item: a weight tensor plus the number of K-blocks to split
@@ -98,7 +98,7 @@ struct TensorPrefetcherInput {
 // Preconditions (TT_FATAL):
 //   - No other prefetcher is currently active on this mesh device.
 //   - DRAM programmable cores are available on this mesh (Blackhole with firmware
-//     >= 19.12.0.0 and either no harvested DRAM channels or a single device).
+//     >= 19.12.0.0).
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config);
 
 // Queue one prefetch request. Non-blocking.
@@ -118,12 +118,13 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 //   - Per-tensor `rotation` (on each TensorPrefetcherInput) is documented on that struct; a
 //     non-empty rotation enables streaming and sets the per-receiver delivery order, the only
 //     knob that varies delivery order within a request.
-//   - `cq_id` is the command queue on which a trace may be recording. When that
-//     CQ is mid trace-capture, the request is captured into the trace instead of
-//     being sent immediately, and is (re)sent on every replay of that trace
-//     (ReplayTrace / ttnn.execute_trace). When the CQ is not capturing, the
-//     request is sent immediately. Defaults (std::nullopt) to the current/default
-//     command queue.
+//   - `trace_capture_cq` is the command queue on which a trace may be recording, and
+//     must belong to `mesh_device`. When it is non-null and mid trace-capture, the
+//     request is captured into the trace instead of being sent, and is (re)sent on
+//     every replay of that trace (ReplayTrace / ttnn.execute_trace). Otherwise — a
+//     non-capturing queue, or null (the default) — the request is sent immediately,
+//     whatever any command queue is doing. Pass `&mesh_device.mesh_command_queue()`
+//     to opt into capture on the calling thread's current queue.
 //
 // The caller is responsible for keeping the tensors in `input_tensors` and
 // `gcb` alive until Stop returns.
@@ -132,25 +133,23 @@ void QueueTensorPrefetcherRequest(
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
-    std::optional<uint8_t> cq_id = std::nullopt);
+    distributed::MeshCommandQueue* trace_capture_cq = nullptr);
 
-// Fence the prefetcher against command queue `cq_id`: every prefetch request queued
-// after this call waits until all work previously enqueued on `cq_id` has completed
+// Fence the prefetcher against command queue `cq`: every prefetch request queued
+// after this call waits until all work previously enqueued on `cq` has completed
 // on device before it reads DRAM. Use this to guarantee that data written over
-// `cq_id` (e.g. the EnqueueWriteBuffer that populates the weights) has landed before
+// `cq` (e.g. the EnqueueWriteBuffer that populates the weights) has landed before
 // the prefetcher streams it.
 //
 // Call this synchronously on the host thread that issued the data writes — after
 // those writes, and before the QueueTensorPrefetcherRequest that consumes them.
 //
-//   - `cq_id` selects the command queue to fence against.
+//   - The prefetcher fenced is the one active on `cq.device()`.
 //   - `device_subset` defaults to the full mesh when std::nullopt.
 //
-// Preconditions (TT_FATAL): a prefetcher is active on this mesh device.
+// Preconditions (TT_FATAL): a prefetcher is active on `cq`'s mesh device.
 void WaitForCqOnTensorPrefetcher(
-    distributed::MeshDevice& mesh_device,
-    uint8_t cq_id,
-    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset);
+    distributed::MeshCommandQueue& cq, const std::optional<distributed::MeshCoordinateRangeSet>& device_subset);
 
 // Block until all previously queued requests have been delivered and the
 // kernels have exited, then release the prefetcher's resources. No-op if no

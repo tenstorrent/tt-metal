@@ -32,6 +32,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "dispatch_mem_map.hpp"
+#include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "dispatch_core_manager.hpp"
 
@@ -430,16 +431,6 @@ DispatchTopology::DispatchTopology(
     get_max_num_eth_cores_(get_max_num_eth_cores),
     get_reads_dispatch_cores_(get_reads_dispatch_cores) {
     command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
-    const bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
-    std::vector<CoreType> core_types{CoreType::WORKER, CoreType::ETH};
-    if (descriptor_.hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
-        core_types.push_back(CoreType::DISPATCH);
-    }
-    for (CoreType core_type : core_types) {
-        const auto& layout = this->get_dispatch_query_manager_().cq_dispatch_layout(core_type);
-        dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<DispatchMemMap>(
-            core_type, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster, layout, descriptor_.rtoptions());
-    }
 }
 
 DispatchTopology::~DispatchTopology() { reset(); }
@@ -487,6 +478,7 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
     if (remote_devices.empty()) {
         // MMIO devices only, just replicate a single chip arch for each
         std::vector<DispatchKernelNode> nodes_for_one_mmio = populate_single_device();
+        nodes.reserve(mmio_devices.size() * nodes_for_one_mmio.size());
         uint32_t index_offset = 0;
         for (auto id : mmio_devices) {
             for (auto node : nodes_for_one_mmio) {
@@ -507,6 +499,7 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
             // For Galaxy, we always init all remote devices associated with an mmio device.
             std::vector<DispatchKernelNode> nodes_for_one_mmio =
                 (num_hw_cqs == 1) ? galaxy_nine_chip_arch_1cq_fabric : galaxy_nine_chip_arch_2cq_fabric;
+            nodes.reserve(mmio_devices.size() * nodes_for_one_mmio.size());
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
                 // Need a mapping from templated device id (1-8) to actual device id (from the tunnel)
@@ -548,6 +541,7 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
                 "N300/T3K expects devices in mmio/remote pairs.");
             std::vector<DispatchKernelNode> nodes_for_one_mmio =
                 (num_hw_cqs == 1) ? two_chip_arch_1cq_fabric : two_chip_arch_2cq_fabric;
+            nodes.reserve(mmio_devices.size() * nodes_for_one_mmio.size());
 
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
@@ -791,7 +785,7 @@ void DispatchTopology::configure_dispatch_cores(Device* device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
     CoreType dispatch_core_type = this->dispatch_core_manager_.get_dispatch_core_type();
-    const auto& mem_map = *this->dispatch_mem_map_[enchantum::to_underlying(dispatch_core_type)];
+    const auto& mem_map = descriptor_.metal_context().dispatch_mem_map();
     uint32_t cq_start = mem_map.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     std::vector<uint32_t> zero = {0x0};

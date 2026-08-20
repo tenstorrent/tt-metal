@@ -1152,7 +1152,8 @@ def run_chunked_block_glm_indexer(
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=GLM52Config.FABRIC_PAYLOAD_SIZE),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                "l1_small_size": 512,
+                # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
+                "l1_small_size": 768,
             },
             2,
             ttnn.Topology.Linear,

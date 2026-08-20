@@ -213,3 +213,24 @@ ALL_MESH_CONFIGS = [
         reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
 ]
+
+
+def _fabric_cfg_to_init_reliability_mode(fabric_cfg):
+    # For fabric 1d the param is omitted. For fabric 2d ideally it would be strict for reliable perf measurements
+    # Until CI HW supports it, use relaxed
+    if fabric_cfg in (ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING):
+        return None
+    else:
+        return ttnn.FabricReliabilityMode.RELAXED_INIT
+
+
+def fabric_to_device_params(fabric_cfg):
+    device_params = {
+        "fabric_config": fabric_cfg,
+        "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+    }
+    reliability_mode = _fabric_cfg_to_init_reliability_mode(fabric_cfg)
+    if reliability_mode is not None:
+        device_params["reliability_mode"] = reliability_mode
+
+    return device_params

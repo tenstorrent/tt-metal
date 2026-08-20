@@ -19,7 +19,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in_data, dfb::in_scaler, dfb::out);
     tilizeA_B_reduce_init<true /*neginf_srcA*/, false /*zero_srcA_reduce*/>(
-        dfb::in_data, dfb::in_scaler, per_core_block_tile_cnt, dfb::out);
+        dfb::in_data, dfb::in_scaler, per_core_block_tile_cnt);
 
     dfb_in_scaler.wait_front(1);
 

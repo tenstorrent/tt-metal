@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "internal/firmware_common.h"
@@ -71,6 +72,7 @@ void kernel_main() {
     bool use_write_with_state = static_cast<bool>(get_arg(args::use_write_with_state));
     bool use_inline_dw_write_from_state = static_cast<bool>(get_arg(args::use_inline_dw_write_from_state));
     bool use_inline_dw_write_with_state = static_cast<bool>(get_arg(args::use_inline_dw_write_with_state));
+    std::uint32_t invalid_txn_id = get_arg(args::invalid_txn_id);
 
     // We will assert later. This kernel will hang.
     // Need to signal completion to dispatcher before hanging so that
@@ -85,6 +87,13 @@ void kernel_main() {
     uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
     notify_dispatch_core_done(dispatch_addr, noc_index);
 #endif
+
+    if (invalid_txn_id) {
+        // Trips DEBUG_SANITIZE_NOC_TXN_ID (user trid above the arch max / Quasar user pool).
+        Noc noc;
+        noc.is_read_trid_flushed(invalid_txn_id);
+        return;
+    }
 
     if (l1_overflow_addr) {
         CoreLocalMem<std::uint32_t> l1_overflow_buffer(l1_overflow_addr);

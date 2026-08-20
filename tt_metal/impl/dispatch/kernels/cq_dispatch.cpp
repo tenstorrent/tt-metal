@@ -594,8 +594,13 @@ void process_write() {
     process_write_linear(num_mcast_dests);
 }
 
+// Deliberately out of line. kernel_main inlines every command handler into one ~11 KB function, so this loop's
+// register allocation and placement depend on everything else in it: a couple hundred bytes added anywhere -- a cold
+// handler, a telemetry counter -- swings small-page write bandwidth by ~9% in either direction. Isolating the loop
+// makes it independent of that. It is free here only because the bank walk below removes enough register pressure
+// that the standalone function no longer spills; on its own the isolation cost ~5%.
 template <bool is_dram>
-void process_write_paged() {
+__attribute__((noinline)) void process_write_paged() {
     volatile tt_l1_ptr CQDispatchCmd* cmd =
         reinterpret_cast<volatile tt_l1_ptr CQDispatchCmd*>(l1_uncached_addr(cmd_ptr));
 
@@ -605,23 +610,75 @@ void process_write_paged() {
     uint32_t pages = cmd->write_paged.pages;
     uintptr_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
     uint32_t write_length = pages * page_size;
-    auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec<is_dram>(), base_addr, page_size);
+    [[maybe_unused]] auto addr_gen =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec<is_dram>(), base_addr, page_size);
     uint32_t dst_addr_offset = 0;  // Offset into page.
+
+    // Interleaved pages round-robin the banks, so walking them in page order steps the bank index by one and only
+    // advances the in-bank offset when it wraps. TensorAccessor::get_noc_addr instead recovers both from the page id
+    // every page, at the cost of two magic-multiply divisions by the bank count.
+    //
+    // A page occupies a whole allocator-aligned slot in its bank, so the row stride is the page size rounded up to
+    // that alignment, not the page size itself. The two differ only for a command whose page size is not already
+    // aligned, which no buffer write generates -- EnqueueWriteBuffer sends the aligned page size -- but the command
+    // permits, and test_dispatcher sends.
+    constexpr uint32_t num_banks = is_dram ? NUM_DRAM_BANKS : NUM_L1_BANKS;
+    const uint32_t aligned_page_size =
+        align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<is_dram>());
+    uint32_t walk_row = interleaved_addr_gen::get_bank_offset_index<is_dram>(page_id);
+    uint32_t walk_bank = interleaved_addr_gen::get_bank_index<is_dram>(page_id, walk_row);
+    uint32_t walk_row_addr = base_addr + walk_row * aligned_page_size;
 
     // DPRINT("process_write_paged - pages: {} page_size: {} dispatch_cb_page_size: {}\n", pages, page_size,
     // dispatch_cb_page_size);
 
+    // A page that fits in one packet and starts on a page boundary is written whole, and every such page in a row of
+    // available data is the same length. Count them up front and write the run with the transfer length programmed
+    // once, which also drops the availability check, both clamps and the partial-page branch from the inner loop.
+    // Anything else -- a page larger than a packet, or a page split across the command buffer's data -- falls through
+    // to the general path below.
+    const bool single_packet_pages = page_size <= NOC_MAX_BURST_SIZE;
+    cq_noc_async_write_init_state<CQ_NOC_sndl>(0, 0, 0);
+
     while (write_length != 0) {
         // Transfer size is min(remaining_length, data_available_in_cb)
         uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
+
+        if (single_packet_pages && dst_addr_offset == 0 && available_data >= page_size) {
+            uint32_t run = available_data < write_length ? available_data : write_length;
+            noc_write_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT, false>(
+                noc_index, 0, 0, page_size);
+            do {
+                uint64_t dst = get_noc_addr_helper(
+                    interleaved_addr_gen::get_noc_xy<is_dram>(walk_bank, noc_index),
+                    walk_row_addr + interleaved_addr_gen::get_bank_offset<is_dram>(walk_bank));
+                ASSERT(dst == addr_gen.get_noc_addr(page_id, 0));
+                cq_noc_async_write_with_state<CQ_NOC_SNDl, CQ_NOC_WAIT, CQ_NOC_SEND, NCRISC_WR_CMD_BUF, true>(
+                    static_cast<uint32_t>(data_ptr), dst, page_size);
+                page_id++;
+                if (++walk_bank == num_banks) {
+                    walk_bank = 0;
+                    walk_row_addr += aligned_page_size;
+                }
+                data_ptr += page_size;
+                write_length -= page_size;
+                run -= page_size;
+            } while (run >= page_size);
+            continue;
+        }
+
         uint32_t remaining_page_size = page_size - dst_addr_offset;
         uint32_t xfer_size = remaining_page_size > available_data ? available_data : remaining_page_size;
         // Cap the transfer size to the NOC packet size - use of One Packet NOC API (better performance
         // than writing a generic amount of data)
         xfer_size = xfer_size > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : xfer_size;
-        uint64_t dst = addr_gen.get_noc_addr(page_id, dst_addr_offset);
+        uint64_t dst = get_noc_addr_helper(
+            interleaved_addr_gen::get_noc_xy<is_dram>(walk_bank, noc_index),
+            walk_row_addr + interleaved_addr_gen::get_bank_offset<is_dram>(walk_bank) + dst_addr_offset);
+        ASSERT(dst == addr_gen.get_noc_addr(page_id, dst_addr_offset));
 
-        noc_async_write<NOC_MAX_BURST_SIZE>(static_cast<uint32_t>(data_ptr), dst, xfer_size);
+        cq_noc_async_write_with_state<CQ_NOC_SNDL, CQ_NOC_WAIT, CQ_NOC_SEND, NCRISC_WR_CMD_BUF, true>(
+            static_cast<uint32_t>(data_ptr), dst, xfer_size);
         // If paged write is not completed for a page (dispatch_cb_page_size < page_size) then add offset, otherwise
         // incr page_id.
         if (xfer_size < remaining_page_size) {
@@ -630,6 +687,10 @@ void process_write_paged() {
         } else {
             page_id++;
             dst_addr_offset = 0;
+            if (++walk_bank == num_banks) {
+                walk_bank = 0;
+                walk_row_addr += aligned_page_size;
+            }
         }
 
         write_length -= xfer_size;

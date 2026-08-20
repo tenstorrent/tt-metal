@@ -5,17 +5,17 @@
 #pragma once
 
 #include "typecast_device_op_types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::prim {
 
 struct TypecastProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output);
 };
 
 struct TypecastSubgridProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output);
 };
 

@@ -32,9 +32,9 @@
     do "$exe" || exit 1; done;
     done
   skus:
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 30
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 30
   team: ttsim
   owner_id: U08PR765YJ1 # Matt Craighead

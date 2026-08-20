@@ -158,11 +158,15 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
 
 // More generic version of cq_noc_async_write_with_state: Allows writing an arbitrary amount of data, when the NOC
 // config (dst_noc, VC..) have been specified.
+// flush_last_transfer sets the flush packet tag on the final transfer so that a credit atomic issued after
+// this call -- typically from CBWriter::release_pages -- cannot commit to L1 ahead of the payload.
+// No-op on tt-1xx, which has no packet tags.
 template <
     bool write_last_packet = true,
     bool update_counters = false,
     enum CQNocWait wait_first = CQ_NOC_WAIT,
-    uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
+    uint32_t cmd_buf = NCRISC_WR_CMD_BUF,
+    bool flush_last_transfer = false>
 inline uint32_t cq_noc_async_write_with_state_any_len(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
     if (size > NOC_MAX_BURST_SIZE) {
@@ -180,10 +184,24 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
         }
     }
     if constexpr (write_last_packet) {
+#if defined(ARCH_QUASAR)
+        if constexpr (flush_last_transfer) {
+            noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/true);
+        }
+#endif
         cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf, update_counters>(
             src_addr, dst_addr, size, ndests, noc);
+#if defined(ARCH_QUASAR)
+        if constexpr (flush_last_transfer) {
+            noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/false);
+        }
+#endif
         return 0;
     } else {
+        static_assert(
+            !flush_last_transfer,
+            "flush_last_transfer requires write_last_packet: this call does not issue the final transfer, so there "
+            "is nothing to tag here. Tag it at the call that does.");
         return size;
     }
 }
@@ -397,12 +415,10 @@ public:
             }
         }
 #endif
-#ifdef ARCH_QUASAR
-        Semaphore<programmable_core_type>(downstream_sem_id).up(n);
-#else
         noc_semaphore_inc(
-            get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)), n, noc_idx);
-#endif
+            get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)),
+            n,
+            noc_idx);
     }
 
     uint32_t additional_count{0};
@@ -423,8 +439,8 @@ private:
 //  - Provides non-blocking availability via acquire_pages() and a blocking drain via wait_all_pages().
 // Notes:
 //  - This class only accounts for pages locally; it does NOT release credits back to the producer.
-//    Use CBReaderWithReleasePolicy or CBReaderWithManualRelease when credits must be returned.
-//  - Credits are returned per-block, not per-page.
+//    Use CBReaderWithReleasePolicy for block-based credit release, or CBReaderWithManualRelease when the caller
+//    returns credits explicitly.
 template <
     uint32_t my_sem_id,
     uint32_t cb_log_page_size,
@@ -614,40 +630,38 @@ private:
     uint32_t block_noc_writes_to_clear_{0};
 };
 
-template <
-    uint32_t my_sem_id,
-    uint32_t cb_log_page_size,
-    uint32_t cb_blocks,
-    uint32_t cb_pages_per_block,
-    uint32_t cb_base,
-    uint32_t cb_end>
-class CBReaderWithManualRelease : public CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base> {
+template <uint32_t my_sem_id, uint32_t cb_log_page_size, uint32_t cb_base, uint32_t cb_end>
+class CBReaderWithManualRelease {
+    static_assert((cb_end - cb_base) % (1 << cb_log_page_size) == 0, "CB size must be a whole number of pages");
+
 public:
     FORCE_INLINE void init() {
-        this->CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base>::init();
+        cb_fence_ = cb_base;
+        upstream_count_ = 0;
+        local_count_ = 0;
     }
+
+    // Return available space (in bytes) after data_ptr. This data will always be contiguous in memory and will never
+    // wrap around.
+    uint32_t available_bytes(uintptr_t data_ptr) const { return static_cast<uint32_t>(cb_fence_ - data_ptr); }
 
     // Get a new CB page. Will update cmd_ptr on wrap-around. Returns the number of pages acquired. Will not release
     // pages to writer.
     FORCE_INLINE uint32_t get_cb_page(uintptr_t& cmd_ptr) {
-        // Strided past the data that has arrived, get the next page
-        if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
-            if (this->rd_block_idx_ == cb_blocks - 1) {
-                cmd_ptr = cb_base;
-                this->cb_fence_ = cb_base;
-            }
-            this->move_rd_to_next_block();
+        if (cb_fence_ == cb_end) {
+            cmd_ptr = cb_base;
+            cb_fence_ = cb_base;
         }
 
-        return this->acquire_pages();
+        return acquire_pages();
     }
 
     // Returns how much data is available. Will block until data is available.
     FORCE_INLINE uint32_t wait_for_available_data(uintptr_t& cmd_ptr) {
-        if (this->available_bytes(cmd_ptr) == 0) {
+        if (available_bytes(cmd_ptr) == 0) {
             get_cb_page(cmd_ptr);
         }
-        return this->available_bytes(cmd_ptr);
+        return available_bytes(cmd_ptr);
     }
 
     // Advance cmd_ptr by length. If we wrap around, wrap the fence (should only happen if we hit the end exactly).
@@ -657,17 +671,47 @@ public:
         if (cmd_ptr + length >= cb_end) {
             length -= static_cast<uint32_t>(cb_end - cmd_ptr);
             cmd_ptr = cb_base;
-            if (this->cb_fence_ == cb_end) {
+            if (cb_fence_ == cb_end) {
                 // We hit the nail on the head, wrap the fence
                 ASSERT(length == 0);
-                this->cb_fence_ = cb_base;
-                // TODO eliminate usage of block_next_start_addr_ in this CB reader. rd_block_idx_ will point to the
-                // last block, not the first block, so the limit calculation in acquire_pages will be incorrect. We
-                // don't really use blocks for anything, here, so we should get rid of them and simplify the code.
+                cb_fence_ = cb_base;
             }
         }
         cmd_ptr += length;
     }
+
+private:
+    // Acquire pages from upstream up to the end of the ring. Pages are released manually by the caller.
+    FORCE_INLINE uint32_t acquire_pages() {
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+
+        if (local_count_ == upstream_count_) {
+            WAYPOINT("UAPW");
+            uint32_t heartbeat = 0;
+            do {
+                invalidate_l1_cache();
+                IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
+            } while ((upstream_count_ = *sem_addr) == local_count_);
+            WAYPOINT("UAPD");
+        }
+
+        uint32_t limit = static_cast<uint32_t>((cb_end - cb_fence_) >> cb_log_page_size);
+        uint32_t available = upstream_count_ - local_count_;
+        uint32_t usable = (available > limit) ? limit : available;
+
+        local_count_ += usable;
+        cb_fence_ += usable << cb_log_page_size;
+
+        return usable;
+    }
+
+    // Byte address fence delimiting the end of currently usable data (do not process beyond this address).
+    uintptr_t cb_fence_{0};
+    // Last value read from the upstream semaphore (producer credits). Cached snapshot for availability checks.
+    uint32_t upstream_count_{0};
+    // Number of pages this reader has already accounted for (consumed) into the cb_fence_ region.
+    uint32_t local_count_{0};
 };
 
 constexpr uint32_t l1_to_local_cache_copy_chunk = 6;

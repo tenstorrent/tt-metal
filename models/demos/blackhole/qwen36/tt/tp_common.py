@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TP helpers for Qwen3.5 on Blackhole (9B single-device + 27B TP=4).
+"""TP helpers for Qwen3.5/3.6 on Blackhole (9B single-device + 27B TP=4 / TP=8).
 
 Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
@@ -31,6 +31,41 @@ COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
 def prefill_grid_default():
     """BH P150: (8,10); WH: (8,8). y capped at 10 on BH (grid_x=10 breaks matmul)."""
     return (8, 10) if is_blackhole() else (8, 8)
+
+
+# Max grid COLUMNS a tuned prefill config may use. A Blackhole galaxy reports a 12-wide worker
+# grid, but harvested P150s expose only 11, so tuning to 12 would not port. 11 x 10 = 110 cores.
+PREFILL_MAX_COLS_PORTABLE = 11
+
+# Why TP=8 wants different values (measured at S=2048, 27B, 1x8 Ring):
+#   * widest_cols -- `_best_prefill_cols` ranks candidate widths by (out_subblock_w, cols), i.e.
+#     subblock first. At TP=8 the halved N makes wide grids yield a small per_core_N and hence a
+#     narrow subblock, so that ranking retreats to fewer columns and leaves cores idle. Measured
+#     device time is monotonically decreasing in column count instead: attn_wo went 1944us @ 60
+#     cores -> 700us @ 110, and mlp_gate 2943us @ 60 -> 1935us @ 110. So take the width.
+#   * in0_block_w_divisor -- `min(cap, k_tiles // grid_x)` is a function of the per-device K, which
+#     halves. attn_wo/gdn_out go k_tiles 48 -> 24 and `24 // 11 = 2`, but in0_block_w only has to
+#     DIVIDE k_tiles, so a larger block is legal and much faster (attn_wo @ 11 cols, from the sweep:
+#     bw2 786us, bw4 719us, bw6 700us, bw8 705us).
+#
+# in0_block_w_cap is L1-BOUND, NOT just a legality bound. in0_block_w sizes the in0 circular
+# buffer, and `_wo_proj` / the MLP prefill arm write their OUTPUT to L1 (attention/tp.py:246,
+# mlp.py:284) -- so the CBs and a resident L1 output tensor compete for the same 1536 KB. Measured
+# on the real model: cap=8 overflows and test_model_tp_long_prefill dies with
+#   "Statically allocated circular buffers in program N clash with L1 buffers on core range
+#    [0-0 - 10-8]. L1 buffer allocated at 1314560 and static circular buffer region ends at 1372032"
+# from attention/tp.py:241. A standalone per-op sweep CANNOT see this: in isolation the only L1
+# tenant is the op under test, so it reports a win that the full model has no room for. Any future
+# raise of this cap must be validated by test_model_tp_long_prefill, not by the sweep alone.
+_PREFILL_TUNING = {
+    4: dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4),
+    8: dict(widest_cols=True, in0_block_w_divisor=True, in0_block_w_cap=4),
+}
+
+
+def prefill_tuning(num_devices):
+    """Prefill matmul tuning for this TP; unknown TP falls back to the frozen TP=4 values."""
+    return _PREFILL_TUNING.get(num_devices, _PREFILL_TUNING[4])
 
 
 def _roundup(a, b):
@@ -176,12 +211,14 @@ def _full_grid_crs(grid):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
 
 
-def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activation=None):
+def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activation=None, tuning=None):
     """2D prefill matmul progcfg (DRAM-interleaved).
 
-    fused_activation in packer; sharded kernel rejects ttnn.linear(activation=...) with progcfg."""
+    fused_activation in packer; sharded kernel rejects ttnn.linear(activation=...) with progcfg.
+    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior."""
     if grid_size is None:
         grid_size = prefill_grid_default()
+    tuning = tuning or _PREFILL_TUNING[4]
     per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
     per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
 
@@ -189,7 +226,13 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
 
     k_tiles = math.ceil(k / TILE_SIZE)
-    in0_block_w = min(4, max(1, k_tiles // grid_size[0]))
+    cap = tuning["in0_block_w_cap"]
+    if tuning["in0_block_w_divisor"]:
+        # in0_block_w only has to divide k_tiles (no K tail in the 2D mcast kernel), so take the
+        # largest legal block rather than scaling with grid width -- see _PREFILL_TUNING.
+        in0_block_w = _find_largest_divisor(k_tiles, cap)
+    else:
+        in0_block_w = min(cap, max(1, k_tiles // grid_size[0]))
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -202,6 +245,27 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
         fused_activation=fused_activation,
         fuse_batch=False,
     )
+
+
+def _widest_prefill_cols(n, max_cols, subblock_slack=1):
+    """Widest grid whose output subblock stays within `subblock_slack` of the best achievable.
+
+    The TP=8 counterpart to `_best_prefill_cols`. More columns is usually a win at TP=8 (the halved
+    per-device N leaves cores idle), but NOT when the extra width collapses the subblock: measured
+    at S=2048, mlp_gate (N=2176 -> 68 tiles) goes cols 9 -> 11, per_core_N 8 -> 7, and 7 is prime so
+    out_subblock_w drops 4 -> 1 -- a 2058us -> 2118us REGRESSION, i.e. the subblock-first ranking
+    was right for that shape. Guarding on the subblock keeps the wide grid exactly where it pays:
+
+        matmul     default        this rule       measured
+        attn_wo    c10_bw2_sw4    c11_bw4_sw3     803.5 -> 718.7us
+        gdn_out    c10_bw2_sw4    c11_bw4_sw3     802.3 -> 719.9us
+        mlp_down   c10_bw4_sw4    c11_bw4_sw3    1787.4 -> 1724.9us
+        mlp_gate   c9_bw4_sw4     c9_bw4_sw4     2058.1us (unchanged -- already optimal)
+    """
+    n_tiles = math.ceil(n / TILE_SIZE)
+    sw = {cols: _get_out_subblock_w(math.ceil(n_tiles / cols), 1) for cols in range(1, max_cols + 1)}
+    floor = max(sw.values()) - subblock_slack
+    return max((cols for cols, w in sw.items() if w >= floor), default=1)
 
 
 def _best_prefill_cols(n, max_cols):
@@ -217,17 +281,31 @@ def _best_prefill_cols(n, max_cols):
     return best_cols
 
 
-def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max_cols=None):
+def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max_cols=None, tuning=None):
     """FPU-tuned 2D prefill progcfg for MLP matmuls: picks the grid width that maximizes the output
     subblock (drives prefill FPU) instead of the default full width.
 
     max_cols caps the grid width. Default = prefill_grid_default()[0] (8). Pass the device worker-grid
     width (11 on BH P150) to let the subblock heuristic go wide -> the measured prefill winners
     (gate 9-wide, down/wo 10-wide, gdn_qkvz 11-wide; test_mlp_matmul_sweep_prefill). Fused AG/RS paths
-    pin 8-wide separately and are unaffected."""
+    pin 8-wide separately and are unaffected.
+
+    tuning: a `_PREFILL_TUNING` entry. With `widest_cols` (TP=8) the subblock-first width heuristic
+    is replaced by "take the width, clamped to PREFILL_MAX_COLS_PORTABLE" -- measured device time at
+    TP=8 falls monotonically with column count, so trading cores for a wider subblock loses."""
     grid = prefill_grid_default()
-    cols = _best_prefill_cols(n, max_cols or grid[0])
-    return create_prefill_matmul_program_config(m, k, n, grid_size=(cols, grid[1]), fused_activation=fused_activation)
+    tuning = tuning or _PREFILL_TUNING[4]
+    limit = max_cols or grid[0]
+    if tuning["widest_cols"]:
+        # Cap the width at PREFILL_MAX_COLS_PORTABLE (harvested parts expose 11, not 12) and never
+        # exceed the output tile count -- columns beyond it get per_core_N=1 with nothing to compute,
+        # paying mcast cost for no work.
+        cols = _widest_prefill_cols(n, max(1, min(limit, PREFILL_MAX_COLS_PORTABLE, math.ceil(n / TILE_SIZE))))
+    else:
+        cols = _best_prefill_cols(n, limit)
+    return create_prefill_matmul_program_config(
+        m, k, n, grid_size=(cols, grid[1]), fused_activation=fused_activation, tuning=tuning
+    )
 
 
 # Mesh tensor helpers
@@ -243,6 +321,18 @@ def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloa
         memory_config=memory_config,
         cache_file_name=cache_path,
     )
+
+
+def agmm_k_block_size(k_local, default=8):
+    """Largest power-of-2 K_block_size <= `default` that divides K_tiles/device (AGMM Ring has no tail).
+
+    TP=4: 1280->40 tiles->8; TP=8: 640->20 tiles->4. Odd divisors (e.g. 5|20) are unsafe on Ring.
+    """
+    k_tiles = k_local // TILE_SIZE
+    b = 1 << (min(default, max(1, k_tiles)).bit_length() - 1)
+    while b > 1 and k_tiles % b:
+        b //= 2
+    return b
 
 
 def all_gather_matmul_prefill(
@@ -271,7 +361,7 @@ def all_gather_matmul_prefill(
     workers = grid[0] // num_links
     cfg = ttnn.MinimalMatmulConfig(
         M_block_size=4,
-        K_block_size=8,
+        K_block_size=agmm_k_block_size(K_local),
         N_block_size=8,
         subblock_h=1,
         subblock_w=4,
@@ -315,7 +405,7 @@ def all_gather_swiglu_prefill(
     workers = grid[0] // num_links
     cfg = ttnn.MinimalMatmulConfig(
         M_block_size=8,
-        K_block_size=8,
+        K_block_size=agmm_k_block_size(K_local),
         N_block_size=16,
         subblock_h=1,
         subblock_w=4,

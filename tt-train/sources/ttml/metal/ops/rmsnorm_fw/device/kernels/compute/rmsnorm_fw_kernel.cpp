@@ -158,7 +158,7 @@ void calculate_input_multiplied_by_gamma_and_divided_by_rms() {
 
         tile_regs_acquire();
         reconfig_data_format(cb_input, cb_gamma);
-        mul_bcast_rows_init_short(cb_input, cb_gamma);
+        mul_bcast_rows_init(cb_input, cb_gamma);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_tiles_bcast_rows(cb_input, cb_gamma, col + block_idx, col + block_idx, block_idx);
         }
@@ -175,7 +175,7 @@ void calculate_input_multiplied_by_gamma_and_divided_by_rms() {
         cb_wait_front(cb_output_intermediate, block_size);
         tile_regs_acquire();
         reconfig_data_format(cb_output_intermediate, cb_inverse_rms_after_reduction_intermediate);
-        mul_bcast_cols_init_short(cb_output_intermediate, cb_inverse_rms_after_reduction_intermediate);
+        mul_bcast_cols_init(cb_output_intermediate, cb_inverse_rms_after_reduction_intermediate);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_tiles_bcast_cols(
                 cb_output_intermediate,
@@ -218,7 +218,7 @@ void calculate_input_multiplied_by_gamma_and_divided_by_rms() {
 
         tile_regs_acquire();
         reconfig_data_format(cb_input, cb_gamma);
-        mul_bcast_rows_init_short(cb_input, cb_gamma);
+        mul_bcast_rows_init(cb_input, cb_gamma);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
 #ifndef EVERYTHING_EXCEPT_GAMMA_FITS_IN_L1
             mul_tiles_bcast_rows(cb_input, cb_gamma, block_idx, block_idx, block_idx);
@@ -243,7 +243,7 @@ void calculate_input_multiplied_by_gamma_and_divided_by_rms() {
         cb_wait_front(cb_output_intermediate, block_size);
         tile_regs_acquire();
         reconfig_data_format(cb_output_intermediate, cb_inverse_rms_after_reduction_intermediate);
-        mul_bcast_cols_init_short(cb_output_intermediate, cb_inverse_rms_after_reduction_intermediate);
+        mul_bcast_cols_init(cb_output_intermediate, cb_inverse_rms_after_reduction_intermediate);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_tiles_bcast_cols(
                 cb_output_intermediate,
@@ -283,7 +283,8 @@ void kernel_main() {
     }
 
     init_sfpu(cb_input, cb_output);
-    binary_op_init_common(cb_input, cb_gamma, cb_output);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    compute_kernel_hw_startup(cb_input, cb_gamma, cb_output);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         calculate_sum_x_squared();
 

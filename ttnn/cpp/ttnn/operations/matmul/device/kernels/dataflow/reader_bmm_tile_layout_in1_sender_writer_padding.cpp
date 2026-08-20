@@ -5,11 +5,13 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/remote_circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -87,9 +89,24 @@ void kernel_main() {
     // batch args
     constexpr uint32_t MtNt = get_compile_time_arg_val(28);  // if 0
     // Don't need batch; same as batch from READER args
+    constexpr bool compact_output = get_compile_time_arg_val(32);
 
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
+
+    // Indexed/gather mode: iterate only the num_active sparse groups named by the caller's `indices`
+    // operand. Each iteration gathers the weights of group indices[i] and writes its result to COMPACT
+    // output slot i, so there is no sparsity scan and no skipped slot.
+    //
+    // The id list rides in the sparsity operand's plumbing (accessor args, `sparsity_addr` runtime arg,
+    // sparsity DataflowBuffer): the sparsity mask itself is never read in this mode, so reusing those
+    // slots keeps the compile-time arg layout of this shared kernel unchanged.
+    //
+    // Every factory that builds this kernel passes "num_active"; only the sparse matmul factory ever
+    // sets it non-zero. 0 means not indexed, i.e. the unchanged dense sparsity-scan path.
+    constexpr uint32_t num_active = get_named_compile_time_arg_val("num_active");
+    constexpr bool use_indices = num_active > 0;
+    constexpr uint32_t batch_loop_lim = use_indices ? num_active : batchB_lim;
 
 #ifdef FUSE_BIAS
     // in3 mcast args
@@ -109,7 +126,6 @@ void kernel_main() {
     // equals the tile size, so this is a no-op. Mirrors how in0/in1 readers walk at the
     // aligned stride.
     const uint32_t bias_single_tile_size_bytes = get_local_cb_interface(dfb_id_in3).fifo_page_size;
-    constexpr const uint32_t in3_tile_hw = get_tile_hw(dfb_id_in3);
 
 #ifndef BIAS_SHARDED
     uint32_t l1_write_addr_in3;
@@ -138,7 +154,7 @@ void kernel_main() {
         op_signaler = OpSignaler(rt_args_idx);
     }
 
-    constexpr auto in1_args = TensorAccessorArgs<32>();
+    constexpr auto in1_args = TensorAccessorArgs<33>();
     constexpr auto sparsity_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<sparsity_args.next_compile_time_args_offset()>();
 #ifdef FUSE_BIAS
@@ -173,7 +189,6 @@ void kernel_main() {
 
     constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(dfb_id_in1);
-    constexpr const uint32_t in1_tile_hw = get_tile_hw(dfb_id_in1);
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
     // interleaved in1 CB pages are sized to match (see the program factory). On the plain interleaved
     // path the NOC reads the unpadded tile of data into each padded slot and tiles are laid out /
@@ -181,7 +196,8 @@ void kernel_main() {
     // keep their natural (unpadded) stride.
     constexpr uint32_t in1_aligned_tile_size_bytes =
         (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
-#if !defined(IN1_SHARDED) && !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED)
+#if !defined(IN1_SHARDED) && !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED) && \
+    !defined(ENABLE_GLOBAL_CB)
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_aligned_tile_size_bytes;
 #else
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
@@ -189,7 +205,6 @@ void kernel_main() {
 
     constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t output_single_tile_size_bytes = get_tile_size(dfb_id_out0);
-    constexpr const uint32_t output_tile_hw = get_tile_hw(dfb_id_out0);
 
     Noc noc;
     DataflowBuffer dfb_in1(dfb_id_in1);
@@ -204,11 +219,16 @@ void kernel_main() {
 #ifdef IN1_SHARDED
     dfb_in1.reserve_back(in1_block_num_tiles * num_blocks_inner_dim);
     dfb_in1.push_back(in1_block_num_tiles * num_blocks_inner_dim);
-#else
+#elif !defined(ENABLE_GLOBAL_CB)
     uint32_t l1_write_addr_in1;
 
     [[maybe_unused]] const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
-#endif  // IN1_SHARDED
+#endif  // IN1_SHARDED / ENABLE_GLOBAL_CB
+
+#ifdef ENABLE_GLOBAL_CB
+    constexpr uint32_t remote_cb_id = tt::CBIndex::c_31;
+    const uint32_t in1_fifo_tiles = get_local_cb_interface(dfb_id_in1).fifo_num_pages;
+#endif
 
     //  WRITER
     const auto s = TensorAccessor(out_args, out_tensor_addr);
@@ -238,6 +258,14 @@ void kernel_main() {
         l1_write_addr_sparsity = dfb_sparsity.get_write_ptr();
     }
 
+    if constexpr (use_indices) {
+        // Indexed/gather mode: the sparsity operand slot carries the active-group id list instead of
+        // the mask. It is a single ROW_MAJOR stick (validated on the host), so one page-0 read pulls
+        // in the whole list, once, for every outer batch.
+        noc.async_read(s_sparsity, dfb_sparsity, sparsity_pagesize, {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+    }
+
 #ifdef IN1_DRAM_WIDTH_SHARDED
     constexpr uint32_t in1_dram_block_size_bytes = in1_dram_block_num_tiles * in1_single_tile_size_bytes;
     uint32_t in1_block_w_bytes = in1_block_w * in1_single_tile_size_bytes;
@@ -258,15 +286,31 @@ void kernel_main() {
         uint32_t in1_dram_batch_offset = in1_batch_in_shard * in1_batch_stride_bytes;
 #endif  // IN1_DRAM_HEIGHT_SHARDED
 
-        if constexpr (batchB > 0) {
+        if constexpr (batchB > 0 && !use_indices) {
             noc.async_read(s_sparsity, dfb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
 
-        for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
-            if constexpr (batchB > 0) {
+        // Indexed/gather mode writes to compact output slots, so capture this outer batch's output
+        // base and index it by the compact slot (the loop counter) each iteration.
+        [[maybe_unused]] const uint32_t out_base_tile_id = out_tensor_start_tile_id;
+
+        for (uint32_t bB = 0; bB < batch_loop_lim; ++bB) {
+            if constexpr (use_indices) {
+                // Gather: jump straight to group indices[bB]'s weight block, scatter its result to
+                // compact output slot bB. Every iterated group is active, so nothing is skipped.
+                const uint32_t group_id = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB];
+                // The ids are device-resident, so the host can only bound their count, not their
+                // values. An out-of-range id would silently read an unrelated weight block; assert
+                // loudly (under watcher) instead, as the in0 sender does for the exact-nnz contract.
+                ASSERT(group_id < batchB);
+                in1_batch_tile_id = in1_tensor_start_tile_id + group_id * KtNt;
+                out_tensor_start_tile_id = out_base_tile_id + bB * MtNt;
+            } else if constexpr (batchB > 0) {
                 if (reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB] == 0) {
-                    out_tensor_start_tile_id += MtNt;
+                    if constexpr (!compact_output) {
+                        out_tensor_start_tile_id += MtNt;
+                    }
                     in1_batch_tile_id += KtNt;
                     continue;
                 }
@@ -294,7 +338,14 @@ void kernel_main() {
                             fused_op_receiver.update_current_block_start_tile_id(
                                 block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
                         }
-#if defined(IN1_DRAM_WIDTH_SHARDED)
+#if defined(ENABLE_GLOBAL_CB)
+                        // The tensor prefetcher pushes this receiver's K-blocks in natural order.
+                        // Keep one block of lookahead: publish the current block to compute, then
+                        // wait for the unpack engine to drain the previous block before returning
+                        // its remote-CB credit to the prefetcher.
+                        dfb_in1.reserve_back(in1_block_num_tiles);
+                        experimental::remote_cb_wait_front(remote_cb_id, block == 0 ? 1u : 2u);
+#elif defined(IN1_DRAM_WIDTH_SHARDED)
                         // Operand 1 - DRAM width sharded
                         dfb_in1.reserve_back(in1_block_num_tiles);
 
@@ -327,9 +378,7 @@ void kernel_main() {
                                 uint32_t l1_read_addr_in1_temp = l1_read_addr_in1;
                                 uint32_t l1_write_addr_in1_temp = l1_write_addr_in1;
                                 for (uint32_t w = 0; w < in1_block_w_dram; ++w) {
-                                    noc.async_read_with_state<
-                                        NocOptions::CUSTOM_VC,
-                                        NOC_MAX_BURST_SIZE>(
+                                    noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                         dram_bank,
                                         CoreLocalMem<uint32_t>(l1_write_addr_in1_temp),
                                         in1_single_tile_size_bytes,
@@ -461,7 +510,23 @@ void kernel_main() {
 #ifndef IN1_SHARDED
                         dfb_in1.push_back(in1_block_num_tiles);
 #endif  // IN1_SHARDED
+#ifdef ENABLE_GLOBAL_CB
+                        if (block >= 1) {
+                            while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles - in1_block_num_tiles)) {
+                                invalidate_l1_cache();
+                            }
+                            experimental::remote_cb_pop_front(remote_cb_id, 1);
+                        }
+#endif
                     }
+#ifdef ENABLE_GLOBAL_CB
+                    if (num_blocks_inner_dim > 0) {
+                        while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles)) {
+                            invalidate_l1_cache();
+                        }
+                        experimental::remote_cb_pop_front(remote_cb_id, 1);
+                    }
+#endif
 #ifdef FUSE_BIAS
                     // Only read bias on first batch, or we have multiple output blocks
                     if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
@@ -687,6 +752,10 @@ void kernel_main() {
 #if OUT_SHARDED
     dfb_out.wait_front(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+#endif
+#ifdef ENABLE_GLOBAL_CB
+    experimental::update_remote_cb_config_in_l1(remote_cb_id);
+    noc.async_atomic_barrier();
 #endif
     noc.async_write_barrier();
 }

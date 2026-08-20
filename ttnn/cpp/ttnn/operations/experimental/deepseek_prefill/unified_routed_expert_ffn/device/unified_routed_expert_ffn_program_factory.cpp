@@ -301,6 +301,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // Candidate gate/up K-block widths: divisors of K_gate_tiles no wider
         // than the requested in0_block_w_gu, largest first.
         std::vector<uint32_t> w_gu_candidates;
+        w_gu_candidates.reserve(std::min<uint32_t>(in0_block_w_gu, K_gate_tiles));
         for (uint32_t w = std::min<uint32_t>(in0_block_w_gu, K_gate_tiles); w >= 1; --w) {
             if (K_gate_tiles % w == 0) {
                 w_gu_candidates.push_back(w);
@@ -829,8 +830,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
     std::map<std::string, std::string> compute_defines{};
     compute_defines["PACKER_L1_ACC"] = "1";
-    // Dst-accumulator mode -> compute kernel: the SwiGLU-OAI dst budget and the
-    // SFPU fp32-dest template derive from this, staying in sync with
+    // Dst-accumulator mode -> compute kernel: the fused-binary-activation dst budget and
+    // the SFPU fp32-dest template derive from this, staying in sync with
     // DST_CAPACITY / ComputeConfig.fp32_dest_acc_en (single source above).
     compute_defines["FP32_DEST_ACC_EN"] = kFp32DestAccEn ? "1" : "0";
     if (op.activation == RoutedExpertActivation::SwiGluOai) {
@@ -838,10 +839,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // clamp(up,±L), (up+1)*gate*sigmoid(alpha*gate). Bakes alpha=1.702,
         // limit=7.0 (SwiGLUConfigGPTOSS) in the kernel.
         compute_defines["SWIGLU_OAI"] = "1";
+    } else if (op.activation == RoutedExpertActivation::SituGlu) {
+        // SiTU-GLU (Kimi K3), with beta_gate=4.0 / beta_up=25.0 baked into the kernel.
+        compute_defines["SITU_GLU"] = "1";
     }
     if (fuse_bias) {
-        // FUSE_BIAS: add gate/up bias (broadcast across rows) before the
-        // SwiGLU-OAI activation and down bias after the down matmul (gpt-oss).
+        // FUSE_BIAS: add gate/up bias (broadcast across rows) before the fused binary
+        // activation and down bias after the down matmul. Validation restricts this to
+        // the activations that have that branch.
         compute_defines["FUSE_BIAS"] = "1";
     }
 

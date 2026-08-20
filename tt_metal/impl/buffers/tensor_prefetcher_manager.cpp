@@ -30,7 +30,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -401,20 +401,42 @@ TensorPrefetcherManager::TensorPrefetcherManager(
 TensorPrefetcherManager::~TensorPrefetcherManager() { stop(); }
 
 void TensorPrefetcherManager::enumerate_dram_senders() {
-    const auto context_id = mesh_device_->impl().get_context_id();
-    const auto& soc_desc = MetalContext::instance(context_id)
-                               .get_cluster()
-                               .get_soc_desc(mesh_device_->get_view().get_devices().front()->id());
-    const uint32_t num_banks = soc_desc.get_num_dram_views();
-    num_banks_ = num_banks;
-    sender_logical_cores_.clear();
-    sender_logical_cores_.reserve(2 * num_banks);
-    for (uint32_t b = 0; b < num_banks; ++b) {
-        // Two senders per bank: the free subchannel then the NOC1-endpoint subchannel.
-        // A queued GCB may use the primary only or both; PREFETCH fan-out targets its mapping.
-        for (const CoreCoord& core : mesh_device_->impl().dram_sender_logical_cores(b)) {
-            sender_logical_cores_.push_back(core);
+    TT_FATAL(!devices_.empty(), "Tensor prefetcher requires at least one device");
+    // dram_grid_size() already TT_FATALs unless every device in the mesh reports the same bank count.
+    num_banks_ = mesh_device_->dram_grid_size().x;
+
+    // Logical DRAM coords name an endpoint role, so a bank's two senders have the same logical
+    // coords on every device even when their DRAM harvest masks differ; only the physical
+    // subchannel each one resolves to changes. Build the list from the reference device and check
+    // the rest agree, because everything downstream (socket placement, kernel placement, GCB sender
+    // indices) indexes senders by slot and would otherwise silently drive another device's wrong
+    // DRISC core.
+    const auto senders_on = [this](const IDevice* device) {
+        std::vector<CoreCoord> senders;
+        senders.reserve(2 * num_banks_);
+        for (uint32_t b = 0; b < num_banks_; ++b) {
+            // Two roles per bank: the free subchannel then the NOC1-endpoint subchannel.
+            const std::vector<CoreCoord> bank_senders = mesh_device_->impl().dram_sender_logical_cores(device, b);
+            TT_FATAL(
+                bank_senders.size() == 2,
+                "Tensor prefetcher expected two DRAM sender roles for bank {} on device {}, found {}",
+                b,
+                device->id(),
+                bank_senders.size());
+            senders.insert(senders.end(), bank_senders.begin(), bank_senders.end());
         }
+        return senders;
+    };
+
+    const IDevice* reference_device = devices_.front();
+    sender_logical_cores_ = senders_on(reference_device);
+    for (size_t d = 1; d < devices_.size(); ++d) {
+        TT_FATAL(
+            senders_on(devices_[d]) == sender_logical_cores_,
+            "Tensor prefetcher: DRAM sender slots on device {} name different logical cores than on reference "
+            "device {}; every device must resolve slot s to the same (bank, role)",
+            devices_[d]->id(),
+            reference_device->id());
     }
     num_senders_ = static_cast<uint32_t>(sender_logical_cores_.size());
 }
@@ -493,6 +515,7 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
                 kRemoteCBId,
                 socket_page_size,
                 cq_signal_l1_addr_,
+                cq_signal_slot_stride_,
             };
 
             KernelHandle kernel_id = CreateKernel(
@@ -515,8 +538,18 @@ void TensorPrefetcherManager::start() {
     TT_FATAL(
         hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
         "Tensor prefetcher requires programmable DRAM cores, which auto-enable on Blackhole with firmware "
-        ">= 19.12.0.0 and either no harvested DRAM channels or a single device");
+        ">= 19.12.0.0");
 
+    // Populate devices_ before resolving sender slots: enumerate_dram_senders checks the slots
+    // against every device's DRAM topology. Build the coord->index map at the same time so
+    // worker_loop fan-out is O(targets).
+    devices_.clear();
+    device_index_by_coord_.clear();
+    for (auto* device : mesh_device_->get_view().get_devices()) {
+        const uint32_t d = static_cast<uint32_t>(devices_.size());
+        devices_.push_back(device);
+        device_index_by_coord_.emplace(mesh_device_->get_view().find_device(device->id()), d);
+    }
     enumerate_dram_senders();
 
     // DRISC L1 layout: the kernel working region (above the GCB zone) is now
@@ -543,10 +576,12 @@ void TensorPrefetcherManager::start() {
     const uint32_t socket_config_bytes = align_up(sizeof(receiver_socket_md), pcie_alignment_for_layout);
     const uint32_t socket_data_bytes = socket_fifo_size_for_layout + pcie_alignment_for_layout;
     const uint32_t kernel_region_base = static_cast<uint32_t>(arena.kernel_working_region_base());
-    // Per-CQ signal slots at the front of the region: a small uint32 counter per
-    // command queue, written by the dispatcher for WaitForCqOnTensorPrefetcher
-    // and polled by the kernel's WAIT_CQ handler.
-    const uint32_t cq_signal_bytes = align_up(kNumCqSignalSlots * sizeof(uint32_t), l1_alignment);
+    // Per-CQ signal slots at the front of the region: a uint32 counter per command
+    // queue, written by the dispatcher for WaitForCqOnTensorPrefetcher and polled by
+    // the kernel's WAIT_CQ handler. One L1 alignment apiece rather than packed — see
+    // cq_signal_slot_stride_.
+    cq_signal_slot_stride_ = l1_alignment;
+    const uint32_t cq_signal_bytes = kNumCqSignalSlots * cq_signal_slot_stride_;
     cq_signal_l1_addr_ = align_up(kernel_region_base, l1_alignment);
     socket_config_l1_addr_ = align_up(cq_signal_l1_addr_ + cq_signal_bytes, pcie_alignment_for_layout);
     socket_data_l1_addr_ = align_up(socket_config_l1_addr_ + socket_config_bytes, pcie_alignment_for_layout);
@@ -574,16 +609,6 @@ void TensorPrefetcherManager::start() {
         kernel_region_size);
     ring_half_ = stage_ring_size_ / 2;
     stage_third_ = stage_ring_size_ / 3;
-
-    // Populate devices_ list once; both allocate_sockets and build_and_launch_programs use it.
-    // Build the coord->index map at the same time so worker_loop fan-out is O(targets).
-    devices_.clear();
-    device_index_by_coord_.clear();
-    for (auto* device : mesh_device_->get_view().get_devices()) {
-        const uint32_t d = static_cast<uint32_t>(devices_.size());
-        devices_.push_back(device);
-        device_index_by_coord_.emplace(mesh_device_->get_view().find_device(device->id()), d);
-    }
 
     allocate_sockets();
     build_and_launch_programs(stage_ring_base_, stage_ring_size_);
@@ -914,9 +939,18 @@ void TensorPrefetcherManager::queue(
     const experimental::GlobalCircularBuffer& gcb,
     const std::optional<MeshCoordinateRangeSet>& device_subset,
     const std::vector<experimental::TensorPrefetcherInput>& tensors,
-    std::optional<uint8_t> cq_id) {
+    MeshCommandQueue* trace_capture_cq) {
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueTensorPrefetcherRequest called before StartTensorPrefetcher");
+    // Only reached with a non-null queue: the null case short-circuits, so the message may
+    // dereference it (TT_FATAL evaluates its arguments only when the condition fails).
+    TT_FATAL(
+        trace_capture_cq == nullptr || trace_capture_cq->device() == mesh_device_,
+        "QueueTensorPrefetcherRequest was given trace-capture command queue {} of mesh device {}, but this prefetcher "
+        "was started on mesh device {}. Pass a command queue of the prefetcher's own mesh device.",
+        trace_capture_cq->id(),
+        trace_capture_cq->device()->id(),
+        mesh_device_->id());
     TT_FATAL(
         experimental::sender_core_type(gcb) == experimental::SenderCoreType::Dram,
         "QueueTensorPrefetcherRequest requires a DRAM-sender GlobalCircularBuffer");
@@ -945,10 +979,10 @@ void TensorPrefetcherManager::queue(
         }
     }
 
-    // If the target command queue is mid trace-capture, capture this request into the trace
-    // instead of sending it now; it is (re)sent on every replay of that trace. Otherwise send
-    // immediately via the host worker.
-    const std::optional<MeshTraceId> recording_trace_id = mesh_device_->mesh_command_queue(cq_id).trace_id();
+    // Engaged only when the caller named a queue that is mid trace-capture; that is what
+    // routes the request into the trace below instead of out via the host worker.
+    const std::optional<MeshTraceId> recording_trace_id =
+        trace_capture_cq != nullptr ? trace_capture_cq->trace_id() : std::nullopt;
 
     {
         // Push all pages of this call under one lock so they stay contiguous and ordered
@@ -988,7 +1022,7 @@ void TensorPrefetcherManager::replay_trace(const MeshTraceId& trace_id) {
 }
 
 void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
-    uint8_t cq_id, const std::optional<MeshCoordinateRangeSet>& device_subset) {
+    MeshCommandQueue& cq, const std::optional<MeshCoordinateRangeSet>& device_subset) {
     // Hold the API lock across this whole call. Three things must be atomic together:
     //   1. the counter bump (++cq_signal_counter_[cq_id]),
     //   2. the dispatcher write that pushes that value to the device, and
@@ -1003,8 +1037,16 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     auto lock = lock_api_function_();
     TT_FATAL(active_, "WaitForCqOnTensorPrefetcher called before StartTensorPrefetcher");
     TT_FATAL(
+        cq.device() == mesh_device_,
+        "WaitForCqOnTensorPrefetcher was given command queue {} of mesh device {}, but this prefetcher was started on "
+        "mesh device {}. Fence against a command queue of the prefetcher's own mesh device.",
+        cq.id(),
+        cq.device()->id(),
+        mesh_device_->id());
+    const uint32_t cq_id = cq.id();
+    TT_FATAL(
         cq_id < cq_signal_counter_.size(),
-        "WaitForCqOnTensorPrefetcher cq_id ({}) out of range [0, {})",
+        "WaitForCqOnTensorPrefetcher command queue id ({}) out of range [0, {})",
         cq_id,
         cq_signal_counter_.size());
 
@@ -1032,13 +1074,14 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
                                             .hal()
                                             .get_l1_noc_offset(HalProgrammableCoreType::DRAM);
     const uint64_t slot_addr = static_cast<uint64_t>(cq_signal_l1_addr_) +
-                               static_cast<uint64_t>(cq_id) * sizeof(uint32_t) + dram_l1_noc_offset;
+                               static_cast<uint64_t>(cq_id) * cq_signal_slot_stride_ + dram_l1_noc_offset;
 
     std::vector<DeviceMemoryAddress> targets;
     targets.reserve(target_devices.size() * num_senders_);
     for (const auto& coord : target_devices) {
         IDevice* device = devices_[device_index_by_coord_.at(coord)];
         for (uint32_t s = 0; s < num_senders_; ++s) {
+            // Per-device translation; see metal_SocDescriptor::dram_bank_endpoint_coords.
             const CoreCoord virtual_core =
                 device->virtual_core_from_logical_core(sender_logical_cores_[s], CoreType::DRAM);
             targets.push_back(DeviceMemoryAddress{coord, virtual_core, slot_addr});
@@ -1046,8 +1089,19 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     }
 
     // (a) Dispatcher write: bump every target DRAM core's signal slot for this CQ. Runs
-    // under the api lock we already hold (the method does not re-lock).
-    mesh_device_->impl().mesh_command_queue_base(cq_id).enqueue_write_dram_core_counter(
+    // under the api lock we already hold (the method does not re-lock). Re-resolving by id is
+    // what gets the queue as a MeshCommandQueueBase, which is what exposes
+    // enqueue_write_dram_core_counter; the identity check is what makes the round trip safe.
+    // It holds for every queue a mesh device owns, so a lookup that lands anywhere else fails
+    // here instead of fencing a queue the caller never named.
+    auto& cq_base = mesh_device_->impl().mesh_command_queue_base(static_cast<uint8_t>(cq_id));
+    TT_FATAL(
+        &cq_base == &cq,
+        "WaitForCqOnTensorPrefetcher was given a command queue reporting id {}, but that is not mesh device {}'s "
+        "command queue for that id. Fence against a command queue obtained from the prefetcher's own mesh device.",
+        cq_id,
+        mesh_device_->id());
+    cq_base.enqueue_write_dram_core_counter(
         ttsl::Span<const DeviceMemoryAddress>(targets), signal_value, /*blocking=*/false);
 
     // (b) Queue a WAIT_CQ request. It rides the same async worker path as prefetch
@@ -1061,7 +1115,7 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     req.sender_pages.assign(1, std::vector<uint8_t>(page_bytes, 0));
     auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(req.sender_pages[0].data());
     header->base.cmd_id = DRAM_PREFETCHER_CMD_WAIT_CQ;
-    header->wait_cq.cq_index = cq_id;
+    header->wait_cq.cq_index = static_cast<uint8_t>(cq_id);
     header->wait_cq.cq_wait_value = signal_value;
     req.target_devices = std::move(target_devices);
 
@@ -1141,6 +1195,7 @@ void TensorPrefetcherManager::worker_loop() {
         std::vector<TargetSocket> still_pending = std::move(remaining_target_sockets);
         while (!still_pending.empty()) {
             std::vector<TargetSocket> next_pending;
+            next_pending.reserve(still_pending.size());
             for (const TargetSocket& target : still_pending) {
                 std::vector<uint8_t>& page = req.sender_pages[target.page_index];
                 if (experimental::detail::try_write(*sockets_[target.socket_index], page.data(), 1)) {
@@ -1196,8 +1251,13 @@ void TensorPrefetcherManager::stop() {
     }
 
     // Wait for kernels to drain their request loop (they exit on the sentinel).
+    // read_device_profiler_results must be false: we hold the (non-recursive) MeshDevice api
+    // lock, and the profiler read reaches enqueue_read_shard_from_core, which takes that same
+    // lock. With the device profiler off the read is a no-op, so this only deadlocks under
+    // tracy. Nothing is lost by skipping it — the read covers worker/eth cores, not the DRAM
+    // cores this program runs on, and the profiler still drains on Finish and at device close.
     for (uint32_t d = 0; d < devices_.size(); ++d) {
-        ::tt::tt_metal::detail::WaitProgramDone(devices_[d], *programs_[d]);
+        ::tt::tt_metal::detail::WaitProgramDone(devices_[d], *programs_[d], /*read_device_profiler_results=*/false);
     }
 
     sockets_.clear();
@@ -1207,6 +1267,7 @@ void TensorPrefetcherManager::stop() {
     sender_logical_cores_.clear();
     trace_requests_.clear();
     num_senders_ = 0;
+    num_banks_ = 0;
     active_ = false;
 }
 
@@ -1232,17 +1293,16 @@ void QueueTensorPrefetcherRequest(
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
-    std::optional<uint8_t> cq_id) {
+    distributed::MeshCommandQueue* trace_capture_cq) {
     auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
-    manager.queue(gcb, device_subset, input_tensors, cq_id);
+    manager.queue(gcb, device_subset, input_tensors, trace_capture_cq);
 }
 
 void WaitForCqOnTensorPrefetcher(
-    distributed::MeshDevice& mesh_device,
-    uint8_t cq_id,
-    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset) {
-    auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
-    manager.enqueue_cq_signal_and_wait(cq_id, device_subset);
+    distributed::MeshCommandQueue& cq, const std::optional<distributed::MeshCoordinateRangeSet>& device_subset) {
+    auto* mesh_device = cq.device();
+    auto& manager = mesh_device->impl().tensor_prefetcher(mesh_device);
+    manager.enqueue_cq_signal_and_wait(cq, device_subset);
 }
 
 void StopTensorPrefetcher(distributed::MeshDevice& mesh_device) {

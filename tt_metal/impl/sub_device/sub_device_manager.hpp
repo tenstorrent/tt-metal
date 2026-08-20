@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/vector_aligned.hpp>
+#include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
 #include <array>
 #include <atomic>
@@ -59,10 +59,12 @@ public:
 
     const std::unique_ptr<AllocatorImpl>& allocator(SubDeviceId sub_device_id) const;
     std::unique_ptr<AllocatorImpl>& sub_device_allocator(SubDeviceId sub_device_id);
+    const std::vector<std::unique_ptr<AllocatorImpl>>& allocators() const { return sub_device_allocators_; }
 
     std::shared_ptr<distributed::MeshTraceBuffer>& create_trace(const distributed::MeshTraceId& trace_id);
     void release_trace(const distributed::MeshTraceId& trace_id);
     std::shared_ptr<distributed::MeshTraceBuffer> get_trace(const distributed::MeshTraceId& trace_id);
+    DeviceAddr get_max_trace_high_water_mark() const;
 
     uint8_t num_sub_devices() const;
     bool has_allocations() const;

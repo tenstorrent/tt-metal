@@ -16,7 +16,6 @@ PCC drops. Single card (TP=1); SP=8×TP=4 sharding of this same path is validate
 """
 
 import os
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -39,11 +38,9 @@ from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.model import create_rope_setup
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
+from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_msa_test_utils import sparse_attention_ref_msa_sampled_tokens
 
 from ..test_factory import parametrize_mesh_with_fabric
-
-sys.path.insert(0, os.path.join("tests/ttnn/unit_tests/operations/sdpa"))
-from sparse_sdpa_msa_test_utils import sparse_attention_ref_msa_sampled_tokens  # noqa: E402
 
 HIDDEN, NQ, NKV, NIDX, HEAD_DIM, IDX_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 4, 128, 128, 64, 5_000_000.0, 1e-6
 BLOCK, TOPK = 128, 16

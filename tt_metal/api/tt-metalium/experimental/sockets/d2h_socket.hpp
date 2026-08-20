@@ -132,6 +132,24 @@ public:
         ProcessScope scope = ProcessScope::CrossProcess);
 
     /**
+     * @brief Constructs a D2HSocket with an L2CPU sender.
+     *
+     * Behaves as the standard constructor, with an L2CPU tile as the sender.
+     * L2CPU LIM has no allocator in tt-metal, so the config buffer address is
+     * caller-supplied rather than allocated here.
+     *
+     * @param mesh_device The mesh device containing the sender L2CPU.
+     * @param sender_l2cpu The sending L2CPU tile. @c core_coord must be the TRANSLATED NOC
+     *                     coord of an L2CPU tile on the target device.
+     * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
+     * @param config_buffer_address LIM address on the sender L2CPU for the socket metadata.
+     *                              Must be L1-aligned, at least required_config_buffer_size()
+     *                              bytes, and within the L2CPU's static TLB window.
+     */
+    D2HSocket(
+        MeshDevice& mesh_device, const MeshCoreCoord& sender_l2cpu, uint32_t fifo_size, uint32_t config_buffer_address);
+
+    /**
      * @brief Connects to an existing D2HSocket from another process.
      *
      * Waits for the flatbuffer descriptor exported by the owner, opens the named
@@ -381,6 +399,10 @@ private:
     volatile uint32_t* hugepage_bytes_sent_host_ptr_ = nullptr;
 
     std::optional<DeviceAddr> svc_config_l1_addr_;
+
+    // True when the sender is an L2CPU tile. Selects the L2CPU code paths in
+    // init_sender_tlb() / write_socket_metadata() and blocks descriptor export.
+    bool is_l2cpu_ = false;
 };
 
 }  // namespace tt::tt_metal::distributed

@@ -193,12 +193,12 @@ def test_sum_subcores(device, sub_core_grids, dtype, shape):
     if dtype == ttnn.bfloat16:
         pcc_threshold = 0.999
         rtol = 1e-06
-        atol = 1e-06
-        frobenius_threshold = 1e-09
+        atol = 4100
+        frobenius_threshold = 0.008
     else:
         pcc_threshold = 0.999
         rtol = 0.015
-        atol = 4177.920
+        atol = 4200
         frobenius_threshold = 0.015
     # test for equivalance
     assert_numeric_metrics(

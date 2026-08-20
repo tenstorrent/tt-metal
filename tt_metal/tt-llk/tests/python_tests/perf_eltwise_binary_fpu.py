@@ -13,9 +13,10 @@ from helpers.llk_params import (
     PerfRunType,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
     TILE_COUNT,
@@ -56,7 +57,7 @@ def test_perf_eltwise_binary_fpu(
             PerfRunType.L1_CONGESTION,
         ],
         templates=[MATH_FIDELITY(math_fidelity), MATH_OP(mathop=mathop)],
-        runtimes=[TILE_COUNT(tile_count)],
+        runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(8)],
         variant_stimuli=StimuliConfig(
             None,
             formats.input_format,

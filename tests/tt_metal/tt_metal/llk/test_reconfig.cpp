@@ -1103,9 +1103,8 @@ TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
                             .fp32_dest_acc_en = fp32_dest_acc_en,
                             .block_copy = block_copy,
                             .dst_full_sync_en = dst_full_sync_en};
-                        for (unsigned int id = 0; id < num_devices_; id++) {
-                            ASSERT_TRUE(
-                                unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+                        for (auto& device : this->devices_) {
+                            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(device, test_config));
                         }
                     }
                 }
@@ -1120,22 +1119,22 @@ TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
             log_info(LogTest, "L1 accumulation is {}, DstSyncFull = {}", l1_acc ? "on." : "off.", dst_full_sync_en);
             unit_tests::compute::reconfig::ReconfigConfig test_config = {
                 .num_tiles = 1, .ublock_size_tiles = 1, .dst_full_sync_en = dst_full_sync_en};
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+            for (auto& device : this->devices_) {
+                ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(device, test_config));
             }
         }
     }
 }
 
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixUnpackReconfigQuasarDfb) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::reconfig::single_core_unpack_reconfig_quasar(devices_.at(id)));
+    for (auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::reconfig::single_core_unpack_reconfig_quasar(device));
     }
 }
 
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixPackReconfigQuasarDfb) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::reconfig::single_core_pack_reconfig_quasar(devices_.at(id)));
+    for (auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::reconfig::single_core_pack_reconfig_quasar(device));
     }
 }
 

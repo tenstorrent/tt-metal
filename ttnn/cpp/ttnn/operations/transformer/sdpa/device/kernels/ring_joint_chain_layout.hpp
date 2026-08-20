@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::transformer::sdpa::ring_joint {
 
-constexpr uint32_t kChainConfigRuntimeArgCount = 18;
+constexpr uint32_t kChainConfigRuntimeArgCount = 16;
 
 constexpr uint32_t kChainSenderSemaphoreCompileArgOffset = 0;
 constexpr uint32_t kChainReceiverSemaphoreCompileArgOffset = 1;

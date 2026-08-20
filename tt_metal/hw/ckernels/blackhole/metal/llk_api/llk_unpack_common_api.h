@@ -242,6 +242,76 @@ inline void llk_unpack_reconfig_data_format(
 }
 
 /**
+ * Reprogram only the srcA unpacker tile/face geometry (dim/stride) for a new operand, leaving the data
+ * format untouched. Face geometry (face_r_dim, num_faces) and the current dst format (for the stride
+ * baselines) are read from the operand's CB metadata.
+ *
+ * @param srca_new_operand New operand id whose tile shape to program srcA for.
+ */
+inline void llk_unpack_reconfig_tile_shape_srca(const std::uint32_t srca_new_operand) {
+    const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
+    const std::uint32_t num_faces = get_operand_num_faces(srca_operand_id);
+    const std::uint32_t face_r_dim = get_operand_face_r_dim(srca_operand_id);
+    // A tile-shape change is a tile-size (CB page size) change too; refresh the tile-size GPR alongside geometry.
+    const std::uint32_t tile_size = get_local_cb_interface(srca_operand_id).fifo_page_size;
+    _llk_unpack_reconfig_tile_shape_srca_(tile_size, face_r_dim, num_faces);
+}
+
+/**
+ * Conditionally reprogram the srcA unpacker tile/face geometry when switching operands. Reprograms only
+ * when the CBs differ or the face geometry changed between the old and new operands.
+ *
+ * @param srca_old_operand Currently configured srcA operand id.
+ * @param srca_new_operand New srcA operand id to switch to.
+ */
+inline void llk_unpack_reconfig_tile_shape_srca(
+    const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
+    const std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
+    const std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
+
+    if (should_reconfigure_cbs(srca_old_operand, srca_new_operand) ||
+        get_operand_face_r_dim(old_srca_operand_id) != get_operand_face_r_dim(new_srca_operand_id) ||
+        get_operand_num_faces(old_srca_operand_id) != get_operand_num_faces(new_srca_operand_id)) {
+        llk_unpack_reconfig_tile_shape_srca(srca_new_operand);
+    }
+}
+
+/**
+ * Reprogram only the srcB unpacker tile/face geometry (dim/stride) for a new operand, leaving the data
+ * format untouched. Face geometry (face_r_dim, num_faces) and the current dst format (for the stride
+ * baseline) are read from the operand's CB metadata.
+ *
+ * @param srcb_new_operand New operand id whose tile shape to program srcB for.
+ */
+inline void llk_unpack_reconfig_tile_shape_srcb(const std::uint32_t srcb_new_operand) {
+    const std::uint32_t srcb_operand_id = get_operand_id(srcb_new_operand);
+    const std::uint32_t num_faces = get_operand_num_faces(srcb_operand_id);
+    const std::uint32_t face_r_dim = get_operand_face_r_dim(srcb_operand_id);
+    // A tile-shape change is a tile-size (CB page size) change too; refresh the tile-size GPR alongside geometry.
+    const std::uint32_t tile_size = get_local_cb_interface(srcb_operand_id).fifo_page_size;
+    _llk_unpack_reconfig_tile_shape_srcb_(tile_size, face_r_dim, num_faces);
+}
+
+/**
+ * Conditionally reprogram the srcB unpacker tile/face geometry when switching operands. Reprograms only
+ * when the CBs differ or the face geometry changed between the old and new operands.
+ *
+ * @param srcb_old_operand Currently configured srcB operand id.
+ * @param srcb_new_operand New srcB operand id to switch to.
+ */
+inline void llk_unpack_reconfig_tile_shape_srcb(
+    const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
+    const std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
+    const std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
+
+    if (should_reconfigure_cbs(srcb_old_operand, srcb_new_operand) ||
+        get_operand_face_r_dim(old_srcb_operand_id) != get_operand_face_r_dim(new_srcb_operand_id) ||
+        get_operand_num_faces(old_srcb_operand_id) != get_operand_num_faces(new_srcb_operand_id)) {
+        llk_unpack_reconfig_tile_shape_srcb(srcb_new_operand);
+    }
+}
+
+/**
  * Mark srcB as holding dummy-valid data so the math thread can proceed without a real srcB unpack.
  */
 inline void llk_unpack_set_srcb_dummy_valid() { _llk_unpack_set_srcb_dummy_valid_(); }

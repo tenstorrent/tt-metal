@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_tp_mesh_composer,
     initialize_test_inputs,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule, _weights_have_output_channel_dim
 from tests.ttnn.utils_for_testing import comp_pcc
 
 REDUCE_MESH_PARAMS = [
@@ -48,6 +48,28 @@ REDUCE_MESH_PARAMS = [
         id="mesh-4x2",
     ),
 ]
+
+
+@pytest.mark.parametrize(
+    "weights_shape, combine_output_shape, expected",
+    [
+        # A top-k=1 score lacks the output channel and must be unsqueezed.
+        ((4, 64, 1), (1, 4, 64, 1, 1024), False),
+        # The same score with an explicit output channel omits only a leading
+        # mesh dimension and must not receive a second trailing singleton.
+        ((4, 64, 1, 1), (1, 4, 64, 1, 1024), True),
+        ((1, 4, 64, 1, 1), (1, 4, 64, 1, 1024), True),
+        # A top-k>1 score has no ambiguity: without the output channel it is
+        # not broadcastable to the complete combine output.
+        ((4, 64, 8), (1, 4, 64, 8, 1024), False),
+    ],
+)
+def test_weights_output_channel_shape_detection(weights_shape, combine_output_shape, expected):
+    actual = _weights_have_output_channel_dim(weights_shape, combine_output_shape)
+    assert actual is expected, (
+        f"Expected channel-dimension inference to be {expected} for weights={weights_shape} "
+        f"and combine_output={combine_output_shape}, but got {actual}"
+    )
 
 
 def run_reduce(
@@ -206,10 +228,23 @@ def run_reduce(
 # Model-independent sanity shape — small seq/emb that exercises the reduce kernel without
 # tying to any model's dimensions. Kept in a single test so it is not duplicated per model.
 @pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
-@pytest.mark.parametrize("seq_len, emb_dim, topk", [(32, 2048, 8)], ids=["generic"])
+@pytest.mark.parametrize(
+    "seq_len, emb_dim, topk",
+    [(32, 2048, 8)],
+    ids=["generic"],
+)
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
 def test_ttnn_reduce(mesh_device, seq_len, emb_dim, topk, use_weights):
     run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
+
+
+@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params", REDUCE_MESH_PARAMS[:1], indirect=["mesh_device", "device_params"]
+)
+def test_ttnn_reduce_single_expert(mesh_device, use_weights):
+    """Top-k=1 cannot be sharded across the second axis of the 4x2 mapper."""
+    run_reduce(mesh_device, seq_len=32, emb_dim=1024, topk=1, use_weights=use_weights)
 
 
 # Per-model reduce shapes as (id_prefix, config, extended_model). Each model uses seq_len 640 and

@@ -486,9 +486,8 @@ class TtSharedExpert(LightweightModule):
             # which run sequentially). This keeps it alive across the overlap (so dispatch can't reuse
             # its slot) AND fixes its DRAM address every iteration, so the op's fabric reduction order
             # is identical each iteration — giving bit-exact determinism. The op overwrites the
-            # intermediate before reading it (the line-reduction compute skips the first slice), so no
-            # per-iteration re-zeroing is needed.
-            rs_intermediate = self.tt_ccl.get_shared_rs_intermediate(output_full)
+            # intermediate before reading it, so no per-iteration re-zeroing is needed.
+            rs_intermediate = self.tt_ccl.get_shared_rs_intermediate(output_full, self.topology)
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 output_full,
                 persistent_output_buffers=[rs_intermediate],

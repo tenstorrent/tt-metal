@@ -3,7 +3,6 @@
 
 import pytest
 import torch
-from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -15,6 +14,7 @@ from helpers.llk_params import (
     DestSync,
     ImpliedMathFormat,
     PerfRunType,
+    UnpackerEngine,
     format_dict,
 )
 from helpers.param_config import (
@@ -24,9 +24,10 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.perf import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import BootMode, TestConfig
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
@@ -37,9 +38,9 @@ from helpers.test_variant_parameters import (
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    UNPACKER_ENGINE_SEL,
     generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
@@ -47,6 +48,24 @@ from helpers.utils import passed_test
 
 INPUT_DIMENSIONS = [[512, 32]]
 TILE_DIMENSIONS = [32, 32]
+
+_FLOAT32_WIDE_RANGE = 10_000.0
+
+
+def _wide_range_spec(fmt: DataFormat):
+    """Return a ``StimuliSpec`` with a wider-than-default range for 32-bit formats.
+
+    The exact bounds are arbitrary but chosen to stress-test with a broader
+    range of values than the generator defaults provide.  Non-32-bit formats
+    return ``None`` so the generator falls back to its own defaults.
+    """
+    if not fmt.is_32_bit():
+        return None
+    if fmt.is_integer():
+        hi = float(torch.iinfo(format_dict[fmt]).max) * 0.9
+    else:
+        hi = _FLOAT32_WIDE_RANGE
+    return StimuliSpec.uniform(low=-hi, high=hi)
 
 
 def unary_broadcast_dest_sync_modes(*, is_perf=False):
@@ -64,37 +83,39 @@ def unary_broadcast_implied_math_formats(formats, *, is_perf=False):
 UNARY_BROADCAST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        # DataFormat.Float32, Buggy functionality for Float32 (unpack_to_dest=True) tbd
+        DataFormat.Float32,
         DataFormat.MxFp8R,
         DataFormat.MxFp8P,
         DataFormat.MxFp4,
+        DataFormat.Int32,
         DataFormat.MxInt8,
         DataFormat.MxInt4,
         DataFormat.MxInt2,
     ],
-    same=True,
+    same=True,  # input_fmt != output_fmt not tested, ISSUE: #47560
 )
+
+BROADCAST_TYPES = [
+    BroadcastType.Scalar,
+    BroadcastType.Column,
+    BroadcastType.Row,
+]
 
 
 def get_valid_dest_acc_unary_broadcast(formats):
     """Valid dest accumulation modes for unary broadcast."""
-    accs = list(get_valid_dest_accumulation_modes(formats))
     if formats.input_format.is_32_bit():
-        accs = [a for a in accs if a == DestAccumulation.Yes]
-    elif formats.output_format == DataFormat.Float32:
-        accs = [a for a in accs if a == DestAccumulation.Yes]
-    return accs if accs else [DestAccumulation.Yes]
+        return [DestAccumulation.Yes]
+    return [
+        DestAccumulation.No
+    ]  # 32bit dest is not supported for the unpack_to_dest=False case, ISSUE: #47560
 
 
 @pytest.mark.quasar
 @parametrize(
     formats=UNARY_BROADCAST_FORMATS,
     dest_acc=lambda formats: get_valid_dest_acc_unary_broadcast(formats),
-    broadcast_type=[
-        BroadcastType.Scalar,
-        BroadcastType.Column,
-        BroadcastType.Row,
-    ],
+    broadcast_type=BROADCAST_TYPES,
     implied_math_format=lambda formats: unary_broadcast_implied_math_formats(formats),
     dest_sync_mode=lambda: unary_broadcast_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(INPUT_DIMENSIONS),
@@ -115,6 +136,10 @@ def test_unary_broadcast_quasar(
     is_perf=False,
     perf_report=None,
 ):
+    unpack_to_dest = (
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    )
+
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
         [tile_rows, tile_cols]
@@ -134,8 +159,16 @@ def test_unary_broadcast_quasar(
         BlocksCalculationAlgorithm.Standard,
     )
 
-    torch_format = format_dict[formats.input_format]
-    src_B = torch.randn(num_elements, dtype=torch_format)
+    spec = _wide_range_spec(formats.input_format)
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=spec,
+        spec_B=spec,
+        tile_dimensions=TILE_DIMENSIONS,
+    )
 
     if not is_perf:
         generate_broadcast_golden = get_golden_generator(BroadcastGolden)
@@ -148,20 +181,19 @@ def test_unary_broadcast_quasar(
             face_r_dim=face_r_dim,
         )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
-
     src_A = src_B
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
+
+    unpacker_sel = UnpackerEngine.UnpA if unpack_to_dest else UnpackerEngine.UnpB
 
     test_config_kwargs = {
         "test_name": "sources/quasar/eltwise_unary_broadcast_quasar_test.cpp",
         "formats": formats,
         "templates": [
             IMPLIED_MATH_FORMAT(implied_math_format),
+            UNPACKER_ENGINE_SEL(unpacker_sel),
             BROADCAST_TYPE(broadcast_type),
             DEST_SYNC(dest_sync_mode),
         ],
@@ -200,22 +232,17 @@ def test_unary_broadcast_quasar(
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
-        "disable_format_inference": (implied_math_format == ImpliedMathFormat.Yes),
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
-
-    configuration = TestConfig(
-        boot_mode=boot_mode,
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
 
     res_from_L1 = configuration.run().result
 

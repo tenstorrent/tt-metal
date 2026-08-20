@@ -5,16 +5,16 @@
 from typing import List, Tuple
 
 import torch
+from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_loop import FusedLoop, LoopBlockRow
-from fuser.fused_operation import FusedOperation
-from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
+from fuser.tile_loop import LoopBlockRow, TileLoop
 
 
 class ReduceBlockMaxRuntimeUnpacker(Unpacker):
-    loop: FusedLoop = LoopBlockRow()
+    loop: TileLoop = LoopBlockRow()
     per_block_init = True
 
     def get_headers(self) -> List[str]:
@@ -24,7 +24,7 @@ class ReduceBlockMaxRuntimeUnpacker(Unpacker):
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -32,7 +32,7 @@ class ReduceBlockMaxRuntimeUnpacker(Unpacker):
 
     def perf_set_valid(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -45,7 +45,7 @@ class ReduceBlockMaxRuntimeUnpacker(Unpacker):
 
     def perf_clear_valid(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -58,20 +58,19 @@ class ReduceBlockMaxRuntimeUnpacker(Unpacker):
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
         dest_acc = config.dest_acc.cpp_enum_value
-        tile_shape = compute_unit.src_a.tile_shape
-        tensor_shape_instantiation = f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
-        return f"_llk_unpack_AB_reduce_block_max_row_init_runtime_<{dest_acc}>({ct_dim}, /*respect_trigger=*/false, {tensor_shape_instantiation});\n"
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        return f"_llk_unpack_AB_reduce_block_max_row_init_runtime_<{dest_acc}>({ct_dim}, /*respect_trigger=*/false, {tensor_shape});\n"
 
     def unpack(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -82,7 +81,7 @@ class ReduceBlockMaxRuntimeUnpacker(Unpacker):
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,

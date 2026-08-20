@@ -6,7 +6,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
-#include "api/compute/topk_xl.h"
+#include "api/compute/experimental/topk_xl.h"
 #include "api/compute/transpose_dest.h"
 #include "api/dataflow/circular_buffer.h"
 

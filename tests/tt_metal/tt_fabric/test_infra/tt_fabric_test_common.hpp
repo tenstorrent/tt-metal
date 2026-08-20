@@ -671,6 +671,12 @@ public:
     // ======================================================================================
     uint32_t get_num_mesh_dims() const override { return mesh_shape_.dims(); }
 
+    bool is_degenerate_torus_axis(uint32_t dim) const override {
+        const auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
+        return tt::tt_fabric::has_flag(fabric_type, tt::tt_fabric::torus_flag_for_axis(dim)) &&
+               !tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape_, dim);
+    }
+
     // TODO: instead of parsing ChipSendType, this should only care about unicast/mcast
     // or capturing every device in the path or not
     std::vector<FabricNodeId> get_dst_node_ids_from_hops(
@@ -843,7 +849,7 @@ public:
         const auto src_coord = get_device_coord(src_node_id);
         auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
 
-        if (has_flag(fabric_type, FabricType::TORUS_X)) {
+        if (tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape_, EW_DIM)) {
             // EW dimension: need to cover (mesh_shape_[EW_DIM] - 1) total hops
             uint32_t ew_total_hops = mesh_shape_[EW_DIM] - 1;
             uint32_t ew_forward_hops = ew_total_hops / 2;                 // Half go in one direction
@@ -856,7 +862,7 @@ public:
             hops[RoutingDirection::W] = src_coord[EW_DIM];
         }
 
-        if (has_flag(fabric_type, FabricType::TORUS_Y)) {
+        if (tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape_, NS_DIM)) {
             // NS dimension: need to cover (mesh_shape_[NS_DIM] - 1) total hops
             uint32_t ns_total_hops = mesh_shape_[NS_DIM] - 1;
             uint32_t ns_forward_hops = ns_total_hops / 2;                 // Half go in one direction
@@ -1472,18 +1478,16 @@ public:
 
                 } else {
                     // if not wrap around mesh, then need to get the neighbours on all directions.
-                    auto ns_hops =
-                        this->get_full_or_half_ring_mcast_hops(src_device, HighLevelTrafficPattern::FullRing, NS_DIM);
-                    auto ew_hops =
-                        this->get_full_or_half_ring_mcast_hops(src_device, HighLevelTrafficPattern::FullRing, EW_DIM);
-                    for (const auto& [direction, hops] : ns_hops) {
-                        if (hops != 0) {
-                            multi_directional_hops[direction] = hops;
+                    for (const uint32_t dim : {NS_DIM, EW_DIM}) {
+                        if (is_degenerate_torus_axis(dim)) {
+                            continue;
                         }
-                    }
-                    for (const auto& [direction, hops] : ew_hops) {
-                        if (hops != 0) {
-                            multi_directional_hops[direction] = hops;
+                        const auto axis_hops =
+                            this->get_full_or_half_ring_mcast_hops(src_device, HighLevelTrafficPattern::FullRing, dim);
+                        for (const auto& [direction, hops] : axis_hops) {
+                            if (hops != 0) {
+                                multi_directional_hops[direction] = hops;
+                            }
                         }
                     }
                 }
@@ -2321,15 +2325,13 @@ private:
 
     MeshCoordinate::BoundaryMode get_boundary_mode_for_dimension(int32_t dim) const {
         if (topology_ == Topology::NeighborExchange || topology_ == Topology::Ring || topology_ == Topology::Torus) {
-            auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
-            switch (fabric_type) {
-                case tt::tt_fabric::FabricType::TORUS_X:
-                    return (dim == EW_DIM) ? MeshCoordinate::BoundaryMode::WRAP : MeshCoordinate::BoundaryMode::NONE;
-                case tt::tt_fabric::FabricType::TORUS_Y:
-                    return (dim == NS_DIM) ? MeshCoordinate::BoundaryMode::WRAP : MeshCoordinate::BoundaryMode::NONE;
-                case tt::tt_fabric::FabricType::TORUS_XY: return MeshCoordinate::BoundaryMode::WRAP;
-                default: return MeshCoordinate::BoundaryMode::NONE;
+            if (dim != NS_DIM && dim != EW_DIM) {
+                return MeshCoordinate::BoundaryMode::NONE;
             }
+            const auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
+            return tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape_, static_cast<uint32_t>(dim))
+                       ? MeshCoordinate::BoundaryMode::WRAP
+                       : MeshCoordinate::BoundaryMode::NONE;
         }
         return MeshCoordinate::BoundaryMode::NONE;
     }

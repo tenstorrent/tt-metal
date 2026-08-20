@@ -13,10 +13,13 @@ from helpers.golden_generators import (
     quantize_mx_stimuli,
 )
 from helpers.llk_params import (
+    ApproximationMode,
     DataCopyType,
     DestAccumulation,
+    DstRoundingMode,
     ImpliedMathFormat,
     MathOperation,
+    PerfRunType,
     UnpackerEngine,
     format_dict,
 )
@@ -28,6 +31,7 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -36,14 +40,16 @@ from helpers.stimuli_generator import (
     format_elem_max,
     generate_stimuli,
 )
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    APPROX_MODE,
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     NUM_FACES,
     SFPU_BINARY_OP,
+    SFPU_DST_ROUNDING_MODE,
     SFPU_TILE_INDICES,
     SIGN_MAGNITUDE_FORMAT,
     TEST_FACE_DIMS,
@@ -67,6 +73,7 @@ _CPP_SOURCE = "sources/quasar/eltwise_binary_sfpu_quasar_test.cpp"
 # Shared (src0_idx, src1_idx, dst_idx) tile-index variants exercised by every
 # binary SFPU family
 _TILE_INDEX_VARIANTS = [(0, 1, 0), (2, 3, 0)]
+DEFAULT_SFPU_BINARY_TILE_INDICES = _TILE_INDEX_VARIANTS[0]
 
 
 def _stage_binary_operands(op0_flat, op1_flat, tile_indices, dtype):
@@ -108,6 +115,13 @@ def _run_sfpu_binary_llk_golden(
     binary_op,
     prepare_stimuli,
     post_check=None,
+    *,
+    approx_mode=ApproximationMode.No,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+    dst_rounding_mode=DstRoundingMode.Default,
 ):
     """Shared driver for the unpack-to-dest, LLK-golden binary SFPU ops.
 
@@ -141,31 +155,37 @@ def _run_sfpu_binary_llk_golden(
         torch_format_out
     )
 
-    configuration = TestConfig(
-        _CPP_SOURCE,
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": _CPP_SOURCE,
+        "formats": formats,
+        "templates": [
             SFPU_BINARY_OP(binary_op),
+            APPROX_MODE(approx_mode),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
             # 2's-complement datapath (default); only the quant family reads this.
             SIGN_MAGNITUDE_FORMAT(False),
+            SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
             TYPECAST_FORMATS(),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
             SFPU_TILE_INDICES(src0_idx, src1_idx, dst_idx),
+            LOOP_FACTOR(loop_factor),
             ZERO_POINT(0),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -177,9 +197,18 @@ def _run_sfpu_binary_llk_golden(
             num_faces=num_faces,
             twos_complement=formats.input_format.is_integer(),
         ),
-        unpack_to_dest=True,
-        dest_acc=dest_acc,
+        "unpack_to_dest": True,
+        "dest_acc": dest_acc,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(golden_tensor)
@@ -236,7 +265,17 @@ _INT_OPS = [
     "data_format, dest_acc", [(DataFormat.Int32, DestAccumulation.Yes)]
 )
 def test_eltwise_binary_sfpu_int_quasar(
-    data_format, dest_acc, binary_op, mathop, clamp_inputs, tile_indices
+    data_format,
+    dest_acc,
+    binary_op,
+    mathop,
+    clamp_inputs,
+    tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
 ):
     """Binary SFPU integer ops (add, mul, gt, lt, le, ge), Int32."""
     formats = InputOutputFormat(input_format=data_format, output_format=data_format)
@@ -250,11 +289,15 @@ def test_eltwise_binary_sfpu_int_quasar(
         prepare_stimuli=lambda f, dims, s0, s1, op: _prepare_int_stimuli(
             f, dims, s0, s1, op, clamp_inputs
         ),
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
     )
 
 
 # ===========================================================================
-# Family 2 — float ops (add, sub, mul, div). Ported from test_sfpu_binary_float_quasar.py.
+# Family 2 — float ops (add, sub, mul, div, atan2). Ported from test_sfpu_binary_float_quasar.py.
 # add/sub route the SFPU calculate_sfpu_binary ADD/SUB path (tenstorrent/tt-metal#49883).
 # Operand/result tile-index variants exercise result-over-operand aliasing.
 # ===========================================================================
@@ -284,8 +327,14 @@ def _get_valid_float_formats_dest_acc():
 
 def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
     """Map [0,1) uniform stimuli into op-appropriate ranges (div: ±[0.25,4] + special
-    lanes; add/sub/mul: ±250)."""
+    lanes; atan2: ±5; add/sub/mul: ±250)."""
     torch_format = format_dict[data_format]
+    if mathop == MathOperation.SfpuAtan2:
+        # atan2(y, x): y = tile src0_idx, x = tile src1_idx. Signed ±5 gives mixed
+        # signs on both operands, so all four quadrants and the |y| >= |x| / x < 0
+        # branches are exercised; the minimax approximation is matched under PCC.
+        scaled = ((src_A.to(torch.float32) - 0.5) * 10.0).to(torch_format)
+        return scaled.flatten().reshape(scaled.shape)
     if mathop == MathOperation.SfpuElwdiv:
         scaled = (src_A.to(torch.float32) - 0.5) * 8.0
         sign = torch.where(scaled >= 0, torch.tensor(1.0), torch.tensor(-1.0))
@@ -303,7 +352,8 @@ def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
 
 def _prepare_float_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop):
     """Float stimuli: uniform [0,1) mapped to op-appropriate ranges by
-    _prepare_float_inputs (div: ±[0.25,4] + special lanes; add/sub/mul: ±250)."""
+    _prepare_float_inputs (div: ±[0.25,4] + special lanes; atan2: ±5;
+    add/sub/mul: ±250)."""
     spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -332,16 +382,20 @@ def _check_div_special_cases(res_tensor):
 
 
 _FLOAT_OPS = [
-    ("ADD", MathOperation.SfpuElwadd),
-    ("SUB", MathOperation.SfpuElwsub),
-    ("MUL", MathOperation.SfpuElwmul),
-    ("DIV", MathOperation.SfpuElwdiv),
+    ("ADD", MathOperation.SfpuElwadd, ApproximationMode.No),
+    ("SUB", MathOperation.SfpuElwsub, ApproximationMode.No),
+    ("MUL", MathOperation.SfpuElwmul, ApproximationMode.No),
+    ("DIV", MathOperation.SfpuElwdiv, ApproximationMode.No),
+    ("ATAN2", MathOperation.SfpuAtan2, ApproximationMode.No),
+    ("ATAN2", MathOperation.SfpuAtan2, ApproximationMode.Yes),
 ]
 
 
 @pytest.mark.quasar
 @pytest.mark.parametrize(
-    "binary_op, mathop", _FLOAT_OPS, ids=[op for op, _ in _FLOAT_OPS]
+    "binary_op, mathop, approx_mode",
+    _FLOAT_OPS,
+    ids=[f"{op}_{approx.name}" for op, _, approx in _FLOAT_OPS],
 )
 @parametrize(
     formats_dest_acc=_get_valid_float_formats_dest_acc(),
@@ -351,9 +405,19 @@ _FLOAT_OPS = [
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_float_quasar(
-    formats_dest_acc, implied_math_format, tile_indices, binary_op, mathop
+    formats_dest_acc,
+    implied_math_format,
+    tile_indices,
+    binary_op,
+    mathop,
+    approx_mode,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
 ):
-    """Binary SFPU float ops (add, sub, mul, div)."""
+    """Binary SFPU float ops (add, sub, mul, div, atan2)."""
     formats, dest_acc = formats_dest_acc
     post_check = (
         _check_div_special_cases if mathop == MathOperation.SfpuElwdiv else None
@@ -367,6 +431,56 @@ def test_eltwise_binary_sfpu_float_quasar(
         binary_op,
         prepare_stimuli=_prepare_float_stimuli,
         post_check=post_check,
+        approx_mode=approx_mode,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )
+
+
+_BF16_ADD_SUB_OPS = [
+    ("ADD", MathOperation.SfpuElwadd),
+    ("SUB", MathOperation.SfpuElwsub),
+]
+
+
+@pytest.mark.quasar
+@pytest.mark.parametrize(
+    "binary_op, mathop", _BF16_ADD_SUB_OPS, ids=[op for op, _ in _BF16_ADD_SUB_OPS]
+)
+@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
+def test_eltwise_binary_sfpu_bf16_rne_quasar(
+    tile_indices,
+    binary_op,
+    mathop,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    """Binary SFPU ADD/SUB with NearestEven rounding on bfloat16 inputs.
+
+    RNE narrowing only applies when DEST holds bf16 (fp32 dest accumulation
+    disabled), so this test is scoped to Float16_b with DestAccumulation.No.
+    """
+    formats = InputOutputFormat(
+        input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
+    )
+    _run_sfpu_binary_llk_golden(
+        formats,
+        DestAccumulation.No,
+        ImpliedMathFormat.No,
+        tile_indices,
+        mathop,
+        binary_op,
+        prepare_stimuli=_prepare_float_stimuli,
+        dst_rounding_mode=DstRoundingMode.NearestEven,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
     )
 
 
@@ -384,6 +498,18 @@ SFPU_BINARY_MAX_MIN_FLOAT_FORMATS = input_output_formats(
     ],
 )
 SFPU_BINARY_MAX_MIN_INT32_FORMATS = input_output_formats([DataFormat.Int32], same=True)
+
+
+def max_min_float_dest_acc_for_format(fmt):
+    return (
+        (DestAccumulation.Yes,)
+        if fmt.input_format.is_32_bit()
+        else (DestAccumulation.No,)
+    )
+
+
+def max_min_int32_dest_acc_for_format(_fmt):
+    return (DestAccumulation.Yes,)
 
 
 def prepare_binary_max_min_inputs(src_A, src_B, input_format, output_format):
@@ -455,6 +581,11 @@ def _run_max_min(
     spec,
     tile_indices,
     is_int,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
 ):
     binary_op = "MAX" if is_max_op else "MIN"
     src0_idx, src1_idx, dst_idx = tile_indices
@@ -523,11 +654,15 @@ def _run_max_min(
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
-    configuration = TestConfig(
-        _CPP_SOURCE,
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": _CPP_SOURCE,
+        "formats": formats,
+        "templates": [
             SFPU_BINARY_OP(binary_op),
+            APPROX_MODE(),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
@@ -536,20 +671,22 @@ def _run_max_min(
             DEST_SYNC(),
             # 2's-complement datapath (default); only the quant family reads this.
             SIGN_MAGNITUDE_FORMAT(False),
+            SFPU_DST_ROUNDING_MODE(),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
             TYPECAST_FORMATS(),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
             SFPU_TILE_INDICES(src0_idx, src1_idx, dst_idx),
+            LOOP_FACTOR(loop_factor),
             ZERO_POINT(0),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             buffer_A_combined,
             formats.input_format,
             buffer_B_dummy,  # dummy buffer_B (unused by kernel)
@@ -561,10 +698,19 @@ def _run_max_min(
             num_faces=num_faces,
             sfpu=True,
         ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
-        disable_format_inference=disable_format_inference,
+        "unpack_to_dest": unpack_to_dest,
+        "dest_acc": dest_acc,
+        "disable_format_inference": disable_format_inference,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(golden_tensor)
@@ -579,17 +725,18 @@ def _run_max_min(
 @parametrize(
     formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
         SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
-        dest_acc_for_format=lambda fmt: (
-            (DestAccumulation.Yes,)
-            if fmt.input_format.is_32_bit()
-            else (DestAccumulation.No,)
-        ),
+        dest_acc_for_format=max_min_float_dest_acc_for_format,
     ),
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_float_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,
     tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
 ):
     """Binary SFPU max/min (float + MX)."""
     formats, dest_acc, implied_math_format, is_max_op, input_dimensions = (
@@ -605,6 +752,10 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
         spec,
         tile_indices,
         is_int=False,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
     )
 
 
@@ -612,7 +763,7 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
 @parametrize(
     formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
         SFPU_BINARY_MAX_MIN_INT32_FORMATS,
-        dest_acc_for_format=lambda fmt: (DestAccumulation.Yes,),
+        dest_acc_for_format=max_min_int32_dest_acc_for_format,
         implied_math_formats=(ImpliedMathFormat.No,),
     ),
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
@@ -620,6 +771,11 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
 def test_eltwise_binary_sfpu_max_min_int32_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,
     tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
 ):
     """Binary SFPU max/min (Int32)."""
     formats, dest_acc, _implied_math_format, is_max_op, input_dimensions = (
@@ -636,6 +792,10 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
         spec,
         tile_indices,
         is_int=True,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
     )
 
 
@@ -680,7 +840,16 @@ def _int32_to_smag32(t: torch.Tensor) -> torch.Tensor:
 _QUANT_OPS = ["QUANT", "REQUANT", "DEQUANT"]
 
 
-def _run_quant(binary_op, tile_indices, sign_magnitude=False):
+def _run_quant(
+    binary_op,
+    tile_indices,
+    sign_magnitude=False,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
     src0_idx, src1_idx, dst_idx = tile_indices
     dest_acc = DestAccumulation.Yes  # all quant endpoints are 32-bit
     num_faces = MAX_NUM_FACES
@@ -751,27 +920,30 @@ def _run_quant(binary_op, tile_indices, sign_magnitude=False):
         input_format=DataFormat.Int32, output_format=output_format
     )
 
-    configuration = TestConfig(
-        _CPP_SOURCE,
-        formats,
-        templates=[
+    test_config_kwargs = {
+        "test_name": _CPP_SOURCE,
+        "formats": formats,
+        "templates": [
             SFPU_BINARY_OP(binary_op),
+            APPROX_MODE(),
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
             SIGN_MAGNITUDE_FORMAT(sign_magnitude),
+            SFPU_DST_ROUNDING_MODE(),
             TYPECAST_FORMATS(),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
             SFPU_TILE_INDICES(src0_idx, src1_idx, dst_idx),
+            LOOP_FACTOR(loop_factor),
             ZERO_POINT(zp_bits),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             buffer_A,
             DataFormat.Int32,
             buffer_A[:MAX_TILE_ELEMENTS],  # dummy buffer_B (unused by kernel)
@@ -783,9 +955,14 @@ def _run_quant(binary_op, tile_indices, sign_magnitude=False):
             num_faces=num_faces,
             twos_complement=True,  # raw 32-bit identity staging
         ),
-        unpack_to_dest=True,
-        dest_acc=dest_acc,
-        disable_format_inference=True,
+        "unpack_to_dest": True,
+        "dest_acc": dest_acc,
+        "disable_format_inference": True,
+    }
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
 
     # Packer reads the SFPU result tile from Dest. For dequant the result is fp32;
@@ -796,6 +973,10 @@ def _run_quant(binary_op, tile_indices, sign_magnitude=False):
     fc.pack_dst = output_format
     fc.pack_S_src = output_format
     fc.pack_S_dst = output_format
+
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(golden_tensor)
@@ -814,9 +995,26 @@ def _run_quant(binary_op, tile_indices, sign_magnitude=False):
     sign_magnitude=[False, True],
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
-def test_eltwise_binary_sfpu_quant_quasar(binary_op, sign_magnitude, tile_indices):
+def test_eltwise_binary_sfpu_quant_quasar(
+    binary_op,
+    sign_magnitude,
+    tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
     """Binary SFPU quant family (quant / requant / dequant), Int32-staged operands
     with a runtime fp32 zero-point; output Int32 (quant/requant) or Float32
     (dequant). Exercised on both the 2's-complement and SIGN_MAGNITUDE_FORMAT
     (SMAG32) datapaths."""
-    _run_quant(binary_op, tile_indices, sign_magnitude)
+    _run_quant(
+        binary_op,
+        tile_indices,
+        sign_magnitude,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )

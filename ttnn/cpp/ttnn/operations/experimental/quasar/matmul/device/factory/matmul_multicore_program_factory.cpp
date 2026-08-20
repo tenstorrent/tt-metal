@@ -182,7 +182,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
                      "num_output_tiles",
                      "MtNt"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Writer kernel ----
@@ -204,7 +205,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Compute kernel(s) — one KernelSpec per core group, preserving the per-group tile-count CTA ----

@@ -67,11 +67,18 @@ namespace ttnn {
 ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
-    const tt::tt_metal::PadValue pad_value,
+    const ttnn::PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    // FP8_E4M3 is ROW_MAJOR-only, so it can never be the TILE output dtype. When the caller doesn't
+    // request a specific output dtype, default an FP8 input to FLOAT32 (the format it unpacks to in
+    // DEST) so every downstream value_or() below resolves to a legal TILE dtype.
+    if (!output_dtype.has_value() && input_tensor.dtype() == DataType::FP8_E4M3) {
+        output_dtype = DataType::FLOAT32;
+    }
+
     if (input_tensor.layout() == Layout::TILE) {
         return input_tensor;
     }
@@ -136,7 +143,7 @@ ttnn::Tensor tilize_with_val_padding(
 ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<uint32_t>& output_padded_shape,
-    const tt::tt_metal::PadValue pad_value,
+    const ttnn::PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore,
@@ -192,7 +199,7 @@ ttnn::Tensor tilize_with_zero_padding(
         return create_device_tensor(spec, input_tensor.device());
     }
 
-    tt::tt_metal::PadValue pad_value;
+    ttnn::PadValue pad_value;
     if (input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::FLOAT32) {
         pad_value = 0.0f;
     } else {

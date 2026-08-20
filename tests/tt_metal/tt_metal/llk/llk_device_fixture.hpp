@@ -90,7 +90,6 @@ void apply_shared_state(Fixture& f, const LLKSharedDevices& s) {
     f.arch_ = s.arch;
     f.devices_ = s.devices;
     f.max_cbs_ = s.max_cbs;
-    f.num_devices_ = s.devices.size();
 }
 
 }  // namespace detail

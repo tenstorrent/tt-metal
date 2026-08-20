@@ -95,7 +95,7 @@ PrefetchKernel::PrefetchKernel(
 void PrefetchKernel::GenerateStaticConfigs() {
     uint16_t channel = descriptor_.cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
-    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
+    const auto& my_dispatch_constants = get_dispatch_mem_map();
     // May be zero if not using dispatch on fabric
     static_config_.fabric_header_rb_base =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_HEADER_RB, cq_id_);
@@ -144,7 +144,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.my_upstream_cb_sem_id = 0;
         dependent_config_.upstream_cb_sem_id = 0;
         static_config_.cmddat_q_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        static_config_.cmddat_q_blocks = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 
         uint32_t dispatch_s_buffer_base = 0xff;
         if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
@@ -204,7 +203,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.prefetch_d_buffer_pages(), GetCoreType());
         static_config_.cmddat_q_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        static_config_.cmddat_q_blocks = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 
         // PREFETCH_H has no DISPATCH_S
         static_config_.dispatch_s_buffer_base = 0;
@@ -240,7 +238,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.my_upstream_cb_sem_id =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
         static_config_.cmddat_q_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        static_config_.cmddat_q_blocks = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 
         uint32_t dispatch_s_buffer_base = 0xff;
         {  // Just to make it match previous implementation
@@ -495,7 +492,6 @@ void PrefetchKernel::CreateKernel() {
         {"MY_UPSTREAM_CB_SEM_ID", std::to_string(static_config_.my_upstream_cb_sem_id.value())},
         {"UPSTREAM_CB_SEM_ID", std::to_string(dependent_config_.upstream_cb_sem_id.value())},
         {"CMDDAT_Q_LOG_PAGE_SIZE", std::to_string(static_config_.cmddat_q_log_page_size.value())},
-        {"CMDDAT_Q_BLOCKS", std::to_string(static_config_.cmddat_q_blocks.value())},
         {"DISPATCH_S_BUFFER_BASE", std::to_string(static_config_.dispatch_s_buffer_base.value())},
         {"MY_DISPATCH_S_CB_SEM_ID", std::to_string(static_config_.my_dispatch_s_cb_sem_id.value())},
         {"DOWNSTREAM_DISPATCH_S_CB_SEM_ID", std::to_string(dependent_config_.downstream_dispatch_s_cb_sem_id.value())},
@@ -544,7 +540,7 @@ void PrefetchKernel::CreateKernel() {
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
 
-    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
+    const auto& my_dispatch_constants = get_dispatch_mem_map();
     defines["PREFETCH_Q_ENTRY_BITS"] = std::to_string(my_dispatch_constants.prefetch_q_entry_size_bytes() * 8);
 
     if (!is_hd()) {
@@ -564,7 +560,7 @@ void PrefetchKernel::CreateKernel() {
     defines["OFFSETOF_ROUTER_DIRECTION"] = std::to_string(static_config_.offsetof_router_direction.value_or(0));
 
     // Compile at Os on IERISC to fit in code region.
-    auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
+    auto optimization_level = (GetCoreType() == CoreType::ETH) ? KernelBuildOptLevel::Os : KernelBuildOptLevel::O2;
     configure_kernel_variant(dispatch_kernel_file_names[PREFETCH], {}, defines, optimization_level);
 }
 
@@ -587,7 +583,7 @@ void PrefetchKernel::ConfigureCore() {
     if (static_config_.is_h_variant.value()) {
         // Initialize the FetchQ
         uint16_t channel = descriptor_.cluster().get_assigned_channel_for_device(device_->id());
-        const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
+        const auto& my_dispatch_constants = get_dispatch_mem_map();
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
         const uint32_t prefetch_q_bytes = my_dispatch_constants.prefetch_q_size();

@@ -93,12 +93,12 @@ public:
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const = 0;
 
     // Called to process the user kernel resource bindings (Metal 2.0 APIs)
-    //  - DFB accessors
-    //  - Semaphore accessors
-    //  - Tensor accessors
-    virtual void process_dataflow_buffer_local_accessor_handles(
+    //  - DFB bindings
+    //  - Semaphore bindings
+    //  - Tensor bindings
+    virtual void process_dataflow_buffer_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
-    virtual void process_semaphore_local_accessor_handles(
+    virtual void process_semaphore_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
@@ -120,7 +120,7 @@ public:
 
     // Scratchpad binding callback emits the codegen-relevant fields:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `scratch::` namespace
-    //  - size_bytes: the scratchpad's per-node size, emitted as the accessor's compile-time size
+    //  - size_bytes: the scratchpad's per-node size, emitted as the binding token's compile-time size
     //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
     //    scratchpad's (framework-allocated) L1 base address
     virtual void process_scratchpad_binding_handles(
@@ -144,6 +144,10 @@ public:
     // Default is the all-zero layout (no named CRTAs, no bindings, varargs start at offset 0),
     // which matches the legacy-kernel case where the buffer has only varargs.
     virtual KernelCrtaLayout get_crta_layout() const { return {}; }
+
+    // Metal 2.0: length of the CTA-vararg prefix in positional compile_time_args.
+    // Default 0 for non–Metal 2.0 kernels.
+    virtual uint32_t get_compile_time_vararg_count() const { return 0; }
 
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args

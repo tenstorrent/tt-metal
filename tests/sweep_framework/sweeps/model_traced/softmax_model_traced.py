@@ -128,7 +128,22 @@ def run(
     _sa_norm = (
         (_sm_shard_axis if _sm_shard_axis >= 0 else _sm_shard_axis + _n_in) if _sm_shard_axis is not None else None
     )
-    if _sm_shard_factor > 1 and _sa_norm is not None and _dim_norm == _sa_norm:
+    # The per-chip split is only meaningful when the shard axis actually divides
+    # evenly across the mesh factor. torch.chunk() SILENTLY returns fewer (smaller)
+    # chunks when it cannot split evenly -- e.g. chunk(size=4, into 8) yields four
+    # size-1 chunks -- and softmax over a size-1 dim is identically 1.0, so the golden
+    # collapses to an ALL-ONES tensor that no correct device output can match. That
+    # golden then has zero variance, so comp_pcc reports "PCC is NaN (zero variance)"
+    # and falls back to an exact allclose, which fails and returns PCC exactly 0.0.
+    # Observed on Galaxy run 30331957397: softmax 6f4cef4fe1 (128,4) and 9166a49a1d
+    # (1,4), both dim=1 with placement ['Replicate','Shard(-1)'] on dist [4,8] ->
+    # factor 8 over a size-4 axis -> golden all ones -> PCC 0.0 on a fully healthy box.
+    # A degenerate shard like that is not what the device does either (it cannot give
+    # 8 chips a fraction of 4 elements), so fall through to the global softmax.
+    _sm_splits_evenly = (
+        _sa_norm is not None and _sm_shard_factor > 1 and torch_input_tensor_a.shape[_sa_norm] % _sm_shard_factor == 0
+    )
+    if _sm_splits_evenly and _dim_norm == _sa_norm:
         chunks = torch.chunk(torch_input_tensor_a, _sm_shard_factor, dim=_sa_norm)
         per_chip = [torch.nn.functional.softmax(c, dim=dim) for c in chunks]
         torch_output_tensor = torch.cat(per_chip, dim=_sa_norm)

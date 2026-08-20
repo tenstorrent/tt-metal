@@ -124,7 +124,8 @@ struct KernelSpec {
 
     // DFB bindings
     // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via DataflowBuffer(dfb::<accessor_name>)
+    // The kernel constructs a DataflowBuffer from the binding token:
+    //   DataflowBuffer(dfb::<accessor_name>)
     struct DFBBinding {
         // Endpoint role this binding plays for the DFB.
         enum class EndpointType { PRODUCER, CONSUMER };
@@ -145,7 +146,7 @@ struct KernelSpec {
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via Semaphore(sem::<accessor_name>)
+    // The kernel constructs a Semaphore from the emitted id: Semaphore(sem::<accessor_name>)
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
@@ -154,7 +155,8 @@ struct KernelSpec {
 
     // Scratchpad bindings
     // Declares that this kernel uses a scratchpad resource (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via Scratchpad(scratch::<accessor_name>)
+    // The kernel constructs a Scratchpad from the binding token, naming the element type:
+    //   Scratchpad<uint32_t>(scratch::<accessor_name>)
     struct ScratchpadBinding {
         ScratchpadSpecName scratchpad_spec_name;  // identify the scratchpad within the ProgramSpec
         std::string accessor_name;                // scratchpad accessor name (used in the kernel source code)
@@ -167,7 +169,8 @@ struct KernelSpec {
 
     // Tensor bindings
     // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via TensorAccessor(tensor::<accessor_name>)
+    // The kernel constructs a TensorAccessor (or LocalTensorAccessor) from the binding token:
+    //   TensorAccessor(tensor::<accessor_name>)
     struct TensorBinding {
         TensorParamName tensor_parameter_name;  // identify the TensorParameter within the ProgramSpec
         std::string accessor_name;              // tensor accessor name (used in the kernel source code)

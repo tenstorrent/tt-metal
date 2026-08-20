@@ -145,6 +145,9 @@ void kernel_main() {
                         input_page_size,
                         size_of_valid_data_in_last_input_page_in_row);
                     noc.async_read_barrier();
+                    // [#48552] invalidate_l1_cache() is a no-op on Quasar DM; the memmove below CPU-reads the
+                    // cb_pad_align slot just NOC-written (reused self-loop scratch) -> discard the stale L2 line.
+                    invalidate_l2_cache_range(cb_pad_align.get_read_ptr(), (size_t)stick_size_bytes);
                     memmove(
                         (void*)(l1_write_addr + stick_size_padded_front),
                         (void*)(cb_pad_align.get_read_ptr()),

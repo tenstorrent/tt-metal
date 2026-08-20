@@ -10,6 +10,9 @@
 #include "cfg_defines.h"
 #include "ckernel.h"
 #include "ckernel_helper.h"
+#if defined(ARCH_QUASAR)
+#include "ckernel_trisc_common.h"
+#endif
 
 // C-runtime related linker symbols
 extern volatile char __ldm_bss_start[], __ldm_bss_end[];
@@ -101,6 +104,7 @@ TT_ALWAYS_INLINE void device_setup()
 #if defined(ARCH_QUASAR)
     // Reset all dest dvalid bits for all clients
     TTI_CLEARDVALID(0, 0, 0xf, 0xf, 0, 0);
+    TTI_SEMINIT(1, 0, 0, ckernel::trisc::semaphore::t6_sem(ckernel::trisc::semaphore::PACK_UNPACK));
 #endif
 
 // Enable CC stack

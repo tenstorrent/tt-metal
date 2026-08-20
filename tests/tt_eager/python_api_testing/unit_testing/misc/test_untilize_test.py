@@ -65,6 +65,21 @@ def test_run_untilize_subcoregrid_test(dtype, nb, nc, nh, nw, device):
     assert passing1
 
 
+def test_run_untilize_subcoregrid_rejects_multiple_tile_rows(device, expect_error):
+    # The sub-core-grid factory's writer derives its tile count from the tensor-wide stick count, so
+    # a tensor more than one tile row tall used to deadlock in the writer instead of failing.
+    inp = torch.rand(1, 1, 64, 128).bfloat16()
+    a = ttnn.from_torch(inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "one tile row tall"):
+        ttnn.untilize(
+            a,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            use_multicore=True,
+            sub_core_grids=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
+        )
+
+
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),

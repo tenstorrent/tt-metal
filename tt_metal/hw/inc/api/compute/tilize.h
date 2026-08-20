@@ -70,21 +70,17 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
 }
 
 #if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
-
 // clang-format off
 /**
- * Initializes the tilize operation with reduction. Should be called once at the beginning of a kernel.
+ * Short initializes the tilize operation with reduction.
  *
- * Return value: None
- *
- * | Param Type | Name           | Description                              | Type     | Valid Range | Required |
- * |------------|----------------|------------------------------------------|----------|-------------|----------|
- * | Template   | neginf_srcA    | NegInf source A flag                     | bool     | true/false  | False    |
- * | Template   | zero_srcA_reduce| Zero source A for reduce flag           | bool     | true/false  | False    |
- * | Function   | icb0           | Input circular buffer A identifier       | uint32_t | 0 to 31     | True     |
- * | Function   | icb1_scaler    | Input circular buffer for scaler         | uint32_t | 0 to 31     | True     |
- * | Function   | block          | Size of tile block to work on            | uint32_t | > 0         | True     |
- * | Function   | ocb            | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
+ * | Param Type | Name             | Description                          | Type     | Valid Range | Required |
+ * |------------|------------------|--------------------------------------|----------|-------------|----------|
+ * | Template   | neginf_srcA      | NegInf source A flag                 | bool     | true/false  | False    |
+ * | Template   | zero_srcA_reduce | Zero source A for reduce flag        | bool     | true/false  | False    |
+ * | Function   | icb0             | Input circular buffer A identifier   | uint32_t | 0 to 31     | True     |
+ * | Function   | icb1_scaler      | Input circular buffer for scaler     | uint32_t | 0 to 31     | True     |
+ * | Function   | block            | Size of tile block to work on        | uint32_t | > 0         | True     |
  *
  * Unpack face geometry for operand A comes from circular-buffer metadata (JIT unpack_tile_* arrays), e.g.
  * set_unpack_face_geometry / set_tile_dims on the host.
@@ -92,33 +88,11 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
 // clang-format on
 template <bool neginf_srcA = true, bool zero_srcA_reduce = false>
 ALWI void tilizeA_B_reduce_init(
-    uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure(icb0, icb1_scaler, ocb, call_line);
-#ifndef ARCH_QUASAR
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
+    uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t call_line = __builtin_LINE()) {
+    state_configure(icb0, icb1_scaler, call_line);
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true /*reload_srcB*/, false /*zero_srcA*/, zero_srcA_reduce>(
         icb0, icb1_scaler, block)));
-
     MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(icb0, icb1_scaler)));
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
-
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(ocb)));
-#else
-    UNPACK((llk_unpack_hw_configure(icb0, icb1_scaler)));
-    UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true /*reload_srcB*/, false /*zero_srcA*/, zero_srcA_reduce>(
-        icb0, icb1_scaler, block)));
-
-    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(icb0, icb1_scaler)));
-    MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
-
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init()));
-#endif
 }
 #endif  // (REDUCE_OP && REDUCE_DIM) || __DOXYGEN__
 

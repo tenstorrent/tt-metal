@@ -72,6 +72,15 @@ FabricType operator|(FabricType lhs, FabricType rhs);
 FabricType operator&(FabricType lhs, FabricType rhs);
 bool has_flag(FabricType flags, FabricType test_flag);
 
+// A declared torus dimension realizes a distinct wrap edge only at size three or
+// larger. Size-one and size-two dimensions retain ordinary mesh links.
+constexpr bool is_genuine_torus_dim(uint32_t dim_size) { return dim_size > 2; }
+
+// MeshShape axis 0 (north/south) maps to TORUS_Y; axis 1 (east/west) maps to TORUS_X.
+constexpr FabricType torus_flag_for_axis(uint32_t axis) {
+    return axis == 0 ? FabricType::TORUS_Y : FabricType::TORUS_X;
+}
+
 enum class FabricReliabilityMode : uint32_t {
 
     // When fabric is initialized, user expects live links/devices to exactly match the mesh graph descriptor.

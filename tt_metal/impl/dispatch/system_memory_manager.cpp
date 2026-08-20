@@ -240,7 +240,7 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
     const CoreType core_type = ctx.get_dispatch_core_manager().get_dispatch_core_type();
     const uint32_t cq_start = ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-    const auto& mem_map = ctx.dispatch_mem_map(core_type);
+    const auto& mem_map = ctx.dispatch_mem_map();
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
         // L1 addresses differ per cq_id when this CQ's dispatch kernels share their dispatch core's L1 with another
         // CQ's
@@ -694,9 +694,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     }
 
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
-    const CoreType core_type = ctx.get_dispatch_core_manager().get_dispatch_core_type();
     const uint32_t prefetch_q_rd_ptr =
-        ctx.dispatch_mem_map(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id);
+        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id);
 
     // Helper to wait for fetch queue space, if needed
     uint32_t fence;
@@ -736,7 +735,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
     wait_for_fetch_q_space();
     // Wrap FetchQ if possible
-    const auto& mem_map = ctx.dispatch_mem_map(core_type);
+    const auto& mem_map = ctx.dispatch_mem_map();
     uint32_t prefetch_q_base = mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
     uint32_t prefetch_q_limit =
         prefetch_q_base + (mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes());

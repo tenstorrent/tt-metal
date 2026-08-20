@@ -25,7 +25,6 @@ using tt::tt_metal::MeshDevice1x2Fixture;
 using tt::tt_metal::MeshTensor;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorSpec;
-using tt::tt_metal::TensorTopology;
 using ttnn::DeviceStorage;
 using ttnn::Tensor;
 
@@ -53,7 +52,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_DefaultConstructedState) {
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ThrowsWhenConstructedFromMovedFromMeshTensor) {
-    auto source_mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec(), TensorTopology{});
+    auto source_mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec());
     MeshTensor moved_mesh_tensor(std::move(source_mesh_tensor));
 
     EXPECT_TRUE(source_mesh_tensor.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
@@ -204,7 +203,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_BufferGettersThrowWhenDeallocat
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorMovesOutUnderlyingMemory) {
-    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec(), TensorTopology{});
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec());
     DeviceStorage storage(std::move(mesh_tensor));
 
     // Capture identity of the underlying device memory before releasing.
@@ -219,7 +218,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorMovesOutUnderl
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorLeavesDefaultConstructedState) {
-    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec(), TensorTopology{});
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec());
     DeviceStorage storage(std::move(mesh_tensor));
     ASSERT_TRUE(storage.is_allocated());
 
@@ -238,7 +237,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorThrowsWhenDefa
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorThrowsWhenDeallocated) {
-    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec(), TensorTopology{});
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec());
     DeviceStorage storage(std::move(mesh_tensor));
     storage.deallocate();
     ASSERT_FALSE(storage.is_allocated());

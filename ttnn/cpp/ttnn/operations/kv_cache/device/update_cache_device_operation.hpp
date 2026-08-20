@@ -35,17 +35,10 @@ struct UpdateKVCacheOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
-    // batch_idx, update_idx and batch_offset are excluded from compute_program_hash (so calls
-    // differing only in them cache-hit), yet the factories bake the values they derive
-    // (cache_start_id, tile_update_offset, batch_read_offset) into runtime args. Those must be
-    // re-applied to the cached program on every dispatch or they freeze at the first cache-miss
-    // value — corrupting the write offset. The buffer base addresses are handled separately by the
-    // Buffer* bindings the factories declare via emplace_runtime_args.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+    // Cache-hit re-apply of all per-dispatch state (buffer addresses + the args derived from the
+    // batch_idx/update_idx/batch_offset that compute_program_hash excludes) lives on each program
+    // factory as override_runtime_arguments(); the framework calls it on the factory that built the
+    // cached program.
 };
 
 Tensor update_cache(

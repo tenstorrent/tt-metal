@@ -4,6 +4,7 @@
 
 #include "narrow.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace ttnn {
 
@@ -134,7 +135,7 @@ ttnn::Tensor narrow(
 
         ttnn::DeviceStorage subtensor_storage(
             storage,
-            tt::tt_metal::MeshTensor::from_buffer(
+            tt::tt_metal::mesh_tensor_from_buffer_with_topology(
                 std::move(*subtensor_mesh), subtensor_spec, input_tensor.tensor_topology()));
         return Tensor(std::move(subtensor_storage));
     }
@@ -295,7 +296,7 @@ ttnn::Tensor narrow(
 
         ttnn::DeviceStorage subtensor_storage(
             storage,
-            tt::tt_metal::MeshTensor::from_buffer(
+            tt::tt_metal::mesh_tensor_from_buffer_with_topology(
                 std::move(*subtensor_mesh), subtensor_spec, input_tensor.tensor_topology()));
         return Tensor(std::move(subtensor_storage));
     }

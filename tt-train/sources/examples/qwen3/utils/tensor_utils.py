@@ -131,6 +131,28 @@ def make_sharded_weight(shape, shard_dim_tensor, shard_dim_mesh=None, std=0.02):
     return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
 
 
+def sharded_weight_init(shard_dim_tensor, std=0.02):
+    """Return a ``ttml.init``-style ``init(shape, mapper=None)`` honouring ``empty_init``.
+
+    ``ttml.modules`` layers take a ``weight_init`` callable and build their own
+    mesh mapper, so ``make_sharded_weight`` (which builds the mapper itself)
+    doesn't fit. This adapts it: on the real path the module's mapper is used
+    verbatim; under ``empty_init()`` the shape is divided along
+    ``shard_dim_tensor`` and allocated straight on device, so pretrained-weight
+    loading still skips host init.
+    """
+
+    def init(shape, mapper=None):
+        if is_empty_init():
+            per_device = list(shape)
+            per_device[shard_dim_tensor] //= get_tp_size()
+            return make_empty_on_device(per_device)
+        data = (torch.randn(shape) * std).float().numpy()
+        return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
+
+    return init
+
+
 def make_sharded_zeros(shape, shard_dim_tensor, shard_dim_mesh=None):
     """Create a sharded zero bfloat16 tensor."""
     if is_empty_init():
