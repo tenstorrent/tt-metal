@@ -108,10 +108,9 @@ static void CompareKernelVsXArray(
     const uint32_t heads,
     const uint32_t features,
     const int num_iterations = 3,
-    // dx discriminates the kernel bugs: the pre-fix double-subtract sat at 0.15-0.36
-    // max abs error on device, the fixed kernel at <=0.014. dgamma/dbeta are host-side
-    // sums of bf16 per-row components, so their noise grows with rows*features and is
-    // unchanged by the fix (~0.29 at features~8k on device) - graded separately.
+    // dx comes straight from the kernel (<=0.014 max abs error on device), while
+    // dgamma/dbeta are host-side sums of bf16 per-row components whose noise grows
+    // with rows*features (~0.29 at features~8k on device) - graded separately.
     const float dx_atol = 2e-2F,
     const float dgb_atol = 5e-2F) {
     using namespace ttml;

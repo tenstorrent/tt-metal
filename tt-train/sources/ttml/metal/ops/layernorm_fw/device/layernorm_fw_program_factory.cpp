@@ -260,7 +260,6 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     const uint32_t num_x_hat_tiles = (everything_fits_in_l1) ? closest_to_Wt_multiple_of_block_size : twice_block_size;
 
     tt::DataFormat default_data_format = tt::DataFormat::Float16_b;
-
     // Input data CBs
     [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
