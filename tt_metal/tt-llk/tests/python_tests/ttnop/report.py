@@ -181,8 +181,7 @@ def in_plan_order(records: list) -> list:
     """Sweep order, even when several workers appended to the same log.
 
     A depth run can split one case over eight workers, whose records then land
-    interleaved — and _first_races reads the earliest record of a case as the race
-    that started it. Sorting on the plan index each record carries restores that.
+    interleaved. Sorting on the plan index each record carries restores that.
     Cases keep the order they first appear in, so a run that gave each worker a
     whole case (records already in plan order) is left exactly as it was.
     """
@@ -191,42 +190,6 @@ def in_plan_order(records: list) -> list:
         first_seen.setdefault(record["case"], len(first_seen))
     return sorted(
         records, key=lambda record: (first_seen[record["case"]], record.get("seq", 0))
-    )
-
-
-def _first_races(records: list):
-    """Keep the first miss per case; fold later sites as leftover.
-
-    After a case's first mismatch/hang the DEST tensor is stale, so every
-    later sync point fails with the same error. JSONL stays complete; the
-    markdown only details that first (thread, addr, filler) cliff.
-    """
-    seed = {}
-    races, leftover = defaultdict(list), defaultdict(list)
-    for record in records:
-        case = record["case"]
-        if case not in seed:
-            seed[case] = (record["thread"], record["addr"], record["filler"])
-        thread, addr, filler = seed[case]
-        if (
-            record["thread"] == thread
-            and record["addr"] == addr
-            and record["filler"] == filler
-        ):
-            races[case].append(record)
-        else:
-            leftover[case].append(record)
-    return races, leftover
-
-
-def _sync_points(records: list) -> str:
-    """`math 0-18, unpack 5` — leftover site indices, folded per thread."""
-    by_thread = defaultdict(list)
-    for record in records:
-        by_thread[record["thread"]].append(record["site_index"])
-    return ", ".join(
-        f"{thread} {as_ranges(indexes, ',')}"
-        for thread, indexes in sorted(by_thread.items())
     )
 
 
@@ -289,12 +252,7 @@ def render(report_dir: Path, env: dict) -> str:
     skips = load_skips(report_dir)
     if not records and not skips:
         return ""
-    races, leftover = _first_races(records) if records else ({}, {})
-    race_records = [record for group in races.values() for record in group]
-    sites, labels, cases, order = (
-        _by_site(race_records) if race_records else ({}, {}, 0, [])
-    )
-    folded = sum(len(group) for group in leftover.values())
+    sites, labels, cases, order = _by_site(records) if records else ({}, {}, 0, [])
 
     out = [
         "# ttnop timing-perturbation findings",
@@ -313,12 +271,7 @@ def render(report_dir: Path, env: dict) -> str:
         "**PCC vs clean** is the Pearson correlation of those two hardware tensors "
         "(`Δ` = `1 − pcc`). It is not PCC vs golden.",
         "",
-        f"{len(order)} race(s) across {cases} case(s)"
-        + (
-            f"; {folded} later variant(s) folded as leftover sync points"
-            if folded
-            else ""
-        )
+        f"{len(records)} recorded variant(s) across {len(order)} site(s), {cases} case(s)"
         + (f"; {len(skips)} case(s) skipped after a hang." if skips else "."),
     ]
     out += _skip_section(skips)
@@ -341,12 +294,6 @@ def render(report_dir: Path, env: dict) -> str:
                 f"{as_ranges(record['delay'] for record in rows)} | {', '.join(tags)} | "
                 f"{_pcc_cell(rows)} |"
             )
-        extra = leftover.get(key[0])
-        if extra:
-            out.append(
-                f"| {labels[key]}+ | | sync points {_sync_points(extra)} fail | "
-                f"| | leftover |"
-            )
 
     for key in order:
         case, thread, addr = key
@@ -365,12 +312,6 @@ def render(report_dir: Path, env: dict) -> str:
         )
         if first_error:
             out.append(f"- first finding: `{first_error}`")
-        extra = leftover.get(case)
-        if extra:
-            out.append(
-                f"- later sync points {_sync_points(extra)} fail "
-                f"(leftover output after the first miss)"
-            )
 
         out += [
             "",

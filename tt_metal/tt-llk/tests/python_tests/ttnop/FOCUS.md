@@ -107,10 +107,8 @@ address, innermost frame first, resolved while the ELF still exists.
 
 A **mismatch** is the delayed run failing the test's own golden. A **drift** is
 it still passing the golden but not matching the clean run bit for bit; that is
-report-only, and keeps the case green. Only the first failing
-`(thread, address, nop)` per case is detailed — after the first miss the output
-buffer is stale, so every later sync point fails the same way and is folded into
-one `leftover` row.
+report-only, and keeps the case green. Every recorded variant is listed (one row
+per site and nop type). Counts that passed are not in the log.
 
 ## Exit codes and gotchas
 
