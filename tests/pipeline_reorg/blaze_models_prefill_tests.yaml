@@ -722,9 +722,6 @@
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    # TT_METAL_HOME on the GH runner pod holds build artifacts only -- source reaches the galaxy workers
-    # via mpirun but never this pod, while ttrun.py, the MGD and the launcher below resolve against source
-    # here, so overlay the pod-local /ci checkout without clobbering the build.
     if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
@@ -746,13 +743,10 @@
 # its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
 # Both caches are PCC'd: the producer gates on min(config 0, config 1), so this is the only leg that
 # covers the merged multi-cache KV chunk table and the per-stage index-cache numbering.
-- name: "GLM-5.2-744B disaggregated prefill runner/producer KV accuracy 20k@5k (SC4)"
+- name: "GLM-5.2-744B disaggregated prefill runner/producer KV accuracy 55k@5k (SC4)"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    # TT_METAL_HOME on the GH runner pod holds build artifacts only -- source reaches the galaxy workers
-    # via mpirun but never this pod, while ttrun.py, the MGD and the launcher below resolve against source
-    # here, so overlay the pod-local /ci checkout without clobbering the build.
     if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
@@ -762,9 +756,9 @@
   test_group: module
   skus:
     bh_sc4:
-      # Measured 4-galaxy run ~8 min end to end (5.5 min weight load from the warm 8x4 cache, 45 s for
-      # the 4-chunk request plus both-cache PCC readback); headroom for the 120 s producer connect and
-      # NFS variance. Counts against the shield/demo budget together with the Kimi entry.
+      # 5.5 min weight load from the warm 8x4 cache, then a full-depth 11-chunk request over 78 layers
+      # plus both-cache UMD readback; headroom for the 120 s producer connect and NFS variance. Counts
+      # against the shield/demo budget together with the Kimi entry.
       timeout: 20
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
