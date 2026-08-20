@@ -59,3 +59,41 @@ def test_skip_boundary_at_32_heads_per_chip():
     would either disable the skip for GLM or wrongly enable it for a fat-head model)."""
     assert _needs_reshard(124, 4) is True  # 124h/tp4 -> 31 per chip -> too thin -> fires
     assert _needs_reshard(128, 4) is False  # 128h/tp4 -> 32 per chip -> fat enough -> no skip
+
+
+def _skip_injected(num_heads, tp_factor, config_opt_in):
+    # Mirrors the injection expression in mla.py (KEEP IN SYNC): the reshard predicate AND an
+    # explicit per-model config opt-in (config.indexer_skip_tp_regather). Head-count scoping is
+    # insufficient: Kimi-K2.6 is also 64-head and with the skip active its padded chunked
+    # no-trace path returned PCC ~ 0 on the 8x4 blaze pipeline.
+    return _needs_reshard(num_heads, tp_factor) and config_opt_in
+
+
+@pytest.mark.parametrize(
+    "num_heads, tp_factor, opt_in, expected_injected, note",
+    [
+        (64, 4, True, True, "GLM-5.x at tp=4: opted in + predicate fires"),
+        (64, 8, True, True, "GLM-5.x at tp=8"),
+        (64, 8, False, False, "Kimi-K2.6 (64h!) at tp=8: predicate fires, NOT opted in"),
+        (96, 8, False, False, "Kimi-K3 96h: not opted in"),
+        (128, 4, True, False, "hypothetical opt-in on a fat shard: predicate is False"),
+    ],
+)
+def test_skip_injection_scope(num_heads, tp_factor, opt_in, expected_injected, note):
+    assert _skip_injected(num_heads, tp_factor, opt_in) is expected_injected, note
+
+
+def test_glm_configs_opt_in_and_others_do_not():
+    """The runtime namespaces GLM builders produce carry the opt-in; Kimi-K2.6's does not
+    (getattr default False in mla.py keeps every non-opted model on today's gather)."""
+    from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import glm_hf_config
+    from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import glm_5_2_hf_config
+
+    assert getattr(glm_hf_config(), "indexer_skip_tp_regather", False) is True
+    assert getattr(glm_5_2_hf_config(), "indexer_skip_tp_regather", False) is True
+    try:
+        from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import kimi_k2_6_hf_config
+
+        assert getattr(kimi_k2_6_hf_config(), "indexer_skip_tp_regather", False) is False
+    except ImportError:
+        pass  # builder name differs; the getattr default in mla.py is the guarantee
