@@ -184,6 +184,12 @@ trust anchor byte-identical in semantics):
      whose jobkey AND archived .text hash set match THIS run's classify
      output adopts the prior silicon instead of re-running (REUSED_FROM.txt
      marker + scoreboard reused_cells: provenance visible, never silent).
+     Every SOURCE ROOT is provenance-gated first (wave-12 ledger 19):
+     quarantined/contaminated markers refuse, a missing pin record refuses
+     fail-closed, craq-gate taint refuses unless this run carries the same
+     taint (then propagated to MANIFEST); a foreign recorded pin adopts
+     LOUDLY (the .text key protects the number) with the source pin
+     recorded, and transitive adoption preserves the full origin chain.
   4. FIRST-CLASS ROW VERDICT STREAMING: <evidence-root>/<op>/
      ROW-VERDICT.json lands the moment a row's cells are assembled —
      cycles per leg, causal/vs_hand %, WIN/PARITY/LOSS band, baseline
@@ -1903,7 +1909,8 @@ class Sweep:
         # Cross-run adoption (laneDA fix): with no local evidence for this
         # leg, probe the --prev-run root(s) and adopt a jobkey- and
         # .text-hash-matched green cell into this run's root (REUSED_FROM
-        # marker written).  The adopted cell then flows through the very
+        # marker written; source roots provenance-gated first — wave-12
+        # ledger 19).  The adopted cell then flows through the very
         # resume validation below — adoption can never bypass it.
         if not (work / "rc.txt").is_file() and not self.a.force:
             self._adopt_prev_cell(work, jobkey, expected_texts)
@@ -2315,19 +2322,152 @@ exit $RC
             return False
         return self._texts_of(work / "TEXT_HASHES.txt") == expected_texts
 
+    def _prev_root_provenance(self, prev):
+        """Source-ROOT provenance gate for cross-run adoption, evaluated
+        once per --prev-run root (cached).  The cell-level checks
+        (_cell_green) protect the NUMBER; this protects where it came from
+        (wave-12 ledger 19: _adopt_prev_cell consumed cells from
+        quarantined roots, roots with no pin record and craq-gate-tainted
+        roots — the cell checks never looked at the source root).
+        Verdicts:
+          - contamination/quarantine markers (the same set
+            newest_clean_runs skips) ......................... REFUSE;
+          - no readable pin record (PIN_STAMP first line, then
+            preflight.json cc1plus_sha256 — the wrapper guard's own
+            order) ........... REFUSE (fail closed: unknown provenance
+            is how contamination starts);
+          - preflight records craq_gate_skipped taint and THIS run
+            gates on CRAQ .................................... REFUSE
+            (a taint-matched run adopts, and _adopt_prev_cell
+            propagates the taint line into THIS run's MANIFEST);
+          - recorded pin != this run's pin ......... ALLOW with a loud
+            CROSS-PIN ADOPTION line (the per-cell .text key against
+            THIS run's classify hashes protects the number; the pin is
+            recorded per adoption so provenance stays visible).
+        Returns {"pin": ..., "taint": ...} on ACCEPT, None on REFUSE
+        (refusals print once per root)."""
+        if not hasattr(self, "_prev_prov"):
+            self._prev_prov = {}
+        key = str(prev.resolve())
+        if key in self._prev_prov:
+            return self._prev_prov[key]
+
+        def refuse(why):
+            print(f"reuse REFUSED: prev root {prev}: {why}")
+            self._prev_prov[key] = None
+            return None
+
+        name = prev.name.lower()
+        if "contaminated" in name or "quarantine" in name:
+            return refuse(
+                "root NAME marks it dirty (*CONTAMINATED*/*quarantine*) — "
+                "never a reuse source"
+            )
+        if (prev / "QUARANTINED").exists():
+            return refuse(
+                "QUARANTINED marker file — quarantined evidence is never a "
+                "reuse source"
+            )
+        if (prev / "CONTAMINATION-NOTE.md").exists():
+            return refuse(
+                "CONTAMINATION-NOTE.md — known-mixed evidence is never a "
+                "reuse source"
+            )
+        pf = {}
+        if (prev / "preflight.json").is_file():
+            try:
+                pf = json.loads((prev / "preflight.json").read_text())
+            except (ValueError, OSError):
+                pf = {}
+        pin = ""
+        if (prev / "PIN_STAMP").is_file():
+            try:
+                stamp = (prev / "PIN_STAMP").read_text().splitlines()
+                pin = stamp[0].strip() if stamp else ""
+            except OSError:
+                pin = ""
+        if not pin:
+            pin = str(pf.get("cc1plus_sha256", "") or "")
+        if not pin:
+            return refuse(
+                "no readable pin record (no PIN_STAMP, no preflight.json "
+                "cc1plus_sha256) — fail closed: unknown provenance is how "
+                "contamination starts"
+            )
+        taint = bool(pf.get("craq_gate_skipped", False))
+        if taint and not getattr(self.a, "skip_craq_gate", False):
+            return refuse(
+                "its preflight records craq_gate_skipped taint but THIS run "
+                "gates on CRAQ — a tainted cell cannot satisfy an untainted "
+                "run"
+            )
+        ours = (getattr(self, "info", None) or {}).get("cc1plus_sha256", "")
+        if pin != ours:
+            print(
+                f"CROSS-PIN ADOPTION: prev root {prev} recorded pin "
+                f"{pin[:12]} != this run's {ours[:12] or '(unrecorded)'} — "
+                "adoption allowed ONLY because every adopted cell is keyed "
+                "on THIS run's classify .text hashes; source_pin recorded "
+                "in REUSED_FROM.txt and scoreboard reused_cells"
+            )
+        prov = {"pin": pin, "taint": taint}
+        self._prev_prov[key] = prov
+        return prov
+
+    @staticmethod
+    def _reuse_chain(src, prev, pin):
+        """Full adoption chain for a source cell, OLDEST FIRST — entry 0 is
+        always the run that touched silicon.  If the source cell was itself
+        adopted (carries a REUSED_FROM.txt), its recorded chain is EXTENDED
+        with this hop, never overwritten (wave-12 ledger 19: the
+        copytree-then-overwrite laundered the origin on transitive
+        adoption).  Entries are (root, recorded_pin) pairs."""
+        chain = []
+        marker = src / "REUSED_FROM.txt"
+        if marker.is_file():
+            try:
+                lines = marker.read_text().splitlines()
+            except OSError:
+                lines = []
+            in_chain = False
+            for ln in lines:
+                if ln.startswith("chain-oldest-first:"):
+                    in_chain = True
+                    continue
+                if in_chain:
+                    m = re.match(r"^  (.+) pin:(\S+)$", ln)
+                    if m:
+                        chain.append((m.group(1), m.group(2)))
+                        continue
+                    in_chain = False
+            if not chain:
+                # legacy pre-gate marker (single reused-from line, no
+                # chain): keep the origin hop; its pin was not recorded
+                # back then
+                for ln in lines:
+                    if ln.startswith("reused-from:"):
+                        chain.append((ln.split(":", 1)[1].strip(), "unrecorded"))
+        chain.append((str(prev), pin))
+        return chain
+
     def _adopt_prev_cell(self, work, jobkey, expected_texts):
         """Cross-run/cross-pin silicon cell reuse (laneDA root cause:
         --prev-run fed ONLY the scoreboard annotator while the resume prober
         looked at the current run root alone, so byte-identical OFF/hand
         cells re-ran every pin).  Probe each --prev-run root (newest first)
         for this leg's evidence at the SAME relative path and adopt it iff
-        it passes the EXACT checks the local resume applies (_cell_green:
-        green rc + jobkey equality + .text set == THIS run's classify
-        hashes — a cc1plus bump that changes the bytes can never reuse).
-        Adoption COPIES the evidence into this run's root (self-contained,
-        SHA256SUMS-covered) and writes a REUSED_FROM.txt marker beside it —
-        provenance visible, never silent.  Returns the source root or None.
-        """
+        (1) the SOURCE ROOT passes the provenance gate
+        (_prev_root_provenance: clean markers + readable pin record +
+        craq-gate taint parity — wave-12 ledger 19) and (2) the cell passes
+        the EXACT checks the local resume applies (_cell_green: green rc +
+        jobkey equality + .text set == THIS run's classify hashes — a
+        cc1plus bump that changes the bytes can never reuse).  Adoption
+        COPIES the evidence into this run's root (self-contained,
+        SHA256SUMS-covered) and writes a REUSED_FROM.txt marker beside it
+        carrying the FULL adoption chain oldest-first with each hop's
+        recorded pin, so the run that touched silicon is always entry 0 —
+        provenance visible, never silent, never laundered.  Returns the
+        source root or None."""
         if expected_texts is None or getattr(self.a, "force", False):
             return None
         try:
@@ -2338,21 +2478,53 @@ exit $RC
             prev = pathlib.Path(root)
             if prev.resolve() == self.ev.resolve():
                 continue
+            prov = self._prev_root_provenance(prev)
+            if prov is None:
+                continue
             src = prev / rel
             if not self._cell_green(src, jobkey, expected_texts):
                 continue
+            chain = self._reuse_chain(src, prev, prov["pin"])
             shutil.rmtree(work, ignore_errors=True)
             shutil.copytree(src, work)
             (work / "REUSED_FROM.txt").write_text(
                 f"reused-from:{prev}\nleg:{rel}\n"
-                "checks: jobkey equality (node/flags/extra_env/tag/mode) + "
-                "archived .text hash set == this run's classify hashes + "
-                "green rc/'passed' log\n"
+                "chain-oldest-first: (entry 0 = the run that touched silicon)\n"
+                + "".join(f"  {r} pin:{p}\n" for r, p in chain)
+                + "checks: source-root provenance (clean markers + readable "
+                "pin record + craq-gate taint parity) + jobkey equality "
+                "(node/flags/extra_env/tag/mode) + archived .text hash set "
+                "== this run's classify hashes + green rc/'passed' log\n"
             )
+            if prov["taint"]:
+                # Taint-matched adoption (this run also runs
+                # --skip-craq-gate): the source root's taint line must
+                # follow the cells it produced (ledger 8(f): a skipped
+                # gate can never be mistaken for a green one).
+                with (self.ev / "MANIFEST.txt").open("a") as f:
+                    f.write(
+                        f"CRAQ gate: ADOPTED-CELL TAINT — {rel} reused-from "
+                        f"{prev} whose preflight records craq_gate_skipped; "
+                        "this run runs --skip-craq-gate itself, taint "
+                        "propagated\n"
+                    )
             if not hasattr(self, "reused"):
                 self.reused = []
-            self.reused.append({"leg": str(rel), "reused_from": str(prev)})
-            print(f"reuse: {rel} reused-from:{prev} (jobkey + .text hash-matched)")
+            self.reused.append(
+                {
+                    "leg": str(rel),
+                    "reused_from": str(prev),
+                    "source_pin": prov["pin"][:12],
+                    "source_taint": prov["taint"],
+                    "origin_root": chain[0][0],
+                }
+            )
+            print(
+                f"reuse: {rel} reused-from:{prev} "
+                f"source_pin:{prov['pin'][:12]} source_taint:{prov['taint']} "
+                f"origin:{chain[0][0]} (root provenance + jobkey + .text "
+                "hash-matched)"
+            )
             return prev
         return None
 
@@ -4168,7 +4340,11 @@ def main():
         "extra_env/tag/mode) matches and whose archived .text hash set "
         "equals THIS run's classify hashes is adopted instead of re-run, "
         "copied into this run's evidence with a REUSED_FROM.txt marker "
-        "(provenance visible, never silent)",
+        "carrying the full origin chain (provenance visible, never silent). "
+        "Source roots are provenance-gated: quarantined/contaminated or "
+        "pin-record-less roots refuse (fail closed), craq-gate-tainted "
+        "roots refuse unless this run runs --skip-craq-gate too, and a "
+        "foreign-pin root adopts loudly with its pin recorded",
     )
     ap.add_argument("--max-drift-pct", type=float, default=5.0)
     ap.add_argument(

@@ -67,10 +67,12 @@ source "$HERE/sweep_wrapper_lib.sh" || { echo "FATAL: sweep_wrapper_lib.sh missi
 evidence_root_guard "$EV" "$PINNED_CC1PLUS_SHA256" "nightly_bh_sweep.sh" || exit 3
 
 # --prev-run chain: newest N clean run roots across nightly/weekly/headline
-# (contaminated/quarantined skipped) — annotator-only today (probes the first
-# root's scoreboard.json; a comma-chain misses harmlessly), and the automatic
-# feed for cross-pin cell reuse once that consumer lands.  SWEEP_PREV_CHAIN=N
-# overrides the depth (default 3).
+# (contaminated/quarantined skipped).  Consumed twice by sweep_2x2.py: the
+# scoreboard annotator (newest root's scoreboard.json -> drift comparison)
+# and the cross-pin cell-reuse prober (EVERY root probed for adoptable
+# device cells; source roots are provenance-gated at adoption time —
+# markers, pin record, craq-gate taint parity; foreign pins adopt loudly
+# with the pin recorded).  SWEEP_PREV_CHAIN=N overrides the depth (default 3).
 PREV=$(newest_clean_runs "$EVIDENCE_ROOT" "$EV" "${SWEEP_PREV_CHAIN:-3}" nightly weekly headline)
 
 echo "== nightly sweep $DATE -> $EV (prev: ${PREV:-none}) =="

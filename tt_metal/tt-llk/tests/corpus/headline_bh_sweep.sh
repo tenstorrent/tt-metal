@@ -59,8 +59,10 @@ bash "$HERE/selftest_sweep_wrapper_lib.sh" > /tmp/headline-selftest-wrapper-lib.
 source "$HERE/sweep_wrapper_lib.sh" || { echo "FATAL: sweep_wrapper_lib.sh missing/broken"; exit 2; }
 evidence_root_guard "$EV" "$PINNED_CC1PLUS_SHA256" "headline_bh_sweep.sh" || exit 3
 
-# --prev-run chain: newest N clean run roots (annotator-only today; the
-# automatic feed for cross-pin cell reuse once that consumer lands).
+# --prev-run chain: newest N clean run roots, consumed twice by
+# sweep_2x2.py: scoreboard drift annotation (newest root) + cross-pin
+# cell reuse (every root probed; source roots provenance-gated at
+# adoption time — markers, pin record, craq-gate taint parity).
 PREV=$(newest_clean_runs "$EVIDENCE_ROOT" "$EV" "${SWEEP_PREV_CHAIN:-3}" headline weekly nightly)
 
 echo "== headline sweep $DATE -> $EV (prev chain: ${PREV:-none}) =="

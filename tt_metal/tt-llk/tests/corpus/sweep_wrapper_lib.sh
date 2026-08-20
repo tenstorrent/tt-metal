@@ -100,10 +100,14 @@ evidence_root_guard() {
 #     - roots whose name marks them dirty (*CONTAMINATED*, *quarantine*),
 #     - roots carrying a CONTAMINATION-NOTE.md or QUARANTINED marker file.
 #   With N=1 this degrades to the old single-prev behavior (plus the clean
-#   filter).  Today sweep_2x2.py's --prev-run feeds only the scoreboard
-#   annotator, which probes <prev>/scoreboard.json and silently skips a
-#   miss — so a comma-chain is harmless until the cross-pin cell-reuse
-#   consumer lands and starts splitting it.
+#   filter).  sweep_2x2.py's --prev-run has TWO consumers: the scoreboard
+#   annotator (newest root's scoreboard.json feeds the drift comparison)
+#   and the CROSS-PIN CELL-REUSE prober, which probes EVERY chained root
+#   for adoptable device cells.  This name-level clean filter is only the
+#   first line of defense: sweep_2x2.py re-gates each source root at
+#   adoption time (marker files, readable pin record, craq-gate taint
+#   parity; foreign pins adopt loudly with the pin recorded), so a dirty
+#   root that slips past here still cannot be consumed silently.
 newest_clean_runs() {
   local root=$1 cur=$2 n=$3
   shift 3
