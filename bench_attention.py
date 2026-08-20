@@ -28,11 +28,14 @@ from unified_bench import bench, show
 TILE = 32
 
 
-def bench_ours_flash(device, sq, sk_total, dt, chunks):
+HIFI2_APPROX = {"math_fidelity": ttnn.MathFidelity.HiFi2, "math_approx_mode": True}
+
+
+def bench_ours_flash(device, sq, sk_total, dt, chunks, fidelity=None):
     import test_unified_flash as flash
 
     # Build once outside the timed region by capturing the closure the test uses.
-    call = lambda: flash.run(device, sq, sk_total, dt, chunks, True)
+    call = lambda: flash.run(device, sq, sk_total, dt, chunks, True, fidelity=fidelity)
     return bench(device, call, iters=20, warmup=3, match="flash_attention.cpp")
 
 
@@ -91,7 +94,9 @@ def main(argv=None):
             if sq % chunks or (sq // chunks) * sq > 8 or sq * dt > 8:
                 continue
             st = bench_ours_flash(device, sq, sq, dt, chunks)
-            show(f"ours: flash, {chunks} chunk(s) (1 core)", st)
+            show(f"ours: flash, {chunks} chunk(s), HiFi4 exact (1 core)", st)
+            st = bench_ours_flash(device, sq, sq, dt, chunks, HIFI2_APPROX)
+            show(f"ours: flash, {chunks} chunk(s), HiFi2 approx (1 core)", st)
 
         # ttnn, whole grid.
         for pin in (1, None):
