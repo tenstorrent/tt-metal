@@ -870,7 +870,11 @@ class Operation:
                             f"Pre-operation hook {hook} returned {hook_return_value} but must return None"
                         )
 
-                if ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_graph_report:
+                # The graph report is built from the C++ GraphProcessor capture and does not use the python
+                # torch tracer, so it is not enabled here. The tracer must be requested explicitly, since it
+                # replaces torch.Tensor arguments with TracedTorchTensor, which cannot be dtype-converted by
+                # nanobind on the way into ttnn.Tensor.
+                if ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_torch_tracer:
                     if not ttnn.tracer.is_tracing_enabled():
                         ttnn.tracer.enable_tracing()
 
