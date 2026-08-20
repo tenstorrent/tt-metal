@@ -50,9 +50,11 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
     constexpr uint64_t kWideChunkThreshold = 800'000;
 
     // Mirrors build_column_parallel + plan_cb_depths: that builder's CB plan is sized by the
-    // busiest core's tile count, not by Wt, and plan_cb_depths() TT_FATALs once even the
-    // single-buffer plan (cb_in + cb_out, one slot per tile each) exceeds the L1 budget. Reject
-    // here so "auto" falls back to native instead of aborting inside program creation.
+    // busiest core's tile count, not by Wt. A case whose single-buffer plan (cb_in + cb_out, one
+    // slot per tile each) cannot fit even an empty core's L1 is out of scope for every codegen
+    // builder no matter what else is resident, so reject it here and let "auto" pick native.
+    // This is a static bound only -- whether the plan fits the L1 that is actually free right now
+    // is decided once, inside the program factory (see UntilizeCodegenProgramFactory).
     auto column_parallel_plan_fits = [&](uint32_t wt) {
         auto* device = input.device();
         auto grid = device->compute_with_storage_grid_size();
