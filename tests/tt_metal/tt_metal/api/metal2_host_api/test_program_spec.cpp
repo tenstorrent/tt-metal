@@ -4411,16 +4411,9 @@ TEST_F(ProgramSpecTestGen1, DifferentCompileTimeVarargCountProducesDifferentKern
 //
 // get_compile_time_vararg(idx) is constexpr AND bounds-checked, and those two properties collide
 // with how ASSERT is defined. The lightweight-assert flavor expands to inline asm ("ebreak");
-// C++20 permits inline asm inside a constexpr function but C++17 rejects it
-// (-Werror=c++20-extensions), and kernels build with -std=c++17. So an ASSERT sitting directly in
-// the constexpr body fails EVERY Metal 2.0 kernel build whenever lightweight asserts are on --
-// the accessor is emitted unconditionally, even for kernels with no varargs at all.
-//
-// These two tests pin both halves of the contract with asserts turned on:
-//   1. an in-range index still folds in a constant expression (the accessor stays constexpr), and
-//   2. an out-of-range index in a constant expression is still rejected at build time.
-//
-// Lightweight (hacky) simulation of assertion-on environment to verify vararg CTA work with assertion.
+// inline assembly is unconditionally not allowed in a constexpr function in C++17.
+// These tests ensure that this caveat is properly handled. The assertion-on environment is
+// simulated in a lightweight (and hacky) way by defining the assertion-enable macro manually.
 
 TEST_F(ProgramSpecTestGen1, InRangeCompileTimeVarargCompilesWithAssertsEnabled) {
     NodeCoord node{0, 0};
