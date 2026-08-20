@@ -33,8 +33,13 @@ __attribute__((noinline)) void calculate_cast_fp32_to_fp16a_fresh_cpp()
 {
     for (int d = 0; d < ITERATIONS; ++d)
     {
-        const sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::dst_reg[0]     = sfpi::convert<sfpi::vFloat16a>(v, sfpi::RoundMode::Nearest);
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        // Assign the vFloat16a convert result back through a vFloat before the
+        // store (production form): storing the vFloat16a-typed value directly
+        // emits SFPSTORE mod0=1 (a 16A-format store) — wrong for the fp32/
+        // dest_acc row contract and unimplemented in the pinned BH sim.
+        v                = sfpi::convert<sfpi::vFloat16a>(v, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
     }
 }
