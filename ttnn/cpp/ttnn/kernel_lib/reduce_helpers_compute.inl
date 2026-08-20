@@ -289,7 +289,13 @@ ALWI void reduce_accumulate_via_add(
     if constexpr (reconfig_out) {
         pack_reconfig_data_format(output_dfb_id);
     }
-    sfpu_reduce_init<PoolType::SUM, dst_fmt>();  // light: (re)load the SFPU reduce macro (persists across adds)
+    // Light: (re)load the SFPU reduce macro (persists across the adds). Skipped entirely under
+    // ReduceWithinTile::Skip — there is no sfpu_reduce to arm. NOTE for post_reduce_op authors: under Skip
+    // this reduce leaves the SFPU UNTOUCHED, so a post_reduce_op must run its own <op>_tile_init (the normal
+    // contract). Under Collapse an SFPU post-op could free-ride on this init; under Skip it cannot.
+    if constexpr (within_tile == ReduceWithinTile::Collapse) {
+        sfpu_reduce_init<PoolType::SUM, dst_fmt>();
+    }
     // Basic validity the reduce() dispatch skips on this path (its compile-time restrictions are asserted
     // there). Capacity self-asserts in each wait_front/reserve_back, except NoWaitNoPop which does neither.
     ASSERT(input_dfb_id != output_dfb_id && Ht > 0 && Wt > 0 && NC > 0);
@@ -465,8 +471,10 @@ ALWI void reduce_accumulate_via_add(
                         reconfig_data_format_srca(acc_cb, input_dfb_id);
 #ifndef ARCH_QUASAR
                         add_binary_tile_init();
-                        add_binary_tile(0, 1, 0);                    // DST[0] = DST[0] + DST[1] (fp32 SFPU add)
-                        sfpu_reduce_init<PoolType::SUM, dst_fmt>();  // restore the reduce macro for the finalize
+                        add_binary_tile(0, 1, 0);  // DST[0] = DST[0] + DST[1] (fp32 SFPU add)
+                        if constexpr (within_tile == ReduceWithinTile::Collapse) {
+                            sfpu_reduce_init<PoolType::SUM, dst_fmt>();  // restore the reduce macro to finalize with
+                        }
 #else
                         ASSERT(false);  // CopySeedSfpuAdd needs add_binary_tile (WH/BH only)
 #endif
@@ -753,9 +761,9 @@ template <
     ReduceDataFormatReconfigMode reconfig_mode,
     ReduceFp32Mode fp32_mode,
     ReduceAlgorithm algorithm,
+    ReduceWithinTile within_tile,
     typename AccumulateT,
-    typename PostReduceOp,
-    ReduceWithinTile within_tile>
+    typename PostReduceOp>
 ALWI void reduce(
     ReduceInputBlockShape input_block_shape,
     ReduceInputMemoryLayout input_memory_layout,
@@ -821,7 +829,7 @@ ALWI void reduce(
             within_tile == ReduceWithinTile::Collapse || reduce_type == PoolType::SUM,
             "AccumulateViaAdd + ReduceWithinTile::Skip: SUM only. AVG's 1/N is derived from tile geometry "
             "along the axis being collapsed, which Skip does not collapse — use SUM and apply the scale in a "
-            "post_reduce_op (or fold it into the reduce scaler).");
+            "post_reduce_op, or compute_kernel_lib::reduce_mean (caller-supplied N; it takes within_tile).");
         // All four ReduceInputPolicy values are supported: BulkWaitBulkPop / WaitUpfrontNoPop / NoWaitNoPop
         // index a resident block (should_pop vs bulk-reserve output); WaitAndPopPerTile streams the reduce dim.
         // Cross-call Accumulate (CB accumulator holding the RAW partial sum, folded into the pairwise add):
@@ -849,6 +857,14 @@ ALWI void reduce(
         // P + a 0/1 mask tile in scaler_dfb). REDUCE_SCALAR can be partial in BOTH axes at once (a single
         // row/col mask can't express the corner), so it is rejected — use ReduceTile.
         if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
+            ASSERT(partial_scaler.valid_reduce_dim_elements == 0);
+        }
+        // Skip + partial is a contradiction, not a supported combination. valid_reduce_dim_elements counts
+        // valid LANES along the reduce axis inside the last tile — a quantity that only means something when
+        // that axis is being collapsed. Under Skip the inputs are already collapsed on it (one valid lane per
+        // tile), so a 0/1 lane mask has nothing to mask: it multiplies the one valid lane by 1 and the garbage
+        // by 0, at the cost of a fidelity-affected bcast-mul. Reject it rather than pretend it did something.
+        if constexpr (within_tile == ReduceWithinTile::Skip) {
             ASSERT(partial_scaler.valid_reduce_dim_elements == 0);
         }
         // Cross-call Accumulate + partial is supported for ROW/COL (the masked last tile folds into each
@@ -883,8 +899,12 @@ ALWI void reduce(
 
     // Past this point is the ReduceTile datapath, where reduce_tile (matmul-with-ones) IS the within-tile
     // collapse — there is no separate finalize pass to elide, so Skip has no meaning here.
+    // The condition MUST be predicated on resolved_algorithm: `if constexpr` discards only the statements
+    // INSIDE its branch, so everything after the AccumulateViaAdd block (including this static_assert) is
+    // still instantiated for an AccumulateViaAdd call. Asserting `within_tile == Collapse` bare here made
+    // ReduceWithinTile::Skip fail to compile on EVERY algorithm, including the one that implements it.
     static_assert(
-        within_tile == ReduceWithinTile::Collapse,
+        resolved_algorithm == ReduceAlgorithm::AccumulateViaAdd || within_tile == ReduceWithinTile::Collapse,
         "ReduceWithinTile::Skip is AccumulateViaAdd-only: on the ReduceTile datapath the reduce_tile "
         "matmul-with-ones performs the within-tile collapse itself, so there is nothing to skip. Select "
         "ReduceAlgorithm::AccumulateViaAdd, or drop the Skip.");
@@ -1331,6 +1351,7 @@ template <
     ReduceDataFormatReconfigMode reconfig_mode,
     ReduceFp32Mode fp32_mode,
     ReduceAlgorithm algorithm,
+    ReduceWithinTile within_tile,
     typename AccumulateT>
 ALWI void reduce_mean(
     ReduceInputBlockShape input_block_shape,
@@ -1354,11 +1375,21 @@ ALWI void reduce_mean(
         input_policy,
         reconfig_mode,
         fp32_mode,
-        algorithm>(
+        algorithm,
+        within_tile>(
         input_block_shape,
         input_memory_layout,
         accumulate,
-        [inv_bits](uint32_t dst) { mul_unary_tile(dst, inv_bits); },
+        [inv_bits](uint32_t dst) {
+            // mul_unary_tile is an SFPU op and needs the common SFPU init to have run. Under Collapse the
+            // finalize's sfpu_reduce has just armed it, so the multiply free-rides (measurably cheaper — this
+            // is why binop_with_scalar_tile_init is absent there). Under Skip the reduce never touches the
+            // SFPU, so the multiply must arm it itself.
+            if constexpr (within_tile == ReduceWithinTile::Skip) {
+                binop_with_scalar_tile_init();
+            }
+            mul_unary_tile(dst, inv_bits);
+        },
         partial_scaler);
 }
 

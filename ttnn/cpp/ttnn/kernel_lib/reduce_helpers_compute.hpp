@@ -172,7 +172,16 @@ enum class ReduceAlgorithm { Auto, ReduceTile, AccumulateViaAdd };
  *
  * With Skip, DST holds the raw cross-tile SUM and `post_reduce_op` still runs on it (so a caller 1/N, eps-add
  * or rsqrt composes exactly as before). AVG is rejected: its 1/N is derived from tile geometry, which only
- * means anything once the axis has actually been collapsed — use SUM plus a post_reduce_op.
+ * means anything once the axis has actually been collapsed — use SUM plus a post_reduce_op, or reduce_mean
+ * (which is SUM + a caller-supplied 1/N and DOES take within_tile, so a cross-core mean combine is one call).
+ *
+ * SFPU STATE: under Skip this helper never touches the SFPU, so an SFPU `post_reduce_op` must run its own
+ * <op>_tile_init — the normal contract, but note that under Collapse a post-op can free-ride on the
+ * finalize's sfpu_reduce init, and under Skip it cannot.
+ *
+ * PARTIAL IS REJECTED (asserted): `valid_reduce_dim_elements` counts valid LANES along the reduce axis inside
+ * the last tile, which only means something while that axis is being collapsed. Skip's inputs are already
+ * collapsed on it, so there is nothing for a 0/1 lane mask to mask.
  *
  * ReduceTile cannot express Skip: there the reduce_tile matmul-with-ones IS the collapse, so there is nothing
  * to skip (asserted).
@@ -600,9 +609,12 @@ template <
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast,
     ReduceAlgorithm algorithm = ReduceAlgorithm::Auto,
+    // within_tile sits AHEAD of the two deduced typename parameters on purpose: PostReduceOp is normally a
+    // lambda, whose type cannot be named at the call site, so a trailing within_tile would be unreachable for
+    // every caller that passes a post_reduce_op — i.e. exactly the callers Skip is documented for.
+    ReduceWithinTile within_tile = ReduceWithinTile::Collapse,
     typename AccumulateT = NoAccumulation,
-    typename PostReduceOp = NoOp,
-    ReduceWithinTile within_tile = ReduceWithinTile::Collapse>
+    typename PostReduceOp = NoOp>
 ALWI void reduce(
     ReduceInputBlockShape input_block_shape,
     ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
@@ -655,6 +667,7 @@ template <
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast,
     ReduceAlgorithm algorithm = ReduceAlgorithm::AccumulateViaAdd,
+    ReduceWithinTile within_tile = ReduceWithinTile::Collapse,
     typename AccumulateT = NoAccumulation>
 ALWI void reduce_mean(
     ReduceInputBlockShape input_block_shape,
