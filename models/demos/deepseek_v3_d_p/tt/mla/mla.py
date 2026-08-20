@@ -686,12 +686,9 @@ class ttMLA:
         # fall back so a same-heads/same-seq variant doesn't pick up an invalid program_config.
         if cfg.get("q_lora_rank") not in (None, self.q_lora_rank):
             return False
-        # The long-seq (non-640) sets were tuned on the 7168-hidden models (DeepSeek-V3 and Kimi at
-        # 32 SP devices) and their in0_block_w values assume that K. K is hidden_size/tp for q_a_proj
-        # and kv_a_proj_with_mqa, so a narrower model reaches the SAME seq_len_local key with a K the
-        # tiling does not divide: Mistral-Small-4 (hidden 4096) hits K_t=32 against in0_block_w=14 and
-        # the matmul hard-asserts `K_t % in0_block_w == 0`. Declaring the hidden_size a config was
-        # tuned for makes any other width fall back to the untuned default instead of hard-failing.
+        # in0_block_w must divide K_t, and K is hidden_size/tp for q_a_proj and kv_a_proj_with_mqa.
+        # A model of a different width reaching the same seq_len_local key would hard-assert, so let
+        # it fall back to the untuned default instead.
         if cfg.get("hidden_size") not in (None, self.hidden_size):
             return False
         # The chunked-prefill 640 set is only dimensionally valid in chunked mode (e.g. wkv_b1/wkv_b2

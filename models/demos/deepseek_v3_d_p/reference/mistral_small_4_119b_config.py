@@ -9,41 +9,27 @@ Single source of truth for model dimension constants.
 Values from HuggingFace config.json for mistralai/Mistral-Small-4-119B-2603 (text_config);
 the vision tower (Pixtral) and the multimodal projector are ignored for text-only prefill.
 
-Mistral 4 is an MLA + MoE model (q_a/q_b LoRA, kv_a_proj_with_mqa, compressed KVPE cache), so it
-rides the shared ttMLA / ttMoE path. It is NOT a DeepSeek-schema checkpoint, so ``mistral4_hf_config``
-translates it into the field names the shared device code reads. Three translations, all load-bearing:
+Mistral 4 is an MLA + MoE model, so it rides the shared ttMLA / ttMoE path. It is not a DeepSeek-schema
+checkpoint, so ``mistral4_hf_config`` translates it into the field names the shared device code reads:
 
 1. ``rope_parameters`` -> ``rope_scaling``. transformers 5.x renamed the block; ttMLA subscripts
-   ``hf_config.rope_scaling[...]`` with no defaults (tt/mla/rope.py:47-52).
-2. ``rope_theta`` moves UP a level. Mistral nests it inside ``rope_parameters``; ttMLA reads
-   ``hf_config.rope_theta`` at the top level (tt/mla/rope.py:45).
-3. ``mscale`` / ``mscale_all_dim`` are deliberately NOT the checkpoint's 1.0 — see below.
+   ``hf_config.rope_scaling[...]`` with no defaults.
+2. ``rope_theta`` moves up a level. Mistral nests it inside ``rope_parameters``; ttMLA reads it at
+   the top level.
+3. ``mscale`` / ``mscale_all_dim`` are deliberately 0.0, not the checkpoint's 1.0.
 
-The softmax-scale divergence (3) is the subtle one. HF's own Mistral4Attention uses a plain
-``self.scaling = qk_head_dim ** -0.5`` with no YaRN mscale correction at all
-(transformers/models/mistral4/modeling_mistral4.py:416). Both this package's device path and its
-vendored DeepSeek reference instead derive an mscale from the YaRN factor, and they key off
-DIFFERENT fields to do it:
+(3) is the subtle one. HF's Mistral4Attention uses a plain ``qk_head_dim ** -0.5`` with no YaRN mscale
+correction, but both the device path and the vendored DeepSeek reference derive one from the YaRN
+factor. With the checkpoint's mscale = 1.0 and factor = 128 both compute 0.1*ln(128)+1 = 1.4852 and
+square it into the softmax scale — a 2.206x inflation Mistral does not apply. Because both sides
+inflate identically, PCC stays green while the model is wrong. Zeroing them collapses the correction
+to exactly 1.0 on both paths. The cos/sin tables are unaffected (rope.py forces mscale_all_dim =
+mscale, so the ratio is 1.0 for any value), and factor = 128 still drives the frequency interpolation
+that Mistral does use. The checkpoint's literal values are preserved on the constants class below.
 
-    device    tt/mla/mla.py:382-385                   mscale     = 0.1*mscale*ln(factor) + 1
-    reference reference/modeling_deepseek.py:698-704  mscale_all_dim, same formula
-
-With the checkpoint's literal ``mscale = mscale_all_dim = 1.0`` and ``factor = 128``, both sides
-compute 0.1*ln(128)+1 = 1.4852 and square it into the softmax scale — a 2.206x inflation that HF
-Mistral does not apply. Because BOTH sides inflate identically, a device-vs-reference PCC test stays
-green while being 2.2x wrong against the real model. Setting both to 0.0 collapses the correction to
-exactly 1.0 on both paths (device: 0.1*0*ln(128)+1 = 1; reference: ``if mscale_all_dim:`` is False),
-restoring Mistral's plain qk_head_dim**-0.5.
-
-This costs nothing elsewhere: rope.py forces ``mscale_all_dim = mscale`` before building the tables
-(rope.py:56), so the YaRN _mscale ratio is 1.0 for ANY value and the cos/sin tables are byte-identical.
-``factor = 128`` is still carried, so the YaRN frequency interpolation — which Mistral DOES use —
-is unaffected. The checkpoint's literal values are preserved on the constants class below.
-
-KNOWN GAP (not expressible in config): Mistral additionally scales queries by a position-dependent
-``get_llama_4_attn_scale`` = 1 + 0.1*ln(1 + floor(pos / 8192)) (modeling_mistral4.py:367-369). ttMLA
-has no equivalent. It is exactly 1.0 for positions < 8192, so short-context runs are unaffected;
-it reaches ~1.07 at 16k and ~1.19 at 56k tokens.
+KNOWN GAP (not expressible in config): Mistral also scales queries by a position-dependent
+``get_llama_4_attn_scale`` = 1 + 0.1*ln(1 + floor(pos / 8192)), for which ttMLA has no equivalent. It
+is exactly 1.0 below 8192, reaching ~1.07 at 16k and ~1.19 at 56k tokens.
 """
 
 import types
@@ -166,10 +152,8 @@ def mistral4_hf_config(max_seq: int = 8192):
         topk_group=C.NUM_LIMITED_GROUPS,
         routed_scaling_factor=C.ROUTE_SCALE,
         norm_topk_prob=C.NORM_TOPK_PROB,
-        # Checkpoint is fp8 with activation_scheme "static" and weight_block_size null (per-tensor),
-        # NOT the [128,128] block scheme the shared dequantizer implements. Carried verbatim so the
-        # mismatch surfaces where dequant happens rather than as a missing attribute; this is why
-        # the adapter leaves supports_pretrained off.
+        # fp8 with weight_block_size null (per-tensor), not the [128,128] block scheme. Carried
+        # verbatim so test_utils dispatches to the per-tensor dequant path.
         quantization_config={
             "quant_method": "fp8",
             "activation_scheme": "static",

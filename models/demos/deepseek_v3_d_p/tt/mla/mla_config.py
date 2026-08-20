@@ -12,17 +12,13 @@ Production local seq_len values:
   - 128k total / 32 SP devices = 4096 per device
   - 100k total / 32 SP devices = 3200 per device
 
-Entries are keyed ONLY by local seq_len, so two different (total seq_len, SP factor) pairs land on the
-same key -- 100k/32SP and 25k/8SP both resolve to 3200. The key therefore does not identify the model,
-and a tiling valid for the shape it was tuned on can be dimensionally invalid for another model that
-reaches the same key. ``in0_block_w`` must exactly divide K_t, and K is model-dependent (hidden_size/tp
-for q_a_proj and kv_a_proj_with_mqa), so the mismatch is a hard TT_FATAL rather than a slow path.
+Entries are keyed only by local seq_len, so different (total seq_len, SP) pairs share a key and the key
+does not identify the model. A tiling valid for the shape it was tuned on can be dimensionally invalid
+for another model reaching the same key, and that is a hard TT_FATAL rather than a slow path.
 
-Guard against that with the gating tags resolved in ``ttMLA._cfg_matches`` (``num_heads``,
-``q_lora_rank``, ``hidden_size``, ``chunked_only``, ``dense_head_cap_non_dsa``): a config declares the
-shape it was tuned for and any other model falls back to the untuned default. The 4096 / 3200 sets
-below carry ``hidden_size: 7168`` because they were tuned on DeepSeek-V3 and Kimi; without it,
-Mistral-Small-4 (hidden 4096 -> K_t 32) picked up ``in0_block_w=14`` and hard-asserted.
+The gating tags resolved in ``ttMLA._cfg_matches`` (``num_heads``, ``q_lora_rank``, ``hidden_size``,
+``chunked_only``, ``dense_head_cap_non_dsa``) let a config declare the shape it was tuned for so other
+models fall back to the default. The 4096 / 3200 sets carry ``hidden_size: 7168`` for that reason.
 """
 
 import ttnn
