@@ -81,18 +81,6 @@ tt_metal/fabric/   (.cpp compiled into libscaleout_topology)
   physical_descriptor_builder.cpp
 ```
 
-### What goes where
-
-| Piece | Home | Moves? |
-|---|---|---|
-| FSD proto, FSD `utils`/`query` | `scaleout_tools` | no |
-| **MGD, PSD, PGD** (proto + class) | `scaleout_topology` | **yes** |
-| topology **solver** + **mapper utils** | `scaleout_topology` | **yes** |
-| **FSD → PSD** builder (`physical_descriptor_builder`) | `scaleout_topology` | new |
-| **mesh_graph** (`MeshGraph` class) | `fabric` | **no — stays** |
-| `fabric_types` (FabricNodeId/MeshId/AsicID formatters etc.) | `fabric` | **no — stays** |
-| runtime protos (router/port/intermesh) | `fabric` | no |
-
 ### The only real code change: relocate 3 functions
 
 `mesh_graph` stays in `fabric`, so the **3 functions that touch `MeshGraph`** are handled as follows (no new file):
@@ -108,18 +96,6 @@ which `generate_rank_bindings` already uses).
 > Keeping `mesh_graph` in fabric means `mesh_graph.cpp` and `fabric_host_utils.*` stay **untouched** — simpler
 > than moving it.
 
-### Symbol visibility & consumer linking
-
-`scaleout_topology` uses **default visibility**: `fabric` links it into `libtt_metal.so`, so its symbols are
-exported from the runtime **exactly as they were before the topology sources were split out**. In-tree consumers
-keep resolving the topology types through `tt_metal` with **no per-target link changes**. The descriptor protos are
-compiled in exactly one place (the lib → `libtt_metal.so`), so there is a single copy and no protobuf
-"File already exists in database" abort — which also means consumers must **not** also link the archive directly.
-
-> An earlier iteration gave the lib **hidden** visibility (protobuf convention, like `TT::ScaleoutTools`) and added
-> an explicit `PRIVATE TT::ScaleoutTopology` to every consumer. That was reverted: hiding these ubiquitous topology
-> symbols forced link changes across many unrelated subsystems (ttnn / multihost / distributed / tt-train tests).
-> Hidden visibility + standalone linking returns as part of the runtime-free-FM follow-up below.
 
 ### Header locations / includes
 
