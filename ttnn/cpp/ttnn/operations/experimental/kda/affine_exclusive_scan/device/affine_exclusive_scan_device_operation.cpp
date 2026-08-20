@@ -35,7 +35,7 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     check_dtype(in.initial_state, DataType::FLOAT32, operation_name, "initial_state");
     check_same_device(in.a, in.b, operation_name, "b");
     check_same_device(in.a, in.initial_state, operation_name, "initial_state");
-    check_matching_dtype(in.a, in.b, operation_name, "a", "b");
+    check_matching_dtype(in.a, in.b, operation_name, "a and b");
     TT_FATAL(attrs.groups_per_head > 0, "affine_exclusive_scan: groups_per_head must be positive");
     check_output_interleaved(attrs.output_mem_config, operation_name);
     check_compute_config(attrs.compute_kernel_config, operation_name);
