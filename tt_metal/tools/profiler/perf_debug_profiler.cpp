@@ -778,7 +778,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         }
         DeviceCtx ctx;
         ctx.chip_id = static_cast<uint32_t>(mesh_device->get_device(coord)->id());
-        if (!boot_device(mesh_device, ctx)) {
+        if (!boot_device(mesh_device, ctx, coord)) {
             continue;  // boot logs its own reason; degrade to no-capture for this device
         }
         // Tracy: anchor + pre-create the per-core contexts (off the drain hot path). Freq = device
@@ -1135,7 +1135,10 @@ void PerfDebugProfiler::disarm_producers(
         n);
 }
 
-bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx) {
+bool PerfDebugProfiler::boot_device(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    DeviceCtx& ctx,
+    const distributed::MeshCoordinate& coord) {
     const auto context_id = mesh_device->impl().get_context_id();
     auto& cluster = MetalContext::instance(context_id).get_cluster();
     const auto& hal = MetalContext::instance(context_id).hal();
@@ -1239,8 +1242,8 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         }
     }
 
-    ctx.device = mesh_device->get_devices().front();
-    const distributed::MeshCoordinate scoord = *distributed::MeshCoordinateRange(mesh_device->shape()).begin();
+    const distributed::MeshCoordinate scoord = coord;
+    ctx.device = mesh_device->get_device(coord);
 
     // ---- bring up each DRISC over a disjoint slice of the grid ----
     //

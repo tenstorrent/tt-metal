@@ -33,6 +33,7 @@ namespace tt::tt_metal {
 
 namespace distributed {
 class MeshDevice;
+class MeshCoordinate;
 class D2HSocket;
 }  // namespace distributed
 namespace perf_debug {
@@ -172,7 +173,10 @@ private:
     // TT_METAL_DEVICE_PROFILER independently of us, they are lossless by design, and with no consumer they
     // block forever -- the workload wedges rather than merely losing its capture.
     void disarm_producers(const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t device_id);
-    bool boot_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
+    bool boot_device(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        DeviceCtx& ctx,
+        const distributed::MeshCoordinate& coord);
     // Read the drainer's LIVE state (done word, heartbeat, phase) mid-run and log it. Distinguishes
     // "kernel exited" from "kernel blocked in the credit wait" from "kernel sweeping with nothing to do" --
     // states the end-of-run results block cannot tell apart because it is only published on exit.

@@ -19,11 +19,12 @@
 //
 //   zone_id = tu_id << TT_ZONE_LOCAL_BITS | local
 //
-//     tu_id  17 bits  a per-translation-unit id handed out by a persistent, flock-guarded registry
+//     tu_id  13 bits  a per-translation-unit id handed out by a persistent, flock-guarded registry
 //                     (tt_metal/jit_build/build.cpp) keyed on SOURCE IDENTITY, injected into the kernel
-//                     compile as -DTT_PROFILER_TU_ID.  131,072 translation units.
-//     local  10 bits  the zone's index within its TU: __COUNTER__ minus the base captured by
-//                     TT_ZONE_COUNTER_ANCHOR below.  1,024 zone sites per TU.
+//                     compile as -DTT_PROFILER_TU_ID.  8,192 translation units.
+//     local  14 bits  the zone's __COUNTER__ value in this TU. Raw, not rebased: the assembler record
+//                     must be integer literals only (see TT_ZONE_DEFINE_ID_AT), so we cannot subtract a
+//                     `.set` symbol.  16,384; non-zone __COUNTER__ uses in the same TU eat the budget.
 //
 // Both halves are unique by construction, so two distinct zone sites can never share an id. THE SPLIT IS
 // ONE CONSTANT: change TT_ZONE_LOCAL_BITS and both halves resize together. Overflow of either half is a
@@ -83,7 +84,7 @@
 #define TT_ZONE_ID_BITS 27
 
 // THE SPLIT. One line to change; everything below follows.
-#define TT_ZONE_LOCAL_BITS 10
+#define TT_ZONE_LOCAL_BITS 14
 #define TT_ZONE_TU_BITS (TT_ZONE_ID_BITS - TT_ZONE_LOCAL_BITS)
 
 #define TT_ZONE_LOCAL_COUNT (1u << TT_ZONE_LOCAL_BITS)
@@ -107,33 +108,10 @@
 #define TT_PROFILER_TU_ID 0
 #endif
 
-// ---- The __COUNTER__ base anchor -------------------------------------------------------------------
-//
-// __COUNTER__ counts every expansion in the TU, so a raw value depends on how much the includes above
-// happened to consume. Subtracting the base captured here makes per-TU zone indices count from 0.
-//
-// THE BASE EXISTS TWICE, and it has to: the C++ side needs a constexpr to build the id that goes on the
-// wire, and the ASSEMBLER needs the same number to build the id that goes in the record. If they ever
-// disagreed, a zone would stream one id and be named under another. They are captured from ONE __COUNTER__
-// expansion passed to both, which is the only way to make disagreement unrepresentable. (Verified equal
-// across TUs under -flto=auto, which is how kernels are built: GCC keeps each TU's top-level asm together
-// and in order, so one TU's records never see another TU's `.set`.)
-//
-// This anchor MUST precede every zone macro expansion in the TU. It is emitted the first time this header
-// is included, and this header is included at the top of every header that defines zone macros.
-#if defined(__riscv)
-#define TT_ZONE_COUNTER_ANCHOR_AT(ctr)                      \
-    asm(".set .Ltt_zone_ctr_base, " TT_ZONE_STR(ctr) "\n"); \
-    [[maybe_unused]] constexpr unsigned tt_zone_counter_base = (unsigned)(ctr)
-#else
-// Host builds include this header for the constants and the host-side decode; they never expand a zone
-// macro, so the assembler half would be dead weight in every host object.
-#define TT_ZONE_COUNTER_ANCHOR_AT(ctr) [[maybe_unused]] constexpr unsigned tt_zone_counter_base = (unsigned)(ctr)
-#endif
-
-TT_ZONE_COUNTER_ANCHOR_AT(__COUNTER__);
-
-#define TT_ZONE_LOCAL_IDX(ctr) ((unsigned)((ctr) - tt_zone_counter_base - 1u))
+// Local half is the raw __COUNTER__ at the site. Do not subtract a GAS `.set` symbol: under `-flto=auto`
+// lto-wrapper partitions that `.set` away from the `.tt_zone_meta` records (ABS vs UND) and the fused
+// kernel link dies. C++ id and assembler record both stringify the same `ctr` token, so they cannot drift.
+#define TT_ZONE_LOCAL_IDX(ctr) ((unsigned)(ctr))
 
 // ---- The primitive ---------------------------------------------------------------------------------
 //
@@ -160,8 +138,8 @@ TT_ZONE_COUNTER_ANCHOR_AT(__COUNTER__);
         ".popsection\n"                                                                                       \
         ".pushsection .tt_zone_meta,\"M\",@progbits," TT_ZONE_STR(TT_ZONE_META_RECORD_BYTES) "\n"             \
         ".balign 4\n"                                                                                         \
-        ".long ((" TT_ZONE_STR(TT_PROFILER_TU_ID) ") << " TT_ZONE_STR(TT_ZONE_LOCAL_BITS) ") | ((" TT_ZONE_STR( \
-            ctr) ") - .Ltt_zone_ctr_base - 1)\n"                                                              \
+        ".long ((" TT_ZONE_STR(TT_PROFILER_TU_ID) ") << " TT_ZONE_STR(TT_ZONE_LOCAL_BITS) ") | (" TT_ZONE_STR( \
+            ctr) ")\n"                                                                                        \
         ".long 8880b\n"                                                                                       \
         ".long 8881b\n"                                                                                       \
         ".long " TT_ZONE_STR(__LINE__) "\n"                                                                   \
