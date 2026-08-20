@@ -54,7 +54,14 @@ BASELINE="$HERE/sfpu_device_baseline_${CHIP_CLASS}_v1.tsv"
 # shellcheck source=sweep_wrapper_lib.sh
 source "$HERE/sweep_wrapper_lib.sh" || { echo "FATAL: sweep_wrapper_lib.sh missing/broken"; exit 2; }
 evidence_root_guard "$EV" "$PINNED_CC1PLUS_SHA256" "weekly_bh_sweep.sh" || exit 3
-PREV=$(ls -d "$EVIDENCE_ROOT"/weekly-* 2>/dev/null | grep -vx "$EV" | sort | tail -1 || true)
+# --prev-run chain: the newest N clean run roots (weekly/nightly/headline,
+# newest activity first; contaminated/quarantined roots are skipped) so the
+# cross-pin cell-reuse consumer engages automatically once it lands.  Today
+# only the scoreboard annotator reads --prev-run and it probes
+# <first-arg>/scoreboard.json, so a multi-root chain degrades harmlessly
+# (single-root chains keep the drift annotation).  SWEEP_PREV_CHAIN=N
+# overrides the depth (default 3; 1 = old single-prev behavior + clean filter).
+PREV=$(newest_clean_runs "$EVIDENCE_ROOT" "$EV" "${SWEEP_PREV_CHAIN:-3}" weekly nightly headline)
 
 echo "== weekly sweep $DATE -> $EV (prev: ${PREV:-none}) =="
 

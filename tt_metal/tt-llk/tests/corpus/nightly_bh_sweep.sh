@@ -64,8 +64,12 @@ BASELINE="$HERE/sfpu_device_baseline_${CHIP_CLASS}_v1.tsv"
 source "$HERE/sweep_wrapper_lib.sh" || { echo "FATAL: sweep_wrapper_lib.sh missing/broken"; exit 2; }
 evidence_root_guard "$EV" "$PINNED_CC1PLUS_SHA256" "nightly_bh_sweep.sh" || exit 3
 
-# Previous nightly run for before/after drift (newest dated dir that is not us).
-PREV=$(ls -d "$EVIDENCE_ROOT"/nightly-* 2>/dev/null | grep -vx "$EV" | sort | tail -1 || true)
+# --prev-run chain: newest N clean run roots across nightly/weekly/headline
+# (contaminated/quarantined skipped) — annotator-only today (probes the first
+# root's scoreboard.json; a comma-chain misses harmlessly), and the automatic
+# feed for cross-pin cell reuse once that consumer lands.  SWEEP_PREV_CHAIN=N
+# overrides the depth (default 3).
+PREV=$(newest_clean_runs "$EVIDENCE_ROOT" "$EV" "${SWEEP_PREV_CHAIN:-3}" nightly weekly headline)
 
 echo "== nightly sweep $DATE -> $EV (prev: ${PREV:-none}) =="
 
