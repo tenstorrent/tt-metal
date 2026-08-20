@@ -224,13 +224,12 @@ class MLP(LightweightModule):
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             )
             ttnn.deallocate(x)
-            w13_i = ttnn.sharded_to_interleaved(w13_out, ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(w13_out)
+            # Split on the width-sharded layout (same math as interleaved slice).
             hidden = n13 // 2
-            sh = w13_i.shape
-            w1_out = ttnn.slice(w13_i, [0, 0, 0, 0], [sh[0], sh[1], sh[2], hidden], [1, 1, 1, 1])
-            w3_out = ttnn.slice(w13_i, [0, 0, 0, hidden], [sh[0], sh[1], sh[2], n13], [1, 1, 1, 1])
-            ttnn.deallocate(w13_i)
+            sh = w13_out.shape
+            w1_out = ttnn.slice(w13_out, [0, 0, 0, 0], [sh[0], sh[1], sh[2], hidden], [1, 1, 1, 1])
+            w3_out = ttnn.slice(w13_out, [0, 0, 0, hidden], [sh[0], sh[1], sh[2], n13], [1, 1, 1, 1])
+            ttnn.deallocate(w13_out)
         else:
             pc_1 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
             pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
