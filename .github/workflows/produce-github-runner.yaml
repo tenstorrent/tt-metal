@@ -87,10 +87,12 @@ jobs:
           path: generated/github_runner/*.json
           if-no-files-found: error
 
-      # Only real scheduled prod runs push to the github-runner ingest bucket.
-      # workflow_dispatch / push (test) runs stop after the artifact above.
+      # TEMPORARY: also SFTP on the branch push so we can test the real upload
+      # end-to-end before merge. Requires aws_s3 + aws_sftp applied (bucket +
+      # github-runner-writer user). Revert to `== 'schedule'` (or drop the gate)
+      # when removing the temporary push trigger before merge.
       - name: Upload runner data via SFTP
-        if: github.event_name == 'schedule'
+        if: github.event_name == 'push' || github.event_name == 'schedule'
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_GITHUB_RUNNER_WRITER_KEY }}
