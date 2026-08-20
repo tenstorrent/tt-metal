@@ -40,7 +40,7 @@ void kernel_main() {
 
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
 
-    // The fabric arg block (laid out by append_ccl_fabric_rt_args) begins at
+    // The fabric arg block (laid out by build_ccl_fabric_rt_args) begins at
     // index 9; its leading has_forward flag also encodes the send direction.
     size_t conn_arg_idx = 9;
     const bool dst_is_forward = get_arg_val<uint32_t>(conn_arg_idx);

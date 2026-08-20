@@ -273,8 +273,28 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("initial_value") = 0,
         "Allocate the op-internal cross-device GlobalSemaphore on the mesh's worker cores and run the cache-miss "
         "cross-device Synchronize barrier. Keep the returned handle alive for the cached workload's lifetime (park "
-        "it on MeshProgramDescriptor.semaphores). Fabric-connection runtime args already have a Python surface via "
-        "setup_fabric_connection.");
+        "it on MeshProgramDescriptor.semaphores).");
+    mod.def(
+        "build_ccl_fabric_rt_args",
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const tt::tt_fabric::FabricNodeId& neighbor_fabric_node_id,
+           uint32_t link_idx,
+           tt::tt_metal::ProgramDescriptor& desc,
+           const tt::tt_metal::CoreCoord& core,
+           bool is_forward) {
+            return ttnn::ccl::dataflow::build_ccl_fabric_rt_args(
+                src_fabric_node_id, neighbor_fabric_node_id, link_idx, desc, core, is_forward);
+        },
+        nb::arg("src_fabric_node_id"),
+        nb::arg("neighbor_fabric_node_id"),
+        nb::arg("link_idx"),
+        nb::arg("program_descriptor"),
+        nb::arg("worker_core"),
+        nb::arg("is_forward"),
+        "Build the complete fabric-connection runtime-arg block in the layout FabricStreamSender consumes "
+        "([has_forward][fwd conn][has_backward][bwd conn]) — one call instead of hand-rolling the flag dance "
+        "around setup_fabric_connection. Place the block FIRST in the kernel's runtime args. Mutates "
+        "program_descriptor (appends SemaphoreDescriptors), same as setup_fabric_connection.");
 }
 
 }  // namespace ttnn::fabric
