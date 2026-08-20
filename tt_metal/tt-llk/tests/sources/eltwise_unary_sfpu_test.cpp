@@ -77,13 +77,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "fresh_cpp/castfp32tofp16a.h"
 #include "fresh_cpp/celu.h"
 // Canonical per-op semantic bodies (storm contract: fresh_cpp/README.md).
+#include "fresh_cpp/gelu_fitted.h"
+#include "fresh_cpp/sigmoid_fitted.h"
 #include "fresh_cpp/softplus.h"
 #include "fresh_cpp/softshrink.h"
 #include "fresh_cpp/softsign.h"
 #include "fresh_cpp/sqrt.h"
 #include "fresh_cpp/square.h"
 #include "fresh_cpp/tanh.h"
+#include "fresh_cpp/tanh_fitted.h"
 #include "fresh_cpp/tanhderivative-lut.h"
+#include "fresh_cpp/tanhderivative_fitted.h"
 #include "fresh_cpp/tanhshrink.h"
 #include "fresh_cpp/threshold.h"
 #include "fresh_cpp/trigonometry.h"
@@ -309,6 +313,36 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::tanh || (!APPROX_MODE && !is_fp32_dest_acc_en),
                     "fresh tanh selector supports only non-approx, bf16 dest");
                 SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tanh_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            // Lane CM fitted-kernel placeholders (tt-polynomial-fitter frontier
+            // selections; provenance headers in fresh_cpp/*_fitted.h): impl 2.
+            else if constexpr (FRESH_CPP_IMPL == 2 && SFPU_UNARY_OPERATION == SfpuType::tanh)
+            {
+                static_assert(
+                    FRESH_CPP_IMPL != 2 || SFPU_UNARY_OPERATION != SfpuType::tanh || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fitted tanh selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tanh_fitted_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 2 && SFPU_UNARY_OPERATION == SfpuType::sigmoid)
+            {
+                static_assert(
+                    FRESH_CPP_IMPL != 2 || SFPU_UNARY_OPERATION != SfpuType::sigmoid || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fitted sigmoid selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_sigmoid_fitted_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 2 && SFPU_UNARY_OPERATION == SfpuType::gelu)
+            {
+                static_assert(
+                    FRESH_CPP_IMPL != 2 || SFPU_UNARY_OPERATION != SfpuType::gelu || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fitted gelu selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_gelu_fitted_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 2 && SFPU_UNARY_OPERATION == SfpuType::tanh_derivative)
+            {
+                static_assert(
+                    FRESH_CPP_IMPL != 2 || SFPU_UNARY_OPERATION != SfpuType::tanh_derivative || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fitted tanh-derivative selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tanh_derivative_fitted_cpp, (iterations), block_tile, VectorMode::None);
             }
             else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::tanh_derivative_lut)
             {
