@@ -14,6 +14,8 @@ Environment:
   RTL_SIM_CONCLUSION  success | failure | timed_out | ...              (required)
   RTL_SIM_DETAIL      check output.summary (+ text)                    (optional)
   RTL_SIM_SHA / RTL_SIM_URL / RTL_SIM_RUN_URL                          (optional)
+  HORIZON_RESULTS_FILE  tt-umd-horizon results (horizon-test-results/v1) (optional)
+  HORIZON_MAX_AGE_DAYS  staleness threshold for the above (default 7)   (optional)
   RELEASE_VERSION     used in the summary and the dedup label          (optional)
   RTL_SIM_MAP         relevance mapping   (default: ./ai_ip_tests.json)
   QUASAR_SIM_YAML     the yaml the gating job runs
@@ -30,6 +32,7 @@ import os
 import re
 import sys
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -180,8 +183,68 @@ def classify(expected, failed_rows, conclusion, detail):
     return FAILED, passed, failed + extra
 
 
-def build(mapping, expected, passed, failed, verdict, suites=None):
-    """Group the run's tests under the requirement each one serves."""
+# The requirement whose evidence comes from the tt-umd-horizon suite, not the
+# Quasar sim gate. Horizon is a separate repo/CI: it publishes its own results
+# file (horizon-test-results/v1) which the release job pulls and passes here.
+HORIZON_REQUIREMENT = "AIIPSW-15"
+
+
+def parse_horizon(path, req_key=HORIZON_REQUIREMENT, max_age_days=7):
+    """Read the tt-umd-horizon results file into evidence for one requirement.
+
+    Returns (status, extra_evidence). `status` is PASSED / FAILED / INCONCLUSIVE
+    and `extra_evidence` is {req_key: {PASSED: [...], FAILED: [...]}} of test rows,
+    empty when inconclusive. Missing / unreadable / wrong-schema / stale input all
+    yield INCONCLUSIVE with no rows -- the same conservative stance the sim path
+    takes, so the requirement simply shows "no passing evidence" until Horizon
+    publishes a fresh green result.
+    """
+    if not path:
+        return INCONCLUSIVE, {}
+    p = Path(path)
+    if not p.is_file():
+        print(f"horizon: results file '{path}' not present; {req_key} inconclusive")
+        return INCONCLUSIVE, {}
+    try:
+        data = json.loads(p.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"horizon: results file unreadable ({e}); {req_key} inconclusive")
+        return INCONCLUSIVE, {}
+    if data.get("schema") != "horizon-test-results/v1":
+        print(f"horizon: unexpected schema {data.get('schema')!r}; {req_key} inconclusive")
+        return INCONCLUSIVE, {}
+
+    ts = data.get("timestamp", "")
+    try:
+        when = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        age_days = (datetime.now(timezone.utc) - when).total_seconds() / 86400
+    except (ValueError, AttributeError):
+        print(f"horizon: unparseable timestamp {ts!r}; {req_key} inconclusive")
+        return INCONCLUSIVE, {}
+    if age_days > max_age_days:
+        print(f"horizon: results are {age_days:.0f}d old (> {max_age_days}); {req_key} inconclusive")
+        return INCONCLUSIVE, {}
+
+    def row(test):
+        return {"config": "horizon", "group": "tests/axi", "filter": str(test.get("name", "?")), "runner": "gtest"}
+
+    tests = data.get("tests", [])
+    passed = [row(t) for t in tests if t.get("result") == "passed"]
+    failed = [row(t) for t in tests if t.get("result") == "failed"]
+    status = FAILED if failed else PASSED
+    print(f"horizon: {len(passed)} passed, {len(failed)} failed (commit {str(data.get('tested_sha',''))[:12]})")
+    return status, {req_key: {PASSED: passed, FAILED: failed}}
+
+
+def build(mapping, expected, passed, failed, verdict, suites=None, extra_evidence=None):
+    """Group the run's tests under the requirement each one serves.
+
+    `extra_evidence` ({req_key: {PASSED: [...], FAILED: [...]}}) injects evidence
+    from sources other than the sim gate (e.g. Horizon), attributed directly to a
+    requirement rather than through the (config, group, filter) map.
+    """
 
     def req_of(row):
         entry = match_entry(row["config"], row["group"], row["filter"], row["runner"], mapping)
@@ -191,6 +254,11 @@ def build(mapping, expected, passed, failed, verdict, suites=None):
     for row, outcome in [(r, PASSED) for r in passed] + [(r, FAILED) for r in failed]:
         key = req_of(row)
         covered.setdefault(key, {PASSED: [], FAILED: []})[outcome].append(row)
+
+    for key, hits in (extra_evidence or {}).items():
+        acc = covered.setdefault(key, {PASSED: [], FAILED: []})
+        acc[PASSED] += hits.get(PASSED, [])
+        acc[FAILED] += hits.get(FAILED, [])
 
     requirements = []
     for req in mapping.get("requirements", []):
@@ -458,7 +526,9 @@ def main():
             f"read {t['suites']} test suite(s) from TEST_REPORTS_DIR: "
             f"{t['passed']} passed, {t['failed']} failed, {t['skipped']} skipped"
         )
-    report = build(mapping, expected, passed, failed, verdict, suites)
+    max_age = int(_env("HORIZON_MAX_AGE_DAYS", "7") or "7")
+    _horizon_status, horizon_evidence = parse_horizon(_env("HORIZON_RESULTS_FILE", ""), max_age_days=max_age)
+    report = build(mapping, expected, passed, failed, verdict, suites, extra_evidence=horizon_evidence)
 
     meta = {
         "version": version,
