@@ -27,25 +27,6 @@ constexpr const char* kWriterSource =
 constexpr const char* kComputeSource =
     "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
-// The typecast LLK is selected by input/output data format through these two defines.
-KernelSpec::CompilerOptions::Defines make_typecast_defines(
-    tt::tt_metal::DataType input_dtype, tt::tt_metal::DataType output_dtype) {
-    KernelSpec::CompilerOptions::Defines defines;
-    defines.emplace(
-        "TYPECAST_LLK_INIT",
-        fmt::format(
-            "typecast_tile_init<{0}u, {1}u>",
-            static_cast<uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(input_dtype)),
-            static_cast<uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(output_dtype))));
-    defines.emplace(
-        "TYPECAST_LLK",
-        fmt::format(
-            "typecast_tile<{0}u, {1}u>",
-            static_cast<uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(input_dtype)),
-            static_cast<uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(output_dtype))));
-    return defines;
-}
-
 // Legacy set unpack_to_dest_mode[in_cb] = UnpackToDestFp32 when preserve_fp32_precision (a no-op in
 // the JIT unless the format is Float32), leaving every other CB at Default. The named equivalent is
 // an UnpackToDest entry for the input DFB. Metal 2.0 additionally *requires* an explicit entry for a
@@ -86,8 +67,6 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
     using namespace tt::tt_metal;
 
     const Tensor& input = tensor_args.input;
-    const DataType& input_dtype = args.input_dtype;
-    const DataType& output_dtype = args.output_dtype;
     const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
 
     const tt::DataFormat cb_data_format_input = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
@@ -159,12 +138,10 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
-    const auto typecast_defines = make_typecast_defines(input_dtype, output_dtype);
     const auto make_compute = [&](const KernelSpecName& id, uint32_t per_core_block_cnt) {
         return KernelSpec{
             .unique_id = id,
             .source = kComputeSource,
-            .compiler_options = {.defines = typecast_defines},
             .dfb_bindings =
                 {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{
@@ -243,8 +220,6 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
     using namespace tt::tt_metal;
 
     const auto& input = tensor_args.input;
-    const auto& input_dtype = args.input_dtype;
-    const auto& output_dtype = args.output_dtype;
     const auto& sub_core_grids = args.sub_core_grids;
 
     TT_FATAL(sub_core_grids.has_value(), "sub_core_grids cannot be null");
@@ -327,7 +302,6 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
     const KernelSpec compute{
         .unique_id = COMPUTE,
         .source = kComputeSource,
-        .compiler_options = {.defines = make_typecast_defines(input_dtype, output_dtype)},
         .dfb_bindings =
             {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},

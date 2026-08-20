@@ -1,4 +1,3 @@
-
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -13,31 +12,24 @@
 
 #include <cstdint>
 
-#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
-#define BCAST_DIM BroadcastType::COL
-
-#include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "api/compute/reduce.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include "chain_llk.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 
-constexpr auto dfb_norm_x_input = dfb::x_minus_mean;  // x - E(x)
+namespace ckl = compute_kernel_lib;
+
+// Each device contributes interleaved partial statistics:
+// stats = [sum(x0^2), sum(x0), sum(x1^2), sum(x1), ...]. Even tiles reduce E[x^2]
+// and odd tiles reduce E[x].
 constexpr uint32_t stats_tile_stride = 2;
-
-struct x_minus_mean_node {
-    static constexpr LLK_Node node{
-        .llk_init = sub_bcast_cols_init,
-        .llk = FN_compute(sub_tiles_bcast_cols),
-        .DFB_A = dfb::inp,
-        .DFB_B = dfb::stats_reduced,
-        .DFB_OUT = dfb::x_minus_mean,
-        .fixed_DFB_B_index = 1,
-        .fixed_dest_reg = 0xFFFF,
-    };
-};
+constexpr auto Wt_file_scope = get_arg(args::Wt);
+constexpr auto dfb_length_file_scope = get_arg(args::dfb_length);
 
 // The normalized result goes straight to the output unless gamma or beta still has to be applied to
 // it. Only the buffers this build binds have handles, so the choice is made at the preprocessor.
@@ -46,74 +38,79 @@ constexpr auto normed_output_dfb = dfb::x_normed;
 #else
 constexpr auto normed_output_dfb = dfb::out;
 #endif
-struct normed_output_node {
-    static constexpr LLK_Node node{
-        .llk_init = mul_bcast_cols_init,
-        .llk = FN_compute(mul_tiles_bcast_cols),
-        .DFB_A = dfb_norm_x_input,
-        .DFB_B = dfb::recip_sqrt_var,
-        .DFB_OUT = normed_output_dfb,
-        .fixed_DFB_B_index = 0,
-        .fixed_dest_reg = 0xFFFF,
-    };
-};
-
-constexpr auto Wt_file_scope = get_arg(args::Wt);
-constexpr auto dfb_length_file_scope = get_arg(args::dfb_length);
-// When the whole row fits in one pass, gamma/beta tiles are re-read across iterations rather than
-// popped, so the B operand is indexed from the running tile offset instead of the loop counter.
-constexpr uint32_t pop_gamma_beta = (Wt_file_scope == dfb_length_file_scope) ? 0xDDDD : 0xFFFF;
 
 // gamma's product feeds the beta stage when both are applied; otherwise it is already the output.
 #if defined(FUSE_GAMMA) && defined(FUSE_BETA)
-constexpr auto dfb_times_gamma_out = dfb::times_gamma_out;
+constexpr auto times_gamma_output_dfb = dfb::times_gamma_out;
 #else
-constexpr auto dfb_times_gamma_out = dfb::out;
-#endif
-#ifdef FUSE_GAMMA
-struct gamma_optional_node {
-    static constexpr LLK_Node node{
-        .llk_init = mul_bcast_rows_init,
-        .llk = FN_compute(mul_tiles_bcast_rows),
-        .DFB_A = dfb::x_normed,
-        .DFB_B = dfb::gamma,
-        .DFB_OUT = dfb_times_gamma_out,
-        .fixed_DFB_B_index = pop_gamma_beta,
-        .fixed_dest_reg = 0xFFFF,
-    };
-};
+constexpr auto times_gamma_output_dfb = dfb::out;
 #endif
 
 #ifdef FUSE_GAMMA
-constexpr auto dfb_in_beta = dfb_times_gamma_out;
+constexpr auto beta_input_dfb = times_gamma_output_dfb;
 #else
-constexpr auto dfb_in_beta = normed_output_dfb;
+constexpr auto beta_input_dfb = normed_output_dfb;
+#endif
+
+ALWI void normalize_chunk(const uint32_t num_tiles) {
+    const auto shape = ckl::IterationShape::tiles(num_tiles).block_size(ckl::DEST_AUTO_LIMIT);
+    // When a whole row fits in one pass, gamma and beta remain resident and are re-read for every
+    // row. Chunked rows consume one block at a time.
+    constexpr auto gamma_beta_wait =
+        Wt_file_scope == dfb_length_file_scope ? ckl::WaitPolicy::Cumulative : ckl::WaitPolicy::PerBlockSize;
+    constexpr auto gamma_beta_pop =
+        Wt_file_scope == dfb_length_file_scope ? ckl::PopPolicy::None : ckl::PopPolicy::PerBlockSize;
+
+    ckl::eltwise_chain(
+        shape,
+        ckl::BinaryFpu<
+            ckl::BinaryFpuOp::Sub,
+            ckl::input(
+                dfb::inp, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
+            ckl::input(
+                dfb::stats_reduced,
+                ckl::BroadcastDim::Col,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::None,
+                ckl::InputTileMapping::Scalar,
+                ckl::DataFormatReconfig::Enabled,
+                ckl::TileAddressing::Offset)>{0u, 1u},
+        ckl::PackTile<ckl::output(
+            dfb::x_minus_mean, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+
+    // Normalize x, then route through gamma and beta when fused; otherwise write directly to out.
+    ckl::mul<
+        ckl::input(
+            dfb::x_minus_mean,
+            ckl::WaitPolicy::PerBlockSize,
+            ckl::PopPolicy::PerBlockSize,
+            ckl::InputTileMapping::Block),
+        ckl::input(dfb::recip_sqrt_var, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+        ckl::output(normed_output_dfb, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(shape);
+
+#ifdef FUSE_GAMMA
+    // x_normed * gamma, then + beta
+    ckl::mul<
+        ckl::input(
+            dfb::x_normed, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
+        ckl::input(dfb::gamma, ckl::BroadcastDim::Row, gamma_beta_wait, gamma_beta_pop, ckl::InputTileMapping::Block),
+        ckl::output(times_gamma_output_dfb, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(shape);
 #endif
 #ifdef FUSE_BETA
-struct beta_optional_node {
-    static constexpr LLK_Node node{
-        .llk_init = add_bcast_rows_init,
-        .llk = FN_compute(add_tiles_bcast_rows),
-        .DFB_A = dfb_in_beta,
-        .DFB_B = dfb::beta,
-        .DFB_OUT = dfb::out,
-        .fixed_DFB_B_index = pop_gamma_beta,
-        .fixed_dest_reg = 0xFFFF,
-    };
-};
+    ckl::add<
+        ckl::input(
+            beta_input_dfb, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
+        ckl::input(dfb::beta, ckl::BroadcastDim::Row, gamma_beta_wait, gamma_beta_pop, ckl::InputTileMapping::Block),
+        ckl::output(dfb::out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(shape);
 #endif
+}
 
 void kernel_main() {
     const auto NCHt = get_arg(args::NCHt);
     constexpr auto Wt = get_arg(args::Wt);
-    constexpr auto blk = get_arg(args::blk);
     constexpr auto stats_tiles_cols = get_arg(args::stats_tiles_cols);
-    constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dtype) == 1;
-    constexpr bool FLOAT32_REDUCTION = get_arg(args::float32_reduction) == 1;
     constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
     constexpr auto dfb_length = get_arg(args::dfb_length);
-
-    constexpr uint32_t onetile = 1;
 
     compute_kernel_hw_startup(dfb::inp, dfb::inp, dfb::stats_reduced);
 
@@ -121,23 +118,16 @@ void kernel_main() {
     DataflowBuffer dfb_eps(dfb::eps);
     DataflowBuffer dfb_stats(dfb::stats);
     DataflowBuffer dfb_stats_reduced(dfb::stats_reduced);
-    DataflowBuffer dfb_mean_squared(dfb::mean_squared);  // E(x)**2
-    DataflowBuffer dfb_var(dfb::var);                    // E(x**2) - E(x)**2
     DataflowBuffer dfb_recip_sqrt_var(dfb::recip_sqrt_var);
 
     dfb_reduce.wait_front(1);  // comes from the reader
     dfb_eps.wait_front(1);     // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        constexpr int onetile = 1;
-        constexpr int dst0 = 0;
-
         reconfig_data_format(dfb::reduce, dfb::stats);
         pack_reconfig_data_format(dfb::stats_reduced);
-
         /*
          * Reduce stats input.
-         * dfb::stats = [sum(x0**2), sum(x0), sum(x1**2), sum(x1), ...]
          * RMSNorm packs mean(x**2) into dfb::var. Layernorm just uses dfb::stats_reduced.
          */
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb::stats, dfb::reduce, dfb::stats_reduced);
@@ -153,100 +143,61 @@ void kernel_main() {
             reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb::stats, dfb::reduce, i, 0, 1);
         }
         tile_regs_commit();
-
         dfb_stats.pop_front(stats_tiles_cols);
-
         dfb_stats_reduced.reserve_back(stats_tile_stride);
-
         tile_regs_wait();
         pack_tile(0, dfb::stats_reduced);
         pack_tile(1, dfb::stats_reduced);
         tile_regs_release();
-
         dfb_stats_reduced.push_back(stats_tile_stride);
-
         reduce_uninit();
 
-        /*
-         * E[x]**2
-         */
-        reconfig_data_format(dfb::stats_reduced, dfb::stats_reduced);
-        pack_reconfig_data_format(dfb::mean_squared);
-        mul_init(dfb::stats_reduced, dfb::stats_reduced);
         dfb_stats_reduced.wait_front(stats_tile_stride);
 
-        tile_regs_acquire();
-        mul_tiles(dfb::stats_reduced, dfb::stats_reduced, 1, 1, 0);
-        tile_regs_commit();
+        // variance = E[x^2] - E[x]^2; reciprocal standard deviation = 1/sqrt(variance + eps).
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Mul,
+                ckl::input(
+                    dfb::stats_reduced,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::None,
+                    ckl::InputTileMapping::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileAddressing::Offset),
+                ckl::input(
+                    dfb::stats_reduced,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::None,
+                    ckl::InputTileMapping::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileAddressing::Offset)>{1u, 1u},
+            ckl::PackTile<ckl::output(dfb::mean_squared)>{});
 
-        dfb_mean_squared.reserve_back(onetile);
+        ckl::sub<
+            ckl::input(dfb::stats_reduced, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+            ckl::input(dfb::mean_squared, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::output(dfb::var, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::one_tile());
 
-        tile_regs_wait();
-        pack_tile(0, dfb::mean_squared);
-        tile_regs_release();
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(dfb::var),
+                ckl::input(dfb::eps, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
+            ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::PackTile<ckl::output(dfb::recip_sqrt_var)>{});
 
-        dfb_mean_squared.push_back(1);
-
-        /*
-         * E[x**2] - E[x]**2
-         */
-        reconfig_data_format(dfb::stats_reduced, dfb::mean_squared);
-        pack_reconfig_data_format(dfb::var);
-        sub_init(dfb::stats_reduced, dfb::mean_squared);
-
-        dfb_mean_squared.wait_front(1);
-
-        tile_regs_acquire();
-        sub_tiles(dfb::stats_reduced, dfb::mean_squared, 0, 0, 0);
-        tile_regs_commit();
-
-        dfb_mean_squared.pop_front(1);
-
-        dfb_var.reserve_back(onetile);
-
-        tile_regs_wait();
-        pack_tile(0, dfb::var);
-        tile_regs_release();
-
-        dfb_var.push_back(1);
-
-        /*
-         * 1/sqrt(var + eps)
-         */
-        dfb_var.wait_front(1);
-        reconfig_data_format(dfb::var, dfb::eps);
-        pack_reconfig_data_format(dfb::recip_sqrt_var);
-        add_init(dfb::var, dfb::eps);
-
-        tile_regs_acquire();
-        add_tiles(dfb::var, dfb::eps, 0, 0, 0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(0);
-        tile_regs_commit();
-
-        dfb_var.pop_front(1);
-
-        dfb_recip_sqrt_var.reserve_back(1);
-
-        tile_regs_wait();
-        pack_tile(0, dfb::recip_sqrt_var);
-        tile_regs_release();
-
-        dfb_recip_sqrt_var.push_back(1);
-
-#if defined(FUSE_GAMMA) && defined(FUSE_BETA)
-        /*
-         * x_normed * gamma, then + beta
-         */
-        chain_llk<Wt, dfb_length, true>(
-            x_minus_mean_node{}, normed_output_node{}, gamma_optional_node{}, beta_optional_node{});
-#elif defined(FUSE_GAMMA)
-        chain_llk<Wt, dfb_length, true>(x_minus_mean_node{}, normed_output_node{}, gamma_optional_node{});
-#elif defined(FUSE_BETA)
-        chain_llk<Wt, dfb_length, true>(x_minus_mean_node{}, normed_output_node{}, beta_optional_node{});
-#else
-        chain_llk<Wt, dfb_length, true>(x_minus_mean_node{}, normed_output_node{});
-#endif
+        constexpr uint32_t chunk_iterations = Wt / dfb_length;
+        constexpr uint32_t leftover_tiles = Wt % dfb_length;
+        for (uint32_t chunk = 0; chunk < chunk_iterations; ++chunk) {
+            normalize_chunk(dfb_length);
+        }
+        if constexpr (leftover_tiles > 0) {
+            normalize_chunk(leftover_tiles);
+        }
 
         // free up the buffers
         dfb_stats_reduced.pop_front(stats_tile_stride);

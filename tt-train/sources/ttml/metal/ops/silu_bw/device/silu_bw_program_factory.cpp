@@ -32,11 +32,6 @@ constexpr auto kInputCbIndex = tt::CBIndex::c_0;
 constexpr auto kDLoutCbIndex = tt::CBIndex::c_1;
 // CBs with output data
 constexpr auto kDLdaCbIndex = tt::CBIndex::c_2;
-// CBs with intermediate computations
-constexpr uint32_t kSigmoidCbIndex = tt::CBIndex::c_3;
-constexpr uint32_t kOneMinusSigmoidCbIndex = tt::CBIndex::c_4;
-constexpr uint32_t kTimesInputPlusOneCbIndex = tt::CBIndex::c_5;
-constexpr uint32_t kTimesSigmoidCbIndex = tt::CBIndex::c_6;
 
 }  // namespace
 
@@ -137,14 +132,6 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
         program, all_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     [[maybe_unused]] auto cb_dL_da = create_circular_buffer(
         program, all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    [[maybe_unused]] auto cb_sigmoid = create_circular_buffer(
-        program, all_cores, kSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    [[maybe_unused]] auto cb_one_minus_sigmoid = create_circular_buffer(
-        program, all_cores, kOneMinusSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    [[maybe_unused]] auto cb_times_input_plus_one = create_circular_buffer(
-        program, all_cores, kTimesInputPlusOneCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    [[maybe_unused]] auto cb_times_sigmoid = create_circular_buffer(
-        program, all_cores, kTimesSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels

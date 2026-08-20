@@ -3,36 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
-#include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
 void kernel_main() {
     uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
 
-    DataflowBuffer dfb_in(tt::CBIndex::c_0);
-    DataflowBuffer dfb_out(tt::CBIndex::c_16);
+    constexpr auto dfb_in_id = tt::CBIndex::c_0;
+    constexpr auto dfb_out_id = tt::CBIndex::c_16;
 
-    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    copy_tile_init(tt::CBIndex::c_0);
-    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        // Pop tile after tile, copy to DST and pack
-        dfb_in.wait_front(1);
+    compute_kernel_hw_startup(dfb_in_id, dfb_out_id);
 
-        tile_regs_acquire();
-        copy_tile(tt::CBIndex::c_0, 0, 0);
-        tile_regs_commit();
-
-        dfb_in.pop_front(1);
-
-        dfb_out.reserve_back(1);
-
-        tile_regs_wait();
-        pack_tile(0, tt::CBIndex::c_16);
-        tile_regs_release();
-
-        dfb_out.push_back(1);
-    }
+    compute_kernel_lib::copy<
+        compute_kernel_lib::input(
+            dfb_in_id,
+            compute_kernel_lib::WaitPolicy::PerTile,
+            compute_kernel_lib::PopPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled),
+        compute_kernel_lib::output(
+            dfb_out_id,
+            compute_kernel_lib::ReservePolicy::PerTile,
+            compute_kernel_lib::PushPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled)>(
+        compute_kernel_lib::IterationShape::tiles(per_core_tile_cnt));
 }

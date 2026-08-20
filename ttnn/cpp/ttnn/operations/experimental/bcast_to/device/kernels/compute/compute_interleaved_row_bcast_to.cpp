@@ -4,9 +4,13 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
-#include "api/compute/eltwise_binary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "api/dataflow/circular_buffer.h"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     uint32_t arg_index = 0;
@@ -23,12 +27,10 @@ void kernel_main() {
     uint32_t Ht = get_arg_val<uint32_t>(arg_index++);
     uint32_t Wt = get_arg_val<uint32_t>(arg_index++);
 
-    constexpr auto cb_id_src = get_compile_time_arg_val(0);
-    constexpr auto cb_id_dst = get_compile_time_arg_val(1);
-    CircularBuffer cb_src(cb_id_src);
-    CircularBuffer cb_dst(cb_id_dst);
-    compute_kernel_hw_startup(cb_id_src, cb_id_dst);
-    unary_bcast_init<BroadcastType::ROW>(cb_id_src);
+    constexpr auto dfb_id_src_id = get_compile_time_arg_val(0);
+    constexpr auto dfb_id_dst_id = get_compile_time_arg_val(1);
+    compute_kernel_hw_startup(dfb_id_src_id, dfb_id_dst_id);
+    unary_bcast_init<BroadcastType::ROW>(dfb_id_src_id);
 
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_read = 0;
@@ -36,18 +38,21 @@ void kernel_main() {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
             for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
                 for (uint32_t tw = start_tw; tw < Wt && num_tiles_read < num_tiles; ++tw) {
-                    cb_src.wait_front(1);
-                    tile_regs_acquire();
-                    unary_bcast<BroadcastType::ROW>(cb_id_src, 0, 0);
-                    tile_regs_commit();
-
-                    cb_src.pop_front(1);
-                    cb_dst.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(0, cb_id_dst);
-
-                    cb_dst.push_back(1);
-                    tile_regs_release();
+                    ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+                        ckl::IterationShape::one_tile(),
+                        // The caller owns setup, so the chain must not reconfigure formats.
+                        ckl::UnaryBcast<
+                            ckl::BroadcastDim::Row,
+                            ckl::input(
+                                dfb_id_src_id,
+                                ckl::WaitPolicy::PerTile,
+                                ckl::PopPolicy::PerTile,
+                                ckl::DataFormatReconfig::Disabled)>{},
+                        ckl::PackTile<ckl::output(
+                            dfb_id_dst_id,
+                            ckl::ReservePolicy::PerTile,
+                            ckl::PushPolicy::PerTile,
+                            ckl::DataFormatReconfig::Disabled)>{});
                     ++num_tiles_read;
                 }
             }

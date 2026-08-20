@@ -7,28 +7,21 @@
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
-#include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
-ALWI void MUL_TILES(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, uint32_t num_tiles) {
+namespace ckl = compute_kernel_lib;
+
+// out = input*cos + rotate_half(input)*sin.
+template <uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id>
+ALWI void mul_tiles_chain() {
     // Multiply input by cos or sin
-    CircularBuffer in0_cb(in0_cb_id);
-    CircularBuffer in1_cb(in1_cb_id);
-    CircularBuffer out_cb(out_cb_id);
-
-    in0_cb.wait_front(num_tiles);
-    in1_cb.wait_front(num_tiles);
-    out_cb.reserve_back(num_tiles);
-
-    tile_regs_acquire();
-    mul_init(in0_cb_id, in1_cb_id);
-    mul_tiles(in0_cb_id, in1_cb_id, 0, 0, 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, out_cb_id);
-    tile_regs_release();
-    out_cb.push_back(num_tiles);
-    in0_cb.pop_front(num_tiles);
-    in1_cb.pop_front(num_tiles);
+    ckl::mul<
+        ckl::input(in0_cb_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+        ckl::input(in1_cb_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+        ckl::output(
+            out_cb_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
+        ckl::IterationShape::one_tile());
 }
 
 void kernel_main() {
@@ -47,16 +40,7 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(10);
     constexpr uint32_t half_Wt = get_compile_time_arg_val(11);
 
-    CircularBuffer in_cb(in_cb_id);
-    CircularBuffer rotated_in_cb(rotated_in_cb_id);
-    CircularBuffer cos_cb(cos_cb_id);
-    CircularBuffer sin_cb(sin_cb_id);
     CircularBuffer scalar_cb(scalar_cb_id);
-    CircularBuffer rotated_in_interm_cb(rotated_in_interm_cb_id);
-    CircularBuffer cos_interm_cb(cos_interm_cb_id);
-    CircularBuffer sin_interm_cb(sin_interm_cb_id);
-    CircularBuffer out_cb(out_cb_id);
-
     scalar_cb.wait_front(onetile);
 
     compute_kernel_hw_startup(rotated_in_cb_id, scalar_cb_id, rotated_in_interm_cb_id);
@@ -65,51 +49,27 @@ void kernel_main() {
         for (uint32_t j = 0; j < Wt; ++j) {
             if (j < half_Wt) {
                 // Multiply half of the rotated input by scalar (-1)
-                reconfig_data_format(rotated_in_cb_id, scalar_cb_id);
-                pack_reconfig_data_format(rotated_in_interm_cb_id);
-                rotated_in_cb.wait_front(onetile);
-                rotated_in_interm_cb.reserve_back(onetile);
-                tile_regs_acquire();
-                mul_bcast_scalar_init(rotated_in_cb_id, scalar_cb_id);
-                mul_tiles_bcast_scalar(rotated_in_cb_id, scalar_cb_id, 0, 0, 0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(0, rotated_in_interm_cb_id);
-                tile_regs_release();
-                rotated_in_interm_cb.push_back(onetile);
-                rotated_in_cb.pop_front(onetile);
+                ckl::mul<
+                    ckl::input(rotated_in_cb_id),
+                    ckl::input(scalar_cb_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::output(rotated_in_interm_cb_id)>(ckl::IterationShape::tiles(onetile));
                 reconfig_data_format_srcb(scalar_cb_id, sin_cb_id);
                 pack_reconfig_data_format(rotated_in_interm_cb_id, sin_interm_cb_id);
                 // Multiply rotated input by sin
-                MUL_TILES(rotated_in_interm_cb_id, sin_cb_id, sin_interm_cb_id, onetile);
+                mul_tiles_chain<rotated_in_interm_cb_id, sin_cb_id, sin_interm_cb_id>();
             } else {
                 reconfig_data_format(rotated_in_cb_id, sin_cb_id);
                 pack_reconfig_data_format(out_cb_id, sin_interm_cb_id);
                 // Multiply rotated input by sin
-                MUL_TILES(rotated_in_cb_id, sin_cb_id, sin_interm_cb_id, onetile);
+                mul_tiles_chain<rotated_in_cb_id, sin_cb_id, sin_interm_cb_id>();
             }
 
             // Multiply input by cos
-            MUL_TILES(in_cb_id, cos_cb_id, cos_interm_cb_id, onetile);
+            mul_tiles_chain<in_cb_id, cos_cb_id, cos_interm_cb_id>();
 
             // Add applied sin/cos tensors
-            cos_interm_cb.wait_front(onetile);
-            sin_interm_cb.wait_front(onetile);
-            out_cb.reserve_back(onetile);
-
-            reconfig_data_format_srca(rotated_in_cb_id, cos_interm_cb_id);
-            pack_reconfig_data_format(cos_interm_cb_id, out_cb_id);
-            tile_regs_acquire();
-            add_init(cos_interm_cb_id, sin_interm_cb_id);
-            add_tiles(cos_interm_cb_id, sin_interm_cb_id, 0, 0, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, out_cb_id);
-            tile_regs_release();
-
-            out_cb.push_back(onetile);
-            cos_interm_cb.pop_front(onetile);
-            sin_interm_cb.pop_front(onetile);
+            ckl::add<ckl::input(cos_interm_cb_id), ckl::input(sin_interm_cb_id), ckl::output(out_cb_id)>(
+                ckl::IterationShape::tiles(onetile));
         }
     }
 }
