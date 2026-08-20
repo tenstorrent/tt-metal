@@ -32,24 +32,38 @@ import torch
 
 import ttnn
 
+from ..utils import decode_tree
 from ..utils.tensor import from_torch
 
 #: Sub-profile of the W-sharded attention (K/V all-gather vs fused SDPA vs head all-gather), summed
 #: across every call in a diff-step. Gated by DIFFVAE_STAGE_TIMING; stage 5 clears + reports it.
 SP_W_PROF: dict[str, float] = {}
-_SP_W_TIMING = os.environ.get("DIFFVAE_STAGE_TIMING", "") not in ("", "0")
+#: Shared with diffvae_ltx_stage5 so the two cannot disagree about whether timing is on.
+_SP_W_TIMING = decode_tree.ENABLED
 
 
 @contextlib.contextmanager
-def _sp_w_prof(mesh, key: str):
+def _sp_w_prof(mesh, key: str, *, category: str | None = None):
+    """Accumulate into SP_W_PROF as before, and record the span in the decode tree.
+
+    The tree attribution needs nothing passed down from the model: open_span reads a thread-local
+    stack, so this lands under whichever stage or diff block is currently open.
+    """
     if not _SP_W_TIMING:
         yield
         return
     ttnn.synchronize_device(mesh)
     t0 = time.perf_counter()
-    yield
+    span = decode_tree.open_span(key, category=category)
+    try:
+        yield
+    except BaseException:
+        decode_tree.abort_span(span)
+        raise
     ttnn.synchronize_device(mesh)
-    SP_W_PROF[key] = SP_W_PROF.get(key, 0.0) + (time.perf_counter() - t0) * 1000
+    ms = (time.perf_counter() - t0) * 1000
+    decode_tree.close_span(span, ms)
+    SP_W_PROF[key] = SP_W_PROF.get(key, 0.0) + ms
 
 
 # Cap on one tile group's [Nq, Nk] score block. Bounds both the additive mask allocation and
@@ -1079,7 +1093,7 @@ def neighborhood_attention_3d_op_sp_w_sharded(
             seq, dim=2, mesh_axis=sp_axis, use_hyperparams=ag_hyper, use_persistent_buffer=persist_ccl
         )
 
-    with _sp_w_prof(mesh, "kv-allgather"):
+    with _sp_w_prof(mesh, "kv-allgather", category=decode_tree.ALLGATHER):
         tk = gathered(k)
         tv = gathered(v)
     tq = to_seq(q, w_local)
@@ -1131,7 +1145,7 @@ def neighborhood_attention_3d_op_sp_w_sharded(
             k_chunk_size=int(os.environ.get("DIFFVAE_SDPA_KCHUNK", 32)),
         )
 
-    with _sp_w_prof(mesh, "fused-sdpa" if use_fused else "op-sdpa"):
+    with _sp_w_prof(mesh, "fused-sdpa" if use_fused else "op-sdpa", category=decode_tree.SDPA):
         attended = ttnn.transformer.scaled_dot_product_attention(
             tq,
             tk,
@@ -1157,7 +1171,7 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     # rank-4 (all_gather supports rank 4). Device order along tp_axis is head order, so gathering on
     # the head axis rebuilds [head0 | head1 | ...]; downstream sees the full width as without TP.
     if tp_axis is not None:
-        with _sp_w_prof(mesh, "head-allgather"):
+        with _sp_w_prof(mesh, "head-allgather", category=decode_tree.ALLGATHER):
             attended = ccl_manager.all_gather(
                 attended, dim=1, mesh_axis=tp_axis, use_hyperparams=ag_hyper, use_persistent_buffer=persist_ccl
             )

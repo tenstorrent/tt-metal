@@ -29,37 +29,69 @@ from loguru import logger
 
 import ttnn
 
+from ...utils import decode_tree
+
 #: Per-stage decode timing. Off unless DIFFVAE_STAGE_TIMING is set (a truthy value), since each
-#: probe forces a device sync that would otherwise serialize the async pipeline.
-_STAGE_TIMING = os.environ.get("DIFFVAE_STAGE_TIMING", "") not in ("", "0")
+#: probe forces a device sync that would otherwise serialize the async pipeline. The gate lives in
+#: decode_tree so this module, na3d and the tree cannot disagree about whether timing is on -- if
+#: they did, the tree would hold partial data and every "other" remainder would silently lie.
+_STAGE_TIMING = decode_tree.ENABLED
+
+
+class _Handle(NamedTuple):
+    """What stage_time_start hands to stage_time_end: the clock, the tree node, and the label.
+
+    The label rides along rather than being passed again at the end, so the [stage-timing] line and
+    the tree row are the same string by construction and cannot drift apart.
+    """
+
+    t0: float
+    span: object
+    label: str
 
 
 @contextlib.contextmanager
-def stage_timer(mesh_device, label: str):
+def stage_timer(mesh_device, label: str, *, category: str | None = None, root: bool = False):
     """Sync the mesh and time a decode stage (or its host-side tail). Inert unless DIFFVAE_STAGE_TIMING."""
     if not _STAGE_TIMING:
         yield
         return
     ttnn.synchronize_device(mesh_device)
     t0 = time.perf_counter()
-    yield
+    span = decode_tree.open_span(label.strip(), category=category, root=root)
+    try:
+        yield
+    except BaseException:
+        # No finally: on the raising path this deliberately does not log, exactly as before. The
+        # span still has to leave the stack, or every later span nests under a dead parent.
+        decode_tree.abort_span(span)
+        raise
     ttnn.synchronize_device(mesh_device)
-    logger.info(f"[stage-timing] {label:34s} {(time.perf_counter() - t0) * 1000:9.1f} ms")
+    ms = (time.perf_counter() - t0) * 1000
+    decode_tree.close_span(span, ms)
+    logger.info(f"[stage-timing] {label:34s} {ms:9.1f} ms")
 
 
-def stage_time_start(mesh_device):
-    """Paired form of stage_timer for loop bodies that can't be wrapped. Returns t0 (or None if off)."""
+def stage_time_start(mesh_device, label: str, *, category: str | None = None):
+    """Paired form of stage_timer for loop bodies that can't be wrapped. Returns a handle (or None).
+
+    The label is required here rather than at the end because a tree node names itself from birth:
+    a span that never closes is then still identifiable, which is when the name matters most.
+    """
     if not _STAGE_TIMING:
         return None
     ttnn.synchronize_device(mesh_device)
-    return time.perf_counter()
+    t0 = time.perf_counter()
+    return _Handle(t0, decode_tree.open_span(label.strip(), category=category), label)
 
 
-def stage_time_end(mesh_device, label: str, t0):
-    if t0 is None:
+def stage_time_end(mesh_device, handle):
+    if handle is None:
         return
     ttnn.synchronize_device(mesh_device)
-    logger.info(f"[stage-timing] {label:34s} {(time.perf_counter() - t0) * 1000:9.1f} ms")
+    ms = (time.perf_counter() - handle.t0) * 1000
+    decode_tree.close_span(handle.span, ms)
+    logger.info(f"[stage-timing] {handle.label:34s} {ms:9.1f} ms")
 
 
 #: Accumulates within-block time by region (attn / mlp / ...) across every block+band, so a single
@@ -68,17 +100,28 @@ _BLOCK_PROF: dict[str, float] = {}
 
 
 @contextlib.contextmanager
-def block_prof(mesh_device, key: str):
+def block_prof(mesh_device, key: str, *, category: str | None = None):
     """Sync + accumulate a diff-block region's time into _BLOCK_PROF[key]. Inert unless timing is on.
-    The syncs serialize the region (so absolute totals inflate a little), but the split is what matters."""
+    The syncs serialize the region (so absolute totals inflate a little), but the split is what matters.
+
+    Also records the span in the decode tree. _BLOCK_PROF is still written exactly as before --
+    time_diff_block.py and ab_gna_stage5.py import that global directly.
+    """
     if not _STAGE_TIMING:
         yield
         return
     ttnn.synchronize_device(mesh_device)
     t0 = time.perf_counter()
-    yield
+    span = decode_tree.open_span(key, category=category)
+    try:
+        yield
+    except BaseException:
+        decode_tree.abort_span(span)
+        raise
     ttnn.synchronize_device(mesh_device)
-    _BLOCK_PROF[key] = _BLOCK_PROF.get(key, 0.0) + (time.perf_counter() - t0) * 1000
+    ms = (time.perf_counter() - t0) * 1000
+    decode_tree.close_span(span, ms)
+    _BLOCK_PROF[key] = _BLOCK_PROF.get(key, 0.0) + ms
 
 
 from ...layers.embeddings import TimestepEmbedding, Timesteps
@@ -961,7 +1004,7 @@ class DiffusionNABlock(Module):
             padded = self._padded_rows(live, index, bands, rows)
             interior = ((band.lo - band.pad_lo) * rows, (band.hi - band.pad_lo) * rows)
 
-            with block_prof(self.mesh_device, "context-inject"):
+            with block_prof(self.mesh_device, "context-inject", category=decode_tree.CONTEXT_INJECT):
                 context_rows = _slice_rows(context, band.pad_lo * rows, band.pad_hi * rows)
                 injected = self.context_proj(context_rows)
                 if context_rows is not context:
@@ -972,7 +1015,7 @@ class DiffusionNABlock(Module):
                     ttnn.deallocate(padded)
 
             modulated = _modulate_consuming(self.norm1(xs), scale_msa, shift_msa)
-            with block_prof(self.mesh_device, "attention"):
+            with block_prof(self.mesh_device, "attention", category=decode_tree.ATTENTION):
                 attended = self.attn(
                     modulated,
                     Grid(grid.batch, band.pad_frames, grid.h, grid.w),
@@ -989,7 +1032,7 @@ class DiffusionNABlock(Module):
             y = _add_consuming(residual, cropped)
 
             modulated = _modulate_consuming(self.norm2(y), scale_mlp, shift_mlp)
-            with block_prof(self.mesh_device, "mlp"):
+            with block_prof(self.mesh_device, "mlp", category=decode_tree.MLP):
                 hidden = self.mlp_gate_up(modulated)
                 ttnn.deallocate(modulated)
                 projected = self.mlp_down(hidden)
@@ -1282,21 +1325,21 @@ class DiffVAEStage5(Module):
         block writes the context half, so nothing depends on them being adjacent.
         """
         cfg = self.config
-        _t0 = stage_time_start(self.mesh_device)
+        _t0 = stage_time_start(self.mesh_device, "stage5 setup: AdaLN + rope tables", category=decode_tree.SETUP)
         scaled_t = ttnn.multiply(timestep, cfg.timestep_scale_multiplier)
         modulation = self.shared_adaln(self.t_embedder(scaled_t), grid.batch)
         tables = self.rope_tables(grid)
         band_tables = tuple(tables.frames(band.pad_lo, band.pad_hi) for band in bands)
-        stage_time_end(self.mesh_device, "stage5 setup: AdaLN + rope tables", _t0)
+        stage_time_end(self.mesh_device, _t0)
         log_dram(self.mesh_device, f"stage5 entry ({len(bands)} band(s))")
         from ...layers.na3d import SP_W_PROF
 
         _BLOCK_PROF.clear()
         SP_W_PROF.clear()
         for index, block in enumerate(self.diff_blocks):
-            _bt0 = stage_time_start(self.mesh_device)
+            _bt0 = stage_time_start(self.mesh_device, f"  stage5 block {index}")
             x = block(x, context, modulation, grid, bands, band_tables)
-            stage_time_end(self.mesh_device, f"  stage5 block {index}", _bt0)
+            stage_time_end(self.mesh_device, _bt0)
             log_dram(self.mesh_device, f"stage5 block {index}")
         if _STAGE_TIMING and _BLOCK_PROF:
             for key, ms in sorted({**_BLOCK_PROF, **SP_W_PROF}.items(), key=lambda kv: -kv[1]):
@@ -1362,22 +1405,21 @@ class DiffVAEStage5(Module):
         """
         cfg = self.config
         bands = self.bands(grid)
-        _t0 = stage_time_start(self.mesh_device)
+        _t0 = stage_time_start(self.mesh_device, "stage5: context reshard", category=decode_tree.RESHAPE)
         if self._w_sharded and not context_sharded:
             context = self._wshard_context(context, grid)
         elif self._w_sharded:
             context = ttnn.to_layout(context, ttnn.TILE_LAYOUT)  # already this chip's band; just ensure TILE
-        stage_time_end(self.mesh_device, "stage5: context reshard", _t0)
+        stage_time_end(self.mesh_device, _t0)
 
         # Evaluated apart from the block timer: as an argument it was host patchify and a noise
         # upload being charged to the diffusion blocks.
-        _t0 = stage_time_start(self.mesh_device)
-        if x_t is None:
-            x_bands = self.device_x_t(grid, bands, seed=seed)
-            stage_time_end(self.mesh_device, "stage5: device randn + embed x_t", _t0)
-        else:
-            x_bands = self.embed_x_t(x_t, bands)
-            stage_time_end(self.mesh_device, "stage5: host patchify + embed x_t", _t0)
+        # Which of the two this is, is known before the clock starts, so the span can name itself at
+        # open rather than picking a label on the way out.
+        _label = "stage5: device randn + embed x_t" if x_t is None else "stage5: host patchify + embed x_t"
+        _t0 = stage_time_start(self.mesh_device, _label, category=decode_tree.HOST_COMPUTE)
+        x_bands = self.device_x_t(grid, bands, seed=seed) if x_t is None else self.embed_x_t(x_t, bands)
+        stage_time_end(self.mesh_device, _t0)
 
         with stage_timer(self.mesh_device, "stage5 diff-blocks (attn+MLP)"):
             out = self.forward_diff_step(context, x_bands, timestep, grid, bands)
@@ -1411,7 +1453,7 @@ class DiffVAEStage5(Module):
             # (correct but replica-pulling) composer path.
             can_fast = len(tuple(self.mesh_device.shape)) == 2 and (other == 1 or grid.h % other == 0)
             if can_fast:
-                with stage_timer(self.mesh_device, "stage5 tail: device->host pull"):
+                with stage_timer(self.mesh_device, "stage5 tail: device->host pull", category=decode_tree.HOST_XFER):
                     rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
                     ttnn.deallocate(out)
                     vol = ttnn.reshape(rm, (1, grid.t, grid.h, w_local, padded_pc))
@@ -1476,13 +1518,13 @@ class DiffVAEStage5(Module):
                     if shard_other:
                         ttnn.deallocate(rm)
                     ttnn.deallocate(vol)
-                with stage_timer(self.mesh_device, "stage5 tail: host unpatchify"):
+                with stage_timer(self.mesh_device, "stage5 tail: host unpatchify", category=decode_tree.HOST_COMPUTE):
                     return unpatchify(gathered.permute(0, 4, 1, 2, 3), cfg.patch_size)
 
-            with stage_timer(self.mesh_device, "stage5 tail: device->host pull"):
+            with stage_timer(self.mesh_device, "stage5 tail: device->host pull", category=decode_tree.HOST_XFER):
                 gathered = gathered_to_torch(out, mesh_axes=[None, None, self.sp_axis, None])[..., : cfg.patch_channels]
                 ttnn.deallocate(out)
-            with stage_timer(self.mesh_device, "stage5 tail: host unpatchify"):
+            with stage_timer(self.mesh_device, "stage5 tail: host unpatchify", category=decode_tree.HOST_COMPUTE):
                 packed = (
                     gathered.reshape(sp, grid.t, grid.h, w_local, cfg.patch_channels)
                     .permute(1, 2, 0, 3, 4)
@@ -1495,10 +1537,10 @@ class DiffVAEStage5(Module):
         # device and fails. Reading a single chip's copy is what that replication means; the
         # composing helper instead pulls all 32 copies to the host and indexes one out of them,
         # which for a 418 MB output is 13 GB over PCIe and was 100s of a 190s decode.
-        with stage_timer(self.mesh_device, "stage5 tail: device->host pull"):
+        with stage_timer(self.mesh_device, "stage5 tail: device->host pull", category=decode_tree.HOST_XFER):
             packed = local_device_to_torch(out)[..., : cfg.patch_channels]
             ttnn.deallocate(out)
-        with stage_timer(self.mesh_device, "stage5 tail: host unpatchify"):
+        with stage_timer(self.mesh_device, "stage5 tail: host unpatchify", category=decode_tree.HOST_COMPUTE):
             packed = packed.reshape(grid.batch, grid.t, grid.h, grid.w, cfg.patch_channels)
             packed = packed.permute(0, 4, 1, 2, 3)
             return unpatchify(packed, cfg.patch_size)
