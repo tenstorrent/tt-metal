@@ -70,7 +70,7 @@ void ReadShard(
 
 template <typename DType>
 void EnqueueWriteMeshBuffer(
-    MeshCommandQueue& mesh_cq, MeshBuffer& mesh_buffer, const std::vector<DType>& src, bool blocking = false) {
+    MeshCommandQueue& mesh_cq, const MeshBuffer& mesh_buffer, const std::vector<DType>& src, bool blocking = false) {
     TT_FATAL(
         src.size() * sizeof(DType) >= mesh_buffer.size(),
         "Source vector is too small for mesh buffer: mesh buffer size={} bytes, source size={} * {} bytes",

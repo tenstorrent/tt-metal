@@ -203,7 +203,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     }
 }
 
-void MeshCommandQueueBase::enqueue_write_mesh_buffer(MeshBuffer& buffer, const void* host_data, bool blocking) {
+void MeshCommandQueueBase::enqueue_write_mesh_buffer(const MeshBuffer& buffer, const void* host_data, bool blocking) {
     MeshCoordinateRange mesh_device_extent(buffer.device()->shape());
     this->enqueue_write_shard_to_sub_grid(buffer, host_data, mesh_device_extent, blocking);
 }
@@ -226,7 +226,7 @@ void MeshCommandQueueBase::enqueue_read_mesh_buffer(void* host_data, const MeshB
 }
 
 void MeshCommandQueueBase::enqueue_write_shards_nolock(
-    MeshBuffer& buffer,
+    const MeshBuffer& buffer,
     ttsl::Span<const ShardDataTransfer> shard_data_transfers,
     bool blocking,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
@@ -283,18 +283,18 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
 }
 
 void MeshCommandQueueBase::enqueue_write_shards(
-    MeshBuffer& mesh_buffer, ttsl::Span<const ShardDataTransfer> shard_data_transfers, bool blocking) {
+    const MeshBuffer& mesh_buffer, ttsl::Span<const ShardDataTransfer> shard_data_transfers, bool blocking) {
     auto lock = lock_api_function_();
     this->enqueue_write_shards_nolock(mesh_buffer, shard_data_transfers, blocking, nullptr);
 }
 
 void MeshCommandQueueBase::enqueue_write(
-    MeshBuffer& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) {
+    const MeshBuffer& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) {
     this->enqueue_write_with_core_filter(mesh_buffer, host_buffer, blocking, nullptr);
 }
 
 void MeshCommandQueueBase::enqueue_write_with_core_filter(
-    MeshBuffer& mesh_buffer,
+    const MeshBuffer& mesh_buffer,
     const DistributedHostBuffer& host_buffer,
     bool blocking,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {

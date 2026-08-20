@@ -85,7 +85,7 @@ public:
     void enqueue_write_mesh_buffer(const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) {
         enqueue_write_mesh_buffer(*buffer, host_data, blocking);
     }
-    virtual void enqueue_write_mesh_buffer(MeshBuffer& buffer, const void* host_data, bool blocking) = 0;
+    virtual void enqueue_write_mesh_buffer(const MeshBuffer& buffer, const void* host_data, bool blocking) = 0;
     // If PinnedMemory is attached to a HostBuffer used within the enqueue_write, the contents of the memory must not be
     // modified until the enqueue_write has completed on the device. This may be checked by any of
     // * calling lock() on the PinnedMemory
@@ -96,7 +96,8 @@ public:
         const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) {
         enqueue_write(*mesh_buffer, host_buffer, blocking);
     }
-    virtual void enqueue_write(MeshBuffer& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) = 0;
+    virtual void enqueue_write(
+        const MeshBuffer& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) = 0;
     // If PinnedMemory is set on a ShardDataTransfer, the contents of the memory must not be modified until the
     // enqueue_write has completed on the device. This may be checked by any of
     // * calling lock() on the PinnedMemory
@@ -110,7 +111,7 @@ public:
         enqueue_write_shards(*mesh_buffer, shard_data_transfers, blocking);
     }
     virtual void enqueue_write_shards(
-        MeshBuffer& mesh_buffer, ttsl::Span<const ShardDataTransfer> shard_data_transfers, bool blocking) = 0;
+        const MeshBuffer& mesh_buffer, ttsl::Span<const ShardDataTransfer> shard_data_transfers, bool blocking) = 0;
 
     // MeshBuffer Read APIs
     void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {

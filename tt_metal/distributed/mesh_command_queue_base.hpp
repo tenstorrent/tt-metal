@@ -77,13 +77,13 @@ private:
         std::vector<MemoryPin> memory_pins = {});
     // Must be called with lock_api_function_() held.
     void enqueue_write_shards_nolock(
-        MeshBuffer& mesh_buffer,
+        const MeshBuffer& mesh_buffer,
         ttsl::Span<const ShardDataTransfer> shard_data_transfers,
         bool blocking,
         const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr);
 
     void enqueue_write_with_core_filter(
-        MeshBuffer& mesh_buffer,
+        const MeshBuffer& mesh_buffer,
         const DistributedHostBuffer& host_buffer,
         bool blocking,
         const tt::tt_metal::CoreRangeSet* logical_core_filter);
@@ -112,12 +112,14 @@ public:
         bool blocking,
         std::optional<BufferRegion> region = std::nullopt) override;
     using MeshCommandQueue::enqueue_write_mesh_buffer;
-    void enqueue_write_mesh_buffer(MeshBuffer& buffer, const void* host_data, bool blocking) override;
+    void enqueue_write_mesh_buffer(const MeshBuffer& buffer, const void* host_data, bool blocking) override;
     using MeshCommandQueue::enqueue_write_shards;
     void enqueue_write_shards(
-        MeshBuffer& mesh_buffer, ttsl::Span<const ShardDataTransfer> shard_data_transfers, bool blocking) override;
+        const MeshBuffer& mesh_buffer,
+        ttsl::Span<const ShardDataTransfer> shard_data_transfers,
+        bool blocking) override;
     using MeshCommandQueue::enqueue_write;
-    void enqueue_write(MeshBuffer& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) override;
+    void enqueue_write(const MeshBuffer& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) override;
 
     // MeshBuffer Read APIs
     using MeshCommandQueue::enqueue_read_mesh_buffer;
