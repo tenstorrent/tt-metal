@@ -8,28 +8,29 @@
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 namespace {
 
-void check_protocol_tensor(const Tensor& tensor, const char* name, bool allow_bf16) {
-    TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE && tensor.buffer() != nullptr,
-        "recurrent_chunk_scan: {} must be an allocated device tensor",
-        name);
-    TT_FATAL(tensor.layout() == Layout::TILE, "recurrent_chunk_scan: {} must use TILE layout", name);
-    TT_FATAL(
-        tensor.dtype() == DataType::FLOAT32 || (allow_bf16 && tensor.dtype() == DataType::BFLOAT16),
-        "recurrent_chunk_scan: {} must be FLOAT32{}",
-        name,
-        allow_bf16 ? " or BFLOAT16" : "");
-    TT_FATAL(!tensor.is_sharded(), "recurrent_chunk_scan: {} must use interleaved memory", name);
+void check_protocol_tensor(
+    const Tensor& tensor, std::string_view name, bool allow_bf16, std::string_view operation_name) {
+    using namespace kda_factory_detail;
+    check_allocated_device_tensor(tensor, operation_name, name);
+    check_layout(tensor, Layout::TILE, operation_name, name);
+    if (allow_bf16) {
+        constexpr std::array accepted_dtypes = {DataType::FLOAT32, DataType::BFLOAT16};
+        check_dtype_in(tensor, accepted_dtypes, "FLOAT32 or BFLOAT16", operation_name, name);
+    } else {
+        check_dtype(tensor, DataType::FLOAT32, operation_name, name);
+    }
+    check_interleaved(tensor, operation_name, name);
 }
 
-void check_shape(const Tensor& tensor, const Shape& shape, const char* name) {
-    TT_FATAL(tensor.logical_shape() == shape, "recurrent_chunk_scan: {} shape mismatch", name);
+void check_shape(const Tensor& tensor, const Shape& shape, std::string_view name, std::string_view operation_name) {
+    TT_FATAL(tensor.logical_shape() == shape, "{}: {} shape mismatch", operation_name, name);
 }
 
 }  // namespace
@@ -41,56 +42,59 @@ RecurrentChunkScanOperation::program_factory_t RecurrentChunkScanOperation::sele
 
 void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    check_protocol_tensor(in.v_beta, "v_beta", true);
-    check_protocol_tensor(in.kd, "kd", true);
-    check_protocol_tensor(in.q_decay, "q_decay", true);
-    check_protocol_tensor(in.intra, "intra", false);
-    check_protocol_tensor(in.k_dec_t, "k_dec_t", true);
-    check_protocol_tensor(in.final_decay, "final_decay", true);
-    check_protocol_tensor(in.t_inv, "t_inv", false);
+    using namespace kda_factory_detail;
+    const std::string_view operation_name =
+        attrs.mode == RecurrentChunkScanMode::RECURRENT ? "recurrent_chunk_scan" : "summarize_chunk_recurrence";
+    check_protocol_tensor(in.v_beta, "v_beta", true, operation_name);
+    check_protocol_tensor(in.kd, "kd", true, operation_name);
+    check_protocol_tensor(in.q_decay, "q_decay", true, operation_name);
+    check_protocol_tensor(in.intra, "intra", false, operation_name);
+    check_protocol_tensor(in.k_dec_t, "k_dec_t", true, operation_name);
+    check_protocol_tensor(in.final_decay, "final_decay", true, operation_name);
+    check_protocol_tensor(in.t_inv, "t_inv", false, operation_name);
 
-    const std::array<const Tensor*, 7> protocol_inputs = {
-        &in.v_beta, &in.kd, &in.q_decay, &in.intra, &in.k_dec_t, &in.final_decay, &in.t_inv};
-    for (const auto* tensor : protocol_inputs) {
-        TT_FATAL(tensor->device() == in.v_beta.device(), "recurrent_chunk_scan: all inputs must be on the same device");
+    for (const auto [tensor, name] : std::array{
+             std::pair{&in.kd, "kd"},
+             std::pair{&in.q_decay, "q_decay"},
+             std::pair{&in.intra, "intra"},
+             std::pair{&in.k_dec_t, "k_dec_t"},
+             std::pair{&in.final_decay, "final_decay"},
+             std::pair{&in.t_inv, "t_inv"}}) {
+        check_same_device(in.v_beta, *tensor, operation_name, name);
     }
-    TT_FATAL(
-        attrs.mode == RecurrentChunkScanMode::SUMMARY || !attrs.output_mem_config.is_sharded(),
-        "recurrent_chunk_scan: output memory must be interleaved");
-    TT_FATAL(
-        !attrs.compute_kernel_config.packer_l1_acc,
-        "recurrent_chunk_scan: packer_l1_acc=true is unsupported because the compute kernel does not accumulate "
-        "through L1");
-    TT_FATAL(attrs.batch_heads > 0, "recurrent_chunk_scan: batch_heads must be positive");
-    TT_FATAL(attrs.num_chunks > 0, "recurrent_chunk_scan: num_chunks must be positive");
+    if (attrs.mode == RecurrentChunkScanMode::RECURRENT) {
+        check_output_interleaved(attrs.output_mem_config, operation_name);
+    }
+    check_compute_config(attrs.compute_kernel_config, operation_name);
+    TT_FATAL(attrs.batch_heads > 0, "{}: batch_heads must be positive", operation_name);
+    TT_FATAL(attrs.num_chunks > 0, "{}: num_chunks must be positive", operation_name);
     TT_FATAL(
         attrs.key_dim > 0 && attrs.value_dim > 0 && attrs.key_dim % tt::constants::TILE_WIDTH == 0 &&
             attrs.value_dim % tt::constants::TILE_WIDTH == 0,
-        "recurrent_chunk_scan: K and V must be positive and tile aligned");
+        "{}: K and V must be positive and tile aligned",
+        operation_name);
 
     constexpr uint32_t chunk_size = tt::constants::TILE_HEIGHT;
     const auto BH = attrs.batch_heads;
     const auto NC = attrs.num_chunks;
     const auto K = attrs.key_dim;
     const auto V = attrs.value_dim;
-    check_shape(in.v_beta, Shape({BH, NC, chunk_size, V}), "v_beta");
-    check_shape(in.kd, Shape({BH, NC, chunk_size, K}), "kd");
-    check_shape(in.q_decay, Shape({BH, NC, chunk_size, K}), "q_decay");
-    check_shape(in.intra, Shape({BH, NC, chunk_size, chunk_size}), "intra");
-    check_shape(in.k_dec_t, Shape({BH, NC, K, chunk_size}), "k_dec_t");
-    check_shape(in.final_decay, Shape({BH, NC, K, 1}), "final_decay");
-    check_shape(in.t_inv, Shape({BH, NC, chunk_size, chunk_size}), "t_inv");
+    check_shape(in.v_beta, Shape({BH, NC, chunk_size, V}), "v_beta", operation_name);
+    check_shape(in.kd, Shape({BH, NC, chunk_size, K}), "kd", operation_name);
+    check_shape(in.q_decay, Shape({BH, NC, chunk_size, K}), "q_decay", operation_name);
+    check_shape(in.intra, Shape({BH, NC, chunk_size, chunk_size}), "intra", operation_name);
+    check_shape(in.k_dec_t, Shape({BH, NC, K, chunk_size}), "k_dec_t", operation_name);
+    check_shape(in.final_decay, Shape({BH, NC, K, 1}), "final_decay", operation_name);
+    check_shape(in.t_inv, Shape({BH, NC, chunk_size, chunk_size}), "t_inv", operation_name);
 
     if (attrs.mode == RecurrentChunkScanMode::RECURRENT) {
-        TT_FATAL(in.initial_state.has_value(), "recurrent_chunk_scan: initial_state is required");
-        check_protocol_tensor(*in.initial_state, "initial_state", false);
-        TT_FATAL(
-            in.initial_state->device() == in.v_beta.device(),
-            "recurrent_chunk_scan: all inputs must be on the same device");
-        check_shape(*in.initial_state, Shape({BH, K, V}), "initial_state");
+        TT_FATAL(in.initial_state.has_value(), "{}: initial_state is required", operation_name);
+        check_protocol_tensor(*in.initial_state, "initial_state", false, operation_name);
+        check_same_device(in.v_beta, *in.initial_state, operation_name, "initial_state");
+        check_shape(*in.initial_state, Shape({BH, K, V}), "initial_state", operation_name);
     } else {
-        TT_FATAL(!in.initial_state.has_value(), "summarize_chunk_recurrence: initial_state is not accepted");
-        TT_FATAL(K == V, "summarize_chunk_recurrence: K must equal V");
+        TT_FATAL(!in.initial_state.has_value(), "{}: initial_state is not accepted", operation_name);
+        TT_FATAL(K == V, "{}: K must equal V", operation_name);
     }
 }
 
@@ -131,7 +135,9 @@ std::vector<Tensor> recurrent_chunk_scan(
     const DeviceComputeKernelConfig& compute_kernel_config) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();
-    TT_FATAL(value_shape.rank() == 4 && key_shape.rank() == 4, "recurrent_chunk_scan: v_beta and kd must be rank 4");
+    const std::string_view operation_name =
+        mode == RecurrentChunkScanMode::RECURRENT ? "recurrent_chunk_scan" : "summarize_chunk_recurrence";
+    TT_FATAL(value_shape.rank() == 4 && key_shape.rank() == 4, "{}: v_beta and kd must be rank 4", operation_name);
     return ttnn::device_operation::launch<RecurrentChunkScanOperation>(
         RecurrentChunkScanParams{
             .batch_heads = value_shape[0],
