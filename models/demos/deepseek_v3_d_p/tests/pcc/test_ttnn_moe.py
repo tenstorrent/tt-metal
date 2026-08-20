@@ -115,6 +115,7 @@ def run_model(
     rms_norm_eps=1e-5,
     final_output_pcc=0.982,
     routed_activation=ttnn.RoutedExpertActivation.Silu,
+    shared_activation=ACTIVATION_SILU,
     measure=None,
 ):
     """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
@@ -130,9 +131,10 @@ def run_model(
     dedicated grouped_topk / routing_setup tests. HOST_ALL gates ignore padding entirely
     (TtMoe falls back to padding_config=None for non-DEVICE_FP32 gates).
 
-    ``routed_activation`` selects the fused routed-expert kernel's activation and the matching
-    torch reference. The shared expert always runs SiLU: no SiTU kernel exists outside the
-    routed-expert op, so both sides must stay on SiLU there for the comparison to mean anything.
+    ``routed_activation`` selects the fused routed-expert kernel's activation and ``shared_activation``
+    the shared expert's; each is mirrored onto the matching torch reference. They are separate knobs
+    because the two sites run different implementations -- a fused kernel vs the Python-composed
+    ttnn ops in TtSharedExpert -- even where Kimi-K3 sets both to SiTU (#53625).
 
     ``measure`` wraps the forward for a perf caller: it is called as ``measure(forward)``,
     must invoke the thunk and return its result, and owns the device sync. The perf gates use
@@ -144,6 +146,8 @@ def run_model(
         raise ValueError(f"no torch reference for {routed_activation}; supported: {list(_TORCH_ROUTED_ACTIVATION)}")
     torch_routed_activation = _TORCH_ROUTED_ACTIVATION[routed_activation]
     upstream_activation = _UPSTREAM_ACT[routed_activation]
+    if shared_activation not in (ACTIVATION_SILU, ACTIVATION_SITU):
+        raise ValueError(f"unknown shared_activation {shared_activation!r}")
 
     profiler.clear()
     profiler.start("test_ttnn_moe")
@@ -362,12 +366,11 @@ def run_model(
             latent_weights=latent_weights,
             latent_use_norm=latent_use_norm,
             rms_norm_eps=rms_norm_eps,
-            # Routed side matches whatever the fused kernel runs; the shared expert stays on SiLU
-            # (no SiTU kernel outside the routed-expert op).
+            # Each side matches whatever the device runs there.
             activation=torch_routed_activation,
             situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
             situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
-            shared_activation=ACTIVATION_SILU,
+            shared_activation=shared_activation,
         )
         profiler.end("torch_moe_creation")
 
@@ -402,6 +405,9 @@ def run_model(
         routed_expert_activation=routed_activation,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
+        shared_expert_activation=shared_activation,
+        shared_expert_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
+        shared_expert_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
         gate_weights=gate_weights,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=moe_cache_dir,
@@ -657,9 +663,9 @@ def run_model(
         shared_expert_weights=shared_expert_weights,
         latent_weights=latent_weights,
         x=x,
-        # Same routed/shared split the device runs; see run_reference_moe.
+        # Same per-site activations the device runs; see run_reference_moe.
         hidden_act=upstream_activation,
-        shared_hidden_act="silu" if upstream_activation is not None else None,
+        shared_hidden_act=shared_activation if upstream_activation is not None else None,
     )
     if ref_out is not None and tt_output is not None:
         logger.info("Running upstream MoE reference")
@@ -971,4 +977,5 @@ def test_kimi_k3_moe(
         rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
         final_output_pcc=0.965,
         routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
+        shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
     )
