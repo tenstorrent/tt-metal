@@ -1278,6 +1278,44 @@ def test_tanh_derivative_lut_fresh_cpp(fresh_cpp_impl):
     )
 
 
+# Lane CM fitted-kernel placeholders (tt-polynomial-fitter frontier
+# selections, PLACEHOLDER-PENDING-UPSTREAM-MERGE; provenance headers in
+# fresh_cpp/*_fitted.h).  Dedicated family: all-new node ids, bf16 corr
+# contract matching the fits' bf16 target; impl 2 = fitted body, impl 0 =
+# production hand kernel (the row's hand arm).  TanhDerivative (not the
+# -Lut op) carries the fitted tanh_bw: its golden is the true derivative,
+# while the -Lut row's golden IS the production LUT and would fail a more
+# accurate kernel.
+_FITTED_CPP_OPS = [
+    MathOperation.Tanh,
+    MathOperation.Sigmoid,
+    MathOperation.Gelu,
+    MathOperation.TanhDerivative,
+]
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 2], ids=["production", "fitted_cpp"])
+@pytest.mark.parametrize("mathop", _FITTED_CPP_OPS, ids=lambda m: m.name)
+def test_fitted_cpp(mathop, fresh_cpp_impl):
+    """A/B the tt-polynomial-fitter frontier-selected fitted bodies
+    (fresh_cpp/*_fitted.h: silicon-measured coefficient sets evaluated in
+    the measured kernel's arithmetic order, plain typed SFPI) against the
+    production kernels with identical inputs, golden, and tolerance."""
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
 @pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
 def test_silu_fresh_cpp(fresh_cpp_impl):
     """A/B the fresh semantic silu (identical piecewise sigmoid math, plain

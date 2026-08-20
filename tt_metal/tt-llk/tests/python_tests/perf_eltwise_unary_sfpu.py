@@ -434,6 +434,43 @@ def test_perf_causal_lift_fresh_cpp(
     ).run(perf_report)
 
 
+# Lane CM fitted-kernel placeholders (tt-polynomial-fitter frontier
+# selections, PLACEHOLDER-PENDING-UPSTREAM-MERGE; provenance headers in
+# fresh_cpp/*_fitted.h).  Dedicated perf family, all-new node ids: impl 2 =
+# fitted body (sem arm), impl 0 = production hand kernel (hand arm).
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No],
+    mathop=[
+        MathOperation.Tanh,
+        MathOperation.Sigmoid,
+        MathOperation.Gelu,
+        MathOperation.TanhDerivative,
+    ],
+    fresh_cpp_impl=[0, 2],
+)
+def test_perf_fitted_cpp(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    fresh_cpp_impl,
+):
+    _run(
+        formats,
+        mathop,
+        ApproximationMode.No,
+        dest_acc,
+        16,
+        32,
+        FastMode.No,
+        StableSort.No,
+        [128, 64],
+        fresh_cpp_impl,
+    ).run(perf_report)
+
+
 # Perf vehicle for the corr-only isinf/isnan corpus row (Lane BK measurement-
 # gap close): the comp-class predicate ops live outside the sfpu_unary_ops()
 # domain registry (their functional sweep is the dedicated
