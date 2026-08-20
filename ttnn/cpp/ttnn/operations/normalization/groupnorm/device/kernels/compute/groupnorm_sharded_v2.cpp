@@ -432,7 +432,13 @@ void kernel_main() {
             reconfig_data_format_srcb(dfb_ex_global_id, dfb_input_mask_id);
             // Re-mask (x - E[x]); otherwise each padding row is centered to (garbage - E[x])
             // and squared into the variance.
-            dfb_x.wait_front(block_hw);
+            // The full-block wait is only needed when the peeled final-row chain below splits
+            // the stream in two; without the peel the chain's PerBlockSize waits cover it, and
+            // waiting for the whole block here serializes UNPACK behind the previous chain's
+            // last PACK.
+            if constexpr (has_row_mask) {
+                dfb_x.wait_front(block_hw);
+            }
 
             if (bcast_row_tiles > 0) {
                 ckl::mul<
@@ -454,7 +460,8 @@ void kernel_main() {
                         ckl::ReservePolicy::PerBlockSize,
                         ckl::PushPolicy::PerBlockSize,
                         ckl::DataFormatReconfig::Disabled)>(
-                    ckl::IterationShape::grid(bcast_row_tiles, block_w).block_size(subblock_w));
+                    has_row_mask ? ckl::IterationShape::grid(bcast_row_tiles, block_w).block_size(subblock_w)
+                                 : valid_group_shape);
             }
 
             // Peeled final row-tile: full-tile multiply with the composed mask.
