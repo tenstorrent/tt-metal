@@ -70,6 +70,33 @@ Downgraded to a printed note: the harness compares TT output against an HF
 reference over the *same token ids*, so a raw completion continuation is a valid
 probe for either checkpoint, and refusing outright made `-it` untestable.
 
+### 5. The qualitative harness compared TT(base) against HF(-it)
+
+Found by the same local run, after fix 4 let it get further. `--hf-model` was
+passed to the HF **reference** model only; all three `build_generator` call sites
+(`--benchmark-only`, `--aligned-ab-only`, and the main path) used the default id,
+so the TT side loaded `HF_MODEL_ID` -- the base checkpoint -- while the reference
+used `-it`.
+
+On this host it surfaced as a clean crash, because the base checkpoint is not in
+the HF cache here:
+
+```text
+FileNotFoundError: cached google/gemma-4-31B checkpoint not found under
+  ~/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots
+```
+
+**On a host where the base checkpoint is cached this would have been silent**: the
+harness would have compared TT running base weights against an HF reference
+running instruction-tuned weights and reported a PCC failure that looked like a
+model bug. That makes it a latent trap independent of `-it` support, not just an
+`-it` inconvenience. Fixed at all three call sites by passing
+`model_id_or_path=args.hf_model`.
+
+Both 4 and 5 were found locally, in minutes, by running the harness rather than
+reasoning about it. Neither would have appeared in the CI run, which serves
+through vLLM and never touches this script.
+
 ## What was deliberately not changed
 
 The datatype policy. Stage 08 selected BFP8 attention, BFP4 MLP and LoFi

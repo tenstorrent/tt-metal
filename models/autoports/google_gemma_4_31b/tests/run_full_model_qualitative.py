@@ -375,6 +375,10 @@ def _run_aligned_ab_only(args: argparse.Namespace) -> None:
             model_dir=args.model_dir,
             mesh_device=mesh,
             model_config=_model_config_from_environment(),
+            # Without this the TT side loads the default (base) checkpoint while
+            # the HF reference uses --hf-model, silently comparing different weights
+            # wherever the base checkpoint happens to be cached.
+            model_id_or_path=args.hf_model,
         )
         result = _run_lm_head_aligned_ab(generator, prompt_token_ids, args.hf_model)
     finally:
@@ -419,6 +423,10 @@ def _run_benchmark_only(args: argparse.Namespace) -> None:
             mesh_device=mesh,
             model_config=config,
             tensor_cache_path=tensor_cache,
+            # Without this the TT side loads the default (base) checkpoint while
+            # the HF reference uses --hf-model, silently comparing different weights
+            # wherever the base checkpoint happens to be cached.
+            model_id_or_path=args.hf_model,
         )
         record_status("generator_ready")
         runtime_precision = generator.model.precision_runtime_summary()
@@ -530,6 +538,10 @@ def run(args: argparse.Namespace) -> None:
             model_dir=args.model_dir,
             mesh_device=mesh,
             model_config=_model_config_from_environment(),
+            # Without this the TT side loads the default (base) checkpoint while
+            # the HF reference uses --hf-model, silently comparing different weights
+            # wherever the base checkpoint happens to be cached.
+            model_id_or_path=args.hf_model,
         )
         runtime_precision = generator.model.precision_runtime_summary()
         if args.lm_head_aligned_ab:
