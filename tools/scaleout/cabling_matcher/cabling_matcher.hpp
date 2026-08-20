@@ -89,9 +89,21 @@ public:
 
     static MatchGraph from_generator(const CablingGenerator& generator, TierScope tier, std::string label);
 
+    // Load a factory system descriptor. An FSD records ethernet channels rather than cables, so the
+    // channels are folded back into the ports they belong to, using the board's own channel-to-port
+    // map; a port connection missing some of its channels still counts as a cable, and is reported in
+    // notes(). Board-internal traces are not cables and are dropped, matching the cabling descriptor
+    // side. An FSD does not record which tier of a hierarchy declared a cable, so it has no tier
+    // scoping: see TierScope.
+    static MatchGraph from_fsd(const std::string& fsd_path, std::string label);
+
     const std::string& label() const { return label_; }
     const std::vector<HostInfo>& hosts() const { return hosts_; }
     const std::vector<ResolvedCable>& cables() const { return cables_; }
+
+    // Anything about the input worth telling the user, e.g. cables that are missing channels. Not
+    // errors: the graph is usable, but the answer was reached having read the input this way.
+    const std::vector<std::string>& notes() const { return notes_; }
 
     // Cable indices touching a host, and touching a specific tray of a host.
     const std::vector<size_t>& cables_at(uint32_t host_id) const;
@@ -104,9 +116,13 @@ public:
     std::vector<std::vector<uint32_t>> components() const;
 
 private:
+    // Build the by-host and by-tray cable indices from cables_. Called once the cables are in place.
+    void index_cables();
+
     std::string label_;
     std::vector<HostInfo> hosts_;
     std::vector<ResolvedCable> cables_;
+    std::vector<std::string> notes_;
     std::vector<std::vector<size_t>> cables_by_host_;
     std::map<std::pair<uint32_t, TrayId>, std::vector<size_t>> cables_by_host_tray_;
 };

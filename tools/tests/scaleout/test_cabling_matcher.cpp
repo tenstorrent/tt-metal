@@ -12,7 +12,12 @@
 #include <string>
 #include <vector>
 
+#include <fmt/format.h>
+#include <google/protobuf/text_format.h>
+
 #include <cabling_matcher/cabling_matcher.hpp>
+
+#include "protobuf/factory_system_descriptor.pb.h"
 
 namespace tt::scaleout_tools::matcher {
 namespace {
@@ -114,6 +119,27 @@ std::vector<std::pair<CableEndpoint, CableEndpoint>> endpoints(const MatchGraph&
     }
     std::sort(result.begin(), result.end());
     return result;
+}
+
+// The factory system descriptor a cabling descriptor would be built into, with the given hostnames.
+fsd::proto::FactorySystemDescriptor generate_fsd(std::string_view name, const std::vector<std::string>& hostnames) {
+    return CablingGenerator(fixture(name), hostnames).generate_factory_system_descriptor();
+}
+
+std::vector<std::string> synthetic_hostnames(size_t count) {
+    std::vector<std::string> hostnames;
+    for (size_t index = 0; index < count; ++index) {
+        hostnames.push_back(fmt::format("host_{}", index));
+    }
+    return hostnames;
+}
+
+std::string write_fsd(const fsd::proto::FactorySystemDescriptor& fsd) {
+    std::string contents;
+    if (!google::protobuf::TextFormat::PrintToString(fsd, &contents)) {
+        throw std::runtime_error("failed to serialise the factory system descriptor");
+    }
+    return write_descriptor("fsd", contents);
 }
 
 std::vector<std::vector<uint32_t>> host_sets(const MatchResult& result) {
@@ -347,6 +373,141 @@ TEST(CablingMatcher, APatternInTwoPiecesIsRefusedUnlessAskedFor) {
     for (const auto& component : result.components) {
         EXPECT_EQ(component.num_host_sets, 2u);
     }
+}
+
+// ---- Factory system descriptors as input ----
+
+TEST(CablingMatcherFsd, BuiltSystemHasTheSameCablesAsTheDescriptorItWasBuiltFrom) {
+    // An FSD records ethernet channels, a cabling descriptor records cables, and the FSD also carries
+    // the traces inside each board. Reading one back has to recover the cables exactly: same count,
+    // same ports, no traces among them.
+    for (std::string_view name : {kT3k, kDualT3k, k5Lb, kBhGalaxyMesh}) {
+        MatchGraph from_descriptor = load(name);
+        fsd::proto::FactorySystemDescriptor fsd =
+            generate_fsd(name, synthetic_hostnames(from_descriptor.hosts().size()));
+
+        // A connection with both ends on one board is wiring inside that board rather than a cable.
+        // Asserting these are present is what makes the comparison below evidence that they are
+        // dropped, rather than evidence that there were none to drop.
+        size_t within_a_board = 0;
+        for (const auto& connection : fsd.eth_connections().connection()) {
+            within_a_board += connection.endpoint_a().host_id() == connection.endpoint_b().host_id() &&
+                                      connection.endpoint_a().tray_id() == connection.endpoint_b().tray_id()
+                                  ? 1
+                                  : 0;
+        }
+        EXPECT_GT(within_a_board, 0u) << name;
+
+        MatchGraph from_fsd = MatchGraph::from_fsd(write_fsd(fsd), "fsd");
+
+        EXPECT_EQ(from_fsd.hosts().size(), from_descriptor.hosts().size()) << name;
+        EXPECT_EQ(endpoints(from_fsd), endpoints(from_descriptor)) << name;
+        EXPECT_TRUE(from_fsd.notes().empty()) << name << ": " << fmt::format("{}", from_fsd.notes().front());
+        for (const auto& cable : from_fsd.cables()) {
+            EXPECT_NE(cable.endpoint_a.port_type, PortType::TRACE) << name;
+            EXPECT_NE(cable.endpoint_b.port_type, PortType::TRACE) << name;
+        }
+    }
+}
+
+TEST(CablingMatcherFsd, ADescriptorMatchesTheSystemBuiltFromItExactly) {
+    // The capability this is for: given what was built, does it implement the scheme it was meant to?
+    for (std::string_view name : {kT3k, kDualT3k, k5Lb}) {
+        MatchGraph pattern = load(name);
+        MatchGraph target =
+            MatchGraph::from_fsd(write_fsd(generate_fsd(name, synthetic_hostnames(pattern.hosts().size()))), "fsd");
+
+        MatchOptions options = strict();
+        options.mode = MatchMode::Exact;
+        MatchResult result = match(pattern, target, options);
+        ASSERT_TRUE(result.matched) << name;
+        ASSERT_EQ(result.components[0].matches.size(), 1u) << name;
+        const auto& host_map = result.components[0].matches[0].host_map;
+        for (uint32_t host = 0; host < pattern.hosts().size(); ++host) {
+            EXPECT_EQ(host_map[host], host) << name << " host " << host;
+        }
+    }
+}
+
+TEST(CablingMatcherFsd, ASchemeIsFoundInABuiltSystemLargerThanIt) {
+    // Containment rather than equality: one T3K node is wired inside a dual-T3K system, twice over.
+    MatchGraph target = MatchGraph::from_fsd(write_fsd(generate_fsd(kDualT3k, synthetic_hostnames(2))), "dual_t3k fsd");
+    MatchResult result = match(load(kT3k), target, strict());
+    ASSERT_TRUE(result.matched);
+    EXPECT_EQ(host_sets(result), (std::vector<std::vector<uint32_t>>{{0}, {1}}));
+}
+
+TEST(CablingMatcherFsd, HostnamesComeFromTheDescriptor) {
+    // An FSD names its hosts, unlike a bare cabling descriptor, and those names are what make the
+    // report worth reading on a real system.
+    std::vector<std::string> hostnames{"rack1-shelf3", "rack1-shelf5"};
+    MatchGraph graph = MatchGraph::from_fsd(write_fsd(generate_fsd(kDualT3k, hostnames)), "fsd");
+    ASSERT_EQ(graph.hosts().size(), 2u);
+    EXPECT_EQ(graph.hosts()[0].name, hostnames[0]);
+    EXPECT_EQ(graph.hosts()[1].name, hostnames[1]);
+}
+
+TEST(CablingMatcherFsd, ACableMissingAChannelIsStillACableAndIsReported) {
+    // A dead lane leaves a cable with fewer channels than the boards call for. Whether that link is
+    // usable is not this tool's question, so the cable stands, but the report says what was read.
+    fsd::proto::FactorySystemDescriptor fsd = generate_fsd(kDualT3k, synthetic_hostnames(2));
+    auto* connections = fsd.mutable_eth_connections()->mutable_connection();
+    auto crossing = std::find_if(connections->begin(), connections->end(), [](const auto& connection) {
+        return connection.endpoint_a().host_id() != connection.endpoint_b().host_id();
+    });
+    ASSERT_NE(crossing, connections->end()) << "dual_t3k joins its two hosts, so some channel must cross";
+    connections->erase(crossing);
+
+    MatchGraph graph = MatchGraph::from_fsd(write_fsd(fsd), "fsd");
+    MatchGraph whole = load(kDualT3k);
+    EXPECT_EQ(graph.cables().size(), whole.cables().size()) << "the cable is short a channel, not absent";
+    ASSERT_EQ(graph.notes().size(), 1u);
+    EXPECT_NE(graph.notes()[0].find("missing channels"), std::string::npos) << graph.notes()[0];
+    EXPECT_NE(graph.notes()[0].find("1 of 2 channels"), std::string::npos) << graph.notes()[0];
+
+    // And the scheme is still recognised in it, which is the point of not dropping the cable.
+    MatchOptions options = strict();
+    options.mode = MatchMode::Exact;
+    MatchResult result = match(whole, graph, options);
+    EXPECT_TRUE(result.matched);
+    EXPECT_NE(format_result(whole, graph, result, options).find("Note (Target)"), std::string::npos)
+        << "a match reached by reading the input this way has to say so";
+}
+
+TEST(CablingMatcherFsd, AChannelListedTwiceIsReported) {
+    // Nothing about matching goes wrong, but a descriptor that counts a channel twice is not one to
+    // trust silently.
+    fsd::proto::FactorySystemDescriptor fsd = generate_fsd(kDualT3k, synthetic_hostnames(2));
+    const auto& connections = fsd.eth_connections().connection();
+    auto crossing = std::find_if(connections.begin(), connections.end(), [](const auto& connection) {
+        return connection.endpoint_a().host_id() != connection.endpoint_b().host_id();
+    });
+    ASSERT_NE(crossing, connections.end());
+    *fsd.mutable_eth_connections()->add_connection() = *crossing;
+
+    MatchGraph graph = MatchGraph::from_fsd(write_fsd(fsd), "fsd");
+    EXPECT_EQ(graph.cables().size(), load(kDualT3k).cables().size());
+    ASSERT_EQ(graph.notes().size(), 1u);
+    EXPECT_NE(graph.notes()[0].find("lists some twice"), std::string::npos) << graph.notes()[0];
+}
+
+TEST(CablingMatcherFsd, AConnectionOnATrayWithNoBoardIsRefused) {
+    // Without a board type there is no channel-to-port map, so the connection cannot be read at all
+    // and guessing would be worse than stopping.
+    fsd::proto::FactorySystemDescriptor fsd = generate_fsd(kT3k, synthetic_hostnames(1));
+    ASSERT_GT(fsd.eth_connections().connection_size(), 0);
+    fsd.mutable_eth_connections()->mutable_connection(0)->mutable_endpoint_a()->set_tray_id(99);
+
+    EXPECT_THROW(MatchGraph::from_fsd(write_fsd(fsd), "fsd"), std::exception);
+}
+
+TEST(CablingMatcherFsd, OneBuiltSystemIsComparedAgainstAnother) {
+    // Both sides read from FSDs, which asks whether one system's wiring is reproduced in another.
+    MatchGraph pattern = MatchGraph::from_fsd(write_fsd(generate_fsd(kT3k, {"node-a"})), "one node");
+    MatchGraph target = MatchGraph::from_fsd(write_fsd(generate_fsd(kDualT3k, {"node-b", "node-c"})), "two nodes");
+    MatchResult result = match(pattern, target, strict());
+    ASSERT_TRUE(result.matched);
+    EXPECT_EQ(host_sets(result), (std::vector<std::vector<uint32_t>>{{0}, {1}}));
 }
 
 // ---- Search shortcuts ----

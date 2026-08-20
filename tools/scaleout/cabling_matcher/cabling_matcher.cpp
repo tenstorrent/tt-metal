@@ -18,7 +18,10 @@
 #include <fmt/ranges.h>
 #include <google/protobuf/text_format.h>
 
+#include <connector/connector.hpp>
+
 #include "protobuf/cluster_config.pb.h"
+#include "protobuf/factory_system_descriptor.pb.h"
 
 namespace tt::scaleout_tools::matcher {
 
@@ -36,17 +39,49 @@ constexpr uint64_t kMinSeedSteps = 250'000;
 // No level of the search is being abandoned.
 constexpr int kNoPrune = std::numeric_limits<int>::max();
 
-cabling_generator::proto::ClusterDescriptor load_cluster_descriptor(const std::string& path) {
+template <typename Descriptor>
+Descriptor load_textproto(const std::string& path) {
     std::ifstream file(path);
     if (!file.is_open()) {
         throw std::runtime_error("Failed to open file: " + path);
     }
     std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    cabling_generator::proto::ClusterDescriptor descriptor;
+    Descriptor descriptor;
     if (!google::protobuf::TextFormat::ParseFromString(contents, &descriptor)) {
         throw std::runtime_error("Failed to parse textproto file: " + path);
     }
     return descriptor;
+}
+
+cabling_generator::proto::ClusterDescriptor load_cluster_descriptor(const std::string& path) {
+    return load_textproto<cabling_generator::proto::ClusterDescriptor>(path);
+}
+
+fsd::proto::FactorySystemDescriptor load_factory_system_descriptor(const std::string& path) {
+    return load_textproto<fsd::proto::FactorySystemDescriptor>(path);
+}
+
+// Boards are immutable here and building one is not free, so each type is built once.
+const Board& board_for(BoardType board_type) {
+    static std::map<BoardType, Board> cache;
+    auto it = cache.find(board_type);
+    if (it == cache.end()) {
+        it = cache.emplace(board_type, create_board(board_type)).first;
+    }
+    return it->second;
+}
+
+// Channels a cable between these two ports carries, which is a property of the boards rather than of
+// any descriptor.
+size_t expected_channel_count(
+    const std::vector<MatchGraph::HostInfo>& hosts, const CableEndpoint& endpoint_a, const CableEndpoint& endpoint_b) {
+    const Board& board_a = board_for(hosts[*endpoint_a.host_id].trays.at(endpoint_a.tray_id));
+    const Board& board_b = board_for(hosts[*endpoint_b.host_id].trays.at(endpoint_b.tray_id));
+    return get_asic_channel_connections(
+               endpoint_a.port_type,
+               board_a.get_port_channels(endpoint_a.port_type, endpoint_a.port_id),
+               board_b.get_port_channels(endpoint_b.port_type, endpoint_b.port_id))
+        .size();
 }
 
 std::string port_to_string(const CableEndpoint& endpoint) {
@@ -843,21 +878,26 @@ MatchGraph MatchGraph::from_generator(const CablingGenerator& generator, TierSco
         graph.cables_.push_back(std::move(cable));
     }
 
-    graph.cables_by_host_.resize(num_hosts);
-    for (size_t index = 0; index < graph.cables_.size(); ++index) {
-        const auto& cable = graph.cables_[index];
+    graph.index_cables();
+    return graph;
+}
+
+void MatchGraph::index_cables() {
+    cables_by_host_.assign(hosts_.size(), {});
+    cables_by_host_tray_.clear();
+    for (size_t index = 0; index < cables_.size(); ++index) {
+        const auto& cable = cables_[index];
         for (const auto& endpoint : {cable.endpoint_a, cable.endpoint_b}) {
-            auto& by_host = graph.cables_by_host_[*endpoint.host_id];
+            auto& by_host = cables_by_host_[*endpoint.host_id];
             if (by_host.empty() || by_host.back() != index) {
                 by_host.push_back(index);
             }
-            auto& by_tray = graph.cables_by_host_tray_[{*endpoint.host_id, endpoint.tray_id}];
+            auto& by_tray = cables_by_host_tray_[{*endpoint.host_id, endpoint.tray_id}];
             if (by_tray.empty() || by_tray.back() != index) {
                 by_tray.push_back(index);
             }
         }
     }
-    return graph;
 }
 
 MatchGraph MatchGraph::load(
@@ -895,6 +935,147 @@ MatchGraph MatchGraph::load(
         hostnames.push_back(fmt::format("host_{}", host_id));
     }
     return from_generator(CablingGenerator(descriptor, hostnames), tier, std::move(label));
+}
+
+MatchGraph MatchGraph::from_fsd(const std::string& fsd_path, std::string label) {
+    fsd::proto::FactorySystemDescriptor fsd = load_factory_system_descriptor(fsd_path);
+
+    MatchGraph graph;
+    graph.label_ = std::move(label);
+
+    // Hosts are positional: the i-th entry of hosts is host_id i, which is what connection endpoints
+    // and board locations refer to. A board location for a host beyond that list has no host to
+    // belong to, so it decides the count when hosts is absent altogether.
+    size_t num_hosts = fsd.hosts_size();
+    for (const auto& location : fsd.board_types().board_locations()) {
+        num_hosts = std::max<size_t>(num_hosts, location.host_id() + 1);
+    }
+    if (num_hosts == 0) {
+        throw std::runtime_error("Factory system descriptor has no hosts: " + fsd_path);
+    }
+
+    graph.hosts_.resize(num_hosts);
+    for (uint32_t host_id = 0; host_id < num_hosts; ++host_id) {
+        graph.hosts_[host_id].name =
+            host_id < static_cast<uint32_t>(fsd.hosts_size()) && !fsd.hosts(host_id).hostname().empty()
+                ? fsd.hosts(host_id).hostname()
+                : fmt::format("host_{}", host_id);
+    }
+    for (const auto& location : fsd.board_types().board_locations()) {
+        BoardType board_type = get_board_type_from_string(location.board_type());
+        graph.hosts_[location.host_id()].trays.emplace(TrayId(location.tray_id()), board_type);
+    }
+    for (auto& host : graph.hosts_) {
+        std::vector<std::string> parts;
+        for (const auto& [tray_id, board_type] : host.trays) {
+            parts.push_back(fmt::format("{}:{}", *tray_id, enchantum::to_string(board_type)));
+        }
+        host.signature = fmt::format("{}", fmt::join(parts, ","));
+    }
+
+    // Fold the channels back into their ports. Each port connection collects the channel connections
+    // that belong to it, so that the graph is in the same terms as a cabling descriptor's cables.
+    std::map<std::pair<CableEndpoint, CableEndpoint>, size_t> channels_seen;
+    size_t split_traces = 0;
+    for (const auto& connection : fsd.eth_connections().connection()) {
+        auto resolve = [&](const fsd::proto::FactorySystemDescriptor::EndPoint& endpoint) {
+            if (endpoint.host_id() >= num_hosts) {
+                throw std::runtime_error(fmt::format(
+                    "{}: a connection refers to host {}, but the descriptor only has {} hosts",
+                    fsd_path,
+                    endpoint.host_id(),
+                    num_hosts));
+            }
+            const auto& trays = graph.hosts_[endpoint.host_id()].trays;
+            auto tray = trays.find(TrayId(endpoint.tray_id()));
+            if (tray == trays.end()) {
+                throw std::runtime_error(fmt::format(
+                    "{}: a connection uses tray {} of host {}, which has no board type declared",
+                    fsd_path,
+                    endpoint.tray_id(),
+                    endpoint.host_id()));
+            }
+            const Board& board = board_for(tray->second);
+            AsicChannel channel{.asic_location = endpoint.asic_location(), .channel_id = ChanId(endpoint.chan_id())};
+            const Port* port = nullptr;
+            try {
+                port = &board.get_port_for_asic_channel(channel);
+            } catch (const std::exception&) {
+                throw std::runtime_error(fmt::format(
+                    "{}: host {} tray {} is a {}, which has no port carrying ASIC {} channel {}",
+                    fsd_path,
+                    endpoint.host_id(),
+                    endpoint.tray_id(),
+                    enchantum::to_string(tray->second),
+                    endpoint.asic_location(),
+                    endpoint.chan_id()));
+            }
+            return CableEndpoint{
+                .host_id = HostId(endpoint.host_id()),
+                .tray_id = TrayId(endpoint.tray_id()),
+                .port_type = port->port_type,
+                .port_id = port->port_id};
+        };
+
+        CableEndpoint endpoint_a = resolve(connection.endpoint_a());
+        CableEndpoint endpoint_b = resolve(connection.endpoint_b());
+
+        // A trace is wiring inside a board rather than a cable, and the descriptor side does not
+        // report those either.
+        if (endpoint_a.port_type == PortType::TRACE || endpoint_b.port_type == PortType::TRACE) {
+            split_traces += endpoint_a.port_type == endpoint_b.port_type ? 0 : 1;
+            continue;
+        }
+        channels_seen[std::minmax(endpoint_a, endpoint_b)]++;
+    }
+
+    // A cable's channel count is decided by the two ports it joins, so it is known independently of
+    // what the descriptor happens to contain, and a disagreement either way is worth reporting.
+    // channels_seen is keyed by the port pair, so the cables come out sorted.
+    std::vector<std::string> short_of_channels;
+    std::vector<std::string> over_channels;
+    for (const auto& [ports, channels] : channels_seen) {
+        const auto& [endpoint_a, endpoint_b] = ports;
+        size_t expected = expected_channel_count(graph.hosts_, endpoint_a, endpoint_b);
+        if (channels != expected) {
+            (channels < expected ? short_of_channels : over_channels)
+                .push_back(fmt::format(
+                    "{} <-> {} ({} of {} channels)",
+                    port_to_string(endpoint_a),
+                    port_to_string(endpoint_b),
+                    channels,
+                    expected));
+        }
+        graph.cables_.push_back(
+            ResolvedCable{.endpoint_a = endpoint_a, .endpoint_b = endpoint_b, .depth = 0, .declared_at = ""});
+    }
+
+    auto note = [&graph](const std::string& text, const std::vector<std::string>& cables) {
+        constexpr size_t kMaxListed = 4;
+        std::vector<std::string> listed(cables.begin(), cables.begin() + std::min(cables.size(), kMaxListed));
+        graph.notes_.push_back(fmt::format(
+            "{} of {} cables {}: {}{}",
+            cables.size(),
+            graph.cables_.size(),
+            text,
+            fmt::join(listed, "; "),
+            cables.size() > kMaxListed ? fmt::format("; and {} more", cables.size() - kMaxListed) : ""));
+    };
+    if (!short_of_channels.empty()) {
+        note("are missing channels and were taken to be present all the same", short_of_channels);
+    }
+    if (!over_channels.empty()) {
+        note("have more channels than their ports can carry, so the descriptor lists some twice", over_channels);
+    }
+    if (split_traces != 0) {
+        graph.notes_.push_back(fmt::format(
+            "{} connections join a board-internal trace to a cabled port, which no cabling can produce; they were "
+            "dropped",
+            split_traces));
+    }
+
+    graph.index_cables();
+    return graph;
 }
 
 const std::vector<size_t>& MatchGraph::cables_at(uint32_t host_id) const {
@@ -1036,6 +1217,15 @@ std::string format_result(
         to_string(options.mode),
         to_string(options.port_identity),
         to_string(options.tray_symmetry));
+
+    for (const auto& [graph, side] : {std::pair{&pattern, "Pattern"}, std::pair{&target, "Target"}}) {
+        for (const auto& note : graph->notes()) {
+            out << fmt::format("Note ({}): {}\n", side, note);
+        }
+    }
+    if (!pattern.notes().empty() || !target.notes().empty()) {
+        out << "\n";
+    }
 
     if (!result.isolated_pattern_hosts.empty()) {
         std::vector<std::string> names;
