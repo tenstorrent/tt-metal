@@ -28,9 +28,11 @@
 #include <tt-metalium/core_coord.hpp>
 #include <memory>
 #include <mutex>
+#include <algorithm>
 #include <span>
 #include <string>
 #include <thread>
+#include <set>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -284,6 +286,16 @@ private:
             uint32_t quiesce = 0;
             bool done = false;
             bool overflow_reported = false;  // one-shot: pages_available() exceeded the FIFO (see drain_pass)
+            // The PRODUCER-STALL zone ids, mirrored from the zone-meta registry BY NAME (see StallIdMirror):
+            // the stall counter is the one thing the decode identifies per marker, and it may not do that by
+            // id VALUE -- and the stall zone genuinely has MANY ids, one per kernel TU, because
+            // kernel_profiler.hpp declares it at namespace scope.
+            struct StallIdMirror {
+                uint32_t cursor = 0;
+                std::vector<uint32_t> ids;  // sorted, so the hot-path test is a binary search
+                void refresh();
+                bool contains(uint32_t id) const { return std::binary_search(ids.begin(), ids.end(), id); }
+            } stall_ids;
         };
         SockState sock_state[kNSockets];
         std::vector<std::vector<HZMark>> hz_raw;  // sized kNRead + kNRelay when enabled
@@ -433,21 +445,36 @@ private:
     uint64_t w_wall_ns_ = 0;
     std::atomic<bool> stop_{false};
     std::atomic<bool> stopped_{false};
-    std::unordered_map<uint16_t, std::string> zone_names_;  // srcloc hash -> zone name (Tracy)
-    // srcloc hash -> explicit Tracy zone colour, for the fixed-id drainer zones only. Tracy's default is a hash
-    // of the name, which puts SWEEP and PACE in unrelated-but-similar colours and makes a drainer row hard to
-    // read at a glance -- and the SWEEP/PACE alternation is the whole point of that row. 0/absent = auto.
-    std::unordered_map<uint16_t, uint32_t> zone_colors_;
+    // Zone NAME -> explicit Tracy zone colour, for the drainer zones. Tracy's default is a hash of the name,
+    // which puts SWEEP and PACE in unrelated-but-similar colours and makes a drainer row hard to read at a
+    // glance -- and the SWEEP/PACE alternation is the whole point of that row. 0/absent = auto.
+    //
+    // KEYED BY NAME, never by id. Structural zone ids legitimately move whenever a source line does, so an
+    // id-keyed table would silently stop matching after any edit to the drain kernel. There is no
+    // zone_names_ map any more either: source-located names come per-ELF from llrt::ZoneMetaRegistry, which
+    // each consumer thread mirrors into a thread-local map (see consumer_thread), and NOTHING is registered
+    // by hand -- PRODUCER-STALL and the DRISC self-zones are ordinary zones with ordinary ELF records now.
+    std::unordered_map<std::string_view, uint32_t> zone_colors_;
     // Mover OVERRIDES for the same zone ids. The two roles share zone names but not meanings -- a filler's
     // CREDIT-WAIT is DRAM ring room (54 ns, never binds) while a mover's is host FIFO credit (us-scale, and the
     // phase that sets the knee) -- so a shared colour would invite reading one row's scale onto the other.
-    std::unordered_map<uint16_t, uint32_t> zone_colors_mover_;
+    std::unordered_map<std::string_view, uint32_t> zone_colors_mover_;
     // chip -> the NOC0 coords of that chip's drainer cores, when DRISC self-profiling is on. Filled during
     // boot_device (the only place a drainer's placement is known) and consumed in start() to pre-create their
     // Tracy contexts, which is off the drain hot path.
     std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, uint32_t>>> self_zone_cores_;
-    std::once_flag names_once_;  // zone names are loaded LAZILY on first drain (after kernels JIT-compile,
-                                 // so the zone-source-location log exists) -- not at start()/bring-up.
+    // Populate the colour tables. Called from the constructor.
+    void init_zone_tables();
+    // Marker rows whose id had no name by the time they reached Tracy. The invariant is ZERO: names are
+    // registered when a binary is loaded, which is strictly before that binary can emit. Counted per drain
+    // thread and summed at teardown, because "some names were missing" is exactly the failure the per-ELF
+    // registry replaced, and it must not be able to come back silently.
+    std::atomic<uint64_t> w_unnamed_zones_{0};
+    // The distinct ids behind that count (capped). Without them a non-zero count only says "some names were
+    // missing"; with them the id decomposes into tu_id/local and says WHICH.
+    static constexpr size_t kMaxUnnamedIds = 16;
+    std::mutex unnamed_mtx_;
+    std::set<uint32_t> unnamed_ids_;
 };
 
 }  // namespace tt::tt_metal

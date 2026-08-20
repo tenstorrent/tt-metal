@@ -13,6 +13,7 @@
 #include <iterator>
 #include <optional>
 #include <span>
+#include <set>
 #include <string>
 
 #include <tt-logger/tt-logger.hpp>
@@ -49,7 +50,7 @@
 #include "tools/profiler/spsc_marker_decode.hpp"
 #include "tools/profiler/perf_debug_profiler_tracy_handler.hpp"
 #include "tools/profiler/perf_debug_profiler_packets.hpp"
-#include "impl/profiler/profiler.hpp"  // generateZoneSourceLocationsHashes (zone hash -> name)
+#include "llrt/zone_meta.hpp"  // per-ELF (zone id -> source location), the streaming name source
 #include "tools/profiler/spsc_packet.h"
 #include "tt_metal/common/broadcast_ring.hpp"
 
@@ -60,6 +61,9 @@ namespace pz = tt::tt_metal::profiler;
 // Host-only record type for a PP_DATA payload continuation. Never appears on the wire, so it only has to
 // avoid the codes spsc_packet.h actually uses (0,1,2,5..11); 31 is the top of the 5-bit type field.
 constexpr uint32_t kRecDataCont = 31u;
+// PerfDebugRec::type holds a 5-bit wire code in a 32-bit field; the PP_DATA primary folds its payload word
+// count into bits [15:8] of the same field (see the emit_data sink), so every comparison against it masks.
+constexpr uint32_t kRecTypeMask = 0xFFu;
 // Largest payload the 7-bit wire size field can express, in uint64s -- bounds the consumer's scratch.
 constexpr uint32_t kMaxEventValues = 64;
 
@@ -534,8 +538,8 @@ uint32_t max_pages_per_read(uint32_t compiled_default) {
 
 // TT_METAL_PERF_DEBUG_STALL_ONLY=1: decode far enough to COUNT PRODUCER STALL ZONES and nothing else --
 // no record building, no BroadcastRing publish, no Tracy. The packet walk is still the real one (a raw scan
-// for the 0x7FFF pattern would false-positive on timestamp words that happen to equal 32767), so the count
-// is exact; what is skipped is the ~24 B record per marker and the publish.
+// for the stall ids' bit patterns would false-positive on timestamp words), so the count is exact; what is
+// skipped is the ~24 B record per marker and the publish.
 //
 // This exists to measure the KNEE without the host being the thing under test: producer stalls are the knee
 // metric, and we measured that host-side per-marker work is what feeds back into the DRISC's credit wait and
@@ -801,11 +805,64 @@ PerfDebugSync sync_device_clock(
 // that way. This records the last step ENTERED so the next hang reports its own stall site.
 thread_local std::string g_bringup_step = "(not started)";
 
+// Mirror every id whose ELF-resolved name is "PRODUCER-STALL" out of the registry's append-only log.
+// BY NAME, never by id value: a structural id legitimately moves whenever kernel_profiler.hpp does, and the
+// stall zone has one id PER KERNEL TU (it is declared at namespace scope in that header), so there is no
+// single value to compare against even in principle. Refreshed by cursor once per decode pass -- names
+// arrive per-ELF as binaries load -- so the per-marker cost stays a binary search over a few dozen words.
+void PerfDebugProfiler::DeviceCtx::SockState::StallIdMirror::refresh() {
+    std::vector<llrt::ZoneMetaEntry> delta;
+    cursor = llrt::ZoneMetaRegistry::instance().additions_since(cursor, delta);
+    bool grew = false;
+    for (const auto& e : delta) {
+        if (e.name == "PRODUCER-STALL") {
+            ids.push_back(e.zone_id);
+            grew = true;
+        }
+    }
+    if (grew) {
+        std::sort(ids.begin(), ids.end());
+    }
+}
+
 PerfDebugProfiler::DeviceCtx::DeviceCtx() = default;
 PerfDebugProfiler::DeviceCtx::~DeviceCtx() = default;
 PerfDebugProfiler::DeviceCtx::DeviceCtx(DeviceCtx&&) noexcept = default;
 
+// The drainer zone COLOURS, keyed BY NAME. Names are the only stable handle on a zone: a structural id
+// legitimately moves whenever a source line does, so a table keyed on id value would silently stop
+// matching after any edit to the drain kernel -- and would be exactly the id-value special-casing this
+// design removed everywhere else. Filled in the constructor and never mutated, so the drain threads read
+// it concurrently without a lock.
+void PerfDebugProfiler::init_zone_tables() {
+    // The pair that matters is SWEEP vs PACE: they alternate continuously on a filler row, so "the drainer
+    // is working" vs "the controller is holding it off" has to be readable without reading labels. SWEEP is
+    // a saturated blue; PACE is a recessive grey, because it is deliberate idleness and should not compete
+    // for attention with real work.
+    zone_colors_["DRISC-SWEEP"] = 0x2E86C1;        // blue: a sweep of the grid
+    zone_colors_["DRISC-PACE"] = 0x707B7C;         // grey: paced idle, on purpose
+    zone_colors_["DRISC-READ"] = 0x27AE60;         // green: NoC reads
+    zone_colors_["DRISC-READ-WAIT"] = 0x196F3D;    // dark green: read barrier
+    zone_colors_["DRISC-PROC"] = 0x8E44AD;         // purple: scan + head write-back
+    zone_colors_["DRISC-CREDIT-WAIT"] = 0xC0392B;  // red: the phase that sets the knee
+    zone_colors_["DRISC-WRITE"] = 0xD35400;        // orange: egress
+    zone_colors_["DRISC-WR-BARRIER"] = 0xF1C40F;   // yellow: waiting for write acks
+    // White, and the same on both roles: the sync marker is a fiducial, not a phase. It should be findable
+    // at a glance on any row and should not read as belonging to the work palette.
+    zone_colors_["DRISC-SYNC"] = 0xFFFFFF;
+    zone_colors_mover_["DRISC-SYNC"] = 0xFFFFFF;
+    // MOVER palette. Same zone names, different hues, because the two roles are different machines: a
+    // filler scans worker L1 and stages to DRAM, a mover reads DRAM and pushes PCIe. Reading a mover row
+    // with a filler's colour scale in your head is the mistake this prevents.
+    zone_colors_mover_["DRISC-SWEEP"] = 0x16A085;        // teal: a mover's visit
+    zone_colors_mover_["DRISC-READ"] = 0x52BE80;         // light green: DRAM read
+    zone_colors_mover_["DRISC-CREDIT-WAIT"] = 0xE74C3C;  // bright red: THE knee phase
+    zone_colors_mover_["DRISC-WRITE"] = 0xE67E22;        // light orange: PCIe push
+    zone_colors_mover_["DRISC-WR-BARRIER"] = 0xF7DC6F;   // light yellow: write acks
+}
+
 PerfDebugProfiler::PerfDebugProfiler(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    init_zone_tables();
     try {
         start(mesh_device);
     } catch (const std::exception& e) {
@@ -830,9 +887,10 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     }
 
     tracy_ = std::make_unique<PerfDebugTracyHandler>();
-    // NOTE: zone names are loaded LAZILY on the first drain (see drain_loop), NOT here -- at start()
-    // (MeshDevice bring-up) the workload's kernels have not been JIT-compiled yet, so their zone-source-
-    // location entries are not in the log and every name would fall back to "Zone_<hash>".
+    // NOTE: zone names are NOT loaded here, and not on the first drain either. They arrive per-ELF as each
+    // kernel/firmware binary is loaded (llrt::ZoneMetaRegistry), which is the only schedule that works for
+    // a model: at start() (MeshDevice bring-up) no workload kernel has been compiled yet, and by the first
+    // drain the LATER kernels still have not been.
 
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         if (!mesh_device->is_local(coord)) {
@@ -2382,14 +2440,16 @@ void PerfDebugProfiler::decode_and_publish(
     static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
     (void)ddbg;
     const auto t_dec_all = std::chrono::steady_clock::now();
+    ss.stall_ids.refresh();  // by NAME from the registry; cheap (an empty delta) except when an ELF just loaded
     if (stall_only()) {
-        pz::spsc_decode(st, buf.data(), words, ctx.nl, [&](uint32_t, uint32_t type, uint32_t hash, uint64_t, uint32_t) {
-            if (hash == 0x7FFFu && type == PP_ZONE_START) {
-                ss.stall++;
-                w_stalls_++;
-            }
-            ss.emit++;
-        });
+        pz::spsc_decode(
+            st, buf.data(), words, ctx.nl, [&](uint32_t, uint32_t type, uint32_t zone_id, uint64_t, uint32_t) {
+                if (type == PP_ZONE_START && ss.stall_ids.contains(zone_id)) {
+                    ss.stall++;
+                    w_stalls_++;
+                }
+                ss.emit++;
+            });
         w_decode_ns_ +=
             std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_dec_all).count();
         return;
@@ -2442,9 +2502,10 @@ void PerfDebugProfiler::decode_and_publish(
                 return;
             }
             ss.emit++;
-            if (hash == 0x7FFFu && type == PP_ZONE_START) {
-                ss.stall++;  // PROFILER_STALL_ZONE_ID: a producer RISC blocked on a FULL ring. Non-zero means
-                             // the capture PERTURBED the workload (kernels elongated); still lossless.
+            if (type == PP_ZONE_START && ss.stall_ids.contains(hash)) {
+                ss.stall++;  // PRODUCER-STALL (matched by ELF-resolved NAME, via the sorted id mirror): a
+                             // producer RISC blocked on a FULL ring. Non-zero means the capture PERTURBED
+                             // the workload (kernels elongated); still lossless.
             }
             if (lane / kNRisc >= ctx.core_virt.size()) {
                 w_drop_lane_.fetch_add(1, std::memory_order_relaxed);
@@ -2484,7 +2545,8 @@ void PerfDebugProfiler::decode_and_publish(
         // PP_DATA point events (DeviceTimestampedData / DeviceRecordEvent). The payload cannot fit in a
         // 24-byte PerfDebugRec, and WIDENING the Rec would cost ~67% more ring bytes on a path that carries
         // ~99M records for a single UFLD-v2 run -- so the payload rides CONTINUATION records instead: one
-        // primary (type PP_DATA, zone = id | size<<20) followed by one record per uint64. Events are rare
+        // primary (zone = the full 27-bit id, payload word count folded into the spare bits of `type`)
+        // followed by one record per uint64. Events are rare
         // next to zones, so the common path pays nothing and Rec stays byte-identical to the harness Rec.
         [&](uint32_t lane,
             uint32_t type,
@@ -2504,9 +2566,12 @@ void PerfDebugProfiler::decode_and_publish(
             if (ctx.marker_ts_base == 0) {
                 ctx.marker_ts_base = ts;
             }
-            // `type` (PP_DATA vs PP_EVENT) rides the record so the consumer knows whether the id is a
-            // compile-time tag it may name-resolve.
-            *bcur++ = PerfDebugRec{ts, (dev_idx << 24) | lane, type, id | (n << 20), prog};
+            // `zone` carries the FULL 27-bit structural id and nothing else -- it used to be
+            // `id | (n << 20)`, which silently truncated the id to 20 bits the moment ids got wider than a
+            // 16-bit hash. The payload word count moves into the SPARE bits of `type` instead: `type` holds
+            // a 5-bit wire code in a 32-bit field, so bits [15:8] are free. Every comparison against `type`
+            // downstream masks with kRecTypeMask for that reason.
+            *bcur++ = PerfDebugRec{ts, (dev_idx << 24) | lane, type | (n << 8), id, prog};
             for (uint32_t k = 0; k < cont; k++) {
                 // The producer writes each uint64 hi-word first (see timeStampedData), so recombine in
                 // that order and hand the consumer a finished value.
@@ -2828,9 +2893,17 @@ void PerfDebugProfiler::consumer_thread() {
         uint64_t vals[kMaxEventValues] = {};
     } pend;
     std::vector<uint64_t> con_last_ts_(4096, 0);
+    // Thread-local mirror of the zone-name table (id -> name) plus this thread's cursor into the registry's
+    // append-only log. Per-thread on purpose: every drain thread reads the whole ring independently, so a
+    // shared map would need a lock on the per-marker lookup.
+    std::unordered_map<uint32_t, std::string> names;
+    std::vector<llrt::ZoneMetaEntry> names_delta;
+    uint32_t names_cursor = 0;
+    uint64_t unnamed = 0;
+    std::set<uint32_t> unnamed_ids;
     auto emit_batch = [&](std::span<PerfDebugRec> b) {
         for (const auto& r : b) {
-            if (r.type != PP_ZONE_START && r.type != PP_ZONE_END) {
+            if ((r.type & kRecTypeMask) != PP_ZONE_START && (r.type & kRecTypeMask) != PP_ZONE_END) {
                 continue;
             }
             const uint32_t ln = r.lane & 0xFFFFFFu;
@@ -2843,54 +2916,19 @@ void PerfDebugProfiler::consumer_thread() {
                 }
             }
         }
-        // Names are only resolvable once the workload's kernels have JIT-compiled, which has certainly
-        // happened by the time records reach us.
-        std::call_once(names_once_, [this]() {
-            try {
-                for (auto& [h, md] : generateZoneSourceLocationsHashes()) {
-                    zone_names_[h] = md.marker_name;
-                }
-            } catch (const std::exception& e) {
-                log_warning(tt::LogMetal, "[perf-debug profiler] zone-name load failed ({})", e.what());
-            }
-            zone_names_[0x7FFFu] = "PRODUCER-STALL";  // PROFILER_STALL_ZONE_ID
-            // DRISC self-profiling. These ids are FIXED rather than source-location hashes (see
-            // DriscSelfZone), so generateZoneSourceLocationsHashes() can never supply their names --
-            // registering them here is the only thing that stops them showing up as "Zone_32752".
-            zone_names_[kernel_profiler::DRISC_ZONE_SWEEP] = "DRISC-SWEEP";
-            zone_names_[kernel_profiler::DRISC_ZONE_READ] = "DRISC-READ";
-            zone_names_[kernel_profiler::DRISC_ZONE_READ_WAIT] = "DRISC-READ-WAIT";
-            zone_names_[kernel_profiler::DRISC_ZONE_PROC] = "DRISC-PROC";
-            zone_names_[kernel_profiler::DRISC_ZONE_CREDIT_WAIT] = "DRISC-CREDIT-WAIT";
-            zone_names_[kernel_profiler::DRISC_ZONE_WRITE] = "DRISC-WRITE";
-            zone_names_[kernel_profiler::DRISC_ZONE_WR_BARRIER] = "DRISC-WR-BARRIER";
-            zone_names_[kernel_profiler::DRISC_ZONE_PACE] = "DRISC-PACE";
-            zone_names_[kernel_profiler::DRISC_ZONE_SYNC] = "DRISC-SYNC";
-            // Explicit colours for the drainer zones. The pair that matters is SWEEP vs PACE: they alternate
-            // continuously on a filler row, so "the drainer is working" vs "the controller is holding it off"
-            // has to be readable without reading labels. SWEEP is a saturated blue; PACE is a recessive grey,
-            // because it is deliberate idleness and should not compete for attention with real work.
-            zone_colors_[kernel_profiler::DRISC_ZONE_SWEEP] = 0x2E86C1;        // blue: a sweep of the grid
-            zone_colors_[kernel_profiler::DRISC_ZONE_PACE] = 0x707B7C;         // grey: paced idle, on purpose
-            zone_colors_[kernel_profiler::DRISC_ZONE_READ] = 0x27AE60;         // green: NoC reads
-            zone_colors_[kernel_profiler::DRISC_ZONE_READ_WAIT] = 0x196F3D;    // dark green: read barrier
-            zone_colors_[kernel_profiler::DRISC_ZONE_PROC] = 0x8E44AD;         // purple: scan + head write-back
-            zone_colors_[kernel_profiler::DRISC_ZONE_CREDIT_WAIT] = 0xC0392B;  // red: the phase that sets the knee
-            zone_colors_[kernel_profiler::DRISC_ZONE_WRITE] = 0xD35400;        // orange: egress
-            zone_colors_[kernel_profiler::DRISC_ZONE_WR_BARRIER] = 0xF1C40F;   // yellow: waiting for write acks
-            // White, and the same on both roles: the sync marker is a fiducial, not a phase. It should be
-            // findable at a glance on any row and should not read as belonging to the work palette.
-            zone_colors_[kernel_profiler::DRISC_ZONE_SYNC] = 0xFFFFFF;
-            zone_colors_mover_[kernel_profiler::DRISC_ZONE_SYNC] = 0xFFFFFF;
-            // MOVER palette. Same zone ids, different hues, because the two roles are different machines: a
-            // filler scans worker L1 and stages to DRAM, a mover reads DRAM and pushes PCIe. Reading a mover row
-            // with a filler's colour scale in your head is the mistake this prevents.
-            zone_colors_mover_[kernel_profiler::DRISC_ZONE_SWEEP] = 0x16A085;        // teal: a mover's visit
-            zone_colors_mover_[kernel_profiler::DRISC_ZONE_READ] = 0x52BE80;         // light green: DRAM read
-            zone_colors_mover_[kernel_profiler::DRISC_ZONE_CREDIT_WAIT] = 0xE74C3C;  // bright red: THE knee phase
-            zone_colors_mover_[kernel_profiler::DRISC_ZONE_WRITE] = 0xE67E22;        // light orange: PCIe push
-            zone_colors_mover_[kernel_profiler::DRISC_ZONE_WR_BARRIER] = 0xF7DC6F;   // light yellow: write acks
-        });
+        // Mirror any zone names registered since this thread last looked. Names arrive per-ELF, as
+        // binaries load (llrt::ZoneMetaRegistry), so the table GROWS throughout a model run -- which is
+        // why this is a delta refresh per batch and not a one-shot snapshot. A model streams zones from
+        // running kernels while later kernels are still compiling, so a snapshot is taken when the table
+        // is a fraction of its final size.
+        //
+        // The mirror is thread-LOCAL, so lookups on the hot path touch no shared state and take no lock;
+        // only the delta copy does, and only when there is a delta.
+        names_cursor = llrt::ZoneMetaRegistry::instance().additions_since(names_cursor, names_delta);
+        for (auto& e : names_delta) {
+            names.emplace(e.zone_id, std::move(e.name));
+        }
+        names_delta.clear();
         ZoneScopedNC("tracy-emit", 0x2980B9);  // blue: pushing this batch into Tracy -- the slow side (~0.8M
                                                // rec/s). When this saturates, the RING drops; it can no longer
                                                // back-pressure the device.
@@ -2925,12 +2963,15 @@ void PerfDebugProfiler::consumer_thread() {
             pkt.core_noc0_y = ny;
             pkt.risc = risc;
             pkt.id = pend.id;
-            pkt.runtime_id = (pend.type == PP_EVENT);
-            // A runtime id is NOT a source-location hash: looking it up would borrow an unrelated zone's
-            // name (id 42 vs whatever hashes to 42). Only compile-time tags get resolved.
-            if (!pkt.runtime_id) {
-                if (auto it = zone_names_.find(static_cast<uint16_t>(pend.id)); it != zone_names_.end()) {
-                    pkt.name = it->second;
+            // BOTH point-marker types carry a compile-time structural id now, so both resolve exactly like
+            // a zone. (PP_EVENT used to carry a RUNTIME value here, which was the one id on this wire that
+            // could not be named; DeviceRuntimeEvent now ships that value as PP_DATA payload instead.)
+            if (auto it = names.find(pend.id); it != names.end()) {
+                pkt.name = it->second;
+            } else {
+                unnamed++;  // must stay 0: see w_unnamed_zones_
+                if (unnamed_ids.size() < kMaxUnnamedIds) {
+                    unnamed_ids.insert(pend.id);
                 }
             }
             const uint64_t base = ctx.synced ? 0 : ctx.marker_ts_base;
@@ -2944,7 +2985,8 @@ void PerfDebugProfiler::consumer_thread() {
         };
 
         for (const auto& r : b) {
-            if (r.type == kRecDataCont) {
+            const uint32_t rtype = r.type & kRecTypeMask;
+            if (rtype == kRecDataCont) {
                 if (pend.active && pend.got < kMaxEventValues) {
                     pend.vals[pend.got++] = r.ts;
                 }
@@ -2953,22 +2995,22 @@ void PerfDebugProfiler::consumer_thread() {
                 }
                 continue;
             }
-            if (r.type == PP_DATA || r.type == PP_EVENT) {
+            if (rtype == PP_DATA || rtype == PP_EVENT) {
                 flush_event();  // defensive: a truncated predecessor must not absorb this event's payload
                 pend = PendingEvent{};
                 pend.active = true;
                 pend.lane_full = r.lane;
                 pend.ts = r.ts;
-                pend.id = r.zone & 0xFFFFFu;
-                pend.type = r.type;
+                pend.id = r.zone;  // the full 27-bit structural id
+                pend.type = rtype;
                 pend.prog = r.prog;
-                pend.want = ((r.zone >> 20) + 1u) / 2u;  // payload words -> uint64s
+                pend.want = (((r.type >> 8) & 0x7Fu) + 1u) / 2u;  // payload words -> uint64s
                 if (pend.want == 0) {
-                    flush_event();  // a bare event (DeviceRecordEvent) has no continuations
+                    flush_event();  // PP_EVENT is a bare flag: always 2 words, never any continuation
                 }
                 continue;
             }
-            if (r.type != PP_ZONE_START && r.type != PP_ZONE_END) {
+            if (rtype != PP_ZONE_START && rtype != PP_ZONE_END) {
                 continue;  // e.g. PP_ZONE_TOTAL: an accumulated sum, not a duration on the timeline
             }
             const uint32_t dev_idx = r.lane >> 24;
@@ -2988,8 +3030,13 @@ void PerfDebugProfiler::consumer_thread() {
                 ny = it->second.second;
             }
             std::string_view name;
-            if (auto it = zone_names_.find(static_cast<uint16_t>(r.zone)); it != zone_names_.end()) {
+            if (auto it = names.find(r.zone); it != names.end()) {
                 name = it->second;
+            } else {
+                unnamed++;  // must stay 0: see w_unnamed_zones_
+                if (unnamed_ids.size() < kMaxUnnamedIds) {
+                    unnamed_ids.insert(r.zone);
+                }
             }
             perf_debug::WorkerZonePacket pkt;
             pkt.chip_id = ctx.chip_id;
@@ -3007,10 +3054,11 @@ void PerfDebugProfiler::consumer_thread() {
                 const bool is_mover = ctx.n_worker_cores != 0 && ci >= ctx.n_worker_cores &&
                                       (ci - ctx.n_worker_cores) < ctx.n_drisc &&
                                       ctx.role[ci - ctx.n_worker_cores] == kRoleMover;
+                // BY NAME, never by id value -- see init_zone_tables.
                 const auto& tbl = is_mover ? zone_colors_mover_ : zone_colors_;
-                if (auto it = tbl.find(static_cast<uint16_t>(r.zone)); it != tbl.end()) {
+                if (auto it = tbl.find(name); it != tbl.end()) {
                     pkt.color = it->second;
-                } else if (auto it2 = zone_colors_.find(static_cast<uint16_t>(r.zone)); it2 != zone_colors_.end()) {
+                } else if (auto it2 = zone_colors_.find(name); it2 != zone_colors_.end()) {
                     pkt.color = it2->second;  // mover table has no override for this zone
                 }
             }
@@ -3018,7 +3066,7 @@ void PerfDebugProfiler::consumer_thread() {
             // pair, so Tracy places it exactly. Unsynced: fall back to rebasing on the first marker seen.
             const uint64_t base = ctx.synced ? 0 : ctx.marker_ts_base;
             pkt.timestamp = (r.ts >= base) ? (r.ts - base) : 0;
-            pkt.is_start = (r.type == PP_ZONE_START);
+            pkt.is_start = (rtype == PP_ZONE_START);
             if (!tracy_push_disabled()) {
                 tracy_->HandleWorkerZone(pkt);
             }
@@ -3047,6 +3095,16 @@ void PerfDebugProfiler::consumer_thread() {
                                                   // harness's mq-pop-wait. Plentiful here = the sink is keeping
                                                   // up; ~absent = the sink is the bottleneck and drops loom.
             rd.wait(tok);
+        }
+    }
+    w_unnamed_zones_.fetch_add(unnamed, std::memory_order_relaxed);
+    if (!unnamed_ids.empty()) {
+        std::lock_guard<std::mutex> lk(unnamed_mtx_);
+        for (uint32_t id : unnamed_ids) {
+            if (unnamed_ids_.size() >= kMaxUnnamedIds) {
+                break;
+            }
+            unnamed_ids_.insert(id);
         }
     }
     consumed_.fetch_add(cnt);
@@ -4044,6 +4102,31 @@ void PerfDebugProfiler::stop() {
             w_con_seen_.load(),
             w_drop_lane_.load(),
             w_batch_flush_.load());
+        // Zone naming, from the per-ELF metadata sections. `unnamed 0` is the invariant, not an
+        // aspiration: a binary's names are registered when it is LOADED, which is strictly before it can
+        // emit, so a non-zero count means either a binary was loaded without .tt_zone_meta or two TUs
+        // share a tu_id. `id collisions 0` is the other half of that check.
+        const auto zm = llrt::ZoneMetaRegistry::instance().stats();
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] zone names: {} records from {} ELFs | unnamed marker rows {} | id collisions {} "
+            "| foreign/stale metadata sections ignored {} [unnamed and collisions MUST be 0; a non-zero foreign "
+            "count means the JIT cache holds ELFs from a different .tt_zone_meta layout]",
+            zm.records,
+            zm.elfs,
+            w_unnamed_zones_.load(),
+            llrt::ZoneMetaRegistry::instance().collisions(),
+            zm.foreign_sections);
+        if (w_unnamed_zones_.load() != 0) {
+            std::string ids;
+            std::lock_guard<std::mutex> lk(unnamed_mtx_);
+            for (uint32_t id : unnamed_ids_) {
+                ids += fmt::format(
+                    "{}{} (tu {} local {})", ids.empty() ? "" : ", ", id, TT_ZONE_TU_OF(id), TT_ZONE_LOCAL_OF(id));
+            }
+            log_warning(
+                tt::LogMetal, "[perf-debug profiler] unnamed marker ids (up to {} distinct): {}", kMaxUnnamedIds, ids);
+        }
     }
     tracy_.reset();
     devices_.clear();

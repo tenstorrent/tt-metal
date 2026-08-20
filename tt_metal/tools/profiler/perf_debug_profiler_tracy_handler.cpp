@@ -271,18 +271,12 @@ void PerfDebugTracyHandler::HandleWorkerEvent([[maybe_unused]] const perf_debug:
     marker.risc = kRisc[event.risc % 5];
     marker.timestamp = event.timestamp;
     marker.runtime_host_id = event.runtime_host_id;
-    // Three distinct kinds, by ID provenance and payload -- not one type with a size of zero:
-    //   RUNTIME_EVENT: runtime id, no name exists (DeviceRuntimeEvent)
-    //   DATA:          compile-time tag + payload (DeviceData)
-    //   FLAG:          compile-time tag, no payload (DeviceFlag)
-    if (event.runtime_id) {
-        marker.marker_type = tracy::TTDeviceMarkerType::RUNTIME_EVENT;
-    } else if (event.num_values != 0) {
-        marker.marker_type = tracy::TTDeviceMarkerType::DATA;
-    } else {
-        marker.marker_type = tracy::TTDeviceMarkerType::FLAG;
-    }
-    // A runtime event has no source location and so no harvested name; show the id rather than a blank.
+    // Two kinds, by payload -- every id on this wire is a compile-time structural id now, so there is no
+    // "runtime id" kind any more (DeviceRuntimeEvent ships its runtime value as PP_DATA payload):
+    //   DATA: compile-time tag + payload (DeviceData / DeviceRuntimeEvent)
+    //   FLAG: compile-time tag, no payload (DeviceFlag)
+    marker.marker_type = (event.num_values != 0) ? tracy::TTDeviceMarkerType::DATA : tracy::TTDeviceMarkerType::FLAG;
+    // Every id resolves from its kernel's ELF; an empty name here is the bug the teardown summary counts.
     marker.marker_name = event.name.empty() ? fmt::format("Event_{}", event.id) : std::string(event.name);
     marker.file = "kernel_profiler";
     marker.line = 0;
@@ -316,7 +310,11 @@ void PerfDebugTracyHandler::HandleWorkerEvent([[maybe_unused]] const perf_debug:
     //   equate them  =>      tsc = (round(ts/freq) - anchor_ns) / timerMul + host_start
     //
     // and the server-private baseTime cancels, which is what makes this computable client-side at all.
-    if (event.id == kernel_profiler::SPSC_DATA_ID_NOCFP && event.num_values >= 2) {
+    // Discriminated BY NAME, never by id value: the sample's id is an ordinary structural source-location
+    // id now (it used to be the fixed kernel_profiler::SPSC_DATA_ID_NOCFP, 0x7FF0, in a reserved band), and a
+    // structural id legitimately moves whenever a source line in the drain kernel does. The name comes from
+    // the drain kernel's own ELF, so it is the stable handle.
+    if (event.name == "DRISC-NOC-FOOTPRINT" && event.num_values >= 2) {
         // PER-CORE anchor, same as the zone path. These samples come off a DRAM core, whose wall clock has its
         // own origin, so resolving the CHIP anchor here would land every plot point the same reset->open gap to
         // the right of the workload -- off the visible timeline entirely, not merely misplaced.

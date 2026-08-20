@@ -14,6 +14,10 @@
 
 namespace noc_debugging_profiler {
 
+// Ordinary structural zone id + ELF record, named "NOC-DEBUG" on the host. Replaces the magic
+// kernel_profiler::NOC_DEBUGGING_STATIC_ID (23456) the host used to compare against by value.
+TT_ZONE_DEFINE_ID(kNocDebugZoneId, "NOC-DEBUG");
+
 template <NocDebuggingEventMetadata::NocDebugEventType event_type>
 FORCE_INLINE void recordScopedLockEvent(uint32_t locked_address_base, uint32_t num_bytes) {
     NocDebuggingEventMetadata ev_md;
@@ -21,9 +25,8 @@ FORCE_INLINE void recordScopedLockEvent(uint32_t locked_address_base, uint32_t n
     ev_md.setLockedRegion(locked_address_base, num_bytes);
 
     kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-    kernel_profiler::
-        timeStampedData<kernel_profiler::NOC_DEBUGGING_STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(
-            ev_md.asU64());
+    kernel_profiler::timeStampedData<noc_debugging_profiler::kNocDebugZoneId, kernel_profiler::DoingDispatch::DISPATCH>(
+        ev_md.asU64());
 }
 
 }  // namespace noc_debugging_profiler
