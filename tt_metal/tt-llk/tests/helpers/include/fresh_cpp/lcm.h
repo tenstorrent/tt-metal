@@ -90,6 +90,14 @@ __attribute__((noinline)) void calculate_lcm_fresh_cpp()
     // 2^23: round-and-extract anchor for the nearest-integer recovery.
     constexpr float BIAS = 8388608.0f;
 
+    // Park the reciprocal magic seed in a programmable constant register
+    // once per call (the production kernel's own init parks its Newton
+    // constants in vConstFloatPrgm0/1 the same way): the seed subtraction
+    // below reads it as an LREG operand instead of re-materializing the
+    // 32-bit immediate with a paired SFPLOADI every row (laneDX: -2
+    // issue/exec words per row vs the measured pin-14 stream).
+    sfpi::vConstIntPrgm0 = 0x7EF311C3;
+
     for (int face = 0; face < 4; ++face)
     {
         for (int row = 0; row < ITERATIONS; ++row)
@@ -138,7 +146,7 @@ __attribute__((noinline)) void calculate_lcm_fresh_cpp()
 
             // Magic-constant reciprocal seed + two Newton refinements in
             // a*b+c form against the once-negated divisor (header piece 2).
-            sfpi::vFloat r        = sfpi::as<sfpi::vFloat>(sfpi::vInt(0x7EF311C3) - sfpi::as<sfpi::vInt>(gf));
+            sfpi::vFloat r        = sfpi::as<sfpi::vFloat>(sfpi::vInt(sfpi::vConstIntPrgm0) - sfpi::as<sfpi::vInt>(gf));
             const sfpi::vFloat ng = -gf;
             r                     = (ng * r + sfpi::vConst1) * r + r;
             r                     = (ng * r + sfpi::vConst1) * r + r;
