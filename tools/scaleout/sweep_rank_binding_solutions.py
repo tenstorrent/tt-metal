@@ -117,12 +117,14 @@ class SweepLog:
         self.line(f"report → {path}")
 
     # -- per-solution tree --
-    def solution_start(self, position: str, sid: str, host: str) -> None:
+    def solution_start(self, position: str, sid: str, host: str, log_path: Path) -> None:
         self.blank()
         self.line(f"┌─ solution {position} · {_short_id(sid)} · {host}")
+        # Show the per-solution log path up front (not just at close) so a long/hung tt-run can be tailed live.
+        self.line(f"│  log: {log_path}")
 
-    def solution_end(self, log_path: Path) -> None:
-        self.line(f"└─ log: {log_path}")
+    def solution_end(self) -> None:
+        self.line("└─")
 
     def solution_dry_run(self, retries: int, recover_cmd: str) -> None:
         self.line(f"│    dry-run: would run tt-run (up to {retries}×, recover on fail) → {recover_cmd}")
@@ -465,7 +467,9 @@ def _run_once(
     spare_daemons_fn: Optional[Callable[[], bool]] = None,
 ) -> Tuple[str, Optional[int]]:
     """Run ``cmd`` once in its own process group, then reap everything it started (local group +
-    remote ranks) so nothing lingers holding CHIP_IN_USE locks. Returns ``(status, returncode)``.
+    remote ranks) so nothing lingers holding CHIP_IN_USE locks. Returns
+    ``(status, returncode, workload_seconds)`` where workload_seconds times ONLY the workload wait
+    (excludes the post-run reap/zombie-collect) so it is directly comparable to ``timeout``.
 
     ``spare_daemons_fn`` is evaluated at reap time: when it returns True (the background producer is
     still running), the reap skips the blanket prted/mpirun kill so the producer's MPI daemons survive."""
@@ -485,11 +489,16 @@ def _run_once(
             pgid = os.getpgid(proc.pid)
         except (ProcessLookupError, OSError):
             pgid = None
+        # Time ONLY the workload wait, so the reported duration is directly comparable to `timeout`
+        # (the post-run reap + zombie-collect below can add ~15s and would otherwise make a PASS look
+        # like it ran past its timeout).
+        t_wait0 = time.time()
         try:
             rc = proc.wait(timeout=timeout)
             status = "pass" if rc == 0 else "fail"
         except subprocess.TimeoutExpired:
             status = "timeout"
+        workload_seconds = round(time.time() - t_wait0, 1)
     # Always reap this command's processes (on timeout AND on normal exit); cheap no-op on a clean pass.
     # While the producer is alive, spare its shared MPI daemons (evaluate now, not before the run).
     _reap_command_processes(pgid, host_set, reap_pattern, spare_daemons=bool(spare_daemons_fn and spare_daemons_fn()))
@@ -498,7 +507,7 @@ def _run_once(
             proc.wait(timeout=15)  # collect the (now-killed) child so it isn't left a zombie
         except Exception:  # noqa: BLE001
             pass
-    return status, rc
+    return status, rc, workload_seconds
 
 
 def _run_with_retries(
@@ -546,8 +555,7 @@ def _run_with_retries(
             header = f"\n# {label} attempt {attempt}/{attempts}\n"
 
         log.attempt_start(indent, label, attempt, attempts)  # live "… running" before the (maybe long) attempt
-        t0 = time.time()
-        last_status, last_rc = _run_once(
+        last_status, last_rc, last_seconds = _run_once(
             cmd,
             cwd=cwd,
             log_path=log_path,
@@ -558,7 +566,8 @@ def _run_with_retries(
             reap_pattern=reap_pattern,
             spare_daemons_fn=(producer.alive if producer is not None else None),
         )
-        log.attempt(indent, label, attempt, attempts, last_status, time.time() - t0)
+        # last_seconds is the workload-only wait (excludes reap/cleanup), so it's comparable to `timeout`.
+        log.attempt(indent, label, attempt, attempts, last_status, last_seconds)
         if last_status == "pass":
             return _RetryResult(status=last_status, returncode=last_rc, attempts=attempt, recover_returncode=recover_rc)
 
@@ -896,7 +905,8 @@ class SolutionConsumer:
         label = sol.get("id", sol["dir"])
         cmd_str = " ".join(shlex.quote(c) for c in cmd)  # exact, copy-paste-reproducible tt-run command (-> log file)
         host = _short_host(sol.get("host_set"))
-        self.log.solution_start(position_label, label, host)
+        log_path = cfg.logs_root / f"{label}.log"
+        self.log.solution_start(position_label, label, host, log_path)
 
         if cfg.dry_run:
             self.log.solution_dry_run(cfg.retries, cfg.recover_command)
@@ -915,7 +925,6 @@ class SolutionConsumer:
             )
             return LoopAction.CONTINUE
 
-        log_path = cfg.logs_root / f"{label}.log"
         t0 = time.time()
         # After every attempt the executor reaps this solution's ranks on its hosts (sparing the producer's
         # daemons while it is alive), and recovers between failures -- see TtRunExecutor / SolutionProducer.
@@ -933,7 +942,7 @@ class SolutionConsumer:
         dur = round(time.time() - t0, 1)
         if outcome.status != "pass" and not outcome.recover_exhausted:
             self.log.solution_failed("│    ", outcome.attempts)
-        self.log.solution_end(log_path)
+        self.log.solution_end()
         self.results.append(
             _make_result(
                 sol=sol,

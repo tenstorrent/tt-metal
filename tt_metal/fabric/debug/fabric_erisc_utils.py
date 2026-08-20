@@ -80,7 +80,8 @@ def normalize_architecture(arch_str: str) -> str:
     if not arch_str:
         raise KeyError("Empty architecture string provided")
 
-    arch_lower = arch_str.lower().strip()
+    # device._arch may be an ARCH enum (newer ttexalens) rather than a str -> coerce.
+    arch_lower = str(arch_str).lower().strip()
 
     for known_arch, normalized_arch in ARCHITECTURE_MAPPING.items():
         if known_arch.lower() in arch_lower:
