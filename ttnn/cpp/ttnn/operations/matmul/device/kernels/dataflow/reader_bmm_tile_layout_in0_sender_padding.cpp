@@ -22,22 +22,8 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 void kernel_main() {
-    uint32_t rt_args_idx = 0;
-    // in0 tensor args
-    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    // in0 mcast args
-    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-
-    // padding args
-    const uint32_t last_block_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    // sparsity args
-    const uint32_t sparsity_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-
     // COMPILE TIME ARGS
     // in0 tensor args
     constexpr uint32_t in0_tensor_stride_w = get_compile_time_arg_val(0);
@@ -58,28 +44,25 @@ void kernel_main() {
     constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(12);
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(13);
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(14);
-    // in0 mcast args
-    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(17);
-    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(18);
     // batch args
-    constexpr uint32_t MtKt = get_compile_time_arg_val(19);  // if 0
-    constexpr uint32_t in0_B = get_compile_time_arg_val(20);
-    constexpr uint32_t in1_B = get_compile_time_arg_val(21);
-    constexpr bool in0_reuse_in_CB = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t MtKt = get_compile_time_arg_val(15);  // if 0
+    constexpr uint32_t in0_B = get_compile_time_arg_val(16);
+    constexpr uint32_t in1_B = get_compile_time_arg_val(17);
+    constexpr bool in0_reuse_in_CB = get_compile_time_arg_val(18) == 1;
 
     // sparsity args
 
-    constexpr uint32_t batchB = get_compile_time_arg_val(23);
-    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(24);
+    constexpr uint32_t batchB = get_compile_time_arg_val(19);
+    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(20);
     // Boolean that is set when input A is sparse. If set, both input A and B are assumed to be sparse.
     // Based on the sparsity tensor, the corresponding batch in input A and B are skipped.
-    constexpr bool bcast_A = static_cast<bool>(get_compile_time_arg_val(25));
+    constexpr bool bcast_A = static_cast<bool>(get_compile_time_arg_val(21));
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = static_cast<bool>(get_compile_time_arg_val(26));
+    constexpr bool get_batch_from_reader = static_cast<bool>(get_compile_time_arg_val(22));
 
-    constexpr bool fuse_op = static_cast<bool>(get_compile_time_arg_val(27));
+    constexpr bool fuse_op = static_cast<bool>(get_compile_time_arg_val(23));
 
-    constexpr auto in0_args = TensorAccessorArgs<28>();
+    constexpr auto in0_args = TensorAccessorArgs<24>();
 
     constexpr auto sparsity_args = TensorAccessorArgs<decltype(in0_args)::next_compile_time_args_offset()>();
 
@@ -94,6 +77,14 @@ void kernel_main() {
     // See https://github.com/tenstorrent/tt-metal/issues/45943.
     [[maybe_unused]] constexpr uint32_t num_batch_compute =
         get_compile_time_arg_val(decltype(sparsity_args)::next_compile_time_args_offset());
+    uint32_t rt_args_idx = 0;
+    // in0 tensor args
+    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    // padding args
+    const uint32_t last_block_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    // sparsity args
+    const uint32_t sparsity_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
     // 0x1 is used to specify "VALID" state, i.e. when the batch is valid.
@@ -122,7 +113,6 @@ void kernel_main() {
             in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
         );
     }
-
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
@@ -139,8 +129,6 @@ void kernel_main() {
 
     const Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
-    Semaphore<> sender_sem(get_compile_time_arg_val(15));
-    Semaphore<> receiver_sem(get_compile_time_arg_val(16));
 
 #ifdef IN0_SHARDED
     // In case we need to send multiple blocks per shard, in0 sharded cb is cb2 and we extract the sub-blocks to cb0
@@ -167,16 +155,16 @@ void kernel_main() {
     DataflowBuffer dfb_sparsity(dfb_id_sparsity);
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
-#ifndef SKIP_MCAST
-    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    receiver_sem.set(VALID);
-    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
-    // to receive the mcast
+    // Multicast arguments follow the operation-owned argument setup.
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("in0_mcast_ct_offset"),
+        get_named_compile_time_arg_val("in0_mcast_rt_offset")>
+        in0_mcast_args;
 
+    auto in0_pipe = in0_mcast_args.optional_sender(noc);
 #ifdef IN0_SHARDED
     uint32_t in0_start_address = dfb_in0.get_write_ptr();
 #endif  // IN0_SHARDED
-#endif  // SKIP_MCAST
 
     uint32_t l1_write_addr_sparsity = 0;
     if constexpr (batchB > 0 && !use_indices) {
@@ -200,22 +188,9 @@ void kernel_main() {
                     ((reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity))[bB]) != 0;
 
                 if constexpr (get_batch_from_reader) {
-#ifndef SKIP_MCAST
-                    // First broadcast this to other cores
-                    sender_sem.wait(in0_mcast_num_dests);
-                    sender_sem.set(0);
-                    receiver_sem.set(is_batch_valid ? VALID : IGNORE_BATCH);
-                    receiver_sem.set_multicast(
-                        noc,
-                        in0_mcast_dest_noc_start_x,
-                        in0_mcast_dest_noc_start_y,
-                        in0_mcast_dest_noc_end_x,
-                        in0_mcast_dest_noc_end_y,
-                        in0_mcast_num_cores);
-                    noc.async_writes_flushed();
-                    // Reset the semaphore value to VALID
-                    receiver_sem.set(VALID);
-#endif  // SKIP_MCAST
+                    if constexpr (in0_mcast_args.active) {
+                        in0_pipe->send_signal(is_batch_valid ? VALID : IGNORE_BATCH);
+                    }
 
                     // We need to pass the value to compute cores regardless of the value of is_batch_valid
                     ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, static_cast<uint32_t>(is_batch_valid));
@@ -262,10 +237,8 @@ void kernel_main() {
 
                         uint32_t in0_write_offset = 0;
 
-#ifndef SKIP_MCAST
                         uint32_t in0_start_address =
                             dfb_in0.get_write_ptr();  // copy start address of block, to be used for mcasting
-#endif                                                // SKIP_MCAST
 
                         // Copy in0 block into CB, as the default kernel
                         uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;
@@ -312,10 +285,8 @@ void kernel_main() {
                         if constexpr (extract_shard_sub_blocks) {
                             uint32_t l1_write_addr_in0 = dfb_in0.get_write_ptr();
 
-#ifndef SKIP_MCAST
                             in0_start_address =
                                 l1_write_addr_in0;  // copy start address of block, to be used for mcasting
-#endif  // SKIP_MCAST
 
                             const UnicastEndpoint self_ep;
                             uint32_t noc_shard_read_l1_addr = in0_tensor_current_inner_dim_block_start_addr;
@@ -360,48 +331,9 @@ void kernel_main() {
                         }
 #endif  // IN0_SHARDED
 
-#ifndef SKIP_MCAST
-                        // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
-                        // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
-                        // zero for the next block
-                        sender_sem.wait(in0_mcast_num_dests);
-                        sender_sem.set(0);
-
-                        // Now we have the block in the CB address, we can mcast to dests!
-                        const MulticastEndpoint mcast_dst;
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(in0_start_address),
-                            mcast_dst,
-                            in0_block_size_bytes,
-                            in0_mcast_num_cores,
-                            {},
-                            {.noc_x_start = in0_mcast_dest_noc_start_x,
-                             .noc_y_start = in0_mcast_dest_noc_start_y,
-                             .noc_x_end = in0_mcast_dest_noc_end_x,
-                             .noc_y_end = in0_mcast_dest_noc_end_y,
-                             .addr = in0_start_address},
-                            true);
-
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id, same
-                        // vc, same cmd_buf Also, this only works because we are setting VCs statically (using
-                        // NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                        // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV
-                        // latency which means data could be changed before write is issued.
-                        noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
-
-                        // We should also multicast the flag to destinations
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        receiver_sem.set_multicast(
-                            noc,
-                            in0_mcast_dest_noc_start_x,
-                            in0_mcast_dest_noc_start_y,
-                            in0_mcast_dest_noc_end_x,
-                            in0_mcast_dest_noc_end_y,
-                            in0_mcast_num_cores);
-#endif  // SKIP_MCAST
+                        if constexpr (in0_mcast_args.active) {
+                            in0_pipe->send(in0_start_address, in0_start_address, in0_block_size_bytes);
+                        }
 
                         // Common for sharded and interleaved paths
                         dfb_in0.push_back(in0_block_num_tiles);

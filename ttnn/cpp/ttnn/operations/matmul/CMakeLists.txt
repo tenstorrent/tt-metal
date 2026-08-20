@@ -34,6 +34,14 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_matmul PRIVATE ${FixmeOpIncDirs})
+# Live multicast builders inspect existing semaphore occupancy before appending descriptors.
+target_include_directories(
+    ttnn_op_matmul
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
+)
 target_link_libraries(ttnn_op_matmul PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(

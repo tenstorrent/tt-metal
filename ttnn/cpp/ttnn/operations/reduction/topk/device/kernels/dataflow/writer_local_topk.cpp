@@ -8,30 +8,34 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 void kernel_main() {
+    // Compile time args
+    constexpr uint32_t arrival_counter_sem_id = get_compile_time_arg_val(0);
+    constexpr uint32_t noc_final_x = get_compile_time_arg_val(1);
+    constexpr uint32_t noc_final_y = get_compile_time_arg_val(2);
+    constexpr uint32_t Ht = get_compile_time_arg_val(3);
+    constexpr uint32_t K = get_compile_time_arg_val(4);
+    constexpr uint32_t Kt = get_compile_time_arg_val(5);
+    constexpr uint32_t values_dfb_index = get_compile_time_arg_val(6);
+    constexpr uint32_t output_ind_dfb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t final_values_dfb_index = get_compile_time_arg_val(8);
+    constexpr uint32_t final_indices_dfb_index = get_compile_time_arg_val(9);
+
     // Runtime args
     const std::uint32_t start_wt = get_arg_val<std::uint32_t>(0);
-
-    // Compile time args
-    constexpr std::uint32_t receiver_sem_id = get_compile_time_arg_val(0);           // Final core readiness signal
-    constexpr std::uint32_t sender_sem_id = get_compile_time_arg_val(1);             // Local core completion signal
-    constexpr std::uint32_t noc_final_x = get_compile_time_arg_val(2);               // Final core X coordinate
-    constexpr std::uint32_t noc_final_y = get_compile_time_arg_val(3);               // Final core Y coordinate
-    constexpr std::uint32_t Ht = get_compile_time_arg_val(4);                        // Height tiles to process
-    constexpr std::uint32_t K = get_compile_time_arg_val(5);                         // TopK value
-    constexpr std::uint32_t Kt = get_compile_time_arg_val(6);                        // TopK in tile units (ceil(K/32))
-    constexpr std::uint32_t values_dfb_index = get_compile_time_arg_val(7);          // Local TopK values output
-    constexpr std::uint32_t output_ind_dfb_index = get_compile_time_arg_val(8);      // Local TopK indices output
-    constexpr std::uint32_t final_values_dfb_index = get_compile_time_arg_val(9);    // Final aggregation values buffer
-    constexpr std::uint32_t final_indices_dfb_index = get_compile_time_arg_val(10);  // Final aggregation indices buffer
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("readiness_mcast_ct_offset"),
+        get_named_compile_time_arg_val("readiness_mcast_rt_offset")>
+        readiness_mcast_args;
 
     // Constants
     constexpr std::uint32_t onetile = 1;
 
     const Noc noc;
-    Semaphore<> receiver_sem(receiver_sem_id);
-    Semaphore<> sender_sem(sender_sem_id);
+    auto readiness_pipe = readiness_mcast_args.receiver(noc);
+    Semaphore<> arrival_counter_sem(arrival_counter_sem_id);
     const UnicastEndpoint remote;
     DataflowBuffer values_dfb(values_dfb_index);
     const DataflowBuffer final_values_dfb(final_values_dfb_index);
@@ -58,7 +62,7 @@ void kernel_main() {
     for (std::uint32_t j = 0; j < Ht; ++j) {  // For each height row
         // Wait for permission to send
         // Block until the final core signals readiness to receive data
-        receiver_sem.wait(VALID);
+        readiness_pipe.receive_signal();
 
         // Transfer local TopK results
         // Send Kt tiles of locally computed TopK values to final core
@@ -103,12 +107,9 @@ void kernel_main() {
 
         // All per-tile writes were drained before their slots were popped above.
 
-        // Signal completion: increment sender semaphore by Kt (number of tiles sent)
-        sender_sem.up(noc, noc_final_x, noc_final_y, Kt);
+        // Signal completion: increment the arrival counter by Kt (number of tiles sent)
+        arrival_counter_sem.up(noc, noc_final_x, noc_final_y, Kt);
         noc.async_atomic_barrier();
-
-        // Reset receiver semaphore to prepare for next round
-        receiver_sem.set(INVALID);
     }  // j loop
 
     // Ensure all atomic operations complete before kernel termination

@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "layernorm_dataflow_utils.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -51,7 +52,6 @@ void kernel_main() {
     constexpr bool use_two_stage_reduce = static_cast<bool>(get_arg(args::use_two_stage_reduce));
     constexpr auto num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
     constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
-    constexpr auto num_mcast_dests = get_arg(args::num_mcast_dests);
 #ifdef RMSNORM
     constexpr bool rms_norm = true;
 #else
@@ -66,10 +66,6 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // Runtime arguments
     // ---------------------------------------------------------------------------
-    const uint32_t mcast_dest_noc_start_x = get_arg(args::mcast_dest_noc_start_x);
-    const uint32_t mcast_dest_noc_start_y = get_arg(args::mcast_dest_noc_start_y);
-    const uint32_t mcast_dest_noc_end_x = get_arg(args::mcast_dest_noc_end_x);
-    const uint32_t mcast_dest_noc_end_y = get_arg(args::mcast_dest_noc_end_y);
     const uint32_t start_x = get_arg(args::start_x);
     const uint32_t start_y = get_arg(args::start_y);
 
@@ -91,11 +87,13 @@ void kernel_main() {
     // Set up experimental API objects
     // ---------------------------------------------------------------------------
     Noc noc;
+    constexpr auto reduction_ready = MCAST_SPEC_ARGS(reduction_ready);
+    auto reduction_ready_pipe = reduction_ready.optional_sender(noc);
+    constexpr auto final_statistics = MCAST_SPEC_ARGS(final_statistics);
+    auto final_statistics_pipe = final_statistics.optional_sender(noc);
     Semaphore reduce_receiver_sem(sem::reduce_receiver);
-    Semaphore reduce_sender_sem(sem::reduce_sender);
     Semaphore reduce_second_stage_sem(sem::reduce_second_stage);
     UnicastEndpoint remote_ep;
-    MulticastEndpoint mcast_ep;
 
     // RMSNorm only allocates the Var[x] partial buffer; the host skips the E[x] one.
 #ifdef RMSNORM
@@ -135,16 +133,7 @@ void kernel_main() {
         dfb_partial_obj.wait_front(static_cast<uint16_t>(block_h * num_tiles_scaler));
 
         if constexpr (num_blocks > 1) {
-            reduce_sender_sem.set(VALID);
-            reduce_receiver_sem.wait(num_blocks - 1);
-            reduce_receiver_sem.set(0);
-            reduce_sender_sem.set_multicast(
-                noc,
-                mcast_dest_noc_start_x,
-                mcast_dest_noc_start_y,
-                mcast_dest_noc_end_x,
-                mcast_dest_noc_end_y,
-                num_mcast_dests);
+            reduction_ready_pipe->send_signal();
         }
 
         // ============================================================================
@@ -269,34 +258,16 @@ void kernel_main() {
         if constexpr (num_blocks > 1) {
             uint32_t mcast_src_offset = 0;
             for (uint32_t block = 0; block < num_all_to_all_workers_first_stage; ++block) {
-                reduce_sender_sem.set(block + 2);
-
                 const uint32_t num_tiles_bytes = block == num_all_to_all_workers_first_stage - 1
                                                      ? num_tiles_per_worker_last_bytes
                                                      : num_tiles_per_worker_bytes;
 
-                noc.async_write_multicast(
-                    dfb_ex_global_obj,
-                    mcast_ep,
-                    num_tiles_scaler * num_tiles_bytes,
-                    num_mcast_dests,
-                    {.offset_bytes = mcast_src_offset},
-                    {.noc_x_start = mcast_dest_noc_start_x,
-                     .noc_y_start = mcast_dest_noc_start_y,
-                     .noc_x_end = mcast_dest_noc_end_x,
-                     .noc_y_end = mcast_dest_noc_end_y,
-                     .addr = l1_read_addr_ex_global + mcast_src_offset},
-                    true);
-                reduce_sender_sem.set_multicast(
-                    noc,
-                    mcast_dest_noc_start_x,
-                    mcast_dest_noc_start_y,
-                    mcast_dest_noc_end_x,
-                    mcast_dest_noc_end_y,
-                    num_mcast_dests);
+                final_statistics_pipe->send(
+                    l1_read_addr_ex_global + mcast_src_offset,
+                    l1_read_addr_ex_global + mcast_src_offset,
+                    num_tiles_scaler * num_tiles_bytes);
 
                 mcast_src_offset += num_tiles_scaler * num_tiles_bytes;
-                noc.async_write_barrier();
             }
         }
     };

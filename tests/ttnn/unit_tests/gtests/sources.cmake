@@ -33,6 +33,8 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
     test_matmul.cpp
+    test_mcast_host.cpp
+    test_mcast_host_unified.cpp
     test_sparse_matmul_fp32.cpp
     test_normalization.cpp
     test_reduction.cpp
