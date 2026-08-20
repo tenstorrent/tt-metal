@@ -14,9 +14,6 @@
 
 namespace ttnn::experimental::prim::kda_factory_detail {
 
-tt::tt_metal::ComputeConfigDescriptor kda_compute_cfg(
-    tt::ARCH arch, const DeviceComputeKernelConfig& config, bool honor_caller_config = true);
-
 void check_allocated_device_tensor(const Tensor& tensor, std::string_view operation_name, std::string_view tensor_name);
 void check_layout(
     const Tensor& tensor,
