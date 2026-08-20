@@ -121,7 +121,7 @@ cpack_add_component(tracy GROUP metalium)
 
 cpack_add_component_group(metalium-dev)
 cpack_add_component(metalium-dev DEPENDS metalium GROUP metalium-dev DESCRIPTION "TT-Metalium SDK")
-cpack_add_component(fmt-core GROUP metalium-dev)
+cpack_add_component(fmt_core GROUP metalium-dev)
 cpack_add_component(enchantum GROUP metalium-dev)
 cpack_add_component(umd-dev GROUP metalium-dev)
 cpack_add_component(spdlog-dev GROUP metalium-dev)
