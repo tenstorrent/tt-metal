@@ -18,7 +18,6 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     BF16_ALLOWED,
     CHUNK_SIZE,
     PROTOCOL_NAMES,
-    assert_device_deterministic,
     assert_outputs_accurate,
     assert_runtime_contract,
     device_protocol,
@@ -29,7 +28,12 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     run_recurrent,
     to_device,
 )
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    assert_equal,
+    collect_accuracy_and_determinism_results,
+)
 
 pytestmark = [
     run_for_blackhole(),
@@ -124,23 +128,24 @@ def test_recurrent_chunk_scan_is_device_deterministic(device: ttnn.Device) -> No
     case = _PRODUCTION_CASE
     host_inputs, host_state, inputs, state = _production_inputs(device, protocol_seed=1441, state_seed=1442)
     expected = recurrent_oracle(host_inputs, host_state)
-    reference = assert_device_deterministic(
-        device,
-        lambda: run_recurrent(inputs, state),
-        names=("token_output", "final_state"),
+    reference, outputs, mismatch_marker = collect_accuracy_and_determinism_results(
+        device, lambda: run_recurrent(inputs, state)
     )
-    assert_outputs_accurate(
-        expected,
-        reference,
-        names=("token_output", "final_state"),
-        context="deterministic recurrent reference",
+    assert_equal(
+        torch.zeros_like(mismatch_marker),
+        mismatch_marker,
+        name="recurrent outputs device-side exact-value determinism marker",
     )
+    for name, golden, output in zip(("token_output", "final_state"), expected, outputs, strict=True):
+        assert_accurate(golden, output, name=f"deterministic recurrent reference {name}", pcc_threshold=0.999)
     assert tuple(reference[0].shape) == (
         case.batch_heads,
         case.num_chunks,
         CHUNK_SIZE,
         case.value_dim,
     )
+    for output in reference:
+        ttnn.deallocate(output)
 
 
 def test_recurrent_chunk_scan_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
