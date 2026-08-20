@@ -96,7 +96,15 @@ constexpr uint32_t cb_l1_sum = 14;   // tree combine: the level-1 partial (row l
 constexpr uint32_t cb_gather2 = 15;  // tree combine: the level-2 landing buffer (root)
 
 constexpr uint32_t IS_ROW_MAJOR = get_compile_time_arg_val(0);
-constexpr uint32_t REGIME_A = get_compile_time_arg_val(1);
+// THE REGIME LADDER (blocking_plan's pinned predicate).  Three plans, not two:
+//   0  B  STREAMING-MASKED   two DRAM reads of x, chunked reduce + chunked scale
+//   1  A  RESIDENT-FUSED     one DRAM read, whole per-core width resident, no mask
+//   2  C  RESIDENT-X         one DRAM read, x resident, scale pass CHUNKED, and -
+//                            the rung's whole point - a non-tile-aligned W allowed
+constexpr uint32_t REGIME = get_compile_time_arg_val(1);
+constexpr bool REGIME_A = (REGIME == 1);
+constexpr bool REGIME_C = (REGIME == 2);
+constexpr bool RESIDENT_X = REGIME_A || REGIME_C;
 constexpr uint32_t HAS_GAMMA = get_compile_time_arg_val(2);
 constexpr uint32_t GAMMA_IS_ROW_MAJOR = get_compile_time_arg_val(3);
 constexpr uint32_t Wt_core = get_compile_time_arg_val(4);
@@ -126,6 +134,18 @@ constexpr uint32_t REDUCE_VIA_ADD = get_compile_time_arg_val(22);
 // W_SPLIT == 0 is the row-parallel plan and every branch below compiles out.
 constexpr uint32_t W_SPLIT = get_compile_time_arg_val(23);
 constexpr uint32_t GROUP_SIZE = get_compile_time_arg_val(24);
+// Gamma held resident for the whole kernel (Regime A always; Regime C where the
+// solver affords it) instead of re-pushed once per W-chunk.
+constexpr bool GAMMA_RESIDENT = (get_compile_time_arg_val(33) != 0);
+// A resident plan whose last W-tile carries pad columns: it needs the two-pass
+// masked fold below.  ROW_MAJOR input never does - the reader zero-fills every
+// stick's pad tail, so the pad is exactly 0.
+constexpr bool RESIDENT_MASKED = RESIDENT_X && (W_PARTIAL > 0) && !IS_ROW_MAJOR;
+// The partial scaler tile now exists on EVERY plan with a non-tile-aligned W, not
+// just the streaming one - the masked resident fold is what consumes it.
+// (A resident plan with ROW_MAJOR input needs no partial tile: the pad is zero.
+// Regime A with a TILE input and W_PARTIAL > 0 is unreachable - `maskless_w` gates it.)
+constexpr bool USES_PARTIAL_SCALER = (W_PARTIAL > 0) && (!RESIDENT_X || !IS_ROW_MAJOR);
 // Hierarchical combine (blocking_plan._tree_gy).  0 = the FLAT root of Perf 1 and
 // every tree branch compiles out; otherwise the group rectangle is
 // GX x COMBINE_GY and the root folds COMBINE_GY tiles instead of GROUP_SIZE.
@@ -332,7 +352,7 @@ ALWI void rms_chain(uint32_t nt, uint32_t inv_w_bits, uint32_t eps_bits) {
 // column `base` of a resident (BLOCK_HT x WT_REDUCE_BLOCK) window.  Caller owns
 // the cb_input_tiles wait/pop - TileOffset::Strided is (None, None)-only, since a
 // gapped window has no single wait/pop count.
-template <uint32_t NCOL>
+template <uint32_t NCOL, uint32_t ROW_STRIDE_T = WT_REDUCE_BLOCK>
 ALWI void sumsq_strided(uint32_t base) {
     ckl::eltwise_chain(
         ckl::IterationShape::grid(BLOCK_HT, NCOL).block_size(DEST_BLOCK),
@@ -354,7 +374,7 @@ ALWI void sumsq_strided(uint32_t base) {
                 ckl::TileOffset::Strided),
             ckl::Dst::D0,
             ckl::DestAccumulation::PerRow>{
-            ckl::StridedTileRange{base, WT_REDUCE_BLOCK}, ckl::StridedTileRange{base, WT_REDUCE_BLOCK}},
+            ckl::StridedTileRange{base, ROW_STRIDE_T}, ckl::StridedTileRange{base, ROW_STRIDE_T}},
         ckl::PackTile<fs_out>{});
 }
 
@@ -444,6 +464,130 @@ ALWI uint32_t sumsq_chunk(uint32_t k, bool is_last_chunk) {
     }
 }
 
+// ===========================================================================
+// THE MASKED RESIDENT SUM-OF-SQUARES (Regime C's enabling primitive)
+// ===========================================================================
+// This is the one thing that was missing to let a non-tile-aligned W take a
+// resident (single-DRAM-read) plan at all.
+//
+// WHY REGIME A CANNOT MASK.  Its fused `sum_of_squares` folds the whole tile-row
+// of x*x into ONE accumulator tile ELEMENT-WISE: column j of the accumulator ends
+// up holding sum over tiles t of x[t][j]^2.  Only the LAST W-tile has pad columns,
+// so after the fold columns j >= W_PARTIAL carry a MIX of valid contributions
+// (tiles 0..Wt-2) and pad ones (tile Wt-1).  No column position is pure pad any
+// more, so no mask can be applied - the pad is already smeared across live data
+// (risk R1).
+//
+// THE FIX is the shape Regime B's `sumsq_chunk` third branch already uses: give
+// the LAST W-TILE ITS OWN ACCUMULATOR.  Two strided passes over the resident
+// window - "every column but the last", then "the last column" - produce two
+// accumulator tiles, and the 32 columns of the second map 1:1 onto the last
+// W-tile's columns, which is what makes the op's existing masked fold
+// (`partial_mask(W_PARTIAL, 1)` on AccumulateViaAdd, `last_tile_at(1)` on
+// ReduceTile) zero PRECISELY the pad.  The only new thing is the ROW STRIDE: the
+// resident window is Wt_core wide, not WT_REDUCE_BLOCK.  The strided walk is also
+// what makes it correct for BLOCK_HT > 1, where "all columns but the last" is not
+// contiguous.
+//
+// Cost: exactly ONE extra reduce fold per row-block against a whole second DRAM
+// read of x.  It is also MORE accurate than the streaming path it replaces - N
+// cross-chunk folds become 2 - and the row-scale bias measures it: +0.173% ->
+// +0.005% on (1,1,32,4095), +0.174% -> +0.038% on its prefill twin.
+ALWI void sumsq_resident_masked() {
+    constexpr uint32_t HEAD = (Wt_core > 1) ? (Wt_core - 1) : 1;
+    // TileOffset::Strided is caller-managed (WaitPolicy::None, PopPolicy::None) -
+    // a gapped window has no single wait/pop count - so the wait is here and the
+    // pop is in kernel_main, AFTER the scale pass has read the same resident x.
+    cb_wait_front(cb_input_tiles, BLOCK_HT * Wt_core);
+    if constexpr (Wt_core > 1) {
+        {
+            MaybeDeviceZoneScope("cp_sumsq_head");
+            sumsq_strided<HEAD, Wt_core>(0);
+        }
+        fold_partial_sum(0, false, false);
+    }
+    {
+        MaybeDeviceZoneScope("cp_sumsq_tail");
+        sumsq_strided<1, Wt_core>(Wt_core - 1);
+    }
+    // The masked fold and the within-tile finalize, in one call.
+    fold_partial_sum(Wt_core > 1 ? 1 : 0, true, true);
+}
+
+// ---------------------------------------------------------------------------
+// REGIME C: addressing a W-CHUNK of the RESIDENT x
+// ---------------------------------------------------------------------------
+// cb_input_tiles holds the whole (BLOCK_HT x Wt_core) row-block, written by the
+// reader in row-major tile order, and is NOT popped between chunks.  Chunk `c` is
+// therefore not at the CB front - it is the sub-block
+//     tile_id = (c * WT_SCALE_BLOCK) + r * Wt_core + w
+// which is exactly `TileOffset::Strided` with StridedTileRange{base, Wt_core}.
+// Strided is contracted to caller-managed (None, None) policies, so the enclosing
+// kernel owns the lifecycle: the sum-of-squares above already did the ONE wait for
+// BLOCK_HT * Wt_core tiles, and kernel_main pops the whole window once, after the
+// last chunk.  CB-WRAP: every access is a multiple of that fixed window measured
+// from an aligned fifo pointer, so no chunk can run off the end.
+//
+// HELPER SUBSTITUTION (the same one `sumsq_strided` already records, and NOT raw
+// LLK): `ckl::mul` is the two-argument convenience forwarder and has no place to
+// pass an operand's `StridedTileRange`, so the call drops ONE level to the
+// `eltwise_chain` + `BinaryFpu` + `PackTile` form the forwarder itself expands to
+// (eltwise/api/convenience.inl).  Same elements, same policies, same helper family.
+template <ckl::PopPolicy RmsPop, ckl::PopPolicy GammaPop>
+ALWI void scale_chunk_resident(uint32_t cw, uint32_t base) {
+    {
+        MaybeDeviceZoneScope("cp_scale_resident");
+        ckl::eltwise_chain(
+            ckl::IterationShape::grid(BLOCK_HT, cw).block_size(DEST_BLOCK),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Mul,
+                ckl::input(
+                    cb_input_tiles,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::OperandKind::Block,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileOffset::Strided),
+                ckl::input(
+                    cb_rms_recip, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, RmsPop, ckl::OperandKind::Col),
+                ckl::Dst::D0>{ckl::StridedTileRange{base, Wt_core}},
+            ckl::PackTile<ckl::output(
+                cb_scale_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+    }
+
+    if constexpr (HAS_GAMMA) {
+        MaybeDeviceZoneScope("cp_gamma_resident");
+        if constexpr (GAMMA_RESIDENT) {
+            // gamma is resident and never popped, so this chunk's columns are
+            // [base, base + cw) of the CB - an ordinary Row operand plus a
+            // TileOffset base.  Caller-managed; waited once before the loop.
+            ckl::eltwise_chain(
+                ckl::IterationShape::grid(BLOCK_HT, cw).block_size(DEST_BLOCK),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::input(cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::input(
+                        cb_gamma_tiles,
+                        ckl::BroadcastDim::Row,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::OperandKind::Row,
+                        ckl::DataFormatReconfig::Enabled,
+                        ckl::TileOffset::Set),
+                    ckl::Dst::D0>{0u, base},
+                ckl::PackTile<ckl::output(
+                    cb_output_tiles, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+        } else {
+            ckl::mul<
+                ckl::input(cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                ckl::input(
+                    cb_gamma_tiles, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, GammaPop, ckl::OperandKind::Row),
+                ckl::output(cb_output_tiles, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                ckl::IterationShape::grid(BLOCK_HT, cw).block_size(DEST_BLOCK));
+        }
+    }
+}
+
 // x * (1/rms) [* gamma] over one (BLOCK_HT x cw) chunk.
 //   RmsPop   : AtEnd in Regime A (one call per row-block); None in Regime B,
 //              where cb_rms_recip is reused across every W-chunk and popped by
@@ -491,15 +635,22 @@ void kernel_main() {
     binop_with_scalar_tile_init();
     rsqrt_tile_init();
 
-    // Regime A holds the whole per-core gamma width resident for the whole
+    // A resident-gamma plan holds the whole per-core gamma width for the whole
     // kernel: ingested exactly once, never popped.
-    if constexpr (REGIME_A) {
+    if constexpr (GAMMA_RESIDENT) {
         ingest_gamma<Wt_core>();
+        if constexpr (REGIME_C && HAS_GAMMA) {
+            // Regime A's scale chain waits on cb_gamma_tiles itself
+            // (WaitPolicy::Upfront); Regime C's resident-gamma chain is
+            // caller-managed (None, None) because it addresses this chunk's columns
+            // through a TileOffset base, so the ONE wait belongs here.
+            cb_wait_front(cb_gamma_tiles, Wt_core);
+        }
     }
 
     for (uint32_t b = 0; b < num_row_blocks_here; ++b) {
         // ---------------- sum of squares over the reduced axis ---------------
-        if constexpr (REGIME_A) {
+        if constexpr (RESIDENT_X) {
             if constexpr (IS_ROW_MAJOR) {
                 MaybeDeviceZoneScope("cp_tilize");
                 ckl::tilize<Wt_core, cb_rm_in, cb_input_tiles>(BLOCK_HT);
@@ -510,85 +661,97 @@ void kernel_main() {
             // reduce<SUM, REDUCE_ROW> below.  No mask is needed here - the
             // accumulator's 32 columns are all meaningful, since the only padded
             // columns live in the last W-tile and the RM reader zero-fills them.
-            {
-                MaybeDeviceZoneScope("cp_sumsq");
-                ckl::sum_of_squares<
-                    ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Block),
-                    ckl::row_output(cb_sumsq_acc)>(ckl::IterationShape::grid(BLOCK_HT, Wt_core).block_size(DEST_BLOCK));
-            }
+            if constexpr (RESIDENT_MASKED) {
+                // Non-tile-aligned W on a resident plan.  This call does the folds
+                // AND the within-tile finalize, so the reduce below is skipped.  It
+                // never coincides with W_SPLIT: the split's P2 requires the per-core
+                // slice to solve to Regime A, which a masked shape cannot, and the
+                // host asserts G == 1 for Regime C.
+                sumsq_resident_masked();
+            } else {
+                {
+                    MaybeDeviceZoneScope("cp_sumsq");
+                    ckl::sum_of_squares<
+                        ckl::input(
+                            cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Block),
+                        ckl::row_output(cb_sumsq_acc)>(
+                        ckl::IterationShape::grid(BLOCK_HT, Wt_core).block_size(DEST_BLOCK));
+                }
 
-            if constexpr (!W_SPLIT) {
-                MaybeDeviceZoneScope("cp_reduce");
-                ckl::reduce<
-                    ckernel::PoolType::SUM,
-                    ckernel::ReduceDim::REDUCE_ROW,
-                    cb_sumsq_acc,
-                    cb_reduce_scaler,
-                    cb_sumsq>(ckl::ReduceInputBlockShape::of(BLOCK_HT, 1, 1));
-            } else if constexpr (COMBINE_GY) {
-                // ---- HIERARCHICAL combine ----------------------------------
-                // Level 1: the row LEADER folds its row's GX partials WITHOUT the
-                // within-tile collapse, so what it forwards is still a pre-collapse
-                // accumulator and level 2 can be the SAME call the flat root ran.
-                //
-                // The exact primitive for "sum tiles, do not collapse" is
-                // `ReduceWithinTile::Skip`, and it DOES NOT COMPILE: the guarding
-                // `static_assert(within_tile == Collapse, ...)` at
-                // reduce_helpers_compute.inl:887 sits AFTER the AccumulateViaAdd
-                // branch's `return`, at function scope, so it is instantiated for
-                // every `Skip` call regardless of algorithm.  Worked around WITHOUT
-                // raw LLK by asking for a NON-finalizing accumulate chunk instead -
-                // `Accumulate::at(cb, 0)`, which the helper documents as leaving the
-                // RAW partial sum in DST and packing it out.  Identical semantics,
-                // reachable today.  Fix the helper and this becomes `Skip`.
-                if (IS_LEADER) {
-                    MaybeDeviceZoneScope("cp_l1_sum");
+                if constexpr (!W_SPLIT) {
+                    MaybeDeviceZoneScope("cp_reduce");
                     ckl::reduce<
                         ckernel::PoolType::SUM,
                         ckernel::ReduceDim::REDUCE_ROW,
-                        cb_partial_gather,
+                        cb_sumsq_acc,
                         cb_reduce_scaler,
-                        cb_l1_sum,
-                        ckl::ReduceInputPolicy::BulkWaitBulkPop,
-                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                        ReduceFp32Mode::Fast,
-                        ckl::ReduceAlgorithm::AccumulateViaAdd>(
-                        ckl::ReduceInputBlockShape::of(BLOCK_HT, GX, 1),
-                        ckl::ReduceInputMemoryLayout::contiguous(),
-                        ckl::Accumulate::at(cb_l1_sum, 0).with_reload(ckl::AccumulateReloadMode::FoldViaAdd));
-                }
-                // Level 2: exactly the flat root's call, COMBINE_GY wide.
-                if (IS_ROOT) {
+                        cb_sumsq>(ckl::ReduceInputBlockShape::of(BLOCK_HT, 1, 1));
+                } else if constexpr (COMBINE_GY) {
+                    // ---- HIERARCHICAL combine ----------------------------------
+                    // Level 1: the row LEADER folds its row's GX partials WITHOUT the
+                    // within-tile collapse, so what it forwards is still a pre-collapse
+                    // accumulator and level 2 can be the SAME call the flat root ran.
+                    //
+                    // The exact primitive for "sum tiles, do not collapse" is
+                    // `ReduceWithinTile::Skip`, and it DOES NOT COMPILE: the guarding
+                    // `static_assert(within_tile == Collapse, ...)` at
+                    // reduce_helpers_compute.inl:887 sits AFTER the AccumulateViaAdd
+                    // branch's `return`, at function scope, so it is instantiated for
+                    // every `Skip` call regardless of algorithm.  Worked around WITHOUT
+                    // raw LLK by asking for a NON-finalizing accumulate chunk instead -
+                    // `Accumulate::at(cb, 0)`, which the helper documents as leaving the
+                    // RAW partial sum in DST and packing it out.  Identical semantics,
+                    // reachable today.  Fix the helper and this becomes `Skip`.
+                    if (IS_LEADER) {
+                        MaybeDeviceZoneScope("cp_l1_sum");
+                        ckl::reduce<
+                            ckernel::PoolType::SUM,
+                            ckernel::ReduceDim::REDUCE_ROW,
+                            cb_partial_gather,
+                            cb_reduce_scaler,
+                            cb_l1_sum,
+                            ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                            ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                            ReduceFp32Mode::Fast,
+                            ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                            ckl::ReduceInputBlockShape::of(BLOCK_HT, GX, 1),
+                            ckl::ReduceInputMemoryLayout::contiguous(),
+                            ckl::Accumulate::at(cb_l1_sum, 0).with_reload(ckl::AccumulateReloadMode::FoldViaAdd));
+                    }
+                    // Level 2: exactly the flat root's call, COMBINE_GY wide.
+                    if (IS_ROOT) {
+                        MaybeDeviceZoneScope("cp_combine");
+                        ckl::reduce<
+                            ckernel::PoolType::SUM,
+                            ckernel::ReduceDim::REDUCE_ROW,
+                            cb_gather2,
+                            cb_reduce_scaler,
+                            cb_sumsq_bcast,
+                            ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                            ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                            ReduceFp32Mode::Fast,
+                            ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                            ckl::ReduceInputBlockShape::of(BLOCK_HT, COMBINE_GY, 1));
+                    }
+                } else if (IS_ROOT) {
+                    // FLAT root: the reader has landed slot i of every group member at
+                    // tile (r * GROUP_SIZE + i) - a contiguous (BLOCK_HT x GROUP_SIZE)
+                    // block - and pushed it.  cb_sumsq itself is filled by the reader's
+                    // broadcast on EVERY core of the group, root included, so the rms
+                    // chain below is identical on all of them.
                     MaybeDeviceZoneScope("cp_combine");
                     ckl::reduce<
                         ckernel::PoolType::SUM,
                         ckernel::ReduceDim::REDUCE_ROW,
-                        cb_gather2,
+                        cb_partial_gather,
                         cb_reduce_scaler,
                         cb_sumsq_bcast,
                         ckl::ReduceInputPolicy::BulkWaitBulkPop,
                         ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                         ReduceFp32Mode::Fast,
                         ckl::ReduceAlgorithm::AccumulateViaAdd>(
-                        ckl::ReduceInputBlockShape::of(BLOCK_HT, COMBINE_GY, 1));
+                        ckl::ReduceInputBlockShape::of(BLOCK_HT, GROUP_SIZE, 1));
                 }
-            } else if (IS_ROOT) {
-                // FLAT root: the reader has landed slot i of every group member at
-                // tile (r * GROUP_SIZE + i) - a contiguous (BLOCK_HT x GROUP_SIZE)
-                // block - and pushed it.  cb_sumsq itself is filled by the reader's
-                // broadcast on EVERY core of the group, root included, so the rms
-                // chain below is identical on all of them.
-                MaybeDeviceZoneScope("cp_combine");
-                ckl::reduce<
-                    ckernel::PoolType::SUM,
-                    ckernel::ReduceDim::REDUCE_ROW,
-                    cb_partial_gather,
-                    cb_reduce_scaler,
-                    cb_sumsq_bcast,
-                    ckl::ReduceInputPolicy::BulkWaitBulkPop,
-                    ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                    ReduceFp32Mode::Fast,
-                    ckl::ReduceAlgorithm::AccumulateViaAdd>(ckl::ReduceInputBlockShape::of(BLOCK_HT, GROUP_SIZE, 1));
             }
         } else {
             // `at_last` (inside fold_partial_sum) marks the finalizing fold: on the
@@ -621,6 +784,23 @@ void kernel_main() {
                 MaybeDeviceZoneScope("cp_untilize");
                 ckl::untilize<Wt_core, cb_output_tiles, cb_rm_out>(BLOCK_HT);
             }
+        } else if constexpr (REGIME_C) {
+            // The scale pass walks W in chunks over the RESIDENT x.  Nothing is
+            // re-read from DRAM here - that is the entire point of the rung.
+            for (uint32_t c = 0; c < NUM_SCALE_CHUNKS; ++c) {
+                if constexpr (!GAMMA_RESIDENT) {
+                    ingest_gamma<WT_SCALE_BLOCK>();
+                }
+                scale_chunk_resident<ckl::PopPolicy::None, ckl::PopPolicy::AtEnd>(WT_SCALE_BLOCK, c * WT_SCALE_BLOCK);
+                if constexpr (IS_ROW_MAJOR) {
+                    MaybeDeviceZoneScope("cp_untilize");
+                    ckl::untilize<WT_SCALE_BLOCK, cb_output_tiles, cb_rm_out>(BLOCK_HT);
+                }
+            }
+            // cb_rms_recip was held across every chunk (PopPolicy::None), and the
+            // resident window is popped ONCE, after the last chunk has read it.
+            cb_pop_front(cb_rms_recip, BLOCK_HT);
+            cb_pop_front(cb_input_tiles, BLOCK_HT * Wt_core);
         } else {
             for (uint32_t c = 0; c < NUM_SCALE_CHUNKS; ++c) {
                 // Ordered to match the reader's push order (gamma, then input);
@@ -644,5 +824,8 @@ void kernel_main() {
     // reduce() waits on the scaler CB but never pops it - release the pages
     // exactly once, at the very end (risk R9).  Only Regime B ever emits the
     // second (partial) tile.
-    cb_pop_front(cb_reduce_scaler, (!REGIME_A && W_PARTIAL > 0) ? 2 : 1);
+    // The partial tile now exists on EVERY plan with a non-tile-aligned W and a
+    // TILE input, not only the streaming one - that is exactly what the masked
+    // resident fold consumes.
+    cb_pop_front(cb_reduce_scaler, USES_PARTIAL_SCALER ? 2 : 1);
 }

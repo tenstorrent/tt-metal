@@ -1,0 +1,26 @@
+import torch, ttnn
+from ttnn.operations.rms_norm import rms_norm
+
+device = ttnn.open_device(device_id=0)
+torch.manual_seed(0)
+cfg = ttnn.ComputeConfigDescriptor()
+cfg.math_fidelity = ttnn.MathFidelity.HiFi4
+cfg.fp32_dest_acc_en = False
+cfg.math_approx_mode = False
+shape = (5, 3, 928, 544)
+x = torch.rand(shape, dtype=torch.float32)
+g = torch.rand((1, 1, 1, shape[-1]), dtype=torch.float32)
+ref = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-6) * g
+t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+gt = ttnn.from_torch(g, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+for name, lv in [
+    ("coarsen_off", dict(coarsen_blocks=0)),
+    ("blockht1", dict(block_ht=1)),
+    ("all_off", dict(coarsen_blocks=0, resident_c=0, combine_tree=0)),
+]:
+    try:
+        out = ttnn.to_torch(rms_norm(t, gamma=gt, compute_kernel_config=cfg, _levers=lv)).to(torch.float32)
+        print("ARM", name, "pcc", torch.corrcoef(torch.stack([out.flatten(), ref.flatten()]))[0, 1].item())
+    except Exception as e:
+        print("ARM", name, "EXC", type(e).__name__)
+ttnn.close_device(device)

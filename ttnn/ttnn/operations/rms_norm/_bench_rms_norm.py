@@ -103,6 +103,12 @@ BENCH_SHAPES = {
     # --- Perf 2: the row-block-coarsening regime (Rt just above the DRAM-
     # saturation width, so `_solve`'s one-block-per-core cap is the binding one) ---
     "prefill_4096": ((1, 1, 4096, 1024), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    # --- Perf 2: the masked-resident (Regime C) regime.  Non-tile-aligned W with
+    # MORE THAN ONE row-block per core - the cell the resident ladder converts from
+    # the streaming two-DRAM-read plan. ---
+    "masked_prefill": ((1, 1, 8192, 4095), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    "masked_prefill_6143": ((1, 1, 8192, 6143), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    "masked_prefill_16k": ((1, 1, 16384, 4095), ttnn.bfloat16, ttnn.TILE_LAYOUT),
     "h_nonalign": ((1, 1, 100, 736), ttnn.bfloat16, ttnn.TILE_LAYOUT),
 }
 
@@ -120,6 +126,9 @@ BENCH_GAMMA_LAYOUT = {
     "w_nonalign": ttnn.TILE_LAYOUT,
     "h_nonalign": ttnn.TILE_LAYOUT,
     "prefill_4096": ttnn.TILE_LAYOUT,
+    "masked_prefill": ttnn.TILE_LAYOUT,
+    "masked_prefill_6143": ttnn.TILE_LAYOUT,
+    "masked_prefill_16k": ttnn.TILE_LAYOUT,
 }
 
 
@@ -166,6 +175,8 @@ LEVER_ARMS = {
     "combine_tree": _arm(levers=dict(combine_tree=0)),
     # The row-block coarsening: OFF is Perf 1's one-block-per-core cap.
     "coarsen_blocks": _arm(levers=dict(coarsen_blocks=0)),
+    # The resident-x ladder's Regime C rung: OFF is Perf 1's streaming two-read plan.
+    "resident_c": _arm(levers=dict(resident_c=0)),
     # --- Perf 1 -------------------------------------------------------------
     # The W-split work distribution: OFF forces G = 1, the pure row-parallel plan
     # the op shipped before this round.
@@ -353,18 +364,32 @@ def run_group_sweep(device, shape_name, groups=(0, 1, 4, 8, 14, 16, 28, 32, 56),
     return manifest
 
 
-def run_perf2_pairs(device):
-    """Perf 2: ON/OFF for the two host-plan graduations, on the shapes they act on."""
+# Perf 2 host-plan ON/OFF pairs.  Tracy's post-pass asserts above roughly 350
+# profiled dispatches in one session, so the caller selects a subset by lever name
+# (RMS_BENCH_PERF2 in the driver) rather than running all of them at once.
+PERF2_PAIRS = (
+    ("focus", None, "combine_tree"),
+    ("grid_starved", None, "combine_tree"),
+    ("prefill_1024", ttnn.bfloat8_b, "coarsen_blocks"),
+    ("prefill_4096", ttnn.bfloat8_b, "coarsen_blocks"),
+    ("prefill_4096", None, "coarsen_blocks"),
+    ("h_nonalign", None, "coarsen_blocks"),
+    ("row_major", None, "coarsen_blocks"),
+    ("masked_prefill", None, "resident_c"),
+    ("masked_prefill_6143", None, "resident_c"),
+    ("masked_prefill", ttnn.bfloat8_b, "resident_c"),
+    ("w_nonalign", None, "resident_c"),
+)
+
+
+def run_perf2_pairs(device, only=None, shapes=None):
+    """Perf 2: ON/OFF for the host-plan graduations, on the shapes they act on."""
     manifest = []
-    for name, dtype, levs in (
-        ("focus", None, "combine_tree"),
-        ("grid_starved", None, "combine_tree"),
-        ("prefill_1024", ttnn.bfloat8_b, "coarsen_blocks"),
-        ("prefill_4096", ttnn.bfloat8_b, "coarsen_blocks"),
-        ("prefill_4096", None, "coarsen_blocks"),
-        ("h_nonalign", None, "coarsen_blocks"),
-        ("row_major", None, "coarsen_blocks"),
-    ):
+    for name, dtype, levs in PERF2_PAIRS:
+        if only and levs not in only:
+            continue
+        if shapes and name not in shapes:
+            continue
         tag = f"{name}{'/bf8b' if dtype else ''}"
         run_arm(device, manifest, f"{tag}/ON:{levs}", name, config="loose", dtype=dtype)
         run_arm(device, manifest, f"{tag}/OFF:{levs}", name, LEVER_ARMS[levs], config="loose", dtype=dtype)

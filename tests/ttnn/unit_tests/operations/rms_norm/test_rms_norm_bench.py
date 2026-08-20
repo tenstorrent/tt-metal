@@ -71,7 +71,9 @@ def test_rms_norm_bench(device):
             manifest += bench.run_group_sweep(device, name)
 
     if mode in ("perf2",):
-        manifest += bench.run_perf2_pairs(device)
+        manifest += bench.run_perf2_pairs(
+            device, only=_shapes("RMS_BENCH_PERF2", None), shapes=_shapes("RMS_BENCH_PERF2_SHAPES", None)
+        )
 
     if mode in ("combine_floor",):
         for name in _shapes("RMS_BENCH_CF_SHAPES", ["focus"]):

@@ -64,7 +64,11 @@ constexpr uint32_t cb_output_tiles = 7;
 constexpr uint32_t cb_rm_out = 9;
 
 constexpr uint32_t IS_ROW_MAJOR = get_compile_time_arg_val(0);
-constexpr uint32_t REGIME_A = get_compile_time_arg_val(1);
+// CT 1 is a REGIME CODE: 0 = B streaming, 1 = A resident, 2 = C resident-x.
+// Only Regime A writes the whole per-core width in one go; Regime C's scale pass
+// is chunked, so the writer takes the same chunked path Regime B does.
+constexpr uint32_t REGIME = get_compile_time_arg_val(1);
+constexpr bool REGIME_A = (REGIME == 1);
 constexpr uint32_t HAS_GAMMA = get_compile_time_arg_val(2);
 constexpr uint32_t GAMMA_IS_ROW_MAJOR = get_compile_time_arg_val(3);
 constexpr uint32_t Wt_core = get_compile_time_arg_val(4);
@@ -117,7 +121,7 @@ constexpr uint32_t RM_MAX_NW = REGIME_A ? Wt_core : WT_SCALE_BLOCK;
 constexpr uint32_t RM_PADDED_MAX = RM_MAX_NW * TILE_DIM * ELEM_SIZE;
 constexpr uint32_t RM_CHUNK_MAX_BYTES = RM_PADDED_MAX < ROW_BYTES ? RM_PADDED_MAX : ROW_BYTES;
 
-constexpr auto output_args = TensorAccessorArgs<33>();
+constexpr auto output_args = TensorAccessorArgs<34>();
 
 FORCE_INLINE uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
 
@@ -178,6 +182,13 @@ void kernel_main() {
         cb_pop_front(cb_output_tiles, n);
     };
 
+    // NOTE, and do not "tidy" this comment away: the device profiler keys a zone
+    // by a 16-BIT hash of "<name>,<file>,<line>" (profiler.cpp::hash16CT), and with
+    // ~70 zone locations in this op a birthday collision is a few percent likely.
+    // One landed exactly here - this lambda's `wr_wait` against the reader's
+    // `rd_in_reserve` - and it makes the WHOLE program unprofilable with a
+    // "Source location hashes are colliding" throw, not a warning.  The line
+    // numbers are part of the key, so this comment is the fix.
     auto write_sticks = [&](uint32_t rt, bool valid, uint32_t w0, uint32_t nw) {
         {
             MaybeDeviceZoneScope("wr_wait");

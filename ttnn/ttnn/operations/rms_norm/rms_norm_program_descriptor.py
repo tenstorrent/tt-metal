@@ -102,6 +102,11 @@ LEVER_DEFAULTS = {
     # one-block-per-core cap while the grid stays DRAM-saturated; 0 = the Perf-1
     # cap, i.e. the coarsest block that still keeps every parallel unit busy.
     "coarsen_blocks": 1,
+    # 1 (applied) = the resident-x ladder's Regime C rung is reachable (one DRAM
+    # read of x, scale pass chunked, non-tile-aligned W supported); 0 = the Perf-1
+    # ladder, where a masked or too-wide shape always fell to the streaming
+    # two-read Regime B.
+    "resident_c": 1,
     # 0 = let the policy choose; N = pin G = N.  This is what makes the group-size
     # calibration in `_choose_group_size` re-MEASURABLE instead of asserted: a new
     # box or a new shape can be swept without editing the policy.
@@ -148,6 +153,9 @@ CB_GATHER2 = 15  # reader (remote NoC writes) -> compute, the level-2 landing bu
 SEM_DATA_READY = 0
 SEM_CONSUMER_READY = 1
 SEM_GATHER = 2
+# CT arg 1 is a REGIME CODE, not a bool: three plans, not two.
+REGIME_CODE = {"B": 0, "A": 1, "C": 2}
+
 SEM_GATHER2 = 3  # the level-2 (row-leader -> root) gather count, tree combine only
 
 
@@ -227,7 +235,9 @@ def _apply_precision_levers(compute_kernel_config, levers):
     return out
 
 
-def _reduce_via_add(regime, compute_kernel_config, acc_dtype, W_partial: int, lever_on: bool) -> int:
+def _reduce_via_add(
+    regime, compute_kernel_config, acc_dtype, W_partial: int, lever_on: bool, is_row_major: bool = False
+) -> int:
     """Pick Regime B's reduce datapath: 1 = AccumulateViaAdd, 0 = ReduceTile.
 
     Regime A never accumulates across reduce() calls - its reduce is the single
@@ -255,7 +265,14 @@ def _reduce_via_add(regime, compute_kernel_config, acc_dtype, W_partial: int, le
     tile-aligned reduce uses no mask at all, so the constraint does not apply
     there.
     """
-    if regime != "B" or not lever_on:
+    # The MASKED RESIDENT fold has exactly Regime B's shape - two accumulating
+    # reduce calls with a mask on the second - so it takes the same datapath
+    # decision.  An UNMASKED resident plan does a single 1-tile finalize with
+    # nothing to accumulate, so it keeps ReduceTile (0).
+    masked_resident = regime in ("A", "C") and W_partial > 0 and not is_row_major
+    if not lever_on:
+        return 0
+    if regime != "B" and not masked_resident:
         return 0
     needed = not bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
     correct = (W_partial == 0) or (acc_dtype == ttnn.bfloat16)
@@ -367,6 +384,9 @@ class BlockingPlan:
     group_y: int
     # Level-2 fan-in of the hierarchical combine; 0 == the flat root (TREE_MIN_GY).
     combine_gy: int
+    # Regime C's two extra plan fields; on A/B they are the constants they always were.
+    NORMED_DEPTH: int
+    RESIDENT_GAMMA: int
     num_groups: int  # groups the gx*gy tiling yields on this grid
     groups_used: int  # groups that actually get row-blocks (<= num_groups)
     l1_cb_budget: int
@@ -421,24 +441,41 @@ def _cb_layout(
     T_bf16: int,
     w_split_group: int = 0,
     w_split_gy: int = 0,
+    normed_depth: int = 1,
+    resident_gamma: int = 0,
 ):
     """Return [(cb_index, num_pages, page_bytes, kind)] for this knob assignment."""
     wmax = max(wr, ws)
     if regime == "A":
         # Regime A is single-chunk by construction: one block spans the whole
-        # per-core width.
+        # per-core width, and it always holds gamma resident.
         wr = ws = wmax = Wt_core
+        resident_gamma = 1
+
+    # x is RESIDENT in A and C: the input CB (and, on the RM path, the stick
+    # staging CB) spans the WHOLE per-core width regardless of the scale chunk.
+    # In B it spans the coarsest chunk.  This one expression IS "one DRAM read of
+    # x instead of two".
+    w_in = Wt_core if regime in ("A", "C") else wmax
+    # A CB that carries a running accumulation ACROSS reduce calls needs a second
+    # generation live.  Two things produce that shape: Regime B's per-W-chunk
+    # accumulate, and the MASKED RESIDENT fold, which is always exactly two calls -
+    # the aligned head, then the masked last W-tile.
+    # THE MASK IS A TILE-PATH PROPERTY, not a W one: on ROW_MAJOR input the reader
+    # zero-fills every stick's pad tail, so the pad is exactly 0 and a resident plan
+    # needs no mask at all (which is why `maskless_w` includes RM).
+    masked_fold = (W_partial > 0) and not is_row_major
+    accum_gens = 2 if (regime == "B" or masked_fold) else 1
 
     layout = [
-        (CB_INPUT_TILES, in_depth * block_ht * wmax, T_in, "in"),
-        # Regime B accumulates across W-chunks through this CB, so it needs the
-        # extra generation live; Regime A writes it once per row-block.
-        (CB_SUMSQ, (2 if regime == "B" else 1) * block_ht, T_acc, "acc"),
+        (CB_INPUT_TILES, in_depth * block_ht * w_in, T_in, "in"),
+        (CB_SUMSQ, accum_gens * block_ht, T_acc, "acc"),
         (CB_RMS_RECIP, block_ht, T_acc, "acc"),
-        # bfloat16 is mandatory for the reduce scaler.  Both regimes need the
-        # within-tile REDUCE_ROW finalize; only Regime B also needs the PARTIAL
-        # tile that zeroes the pad columns of the last W-tile.
-        (CB_REDUCE_SCALER, 2 if (regime == "B" and W_partial) else 1, T_bf16, "bf16"),
+        # bfloat16 is mandatory for the reduce scaler.  Every regime needs the
+        # within-tile REDUCE_ROW finalize; a non-tile-aligned W also needs the
+        # PARTIAL tile that zeroes the pad columns of the last W-tile - now on the
+        # resident plans too, which is what makes them expressible there at all.
+        (CB_REDUCE_SCALER, 2 if (W_partial and (regime == "B" or masked_fold)) else 1, T_bf16, "bf16"),
     ]
     # `sum_of_squares`' element-wise tile accumulator: ONE tile per tile-row,
     # collapsed along W by the finalize reduce.  BOTH regimes run that shape now,
@@ -446,7 +483,7 @@ def _cb_layout(
     # `cb_squared` (block_ht * wr pages) is gone.  Regime B gets a second
     # generation so the finalize reduce's unpack can overlap the next W-chunk's
     # pack; Regime A writes it once per row-block.
-    layout.append((CB_SUMSQ_ACC, (2 if regime == "B" else 1) * block_ht, T_acc, "acc"))
+    layout.append((CB_SUMSQ_ACC, accum_gens * block_ht, T_acc, "acc"))
     if has_gamma:
         # `gamma_depth` generations of the scale pass' gamma chunk.  In Regime B
         # this CB is STREAMED (one chunk pushed and popped per W-chunk), so a
@@ -454,15 +491,18 @@ def _cb_layout(
         # still scaling chunk k; in Regime A gamma is RESIDENT (pushed once, never
         # popped), so there is only ever one generation to hold and `_solve`
         # leaves the depth at 1.
-        layout.append((CB_GAMMA_TILES, gamma_depth * ws, T_g, "gamma"))
+        # RESIDENT gamma (Regime A always, Regime C where the solver affords it)
+        # costs the full per-core width but is read ONCE per core rather than once
+        # per row-block.
+        layout.append((CB_GAMMA_TILES, Wt_core if resident_gamma else gamma_depth * ws, T_g, "gamma"))
         if gamma_is_row_major:
             layout.append((CB_GAMMA_RM, gamma_ingest_block, T_g, "gamma"))
-        layout.append((CB_NORMED, block_ht * ws, T_interm, "interm"))
+        layout.append((CB_NORMED, normed_depth * block_ht * ws, T_interm, "interm"))
     # Streamed to the writer on the TILE path, but feeds the sequential untilize
     # helper on the RM path (must then hold the full block).
     layout.append((CB_OUTPUT_TILES, (out_depth if tile_out else 1) * block_ht * ws, T_in, "out"))
     if is_row_major:
-        layout.append((CB_RM_IN, rm_depth * wmax, T_in, "in"))
+        layout.append((CB_RM_IN, rm_depth * w_in, T_in, "in"))
         layout.append((CB_RM_OUT, rm_depth * ws, T_in, "out"))
     if w_split_group:
         # The combine's landing buffer, allocated on EVERY core of the group (not
@@ -514,6 +554,8 @@ class _Solved:
     GAMMA_DEPTH: int
     GAMMA_INGEST_BLOCK: int
     num_row_blocks: int
+    NORMED_DEPTH: int = 1
+    RESIDENT_GAMMA: int = 1
 
 
 def _solve(
@@ -533,7 +575,7 @@ def _solve(
     """Regime + every block factor / buffer depth for ONE per-core width."""
     common = dict(layout_common, Wt_core=Wt_core, w_split_group=w_split_group, w_split_gy=w_split_gy)
 
-    def ws_bytes(regime, block_ht, in_depth, out_depth, rm_depth, wr, wsc, gamma_depth):
+    def ws_bytes(regime, block_ht, in_depth, out_depth, rm_depth, wr, wsc, gamma_depth, nd=1, rg=0):
         # The gamma staging chunk must divide every ingest count the kernel uses,
         # so tilize<GAMMA_INGEST_BLOCK> never over-produces gamma tiles.
         return _working_set_bytes(
@@ -546,6 +588,8 @@ def _solve(
             wr=wr,
             ws=wsc,
             gamma_ingest_block=_largest_divisor_at_most(wsc, gamma_cap_tiles),
+            normed_depth=nd,
+            resident_gamma=rg,
             **common,
         )
 
@@ -565,7 +609,55 @@ def _solve(
     # priced from both sides instead of only asserted.  Regime B is always a legal
     # plan (it is the correctness fallback), so this arm never produces a wrong
     # answer - it just moves 1.5x the DRAM bytes.  Default 0 = the solver decides.
-    regime = "B" if _lever(levers, "force_regime") else ("A" if (maskless_w and fits) else "B")
+    # THE LADDER'S SECOND RUNG: does X ALONE fit resident, with the scale pass at
+    # its finest (one-tile) chunk?  MINIMAL for the same reason `fits` is - the
+    # boundary must not move when the depth/chunk allocation below spends L1
+    # differently, which is what keeps the W-split's P2 property invariant.
+    fits_c = ws_bytes("C", 1, 1, 1, 1, Wt_core, 1, 1) <= l1_cb_budget
+    # THE NEW RUNG IS C, NOT A, and two measurements are why:
+    #   * Regime A is single-chunk by construction, so its whole-width normed/out
+    #     CBs leave nothing for a second generation.  A masked A fits only at depth
+    #     1 on (1,1,32,4095): 19,344 -> 24,460 ns (0.79x).
+    #   * A also holds gamma RESIDENT by construction, and a resident gamma is a
+    #     SERIALIZED PROLOGUE - all Wt_core gamma pages must land before the first x
+    #     tile.  It only pays back when a core owns more than one row-block: on
+    #     (1,1,32,1057) masked A is fully double-buffered and STILL 8,207 -> 9,370 ns
+    #     (0.88x), while the same single read through C with streamed gamma is 8,093.
+    # C SUBSUMES A anyway (C at ws == Wt_core with resident gamma IS A), so the
+    # ladder leaves every shape that already solves to A alone and only ever
+    # converts a Regime-B shape to C.
+    #
+    # THE SELECTION PROPERTY, all three parts, each a real property of THIS plan:
+    #   L1     - does this CB set fit at this dtype / DEST width / layout?
+    #   MASK   - can the reduce see the pad columns?  It can now: the masked
+    #            resident fold gives the last W-tile its own accumulator (see
+    #            `sumsq_resident_masked` in the compute kernel), so `maskless_w` is
+    #            no longer required for a resident plan.
+    #   WORK   - does a core own MORE THAN ONE row-block?  Making x resident deletes
+    #            the second DRAM read, but that read is only on the critical path
+    #            when it is not already hidden.  At exactly one row-block per core
+    #            the kernel is a single pipeline fill and Regime B's scale pass
+    #            re-reads chunk c+1 while compute scales chunk c, so the second read
+    #            costs ~nothing while residency pays a real fill latency.
+    #            MEASURED at one row-block per core, best C arm vs Regime B: bf16
+    #            (1,1,32,4095) 1.000x, (1,1,32,4127) 0.994x, (1,1,64,6143) 0.986x,
+    #            (1,1,32,1057) 1.014x, (32,17) 1.015x -> FLAT; but bfloat8_b
+    #            (1,1,32,4095) 0.971x and float32 0.908x -> REGRESSION, and no
+    #            chunk/depth arm recovers them (16 swept).  MEASURED above one
+    #            row-block: (1,1,8192,4095) 1.577x, (1,1,16384,4095) 1.659x,
+    #            (1,1,8192,6143) 1.574x.  So the gate is the per-core row-block
+    #            count - a work-distribution quantity the plan already computes -
+    #            and never a width or a dtype list.
+    # See perf_experiments/regime_b_resident/.
+    blocks_per_unit = _div_up(Rt, max(1, row_parallel_units))
+    if _lever(levers, "force_regime"):
+        regime = "B"
+    elif maskless_w and fits:
+        regime = "A"
+    elif fits_c and blocks_per_unit > 1 and _lever(levers, "resident_c"):
+        regime = "C"
+    else:
+        regime = "B"
 
     # Coarsest useful row-block: any coarser and some row-parallel unit (a core
     # without a W split, a combine GROUP with one) gets no work at all.
@@ -582,14 +674,62 @@ def _solve(
     # (pushed once, never popped — see the WT_SCALE_BLOCK assert in
     # blocking_plan), so there is only ever one generation and a second would be
     # dead L1.  That is a property of the CB's lifecycle, not of the shape.
-    gamma_streamed = layout_common["has_gamma"] and regime == "B"
+    gamma_streamed = layout_common["has_gamma"] and regime != "A"
     gamma_depth = 2 if (gamma_streamed and _lever(levers, "double_buffer")) else 1
     # Same question for the input CB, and it is answered the same way in both
     # regimes: cb_input_tiles always streams.
     stream_depth = 2 if _lever(levers, "double_buffer") else 1
 
+    normed_depth = 1
+    resident_gamma = 1 if regime == "A" else 0
+
     if regime == "A":
         wr = wsc = Wt_core
+    elif regime == "C":
+        # DEPTHS FIRST, THEN THE CHUNK - the same ordering Regime B's search below
+        # uses, for the same measured reason: letting the reader run a chunk ahead
+        # buys more than a coarser chunk does.  Then GAMMA RESIDENCY where it fits,
+        # because a chunked gamma is re-read once per row-block and a resident one
+        # once per core.
+        depth_prefs = [(1, 2, 2, 1), (1, 1, 1, 1)] if _lever(levers, "double_buffer") else [(1, 1, 1, 1)]
+        # GAMMA RESIDENCY is a per-core WORK property, not a shape one: it buys
+        # something only when a core owns more than one row-block, and below that it
+        # costs a serialized prologue (all Wt_core gamma pages before the first x
+        # tile, with nothing to overlap it).  MEASURED on (1,1,32,4095) (one
+        # row-block, one busy core): resident gamma 22,679 ns vs chunked 19,112 at
+        # the same chunk - a 3,567 ns prologue, 19% of the wall.
+        rg_prefs = [1, 0] if blocks_per_unit > 1 else [0]
+        # CB-WRAP: the scale chunk must DIVIDE Wt_core - the resident window is
+        # accessed as a fixed (BLOCK_HT x Wt_core) block from an aligned pointer.
+        divisors = [c for c in range(Wt_core, 0, -1) if Wt_core % c == 0]
+        # CHUNK COARSENESS IS NOT FREE - IT IS L1 THAT BLOCK_HT WANTS.  So the
+        # search asks for the coarsest divisor that still affords the FULL BLOCK_HT
+        # this core could use, and descends through every BLOCK_HT rather than
+        # jumping straight to 1.  MEASURED on (1,1,8192,4095) (max_block_ht 2): the
+        # coarsest-that-fits chunk (ws 64) lands BLOCK_HT 1 and 379,186 ns, while
+        # ws 32 lands BLOCK_HT 2 and 369,547 ns.  On (1,1,32,4095) (max_block_ht 1)
+        # the same rule keeps the coarse chunk, which is what that shape wants:
+        # ws 64 -> 19,376 ns, ws 2 -> 35,638 ns (0.54x).
+        wsc = 0
+        for rg in rg_prefs:
+            for di, do, dg, dn in depth_prefs:
+                for target_bht in range(max_block_ht, 0, -1):
+                    for cand in divisors:
+                        if ws_bytes("C", target_bht, di, do, di, Wt_core, cand, dg, dn, rg) <= l1_cb_budget:
+                            wsc, block_ht, resident_gamma = cand, target_bht, rg
+                            in_depth = rm_depth = di
+                            out_depth, gamma_depth, normed_depth = do, dg, dn
+                            break
+                    if wsc:
+                        break
+                if wsc:
+                    break
+            if wsc:
+                break
+        assert wsc, "Regime C: no (chunk, depth) assignment fits L1"
+        # Regime C has no separate reduce chunk: the sum-of-squares is one call
+        # (two in the masked case) over the whole resident window.
+        wr = wsc
     else:
         # Coarsest chunk of the dependent axis at which the STREAMING CBs still
         # reach depth 2 — i.e. the W-chunk is the variable that BUYS the overlap,
@@ -651,7 +791,10 @@ def _solve(
     #      still decides.
     #   2. grow BLOCK_HT (per-block-overhead amortization)
     #   3. grow IN_BUF_DEPTH further
-    if _lever(levers, "double_buffer"):
+    # Regime C already picked its depths TOGETHER with its chunk (there they are
+    # one decision: the chunk is the coarsest divisor that still affords them), so
+    # the generic depth ladder must not re-open it.
+    if _lever(levers, "double_buffer") and regime != "C":
         if ws_bytes(regime, block_ht, 2, 2, 2, wr, wsc, gamma_depth) <= l1_cb_budget:
             in_depth = out_depth = rm_depth = 2
         elif ws_bytes(regime, block_ht, 2, 1, 2, wr, wsc, gamma_depth) <= l1_cb_budget:
@@ -665,11 +808,14 @@ def _solve(
 
     while (
         block_ht < max_block_ht
-        and ws_bytes(regime, block_ht + 1, in_depth, out_depth, rm_depth, wr, wsc, gamma_depth) <= l1_cb_budget
+        and ws_bytes(
+            regime, block_ht + 1, in_depth, out_depth, rm_depth, wr, wsc, gamma_depth, normed_depth, resident_gamma
+        )
+        <= l1_cb_budget
     ):
         block_ht += 1
 
-    if _lever(levers, "double_buffer"):
+    if _lever(levers, "double_buffer") and regime != "C":
         while (
             in_depth < IN_DEPTH_CAP
             and ws_bytes(regime, block_ht, in_depth + 1, out_depth, rm_depth, wr, wsc, gamma_depth) <= l1_cb_budget
@@ -689,6 +835,8 @@ def _solve(
         GAMMA_DEPTH=gamma_depth,
         GAMMA_INGEST_BLOCK=_largest_divisor_at_most(wsc, gamma_cap_tiles),
         num_row_blocks=_div_up(Rt, block_ht),
+        NORMED_DEPTH=normed_depth,
+        RESIDENT_GAMMA=resident_gamma,
     )
 
 
@@ -875,11 +1023,11 @@ def _split_cost(solved, *, Wt_core, group_size, num_groups, has_gamma, T_in, T_g
     """
     groups_used = max(1, min(num_groups, solved.num_row_blocks))
     blocks_per_group = _div_up(solved.num_row_blocks, groups_used)
-    passes = 1 if solved.regime == "A" else 2
+    passes = 1 if solved.regime in ("A", "C") else 2
     read = blocks_per_group * solved.BLOCK_HT * Wt_core * passes
     # Regime A holds gamma resident for the whole kernel (one read per core);
     # Regime B re-reads the slice once per row-block.
-    gamma = 0 if not has_gamma else (Wt_core if solved.regime == "A" else blocks_per_group * Wt_core)
+    gamma = 0 if not has_gamma else (Wt_core if solved.RESIDENT_GAMMA else blocks_per_group * Wt_core)
     combine = (
         0.0 if group_size == 1 else blocks_per_group * (_COMBINE_FIXED_TILES + _COMBINE_PER_CORE_TILES * group_size)
     )
@@ -1059,6 +1207,13 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
     grid_cores = grid.x * grid.y
 
     # --- W-split policy: choose G (1 == row-parallel) ------------------------
+    # COMPOSITION WITH THE SHIPPED SPLIT: the G policy is asked with the ladder
+    # SWITCHED OFF, so G is chosen byte-identically to Perf 1's.  The ladder then
+    # applies only to the final per-core solve, and only where the split already
+    # returned G == 1 - a shape the split takes cannot move (its P2 property
+    # requires the per-core slice to solve to Regime A, and Regime C is not A).
+    split_levers = dict(LEVER_DEFAULTS if levers is None else levers)
+    split_levers.update(resident_c=0)
     group_size, gx, gy, num_groups, _tiling = _choose_group_size(
         device=device,
         grid=grid,
@@ -1075,7 +1230,7 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         l1_cb_budget=l1_cb_budget,
         gamma_cap_tiles=gamma_cap_tiles,
         layout_common=layout_common,
-        levers=levers,
+        levers=split_levers,
     )
     Wt_core = Wt // group_size
     w_split_group = 0 if group_size == 1 else group_size
@@ -1095,7 +1250,7 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         l1_cb_budget=l1_cb_budget,
         gamma_cap_tiles=gamma_cap_tiles,
         layout_common=layout_common,
-        levers=levers,
+        levers=(levers if group_size == 1 else split_levers),
     )
     # ---- grow the CHOSEN plan's row block past the one-block-per-core cap ----
     # `_solve` caps BLOCK_HT at ceil(Rt / row_parallel_units) - the coarsest block
@@ -1149,7 +1304,7 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
                 l1_cb_budget=l1_cb_budget,
                 gamma_cap_tiles=gamma_cap_tiles,
                 layout_common=layout_common,
-                levers=levers,
+                levers=(levers if group_size == 1 else split_levers),
             )
             break
 
@@ -1160,6 +1315,14 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
     # span every gamma column from the CB front.
     if regime == "A":
         assert solved.WT_SCALE_BLOCK == Wt_core, "Regime A requires WT_SCALE_BLOCK == Wt_core (gamma is never popped)"
+    if regime == "C":
+        # Regime C RENEGOTIATES R5: with chunked gamma the reader re-pushes each
+        # slice and the compute pops it (Regime B's protocol); with RESIDENT gamma
+        # the scale pass addresses this chunk's columns through a TileOffset base
+        # instead of consuming from the CB front.  Either way the scale chunk must
+        # still DIVIDE Wt_core (CB-wrap on the resident window).
+        assert Wt_core % solved.WT_SCALE_BLOCK == 0, "Regime C: scale chunk must divide Wt_core"
+        assert not w_split_group, "Regime C is only reachable at G == 1"
 
     common = dict(layout_common, Wt_core=Wt_core, w_split_group=w_split_group, w_split_gy=w_split_gy)
     cb_layout = tuple(
@@ -1173,6 +1336,8 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
             wr=solved.WT_REDUCE_BLOCK,
             ws=solved.WT_SCALE_BLOCK,
             gamma_ingest_block=solved.GAMMA_INGEST_BLOCK,
+            normed_depth=solved.NORMED_DEPTH,
+            resident_gamma=solved.RESIDENT_GAMMA,
             **common,
         )
     )
@@ -1219,13 +1384,15 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         GAMMA_DEPTH=solved.GAMMA_DEPTH,
         regime=regime,
         reduce_via_add=_reduce_via_add(
-            regime, compute_kernel_config, acc_dtype, W_partial, bool(_lever(levers, "reduce_via_add"))
+            regime, compute_kernel_config, acc_dtype, W_partial, bool(_lever(levers, "reduce_via_add")), is_row_major
         ),
         num_row_blocks=solved.num_row_blocks,
         group_size=group_size,
         group_x=gx,
         group_y=gy,
         combine_gy=w_split_gy,
+        NORMED_DEPTH=solved.NORMED_DEPTH,
+        RESIDENT_GAMMA=solved.RESIDENT_GAMMA,
         num_groups=num_groups,
         groups_used=groups_used,
         l1_cb_budget=l1_cb_budget,
@@ -1236,7 +1403,7 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
 # The shared geometry compile-time prefix is CT_ACCESSOR_BASE args wide; every
 # kernel spells its TensorAccessorArgs<CT_ACCESSOR_BASE>, so the two cannot drift
 # (create_program_descriptor asserts the prefix length).
-CT_ACCESSOR_BASE = 33
+CT_ACCESSOR_BASE = 34
 
 
 def _even_split(total, buckets):
@@ -1359,7 +1526,7 @@ def create_program_descriptor(
     # One shared geometry prefix so reader / writer / compute cannot drift.
     geometry_ct_args = [
         1 if plan.is_row_major else 0,  # 0  IS_ROW_MAJOR
-        1 if plan.regime == "A" else 0,  # 1  REGIME_A
+        REGIME_CODE[plan.regime],  # 1  REGIME (0 = B streaming, 1 = A resident, 2 = C resident-x)
         1 if plan.has_gamma else 0,  # 2  HAS_GAMMA
         1 if plan.gamma_is_row_major else 0,  # 3  GAMMA_IS_ROW_MAJOR
         plan.Wt_core,  # 4
@@ -1393,6 +1560,7 @@ def create_program_descriptor(
         plan.combine_gy,  # 30 level-2 fan-in; 0 = the flat root
         plan.group_x if plan.group_size > 1 else 1,  # 31 GX = the level-1 fan-in
         SEM_GATHER2,  # 32
+        plan.RESIDENT_GAMMA,  # 33 gamma held resident (A always; C where it pays)
     ]
     assert len(geometry_ct_args) == CT_ACCESSOR_BASE, "geometry prefix must match TensorAccessorArgs<CT_ACCESSOR_BASE>"
 

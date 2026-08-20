@@ -162,7 +162,12 @@ constexpr uint32_t cb_gather2 = 15;  // tree combine: the level-2 landing buffer
 
 // --- shared geometry compile-time args (identical prefix in all 3 kernels) ---
 constexpr uint32_t IS_ROW_MAJOR = get_compile_time_arg_val(0);
-constexpr uint32_t REGIME_A = get_compile_time_arg_val(1);
+// THE REGIME LADDER (see rms_norm_compute.cpp): 0 = B streaming two-read,
+// 1 = A resident-fused, 2 = C resident-x with a chunked scale pass.
+constexpr uint32_t REGIME = get_compile_time_arg_val(1);
+constexpr bool REGIME_A = (REGIME == 1);
+constexpr bool REGIME_C = (REGIME == 2);
+constexpr bool RESIDENT_X = REGIME_A || REGIME_C;
 constexpr uint32_t HAS_GAMMA = get_compile_time_arg_val(2);
 constexpr uint32_t GAMMA_IS_ROW_MAJOR = get_compile_time_arg_val(3);
 constexpr uint32_t Wt_core = get_compile_time_arg_val(4);
@@ -204,6 +209,8 @@ constexpr uint32_t GROUP_SIZE = get_compile_time_arg_val(24);
 constexpr uint32_t COMBINE_GY = get_compile_time_arg_val(30);
 constexpr uint32_t GX = get_compile_time_arg_val(31);
 constexpr uint32_t SEM_GATHER2 = get_compile_time_arg_val(32);
+// Gamma held resident for the whole kernel instead of re-pushed per W-chunk.
+constexpr bool GAMMA_RESIDENT = (get_compile_time_arg_val(33) != 0);
 constexpr uint32_t WT_TOTAL = get_compile_time_arg_val(25);
 constexpr uint32_t ACC_TILE_BYTES = get_compile_time_arg_val(26);
 constexpr uint32_t SEM_DATA_READY = get_compile_time_arg_val(27);
@@ -303,11 +310,11 @@ constexpr uint32_t IN_PAGE_BYTES = IN_TILE_BYTES;
 // place the burst size can actually bite: at bf16 it needs ROW_BYTES > 16 KB on
 // Blackhole (W > 8192), and there the any-length form is the correct answer.
 constexpr uint32_t RM_MAX_NW =
-    (REGIME_A || W_SPLIT) ? Wt_core : (WT_REDUCE_BLOCK > WT_SCALE_BLOCK ? WT_REDUCE_BLOCK : WT_SCALE_BLOCK);
+    (RESIDENT_X || W_SPLIT) ? Wt_core : (WT_REDUCE_BLOCK > WT_SCALE_BLOCK ? WT_REDUCE_BLOCK : WT_SCALE_BLOCK);
 constexpr uint32_t RM_PADDED_MAX = RM_MAX_NW * TILE_DIM * ELEM_SIZE;
 constexpr uint32_t RM_CHUNK_MAX_BYTES = RM_PADDED_MAX < ROW_BYTES ? RM_PADDED_MAX : ROW_BYTES;
 
-constexpr auto input_args = TensorAccessorArgs<33>();
+constexpr auto input_args = TensorAccessorArgs<34>();
 [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
 FORCE_INLINE uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
@@ -351,7 +358,11 @@ void kernel_main() {
     // with a cheap issue loop want opposite fixes.
     auto build_scaler = [&]() {
         MaybeDeviceZoneScope("rd_scaler");
-        if constexpr (!REGIME_A && W_PARTIAL > 0) {
+        // The PARTIAL tile is needed by every plan whose reduce can see pad
+        // columns: the streaming one, and now the RESIDENT one too (Regime C's
+        // masked fold consumes it).  A resident plan on ROW_MAJOR input never
+        // does - the reader zero-fills every stick's pad tail, so the pad is 0.
+        if constexpr (W_PARTIAL > 0 && (!RESIDENT_X || !IS_ROW_MAJOR)) {
             // The two reduce datapaths consume DIFFERENT forms of the partial, in
             // different tile layouts, so the tile the reader emits at index 1 is
             // chosen by the same REDUCE_VIA_ADD knob the compute side reads:
@@ -571,7 +582,7 @@ void kernel_main() {
     // 9,062 and 8,849 -> 9,152 (0.963x / 0.967x) on (1,1,32,7168) with RM gamma.
     // Written as an exception around the case that CANNOT carry it, not as an
     // allow-list of the shapes that were benchmarked.
-    constexpr bool DEFER_GAMMA = REGIME_A && HAS_GAMMA && !GAMMA_IS_ROW_MAJOR;
+    constexpr bool DEFER_GAMMA = GAMMA_RESIDENT && HAS_GAMMA && !GAMMA_IS_ROW_MAJOR;
 
     // Regime A holds the whole per-core width of gamma resident for the whole
     // kernel: filled exactly once, never popped.  That is what makes the gamma
@@ -582,14 +593,32 @@ void kernel_main() {
     // the prologue has already put in the CB.  A core with no row blocks
     // prefetches nothing - nothing would ever consume it - but must still fill
     // gamma, or the CB contract with a compute thread that waits on it breaks.
+    //
+    // SECOND CARVE-OUT, and it is CORRECTNESS, not perf: the input may only be
+    // prefetched when the compute thread's FIRST CB consumption is the input.  It
+    // is not when gamma is ROW_MAJOR: `ingest_gamma` runs a compute-side tilize out
+    // of the DEPTH-1 `cb_gamma_rm` staging CB before anything else, so the compute
+    // parks on gamma.  With a TILE input that is harmless (cb_input_tiles is sized
+    // to hold a whole row-block, so the reader pushes it and moves straight on to
+    // gamma - that is `grid_starved`, which GAINS 1.06x).  With a ROW_MAJOR input
+    // it DEADLOCKS: `cb_rm_in` holds only RM_BUF_DEPTH tile-rows, so as soon as a
+    // row-block is deeper than that the reader blocks in `cb_reserve_back(cb_rm_in)`
+    // while the compute is still waiting for gamma, and neither moves.
+    // REPRODUCED on (5,3,928,544) RM input + RM gamma (BLOCK_HT 4, RM_BUF_DEPTH 2,
+    // Wt 17) - a hang, not a wrong answer.  The golden suite found it; the guard set
+    // did not, because `row_major` (1,1,8192,1024) happens to have
+    // RM_BUF_DEPTH * Wt_core >= BLOCK_HT * Wt_core and so never blocks.
+    constexpr bool PREFETCH_INPUT = !(IS_ROW_MAJOR && GAMMA_IS_ROW_MAJOR && HAS_GAMMA);
     const uint32_t rt0_first = start_row_block * BLOCK_HT;
     const bool has_work = num_row_blocks_here > 0;
     bool skip_first_read = false;
-    if (has_work) {
-        read_input_chunk(rt0_first, 0, REGIME_A ? Wt_core : WT_REDUCE_BLOCK);
-        skip_first_read = true;
+    if constexpr (PREFETCH_INPUT) {
+        if (has_work) {
+            read_input_chunk(rt0_first, 0, RESIDENT_X ? Wt_core : WT_REDUCE_BLOCK);
+            skip_first_read = true;
+        }
     }
-    if constexpr (REGIME_A && !DEFER_GAMMA) {
+    if constexpr (GAMMA_RESIDENT && !DEFER_GAMMA) {
         fill_gamma(0, Wt_core);
     }
     build_scaler();
@@ -777,7 +806,11 @@ void kernel_main() {
     for (uint32_t b = 0; b < num_row_blocks_here; ++b) {
         const uint32_t rt0 = (start_row_block + b) * BLOCK_HT;
 
-        if constexpr (REGIME_A) {
+        if constexpr (RESIDENT_X) {
+            // ONE DRAM read of x for the whole per-core width - the resident
+            // plans' defining property.  Regime C then streams gamma per scale
+            // chunk (unless the solver made gamma resident too); Regime A holds
+            // both resident.
             if (skip_first_read) {
                 skip_first_read = false;
             } else {
@@ -789,6 +822,13 @@ void kernel_main() {
             if constexpr (DEFER_GAMMA) {
                 if (b == 0) {
                     fill_gamma(0, Wt_core);
+                }
+            }
+            if constexpr (REGIME_C && !GAMMA_RESIDENT) {
+                // The compute side consumes one gamma slice per scale chunk and
+                // pops it, so this is Regime B's gamma protocol over a resident x.
+                for (uint32_t c = 0; c < NUM_SCALE_CHUNKS; ++c) {
+                    fill_gamma(c * WT_SCALE_BLOCK, WT_SCALE_BLOCK);
                 }
             }
         } else {
