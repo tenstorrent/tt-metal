@@ -8,6 +8,11 @@ on:
         description: "The workflow run ID of the perf measurement to gate against"
         required: false
         type: string
+      run_types:
+        description: "Comma-separated run types to gate on (e.g. L1_TO_L1, MATH_ISOLATE, PACK_ISOLATE)"
+        required: false
+        default: L1_TO_L1
+        type: string
 
 permissions:
   contents: read
@@ -157,6 +162,7 @@ jobs:
             --baseline 'baseline_perf/**/*.csv' \
             --threshold 0.02 \
             --min-cycles 30 \
+            --run-types '${{ inputs.run_types }}' \
             --report perf_gate_report.md \
             --test 'LLK perf' \
             --baseline-sha "${{ github.event.workflow_run.head_commit }}" \

@@ -86,6 +86,7 @@ def compare_runs(
     *,
     threshold=DEFAULT_THRESHOLD,
     min_cycles=DEFAULT_MIN_CYCLES,
+    run_types=None,
 ):
     """Median-vs-median comparison.
 
@@ -97,9 +98,20 @@ def compare_runs(
 
     ``noise_filtered`` counts points that cleared the percentage but not the cycle
     floor — exactly the points a relative-only rule would have failed on.
+
+    If ``run_types`` is specified (comma-separated, e.g. "L1_TO_L1,MATH_ISOLATE"),
+    only compare metrics for those run types.
     """
     cur = _medians([pd.read_csv(p) for p in current_csvs])
     base = _medians([pd.read_csv(p) for p in baseline_csvs])
+
+    # Filter by run type if specified
+    if run_types:
+        allowed_types = set(t.strip() for t in run_types.split(","))
+        cur = {k: v for k, v in cur.items() if k[1][len("mean(") : -1] in allowed_types}
+        base = {
+            k: v for k, v in base.items() if k[1][len("mean(") : -1] in allowed_types
+        }
 
     records, regressions, improvements, new_points = [], [], [], []
     noise_filtered = 0
@@ -292,6 +304,12 @@ def main(argv=None):
         f"(default {DEFAULT_MIN_CYCLES:.0f}). Stops small markers such as INIT "
         "from failing the gate on a few cycles of jitter. 0 disables the clause.",
     )
+    ap.add_argument(
+        "--run-types",
+        default=None,
+        help="comma-separated run types to compare (e.g. L1_TO_L1,MATH_ISOLATE). "
+        "if not specified, all run types are compared.",
+    )
     ap.add_argument("--report", default="regression_report.md")
     ap.add_argument("--test", default="?")
     ap.add_argument("--baseline-sha", default="?")
@@ -311,7 +329,11 @@ def main(argv=None):
         )
 
     result = compare_runs(
-        current, baseline, threshold=a.threshold, min_cycles=a.min_cycles
+        current,
+        baseline,
+        threshold=a.threshold,
+        min_cycles=a.min_cycles,
+        run_types=a.run_types,
     )
     report = render_report(
         result,
