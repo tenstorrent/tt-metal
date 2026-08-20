@@ -1,0 +1,110 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+
+#include "api/core_local_mem.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+    constexpr auto num_heads = get_arg(args::num_heads);
+    constexpr auto width_tiles = get_arg(args::width_tiles);
+    constexpr auto source_height_tiles = get_arg(args::source_height_tiles);
+    constexpr auto cache_page_rows = get_arg(args::cache_page_rows);
+    constexpr auto total_cache_rows = get_arg(args::total_cache_rows);
+    constexpr auto worker_count = get_arg(args::worker_count);
+
+    constexpr uint32_t tile_width = 32;
+    constexpr uint32_t tile_height = 32;
+    constexpr uint32_t face_width = 16;
+    constexpr uint32_t face_height = 16;
+    constexpr uint32_t bytes_per_element = 2;
+    constexpr uint32_t face_bytes = face_width * face_height * bytes_per_element;
+    constexpr uint32_t face_line_bytes = face_width * bytes_per_element;
+    constexpr uint32_t cache_height_tiles = cache_page_rows / tile_height;
+
+    const auto source_rows = get_arg(args::source_rows);
+    const auto worker_start = get_arg(args::worker_start);
+    const auto worker_stride = get_arg(args::worker_stride);
+
+    DataflowBuffer scratch_dfb(dfb::scratch);
+    DataflowBuffer positions_dfb(dfb::positions);
+    Noc noc;
+
+    const auto cache1 = TensorAccessor(tensor::cache1);
+    const auto cache2 = TensorAccessor(tensor::cache2);
+    const auto input1 = TensorAccessor(tensor::input1);
+    const auto input2 = TensorAccessor(tensor::input2);
+    const auto positions = TensorAccessor(tensor::positions);
+
+    // Indices stay on device so a captured trace can target different physical
+    // cache rows on every replay. Negative entries are per-row no-ops.
+    positions_dfb.reserve_back(1);
+    noc.async_read(positions, positions_dfb, positions_dfb.get_entry_size(), {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    positions_dfb.push_back(1);
+    CoreLocalMem<volatile int32_t> physical_positions(positions_dfb.get_read_ptr());
+
+    auto copy_rows = [&](const auto& source, const auto& cache, uint32_t head, uint32_t width_tile) {
+        for (uint32_t source_height_tile = 0; source_height_tile < source_height_tiles; ++source_height_tile) {
+            const uint32_t source_tile = (head * source_height_tiles + source_height_tile) * width_tiles + width_tile;
+
+            scratch_dfb.reserve_back(1);
+            noc.async_read(
+                source, scratch_dfb, scratch_dfb.get_entry_size(), {.page_id = source_tile}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            scratch_dfb.push_back(1);
+
+            for (uint32_t tile_row = 0; tile_row < tile_height; ++tile_row) {
+                const uint32_t source_row = source_height_tile * tile_height + tile_row;
+                if (source_row >= source_rows) {
+                    break;
+                }
+                const int32_t physical_row_signed = physical_positions[source_row];
+                if (physical_row_signed < 0 || static_cast<uint32_t>(physical_row_signed) >= total_cache_rows) {
+                    continue;
+                }
+
+                const uint32_t physical_row = static_cast<uint32_t>(physical_row_signed);
+                const uint32_t physical_page = physical_row / cache_page_rows;
+                const uint32_t row_in_page = physical_row % cache_page_rows;
+                const uint32_t cache_tile =
+                    ((physical_page * num_heads + head) * cache_height_tiles + row_in_page / tile_height) *
+                        width_tiles +
+                    width_tile;
+
+                const uint32_t source_face_y = tile_row / face_height;
+                const uint32_t source_line = tile_row % face_height;
+                const uint32_t dest_tile_row = row_in_page % tile_height;
+                const uint32_t dest_face_y = dest_tile_row / face_height;
+                const uint32_t dest_line = dest_tile_row % face_height;
+                for (uint32_t face_x = 0; face_x < tile_width / face_width; ++face_x) {
+                    const uint32_t source_offset =
+                        (source_face_y * 2 + face_x) * face_bytes + source_line * face_line_bytes;
+                    const uint32_t dest_offset = (dest_face_y * 2 + face_x) * face_bytes + dest_line * face_line_bytes;
+                    noc.async_write(
+                        scratch_dfb,
+                        cache,
+                        face_line_bytes,
+                        {.offset_bytes = source_offset},
+                        {.page_id = cache_tile, .offset_bytes = dest_offset});
+                }
+            }
+            noc.async_write_barrier();
+            scratch_dfb.pop_front(1);
+        }
+    };
+
+    for (uint32_t worker = worker_start; worker < worker_count; worker += worker_stride) {
+        const uint32_t head = worker / width_tiles;
+        const uint32_t width_tile = worker % width_tiles;
+        copy_rows(input1, cache1, head, width_tile);
+        copy_rows(input2, cache2, head, width_tile);
+    }
+
+    positions_dfb.pop_front(1);
+}
