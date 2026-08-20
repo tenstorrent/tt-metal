@@ -9,7 +9,7 @@
 
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
-#include "api/llk_operand_members.h"
+#include "internal/llk_metadata.h"
 #include "experimental/kernel_args.h"
 
 template <typename T>
@@ -36,8 +36,8 @@ public:
     // A scratchpad used as an LLK operand additionally bakes its format + face grid for a future
     // to_llk_mem_descriptor(ScratchpadBindingToken). That converter was dropped in the rebase onto main;
     // see llk_operand.h. Plain working memory uses the two-arg form.
-    constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes, LlkOperandMembers llk) noexcept :
-        crta_offset_(crta_offset), size_in_bytes_(size_in_bytes), llk_(llk) {}
+    constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes, LLKMetadata llk) noexcept :
+        crta_offset_(crta_offset), size_in_bytes_(size_in_bytes), llk_metadata_(llk) {}
 
 private:
     template <typename T>
@@ -45,7 +45,7 @@ private:
 
     uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
     uint32_t size_in_bytes_;  // static per-node size
-    LlkOperandMembers llk_{};
+    LLKMetadata llk_metadata_{};
 };
 
 /**
