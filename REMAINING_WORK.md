@@ -1,7 +1,8 @@
 # tt-llk blaze promotions — everything still to do
 
-Single actionable index of what is left, with a plan per item. **Updated 2026-08-19** after
-#52727 merged and the branch was rebased onto it — see
+Single actionable index of what is left, with a plan per item. **Updated 2026-08-20** after
+#52713 merged and A2 landed — see [§ Closed on 2026-08-20](#closed-on-2026-08-20).
+Previously updated **2026-08-19** after #52727 merged and the branch was rebased onto it — see
 [§ Closed on 2026-08-19](#closed-on-2026-08-19). Previously updated **2026-08-18** after a
 working session that closed A3, A6 and D2, added coverage for a boundary nothing reached, and
 **located the `mul_reduce_scalar_chunked_tile` defect** (A4). See
@@ -25,7 +26,8 @@ that means no driver under `tt_metal/tt-llk/tests/sources/` references the symbo
 | # | Item | Type | Size | Blocked on |
 |---|------|------|------|-----------|
 | **A1** | `custom_mm` (plain) — **now under test**; transpose + split_acc/finalize left | test | ~0.5 d left | — |
-| **A2** | `top32_rm` — entire family untested | test | ~3–4 d | #52713 merging (**still open**) |
+| ~~A2~~ | ~~`top32_rm` — entire family untested~~ | — | — | **DONE 2026-08-20** (two combinations left, below) |
+| **A2'** | `top32_rm` — mixed 1024+tail shape, and the metal wrapper layer | test | ~0.5 d + B1-shaped | — / needs an owner in the metal tree |
 | ~~A3~~ | ~~`set_dst_write_addr_offset` behaviour~~ | — | — | **DONE 2026-08-18** |
 | ~~A4~~ | ~~`mul_reduce_scalar_chunked_tile` untested~~ | — | — | **Defect located → C4** |
 | **A5** | `eltwise_mul_scalar` HiFi init — untested, rationale disproved | test | unknown | C2 |
@@ -43,8 +45,134 @@ that means no driver under `tt_metal/tt-llk/tests/sources/` references the symbo
 | **F** | `test_matmul_custom_compressed` hangs — host/BRISC desync | **defect**, nightly-only | unknown | needs an owner |
 
 **A1 is no longer a hole.** #52727 merged on 2026-08-18 at 23:37 UTC, and the plain family now
-has coverage (see below). **A2 still is** — #52713 was re-checked on 2026-08-19 and is still
-open, so `top32_rm` remains promoted-on-this-branch and untested.
+has coverage (see below). **A2 is no longer one either**: #52713 merged, and `top32_rm` went
+from zero coverage to 10 passing variants across both of its modes on 2026-08-20. What is left
+of it is two combinations, tracked as A2' — the mixed 1024+tail shape, and the metal wrapper
+layer, which a tt-llk test cannot reach at all.
+
+---
+
+## Closed on 2026-08-20
+
+#52713 **merged**, which was A2's only blocker. `top32_rm` now has coverage; two commits on
+`ldjurovic/llk-tests-blaze-promotions`.
+
+### A2 — the top32_rm family is under test, `5b768385ee1` + `edcdc8f4157`
+
+`tests/sources/top32_rm_test.cpp` + `tests/python_tests/test_top32_rm.py`.
+**BH p100a: 10 passed** — 8 plain (row lengths 64/128/160/256 x `dest_acc` No/Yes) and 2
+pre-sorted (1024, 2048). All nine LLK/SFPU entry points the family exposes to a kernel are now
+called; the previous state was that **none** of them were, and `_top32_rm_init_` looked covered
+on a grep only because the sole occurrence in the test tree was inside a comment.
+
+Both of the consumer's modes are driven, statement for statement:
+
+| Mode | Entry points | What it is |
+|---|---|---|
+| plain (`< 1024`) | `_llk_unpack_A_top32_rm_init_`/`_`, `_llk_math_top32_rm_init_`/`_`, `_top32_rm_init_`, `_bitonic_top32_phases_steps_`, `_bitonic_top32_merge_`, `_bitonic_top32_rebuild_` | `top32_rm_dev_compute.cpp`: 64 row-major elements at a time into a Dest **column**, sort, merge the running top32 across tiles |
+| pre-sorted (`>= 1024`) | `_bitonic_top32_of_1024_rm_pre_sorted_{prep,combine,final}_` | `top32_rm_dev_compute_v2.cpp`: whole 32x32 tiles transposed into Dest, 16 columns reduced at once |
+
+The Dest layout is what made this non-obvious. `_llk_unpack_A_top32_rm_` takes 64 consecutive
+**row-major** elements — not a tilized tile — and lands them in the first COLUMN of 64 Dest
+rows, 16 per face, transposed within the face. That column is what the bitonic sort addresses
+(its distances are Dest rows: 8/16/32/64), the index operand has to sit exactly +2 tiles away
+because `load16`/`store16` hardcode `dst_indices_offset = 128`, and the pack side narrows the
+packer to one datum per row (`SETADCXX PAC`) to turn the surviving column back into 32
+contiguous L1 elements.
+
+Two deliberate deviations from the consumer, both recorded in the files:
+
+- **One format for both operands.** The consumer runs bf16 values + uint32 indices, which needs
+  a srcA reconfig between the two unpacks and a pack reconfig on the way out. The test carries
+  indices as floats holding the integer itself, so it measures the sort rather than the
+  reconfig sequence — C3 already owns the reconfig question. In the plain mode that caps the
+  row at 256 (bf16 has 8 mantissa bits); the pre-sorted mode is Float32, where it does not bind.
+- **Distinct values straddling zero.** Distinct means "the top 32" determines the indices, so
+  indices are asserted **exactly** rather than tolerating hardware tie order the way
+  `test_topk.py` has to. Straddling zero is what makes the -inf padding load-bearing: a
+  32-element tail chunk fills two faces and the other two arrive as -inf from
+  `CLR_SRC_NEGINF`, so with non-negative stimuli the `row=160` case would pass on padding alone.
+
+**`dest_acc` turned out to be a real axis, not a formality.** It selects the index word width
+inside the sort (`InstrModLoadStore::INT32` vs `LO16`) *and* the Dest-move opcode in
+`llk_math_top32_rm_configure_mop` (ELWADD against a zeroed SrcB at fp32 Dest, MOVA2D
+otherwise). The consumer only ever builds fp32 Dest, so the `dest_acc=No` cells are the first
+exercise the 16-bit half of this family has had — and they pass.
+
+Discrimination, per Finding 13 (a test that passes first try has not been shown to test
+anything):
+
+- plain mode: rebuilding the driver with a 4-byte chunk stride instead of 2 makes it re-read
+  overlapping chunks, and the answer comes back `[63, 62, 61, 59, 57, ...]` against a golden of
+  `[63, 62, 61, 60, 59, ...]`. Both assertions fire.
+- pre-sorted mode: discriminates by construction at 2048, which is why that row length is in
+  the sweep — the tiebreak is a permutation over all 64 runs, so **17 of the 32 winning indices
+  land in the second 1024-chunk**. A driver that dropped the second chunk, or a `combine` that
+  did not merge across tiles, cannot produce that answer.
+
+**New finding, fixed in the same commit: `llk_math_top32_rm.h` did not compile under the tt-llk
+build** (Finding 17 in the DONE document). `_llk_math_top32_rm_init_`'s `num_faces` and
+`llk_math_top32_rm_configure_mop`'s `total_rows` are never read, and the tt-llk build compiles
+with `-Werror=unused-parameter`, so the first test to include the header failed to build.
+Dropped both and updated `llk_math_top32_rm_api.h`, its only caller — the same call the #53130
+reviewers made on the two unpack headers. That is now **three** promoted headers in this state,
+and the common cause is worth naming: a promoted header no in-tree test compiles has only ever
+been compiled by the JIT path, under a weaker warning set.
+
+**A2's second half is resolved rather than done:** the 7 `llk_math_deepseek_top32_rm_*` metal
+wrappers dropped during #53130's review never needed restoring — they are on main, having
+arrived with #52713 — and the recheck confirms they still have no caller anywhere. What is left
+is covering the wrapper layer, which needs a metal-side test (Finding 18), same blocker as B1.
+
+### Regression run for the 2026-08-20 change set
+
+Everything the change set could touch, re-run serially through
+`.claude/scripts/run_test.sh` on BH p100a. All PASS:
+
+| Suite | Why it is in the set | Result |
+|---|---|---|
+| `test_top32_rm.py` | new | **10 passed** |
+| `test_rmsnorm_bcast_scalar_dest_reuse.py` | `llk_unpack_A_rmsnorm.h` selector change | 114 passed, 114 skipped |
+| `test_sfpu_sampling.py` | `pollute` axis pinned into the driver | 63 passed, 97 skipped |
+| `test_custom_mm_uninit_restore.py` | driver header rescoped | 7 passed, 8 skipped, **1 xfailed** (C1, expected) |
+| `test_custom_mm_uninit_parity.py` | dangling-reference edits | 2 passed |
+| `test_matmul_custom_mm.py` | dangling-reference edits | 32 passed |
+| `test_sort_headers_coexist.py` | same sort headers | 2 passed |
+| `test_set_dst_write_addr_offset.py` | helper both sort families use | 14 passed, 14 skipped |
+| `test_topk_xl.py` | the other sort family in this area (C3) | 100 passed |
+| `test_matmul_custom_compressed.py` | branch's other half | 588 passed |
+
+**Two things worth recording from doing it, both about the harness rather than the code.**
+
+*Do not run plain `pytest` while `run_test.sh` holds the device.* Doing exactly that —
+a background `pytest test_matmul_custom_compressed.py test_topk_xl.py` overlapping a
+`run_test.sh` run — produced **137 failures out of 688 and a `TENSIX TIMED OUT`** (BRISC
+command poll: python counter 1239 vs brisc 157). Serially afterwards, the same two suites are
+100/100 and 588/588. So the "use `run_test.sh`, never `pytest`" rule is not only about
+tidiness: the `flock` is what makes concurrent agents' results mean anything, and without it
+the failure mode is a large, entirely spurious failure count that looks like a real regression.
+
+*One intermittent value failure was seen and did not reproduce.* In the first serial run after
+that incident, `test_matmul_custom_compressed[shape=(1, 64, 32), formats=('bfp4',)]` failed with
+**PCC -0.033**, 587/588. Re-running that variant in isolation passes (17/17 for `single and
+bfp4`), and the full suite then passes 588/588. Nothing in the 2026-08-20 change set is on the
+compressed path. Recorded as a data point for **Finding 12 / item F** — the known
+intermittency in this suite — and specifically as one that presents as a *wrong answer* rather
+than a hang, which is new for that finding.
+
+### What is left of A2 → tracked as A2'
+
+1. **The mixed shape** — whole 1024-element chunks *plus* a 64-element tail, i.e. the Metal dev
+   test's `row=3232`, which runs the pre-sorted mode and then finishes in the plain one. Both
+   halves are covered; their composition is not. ~0.5 d: the driver already has both paths, so
+   this is a tail loop plus the stimuli question (indices past 256 force Float32, which forces
+   the plain mode's unpack down its 32-bit branch — the one that pads with **zeros** instead of
+   -inf, so the tail chunk's padding stops being safe and that needs checking before it is
+   claimed).
+2. **The metal wrapper layer** — the 7 uncalled wrappers above. B1-shaped: needs an owner in
+   the metal test tree.
+3. The 8-datum `bitonic_top32_load8`/`store8` helpers stay uncovered on purpose; the header
+   itself records that no kernel references them.
 
 ---
 
@@ -273,32 +401,33 @@ is `block_uninit`, and only via a replicated body (see B1).
 **Watch for.** The `-Werror` prerequisite (Finding 5) — budget for a build fix before any test
 compiles.
 
-### A2. `top32_rm` — the entire family is untested
+### A2'. `top32_rm` — **under test since 2026-08-20**, two combinations left
 
-**Unchanged from 2026-08-17, still blocked on #52713.** All 19 SFPU entry points plus all four
-LLK wrappers are uncalled. `_top32_rm_init_` looks covered on a naive grep; **it is not** — the
-only occurrence in the test tree is inside a comment in `sort_headers_coexist_test.cpp`.
+The family went from zero coverage to 10 passing variants across both modes; see
+[§ Closed on 2026-08-20](#closed-on-2026-08-20) for what landed, how it discriminates, and the
+header defect it turned up. What remains:
 
-**This item also gates a removal.** The 7 `llk_math_deepseek_top32_rm` metal wrappers were
-dropped from the promotion during review of #53130. They come back when this test exists to
-justify them.
+**1. The mixed shape (~0.5 d, unblocked).** `row = 3232` in the Metal dev test: whole
+1024-element chunks through the pre-sorted path, then a 64-element tail through the plain one.
+Both halves pass in isolation; their composition is untested. The driver already contains both
+paths, so this is a tail loop plus one open question — indices past 256 force Float32, and
+Float32 sends the plain mode's unpack down its **32-bit** branch, which pads with zeros rather
+than the `CLR_SRC_NEGINF` the 16-bit branch uses. A tail chunk that pads with zeros is only
+safe for non-negative inputs, so that needs establishing rather than assuming.
 
-**Plan.** Two modes (plain sort, and the `top32_of_1024_rm_pre_sorted_*` prep→combine→final
-path) as two test functions in one file. Model the driver on `tests/sources/topk_xl_test.cpp`.
-Extend `TopKGolden`/`TopKXLGolden` rather than writing a third sort golden; expect tie-handling
-to be the hard part and copy `test_topk_xl.py`'s signed/random split. Sweep `top_min` both
-polarities, sort direction, and the fidelity/format axes. Once green, restore
-`llk_math_deepseek_top32_rm.h` in the same PR.
+**2. The metal wrapper layer (B1-shaped, needs an owner).** The 7
+`llk_math_deepseek_top32_rm_*` wrappers are on main with no caller — they arrived with #52713,
+not with this branch, so the #53130 removal is moot. A tt-llk test cannot reach the metal API
+layer; covering them needs a metal-side test, exactly like B1.
 
-**Watch for.** `_top32_rm_init_()` and `_topk_xl_init_<K, fused>()` **cannot both be called in
-one kernel** — they hang the math thread on overlapping ADDR_MOD slots, the MOP and the REPLAY
-buffer (Finding 3). And see C3: a pre-existing reconfig escape already lives in this area, so
-bisect single-file-then-target before blaming your own driver.
+**Not planned:** the 8-datum `bitonic_top32_load8`/`store8` helpers, which the header records as
+referenced by no kernel.
 
-**New, from A3.** `test_set_dst_write_addr_offset.py` now pins the helper both sort families
-use, so a `top32_rm` failure can be attributed to the family rather than to the shared helper.
-Its driver is also the closest worked example of doing your own Dst addressing under
-`VectorMode::None`, which is what these families do.
+**Still true, and still worth knowing before touching this area:** `_top32_rm_init_()` and
+`_topk_xl_init_<K, fused>()` **cannot both be called in one kernel** — they overlap in the
+ADDR_MODs, the MOP and the REPLAY buffer, and the math thread hangs (Finding 3). And see C3: a
+pre-existing reconfig escape lives in this area, so bisect single-file-then-target before
+blaming your own driver.
 
 ### A5. `eltwise_mul_scalar` HiFi init — untested, and its rationale does not hold
 
@@ -588,6 +717,12 @@ is:
    `requirements.txt` pins **0.3.29**, and `CallstackEntry` moved modules between those
    versions. That ImportError blocks *collection of the entire suite* from `conftest.py`, so it
    reads like a broken repo rather than one stale dependency.
+   **Confirmed again on 2026-08-20:** `tests/.venv` (0.3.29) is present and `run_test.sh` works,
+   while `/opt/venv` is still 0.3.11 — so `python -m pytest` with the ambient interpreter still
+   fails at collection. If you are going to reach for pytest anyway, the pinned versions are
+   `tt-exalens 0.3.31` **plus `tt-umd 0.9.9`**; 0.3.31 against the ambient `tt_umd 0.9.3` fails
+   later and more confusingly, on
+   `TopologyDiscoveryOptions.device_init_failure_action`. Use `run_test.sh`.
 2. **No SFPI toolchain** (`tests/sfpi/`) — every compile fails with
    `riscv-tt-elf-g++: not found`, which looks like a broken driver rather than a missing
    toolchain. `tests/setup_testing_env.sh` fetches and sha256-verifies it (7.69.0), but note it
@@ -633,8 +768,8 @@ pairing, which reports real pairs as unmatched.
 3. **C4** — route to an owner. It is a located defect in a shipping op with a minimal
    reproducer, which makes it the cheapest real fix on the list, and it decides D1.
 4. **C1 / C2 / C3** — route to owners too; they are decisions, and C2 gates A5.
-5. **A1's remainder** — `transpose` and `split_acc` / `finalize`, ~0.5 d, unblocked. **A2** when
-   #52713 merges; it is the bigger job and also restores the dropped wrappers.
+5. **A1's remainder** — `transpose` and `split_acc` / `finalize`, ~0.5 d, unblocked. Then
+   **A2'** — the mixed 1024+tail `top32_rm` shape, also ~0.5 d; A2 itself closed on 2026-08-20.
 6. **B1** once an owner in the metal tree exists.
 7. **F** — now diagnosed (host/BRISC command desync, nightly-only). Route to an owner with the
    triage output; no further reproduction needed, and repeating it costs a device reset.

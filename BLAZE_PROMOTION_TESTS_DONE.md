@@ -22,9 +22,13 @@
 > **Updated 2026-08-18:** a second session added the A3 and A6 items below, closed the #53130
 > review comments, and turned the old open A4 investigation into Finding 9.
 >
-> Branch: `ldjurovic/llk-tests-blaze-promotions` (tt-metal). #52709 merged 2026-08-14 and the
-> branch was rebased onto main; #52713 and #52727 are **still open** as of 2026-08-18, so it
-> still carries their promotion payload.
+> Branch: `ldjurovic/llk-tests-blaze-promotions` (tt-metal). **All three promotion PRs have
+> merged** — #52709 on 2026-08-14, #52727 on 2026-08-18, #52713 by 2026-08-20 — and the branch
+> has been rebased onto main, so it no longer carries their payload.
+>
+> **Updated 2026-08-20:** #52713's merge unblocked A2, and the `top32_rm` family went from zero
+> coverage to 10 passing variants across both of its modes. Findings 17 and 18 are from that
+> work; the narrative is in `REMAINING_WORK.md` § Closed on 2026-08-20.
 
 **PRs covered:** tt-metal #52747, #52745, #52713, #52727, #52709
 
@@ -35,10 +39,10 @@
 | | |
 |---|---|
 | Verification tier (V1-V4) | 4 of 4, all green |
-| New test items landed | **10** — the original 5 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard, rmsnorm bcast-scalar dest-reuse) plus 3 from 2026-08-18 (`set_dst_write_addr_offset` behaviour, compressed metadata-word boundary, `mul_reduce_scalar` re-entry) |
-| Test results | **235 new variants passing / 13 xfailed** (42 + 15 + 2 + 12 + 114 + 14 + 6 + 36; xfails are 1 W-stride + 12 re-entry) |
-| Files | 12 added (6 `tests/sources/*.cpp`, 6 `tests/python_tests/test_*.py`) + 3 extended (`sfpu_sampling_test.cpp`, `test_sfpu_sampling.py`, `test_matmul_custom_compressed.py`) + 2 LLK headers fixed to compile + 3 template params added |
-| Product findings | **4 defects** (all need an owner) + 1 pre-existing reconfig escape + 10 behavioural constraints |
+| New test items landed | **12** — the original 5 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard, rmsnorm bcast-scalar dest-reuse), 3 from 2026-08-18 (`set_dst_write_addr_offset` behaviour, compressed metadata-word boundary, `mul_reduce_scalar` re-entry), the uninit parity guard and plain `custom_mm` from 2026-08-19, and the **`top32_rm` sort family** from 2026-08-20 |
+| Test results | **287 new variants passing / 13 xfailed** (42 + 15 + 2 + 12 + 114 + 14 + 6 + 36 + 2 + 32 + 10; xfails are 1 W-stride + 12 re-entry) |
+| Files | 14 added (7 `tests/sources/*.cpp`, 7 `tests/python_tests/test_*.py`) + 3 extended (`sfpu_sampling_test.cpp`, `test_sfpu_sampling.py`, `test_matmul_custom_compressed.py`) + **3** LLK headers fixed to compile + 4 template params added |
+| Product findings | **4 defects** (all need an owner) + 1 pre-existing reconfig escape + 12 behavioural constraints |
 
 ### Landed tests
 
@@ -54,6 +58,7 @@
 | **`mul_reduce_scalar` re-entry (#52709)** — 2026-08-18 | `tests/sources/mul_reduce_scalar_reenter_test.cpp`, `tests/python_tests/test_mul_reduce_scalar_reenter.py` | **36 passed, 12 xfailed** (Finding 9) |
 | **custom_mm uninit parity guard (#52727)** — 2026-08-18 | `tests/python_tests/test_custom_mm_uninit_parity.py` | **2 passed** — static, device-free; B1's interim guard |
 | **plain `custom_mm` matmul (#52727)** — 2026-08-19 | `tests/sources/matmul_custom_mm_test.cpp`, `tests/python_tests/test_matmul_custom_mm.py` | **32 passed**, PCC >= 0.99999 — closes A1's "no coverage at all" |
+| **`top32_rm` sort family (#52713)** — 2026-08-20 | `tests/sources/top32_rm_test.cpp`, `tests/python_tests/test_top32_rm.py` | **10 passed** — 8 plain (4 row lengths x 2 `dest_acc`) + 2 pre-sorted 1024/2048; closes A2 |
 
 ### Verification tier — all green on the merged branch
 
@@ -656,6 +661,21 @@ not a reconfig escape), but it means reproducing this is not free.
 Probably distinct from Finding 8: that is a golden mismatch under a specific test ordering, this
 is a hang.
 
+### Finding 12b — the compressed-matmul intermittency can present as a wrong answer, 2026-08-20
+
+Finding 12 records `test_matmul_custom_compressed.py` hanging on repeat (host/BRISC command
+desync, nightly-only). On 2026-08-20 the same suite produced a **value** failure instead:
+`shape=(1, 64, 32), formats=('bfp4',)` at **PCC -0.033**, 587/588. It did not reproduce — that
+variant passes in isolation (17/17 for `single and bfp4`) and the full suite then passes
+588/588 — and it appeared in the first run after a device-contention incident (a stray plain
+`pytest` overlapping a `run_test.sh` run, which by itself produced 137 spurious failures and a
+`TENSIX TIMED OUT` across two suites).
+
+Worth attaching to Finding 12 rather than filing separately: same suite, same intermittency,
+but the symptom is a wrong answer, not a hang. Whoever picks up item F should know the failure
+mode has both shapes, because "it hangs" is a much easier thing to look for than "it
+occasionally computes garbage".
+
 ### Finding 13 — a test that passes first try has not been shown to test anything
 
 Method note rather than a product finding, but it changed two conclusions on 2026-08-18, so it
@@ -722,6 +742,38 @@ The companion constraint is real and now sourced: `kt_dim` must be **even**, bec
 tables' "even number from 2 to 256" comes from.
 
 ---
+
+### Finding 17 — `llk_math_top32_rm.h` did not compile under the tt-llk build
+
+Third header of the class Finding 5 opened, and the same fix. `_llk_math_top32_rm_init_`'s
+`num_faces` and `llk_math_top32_rm_configure_mop`'s `total_rows` are never read — the MOP is a
+fixed two-instruction body walking 8 Dest rows per issue via `ADDR_MOD_2` — and the tt-llk test
+build compiles with `-Werror=unused-parameter`, so **the first test to include this header
+failed to build**. The JIT build does not treat that warning as an error, which is why a
+promoted header could sit on main in this state.
+
+Both parameters were dropped rather than suppressed, matching the call the #53130 reviewers
+made on `llk_unpack_A_rmsnorm.h` and `llk_unpack_A_top32_rm.h`, and
+`llk_math_top32_rm_api.h` — its only caller anywhere in the tree — was updated with it.
+
+What the three instances have in common is worth stating once: **a promoted header that no
+in-tree test compiles has not been compiled at all except by the JIT path, under a weaker
+warning set.** Promotion reviews cannot see this; the first test can, and does, immediately.
+
+### Finding 18 — the 7 `llk_math_deepseek_top32_rm_*` wrappers are on main with no caller
+
+During #53130's review these seven metal wrappers were dropped from the branch because they
+had no caller and no test. They are on main regardless — they arrived with #52713 — and the
+recheck on 2026-08-20 says nothing has changed: `git grep` finds no caller anywhere outside
+the header itself, and the in-tree consumers (`unified_kernels/sampling.hpp`, both
+`top32_rm_dev_compute*.cpp`) still drive the underlying `ckernel::sfpu::_bitonic_top32_*` and
+`_top32_rm_init_` primitives directly through `SFPU_UNARY_CALL`.
+
+So A2's "this test also unblocks restoring the wrappers" is resolved by the wrappers never
+having needed restoring, and what is left is coverage rather than a promotion decision:
+`test_top32_rm.py` drives the same primitives the wrappers wrap, but through the LLK layer,
+which is where a tt-llk test can reach. Covering the **wrapper layer** needs a metal-side
+test, the same shape and the same blocker as B1.
 
 ## 8. Note on tooling (applies to the remaining work too)
 

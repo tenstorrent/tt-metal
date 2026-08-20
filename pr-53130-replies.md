@@ -1,240 +1,217 @@
 # PR #53130 — drafted replies
 
-> **Status: drafted, NOT posted.** Written 2026-08-18 by a session with no GitHub write access,
-> so every reply below is copy-paste ready and none of it is on the PR. SHAs are post-rebase
-> (the branch was rebased onto `main` `b62ff4a6af1` the same day). Committed here rather than
-> left in a scratchpad so the work is not lost — see item E in
-> [`REMAINING_WORK.md`](REMAINING_WORK.md).
+> **Status: drafted, NOT posted.** Rewritten **2026-08-20** against the live thread list: of the
+> 36 review comments on the PR, 15 already have a reply and the **21 below do not**. Supersedes
+> the 2026-08-18 draft, which covered 11 (all of them still here, re-checked). One thread the
+> old draft answered — `r3783240232`, a reviewdog import-order nit — is gone from the API
+> listing entirely, so it needs nothing.
 >
-> Check each thread is still open before pasting: some may have been answered since.
+> Still not posted for the same reason as last time: no GitHub write access from the session
+> that wrote them (`gh` is not installed on this box and outbound `curl` is blocked, so reads
+> work and writes do not). Everything below is copy-paste ready.
+>
+> Check each thread is still open before pasting, and note the last group is deliberate
+> won't-fix with a rationale rather than a change.
 
 Base URL for each: `https://github.com/tenstorrent/tt-metal/pull/53130#discussion_r<id>`
 
-Eleven open comments. **6 fixed in this pass**, **3 were already fixed by earlier commits on the
-branch** (reply + resolve), **2 are reply-only**.
+SHAs are on `ldjurovic/llk-tests-blaze-promotions`.
 
 ---
 
-## Fixed in this pass
+## A. Fixed in this session (5 new commits)
 
-### r3796908960 — `test_custom_mm_uninit_restore.py:210` — imperative `pytest.xfail()`
-
-> Imperative `pytest.xfail()` raises immediately and aborts the body […] it can never report XPASS.
-
-Correct, and this file was the only place in the suite doing it — `test_sfpu_unary.py`,
-`test_sfpu_binary.py` and `test_sfpu_reduce.py` all use the marker form. Fixed as suggested:
-`request` added to the signature and
-
-```python
-request.node.add_marker(pytest.mark.xfail(reason=_DENSE_FP32_XFAIL, strict=False))
-```
-
-so the body actually builds and runs, and the variant flips to XPASS once the W-stride constants
-become format-aware — which is what the comment above it promised. Confirmed the local
-`parametrize()` helper only parametrizes its own named kwargs, so the `request` fixture injects
-cleanly.
-
----
-
-### r3796909504 — `llk_unpack_A_rmsnorm.h:30` — dead `unpack_{src,dst}_format`
-
-> deleting both end-to-end is 2 files […] prefer that over suppressing the warning.
-
-Agreed, done — the `[[maybe_unused]]` suppressions are gone and both parameters are deleted
-end-to-end. It was **3** files, not 2: besides the LLK lib header and the
-`llk_unpack_A_rmsnorm_api.h` shim, the new tt-llk driver
-`tests/sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp:75` was also passing
-`formats.unpack_A_src` / `formats.unpack_A_dst` positionally.
-
-The public `llk_unpack_A_rmsnorm_init` signature is unchanged (it never exposed them), so nothing
-above layer 1 moves — `hw/inc/api/compute/experimental/rmsnorm.h` still calls it with 3 args and
-there are no other consumers in the tree.
-
-The commented-out `disable_src_zero_flag` TODO in `_llk_unpack_A_rmsnorm_init_` referenced
-`unpack_dst_format`, so it now carries a line saying reviving it needs the dst format plumbed back
-in.
-
----
-
-### r3796909555 — `sort_headers_coexist_test.cpp:120` — bare `0`
-
-Fixed: `set_dst_write_addr_offset(0 /*addr*/)`, matching the helper's parameter name and the
-annotated-literal convention used elsewhere in the file.
-
----
-
-### r3796119145 (Copilot) — `llk_unpack_AB_compressed_custom_mm.h:250` — OOB remainder read
-
-> When `kt_dim * ct_dim` is divisible by 10, `rem_iters` is zero […] this still reads
-> `meta_ptr[full_iters]` one word past the buffer.
-
-Confirmed and fixed. `full_iters = (kt_dim * ct_dim) / 10` and `rem_iters = (kt_dim * ct_dim) % 10`,
-so the buffer holds `ceil(kt_dim * ct_dim / 10)` words and the load is past the end whenever the
-product is a multiple of 10 — reachable within the documented ranges (`kt_dim` even 2..256,
-`ct_dim` 1..16), e.g. `kt_dim=10, ct_dim=1`. The load and the remainder loop are now inside
-`if (rem_iters != 0)`.
-
----
-
-### r3796909307 — `test_sfpu_add_rsqrt.py:268` — sign of an undefined value
-
-> this one pins the sign of a value the implementation does not define […] Asserting that the two
-> `fast_approx` builds differ would pin the same intent.
-
-Fair, and taken. The `fast_approx=True` branch was asserting `negative_lanes > 0` on the *unguarded*
-result, which as you say falls out of the current LUT seed rather than from anything
-`ckernel_sfpu_sqrt.h` states.
-
-Restructured along the lines you suggested: `fast_approx` is no longer a parametrize axis; the test
-now builds both variants and asserts
-
-1. `FAST_APPROX=false` leaves no negative lane — guard-specified, and the load-bearing half; and
-2. the two builds differ somewhere — which is the actual intent ("the one case that tells
-   FAST_APPROX=true from FAST_APPROX=false") and holds regardless of what the unguarded body
-   returns.
-
-Both variants are `prepare()`d before either runs, following `test_topk_xl_rebuild_ascending` —
-under `--compile-producer` `run()` skips as soon as the first variant is built, so the second would
-otherwise never emit its ELF. The "sign guarantee" wording is gone; the docstring now records the
-measured behaviour as an observation and says explicitly why it is not asserted.
-
----
-
-### r3796909124 — `custom_mm.h:267` — `restore_tile_pack_mop` vs `pack_block_contiguous_uninit`
-
-Every factual claim here checks out, and I verified each one:
-
-- the body is byte-identical to `pack_block_contiguous_uninit()` in
-  `experimental/pack_block_uninit.h` (which is already on main);
-- `custom_mm_block_init_short` (`matmul.hpp:131`, `kn_sliced_matmul.hpp:114`) programs no pack MOP
-  at all, so on the mid-kernel path there is nothing to restore;
-- full `custom_mm_block_init` derives pack geometry from `out_cb_id` via `llk_pack_init`, so on a
-  non-32x32 output CB this clobbers rather than restores;
-- it leaves the `set_packer_strides`/`SETADCXX` state untouched;
-- and no caller passes `restore_tile_pack_mop=true` — every site in the tree calls
-  `custom_mm_block_uninit<dense_packing>()` / `compressed_custom_mm_block_uninit<...>()`.
-
-**Keeping the flag but fixing the documentation**, rather than removing it: it exists for the
-tt-blaze fused chains that call neither `pack_block_contiguous_init` nor its uninit and still expect
-the packer left at Default on op exit. The doc table row and the body comment no longer say
-"restore" — they now state that it *installs* fixed 32x32/4-face geometry, spell out all four
-caveats above, and point at `pack_block_contiguous_uninit()` as the correct pairing for a caller
-whose MOP was replaced by `pack_block_contiguous_init`. Same for the copy in
-`compressed_custom_mm.h`.
-
-Happy to drop the flag instead if you'd rather not ship the redundant surface — say so and I'll
-remove it from both headers and strip the MOP-restore half of the new test (the `dense_packing`
-W-stride coverage stands on its own either way).
-
----
-
-## Already fixed by earlier commits on the branch
-
-### r3783240232 — `test_sfpu_sampling.py:62` — reviewdog import order
-
-Already applied in `f628a3de0be` ("Apply isort/black formatting to test_sfpu_sampling.py") — the
-import block reads `SAMPLING_PRGM0_HAZARD, SFPU_UNARY_SCALAR` as suggested. Resolving.
-
-### r3783813739 — `compressed_custom_mm.h:62` — `split_acc`/`finalize` doc tables
-
-Already applied in `795ff816b1f` — every affected table row on this family now carries
-"NOT FORWARDED on this family: accepted for call-site compatibility, but the LLK is always
-instantiated with `<flag>=false` (see the NOTE in the body). Sibling custom_mm.h does forward it."
-Resolving.
-
-### r3783809559 — `sort_headers_coexist_test.cpp:125` — runtime half has no signal
-
-Addressed in `c6c52b16063`, taking the first of your two options but keeping the run:
-
-- the Dst-row offset sweep is gone; the test now sweeps `dest_acc`, which is the one axis that
-  changes what the combined TU actually builds;
-- the pytest assertion message no longer claims anything about the helper's offset — it says the
-  datacopy in the combined TU was corrupted, and points at the docstring;
-- the module docstring and the file header both state that this is a compile-time assertion, that
-  the datacopy reprograms `DEST_TARGET_REG_CFG_MATH_Offset_ADDR32` before touching DEST so any
-  offset the helper left is discarded, and that the helper is covered in its real context by the
-  topk_xl and deepseek_top32_rm kernels.
-
-The run is deliberately kept rather than dropping to compile-only: it shows the combined TU
-*executes* (a coexistence regression that wedged the math thread would surface as a hang or a
-corrupted datacopy), and the helper is called so it is code-generated rather than only parsed.
-That is a weaker claim than validating the offset, and it is now the only claim made.
-
----
-
-## Reply-only
-
-### r3796119098 (Copilot) — "Exercise the real uninit API"
-
-> This block is labeled as the function under test, but it reimplements the two statements instead
-> of invoking either changed Compute API entry point.
-
-This is a real limitation and a deliberate one — it is called out in the module docstring of
-`test_custom_mm_uninit_restore.py` and in the header of
-`sources/custom_mm_uninit_restore_test.cpp`: a tt-llk test cannot include
-`tt_metal/hw/inc/api/compute`, so the driver replicates the shared body. The docstring already
-states the consequence in the same terms you do — the test pins the behaviour the two uninits
-currently share, and a future divergence between them is exactly what it cannot catch, which needs
-a test on the metal side that calls the real entry points.
-
-Filing that metal-side test as follow-up rather than doing it here: it belongs in the
-tt_metal compute-kernel test suite, not in this tt-llk PR, and the value this test does add
-(pinning the two packer-state restores against LLK-level regressions, and catching the
-`dense_packing` FP32 W-stride defect) does not depend on it.
-
-Since then, `096ff04e219` adds `test_custom_mm_uninit_parity.py`, a device-free static gate
-that closes the specific risk you are pointing at without the metal-side test: it fails if the
-two compute-API uninit bodies stop being identical, and if the driver's replicated W-stride
-expressions stop matching the headers'. Both mutation-checked. It does not make the test
-"exercise the real uninit API" — a text match cannot say the functions work — but divergence
-now fails loudly instead of silently, which was the part that could rot unnoticed.
-
-### r3796119166 (Copilot) — PR metadata
-
-Correct — the body is still the template and the title understates the diff. Note the title is also
-still tagged `[do not review]`.
-
-**Suggested title**
-
-```
-[LLK] Promote the Blackhole custom_mm / top32_rm / rmsnorm blaze kernels and add tt-llk coverage
-```
-
-**Suggested Summary**
-
-> Promotes four Blackhole kernel families out of the `deepseek_v3_b1` demo's private
-> `kernel_includes/` tree into the real ones, and adds the tt-llk regression coverage they had none
-> of.
+### 3813108243 — `llk_unpack_A_rmsnorm.h:112`, should `UNP_SEL` be `UNP_A`?
+> Fixed in 99dc2eea1c5, as `UNP_AB`.
 >
-> Promoted (moves, so the diff is mostly renames): `custom_mm`, `compressed_custom_mm`,
-> `deepseek_top32_rm`, and the rmsnorm bcast-scalar dest-reuse family — LLK lib into
-> `tt-llk/tt_llk_blackhole/llk_lib/experimental/`, LLK API into
-> `hw/ckernels/blackhole/metal/llk_api/experimental/`, and the two Compute API headers into
-> `hw/inc/api/compute/experimental/`, packaged via `HW_JIT_API_HEADERS` in `hw/sources.cmake`. The
-> DeepSeek unified kernels and the `top32_rm_dev_compute*` test kernels are migrated to the promoted
-> paths.
+> You are right about the mechanism. `x-start/x-end` is per-unpacker state, and this MOP
+> issues its real UNPACRs against SrcA (unpacker 0) — one per face — while SrcB gets only a
+> ZEROSRC dummy dvalid, because SrcB is filled by MOVD2B on the math thread and reads no L1.
+> The selector was derived the way generic `llk_unpack_A.h` derives it,
+> `(BType == NONE) ? UNP_A : UNP_B`, which is correct there (a SCALAR broadcast means the
+> broadcast operand *is* SrcB) and wrong here (SCALAR only routes the base address to upk0).
+> So it programmed the datum count on the one unpacker that does not use it, and left
+> unpacker 0 at whatever the preceding op left.
 >
-> Also extracts the `set_dst_write_addr_offset` helper shared by `ckernel_sfpu_topk_xl.h` and
-> `ckernel_sfpu_deepseek_top32_rm.h` into
-> `sfpu/experimental/ckernel_sfpu_set_dst_write_addr_offset.h`, so a math TU including both no
-> longer fails with a redefinition error.
+> Programmed on both rather than on UNP_A alone: A is the one that needs it, keeping B costs
+> one instruction and makes the change unable to regress the previous state — which matters
+> because it cannot be measured here. Both of today's callers (the api wrapper and
+> `rmsnorm_bcast_scalar_dest_reuse_test.cpp`) pass `FACE_R_DIM` and run after an unpack that
+> already left unpacker 0 there, so old and new selectors agree and the existing sweep cannot
+> discriminate them. Discriminating it needs a driver that unpacks at a narrow `face_r_dim`
+> after a wide one; noted as follow-up. What the change removes is the dependence on that
+> agreement continuing to hold.
+
+### 3813108603 — `llk_unpack_A_top32_rm.h:25`, unused params
+> Dropped in bf2e02a37dd. Confirmed on both counts: `unpack_src_format` is never read in the
+> init (the y-stride comes from `unpack_dst_format & 0x3`), and the `unpack_to_dest` template
+> parameter is unused there too — only the execute half reads either, and both stay there.
+> The only caller is `llk_unpack_A_top32_rm_api.h`; with the template parameter gone its
+> if/else collapsed, since the two arms differed solely in `within_face_16x16_transpose`, so
+> it is now one call with the flag named at the call site.
+
+### 3813108970 — `test_custom_mm_uninit_parity.py:112`, `REMAINING_WORK.md` does not exist
+> Fixed in 0c19b7e0e3e, all four sites. The file went away with the strategy docs (your
+> earlier comment on those) and these pointers outlived it. Agreed that :112 was the worst of
+> the four, since it is the message a maintainer reads exactly when the guard fires. Each site
+> now states the thing the item said instead of naming where it was written down — for the two
+> parity ones, that the real test has to be metal-side, able to include
+> `tt_metal/hw/inc/api/compute` and call both entry points, which a tt-llk test cannot. No
+> issue link because the follow-up is not filed; the constraint now travels with the code.
+
+### 3813109380 — `custom_mm_uninit_restore_test.cpp:38`, "must be 4" unqualified
+> Scoped in fe7bfe01f13. You are right that it is false of the file as a whole —
+> `test_custom_mm_uninit_restore.py:260` builds this source at `block_mop_num_faces=2` and
+> asserts `not passed_test(...)`. The header now says what each value is for: 4 for the
+> W-stride tests (at a mismatched geometry run 1 is wrong whatever the stride is, so the
+> restore is unobservable), 2 for `test_custom_mm_uninit_leaves_the_caller_mop_installed`, and
+> that deleting the 2-face case deletes the only coverage that would catch a MOP restore being
+> re-added.
+
+### 3813109712 — `llk_unpack_A_rmsnorm.h:26`, no doxygen
+> Added in 99dc2eea1c5, on both functions, in the style of `llk_unpack_A.h`'s own blocks. It
+> names which template arguments are actually reachable rather than presenting them as free
+> choices — the static_asserts pin the pair to SCALAR + acc_to_dest + DEST_TO_SRCB — and
+> records the missing-format-parameter note so the next reader does not go looking for the
+> arguments this branch removed.
+
+---
+
+## B. Already fixed on the branch before this session — reply and resolve
+
+### 3783809559 — `sort_headers_coexist_test.cpp:125`, the runtime half has no signal
+> Agreed and taken. The datacopy does open with `math::set_dst_write_addr<Tile32x32, SrcRegs>`,
+> so the offset the helper leaves is discarded and the copy lands identically whether the
+> helper is right, wrong, or deleted. The offset sweep is gone (one fixed constant remains, so
+> the helper is code-generated rather than only parsed), the runtime assertion message no
+> longer claims to cover the helper's value, and both the source header and the module
+> docstring now say the value is in the build succeeding. The helper stays covered in its real
+> context by the topk_xl and deepseek_top32_rm kernels.
+
+### 3783809910 — `test_custom_mm_uninit_restore.py`, the `family` axis never reaches the build
+> Dropped. Both halves of the finding were right: it produced the same `variant_id` so the ELF
+> was reused, and the rationale was inverted — the driver replicates the shared uninit body
+> rather than calling either entry point, so a divergence between the two headers is precisely
+> what the axis could not catch. The comment where the axis used to be now says that, and
+> `test_custom_mm_uninit_parity.py` guards the divergence textually until there is a
+> metal-side test that calls the real functions.
+
+### 3783810855 — `test_sfpu_add_rsqrt.py`, atol gates the `(No, Float32)` cell
+> Fixed: `_ATOL` is 0, so the per-cell rtol is what gates every cell. Your arithmetic was the
+> point — golden in ~[0.45, 3.2] puts `rtol*|r|` around 3.2e-6, three orders under the old
+> 1e-3 floor, and `torch.isclose` adds the two, so the floor competed with the relative term
+> instead of backing it up. The "50000x tighter" claim went with it.
+
+### 3783812081 — `BLAZE_PROMOTION_TEST_STRATEGY.md`, sprint tracker not documentation
+> Agreed; both docs are off the branch. The genre argument is the right one — per-item effort
+> estimates, an open-questions section, investigation diaries and cross-references to five
+> in-flight PRs do not belong next to `DPRINT.md` / `LOGGING.md` / `TTSIM.md`. The findings
+> worth keeping travel with the code that they constrain instead: the
+> `_top32_rm_init_` / `_topk_xl_init_` same-kernel hang is the scope note in
+> `sort_headers_coexist_test.cpp`, the `vConstFloatPrgm0` hazard is the driver comment and the
+> hazard test in `test_sfpu_sampling.py`, and the `dense_packing` W-stride defect is the
+> thread above plus the xfailed measurement in `test_custom_mm_uninit_restore.py`.
+
+### 3783813409 — `llk_math_deepseek_top32_rm.h`, seven wrappers with no caller
+> Dropped — the file is no longer in this branch's diff. Your read was right: the in-tree
+> consumers drive `ckernel::sfpu::_bitonic_top32_*` / `_top32_rm_init_` directly via
+> `SFPU_UNARY_CALL` and bypass the wrapper entirely, so it would have shipped seven public
+> entry points with no caller and no test. It can land with the top32_rm test that needs it.
+
+### 3783813739 — `compressed_custom_mm.h:72`, doxygen still shows `split_acc`/`finalize` as live
+> Added. Each affected table row now carries the caveat inline — NOT FORWARDED on this family,
+> accepted for call-site compatibility, LLK always instantiated with the flag false, sibling
+> `custom_mm.h` does forward it — pointing at the NOTEs in the bodies. See the thread on
+> Copilot's `split_acc` comment for why the behaviour itself is not changed here.
+
+### 3796119145 (Copilot) — `llk_unpack_AB_compressed_custom_mm.h:250`, remainder word read
+> Fixed in 54e218ebbce: the `meta_ptr[full_iters]` load is now inside `if (rem_iters != 0)`.
+> Correct as reported — with `kt_dim * ct_dim` a multiple of 10 the buffer holds exactly
+> `full_iters` words and the load ran anyway, e.g. `kt_dim=10, ct_dim=1`. The math thread had
+> the same defect in three places; guarded in 506984e522a with
+> `num_meta_words = (kt_dim * ct_dim + 9) / 10`, the expression the caller sizes the buffer
+> with. Scope caveat both times: the elided word was never *used*, so this is memory safety
+> rather than a wrong answer, and no golden can observe it.
+
+### 3796908960 — `test_custom_mm_uninit_restore.py:210`, imperative `pytest.xfail()`
+> Fixed, exactly as suggested: the test takes `request` and calls
+> `request.node.add_marker(pytest.mark.xfail(reason=_DENSE_FP32_XFAIL, strict=False))`, so the
+> body runs and the cell can report XPASS once the W-stride constants become format-aware.
+> Your reading was right that the imperative form was `pytest.skip` with a different label,
+> and the note about `pytest.param(..., marks=...)` not working here saved a wrong fix — the
+> local `parametrize()` helper builds raw tuples and calls `.name`/`str()` on each value, so it
+> does not unwrap a `ParameterSet`.
+
+### 3796909307 — `test_sfpu_add_rsqrt.py:268`, the negative-sign assertion is fragile
+> Taken. The `negative_lanes > 0` assertion on the FAST_APPROX=true side is gone; the test now
+> asserts (1) FAST_APPROX=false leaves no negative lane, which follows from the guard itself,
+> and (2) the two builds differ somewhere, which is what makes the flag observable at all —
+> your suggested framing. The docstring says why: the sign falls out of `vConstIntPrgm0 - i`
+> going negative for these exponents, i.e. from the current LUT seed and not from an
+> invariant, so an accuracy-motivated retune could break the old assertion with the guard
+> still working. The "sign guarantee" wording at the old :241 went with it.
+
+### 3796909504 — `llk_unpack_A_rmsnorm.h:30`, `[[maybe_unused]]` params are dead all the way down
+> Deleted end-to-end rather than suppressed — both parameters are gone from
+> `_llk_unpack_A_rmsnorm_mop_config_`, `_llk_unpack_A_rmsnorm_init_` and the api wrapper. The
+> one thing that referenced `unpack_dst_format`, the commented-out UInt16 src-zero-flag TODO,
+> now carries a note that reviving it means plumbing the format back in. The same cleanup has
+> since been applied to `llk_unpack_A_top32_rm.h` (bf2e02a37dd) per your later comment.
+
+### 3796909555 — `sort_headers_coexist_test.cpp:120`, bare `0`
+> Annotated: `0 /*addr*/`, matching the call above it.
+
+### 3812155565 — reviewdog, trailing whitespace in `test_matmul_custom_mm.py:45`
+> Fixed; `pre-commit run --files <branch files>` is clean on every hook.
+
+---
+
+## C. Not changed in code, deliberately — reply with the rationale and resolve
+
+### 3796119098 (Copilot) — `custom_mm_uninit_restore_test.cpp`, exercise the real uninit API
+> The finding is accurate and the constraint is structural: a tt-llk test cannot include
+> `tt_metal/hw/inc/api/compute`, so this driver replicates the uninit body rather than calling
+> `custom_mm_block_uninit` / `compressed_custom_mm_block_uninit`. Moving the scenario to the
+> metal kernel tests is the right end state and is not something this PR does; it is a
+> different test tree with a different harness.
 >
-> New tt-llk tests: `custom_mm` / `compressed_custom_mm` `_block_uninit` packer-state restore,
-> rmsnorm bcast-scalar dest-reuse, the fused `add_rsqrt` SFPU functor, and sort-header coexistence.
-> `test_sfpu_sampling.py` and `test_matmul_custom_compressed.py` are extended for the promoted
-> paths.
+> What this branch adds instead of pretending otherwise: the limitation is stated in both the
+> driver header and the module docstring, and `test_custom_mm_uninit_parity.py` closes the two
+> failure modes textually — a divergence between the two bodies, and the driver's replicated
+> W-stride expressions drifting from the headers'. A text match cannot tell you the functions
+> work, only that they still say the same thing, which is why it is called an interim guard.
 
-**Suggested Notes for reviewers**
+### 3812324720 (Copilot) — `compressed_custom_mm.h:39`, do not silently discard `split_acc`
+> The claim checks out: `matmul_expert_compressed_dram.hpp:645` `<false, true, false>` and
+> `matmul_expert_compressed_sram.hpp:188` `<false, true, true>` both request `split_acc=true`
+> and silently get false, and the LLK does implement the flag (it selects the DEST addr_mod).
+>
+> Not changed here, deliberately. Forwarding it changes what two shipping DeepSeek kernels
+> compute; rejecting `true` at compile time breaks their build and requires migrating them.
+> #52727 deferred this as a semantic change belonging in its own PR, and that call is the
+> header owner's, not a test PR's. What this branch does is make the hazard concrete: the body
+> NOTE now names both callers instead of saying "all existing consumers were validated against
+> this behavior", which read as reassurance where there is a mismatch, and the doxygen rows
+> carry the caveat.
 
-> - The promotion is a move: most of the diff is renames, and the LLK bodies are carried verbatim
->   from the demo tree. The behavioural deltas are called out in the header comments.
-> - `test_custom_mm_uninit_restore.py` xfails `dense_packing` on a 32-bit pack source: the W-stride
->   constants in both compute-API headers are hardcoded `* 2` (16-bit pack source), so the uninit
->   does not restore what `_llk_pack_init_` programmed. Pre-existing, but the promotion ships it in
->   packaged metalium — see the comment above `_DENSE_FP32_XFAIL`.
-> - `split_acc` and `finalize` are accepted but NOT forwarded on the compressed family; the doc
->   tables and body NOTEs say so.
-> - `restore_tile_pack_mop` on the two `_block_uninit`s installs fixed 32x32/4-face pack geometry
->   rather than restoring a caller's — documented on the flag, with a pointer to
->   `pack_block_contiguous_uninit()` as the right pairing when the MOP came from
->   `pack_block_contiguous_init`.
+### 3796909124 — `custom_mm.h:267`, pair the fused caller with `pack_block_contiguous_uninit`
+> Your analysis is right and the flag it is about did not survive: `restore_tile_pack_mop` is
+> not in main, and `custom_mm.h` on this branch is byte-identical to main —
+> `git diff origin/main HEAD -- tt_metal/hw/inc/api/compute/experimental/custom_mm.h` is empty.
+> It appears in the diff only because the merge-base predates #52727's merge, so there is
+> nothing here to change. Recording the substance for whoever picks the contract up: the body
+> was byte-identical to `pack_block_contiguous_uninit()`, the restore was weaker than it read
+> (hardcoded 32x32/4-face vs `llk_pack_init` deriving geometry from `out_cb_id`, nothing to
+> restore at all after `custom_mm_block_init_short`), and it left the
+> `set_packer_strides`/`SETADCXX` that `_llk_pack_init_` sets untouched.
+> `test_custom_mm_uninit_restore.py` has been narrowed to what actually merged and now pins the
+> *absence* of a MOP restore, which is what a change re-adding one would break.
+
+### 3796119166 (Copilot) — PR metadata still the template
+> Fair. Note the packaging half no longer applies: this branch makes no change to
+> `hw/sources.cmake` any more (`git diff origin/main...HEAD -- tt_metal/hw/sources.cmake` is
+> empty) — those two header entries reached main with #52727, and they showed here only
+> because the merge-base predates it. What is left is tt-llk tests plus the LLK-side
+> promotions and cleanups. The title and body still want updating to say that.
+> **Needs the PR description and title edited by hand — no `gh` on the box this was worked
+> from.**
