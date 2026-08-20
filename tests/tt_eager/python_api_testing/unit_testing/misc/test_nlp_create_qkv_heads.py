@@ -663,6 +663,20 @@ def test_nlp_create_qkv_heads_kv_tied_rejects_untied_widths(device, expect_error
         )
 
 
+def test_nlp_create_qkv_heads_kv_tied_rejects_ambiguous_fused_widths(device, expect_error):
+    """A fused shape divisible both tied and untied section counts must be rejected as ambiguous."""
+    dtype = ttnn.bfloat16
+    num_q_heads, num_kv_heads, head_dim, seq_len = 1, 1, 64, 32
+
+    # Untied fused width (1 + 2) * 64 == 192 is also divisible by tied sections (1 + 1).
+    A = torch.randn([1, 1, seq_len, (num_q_heads + 2 * num_kv_heads) * head_dim])
+    in0_t = ttnn.Tensor(A, dtype).to(ttnn.TILE_LAYOUT).to(device, ttnn.DRAM_MEMORY_CONFIG)
+    with expect_error(RuntimeError, "Ambiguous kv_tied fused input shape"):
+        ttnn.experimental.nlp_create_qkv_heads(
+            in0_t, None, num_heads=num_q_heads, num_kv_heads=num_kv_heads, transpose_k_heads=False, kv_tied=True
+        )
+
+
 def test_nlp_create_qkv_heads_kv_tied_transpose_k_heads(device):
     """transpose_k_heads only selects which CB K lands in, so it is orthogonal to the tied rewind.
 

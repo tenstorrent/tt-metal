@@ -32,8 +32,17 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads(
             "Head dims must be the same for Q and K, V");
     } else if (kv_tied) {
         // One K/V section instead of two, so the fused width is (q + kv), not (q + 2*kv).
-        TT_FATAL(input_tensor_q.padded_shape()[3] % (num_q_heads + num_kv_heads_val) == 0, "Unsupported input shape");
-        head_dim = input_tensor_q.padded_shape()[3] / (num_q_heads + num_kv_heads_val);
+        const uint32_t fused_width = input_tensor_q.padded_shape()[3];
+        const uint32_t tied_sections = num_q_heads + num_kv_heads_val;
+        TT_FATAL(fused_width % tied_sections == 0, "Unsupported input shape");
+        const uint32_t untied_sections = num_q_heads + 2 * num_kv_heads_val;
+        TT_FATAL(
+            fused_width % untied_sections != 0,
+            "Ambiguous kv_tied fused input shape: width {} is divisible by both {} (tied) and {} (untied) sections",
+            fused_width,
+            tied_sections,
+            untied_sections);
+        head_dim = fused_width / tied_sections;
     } else {
         TT_FATAL(
             input_tensor_q.padded_shape()[3] % (num_q_heads + 2 * num_kv_heads_val) == 0, "Unsupported input shape");
