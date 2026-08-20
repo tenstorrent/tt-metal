@@ -917,10 +917,15 @@ def test_sqrt_custom_infinity_regression(request):
         "next multiply is 0 * -inf = NaN. Every consumer inherits it -- erfinv(+/-1) is "
         "how it was originally found. See tt-metal issue #52930."
     )
-    assert torch.all(res[1:] == 2.0), (
-        "sqrt_custom(4.0) is no longer 2.0 on the lanes around the probe. The non-finite "
-        "guard is supposed to divert only zero and the 255-exponent lanes; a finite lane "
-        "reaching the pass-through path means the predicate has been widened."
+    # Tolerance, not equality: sqrt_custom is a magic-seed + Newton-Raphson approximation
+    # (~14 correct bits after two iterations), so sqrt_custom(4.0) is near 2.0, not exactly
+    # 2.0. The band only has to be tight enough to separate "computed" from "passed through",
+    # and a pass-through lane would read 4.0.
+    assert torch.allclose(res[1:], torch.tensor(2.0), rtol=1e-3, atol=0.0), (
+        f"sqrt_custom(4.0) is no longer ~2.0 on the lanes around the probe "
+        f"(max deviation {(res[1:] - 2.0).abs().max().item():.6g}). The non-finite guard is "
+        "supposed to divert only zero and the 255-exponent lanes; a finite lane reaching the "
+        "pass-through path means the predicate has been widened."
     )
 
 
