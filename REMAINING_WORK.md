@@ -21,7 +21,6 @@ references the symbol. State verified against the tree on 2026-08-20.
 
 | # | Item | Type | Size | Blocked on |
 |---|------|------|------|-----------|
-| **A1'** | `custom_mm` (plain) — `read_transposed`, and the top of the `kt_dim` range | test | ~2 h | — |
 | **A2''** | `top32_rm` — the metal wrapper layer (its other half is now C6) | test | B1-shaped | needs an owner in the metal tree |
 | **A5** | `eltwise_mul_scalar` HiFi init — untested, rationale disproved | test | unknown | C2 |
 | **B1** | `custom_mm` vs `compressed_custom_mm` divergence guard | test, **outside tt-llk** | ~1 d | needs an owner (interim static guard landed) |
@@ -29,41 +28,23 @@ references the symbol. State verified against the tree on 2026-08-20.
 | **C2** | `eltwise_mul_scalar` HiFi workaround rationale does not hold | **question** | — | #52709 author |
 | **C3** | `topk_xl` → `eltwise_binary` reconfig escape | **defect**, pre-existing | unknown | needs an owner |
 | **C4** | `mul_reduce_scalar` re-entry needs a DEST-section boundary | **defect** | unknown | needs an owner |
-| **C5** | OOB metadata read shipped to main with #52727 | **defect** | minutes | needs the fix cherry-picked |
+| **C5** | OOB metadata read shipped to main with #52727 | **defect** | minutes | branch ready, needs pushing + a PR |
 | **C6** | `top32_rm` 32-bit unpack: partial chunk sorts against stale Dest | **defect** | ~0.5 d | needs an owner (xfail pins it) |
 | **D1** | `mul_reduce_scalar_chunked_tile` ships with no caller | cleanup | — | C4 decides it |
 | **E** | PR mechanics — title and body | chore | minutes | — |
 | **F** | `test_matmul_custom_compressed` intermittent — host/BRISC desync | **defect**, nightly-only | unknown | needs an owner |
 
-Nothing here is blocked on a promotion PR any more, and **only four of the thirteen are test
-work** (A1', A2'', A5, B1) — two of those are hours rather than days. Six are product decisions
-or defects that need an owner rather than a test (C1–C6), three of them defects in shipping ops
-with a reproducer already attached (C1, C4, C6); the rest are one cleanup (D1), the PR's own
-metadata (E), and one intermittent-failure investigation (F).
+Nothing here is blocked on a promotion PR, and **nothing left is tt-llk test work that a test
+PR can do on its own**. The three test items (A2'', A5, B1) each need something else first: an
+owner in the metal test tree for two of them, and C2's answer for the third. Six are product
+decisions or defects needing an owner (C1–C6) — three of those are defects in shipping ops with a
+reproducer already attached (C1, C4, C6), and C5 has a verified branch waiting to be pushed. The
+rest are one cleanup (D1), the PR's own metadata (E), and one intermittent-failure investigation
+(F).
 
 ---
 
 ## A. Functional test gaps
-
-### A1'. `custom_mm` (plain) — `read_transposed`, and the top of the `kt_dim` range
-
-Two things, neither of them in the original plan for this family:
-
-**1. `read_transposed` (~2 h, unblocked).** A *different* flag from `transpose`, and easy to
-conflate with it: `transpose` transposes each in1 tile inside SrcA, while `read_transposed`
-changes the ORDER the unpacker reads in1 tiles out of L1 --
-`_llk_unpack_AB_custom_mm_<read_transposed, clear_src>` computes
-`block_increment = kt_dim * tile_size_a` and a negative `inner_increment` instead of walking
-tiles contiguously. So it reads the ct dimension with a kt stride. Both polarities are reachable
-from the existing driver; the golden is a reindexed operand, not a transposed one.
-
-**2. The top of the documented `kt_dim` range.** The sweep runs `kt_dim` 2 and 4 against tables
-that claim 2..256. Nothing suggests a defect up there, but the parity constraint
-(`TT_MOP(0, (kt_dim / 2) - 1, 0)`) is the only thing anyone has verified about the range.
-
-**Watch for.** `ct_dim <= 8` is a real ceiling in this configuration, not a documentation gap:
-the ct output tiles are all live in DEST and half-sync holds 8 bf16 tiles. The doc tables claim
-1..16; the upper half needs `DstSync::SyncFull` or a caller that splits the block.
 
 ### A2''. `top32_rm` — the metal wrapper layer, and one shape the hardware cannot do
 
@@ -228,9 +209,15 @@ see it — confirmed by running the boundary test against the unguarded kernel, 
 It is a memory-safety defect, not a wrong-answer defect: an L1 read of whatever follows the
 metadata buffer.
 
-**Fix:** cherry-pick `54e218ebbce` onto main, or re-apply the three-line guard. Minutes of work.
-It will otherwise ride in on this branch whenever #53130 merges, which is fine but leaves main
-carrying it in the meantime.
+**A ready branch exists — what is left is pushing it and opening the PR.**
+`ldjurovic/compressed-mm-oob-guard`, cut from `main`, carries both guards cherry-picked (unpack
+side and math side) and nothing else: 2 files, +30/-12, no compute-API change. Verified on BH
+p100a from that worktree — `test_matmul_custom_compressed.py` **582 passed** (main's count; the
+6 metadata-word-boundary variants that reach the guarded case live on #53130's branch, so run
+those there).
+
+The guard will otherwise ride in on #53130 whenever it merges, which is fine but leaves main
+carrying the defect in the meantime.
 
 ---
 
@@ -390,14 +377,16 @@ pairing, which reports real pairs as unmatched.
 
 1. **E** — retitle the PR and fill in the body. Minutes, and nothing else gets reviewed until it
    is done. Posting the 21 drafted replies belongs here too.
-2. **C5** — cherry-pick the OOB metadata guard onto main. Minutes, and main carries the defect
-   until someone does.
+2. **C5** — push `ldjurovic/compressed-mm-oob-guard` and open the PR. The work is done and
+   verified; main carries the defect until someone clicks.
 3. **C4** — route to an owner. A located defect in a shipping op with a minimal reproducer, which
    makes it the cheapest real fix on the list, and it decides D1.
 4. **C1 / C2 / C3** — route to owners too; they are decisions rather than work, and C2 gates A5.
-5. **A1'** — `read_transposed`, ~2 h, unblocked and the cheapest test work left.
-6. **C6** — route to an owner with the xfail; it is the only thing standing between the
-   `top32_rm` sweep and the Metal dev test's own row=3232 shape.
-7. **B1** and **A2''**, once an owner in the metal test tree exists.
+5. **C6** — route to an owner with the xfail; it is the only thing standing between the
+   `top32_rm` sweep and the Metal dev test's own row=3232 shape, and the fix is half a day once
+   someone picks between clearing the tile and rejecting `num_faces < 4`.
+6. **B1** and **A2''**, once an owner in the metal test tree exists. Note **A2'' also needs the
+   branch rebased onto main first**: the 7 wrappers it is about are on main, not on this branch,
+   so nothing here can even include them yet.
 8. **F** — route to an owner with the triage output; no further reproduction needed, and
    repeating it costs a device reset.

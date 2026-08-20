@@ -40,7 +40,7 @@
 |---|---|
 | Verification tier (V1-V4) | 4 of 4, all green |
 | New test items landed | **12** — the original 5 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard, rmsnorm bcast-scalar dest-reuse), 3 from 2026-08-18 (`set_dst_write_addr_offset` behaviour, compressed metadata-word boundary, `mul_reduce_scalar` re-entry), the uninit parity guard and plain `custom_mm` from 2026-08-19, and the **`top32_rm` sort family** from 2026-08-20 — the last two widened the same day to close A1 and A2' |
-| Test results | **324 new variants passing / 14 xfailed** (42 + 15 + 2 + 12 + 114 + 14 + 6 + 36 + 2 + **64** + **15**; xfails are 1 W-stride + 12 re-entry + 1 stale-Dest) |
+| Test results | **348 new variants passing / 14 xfailed** (42 + 15 + 2 + 12 + 114 + 14 + 6 + 36 + 2 + **88** + **15**; xfails are 1 W-stride + 12 re-entry + 1 stale-Dest) |
 | Files | 14 added (7 `tests/sources/*.cpp`, 7 `tests/python_tests/test_*.py`) + 3 extended (`sfpu_sampling_test.cpp`, `test_sfpu_sampling.py`, `test_matmul_custom_compressed.py`) + **3** LLK headers fixed to compile + 4 template params added |
 | Product findings | **4 defects** (all need an owner) + 1 pre-existing reconfig escape + 12 behavioural constraints |
 
@@ -57,7 +57,7 @@
 | **Compressed metadata-word boundary (#52727)** — 2026-08-18 | `tests/python_tests/test_matmul_custom_compressed.py` (extended) | **6 passed** (suite 582 -> 588) |
 | **`mul_reduce_scalar` re-entry (#52709)** — 2026-08-18 | `tests/sources/mul_reduce_scalar_reenter_test.cpp`, `tests/python_tests/test_mul_reduce_scalar_reenter.py` | **36 passed, 12 xfailed** (Finding 9) |
 | **custom_mm uninit parity guard (#52727)** — 2026-08-18 | `tests/python_tests/test_custom_mm_uninit_parity.py` | **2 passed** — static, device-free; B1's interim guard |
-| **plain `custom_mm` matmul (#52727)** — 2026-08-19, widened 2026-08-20 | `tests/sources/matmul_custom_mm_test.cpp`, `tests/python_tests/test_matmul_custom_mm.py` | **64 passed** — 32 plain + 16 `transpose` + 16 `split_acc`/`finalize`; closes A1 |
+| **plain `custom_mm` matmul (#52727)** — 2026-08-19, widened twice on 2026-08-20 | `tests/sources/matmul_custom_mm_test.cpp`, `tests/python_tests/test_matmul_custom_mm.py` | **88 passed** — 32 plain + 16 `transpose` + 16 `split_acc`/`finalize` + 16 `read_transposed` + 8 deep-kt; closes A1 and A1', i.e. every flag this family forwards |
 | **`top32_rm` sort family (#52713)** — 2026-08-20 | `tests/sources/top32_rm_test.cpp`, `tests/python_tests/test_top32_rm.py` | **15 passed, 1 xfailed, 5 skipped** — both widths of the plain mode, pre-sorted at 1024/2048/1088/1152; closes A2 and A2' item 1, and pins C6 |
 
 ### Verification tier — all green on the merged branch
@@ -953,8 +953,29 @@ Both axes passed first try and were mutated to show they are not vacuous (Findin
 `transpose=true` against the untransposed golden fails, and `split_acc` with `finalize=false`
 fails at **PCC 0.687** — so the flag really changes the result, and `finalize` is load-bearing.
 
-Left on the family: `read_transposed` (the tile read ORDER, a separate flag from `transpose`)
-and the top of the documented `kt_dim` range. Tracked as A1'.
+### And the last two axes: `read_transposed` and deep kt
+
+`read_transposed` **transposes nothing** — that is the trap in its name.
+`_llk_unpack_AB_custom_mm_` sets `block_increment = kt_dim * tile_size_a` and
+`inner_increment = -((ct_dim - 1) * kt_dim - 1) * tile_size_a`, so the MOP walks the ct dimension
+with a kt stride and then winds back to the next k row. Worked through, k=0 reads tiles
+0, kt, 2kt, … (ct-1)kt and the wind-back lands on tile 1 — the caller is expected to have stored
+its tiles in `[ct][kt]` order instead of `[kt][ct]`. The tiles are byte-identical either way,
+which is what makes the golden the same and the flag purely a layout contract.
+
+The sweep starts at `ct=3` because at `ct=1` both layouts are the same bytes in the same order
+and the flag is unobservable — a `ct=1` cell would pass whether the walk changed or not. And the
+discrimination mattered here more than usual, a layout flag being exactly the kind of thing that
+can pass by symmetry: with the flag on and the `[ct][kt]` repacking removed, all 16 variants fail
+at **PCC 0.13 / 0.25 / 0.05**.
+
+Deep kt (16 and 32, at ct 1 and 3) adds no new code path — the issue count is
+`TT_MOP(0, (kt_dim / 2) - 1, 0)` at any depth — so what it pins is that the single-issue walk
+still addresses correctly at 8x and 16x the swept depth, and that the bf16 Dest accumulation
+stays inside the kt-scaled floor the shallow cases calibrate. What bounds this is the stimuli
+region, not the op: `kt*ct` tiles at 2 KB each have to fit alongside the ct block.
+
+Nothing is left uncovered on this family's flags.
 
 ### Regression run for the 2026-08-20 change set
 
@@ -962,7 +983,7 @@ Serially through `run_test.sh` on BH p100a, all PASS: `test_top32_rm.py` **15 + 
 `test_rmsnorm_bcast_scalar_dest_reuse.py` 114 (+114 skipped);
 `test_sfpu_sampling.py` 63 (+97 skipped); `test_custom_mm_uninit_restore.py` 7 (+8 skipped,
 **1 xfailed** — C1, expected); `test_custom_mm_uninit_parity.py` 2;
-`test_matmul_custom_mm.py` **64**; `test_sort_headers_coexist.py` 2;
+`test_matmul_custom_mm.py` **88**; `test_sort_headers_coexist.py` 2;
 `test_perf_header_gate.py` 12; `test_generalized_moe_gate.py` 89;
 `test_set_dst_write_addr_offset.py` 14 (+14 skipped); `test_topk_xl.py` 100;
 `test_matmul_custom_compressed.py` 588.
