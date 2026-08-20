@@ -132,9 +132,17 @@ def _to_host(output_tensor, mesh_device):
 
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 2048}], indirect=True
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "l1_small_size": 2048,
+            "require_exact_physical_num_devices": True,
+        }
+    ],
+    indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["2x4", "8x4"], indirect=True)
 def test_two_matmul_pipeline_transfer_host_time(mesh_device):
     torch.manual_seed(0)
 

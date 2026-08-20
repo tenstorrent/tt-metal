@@ -216,14 +216,15 @@ fabric_router_config.max_packet_payload_size_bytes = 1088 * 8
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "l1_small_size": 2048,
             "fabric_router_config": fabric_router_config,
+            "require_exact_physical_num_devices": True,
         }
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize(
     "tensor_shape",
     [[1024, 2048]],
