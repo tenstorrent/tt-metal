@@ -40,53 +40,63 @@ Extending past the table (same box, `kernel-iters=10`, N=3): at **24** tiles/cor
 reducers land within 0.03% of each other (10689 / 10691 / 10688 ns), i.e. the group is bandwidth-
 bound and the work-distribution choice no longer matters.
 
-## RESOLVED defect: ragged CB quantum corrupted the gather above 8 tiles/core
+## The split does not have to divide the group
 
-**This section originally reported an open, undiagnosed defect. It is diagnosed and fixed; the text
-below is kept because the failure mode generalizes to any ragged work split feeding a CB.**
+`reduce_scatter_mcast` gives worker `i` the tile indices `i, i+W, i+2W, …` for `W` workers, so
+whenever `num_tiles` is not a multiple of `W` some workers own one tile more than the rest. That
+**ragged** case is the normal one — it is what an arbitrary `num_tiles` produces against a fixed
+group — so the variant is built to take it rather than being restricted to even divisions.
 
-The symptom was real. On the pre-fix code (`a3b4ce20bc9`) at `--num-tiles 16` on a `1x8` group,
-the reducer fails the example's correctness assertion hard — not marginally:
+Two properties carry it, and both are worth copying into any op that distributes a ragged split
+over a CB:
 
-```
-Mismatched elements: 655360 / 1048576 (62.5%)
-Greatest absolute difference: 28.90625 (up to 0.125 allowed)
-```
+- **The CB quantum is uniform, not per-worker.** The gather and partial CBs are sized at
+  `max_assigned = ceil(num_tiles / W)`, and every worker pushes and pops that uniform amount with
+  gather stride `contributor * max_assigned`, whatever its own share happens to be. A CB's capacity
+  must be an exact multiple of its push/pop quantum, so a per-worker quantum would wrap at a
+  different offset on every core and contributors would land on each other's slots. Holding the
+  quantum uniform keeps each contributor's slot at a fixed address. The pad slots a short worker
+  leaves are never read and never written back — they cost a little L1 and nothing else.
+- **Every core is a worker, the root included.** `W = min(num_tiles, group_size)`: the root takes a
+  share like everyone else and only then multicasts, writing its own partials to itself over NoC
+  loopback so the sender's `wait_min` still counts one increment per worker per iteration.
+  Reserving the root instead would idle `1/G` of the group through the whole gather/reduce phase,
+  *and* leave `W` coprime with power-of-two tile counts — which is the more ragged split, not the
+  less.
 
-8 tiles/core passed (2304.5 ns), 16 failed. That boundary is not a hardware limit and not a DEST
-batching issue — it is the point at which the per-worker tile split first goes **ragged**.
+### Measured — ragged splits sit on the same curve as even ones
 
-**Root cause.** Worker `i` owns tiles `i, i+W, i+2W, …`, so its share is either `q` or `q+1` tiles.
-The pre-fix kernel used each worker's *own* ragged `assigned` count as the CB push/pop quantum and
-as the gather stride, while both CBs were allocated at the **uniform** `max_assigned`. A CB's
-capacity must be an exact multiple of its push/pop quantum, so a short worker's ragged quantum
-wraps illegally and overwrites another contributor's slot in the gather buffer. At 8 tiles over
-7 workers the split is `2,1,1,1,1,1,1` and the wrap happened to be benign; at 16 over 7 it is
-`3,3,2,2,2,2,2` and it corrupts most of the buffer — hence 62.5%, not a few LSBs.
+`1x8` × 8 groups, `kernel-iters=10`, this box. `W = 8`, so the split is ragged whenever
+`num_tiles % 8 != 0`:
 
-**Fix** (in place since `5ac64b6d1e2`, the same commit that first published this report — which is
-why the report's own "suspected but NOT verified" note is stale): every worker pushes and pops the
-uniform `max_assigned`, and the gather stride is `contributor * max_assigned`, even when a worker's
-real share is smaller. The pad slots are neither read nor written back, so they never reach the
-output. The worker count also became `min(num_tiles, group_size)` — the root now takes a share
-instead of being reserved — but that was a *utilization* change, not the correctness fix: reverting
-only the worker count while keeping the uniform quantum still passes at 16 tiles.
+| tiles/core | split over the 8 workers | shape | median ns | N |
+|---:|---|---|---:|---:|
+| 12 | `2,2,2,2,1,1,1,1` | ragged | 2778.9 | 2 |
+| 16 | `2` each | even | 3527.3 | 5 |
+| 20 | `3,3,3,3,2,2,2,2` | ragged | 5238.1 | 2 |
+| 24 | `3` each | even | 6949.3 | 3 |
+| 32 | `4` each | even | 10689.2 | 2 |
 
-**Verified fixed** on this box, current code:
+The ragged points carry no measurable penalty: the straight line through the two *even* neighbours
+16 and 24 predicts 5238.3 ns at 20 tiles, and the measured ragged value is 5238.1 ns. Read that as
+"inside the run-to-run spread" (1–3% here) rather than as a precise coincidence — the point is that
+a ragged split does not introduce a step in the curve.
 
-| Config | Result |
-|---|---|
-| `1x8` × 8 groups, 12 / 16 / 20 / 24 / 32 tiles/core | PASS (12 and 20 are ragged over 8 workers; 16 / 24 / 32 divide evenly) |
-| grid-derived sweep at 16 tiles/core — `1x11`, `10x1`, `1x5`, `2x11`, `10x2`, `5x5` × all 7 variants | PASS |
+Ragged group *widths* behave the same way. The grid-derived sweep at 16 tiles/core covers
+`1x11` (16 over 11 workers → `2,2,2,2,2,1,1,1,1,1,1`), `10x1` (16 over 10) and `1x5` (16 over 5 →
+`4,3,3,3,3`), alongside `2x11`, `10x2` and `5x5` where `W` caps at `num_tiles = 16` and the split is
+even with the surplus cores idle. All six placements × all seven variants pass.
 
-The 16-over-11, 16-over-5 and 16-over-25 splits in that sweep are all ragged, so the fix is
-general, not tuned to the `1x8` case.
+The 16-tile cell in the payload sweep above was left unmeasured in the first revision of this
+report, pending this mechanism being pinned down; see `5ac64b6d1e2` and `01d578082e8` for the
+history.
 
 ## Consequence for rms_norm R5
 
-`reduce_scatter_mcast` is the only reducer that beats flat root on a 1-D group, and with the
-ragged-quantum fix its **measured-correct region on this box is 4–24 tiles/core** (it loses below 4
-and stops winning by 32). rms_norm's `MAX_GATHER_TILES = 64` caps `R <= 64/G = 8` for the
-`BLOCK_SHARDED` `G=8` case. Raising that cap to reach `R=16` is now safe *and* worth it — 16
-tiles/core is where the pattern is fastest relative to root (**1.61x**, its best ratio at any size
-measured). Past 24 tiles/core there is nothing left to win.
+`reduce_scatter_mcast` is the only reducer that beats flat root on a 1-D group, and its **measured
+winning region on this box is 4–24 tiles/core** — it loses below 4, where there are too few tiles to
+spread, and by 32 the group is bandwidth-bound and all three reducers converge. rms_norm's
+`MAX_GATHER_TILES = 64` caps `R <= 64/G = 8` for the `BLOCK_SHARDED` `G=8` case. Raising that cap to
+reach `R=16` is worth doing: 16 tiles/core is where the pattern is fastest relative to root
+(**1.61x**, its best ratio at any size measured), and `R` does not need to divide `G` to get there.
+Past 24 tiles/core there is nothing left to win.
