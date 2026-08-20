@@ -26,6 +26,47 @@ _PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # with the constructors that accept these kwargs (Gemma4Model and below).
 KNOWN_MODULES = ("shared_mlp", "attention", "experts", "router", "lm_head", "embedding")
 
+
+def _env_overrides():
+    """Per-module dtype overrides from ``GEMMA4_PRECISION_OVERRIDE``, or ``{}``.
+
+    Format is ``module=dtype`` pairs, comma separated:
+
+        GEMMA4_PRECISION_OVERRIDE=attention=bf16,shared_mlp=bf16
+
+    These win over precision_overrides.json. The point is A/B-ability: module
+    dtype is one of the biggest levers on accuracy, and until now changing it
+    meant editing a checked-in JSON — which makes a sweep awkward, leaves no
+    record in the run's own log of what was tested, and is exactly how earlier
+    A/B pairs ended up bit-identical because the intended change never took
+    effect. Score any sweep on the per-layer PCC ladder
+    ladder against the HF reference, not on end-to-end token counts.
+
+    Unknown module names and bad dtypes raise rather than being ignored: a typo'd
+    knob that silently does nothing is the failure mode this exists to prevent.
+    """
+    raw = os.environ.get("GEMMA4_PRECISION_OVERRIDE", "").strip()
+    if not raw:
+        return {}
+    out = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(f"GEMMA4_PRECISION_OVERRIDE: expected 'module=dtype' pairs, got {item!r}")
+        name, value = (part.strip() for part in item.split("=", 1))
+        if name not in KNOWN_MODULES:
+            raise ValueError(f"GEMMA4_PRECISION_OVERRIDE: unknown module {name!r}; expected one of {KNOWN_MODULES}")
+        if value not in _DTYPE_BY_NAME:
+            raise ValueError(
+                f"GEMMA4_PRECISION_OVERRIDE: unknown dtype {value!r} for {name}; "
+                f"expected one of {sorted(_DTYPE_BY_NAME)}"
+            )
+        out[name] = _DTYPE_BY_NAME[value]
+    return out
+
+
 _DTYPE_BY_NAME = {
     "bf16": ttnn.bfloat16,
     "bfloat16": ttnn.bfloat16,
@@ -133,7 +174,7 @@ class Gemma4Precision:
             with open(_PATH) as f:
                 table = json.load(f)
         except FileNotFoundError:
-            return cls({})
+            return cls(_env_overrides())
 
         candidates = _model_key_candidates(model_path, hf_config)
         model_key, model_entry = _lookup_model_entry(table, candidates)
@@ -149,7 +190,7 @@ class Gemma4Precision:
                     list(candidates),
                     sorted(k for k in table if not k.startswith("_")),
                 )
-            return cls({})
+            return cls(_env_overrides())
 
         # Mesh-specific override wins over "default"
         raw = model_entry.get(mesh_key) or model_entry.get("default") or {}
@@ -169,4 +210,11 @@ class Gemma4Precision:
             mesh_key,
             {k: v for k, v in raw.items() if k in KNOWN_MODULES},
         )
+        env = _env_overrides()
+        if env:
+            logger.warning(
+                "Gemma4 precision: GEMMA4_PRECISION_OVERRIDE applied on top of the table -> {}",
+                {k: dtype_to_str(v) for k, v in env.items()},
+            )
+            resolved.update(env)
         return cls(resolved)

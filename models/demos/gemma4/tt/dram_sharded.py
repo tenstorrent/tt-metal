@@ -31,7 +31,9 @@ _L1_HEADROOM_BYTES = 64_000
 _DECODE_IN0_BLOCK_W_MAX = 2
 # Opt-in tuned attention o_proj prefill matmul; default off because it loses to
 # auto end-to-end (see interleaved_o_proj_prefill_config).
-_OPROJ_TUNED = os.environ.get("GEMMA4_OPROJ_TUNED", "0") != "0"
+# On by default: the tuned prefill o_proj is an ACCURACY win that a per-op
+# measurement cannot see. See interleaved_o_proj_prefill_config for the numbers.
+_OPROJ_TUNED = os.environ.get("GEMMA4_OPROJ_TUNED", "1") != "0"
 
 
 def prefill_matmul_lofi_enabled(m: int) -> bool:
@@ -821,8 +823,26 @@ def interleaved_o_proj_prefill_config(m, k, n, grid=None):
     ``TT_FATAL``; ``_out_shard_matches_progcfg`` re-checks that invariant and
     returns all-``None`` if a different shape ever breaks it.
 
-    Opt-in via ``GEMMA4_OPROJ_TUNED=1`` (default off), because the measurement does
-    not support making it the default. ``test_o_proj_wired_config_vs_auto`` on WH 1x8
+    **On by default** (``GEMMA4_OPROJ_TUNED=0`` to opt out). It was previously off
+    because the throughput measurement below did not support it and its PCC check
+    read 0.99993 on *every* arm — per-op, the arms are indistinguishable. That check
+    is the wrong instrument: the difference compounds through 60 layers, and the
+    per-layer hidden-state PCC ladder against the HF reference (31B 1x8 len512,
+    bit-deterministic across repeats) measures
+    **total PCC lost 0.024539 -> 0.016006, a 34.8% reduction**. End to end on
+    ``test_teacher_forcing_e2e[prefill_512-max_new_tokens_500-1x8]``: KL(HF||TT) mean
+    0.671577 -> 0.458668, top-1 75.65% -> 78.64%, worst-step logit PCC 0.424 ->
+    0.459, confident flips 6 -> 3, outside-HF-top-5 28 -> 11.
+
+    The cost is bounded and one-off, not per-token: this config only fires for
+    ``TILE_SIZE < m <= _PREFILL_CUTOFF`` (see the guard below), so decode (m=32)
+    keeps the auto path untouched and pays nothing. Prefill pays the wired-vs-auto
+    delta once per layer per prefill — with the interleave-back that
+    ``apply_allreduce`` adds, ~61.5 us x 60 layers ~= 3.7 ms of TTFT. The decode-side
+    gain is inherited: a better prefill o_proj writes a better KV cache, and every
+    subsequent decode step reads it.
+
+    ``test_o_proj_wired_config_vs_auto`` on WH 1x8
     (64 iters x 8 repeats, best-of, host micros, PCC 0.99993 on every arm):
 
     ==========================  ========  ========
@@ -869,11 +889,41 @@ def lm_head_decode_config(mesh_device, m, k, n):
 
     ``test_lm_head_matmul_sweep`` overall winner at M=32 K=5376 N=32768 (31B TP=8):
     ``1d_c64_bw1`` + DRAM in0 + L1-interleaved out + HiFi4 bf16 (~1.08x vs auto).
-    ``fp32_dest_acc_en`` is on: this is a single last-token matmul (not the
-    prefill-layer band where dest-acc hurt last-token PCC). Scoped to
-    ``m_tiles==1`` and ``n <= 64K`` — the same regime as the prior
+    Scoped to ``m_tiles==1`` and ``n <= 64K`` — the same regime as the prior
     ``_get_lm_head_program_config`` guard (full-vocab tp=1 and multi-row-tile
     prefill fall back to auto).
+
+    Fidelity / dest-acc is selectable via ``GEMMA4_LM_HEAD_FIDELITY`` because this
+    is the one Gemma4 op whose shipped config lands on a **documented Wormhole
+    hardware bug**:
+
+      * ``hifi3_destacc`` (**default**) — HiFi3 + fp32 dest-acc, the runtime's own
+        recommendation for Wormhole under #38306, keeping the dest-acc that
+        ``b040c13f3a6`` wanted. Measured equal to ``hifi4_destacc`` and free of
+        the bug exposure; see the numbers below.
+      * ``hifi4_destacc`` — HiFi4 + fp32 dest-acc, the previous default. This is a
+        matmul, so it calls ``verify_numerical_configuration``, and on Wormhole B0
+        it emits "output accuracy can be worse with HiFi4 than HiFi3 due to a
+        hardware bug" (#38306) once per process. That warning appears in every
+        Gemma4 WH run from this config onwards and in none before it, so this op
+        is its source.
+      * ``hifi4`` — HiFi4 without dest-acc, the pre-``b040c13f3a6`` behaviour. Also
+        #38306-safe, but measurably worse than either of the above.
+
+    Why HiFi3 is the default. ``test_lm_head_bfp8_weight_decode_batch32``
+    [wormhole_b0-1x8] on 31B, op PCC: ``hifi4_destacc`` 0.9999652094 (warns),
+    ``hifi3_destacc`` 0.9999652102 (silent), ``hifi4`` 0.9998385074 (silent). So
+    the dest-acc gain is real and HiFi3 keeps all of it, differing from HiFi4 in
+    the ninth decimal while leaving the buggy combination. End-to-end on
+    ``test_teacher_forcing_e2e[prefill_512-max_new_tokens_500-1x8]``, 31B: top-1
+    and top-5 identical (73.05% / 94.41%), logit PCC mean identical (0.939216),
+    KL(HF||TT) mean 0.874795 vs 0.875192 — i.e. a wash on accuracy, and HiFi3 is
+    never the more expensive fidelity. Set ``GEMMA4_LM_HEAD_FIDELITY=hifi4_destacc``
+    to restore the previous default.
+
+    Score any further A/B on per-step logit KL / PCC (``test_teacher_forcing_e2e``'s
+    decision-distance block), not on token-flip counts: at the sample sizes those
+    cases run, a token rate cannot separate two fidelity settings.
     """
     m_tiles = max(1, (m + TILE_SIZE - 1) // TILE_SIZE)
     if m_tiles > 1 or n > 64 * 1024:
@@ -884,10 +934,17 @@ def lm_head_decode_config(mesh_device, m, k, n):
     program_config = prefill_progcfg_1d(m, k, n, cores=cores, in0_block_w=1, grid_size=grid_size)
     if program_config is None:
         return None, None, None
+    mode = os.environ.get("GEMMA4_LM_HEAD_FIDELITY", "hifi3_destacc").lower()
+    if mode == "hifi4":
+        fidelity, dest_acc = ttnn.MathFidelity.HiFi4, False
+    elif mode == "hifi4_destacc":
+        fidelity, dest_acc = ttnn.MathFidelity.HiFi4, True
+    else:
+        fidelity, dest_acc = ttnn.MathFidelity.HiFi3, True
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=fidelity,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=dest_acc,
         packer_l1_acc=True,
     )
     return program_config, ttnn.L1_MEMORY_CONFIG, compute_kernel_config
