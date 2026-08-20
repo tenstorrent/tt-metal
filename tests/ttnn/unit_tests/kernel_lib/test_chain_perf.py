@@ -191,7 +191,7 @@ def _check_baseline(measured, baseline, label):
 
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize("n", HOIST_N)
-def test_perf_hoisting_device(n):
+def test_perf_hoisting_device(n, silicon_arch_name, silicon_arch_wormhole_b0):
     """Init-once vs init-per-tile device-kernel ns at tile count n. Logs the ratio (the helper-design
     signal: hoisting is ~3.5% faster across the whole n range) and regression-guards each config."""
     ns_single = _device_kernel_ns(f"test_func_hoist[mode=single-n={n}]", f"eltwise_hoist_single_n{n}")
@@ -209,7 +209,7 @@ def test_perf_hoisting_device(n):
 
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize("n", BLOCK_N)
-def test_perf_blocking_device(n):
+def test_perf_blocking_device(n, silicon_arch_name, silicon_arch_wormhole_b0):
     """block_size 1 vs 8 device-kernel ns at tile count n (PerBlockSize block-capable chain). Logs the
     ratio — blocking is neutral-to-slightly-negative for this Exp chain and the penalty amortizes as n
     grows (x0.90 @ n=64 -> x0.99 @ n=2048), which is why the n sweep matters. Regression-guards each config."""
@@ -247,7 +247,7 @@ LIFECYCLE_BASELINE_NS = {
 
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize("n", LIFECYCLE_NS)
-def test_perf_lifecycle_compare(n):
+def test_perf_lifecycle_compare(n, silicon_arch_name, silicon_arch_wormhole_b0):
     """Same exp(A+B)*C chain under Bulk(blk=1), Bulk(blk=max), and PerBlockSize(blk=max).
 
     bulk1->bulk8 isolates blocking within Bulk; bulk8->chunk8 isolates lifecycle at the same block size.
