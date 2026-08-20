@@ -39,6 +39,35 @@
  *        them back. Distinct from step 3 — this is the ROUTE, not the connection.
  *     5. @c make_ccl_semaphore(mesh_device) — allocate the cross-device GlobalSemaphore + run the
  *        cache-miss Synchronize barrier; keep the returned handle alive for the workload's lifetime.
+ *
+ * @par Host helper <-> kernel-side consumer pairing.
+ *   | host (this header / ttnn._ttnn.fabric)   | kernel side consumes it via                       |
+ *   |-------------------------------------------|---------------------------------------------------|
+ *   | @c build_ccl_fabric_rt_args               | @c FabricStreamSender<>(arg_idx, ...) cursor       |
+ *   | @c append_ccl_line_route_ct_args          | @c ccl_routing_utils::get_line_*_route_info_from_args |
+ *   | @c ccl_packet_dims                        | the writer's packet loop (pages_per_packet, segments) |
+ *   | @c ccl_dm_route                           | plain scalars the op passes as its own rt args     |
+ *   | @c make_ccl_semaphore                     | @c AtomicIncChannel targets / semaphore waits      |
+ *
+ * @par EXAMPLE — minimal unidirectional writer (factory side, then kernel side).
+ * @code
+ *   // ---- program factory ----
+ *   auto pkt   = ccl_packet_dims(dtype, page_size, num_pages, l1_alignment);
+ *   auto route = ccl_dm_route(mesh_device, my_coord, dst_coord, topology);   // hops/direction/neighbor
+ *   auto sem   = make_ccl_semaphore(mesh_device);                             // keep alive with the workload
+ *
+ *   std::vector<uint32_t> rt_args = build_ccl_fabric_rt_args(                 // fabric block FIRST
+ *       my_fabric_id, route.neighbor_id, link_idx, desc, core, route.is_forward);
+ *   rt_args.insert(rt_args.end(), {route.num_hops, sem.address(), pkt.pages_per_packet, ...});  // op args AFTER
+ *
+ *   // ---- kernel (writer) ----
+ *   size_t arg_idx = 0;
+ *   const bool is_forward = get_arg_val<uint32_t>(0);        // peek: leading has_forward flag
+ *   FabricStreamSender<> sender(arg_idx, is_forward, l1_alignment);  // cursor eats the fabric block
+ *   const uint32_t num_hops = get_arg_val<uint32_t>(arg_idx++);      // op args resume at the cursor
+ * @endcode
+ *   Full worked references: the committed example packages under ttnn/ttnn/operations/
+ *   (point_to_point is the smallest) and the migrated reduce_scatter_minimal_async factory.
  */
 
 #include <bit>
@@ -196,7 +225,7 @@ inline DmRoute ccl_dm_route(
  *        backward-unicast, backward-multicast (see ccl_routing_utils::
  *        get_line_{unicast,multicast}_route_info_from_args, e.g. all_gather_async's
  *        minimal_default_writer). Owns the host<->kernel arg-layout contract in one place,
- *        the same way append_ccl_fabric_rt_args owns the connection-arg layout.
+ *        the same way build_ccl_fabric_rt_args owns the connection-arg layout.
  *
  * @note This PACKS; it does NOT compute. The route args are produced by the existing
  *   ring-route abstraction @c ttnn::ccl::get_forward_backward_line_{unicast,mcast}_configuration —

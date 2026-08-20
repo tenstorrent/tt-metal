@@ -71,7 +71,7 @@ void kernel_main() {
             const uint32_t target_noc_x = get_arg_val<uint32_t>(ai++);
             const uint32_t target_noc_y = get_arg_val<uint32_t>(ai++);
 
-            // Fabric connection arg block (laid out by append_ccl_fabric_rt_args); its
+            // Fabric connection arg block (laid out by build_ccl_fabric_rt_args); its
             // leading has_forward flag also encodes the send direction, which we peek.
             size_t conn_arg_idx = ai;
             const bool dst_is_forward = get_arg_val<uint32_t>(conn_arg_idx);

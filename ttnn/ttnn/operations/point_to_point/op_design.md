@@ -125,7 +125,7 @@ The shard travels `sender DRAM/L1 → sender L1 CBs → fabric → receiver inte
 
 ### Kernel-side fabric-connection arg contract (non-derivable — pin it)
 
-Both fabric-using kernels build their connection with `FabricStreamSender<>(conn_arg_idx, is_forward, alignment)`, where `conn_arg_idx` points at the start of the fabric-connection runtime block and the **leading word of that block is `has_forward` = `int(is_forward)`** (the kernel peeks it for the direction, then the ctor consumes the whole block). The host must lay the block out exactly as `append_ccl_fabric_rt_args` does (`ccl_helpers_dataflow_host.hpp:219-237`):
+Both fabric-using kernels build their connection with `FabricStreamSender<>(conn_arg_idx, is_forward, alignment)`, where `conn_arg_idx` points at the start of the fabric-connection runtime block and the **leading word of that block is `has_forward` = `int(is_forward)`** (the kernel peeks it for the direction, then the ctor consumes the whole block). The host must lay the block out exactly as `build_ccl_fabric_rt_args` does (`ccl_helpers_dataflow_host.hpp:219-237`):
 
 ```
 [ has_forward = int(is_forward) ]
@@ -256,7 +256,7 @@ After phase 7, every device's `sem` copy is back to 0 (clean for the next cache 
 
 - **Semaphore reset order is load-bearing.** Sender resets BEFORE its outgoing "done" inc; receiver resets AFTER its "done" wait (`ccl_helpers_dataflow.hpp:67-69`). Missing or mis-ordered resets pass run 1 and hang/corrupt run 2 (program-cache reuse).
 - **Create the GlobalSemaphore once.** Create + `synchronize_device` exactly once per mesh, cache the handle on the module, and park it in `mesh_program_descriptor.semaphores`. Do NOT recreate per call and do NOT add a per-call post-dispatch `synchronize_device`.
-- **Fabric-connection RT block layout is exact.** The word at `conn_arg_idx` must be `int(is_forward)` (the kernel peeks it for direction); the rest follows the `[has_forward][fwd][has_backward][bwd]` layout of `append_ccl_fabric_rt_args`. `setup_fabric_connection` must run after `ProgramDescriptor` construction (it mutates the program).
+- **Fabric-connection RT block layout is exact.** The word at `conn_arg_idx` must be `int(is_forward)` (the kernel peeks it for direction); the rest follows the `[has_forward][fwd][has_backward][bwd]` layout of `build_ccl_fabric_rt_args`. `setup_fabric_connection` must run after `ProgramDescriptor` construction (it mutates the program).
 - **`ccl_dm_route` already applies the fwd/bwd sign reversal and ring short-way.** Use `.is_forward` / `.num_hops` / `.neighbor_id` directly; do NOT re-derive direction. Compute the ack route with the coords swapped (`receiver_coord, sender_coord`).
 - **Intermediate is addressed per-packet with an overridden page size.** Both endpoints construct `TensorAccessor` with the third arg = `packet_size_bytes`, and index by `packet_idx`. The intermediate's natural layout (TILE/RM) only governs allocation size, which must be ≥ `total_packets * packet_size_bytes`; following the reference (same `TensorLayout` as output) guarantees this.
 - **No packet-header CB.** `FabricStreamSender` uses `PacketHeaderPool` (fixed fabric L1). The vestigial `packet_header_cb` in `test_generic_op.py` is not used by the kernels and must not be carried over.
