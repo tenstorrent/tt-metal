@@ -160,8 +160,10 @@ void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& 
 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
+[[deprecated("Use distributed::EnqueueMeshWorkload instead. detail::LaunchProgram will be removed after 2026-09-20.")]]
 void LaunchProgram(
     IDevice* device, Program& program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
+[[deprecated("Use distributed::EnqueueMeshWorkload instead. detail::LaunchProgram will be removed after 2026-09-20.")]]
 void LaunchProgram(
     IDevice* device,
     const std::shared_ptr<Program>& program,

@@ -60,7 +60,7 @@ void measure_latency(const std::string& kernel_name) {
     tt::tt_metal::detail::SetDeviceProfilerDir(kernel_name + "_microbenchmark");
     tt::tt_metal::detail::FreshProfilerDeviceLog();
     program.impl().compile(device);
-    tt_metal::detail::LaunchProgram(device, program);
+    tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
     tt_metal::CloseDevice(device);
 }
 
