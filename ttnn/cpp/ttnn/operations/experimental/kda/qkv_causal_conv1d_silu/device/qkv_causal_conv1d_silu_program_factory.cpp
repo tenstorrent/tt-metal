@@ -57,8 +57,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     const m2::DFBSpecName ACT_RM_DFB{"act_rm"};
     const m2::DFBSpecName ACT_TILE_DFB{"act_tile"};
     const m2::DFBSpecName WEIGHTS_DFB{"weights"};
-    const m2::DFBSpecName PARTIAL_A_DFB{"partial_a"};
-    const m2::DFBSpecName PARTIAL_B_DFB{"partial_b"};
+    const m2::DFBSpecName PARTIAL_DFB{"partial"};
     const m2::DFBSpecName OUTPUT_DFB{"output"};
 
     const m2::TensorParamName INPUT{"input"};
@@ -84,8 +83,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
         make_dfb(ACT_RM_DFB, block_ct),
         make_dfb(ACT_TILE_DFB, block_ct),
         make_dfb(WEIGHTS_DFB, 4 * block_ct),
-        make_dfb(PARTIAL_A_DFB, block_ct),
-        make_dfb(PARTIAL_B_DFB, block_ct),
+        make_dfb(PARTIAL_DFB, 2 * block_ct),
         make_dfb(OUTPUT_DFB, block_ct),
     };
 
@@ -142,10 +140,8 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
                 m2::DFBBinding{ACT_TILE_DFB, "act_tile", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{ACT_TILE_DFB, "act_tile", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{WEIGHTS_DFB, "weights", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{PARTIAL_A_DFB, "partial_a", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{PARTIAL_A_DFB, "partial_a", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{PARTIAL_B_DFB, "partial_b", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{PARTIAL_B_DFB, "partial_b", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{PARTIAL_DFB, "partial", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{PARTIAL_DFB, "partial", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{OUTPUT_DFB, "output", m2::DFBEndpointType::PRODUCER},
             },
         .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
