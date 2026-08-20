@@ -90,6 +90,67 @@ Two properties make that hold, and both transfer to any op distributing a ragged
   idle `1/G` of the group for the whole gather/reduce phase *and* leave `W` coprime with power-of-two
   tile counts, which is the more ragged split rather than the less.
 
+## L1 pressure - what each topology costs per core
+
+The reducers do not just differ in speed; they differ in how much L1 each core has to give up,
+and by a much larger factor. With `T` = tiles/core, `G` = group size, `P` = tile bytes (2048 for
+bf16), `W = min(T, G)` workers and `A = ceil(T / W)`:
+
+| Variant | CB | Allocated on | Per-core bytes |
+|---|---|---|---|
+| `reduce_root_mcast` | `CB_GATHER` | **every core in the group** | `G * T * P` |
+| `tree_reduce_mcast` | `CB_GATHER` | every core | `cols * T * P` |
+| | `CB_PARTIAL` + `CB_STAGE2` | row leaders only | `+ (1 + rows) * T * P` |
+| `reduce_scatter_mcast` | `CB_GATHER` + `CB_PARTIAL` | **worker cores only** | `(G + 1) * A * P` |
+
+`CB_OUTPUT` is zero-copy over the sharded output tensor (`cb_descriptor_from_sharded_tensor`), so it
+adds nothing; the input and output shards themselves cost `T * P` each out of the same L1.
+
+**Why the gather buffer is group-wide for the root reducers and worker-local for reduce-scatter** -
+this is the whole story, and it is a *direction* difference, not an accounting one:
+
+- The root reducers **push**: a contributor writes its block into the root's gather buffer with
+  `get_noc_addr(root_x, root_y, gather_addr + my_index * payload_bytes)`, where `gather_addr` is its
+  own local `get_write_ptr()`. That only resolves to the right place because the CB is allocated
+  identically on every core in the group, so the local address equals the root's address. The
+  symmetric `G * T * P` allocation is the addressing mechanism - non-root cores are not wasting it,
+  they are relying on it.
+- Reduce-scatter **pulls**: a worker reads each contributor's shard straight out of the input tensor
+  (already symmetric by virtue of being sharded) into a buffer nobody else addresses. So that buffer
+  is purely local, exists only on the `W` worker cores, and holds only the `1/W` slice of tiles that
+  worker owns - `G` copies of `A` tiles instead of `G` copies of all `T`.
+
+For `T >= G` that collapses to `(G+1) * (T/G) * P ~= T * P`: **reduce-scatter's per-core footprint is
+essentially independent of group size**, where the root reducers' grows linearly with it. Tree reduce
+lands in between - `rows + cols` instead of `rows * cols` - and is cheapest on a square group.
+
+| Config | `reduce_root_mcast` | `tree_reduce_mcast` (leader) | `reduce_scatter_mcast` (worker) |
+|---|---:|---:|---:|
+| `1x8`, T=8 | 128 KiB | = root on 1-D | **18 KiB** |
+| `1x8`, T=16 | 256 KiB | = root on 1-D | **36 KiB** |
+| `1x8`, T=32 | 512 KiB | = root on 1-D | **72 KiB** |
+| `2x8`, T=6 | 192 KiB | 132 KiB | **34 KiB** |
+| `4x4`, T=6 | 192 KiB | 108 KiB | **34 KiB** |
+
+### Measured ceiling
+
+Largest `T` that fits before `Statically allocated circular buffers ... clash with L1 buffers`
+(Blackhole p150a, 1.5 MB L1/core, bf16, `--num-groups 1`; bracketed by the first size that fails):
+
+| Group | `reduce_root_mcast` | `tree_reduce_mcast` | `reduce_scatter_mcast` |
+|---|---|---|---|
+| `1x8` (G=8) | 70 (72 fails) | = root on 1-D | **224** (232 fails) |
+| `4x4` (G=16) | 36 (40 fails) | 64 (72 fails) | **>= 224** |
+
+So reduce-scatter carries **3.2x** the payload of flat root on an 8-core line and **6.2x** on a
+16-core square, and tree reduce **1.8x**. Note what binds at the top end: past roughly 200 tiles/core
+reduce-scatter's own CB is no longer the limit - the `2 * T * P` of input and output shards is - which
+is why its ceiling stops tracking `G` and flattens out near the same number for both group shapes.
+
+Practical consequence: **L1 headroom, not speed, is usually what rules the root reducers out first.**
+If an op needs to keep other buffers resident on the same cores, the gather buffer that scales as
+`G * T` is the first thing to go.
+
 ## CLI - measure your own shapes and parameters
 
 ```bash
