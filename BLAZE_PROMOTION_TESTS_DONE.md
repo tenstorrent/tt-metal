@@ -39,8 +39,8 @@
 | | |
 |---|---|
 | Verification tier (V1-V4) | 4 of 4, all green |
-| New test items landed | **12** — the original 5 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard, rmsnorm bcast-scalar dest-reuse), 3 from 2026-08-18 (`set_dst_write_addr_offset` behaviour, compressed metadata-word boundary, `mul_reduce_scalar` re-entry), the uninit parity guard and plain `custom_mm` from 2026-08-19, and the **`top32_rm` sort family** from 2026-08-20 |
-| Test results | **287 new variants passing / 13 xfailed** (42 + 15 + 2 + 12 + 114 + 14 + 6 + 36 + 2 + 32 + 10; xfails are 1 W-stride + 12 re-entry) |
+| New test items landed | **12** — the original 5 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard, rmsnorm bcast-scalar dest-reuse), 3 from 2026-08-18 (`set_dst_write_addr_offset` behaviour, compressed metadata-word boundary, `mul_reduce_scalar` re-entry), the uninit parity guard and plain `custom_mm` from 2026-08-19, and the **`top32_rm` sort family** from 2026-08-20 — the last two widened the same day to close A1 and A2' |
+| Test results | **324 new variants passing / 14 xfailed** (42 + 15 + 2 + 12 + 114 + 14 + 6 + 36 + 2 + **64** + **15**; xfails are 1 W-stride + 12 re-entry + 1 stale-Dest) |
 | Files | 14 added (7 `tests/sources/*.cpp`, 7 `tests/python_tests/test_*.py`) + 3 extended (`sfpu_sampling_test.cpp`, `test_sfpu_sampling.py`, `test_matmul_custom_compressed.py`) + **3** LLK headers fixed to compile + 4 template params added |
 | Product findings | **4 defects** (all need an owner) + 1 pre-existing reconfig escape + 12 behavioural constraints |
 
@@ -57,8 +57,8 @@
 | **Compressed metadata-word boundary (#52727)** — 2026-08-18 | `tests/python_tests/test_matmul_custom_compressed.py` (extended) | **6 passed** (suite 582 -> 588) |
 | **`mul_reduce_scalar` re-entry (#52709)** — 2026-08-18 | `tests/sources/mul_reduce_scalar_reenter_test.cpp`, `tests/python_tests/test_mul_reduce_scalar_reenter.py` | **36 passed, 12 xfailed** (Finding 9) |
 | **custom_mm uninit parity guard (#52727)** — 2026-08-18 | `tests/python_tests/test_custom_mm_uninit_parity.py` | **2 passed** — static, device-free; B1's interim guard |
-| **plain `custom_mm` matmul (#52727)** — 2026-08-19 | `tests/sources/matmul_custom_mm_test.cpp`, `tests/python_tests/test_matmul_custom_mm.py` | **32 passed**, PCC >= 0.99999 — closes A1's "no coverage at all" |
-| **`top32_rm` sort family (#52713)** — 2026-08-20 | `tests/sources/top32_rm_test.cpp`, `tests/python_tests/test_top32_rm.py` | **10 passed** — 8 plain (4 row lengths x 2 `dest_acc`) + 2 pre-sorted 1024/2048; closes A2 |
+| **plain `custom_mm` matmul (#52727)** — 2026-08-19, widened 2026-08-20 | `tests/sources/matmul_custom_mm_test.cpp`, `tests/python_tests/test_matmul_custom_mm.py` | **64 passed** — 32 plain + 16 `transpose` + 16 `split_acc`/`finalize`; closes A1 |
+| **`top32_rm` sort family (#52713)** — 2026-08-20 | `tests/sources/top32_rm_test.cpp`, `tests/python_tests/test_top32_rm.py` | **15 passed, 1 xfailed, 5 skipped** — both widths of the plain mode, pre-sorted at 1024/2048/1088/1152; closes A2 and A2' item 1, and pins C6 |
 
 ### Verification tier — all green on the merged branch
 
@@ -775,6 +775,51 @@ having needed restoring, and what is left is coverage rather than a promotion de
 which is where a tt-llk test can reach. Covering the **wrapper layer** needs a metal-side
 test, the same shape and the same blocker as B1.
 
+### Finding 19 — DEFECT (needs an owner): `top32_rm`'s 32-bit unpack branch does not clear its tile
+
+Tracked as **C6**. `llk_unpack_A_top32_rm_api.h` forks on the src format, and only the 16-bit
+branch clears SrcA to -infinity (`CLR_SRC_NEGINF`) before unpacking. The 32-bit
+(unpack-to-dest) branch clears nothing, and the `ZEROACC` loop in `_llk_math_top32_rm_` covers
+only `num_faces` faces, so a chunk that fills fewer than 4 faces sorts against whatever Dest
+already held.
+
+Measured on BH p100a: a 160-element row of Float32 values in [-80, 79] returned a top-32
+containing **11026.0, 10041.0, 9058.0** — values not in the input at all, left in Dest by an
+earlier kernel. Pinned by `test_top32_rm_32bit_partial_chunk` as a non-strict xfail.
+
+Latent in the consumer, and the reason is worth keeping: `top32_rm_dev_compute.cpp` does drive
+this branch with `num_faces=2`, but only for its uint32 **index** tile, and an index slot can
+only be selected when the paired value slot wins — the value tile is bf16, so its padding is
+-infinity and never wins. **The 32-bit branch is safe only because a 16-bit operand is
+supplying the -infinity next to it.**
+
+### Finding 20 — the driver was missing a whole branch of the API, and the test still passed
+
+Worth recording as a method note, not just a bug. `top32_rm_test.cpp` originally implemented
+only the 16-bit half of the unpack/copy pair — `_llk_unpack_A_top32_rm_` with
+`unpack_to_dest=false` and `_llk_math_top32_rm_` likewise — because that is the branch the
+bf16 sweep needed. Every bf16 variant passed. The gap only surfaced when a Float32 variant was
+added for the mixed-shape work: `unpack_to_dest=True` then ran a configuration that exists
+nowhere in the API, and the plain mode returned a scattered subset (62, 59, 57, 56, 55 … against
+a golden of 63, 62, 61, 60, 59) at both row=128 and row=256. With both branches implemented and
+selected the way `llk_unpack_A_top32_rm_api.h` selects them, both formats pass.
+
+The generalisable part: **a driver that mirrors one branch of a forked API looks complete for as
+long as the sweep only reaches that branch.** Sweeping the format axis is what exposed it, and
+it is also what turned up C6 — which lives in the branch the driver had been missing.
+
+### Finding 21 — the perf-header gate catches new parameter classes, twice now
+
+`test_perf_header_gate.py::test_parameter_field_names_are_globally_unique` fails when two
+parameter classes declare the same field name, because a test passing both produces two
+perf-CSV columns with the same header. It caught `RMSNORM_DEST_REUSE`'s bare `num_tiles` /
+`num_faces` earlier on this branch (fixed in `55b57d28045`), and on 2026-08-20 it caught
+`TOP32_RM`'s bare `mode`, which `GENERALIZED_MOE_GATE` already owns. Renamed to `top32_mode`,
+matching the constant it emits — the same fix and the same convention as last time.
+
+Both instances were introduced by adding a parameter class and not running this gate. It is
+device-free and takes seconds: **run it whenever you add one.**
+
 ## 8. Note on tooling (applies to the remaining work too)
 
 Run tests through `tt-llk/.claude/scripts/run_test.sh` (`count` / `compile` / `run`), not
@@ -864,13 +909,61 @@ The consumer only ever builds fp32 Dest, so the `dest_acc=No` cells are the firs
   across tiles, cannot produce that answer. The 1024 case is the complement: one tile, prep then
   final, no combine at all.
 
+### Widened the same day: the mixed 1024+tail shape
+
+The pre-sorted mode now finishes a row that is not a multiple of 1024 (rows 1088 and 1152),
+which is what `top32_rm_dev_compute_v2.cpp` does. The tail step sequence is v2's and
+deliberately not the plain mode's: where mode 0 opens each chunk with `phases_steps` (a full
+bitonic sort of an arbitrary 64), v2 opens with `rebuild(skip_second=false)`, which sorts a
+*bitonic* 64. That is sound only because this mode's input contract already holds — two adjacent
+descending runs of 32 are bitonic as a cyclic sequence — so sharing the tail with mode 0 would
+have been wrong in a way that still passes on pre-sorted input.
+
+The stimuli force the largest tiebreak into the last run whenever the row has a tail, and the
+test asserts a winner actually comes from the tail region. Without that the permutation can put
+every winner in the whole-tile region and the test cannot tell a working tail loop from one that
+does nothing — which is exactly what the first attempt produced (the device returned precisely
+the top-32 of the first 1024, with golden's index 1056 missing from position 0), and what led to
+Finding 20 and then C6.
+
+Float32 also became a swept format on the plain mode, which is what put the family's 32-bit
+branch under test at all: 15 passing variants where there were 10, plus the C6 xfail.
+
+### Also on 2026-08-20: A1's two remaining axes
+
+`transpose` and `split_acc`/`finalize` on the plain `custom_mm` family, 32 variants -> **64**.
+What each flag changes, since none of it is visible from the doc tables:
+
+- **transpose** acts on **in1**, which after this family's operand swap is what sits in SrcA —
+  the full 32x32 tiles. Unpack turns on Haloize (within-face 16x16 transpose), math swaps the
+  SrcA face traversal (ADDR_MOD_0/1 SrcA increments 32/48 instead of 16/16). The effect is
+  per-TILE transposition, **not** a transpose of the whole [K, N] operand, so the golden
+  transposes each 32x32 tile in place. Conflating the two is the easy mistake here.
+- **split_acc** moves the inner dimension's partials to Dest rows 8/24 (ADDR_MOD_1 dest
+  increment `1024-8`) instead of accumulating in place at 0/16.
+- **finalize** replaces the last MOP iteration with the replay that ELWADDs those partials back
+  together — the other half of `split_acc`, not an independent knob.
+
+Only the paired `(split_acc=true, finalize=true)` form is swept, and that pairing *is* the
+specification: it must reproduce the plain result exactly, since nothing else in the call
+changes. `finalize` without `split_acc` would ELWADD rows that are not partials, so
+`CUSTOM_MM_FLAGS` rejects it at build time rather than letting a test assert on it.
+
+Both axes passed first try and were mutated to show they are not vacuous (Finding 13):
+`transpose=true` against the untransposed golden fails, and `split_acc` with `finalize=false`
+fails at **PCC 0.687** — so the flag really changes the result, and `finalize` is load-bearing.
+
+Left on the family: `read_transposed` (the tile read ORDER, a separate flag from `transpose`)
+and the top of the documented `kt_dim` range. Tracked as A1'.
+
 ### Regression run for the 2026-08-20 change set
 
-Serially through `run_test.sh` on BH p100a, all PASS: `test_top32_rm.py` **10**;
+Serially through `run_test.sh` on BH p100a, all PASS: `test_top32_rm.py` **15 + 1 xfail**;
 `test_rmsnorm_bcast_scalar_dest_reuse.py` 114 (+114 skipped);
 `test_sfpu_sampling.py` 63 (+97 skipped); `test_custom_mm_uninit_restore.py` 7 (+8 skipped,
 **1 xfailed** — C1, expected); `test_custom_mm_uninit_parity.py` 2;
-`test_matmul_custom_mm.py` 32; `test_sort_headers_coexist.py` 2;
+`test_matmul_custom_mm.py` **64**; `test_sort_headers_coexist.py` 2;
+`test_perf_header_gate.py` 12; `test_generalized_moe_gate.py` 89;
 `test_set_dst_write_addr_offset.py` 14 (+14 skipped); `test_topk_xl.py` 100;
 `test_matmul_custom_compressed.py` 588.
 

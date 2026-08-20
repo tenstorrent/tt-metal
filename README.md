@@ -45,9 +45,9 @@ appear in the diff and the PR is test files plus LLK-side cleanups.
 ## Status at time of writing
 
 - Verification tier V1–V4: **4 of 4 green**
-- New test items: **12 landed** (287 new variants passing, 13 xfailed), **1 attempted and
+- New test items: **12 landed** (324 new variants passing, 14 xfailed), **1 attempted and
   reverted** (now diagnosed as Finding 9), **1 not started** (A5, gated on C2)
-- **Four things need an owner:**
+- **Five things need an owner:**
   - the `dense_packing` W-stride constants in `custom_mm.h` / `compressed_custom_mm.h` are
     hardcoded for a 16-bit pack source (item **C1**, detail as Finding 2);
   - the `eltwise_mul_scalar` HiFi workaround's stated mechanism does not survive reading the
@@ -55,6 +55,8 @@ appear in the diff and the PR is test files plus LLK-side cleanups.
   - `mul_reduce_scalar` re-entry needs a DEST-section boundary (**C4** / Finding 9), a located
     defect in a shipping op;
   - a pre-existing `topk_xl` -> `eltwise_binary` reconfig escape, unrelated to the
-    promotions but liable to confuse work in the sort area (**C3** / Finding 8).
+    promotions but liable to confuse work in the sort area (**C3** / Finding 8);
+  - `top32_rm`'s 32-bit unpack branch does not clear its tile, so a partially-filled chunk
+    sorts against stale Dest (**C6** / Finding 19), pinned by an xfail.
 
 All results measured on Blackhole p100a. Last updated 2026-08-20.

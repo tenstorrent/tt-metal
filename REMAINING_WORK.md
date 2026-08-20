@@ -21,8 +21,8 @@ references the symbol. State verified against the tree on 2026-08-20.
 
 | # | Item | Type | Size | Blocked on |
 |---|------|------|------|-----------|
-| **A1** | `custom_mm` (plain) — `transpose` and `split_acc`/`finalize` still unswept | test | ~0.5 d | — |
-| **A2'** | `top32_rm` — mixed 1024+tail shape, and the metal wrapper layer | test | ~0.5 d + B1-shaped | — / needs an owner in the metal tree |
+| **A1'** | `custom_mm` (plain) — `read_transposed`, and the top of the `kt_dim` range | test | ~2 h | — |
+| **A2''** | `top32_rm` — the metal wrapper layer (its other half is now C6) | test | B1-shaped | needs an owner in the metal tree |
 | **A5** | `eltwise_mul_scalar` HiFi init — untested, rationale disproved | test | unknown | C2 |
 | **B1** | `custom_mm` vs `compressed_custom_mm` divergence guard | test, **outside tt-llk** | ~1 d | needs an owner (interim static guard landed) |
 | **C1** | `dense_packing` W-stride not format-aware | **defect** | ~0.5 d once decided | owner decision |
@@ -30,65 +30,66 @@ references the symbol. State verified against the tree on 2026-08-20.
 | **C3** | `topk_xl` → `eltwise_binary` reconfig escape | **defect**, pre-existing | unknown | needs an owner |
 | **C4** | `mul_reduce_scalar` re-entry needs a DEST-section boundary | **defect** | unknown | needs an owner |
 | **C5** | OOB metadata read shipped to main with #52727 | **defect** | minutes | needs the fix cherry-picked |
+| **C6** | `top32_rm` 32-bit unpack: partial chunk sorts against stale Dest | **defect**, NEW | ~0.5 d | needs an owner (xfail pins it) |
 | **D1** | `mul_reduce_scalar_chunked_tile` ships with no caller | cleanup | — | C4 decides it |
 | **E** | PR mechanics — title and body | chore | minutes | — |
 | **F** | `test_matmul_custom_compressed` intermittent — host/BRISC desync | **defect**, nightly-only | unknown | needs an owner |
 
-Nothing here is blocked on a promotion PR any more, and **only four of the twelve are test
-work** (A1, A2', A5, B1). Five are product decisions or defects that need an owner rather than a
-test (C1–C5), two of them defects in shipping ops with a reproducer already attached (C1, C4);
-the rest are one cleanup (D1), the PR's own metadata (E), and one intermittent-failure
-investigation (F).
+Nothing here is blocked on a promotion PR any more, and **only four of the thirteen are test
+work** (A1', A2'', A5, B1) — two of those are hours rather than days. Six are product decisions
+or defects that need an owner rather than a test (C1–C6), three of them defects in shipping ops
+with a reproducer already attached (C1, C4, C6); the rest are one cleanup (D1), the PR's own
+metadata (E), and one intermittent-failure investigation (F).
 
 ---
 
 ## A. Functional test gaps
 
-### A1. `custom_mm` (plain) — `transpose` and `split_acc` / `finalize` unswept
+### A1'. `custom_mm` (plain) — `read_transposed`, and the top of the `kt_dim` range
 
-The family is under test; what is left is two axes, roughly half a day, nothing blocking.
+`transpose` and `split_acc`/`finalize` are done (64 variants passing; see the DONE document for
+what the flags actually change and how each axis was shown to discriminate). Two smaller things
+were never in A1's plan and are what is left of the family:
 
-**Plan.** Extend `tests/sources/matmul_custom_mm_test.cpp` +
-`tests/python_tests/test_matmul_custom_mm.py` rather than starting a driver:
+**1. `read_transposed` (~2 h, unblocked).** A *different* flag from `transpose`, and easy to
+conflate with it: `transpose` transposes each in1 tile inside SrcA, while `read_transposed`
+changes the ORDER the unpacker reads in1 tiles out of L1 --
+`_llk_unpack_AB_custom_mm_<read_transposed, clear_src>` computes
+`block_increment = kt_dim * tile_size_a` and a negative `inner_increment` instead of walking
+tiles contiguously. So it reads the ct dimension with a kt stride. Both polarities are reachable
+from the existing driver; the golden is a reindexed operand, not a transposed one.
 
-1. `transpose` — the `_llk_unpack_AB_custom_mm_init_<transpose>` template argument, untested in
-   either polarity.
-2. `split_acc` / `finalize` — **forwarded on this family, unlike the compressed one**, which is
-   exactly the asymmetry worth pinning. `finalize=true` changes the iteration count
-   (`kt_dim - 1` in the loop plus a merge block), so the golden has to follow it.
-3. Reuse the existing golden path (`helpers/compressed_utils.py` for the operand-swap and result
-   reorder, `helpers/matmul_sweep.py` for the sweep). Do **not** write a new golden generator.
+**2. The top of the documented `kt_dim` range.** The sweep runs `kt_dim` 2 and 4 against tables
+that claim 2..256. Nothing suggests a defect up there, but the parity constraint
+(`TT_MOP(0, (kt_dim / 2) - 1, 0)`) is the only thing anyone has verified about the range.
 
 **Watch for.** `ct_dim <= 8` is a real ceiling in this configuration, not a documentation gap:
 the ct output tiles are all live in DEST and half-sync holds 8 bf16 tiles. The doc tables claim
 1..16; the upper half needs `DstSync::SyncFull` or a caller that splits the block.
 
-### A2'. `top32_rm` — mixed shape, and the metal wrapper layer
+### A2''. `top32_rm` — the metal wrapper layer, and one shape the hardware cannot do
 
-The family is under test across both of its modes (10 variants; see the DONE document for what
-landed, how it discriminates, and the header defect it turned up). What remains:
+The mixed 1024+tail shape is done: the pre-sorted mode now finishes a row that is not a
+multiple of 1024, at rows 1088 and 1152 (see the DONE document). Two things remain, and the
+second is new information rather than leftover work:
 
-**1. The mixed shape (~0.5 d, unblocked).** `row = 3232` in the Metal dev test: whole
-1024-element chunks through the pre-sorted path, then a 64-element tail through the plain one.
-Both halves pass in isolation; their composition is untested. The driver already contains both
-paths, so this is a tail loop plus one open question — indices past 256 force Float32, and
-Float32 sends the plain mode's unpack down its **32-bit** branch, which pads with zeros rather
-than the `CLR_SRC_NEGINF` the 16-bit branch uses. A tail chunk that pads with zeros is only
-safe for non-negative inputs, so that needs establishing rather than assuming.
-
-**2. The metal wrapper layer (B1-shaped, needs an owner).** The 7
+**1. The metal wrapper layer (B1-shaped, needs an owner).** The 7
 `llk_math_deepseek_top32_rm_*` wrappers are on main with no caller — they arrived with #52713,
-not with this branch, so the #53130 removal is moot. A tt-llk test cannot reach the metal API
-layer; covering them needs a metal-side test, exactly like B1.
+not with this branch. A tt-llk test cannot reach the metal API layer; covering them needs a
+metal-side test, exactly like B1.
+
+**2. The Metal dev test's own `row=3232` shape is not reachable — see C6.** That row ends in a
+32-element chunk, and a partially-filled chunk on the 32-bit branch of this family's unpack
+sorts against stale Dest. The two halves either side of it are covered; the middle is pinned by
+an xfail and tracked as C6.
 
 **Not planned:** the 8-datum `bitonic_top32_load8`/`store8` helpers, which the header records as
 referenced by no kernel.
 
-**Still true, and still worth knowing before touching this area:** `_top32_rm_init_()` and
-`_topk_xl_init_<K, fused>()` **cannot both be called in one kernel** — they overlap in the
-ADDR_MODs, the MOP and the REPLAY buffer, and the math thread hangs (Finding 3). And see C3: a
-pre-existing reconfig escape lives in this area, so bisect single-file-then-target before
-blaming your own driver.
+**Still true before touching this area:** `_top32_rm_init_()` and `_topk_xl_init_<K, fused>()`
+**cannot both be called in one kernel** — they overlap in the ADDR_MODs, the MOP and the REPLAY
+buffer, and the math thread hangs (Finding 3). And see C3: a pre-existing reconfig escape lives
+here, so bisect single-file-then-target before blaming your own driver.
 
 ### A5. `eltwise_mul_scalar` HiFi init — untested, and its rationale does not hold
 
@@ -247,6 +248,36 @@ metadata buffer.
 **Fix:** cherry-pick `54e218ebbce` onto main, or re-apply the three-line guard. Minutes of work.
 It will otherwise ride in on this branch whenever #53130 merges, which is fine but leaves main
 carrying it in the meantime.
+
+---
+
+### C6. A partially-filled chunk on `top32_rm`'s 32-bit unpack branch sorts against stale Dest — **defect, NEW**
+
+`llk_unpack_A_top32_rm_api.h` forks on the src format. The 16-bit branch has the unpacker clear
+SrcA to -infinity (`TTI_UNPACR_NOP ... CLR_SRC_NEGINF`) before unpacking, so a chunk that fills
+fewer than 4 faces leaves the rest at -infinity and they lose every comparison. **The 32-bit
+(unpack-to-dest) branch clears nothing**, and the `ZEROACC` loop inside `_llk_math_top32_rm_`
+covers only `num_faces` faces, so the untouched part of the tile keeps whatever Dest held.
+
+Measured on BH p100a: a 160-element row (two full 64-element chunks plus a 32-element one) of
+Float32 values in [-80, 79] returned a top-32 containing **11026.0, 10041.0, 9058.0** and more —
+values that are not in the input at all, evidently left in Dest by an earlier kernel.
+
+**Latent in the consumer rather than harmless**, which is the reason nobody has hit it:
+`top32_rm_dev_compute.cpp` does call this branch with `num_faces=2`, but only for its **uint32
+index** tile, and an index slot can only be selected if the paired value slot wins — the value
+tile is bf16, so its padding is -infinity and never wins. The defect is invisible until someone
+puts *values* through the 32-bit branch, which the family's doc tables permit.
+
+**Pinned, not just described:** `test_top32_rm_32bit_partial_chunk` is a non-strict `xfail`, so
+it flips to XPASS the moment the branch starts clearing its tile. It also means the sweep has a
+hole with a name: the Metal dev test's `row=3232` shape ends in a 32-element chunk and is the
+one shape this family cannot currently do correctly on 32-bit data.
+
+**Fix shape, for whoever owns it:** either clear the whole tile on the 32-bit path (the ZEROACC
+loop already exists — it just needs to run over all 4 faces, or the unpacker needs a -infinity
+equivalent), or reject `num_faces < 4` on that branch at compile time and document that a
+partial chunk is 16-bit only.
 
 ---
 
@@ -410,9 +441,9 @@ pairing, which reports real pairs as unmatched.
 3. **C4** — route to an owner. A located defect in a shipping op with a minimal reproducer, which
    makes it the cheapest real fix on the list, and it decides D1.
 4. **C1 / C2 / C3** — route to owners too; they are decisions rather than work, and C2 gates A5.
-5. **A1's remainder** (`transpose`, `split_acc`/`finalize`) then **A2'** (the mixed 1024+tail
-   `top32_rm` shape) — ~0.5 d each, both unblocked, both extensions of drivers that already
-   exist.
-6. **B1** and **A2'**'s wrapper half, once an owner in the metal test tree exists.
-7. **F** — route to an owner with the triage output; no further reproduction needed, and
+5. **A1'** — `read_transposed`, ~2 h, unblocked and the cheapest test work left.
+6. **C6** — route to an owner with the xfail; it is the only thing standing between the
+   `top32_rm` sweep and the Metal dev test's own row=3232 shape.
+7. **B1** and **A2''**, once an owner in the metal test tree exists.
+8. **F** — route to an owner with the triage output; no further reproduction needed, and
    repeating it costs a device reset.
