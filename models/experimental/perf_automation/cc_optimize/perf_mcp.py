@@ -5207,6 +5207,71 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
     }
 
 
+def _conv_gate(prof: dict, attempts: list) -> dict | None:
+    """MANDATORY conv weight preparation, for a model that actually has convs.
+
+    WHY THIS IS A GATE AND NOT PLAYBOOK PROSE. `conv_pool` is a first-class op_class -- opclass.py
+    maps Conv/Halo/Pool/GridSample/Upsample to it, and it is in STRUCTURAL_OP_CLASSES -- but the
+    catalogue tags exactly two sections with it, `11_TT_LANG_KERNELS` and `12_CPP_METALIUM_KERNELS`:
+    the bottom two rungs. So for a conv op the only thing recall_knobs can ever return is "author a
+    custom kernel", and the ladder walks a conv straight down to hand-writing Metalium for work that
+    `ttnn.prepare_conv_weights` does once at load. Voxtral-Mini-3B-2507 has audio_tower.conv1 and
+    conv2, so this is not hypothetical for the model in hand.
+
+    The expensive part of a conv is not the math, it is preparing weights into the layout the kernel
+    wants. Done per call it is paid every forward; done once per (in_channels, out_channels, kernel,
+    stride, padding, dtype, layout) it is paid once, and two call sites with identical parameters can
+    share one prepared tensor rather than each building a byte-identical copy.
+
+    Shaped exactly like _decode_gate, and for the same reasons:
+
+      1. APPLICABILITY FIRST. No conv ops -> return None. _decode_gate's comment records what the
+         alternative costs: an encoder-only model was ordered to add a KV-cache and burned three
+         rewrites before the attempt cap released it. A model with no convs must never see this.
+      2. MEASUREMENT-GATED EXIT. Clears on a MEASURED win, never on "attempted" -- the failure the
+         host rung had, where one unhelpful attempt sealed an axis for 158 later rounds.
+      3. CAPPED. A genuinely unpreparable conv yields after PERF_MCP_MAX_CONV_ATTEMPTS real tries,
+         wedges included, so this cannot become a loop that never converges.
+    """
+    convs = [o for o in (prof.get("open_ops") or []) if str(o.get("bucket") or "").lower() == "conv_pool"]
+    if not convs:
+        return None  # (1) not applicable: this model has no convolution at all
+    gap = sum(float(o.get("gap_ms") or 0.0) for o in convs)
+    if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
+        return None
+    _kinds = ("conv-prep", "structural-conv")
+    clean = [a for a in attempts if (a.get("kernel_kind") or "").lower() in _kinds]
+    if any(_ledger().is_win(a) for a in clean):  # (2) measured win clears it
+        return None
+    wedged = sum(1 for a in _load_attempts() if (a.get("kernel_kind") or "").lower() in _kinds and a.get("wedged"))
+    if (len(clean) + wedged) >= int(os.environ.get("PERF_MCP_MAX_CONV_ATTEMPTS", "3") or "3"):
+        return None  # (3) capped
+    _codes = ", ".join(sorted({str(o.get("op_code") or "") for o in convs})[:4])
+    return {
+        "op": "conv_weights",
+        "op_class": "conv_pool",
+        "gap_ms": round(gap, 4),
+        "bound_by": "host",
+        "grid": None,
+        "weight_dtype": None,
+        "next_rung": "structural-conv",
+        "reason": (
+            "MANDATORY conv weight preparation -- a lever SEPARATE from the kernel rungs, and it comes "
+            "BEFORE them. This model has conv ops (%s) carrying %.3fms of gap. Prepare the weights ONCE "
+            "per distinct (in_channels, out_channels, kernel_size, stride, padding, dtype, layout) with "
+            "ttnn.prepare_conv_weights / prepare_conv_bias at load, hold the prepared tensors, and pass "
+            "them to every ttnn.conv2d call instead of letting each call prepare its own. Two call sites "
+            "whose parameters match must SHARE one prepared tensor, not build byte-identical copies. "
+            "Authoring a tt-lang or C++ kernel does NOT resolve this and will NOT clear the gate -- a "
+            "hand-written kernel still pays per-call preparation. Then record_kernel_attempt(op="
+            "'conv_weights','conv-prep',measured_ms,beat_baseline) -- this clears ONLY on a MEASURED "
+            "reduction. If the weights are provably already prepared once and shared, record it with "
+            "note='none: <evidence>' and the cap will release it."
+        )
+        % (_codes or "conv", gap),
+    }
+
+
 def _reliable_forward_ms(dev: float) -> float | None:
     """The trace+1cq per-token number, or None when there isn't one.
 
@@ -5694,6 +5759,9 @@ def termination_check() -> dict:
     decode_block = _decode_gate(prof, attempts)
     if decode_block:
         blocking.append(decode_block)
+    conv_block = _conv_gate(prof, attempts)
+    if conv_block:
+        blocking.append(conv_block)
     blocking.sort(key=lambda b: -(b.get("eff_gap_ms") or b.get("gap_ms") or 0.0))
     can_stop = not blocking
     # AND NOTHING MATERIAL MAY BE UNTRIED. `blocking` empties as each op's checklist fills, so an op
