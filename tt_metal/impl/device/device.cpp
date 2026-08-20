@@ -607,6 +607,7 @@ bool Device::initialize(
     // them at construction time avoids the SHM helpers having to look up a MetalContext on every
     // allocation (and avoids any "find any context" walk that mock+silicon coexistence forced).
     const bool shm_tracking_disabled = context_->rtoptions().get_shm_tracking_disabled();
+    const bool shm_cb_tracking_enabled = context_->rtoptions().get_shm_cb_tracking_enabled();
     const bool shm_verbose = context_->rtoptions().get_shm_verbose();
     if (!shm_tracking_disabled) {
         // Use UMD's chip_unique_ids for globally unique chip identification.
@@ -649,8 +650,8 @@ bool Device::initialize(
             asic_id = this->id_;
         }
 
-        shm_stats_provider_ =
-            std::make_unique<SharedMemoryStatsProvider>(asic_id, this->id_, shm_tracking_disabled, shm_verbose);
+        shm_stats_provider_ = std::make_unique<SharedMemoryStatsProvider>(
+            asic_id, this->id_, shm_tracking_disabled, shm_cb_tracking_enabled, shm_verbose);
         log_debug(tt::LogMetal, "Shared memory tracking enabled for device {}, asic_id=0x{:x}", this->id_, asic_id);
 
         // Register ShmTrackingProcessor globally once (when first device with SHM is created).

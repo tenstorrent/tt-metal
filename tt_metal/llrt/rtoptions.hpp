@@ -407,6 +407,8 @@ class RunTimeOptions {
 
     // Disable shared memory tracking for tt-smi
     bool shm_tracking_disabled = false;
+    // Enable per-program CB (circular buffer) tracking for tt-smi
+    bool shm_cb_tracking_enabled = false;
     bool shm_verbose = false;
 
     SanitizerSettings sanitizer_settings;
@@ -508,6 +510,7 @@ public:
     }
 
     bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
+    bool get_shm_cb_tracking_enabled() const { return shm_cb_tracking_enabled; }
     bool get_shm_verbose() const { return shm_verbose; }
 
     // Info from inspector environment variables, setters included so that user

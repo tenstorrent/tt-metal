@@ -15,6 +15,9 @@ namespace tt::tt_metal {
 // Query ONLY locally-allocated CBs (device->get_total_cb_allocated() only counts local CBs)
 // Globally-allocated CBs create L1 Buffers and are already tracked in L1 column
 void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_t pid) {
+    if (!cb_tracking_enabled_) {
+        return;
+    }
     if (!region_ || !device) {
         return;
     }

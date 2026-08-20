@@ -104,8 +104,12 @@ public:
     // tracking_disabled: process-wide TT_METAL_SHM_TRACKING_DISABLED flag, captured at
     //                    construction time from the owning Device's MetalContext rtoptions
     //                    so the SHM provider does not need to walk MetalContext slots later
+    // cb_tracking_enabled: process-wide TT_METAL_SHM_CB_TRACKING_ENABLED flag, captured the same way.
+    //                    Gates per-program CB aggregation (update_from_allocator);
+    //                    off by default so only the CB column is dropped.
     // verbose: process-wide TT_METAL_SHM_VERBOSE flag, captured the same way
-    SharedMemoryStatsProvider(uint64_t asic_id, int device_id, bool tracking_disabled, bool verbose);
+    SharedMemoryStatsProvider(
+        uint64_t asic_id, int device_id, bool tracking_disabled, bool cb_tracking_enabled, bool verbose);
 
     // Destructor unmaps shared memory and closes file descriptor
     // NOTE: SHM file persists (like UMD locks) - not deleted on process exit
@@ -191,6 +195,7 @@ private:
     int shm_fd_;                     // Shared memory file descriptor
     DeviceMemoryRegion* region_;     // Mapped shared memory region
     bool per_pid_tracking_enabled_;  // Enable detailed per-PID tracking
+    bool cb_tracking_enabled_;       // Cached TT_METAL_SHM_CB_TRACKING_ENABLED flag (process-wide)
     bool verbose_enabled_;           // Cached TT_METAL_SHM_VERBOSE flag (process-wide)
     bool is_creator_;                // True if this process created the shared memory
 
