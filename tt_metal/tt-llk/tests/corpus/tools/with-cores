@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# with-cores — flock-based core-budget slot pool for long compile legs.
+#
+# laneDA (build-infra): concurrent lanes each launching `make -j24` /
+# 12-shard corpus legs trisect each other's cores — three "parallel" legs
+# run slower than three serialized ones.  This wrapper gives the machine a
+# single shared budget of N slots (default: nproc-4, leaving headroom for
+# interactive work and the device harness) that long jobs ACQUIRE before
+# running:
+#
+#     with-cores 12 -- make -j12 all-gcc
+#     with-cores 8  -- ./launch-shard.sh          # $WITH_CORES=8 exported
+#     with-cores status                           # who holds what
+#
+# ADOPTION IS OPT-IN: nothing acquires a slot unless the caller wraps its
+# command.  Existing scripts are untouched.
+#
+# Design (why it cannot deadlock or leak):
+#   * The pool is a directory of slot files ~/sfpi-uplift/.corebudget/
+#     (override: $COREBUDGET_DIR).  Slot i is "in use" iff some process
+#     holds an exclusive flock on slot.i.  flocks are KERNEL-OWNED: a
+#     crashed/killed holder releases its slots automatically — there is no
+#     stale-lock state and never a cleanup protocol.
+#   * Acquisition is ALL-OR-NOTHING under a short mutex (pool.lock): grab
+#     up to n free slots non-blockingly; if fewer than n are free, release
+#     them all, drop the mutex, sleep, retry.  No process ever WAITS while
+#     HOLDING a partial set, so two half-satisfied waiters cannot deadlock
+#     each other.
+#   * The slot locks live on fds inherited by the wrapped command; they are
+#     released when the last process holding them exits.  The wrapper
+#     exec's nothing away — it waits and propagates the command's exit
+#     status unchanged.
+#   * Requests are clamped to the pool size (a 32-slot ask on a 28-slot
+#     pool would otherwise never return; clamping is loud, on stderr).
+#
+# The pool size is fixed at pool-creation time in $COREBUDGET_DIR/size
+# (first caller creates it as nproc-4; override at creation with
+# $COREBUDGET_SLOTS).  Growing/shrinking: stop all holders, rm -r the dir.
+set -u
+
+POOL="${COREBUDGET_DIR:-$HOME/sfpi-uplift/.corebudget}"
+POLL_SECS="${COREBUDGET_POLL_SECS:-5}"
+
+usage() {
+    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+    exit "${1:-2}"
+}
+
+init_pool() {
+    mkdir -p "$POOL"
+    # Racing initializers: size is created atomically (noclobber); the loser
+    # reads the winner's value.
+    if [ ! -f "$POOL/size" ]; then
+        local want
+        want="${COREBUDGET_SLOTS:-$(( $(nproc) - 4 ))}"
+        [ "$want" -ge 1 ] || want=1
+        ( set -C; echo "$want" > "$POOL/size" ) 2>/dev/null || true
+    fi
+    SIZE=$(cat "$POOL/size")
+    case "$SIZE" in ''|*[!0-9]*)
+        echo "with-cores: corrupt $POOL/size ('$SIZE') — rm -r $POOL to reset" >&2
+        exit 2 ;;
+    esac
+    local i
+    for ((i = 0; i < SIZE; i++)); do
+        [ -e "$POOL/slot.$i" ] || : > "$POOL/slot.$i"
+    done
+    : > "$POOL/pool.lock"
+}
+
+cmd_status() {
+    init_pool
+    local i held=0 pid tag
+    echo "pool $POOL: $SIZE slots"
+    for ((i = 0; i < SIZE; i++)); do
+        # A held slot refuses a non-blocking probe lock.
+        if ! flock -n -x "$POOL/slot.$i" -c true 2>/dev/null; then
+            read -r pid tag < "$POOL/slot.$i" 2>/dev/null || { pid=?; tag=; }
+            echo "  slot.$i HELD by pid ${pid:-?} ${tag:-}"
+            held=$((held + 1))
+        fi
+    done
+    echo "  $held/$SIZE held, $((SIZE - held)) free"
+    exit 0
+}
+
+[ $# -ge 1 ] || usage
+case "$1" in
+    status) cmd_status ;;
+    -h|--help) usage 0 ;;
+esac
+
+N="$1"; shift
+case "$N" in ''|*[!0-9]*) echo "with-cores: slot count must be a number, got '$N'" >&2; usage ;; esac
+[ "${1:-}" = "--" ] || { echo "with-cores: expected '--' before the command" >&2; usage; }
+shift
+[ $# -ge 1 ] || { echo "with-cores: no command given" >&2; usage; }
+
+init_pool
+if [ "$N" -gt "$SIZE" ]; then
+    echo "with-cores: clamping request $N -> pool size $SIZE" >&2
+    N="$SIZE"
+fi
+[ "$N" -ge 1 ] || N=1
+
+# --- acquire: all-or-nothing under the pool mutex, retry on shortfall ---
+declare -a HELD_FDS=()
+while :; do
+    exec {mutex_fd}>>"$POOL/pool.lock"
+    flock -x "$mutex_fd"
+    HELD_FDS=()
+    for ((i = 0; i < SIZE && ${#HELD_FDS[@]} < N; i++)); do
+        exec {fd}>>"$POOL/slot.$i"
+        if flock -n -x "$fd"; then
+            # Truncate-and-tag AFTER holding the lock (the probe in status
+            # reads this; losers never write).
+            printf '%s %s\n' "$$" "${WITH_CORES_TAG:-$(basename -- "$1")}" > "$POOL/slot.$i"
+            HELD_FDS+=("$fd")
+        else
+            exec {fd}>&-
+        fi
+    done
+    if [ "${#HELD_FDS[@]}" -eq "$N" ]; then
+        exec {mutex_fd}>&-   # locks ride the slot fds; mutex released
+        break
+    fi
+    for fd in "${HELD_FDS[@]}"; do exec {fd}>&-; done
+    HELD_FDS=()
+    exec {mutex_fd}>&-
+    sleep "$POLL_SECS"
+done
+
+# --- run: slot fds are inherited; released by the kernel on exit ---
+export WITH_CORES="$N"
+"$@"
+rc=$?
+exit "$rc"
