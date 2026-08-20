@@ -21,9 +21,15 @@
 #include "tools/profiler/noc_debugging_profiler.hpp"
 #endif
 
-#include "api/dataflow/dfb_binding_token.h"
+// The LLK operand conversion below is compute-only: llk_mem_descriptor.h reaches into the ckernel/LLK
+// headers, which are not on the include path for data-movement builds.
+#ifdef COMPILE_FOR_TRISC
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#endif
+
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
+#include "api/llk_operand_members.h"
 #include "api/lock.h"
 #include "api/core_local_mem.h"
 #include <type_traits>
@@ -64,6 +70,52 @@ template <bool IsWrite, typename ReleaseFunc>
     uint32_t pointer, ReleaseFunc release) {
     return DfbScopedLock<IsWrite, ReleaseFunc>(pointer, release);
 }
+
+// Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
+// The user will never directly interact with this type.
+//
+// The user's host code declares an accessor_name when binding a DFB endpoint to a kernel.
+// The user then uses that accessor_name to construct a DataflowBuffer in the kernel code.
+//
+// Usage example:
+//   // (Host code declares "my_dfb_name" as the DFB accessor name for this kernel.)
+//   // In the kernel code:
+//   DataflowBuffer my_dfb(dfb::my_dfb_name);
+//
+// Here my_dfb_name is a constexpr DFBBindingToken, auto-included in kernel_bindings_generated.h.
+//
+struct DFBBindingToken {
+    explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
+
+    // Compute endpoints additionally bake the operand's LLK format + face grid; see
+    // ckernel::experimental::to_llk_mem_descriptor below. DM-only DFBs use the id-only constructor.
+    constexpr DFBBindingToken(uint16_t id, LlkOperandMembers llk) noexcept : id_(id), llk_(llk) {}
+
+    // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
+
+    // Implicit conversion to uint32_t:
+    // This lets a Metal 2.0 kernel pass a DFBBindingToken directly to Gen1 (WH/BH) LLK
+    // compute APIs that expect a raw CB id.
+    // This conversion is constexpr; it's intended for Gen1 use only.
+    constexpr operator uint32_t() const noexcept { return id_; }
+
+private:
+#ifdef COMPILE_FOR_TRISC
+    friend constexpr ckernel::experimental::LLKMemDescriptor ckernel::experimental::to_llk_mem_descriptor(
+        DFBBindingToken);
+#endif
+
+    uint16_t id_;
+    LlkOperandMembers llk_{};
+};
+
+#ifdef COMPILE_FOR_TRISC
+namespace ckernel {
+namespace experimental {
+constexpr LLKMemDescriptor to_llk_mem_descriptor(DFBBindingToken token) { return llk_desc_from_members(token.llk_); }
+}  // namespace experimental
+}  // namespace ckernel
+#endif
 
 class DataflowBuffer {
 public:

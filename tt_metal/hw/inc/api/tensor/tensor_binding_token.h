@@ -6,21 +6,14 @@
 
 #include <cstdint>
 
+// The LLK operand conversion below is compute-only: llk_mem_descriptor.h reaches into the ckernel/LLK
+// headers, which are not on the include path for data-movement builds.
+#ifdef COMPILE_FOR_TRISC
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#endif
+
 #include "api/llk_operand_members.h"
 #include "api/tensor/tensor_accessor_args.h"
-
-namespace tensor_accessor {
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-struct TensorBindingToken;
-}  // namespace tensor_accessor
-
-namespace ckernel {
-namespace experimental {
-struct LLKMemDescriptor;
-template <uint32_t CTA, uint32_t CRTA>
-constexpr LLKMemDescriptor to_llk_mem_descriptor(tensor_accessor::TensorBindingToken<CTA, CRTA>);
-}  // namespace experimental
-}  // namespace ckernel
 
 namespace tensor_accessor {
 
@@ -62,11 +55,31 @@ struct TensorBindingToken {
     constexpr TensorBindingToken(LlkOperandMembers llk) noexcept : llk_(llk) {}
 
 private:
+#ifdef COMPILE_FOR_TRISC
     template <uint32_t C, uint32_t A>
     friend constexpr ckernel::experimental::LLKMemDescriptor ckernel::experimental::to_llk_mem_descriptor(
         TensorBindingToken<C, A>);
+#endif
 
     LlkOperandMembers llk_;
 };
 
 }  // namespace tensor_accessor
+
+#ifdef COMPILE_FOR_TRISC
+namespace ckernel {
+namespace experimental {
+
+// DRAM tensors have no node-local L1 region, so they are not LLK sources. LocalTensorAccessor already
+// rejects them the same way.
+template <uint32_t CTA, uint32_t CRTA>
+constexpr LLKMemDescriptor to_llk_mem_descriptor(tensor_accessor::TensorBindingToken<CTA, CRTA> token) {
+    static_assert(
+        !tensor_accessor::TensorBindingToken<CTA, CRTA>::args_t::is_dram,
+        "to_llk_mem_descriptor: DRAM TensorBindingToken has no node-local L1 region");
+    return llk_desc_from_members(token.llk_);
+}
+
+}  // namespace experimental
+}  // namespace ckernel
+#endif
