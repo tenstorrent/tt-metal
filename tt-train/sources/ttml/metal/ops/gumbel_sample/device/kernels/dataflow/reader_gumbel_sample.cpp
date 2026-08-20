@@ -37,7 +37,9 @@ void kernel_main() {
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t num_entries = get_compile_time_arg_val(2);
+    // Unused since positions moved to local-window staging; the slot is kept so the compile-time
+    // arg indices (and the TensorAccessorArgs offset chain below) stay stable.
+    [[maybe_unused]] constexpr uint32_t num_entries = get_compile_time_arg_val(2);
 
 #ifdef DO_LOGITS_MASK
     constexpr bool do_logits_mask = true;
@@ -59,20 +61,19 @@ void kernel_main() {
 
     const uint32_t logits_tile_bytes = get_tile_size(cb_logits_idx);
 
-    // Stage the whole local position list into L1 up front. It cannot be deferred: the very first
-    // logits page address depends on it.
-    uint32_t positions_l1_base = 0U;
-    uint32_t positions_slot_bytes = 0U;
+    // Stage the entry WINDOW this core's tile run touches -- and only that window; every entry
+    // this kernel dereferences is start_tile / Wt ..= (start_tile + num_tiles - 1) / Wt by
+    // construction of source_page below. It cannot be deferred: the very first logits page address
+    // depends on it. The staging, the slot addressing and the position clamp are single-sourced in
+    // PositionWindow (dataflow_utils.hpp); the writer stages the identical window and consumes the
+    // complementary bit field of the same clamped value.
+    PositionWindow positions{};
     if constexpr (do_positions) {
         const auto positions_address_generator = TensorAccessor(positions_args, positions_address);
-        positions_slot_bytes = positions_address_generator.get_aligned_page_size();
-        positions_l1_base = get_write_ptr(cb_positions_idx);
-        uint32_t l1_addr = positions_l1_base;
-        for (uint32_t entry = 0U; entry < num_entries; ++entry) {
-            noc_async_read_page(entry, positions_address_generator, l1_addr);
-            l1_addr += positions_slot_bytes;
-        }
-        noc_async_read_barrier();
+        const uint32_t first_entry = start_tile / Wt;
+        const uint32_t last_entry = (start_tile + num_tiles - 1U) / Wt;
+        positions = stage_position_window(
+            cb_positions_idx, positions_address_generator, first_entry, last_entry - first_entry + 1U);
     }
 
     // With positions supplied, the indices this loop walks are VIRTUAL: one tile row per batch
@@ -84,32 +85,13 @@ void kernel_main() {
         if constexpr (do_positions) {
             const uint32_t entry = virtual_tile / Wt;
             const uint32_t column = virtual_tile - entry * Wt;
-            // volatile so the load cannot be hoisted above the barrier above.
-            const uint32_t position =
-                *reinterpret_cast<volatile tt_l1_ptr uint32_t *>(positions_l1_base + entry * positions_slot_bytes);
-            // Clamp the POSITION against the logical token count, BEFORE it is split into its two
-            // consumed bit fields (this kernel takes position >> 5, the writer takes position & 31).
-            // The writer applies the IDENTICAL clamp: both halves must come from the same clamped
-            // value, or the pair desynchronizes -- clamping only the tile row here would fetch one
-            // tile while the writer scans a different position's row inside it.
-            //
-            // The clamp exists because positions live in device memory, so the host cannot
-            // range-check them on the dispatch path (reading them back is a blocking sync). Without
-            // it, a position in the tile-padding band [logical_tokens, Ht*32) selects a real tile
-            // but a ZERO-FILLED padding row -- greedy then returns token 0 and sampling returns a
-            // near-uniform token, silently -- and a position past Ht*32 reads outside the logits
-            // buffer entirely (interleaved accessors do no bounds checking, and watcher validates
-            // the whole DRAM window rather than the buffer). Clamping to the last real token also
-            // yields the row the caller almost certainly meant for the classic off-by-one
-            // (position == prompt length), and doing it before the shift and multiply contains the
-            // uint32 overflow case. The ASSERT makes a bad position loud under watcher; in normal
-            // runs the clamp keeps it in bounds.
+            // Clamped BEFORE the split into bit fields: this kernel takes clamped >> 5, the writer
+            // takes clamped & 31 of the SAME value -- see PositionWindow::clamped_position for the
+            // full rationale (the clamp, the padding band, the out-of-bounds case).
             //
             // No separate Ht clamp is needed: validation pins the padded token dim to
             // round_up(logical_tokens, 32), so clamped >> 5 <= Ht - 1 by construction.
-            ASSERT(position < logical_tokens);
-            const uint32_t clamped_position = (position < logical_tokens) ? position : (logical_tokens - 1U);
-            const uint32_t tile_row = clamped_position >> 5U;
+            const uint32_t tile_row = positions.clamped_position(entry, logical_tokens) >> 5U;
             return (entry * Ht + tile_row) * Wt + column;
         } else {
             return virtual_tile;

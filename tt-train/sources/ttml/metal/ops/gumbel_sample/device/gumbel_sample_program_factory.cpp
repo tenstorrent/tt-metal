@@ -33,8 +33,10 @@ constexpr uint32_t kReaderMaskBufferIdx = 1U;
 constexpr uint32_t kWriterOutputBufferIdx = 0U;
 // compute runtime arg slots
 constexpr uint32_t kComputeSeedIdx = 0U;
-constexpr uint32_t kComputeRandFromIdx = 1U;
-constexpr uint32_t kComputeRandScaleIdx = 2U;
+// Slots 1 and 2 hold the rand from/scale bits -- process constants set once at build and never
+// re-patched on cache hits, so nothing reads these indices; they stay to document the layout.
+[[maybe_unused]] constexpr uint32_t kComputeRandFromIdx = 1U;
+[[maybe_unused]] constexpr uint32_t kComputeRandScaleIdx = 2U;
 constexpr uint32_t kComputeInvTemperatureIdx = 3U;
 constexpr uint32_t kComputeRandStreamIdx = 4U;
 
@@ -110,6 +112,13 @@ uint32_t compute_rand_scale_bits(float lower, float upper) {
     }
     return scale_bits;
 }
+
+// Derived once per process, consumed by the cache-miss build. Deliberately NOT re-derived (or even
+// re-patched) on cache hits: the bounds are process constants, and a second derivation site is a
+// divergence trap -- a drift between the two would manifest only on cache hits, which single-shape
+// unit tests never exercise.
+const uint32_t kRandFromBits = std::bit_cast<uint32_t>(kGumbelUniformLowerBound);
+const uint32_t kRandScaleBits = compute_rand_scale_bits(kGumbelUniformLowerBound, kGumbelUniformUpperBound);
 
 // Linear index of this device among the SEEDED (data-parallel) mesh axes only. Devices that differ
 // solely on a replicated axis get the same index -- and therefore the same RNG stream -- which is
@@ -313,8 +322,10 @@ tt::tt_metal::Program build_program(
     // quantize the very comparisons the argmax is about to make.
     create_circular_buffer(
         program, layout.all_cores, kScoresCbIndex, tt::DataFormat::Float32, score_tile_bytes, streamed_tiles);
-    // Staging for one tile-row of results: 32 token ids, each in its own NOC-aligned slot (see
-    // kOutputSlotBytes in the writer kernel) so all 32 page writes can be issued behind one barrier.
+    // Staging for the writer's output ring: 32 token ids, each in its own NOC-aligned slot (see
+    // kOutputSlotBytes in the writer kernel). The writer rotates through the slots and barriers
+    // only when recycling one (and once at kernel end), so up to 32 page writes ride behind each
+    // flush regardless of how the rows that produced them were grouped.
     constexpr uint32_t kOutputSlotBytes = 32U;
     create_circular_buffer_bytes(
         program,
@@ -336,13 +347,21 @@ tt::tt_metal::Program build_program(
     // Positions staging. One ALIGNED page per entry, not four packed bytes: a DRAM read moves a
     // whole aligned page, and the NOC requires the L1 destination to match the DRAM alignment
     // (64 B on Blackhole) rather than L1's own -- see the alignment_mask logic in
-    // hw/inc/internal/debug/sanitize.h. Sized to exactly num_entries pages so the final read ends at
-    // the CB end, which is what watcher's bounds check wants.
+    // hw/inc/internal/debug/sanitize.h.
+    //
+    // Each core stages only the entry WINDOW its contiguous tile run touches (see PositionWindow
+    // in dataflow_utils.hpp): a run of n tiles spans at most (n - 1) / Wt + 2 entries. Sized by
+    // the LARGER core group so one CB config serves both; cores with smaller windows leave the
+    // tail unused. Sizing by num_entries instead would make the positions footprint -- L1 bytes
+    // AND per-core staging page reads, in BOTH kernels -- scale with the global batch rather than
+    // a core's share of it.
     if (layout.position_aware) {
         const uint32_t slot_bytes = static_cast<uint32_t>(tensor_args.positions->buffer()->aligned_page_size());
+        const uint32_t max_local_entries =
+            std::min(layout.num_entries, (layout.tiles_per_core_group_1 - 1U) / layout.Wt + 2U);
         for (auto cb_index : {kReaderPositionsCbIndex, kWriterPositionsCbIndex}) {
             create_circular_buffer_bytes(
-                program, layout.all_cores, cb_index, tt::DataFormat::UInt32, layout.num_entries * slot_bytes);
+                program, layout.all_cores, cb_index, tt::DataFormat::UInt32, max_local_entries * slot_bytes);
         }
     }
 
@@ -444,8 +463,6 @@ tt::tt_metal::Program build_program(
     // -------------------------------------------------------------------------
     // Runtime args
     // -------------------------------------------------------------------------
-    const uint32_t rand_from_bits = std::bit_cast<uint32_t>(kGumbelUniformLowerBound);
-    const uint32_t rand_scale_bits = compute_rand_scale_bits(kGumbelUniformLowerBound, kGumbelUniformUpperBound);
     // Guard the reciprocal: only computed when the noisy kernel will read it. uses_gumbel_noise
     // guarantees the reciprocal is FINITE here (that is the predicate's whole point); greedy gets a
     // zero because an inf sitting in a runtime arg is a trap for anyone who later makes it read it.
@@ -455,6 +472,7 @@ tt::tt_metal::Program build_program(
     // unconditionally, exactly as it does for Ht.
     const uint32_t positions_address = layout.position_aware ? tensor_args.positions->buffer()->address() : 0U;
 
+    shared_vars.core_info.reserve(layout.num_cores);
     for (uint32_t core_index = 0U; core_index < layout.num_cores; ++core_index) {
         const auto& [core, num_tiles, start_tile] = work[core_index];
         SetRuntimeArgs(
@@ -483,24 +501,18 @@ tt::tt_metal::Program build_program(
              expected_shards[core_index],
              layout.logical_tokens});
 
-        const auto compute_kernel = layout.core_group_1.contains(core) ? shared_vars.compute_kernel_group_1_id
-                                                                       : shared_vars.compute_kernel_group_2_id;
+        const bool in_group_1 = layout.core_group_1.contains(core);
+        const uint32_t stream_id = rand_stream_id(layout, device_index, start_tile);
         SetRuntimeArgs(
             program,
-            compute_kernel,
+            in_group_1 ? shared_vars.compute_kernel_group_1_id : shared_vars.compute_kernel_group_2_id,
             core,
-            {args.seed,
-             rand_from_bits,
-             rand_scale_bits,
-             inv_temperature_bits,
-             rand_stream_id(layout, device_index, start_tile)});
+            {args.seed, kRandFromBits, kRandScaleBits, inv_temperature_bits, stream_id});
+
+        shared_vars.core_info.push_back({core, stream_id, in_group_1});
     }
 
-    shared_vars.core_group_1 = layout.core_group_1;
-    shared_vars.core_group_2 = layout.core_group_2;
-    shared_vars.num_cores = layout.num_cores;
-    shared_vars.num_cores_y = layout.num_cores_y;
-    shared_vars.device_seed_offset = device_index;
+    shared_vars.has_compute_group_2 = !layout.core_group_2.ranges().empty();
 
     return program;
 }
@@ -547,8 +559,16 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
     const auto& logits = tensor_args.logits;
     const bool has_mask = tensor_args.logits_padding_mask.has_value();
 
-    const auto layout = compute_layout(logits, tensor_args.positions.has_value());
-    const auto work = core_layout(layout);
+    // Deliberately NO compute_layout / core_layout here: the work split and everything derived
+    // from it (per-core tile runs, merge routing, RNG stream ids, core-group membership) is a
+    // function of hashed quantities only, so it was derived once at build time and cached in the
+    // shared variables. This op dispatches once per generated token; re-deriving the split would
+    // pay a device grid query, split_work_to_cores and per-core CoreRangeSet scans on every one of
+    // those dispatches. The only layout values that CAN differ under the same program hash are the
+    // token-dimension pair below (position mode normalizes the token dim away), and they are plain
+    // shape reads.
+    const uint32_t Ht = logits.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+    const uint32_t logical_tokens = logits.logical_shape()[-2];
 
     const uint32_t logits_address = logits.buffer()->address();
     const uint32_t mask_address = has_mask ? tensor_args.logits_padding_mask->buffer()->address() : 0U;
@@ -561,9 +581,8 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
     // alongside the buffer addresses. The guard is uses_gumbel_noise, matching build_program and
     // the hash: it keeps the reciprocal finite, and a temperature whose kernel selection CHANGED
     // (crossing zero or the reciprocal-overflow floor) hashes to a different program anyway, so a
-    // cached program is never patched with the wrong variant's args.
-    const uint32_t rand_from_bits = std::bit_cast<uint32_t>(kGumbelUniformLowerBound);
-    const uint32_t rand_scale_bits = compute_rand_scale_bits(kGumbelUniformLowerBound, kGumbelUniformUpperBound);
+    // cached program is never patched with the wrong variant's args. The rand from/scale bits are
+    // process constants baked at build time (kRandFromBits/kRandScaleBits) and are not re-patched.
     const uint32_t inv_temperature_bits = uses_gumbel_noise(operation_attributes.temperature)
                                               ? std::bit_cast<uint32_t>(1.0F / operation_attributes.temperature)
                                               : 0U;
@@ -574,14 +593,15 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
         auto& reader_args = GetRuntimeArgs(program, vars.reader_kernel_id);
         auto& writer_args = GetRuntimeArgs(program, vars.writer_kernel_id);
         auto& compute_g1_args = GetRuntimeArgs(program, vars.compute_kernel_group_1_id);
-        auto& compute_g2_args = vars.core_group_2.ranges().empty()
-                                    ? compute_g1_args
-                                    : GetRuntimeArgs(program, vars.compute_kernel_group_2_id);
+        auto& compute_g2_args =
+            vars.has_compute_group_2 ? GetRuntimeArgs(program, vars.compute_kernel_group_2_id) : compute_g1_args;
 
-        // The merge routing (owner coords, slot, expected shard count) is not re-patched here: it
-        // is a property of the work split, which is identical on every dispatch. Only the buffer
-        // addresses and the seed change.
-        for (const auto& [core, num_tiles, start_tile] : work) {
+        // The merge routing (owner coords, slot, expected shard count) and the per-core tile runs
+        // are not re-patched here: they are properties of the work split, which is identical on
+        // every dispatch. Only the buffer addresses, the token-dimension pair, the seed and the
+        // temperature change.
+        for (const auto& info : vars.core_info) {
+            const auto& core = info.core;
             {
                 auto& core_args = reader_args[core.x][core.y];
                 core_args[kReaderLogitsBufferIdx] = logits_address;
@@ -592,7 +612,7 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
                 // decode's arg vector would stop at four words and this line would write one past
                 // the end -- and RuntimeArgsData's bounds check is a TT_ASSERT that compiles away in
                 // Release, so it would land silently in the packed dispatch command.
-                core_args[kReaderHtIdx] = layout.Ht;
+                core_args[kReaderHtIdx] = Ht;
                 // The positions BUFFER moves between dispatches (each prefill builds a new one), and
                 // a cached program replayed against a stale address reads whatever DRAM now occupies
                 // that region -- in bounds, no fault, a plausible-looking token. This patch prevents that.
@@ -600,22 +620,21 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
                 // Like Ht: runtime-only and token-derived, so a cached program replayed without
                 // this patch would clamp positions against a STALE token count -- either rejecting
                 // valid rows or readmitting the padding band the clamp exists to keep out.
-                core_args[kReaderLogicalTokensIdx] = layout.logical_tokens;
+                core_args[kReaderLogicalTokensIdx] = logical_tokens;
             }
             {
                 auto& core_args = writer_args[core.x][core.y];
                 core_args[kWriterOutputBufferIdx] = output_address;
                 core_args[kWriterPositionsBufferIdx] = positions_address;
-                core_args[kWriterLogicalTokensIdx] = layout.logical_tokens;
+                core_args[kWriterLogicalTokensIdx] = logical_tokens;
             }
             {
-                auto& core_args = vars.core_group_1.contains(core) ? compute_g1_args[core.x][core.y]
-                                                                   : compute_g2_args[core.x][core.y];
+                auto& core_args =
+                    info.in_compute_group_1 ? compute_g1_args[core.x][core.y] : compute_g2_args[core.x][core.y];
                 core_args[kComputeSeedIdx] = operation_attributes.seed;
-                core_args[kComputeRandFromIdx] = rand_from_bits;
-                core_args[kComputeRandScaleIdx] = rand_scale_bits;
                 core_args[kComputeInvTemperatureIdx] = inv_temperature_bits;
-                core_args[kComputeRandStreamIdx] = rand_stream_id(layout, vars.device_seed_offset, start_tile);
+                // Baked at build from the same split this loop iterates; see CoreRuntimeInfo.
+                core_args[kComputeRandStreamIdx] = info.rand_stream_id;
             }
         }
     }

@@ -84,7 +84,9 @@ void kernel_main() {
     // Receive-slot count in the records CB (the grid-wide worst-case shard fan-in for one row);
     // the outgoing record is staged in the slot just past them.
     constexpr uint32_t max_foreign_shards = get_compile_time_arg_val(4);
-    constexpr uint32_t num_entries = get_compile_time_arg_val(5);
+    // Unused since positions moved to local-window staging; the slot is kept so the compile-time
+    // arg indices (and the TensorAccessorArgs offset chain below) stay stable.
+    [[maybe_unused]] constexpr uint32_t num_entries = get_compile_time_arg_val(5);
 
 #ifdef DO_POSITIONS
     constexpr bool do_positions = true;
@@ -99,42 +101,29 @@ void kernel_main() {
     const uint32_t staging_address = get_write_ptr(cb_output_staging_idx);
     const uint32_t records_base = get_write_ptr(cb_records_idx);
 
-    // Stage the full local position list, as the reader does. Only this core's own entries are ever
-    // consumed -- the rows it scans and the one row it may merge all lie inside its run -- but the
-    // slots are indexed by absolute entry id, so staging the whole list keeps the addressing
-    // trivial and the reads hide under the scores wait below.
+    // Stage the entry WINDOW this core's tile run touches, exactly as the reader does -- the rows
+    // this kernel scans (pass 1) and the one row it may merge (pass 2's owned_row, the run's LAST
+    // entry) all lie inside [start_tile / Wt, (start_tile + num_tiles - 1) / Wt]. Staging, slot
+    // addressing and the position clamp are single-sourced in PositionWindow (dataflow_utils.hpp).
     //
     // The read is free here -- the next thing this kernel does is block on cb_wait_front(scores),
     // which cannot clear until the reader has already fetched logits from DRAM. BRISC issues reads
     // exactly as NCRISC does (brisc.cc runs noc_init + noc_local_state_init), on its own NOC, and
     // noc_async_read_barrier tracks a counter independent of the write/semaphore rendezvous below.
-    uint32_t positions_l1_base = 0U;
-    uint32_t positions_slot_bytes = 0U;
+    PositionWindow positions{};
     if constexpr (do_positions) {
         const auto positions_address_generator = TensorAccessor(positions_args, positions_address);
-        positions_slot_bytes = positions_address_generator.get_aligned_page_size();
-        positions_l1_base = get_write_ptr(cb_positions_idx);
-        uint32_t l1_addr = positions_l1_base;
-        for (uint32_t entry = 0U; entry < num_entries; ++entry) {
-            noc_async_read_page(entry, positions_address_generator, l1_addr);
-            l1_addr += positions_slot_bytes;
-        }
-        noc_async_read_barrier();
+        const uint32_t first_entry = start_tile / Wt;
+        const uint32_t last_entry = (start_tile + num_tiles - 1U) / Wt;
+        positions = stage_position_window(
+            cb_positions_idx, positions_address_generator, first_entry, last_entry - first_entry + 1U);
     }
 
-    // Only the low 5 bits are consumed here; the reader consumes the high bits (position >> 5).
-    // The clamp against the logical token count MIRRORS the reader's exactly: both bit fields must
-    // come from the same clamped value or the pair desynchronizes (the reader would fetch one
-    // tile while this kernel scans a different position's row inside it). Without the clamp, a
-    // position in the tile-padding band [logical_tokens, Ht*32) lands on a zero-filled padding row
-    // and the argmax silently returns token 0 (greedy) or a near-uniform token (sampled). See the
-    // reader's source_page for the full rationale.
+    // Only the low 5 bits are consumed here; the reader consumes the high bits (clamped >> 5) of
+    // the SAME clamped value -- see PositionWindow::clamped_position for the shared clamp and its
+    // rationale.
     auto target_row_of = [&](uint32_t entry) -> uint32_t {
-        const uint32_t position =
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(positions_l1_base + entry * positions_slot_bytes);
-        ASSERT(position < logical_tokens);
-        const uint32_t clamped_position = (position < logical_tokens) ? position : (logical_tokens - 1U);
-        return clamped_position & (kTileHeight - 1U);
+        return positions.clamped_position(entry, logical_tokens) & (kTileHeight - 1U);
     };
 
     uint32_t max_values[kTileHeight];
@@ -160,20 +149,36 @@ void kernel_main() {
 
     // Emit a group's token ids. Output pages run row-major over [B, 1, tokens] normally, and over
     // [B, 1, 1] -- one page per batch entry -- when positions selected a single row each.
+    //
+    // Writes are staged through the output CB's 32 NOC-aligned slots used as a RING and left in
+    // flight: a barrier is paid only when a slot is about to be recycled (its previous write may
+    // still be outbound) and once at kernel end -- never per row. This matters exactly when a core
+    // owns many one-page rows (position mode, and decode's single valid row): at large batches a
+    // core owns ~B/num_cores rows, and a per-row barrier would serialize that many NOC round-trips
+    // into pass 1. send_shard's own barrier is global, so it can only OVER-flush ring slots; the
+    // ring never under-waits.
+    uint32_t staging_cursor = 0U;
+    auto stage_and_write = [&](uint32_t page, uint32_t value) {
+        if (staging_cursor == kTileHeight) {
+            // Every slot may still have a write outbound; drain them all before recycling slot 0.
+            noc_async_write_barrier();
+            staging_cursor = 0U;
+        }
+        const uint32_t slot = staging_address + staging_cursor * kOutputSlotBytes;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot) = value;
+        noc_async_write_page(page, output_address_generator, slot);
+        ++staging_cursor;
+    };
+
     auto write_row = [&](uint32_t tile_row, uint32_t valid_rows) {
         if constexpr (do_positions) {
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging_address) = arg_max[target_row_of(tile_row)];
-            noc_async_write_page(tile_row, output_address_generator, staging_address);
-            noc_async_write_barrier();
+            stage_and_write(tile_row, arg_max[target_row_of(tile_row)]);
             return;
         }
         const uint32_t page_base = (tile_row / Ht) * logical_tokens + (tile_row % Ht) * kTileHeight;
         for (uint32_t h = 0U; h < valid_rows; ++h) {
-            const uint32_t slot = staging_address + h * kOutputSlotBytes;
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot) = arg_max[h];
-            noc_async_write_page(page_base + h, output_address_generator, slot);
+            stage_and_write(page_base + h, arg_max[h]);
         }
-        noc_async_write_barrier();
     };
 
     // Ship this core's shard of its first row to that row's owner. All 32 slots travel verbatim:
@@ -327,4 +332,9 @@ void kernel_main() {
             write_row(owned_row, valid);
         }
     }
+
+    // Drain the output writes still in flight in write_row's slot ring. Unconditional: with
+    // nothing outstanding a barrier is a cheap counter check, and the kernel must not return
+    // while NOC writes are still outbound.
+    noc_async_write_barrier();
 }

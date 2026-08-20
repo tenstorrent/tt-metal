@@ -616,3 +616,58 @@ inline void mcast_sender_signal_receivers_loopback(
     noc_semaphore_set_multicast_loopback_src(receiver_sem_addr, receiver_sem_noc_addr, num_dests_including_self);
     noc_async_atomic_barrier();
 }
+
+// ---------------------------------------------------------------------------
+// Per-entry position list, staged as a local window
+// ---------------------------------------------------------------------------
+// A staged window of a [B, 1, 1, 1] token-position list. Two kernels consume the SAME staged
+// layout and the SAME clamp -- one takes clamped >> 5 (the tile row), the other clamped & 31 (the
+// row within that tile) -- so the staging loop, the slot addressing and the clamp live here,
+// single-sourced: a stride or bounds change cannot silently desync the two halves.
+//
+// Only the window [first_entry, first_entry + entry_count) is staged: a core's contiguous tile
+// run touches exactly that entry range, and every consumer (the reader's page lookup, the
+// writer's scan bounds, the writer's merge of the one row it owns) dereferences entries inside
+// it. Staging the whole list would cost num_entries tiny DRAM page reads per core per kernel and
+// num_entries aligned pages of L1 -- both scaling with the GLOBAL batch rather than the core's
+// share of it.
+struct PositionWindow {
+    uint32_t l1_base{};
+    uint32_t slot_bytes{};
+    uint32_t first_entry{};
+
+    // Clamp BEFORE the caller splits the value into its bit fields: every consumer must derive
+    // its field from the same clamped value, or one kernel fetches one tile while another scans a
+    // different position's row inside it. The clamp exists because positions live in device
+    // memory, so the host cannot range-check them on the dispatch path (reading them back is a
+    // blocking sync). Without it, a position in the tile-padding band [logical_tokens, Ht*32)
+    // selects a real tile but a ZERO-FILLED padding row -- silently wrong samples -- and a
+    // position past Ht*32 reads outside the buffer entirely (interleaved accessors do no bounds
+    // checking). Clamping to the last real token also yields the row the caller almost certainly
+    // meant for the classic off-by-one (position == prompt length), and doing it before the shift
+    // and multiply contains the uint32 overflow case. The ASSERT makes a bad position loud under
+    // watcher; in normal runs the clamp keeps it in bounds.
+    inline uint32_t clamped_position(uint32_t entry, uint32_t logical_tokens) const {
+        // volatile so the load cannot be hoisted above stage_position_window's read barrier.
+        const uint32_t position =
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_base + (entry - first_entry) * slot_bytes);
+        ASSERT(position < logical_tokens);
+        return (position < logical_tokens) ? position : (logical_tokens - 1U);
+    }
+};
+
+template <typename AddressGenerator>
+inline PositionWindow stage_position_window(
+    uint32_t cb_idx, const AddressGenerator& address_generator, uint32_t first_entry, uint32_t entry_count) {
+    PositionWindow window;
+    window.slot_bytes = address_generator.get_aligned_page_size();
+    window.l1_base = get_write_ptr(cb_idx);
+    window.first_entry = first_entry;
+    uint32_t l1_addr = window.l1_base;
+    for (uint32_t e = 0U; e < entry_count; ++e) {
+        noc_async_read_page(first_entry + e, address_generator, l1_addr);
+        l1_addr += window.slot_bytes;
+    }
+    noc_async_read_barrier();
+    return window;
+}
