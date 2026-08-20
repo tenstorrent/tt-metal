@@ -839,7 +839,14 @@ class TTSampling(LightweightModule):
             if slice_valid_vocab:
                 x = self._slice_valid_vocab_for_argmax(x)
             num_untilize_chunks = self._untilize_chunk_count(x.shape[-1])
-            if num_untilize_chunks > 1:
+            # DRAM-interleaved ttnn.split/slice does not honor sub_core_grids (same
+            # senders-column spill as the vocab-trim slice above). Qwen3-32B Galaxy
+            # pads to 155648, which _untilize_chunk_count cuts into 4 chunks, so the
+            # post-main-rebase chunked path hits that fatal on the BH prefetcher
+            # worker sub-device. A single untilize of that width compiles there
+            # (Gemma-2's 256000-wide clash is the reason the chunked path exists;
+            # it stays for unpinned Wormhole grids).
+            if num_untilize_chunks > 1 and self._force_argmax_sub_core_grids is None:
                 # Untilizing the full row in one program needs a static circular-buffer
                 # region proportional to the row width; past ~150K elements it clashes
                 # with the model's resident L1 buffers at compile (Gemma-2's 256000-wide
@@ -870,9 +877,7 @@ class TTSampling(LightweightModule):
                 for chunk in untilized_chunks:
                     ttnn.deallocate(chunk)
             else:
-                x_untilized = ttnn.untilize(
-                    x, use_multicore=True, sub_core_grids=self._force_argmax_sub_core_grids
-                )
+                x_untilized = ttnn.untilize(x, use_multicore=True, sub_core_grids=self._force_argmax_sub_core_grids)
             tt_out_tok = ttnn.argmax(
                 x_untilized,
                 dim=-1,
