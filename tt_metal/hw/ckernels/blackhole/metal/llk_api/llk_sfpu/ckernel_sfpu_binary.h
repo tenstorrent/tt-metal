@@ -187,12 +187,19 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
         }
 
         v_if(in1 == 0) {
-            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-            v_else {
-                result = std::numeric_limits<float>::infinity();
-                result = sfpi::copysgn(result, in0);
+            if constexpr (BINOP == BinaryOp::DIV_NO_NAN) {
+                // div_no_nan is defined by this arm: a zero divisor yields zero,
+                // for a zero dividend too. Everything above it is the ordinary
+                // quotient, which is why the two share one kernel.
+                result = 0.0f;
+            } else {
+                v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+                v_else {
+                    result = std::numeric_limits<float>::infinity();
+                    result = sfpi::copysgn(result, in0);
+                }
+                v_endif;
             }
-            v_endif;
         }
         v_endif;
 

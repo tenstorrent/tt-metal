@@ -62,6 +62,18 @@ ALWI void div_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #endif
 }
 
+ALWI void div_no_nan_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary_div,
+        (APPROX, ckernel::BinaryOp::DIV_NO_NAN, 8 /* ITERATIONS */, DST_ACCUM_MODE),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
+}
+
 ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #ifdef ARCH_QUASAR
     MATH((SFPU_BINARY_CALL(
