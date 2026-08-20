@@ -812,6 +812,11 @@ class ModelArgs:
                 self.attn_input_grid = self.core_grid_for_count(16)
                 self.mlp_core_grid = self.core_grid_for_count(16)
                 self.mlp2_core_grid = self.core_grid_for_count(16)
+                # 32-core lm_head: 8 splits vs 64-core 4. A/B 59.9 -> 60.8 tok/s.
+                self.lm_head_core_grid = self.core_grid_for_count(32)
+                self.max_columns_per_device_lm_head = self.get_lm_head_max_columns_per_device(
+                    self.lm_head_core_grid, self.prefetcher
+                )
 
             # ============================================================================
             # Compute kernels Configs
