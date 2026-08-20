@@ -321,8 +321,14 @@ tile-index `reduce_scatter_mcast` wins instead (**~2×** over root) by paralleli
 at **1 tile/core** tree reduce wins again (low fan-in; reduce-scatter degenerates to one worker).
 Rule of thumb: **tree reduce when the grid is busy or the payload is tiny; tile-index reduce-scatter
 for an isolated, well-fed group.** On a 1-D group tree reduce collapses to the single root reduce.
-**Correctness note it demonstrates:** when a reduce-scatter split is *ragged* (worker `i` owns `q` or
-`q+1` tiles), the CB push/pop quantum and the gather stride must both use the **uniform** `max_assigned`,
-never each worker's own share — a CB's capacity must be an exact multiple of its quantum, so a short
-worker's ragged quantum wraps illegally and overwrites another contributor's gather slot (this silently
-corrupted 62.5% of the output at 16 tiles/core over 7 workers; the unread pad slots cost nothing).
+**It is also robust to ragged splits, which is the normal case:** `num_tiles` need not divide the worker
+count, and a ragged split measures on the same curve as an even one (a ragged 20-tiles-over-8 point lands
+on the straight line through its even 16 and 24 neighbours, well inside run-to-run spread). Two properties
+to copy when distributing any ragged split over a CB: size both CBs at the **uniform** `max_assigned =
+ceil(num_tiles/W)` and have every worker push/pop that amount with gather stride `contributor *
+max_assigned` rather than its own share — a CB's capacity must be an exact multiple of its push/pop
+quantum, so a per-worker quantum wraps at a different offset on every core and contributors land on each
+other's slots (the unread pad slots cost a little L1 and nothing else); and let **every** core work, root
+included (`W = min(num_tiles, group_size)`, the root taking a share and only then multicasting), since
+reserving the root idles `1/G` of the group for the whole gather/reduce phase and leaves `W` coprime with
+power-of-two tile counts — a *more* ragged split, not less.
