@@ -90,7 +90,14 @@ def assert_unique_columns(columns, context: str = "") -> None:
 
 # Run-type names — mirror helpers/llk_params.py::PerfRunType.
 RUN_TYPE_NAMES = frozenset(
-    {"L1_TO_L1", "UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE", "L1_CONGESTION"}
+    {
+        "L1_TO_L1",
+        "UNPACK_ISOLATE",
+        "MATH_ISOLATE",
+        "PACK_ISOLATE",
+        "L1_CONGESTION",
+        "SFPU_ISOLATE",
+    }
 )
 
 # Stat kinds a timing/counter column may carry.

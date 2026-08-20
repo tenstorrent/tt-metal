@@ -26,6 +26,14 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
     TT_FATAL(t.x.storage_type() == ttnn::StorageType::DEVICE, "x must be on device");
+    // Scoped to Blackhole, matching ttnn::softcap / ttnn::situ_glu. The underlying SFPU
+    // primitives exist on Wormhole, but that combination is unverified.
+    if (op.activation == RoutedExpertActivation::SituGlu) {
+        TT_FATAL(
+            t.x.device()->arch() == tt::ARCH::BLACKHOLE,
+            "unified_routed_expert_ffn: SiTU-GLU is implemented for Blackhole only, got arch {}",
+            t.x.device()->arch());
+    }
     // x layout/dtype depends on x_is_row_major:
     //   false (default): x is TILE BFLOAT8_B — the reader reads tile pages directly.
     //   true: x is ROW_MAJOR BFLOAT16 (the dispatch output) — the reader streams
@@ -267,13 +275,13 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
             t.gate_bias->dtype(),
             t.up_bias->dtype(),
             t.down_bias->dtype());
-        // Bias fusion is implemented only for the SwiGLU-OAI activation (gpt-oss):
-        // the kernel adds gate/up bias before the clamp and down bias after the
-        // down matmul. The SiLU path has no bias branch.
+        // Bias fusion lives in the kernel's shared binary-activation phase and is
+        // activation-agnostic, so every fused binary activation supports it. Only the SiLU
+        // path has no bias branch.
         TT_FATAL(
-            op.activation == RoutedExpertActivation::SwiGluOai,
-            "unified_routed_expert_ffn: expert biases are only supported with RoutedExpertActivation::SwiGluOai "
-            "(got the SiLU path).");
+            op.activation == RoutedExpertActivation::SwiGluOai || op.activation == RoutedExpertActivation::SituGlu,
+            "unified_routed_expert_ffn: expert biases require a fused binary activation "
+            "(SwiGluOai or SituGlu); the SiLU path has no bias branch.");
     }
 }
 

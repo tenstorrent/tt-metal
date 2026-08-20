@@ -76,6 +76,7 @@ enum class BinaryOp : std::uint8_t
     QUANT,
     REQUANT,
     DEQUANT,
+    ATAN2,
 };
 
 // For instructions that address lower/upper 16 bits of a register
