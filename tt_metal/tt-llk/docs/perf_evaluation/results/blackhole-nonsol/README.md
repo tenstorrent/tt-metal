@@ -160,23 +160,27 @@ exactly 353 and 349 cycles. The behaviour is bimodal: one value on the first run
 another on every run after.
 
 In this method, run 1 is the run that compiles the ELFs cold; runs 2 to 5 reuse
-them. So the likely cause is a first-run state effect, not measurement noise.
+them, so a first-run effect was the obvious reading.
 
-**Open question for the team.** Two readings, with different consequences:
+**That reading does not survive scrutiny.** This is one measurement. With a
+single point, run 1 carries a one-in-five chance of being the odd one by
+coincidence, and the Wormhole data — 1,457 flagged points, characterised in
+`../wormhole-nonsol/outliers_pack_isolate.md` — shows the odd run spread evenly
+across all five, with no per-run concentration at all. So there is no evidence
+here for a first-run cause, only for a two-valued measurement.
 
-1. If the cold-build first run is what a real gate always does, the gate would
-   consistently see the run-1 value and this would never fire.
-2. If the difference comes from device or L1 state left by preceding tests, then
-   this configuration is genuinely order-dependent and should be stabilised or
-   excluded from the gate.
+What this point *does* share with Wormhole is its format: Float16_b in and out.
+On Wormhole, Float16_b output carries a 13% flag rate against 0% for Float32 and
+Bfp8_b. One point cannot confirm that, but it is consistent with it.
 
 Either way it is one configuration out of 311,352 measurements, and it should
 not set the threshold. Raising the rule to 20% to accommodate it would make the
 gate useless everywhere else.
 
-It also flags a limitation of the method itself: **run 1 is not interchangeable
-with runs 2 to 5.** Every other point was insensitive to this, but that is a
-property of the data, not a guarantee.
+It also flags a limitation of the method itself: **run 1 compiles cold and runs
+2 to 5 do not**, so the five runs are not strictly interchangeable. No point in
+either architecture shows a run-1 effect once measured properly, but the
+asymmetry is real and worth remembering.
 
 ## What this does not cover
 

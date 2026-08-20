@@ -95,21 +95,73 @@ Every failure is the packer.
 Within PACK_ISOLATE, 1,246 come from `perf_matmul`, 98 from
 `perf_unpack_tilize`, 87 from `perf_math_matmul`, and 26 from six other tests.
 
-**All 53 L1_TO_L1 failures are matmul** — 44 `perf_math_matmul`, 9 `perf_matmul`.
-L1_TO_L1 runs unpack, math and pack in sequence, so the packer instability
-leaks into the end-to-end measurement.
+**All 53 L1_TO_L1 failures are matmul** — 45 `perf_math_matmul`, 8 `perf_matmul`.
 
-It is not a first-run artefact. On the 53 L1_TO_L1 failures we checked which of
-the five runs disagreed with the others:
+Full characterisation in `outliers_pack_isolate.md` and `outliers_l1_to_l1.md`.
+Note that KERNEL and TILE_LOOP are paired views of the same measurement, so
+1,457 rows are roughly 730 independent measurements.
 
-    run_2  18    run_3  14    run_5  9    run_1  8    run_4  4
+### It is not a per-run state
 
-Spread across all five. On Blackhole the single outlier was always run 1, the
-cold-build run. Here any run can be the odd one, so this is genuine run-to-run
-instability in the packer path, not a property of the measurement method.
+Which of the five runs disagrees with the others, across flagged PACK_ISOLATE
+points:
 
-Magnitude: up to 24% and 41,091 cycles. That is far outside anything the rest of
-the suite produces.
+| run_1 | run_2 | run_3 | run_4 | run_5 |
+|--:|--:|--:|--:|--:|
+| 24.4% | 22.9% | 20.3% | 15.0% | 17.4% |
+
+Independence predicts 20% each. A state established once per run and held for
+its duration predicts nearly 100% on one run. This is independence: **each
+measurement is affected on its own.**
+
+### It is not a one-directional penalty
+
+The odd run against the median of the other four:
+
+| min | 25% | median | 75% | max | mean |
+|--:|--:|--:|--:|--:|--:|
+| -19.8% | -7.6% | +2.3% | +7.9% | +24.3% | **+0.6%** |
+
+Symmetric about zero. The odd run is as often much faster as much slower, so
+nothing is being *added* to some runs. The measurement lands in one of two
+places.
+
+### It is mostly two-state
+
+Distinct values taken by the five runs:
+
+| 2 values | 3 | 4 | 5 |
+|--:|--:|--:|--:|
+| 76.0% | 15.8% | 3.2% | 4.9% |
+
+Three quarters are exactly two-valued, which is what a discrete state change
+looks like. The remaining quarter is not, so this is a majority behaviour and
+not a universal one.
+
+### Output format separates the affected configurations
+
+Within `perf_matmul`, 29,376 points, flag rate by output format:
+
+| Float32 | Bfp8_b | Float16 | Float16_b |
+|--:|--:|--:|--:|
+| 0% | 0% | 3% | **13%** |
+
+Correlated parameters point the same way: `formats.register_*` and
+`formats.sfpu_math` at Tf32 = 10% against Bfp8_b = 2%, and `dest_acc = Yes` at
+9% against `No` at 2%.
+
+Association, not cause — these sweep parameters co-vary. But zero against
+thirteen percent is where an investigation starts.
+
+It also argues against cross-core contention as the explanation: contention from
+neighbouring tests would not care what output format the kernel writes.
+
+### L1_TO_L1 may be a different phenomenon
+
+Its flagged points do not share the PACK_ISOLATE signature. Only 21% are
+two-valued against 76%, and deviations span ±4.6% against ±24%. Its apparent
+concentration on run_2 is 18 counts out of 53 rows, roughly 9 independent
+measurements — too few to claim anything. Do not assume one cause for both.
 
 **This is a hardware or test question, not a threshold question.** No threshold
 low enough to be useful can accommodate a 24% swing.

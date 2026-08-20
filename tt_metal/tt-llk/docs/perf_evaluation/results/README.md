@@ -65,27 +65,42 @@ the typical case at all, only the extreme tail. Use one run per side.
 
 Every failure in the study is the packer path.
 
-- Wormhole PACK_ISOLATE: 1,457 failures, up to 24% and 41,091 cycles. 1,246 of
-  them are `perf_matmul`.
-- Wormhole L1_TO_L1: 53 failures, all matmul. That path runs unpack, math and
-  pack in sequence, so the instability leaks in.
-- Blackhole PACK_ISOLATE: 2 failures, one test configuration
-  (`perf_pack_dest_bank`), bimodal between the first run and the rest.
+- Wormhole PACK_ISOLATE: 1,457 failures, up to 24%. 1,246 are `perf_matmul`.
+- Wormhole L1_TO_L1: 53 failures, all matmul.
+- Blackhole PACK_ISOLATE: 2 failures — one measurement seen through two markers,
+  so a single point. Nothing can be inferred from it.
 
-On Wormhole it is not a first-run artefact: any of the five runs can be the odd
-one out. It is genuine run-to-run instability.
+What the characterisation shows on Wormhole (`wormhole-nonsol/outliers_pack_isolate.md`):
+
+- **Each measurement is affected independently.** The run that disagrees is
+  spread 24 / 23 / 20 / 15 / 17 percent across the five, against 20% under
+  independence. There is no per-run state.
+- **The deviation is symmetric** — mean +0.6%, from -19.8% to +24.3%. The odd
+  run is as often faster as slower, so nothing is being added to some runs; the
+  measurement lands in one of two places.
+- **76% are exactly two-valued** across the five runs, consistent with a
+  discrete state change for most of them.
+- **Output format separates them.** Within `perf_matmul`, Float16_b output has a
+  13% flag rate against 0% for Float32 and Bfp8_b.
 
 No usable threshold can absorb a 24% swing, so this needs an investigation
 before the packer can be gated.
 
 ## Open questions
 
-1. **Why is the packer unstable, and worse on Wormhole?** One untested
-   hypothesis: the measure phase runs 15 tests concurrently on different Tensix
-   cores, so a long kernel overlaps with its neighbours and sees whatever L1 and
-   NoC contention occurs. The affected points are the largest ones. Measuring
-   serially would confirm or eliminate it.
-2. **How big are real regressions?** These numbers constrain the threshold from
+1. **Why does Float16_b output destabilise the packer?** The association is
+   strong and the mechanism is unknown. This is the concrete lead. The single
+   Blackhole offender also writes Float16_b, which is consistent, though one
+   point proves nothing.
+2. **Are the 53 L1_TO_L1 failures the same phenomenon?** They do not share the
+   signature: 21% two-valued against 76%, deviations ±4.6% against ±24%.
+3. **How big are real regressions?** These numbers constrain the threshold from
    below only. The upper bound has to come from the commit history.
-3. **Cross-machine and cross-day drift.** Every run here was one card in one
+4. **Cross-machine and cross-day drift.** Every run here was one card in one
    session. A real gate compares different runners on different days.
+
+Cross-core contention was an early hypothesis — 15 tests measure concurrently,
+and the affected points are large. It is now unlikely: contention would not
+depend on the kernel's output format, and it would not produce a two-valued
+distribution. Measuring serially would still settle it, but it is no longer the
+leading explanation.

@@ -193,7 +193,12 @@ def plot_by_run_type(frame, title, path):
 
 
 def plot_bimodal(frame, title, path, limit=14):
-    """The 5 run values of the worst offenders, each normalised to its own min."""
+    """The 5 run values of the worst offenders, each normalised to its own median.
+
+    Normalising to the minimum, as this did first, forces every series to read as
+    "four low, one high" no matter which way the odd run actually went, and that
+    misreading survived into a written conclusion. The median keeps the sign.
+    """
     runs = [c for c in frame.columns if c.startswith("run_") and c[4:].isdigit()]
     worst = _fires(frame).nlargest(limit, "spread")
     if worst.empty or not runs:
@@ -202,7 +207,7 @@ def plot_bimodal(frame, title, path, limit=14):
     fig, ax = plt.subplots(figsize=(9, 6))
     for _, row in worst.iterrows():
         values = row[runs].astype(float)
-        base = values.min()
+        base = values.median()
         ax.plot(
             range(1, len(runs) + 1),
             (values / base - 1) * 100,
@@ -215,10 +220,11 @@ def plot_bimodal(frame, title, path, limit=14):
 
     ax.set_xticks(range(1, len(runs) + 1))
     ax.set_xlabel("run")
-    ax.set_ylabel("above that point's own minimum (%)")
+    ax.axhline(0, color="black", lw=0.8)
+    ax.set_ylabel("against that point's own median (%)")
     ax.set_title(
-        f"{title}\nworst {len(worst)} offenders — flat clusters mean a discrete "
-        "state change, scatter means jitter"
+        f"{title}\nworst {len(worst)} offenders — two levels mean a discrete "
+        "state change, scatter means jitter; sign shows direction"
     )
     ax.legend(fontsize=6.5, loc="upper left", ncol=2, framealpha=0.9)
     ax.grid(alpha=0.25)
