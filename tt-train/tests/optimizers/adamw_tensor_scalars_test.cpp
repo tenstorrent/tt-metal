@@ -49,10 +49,9 @@ struct AdamWHyperParams {
     float beta2{0.999F};
     float epsilon{1e-8F};
     float weight_decay{0.01F};
-    uint32_t step{10U};
 };
 
-void run_parity_check(ttnn::DataType param_dtype, bool amsgrad) {
+void run_parity_step(ttnn::DataType param_dtype, bool amsgrad, uint32_t step) {
     const ttnn::Shape shape({1, 1, 64, 96});
     const AdamWHyperParams hp{};
 
@@ -63,8 +62,8 @@ void run_parity_check(ttnn::DataType param_dtype, bool amsgrad) {
     const auto max_exp_avg_sq_data =
         ttml::test_utils::make_uniform_vector<float>(shape.volume(), 0.0F, 1.0F, /*seed=*/4U);
 
-    const float beta1_pow = std::pow(hp.beta1, static_cast<float>(hp.step));
-    const float beta2_pow = std::pow(hp.beta2, static_cast<float>(hp.step));
+    const float beta1_pow = std::pow(hp.beta1, static_cast<float>(step));
+    const float beta2_pow = std::pow(hp.beta2, static_cast<float>(step));
 
     // The op updates exp_avg / exp_avg_sq (/ max_exp_avg_sq) in place, so each path gets its own copies.
     auto run_float_path = [&]() {
@@ -124,6 +123,14 @@ void run_parity_check(ttnn::DataType param_dtype, bool amsgrad) {
     EXPECT_EQ(param_ref, param_out);
     EXPECT_EQ(exp_avg_ref, exp_avg_out);
     EXPECT_EQ(exp_avg_sq_ref, exp_avg_sq_out);
+}
+
+void run_parity_check(ttnn::DataType param_dtype, bool amsgrad) {
+    // The first step compiles and caches the program; the second hits the program
+    // cache with freshly allocated scalar tensors holding different values, so it
+    // exercises override_runtime_arguments updating the scalar-tensor addresses.
+    run_parity_step(param_dtype, amsgrad, /*step=*/10U);
+    run_parity_step(param_dtype, amsgrad, /*step=*/11U);
 }
 
 }  // namespace
