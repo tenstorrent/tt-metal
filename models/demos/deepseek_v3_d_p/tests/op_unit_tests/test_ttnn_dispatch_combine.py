@@ -449,6 +449,13 @@ def _ci_unsupported_param_combos_dispatch_combine(**params):
             id="torus-y-8x1",
         ),
         pytest.param(
+            (4, 2),
+            fabric2d_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-4x2",
+        ),
+        pytest.param(
             (8, 4),
             torus_xy_device_params(),
             2,
