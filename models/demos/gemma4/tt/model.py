@@ -59,6 +59,34 @@ def force_argmax_sampling_enabled() -> bool:
     return os.environ.get("GEMMA4_TT_FORCE_ARGMAX", "0").strip().lower() not in ("0", "false", "no", "off", "")
 
 
+# Gemma4-31B dense checkpoint (``configs/gemma-4-31B-it``).
+_GEMMA4_31B_HIDDEN_SIZE = 5376
+# Batched prefill + on-device sampling demo ceiling (``text_demo_v2`` batch-32).
+_GEMMA4_BATCH32_SAMPLING_WIDTH = 32
+
+
+def _is_gemma4_31b_hidden_size(hidden_size: int) -> bool:
+    return int(hidden_size) == _GEMMA4_31B_HIDDEN_SIZE
+
+
+def _use_31b_batch32_host_batched_extract(hidden_size: int, *, target_batch=None) -> bool:
+    """True when 31B batch-32 batched prefill must avoid device slice→untilize.
+
+    After traced batched prefill at row spans ≥16, ``ttnn.slice`` → untilize clashes
+    with L1 CBs left by the capture and CCL RS buffers on WH T3K (same class of
+    failure as RoPE slices in ``_slice_prefill_rot_mats``). Callers route to the
+    host extract path instead; scoped to 31B + batch-32 so 12B keeps device extract.
+    """
+    if not _is_gemma4_31b_hidden_size(hidden_size):
+        return False
+    tb = int(target_batch) if target_batch is not None else 0
+    return tb == _GEMMA4_BATCH32_SAMPLING_WIDTH
+
+
+# Back-compat alias for tests/docs grepping the old name.
+_batched_prefill_slice_memcfg = _use_31b_batch32_host_batched_extract
+
+
 def _compute_per_device_vocab(vocab_size, num_tp):
     """Per-device vocab width: tile-aligned then rounded to next power of 2.
 
@@ -2096,6 +2124,10 @@ class Gemma4Model:
         """
         del prefill_seq_len
         if os.environ.get("GEMMA4_BATCHED_EXTRACT_DEVICE", "1").lower() in ("0", "false", "no"):
+            return self._extract_last_tokens_batched_prefill_host(
+                hidden_states, last_token_idx_list, padded_batch, target_batch
+            )
+        if _use_31b_batch32_host_batched_extract(self.hidden_size, target_batch=target_batch):
             return self._extract_last_tokens_batched_prefill_host(
                 hidden_states, last_token_idx_list, padded_batch, target_batch
             )

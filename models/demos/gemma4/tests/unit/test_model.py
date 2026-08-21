@@ -1189,3 +1189,11 @@ def test_single_decode(mesh_device, reset_seeds, request):
     assert torch.isfinite(out).all(), "decode produced non-finite logits"
     next_token = int(out.argmax().item())
     logger.info(f"Single decode complete (TP={tp}, pos={decode_pos + 1}); next token id = {next_token}")
+
+
+def test_batched_prefill_slice_memcfg_31b_batch32_only():
+    from models.demos.gemma4.tt.model import _GEMMA4_31B_HIDDEN_SIZE, _use_31b_batch32_host_batched_extract
+
+    assert _use_31b_batch32_host_batched_extract(_GEMMA4_31B_HIDDEN_SIZE, target_batch=32) is True
+    assert _use_31b_batch32_host_batched_extract(_GEMMA4_31B_HIDDEN_SIZE, target_batch=8) is False
+    assert _use_31b_batch32_host_batched_extract(3840, target_batch=32) is False
