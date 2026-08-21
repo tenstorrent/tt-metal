@@ -2,12 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Program factory for the fused prep→scan chunk_gdn op: ONE program, two disjoint core sets.
-// Per head h, PRODUCER core h runs {unchanged prep reader, unchanged prep compute, NEW fused
-// writer} and RECEIVER core h runs {NEW fused-receiver reader variant, unchanged scan compute,
-// unchanged scan writer}. The producer's writer NoC-writes the 7 computed intermediates
+// Per head h, NP PRODUCER cores run {unchanged prep reader, unchanged prep compute, NEW fused
+// writer} and one RECEIVER core runs {NEW fused-receiver reader variant, unchanged scan compute,
+// unchanged scan writer}. Each producer's writer NoC-writes the 7 computed intermediates
 // (v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv) directly into the receiver's CBs via the
-// shipped ready/valid handshake — zero DRAM intermediates. NP=1 producer/head, NV=1 (full V)
-// per receiver.
+// shipped ready/valid handshake — zero DRAM intermediates. NP >= 1 producers/head (attrs.np,
+// F3a: producer p owns chunks c = p, p+NP, ... round-robin; prep is chunk-independent, so the
+// split is free of cross-chunk state), NV=1 (full V) per receiver.
+//
+// F3a in-order protocol (P1): the RECEIVER drives ordering — per chunk c it reserves the
+// hand-off slots, then credits SEM_READY on producer (c % NP) only. At most one hand-off is in
+// flight per receiver, so the single SEM_VALID flag never mixes chunks across producers.
 //
 // v_beta note (F1 deviates from the design plan's F1 line): the plan recommends Option R
 // (scan-side recompute of v_beta from a DRAM v-slice + mcast beta). F1 ships Option U instead —
@@ -15,11 +20,14 @@
 // keeps both compute kernels byte-identical to the phased path (the bit-exactness gate needs
 // that). Option R is deferred to F2.
 //
-// Hand-off CB addressing (the lockstep lemma, shipped in the scan-mcast PR): the 7 hand-off CBs
-// are declared FIRST, on the UNION of producer+receiver cores, so they get identical base
-// addresses on both sides. With nbuf=1 and an equal per-chunk push/pop cadence on both sides,
-// the producer's read pointer always equals the receiver's reserved slot (== base), so the
-// producer's NoC write lands exactly where the receiver reserved. After the F1 scan-side CB
+// Hand-off CB addressing: the 7 hand-off CBs are declared FIRST, on the UNION of producer+
+// receiver cores, so they get identical base addresses on both sides. The receiver reserves/
+// pushes each CB exactly once per GLOBAL chunk c, so its reserved slot for chunk c is
+// base + (c % nbuf)*slot_bytes; the writer computes that destination explicitly from the global
+// chunk index (F3a). At NP=1 this degenerates to the F2 lockstep lemma (the producer's own read
+// pointer names the same address); at NP>1 the producer's local slot index diverges from the
+// receiver's — sourcing from read_ptr stays correct, but the DESTINATION must come from the
+// global c, which is exactly what writer_chunk_gdn_fused.cpp does. After the F1 scan-side CB
 // renumber (scan v_beta 17->14, dl 11->22, v_new 22->11) the seven hand-off indices coincide
 // with prep's output indices, so the same physical CB is prep's output AND scan's input:
 //   v_beta=14  kd=18  q_decay=19  intra=20  k_dec_t=24  dl=22  t_inv=13
@@ -105,22 +113,29 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
 
     const tt::DataFormat df_qkv = tt::DataFormat::Float16_b;  // bf16 q/k/v (prep inputs)
 
+    const uint32_t NP = attrs.np;  // producers per head (F3a); the op host clamps it to NC
     auto* device = in.q.device();
     const CoreCoord grid = device->compute_with_storage_grid_size();
     TT_FATAL(
-        2 * BH <= grid.x * grid.y, "chunk_gdn_fused: 2*BH ({}) cores needed, grid has {}", 2 * BH, grid.x * grid.y);
+        BH * (1 + NP) <= grid.x * grid.y,
+        "chunk_gdn_fused: BH*(1+NP) ({}) cores needed, grid has {}",
+        BH * (1 + NP),
+        grid.x * grid.y);
 
-    // Placement: receivers occupy row-major grid slots 0..BH-1, producers slots BH..2BH-1;
-    // producer i pairs with receiver i (head h == i).
+    // Placement: receivers occupy row-major grid slots 0..BH-1, producers slots BH..BH+BH*NP-1;
+    // producer j of head h sits at slot BH + h*NP + j and pairs with receiver h. (NV=1: 1x1
+    // NoC rectangles everywhere, so the geometry is orientation-neutral and packing is free.)
     auto slot_core = [&](uint32_t slot) { return CoreCoord{slot % grid.x, slot / grid.x}; };
-    std::vector<CoreCoord> rcv_cores(BH), prod_cores(BH);
+    std::vector<CoreCoord> rcv_cores(BH), prod_cores(BH * NP);
     std::set<CoreRange> rcv_crs, prod_crs, union_crs;
     for (uint32_t i = 0; i < BH; i++) {
         rcv_cores[i] = slot_core(i);
-        prod_cores[i] = slot_core(BH + i);
         rcv_crs.insert(CoreRange{rcv_cores[i], rcv_cores[i]});
-        prod_crs.insert(CoreRange{prod_cores[i], prod_cores[i]});
         union_crs.insert(CoreRange{rcv_cores[i], rcv_cores[i]});
+    }
+    for (uint32_t i = 0; i < BH * NP; i++) {
+        prod_cores[i] = slot_core(BH + i);
+        prod_crs.insert(CoreRange{prod_cores[i], prod_cores[i]});
         union_crs.insert(CoreRange{prod_cores[i], prod_cores[i]});
     }
     const CoreRangeSet rcv_set{rcv_crs};
@@ -142,20 +157,21 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     };
 
     // (1) The 7 hand-off CBs FIRST, on the UNION core set: declared first => same base address on
-    // producer and receiver (the lockstep lemma's precondition). fp32, in the receiver's reserve
+    // producer and receiver (the slot-addressing precondition). fp32, in the receiver's reserve
     // order (v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv). Double-buffered (F2): the producer
-    // runs one chunk ahead of the receiver's consumption instead of alternating with it; the
-    // lockstep addressing survives any equal nbuf on both sides (equal per-chunk push/pop cadence
-    // keeps the pointers in phase, and the writer sources read_ptr, which names the correct slot).
-    add_cb(union_set, fcb::vbeta, cv, 2);
-    add_cb(union_set, fcb::kd, ck, 2);
-    add_cb(union_set, fcb::qdecay, ck, 2);
-    add_cb(union_set, fcb::intra, cc, 2);
-    add_cb(union_set, fcb::kdec_t, kc, 2);
+    // runs one chunk ahead of the receiver's consumption instead of alternating with it. The
+    // writer's explicit destination slot (global c % nbuf) must be computed against THIS depth,
+    // so kHandoffNbuf also travels to the writer as a compile-time arg — one source of truth.
+    constexpr uint32_t kHandoffNbuf = 2;
+    add_cb(union_set, fcb::vbeta, cv, kHandoffNbuf);
+    add_cb(union_set, fcb::kd, ck, kHandoffNbuf);
+    add_cb(union_set, fcb::qdecay, ck, kHandoffNbuf);
+    add_cb(union_set, fcb::intra, cc, kHandoffNbuf);
+    add_cb(union_set, fcb::kdec_t, kc, kHandoffNbuf);
     // dl is 1 tile. (The phased prep factory sized this index cv as cb_vnew for monolithic layout
     // parity, but the prep kernel only ever uses 1 tile of it, as cb_dl.)
-    add_cb(union_set, fcb::dl, 1, 2);
-    add_cb(union_set, fcb::Tinv, cc, 2);
+    add_cb(union_set, fcb::dl, 1, kHandoffNbuf);
+    add_cb(union_set, fcb::Tinv, cc, kHandoffNbuf);
 
     // (2) The remaining 25 prep CBs on the PRODUCER cores only — same sizes/formats as the phased
     // prep factory (which mirrors the monolithic op's layout). The absolute L1 layout necessarily
@@ -246,8 +262,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     prep_compute_ct.push_back(f32_bits(attrs.scale));
     prep_compute_ct.push_back(f32_bits(1e-6f));
 
-    // Fused writer: 5 plain scalars, no accessors (it writes no DRAM at all).
-    const std::vector<uint32_t> fused_writer_ct = {Ct, Kt, Vt, sem_ready_id, sem_valid_id};
+    // Fused writer: 6 plain scalars, no accessors (it writes no DRAM at all). kHandoffNbuf feeds
+    // the writer's explicit destination-slot arithmetic (global c % nbuf).
+    const std::vector<uint32_t> fused_writer_ct = {Ct, Kt, Vt, sem_ready_id, sem_valid_id, kHandoffNbuf};
 
     // ---- Receiver-side CT args: the phased SCAN layout with per-core Vt == Vt_full ----
     const std::vector<uint32_t> ct_scan = {Ct, Kt, Vt, has_s0, Vt};
@@ -272,7 +289,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     prep_reader.core_ranges = prod_set;
     prep_reader.compile_time_args = prep_reader_ct;
     prep_reader.config = ReaderConfigDescriptor{};
-    prep_reader.runtime_args.reserve(BH);
+    prep_reader.runtime_args.reserve(BH * NP);
 
     KernelDescriptor prep_compute;
     prep_compute.kernel_source = kdir + "compute/chunk_gdn_prep.cpp";
@@ -282,7 +299,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     prep_compute.config = fused_compute_cfg();
     // Fused-only perf: hoisted WY-path reconfigs (see chunk_gdn_math.hpp kGdnHoistReconfig).
     prep_compute.defines = {{"GDN_HOIST_RECONFIG", "1"}};
-    prep_compute.runtime_args.reserve(BH);
+    prep_compute.runtime_args.reserve(BH * NP);
 
     KernelDescriptor fused_writer;
     fused_writer.kernel_source = kdir + "dataflow/writer_chunk_gdn_fused.cpp";
@@ -290,7 +307,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     fused_writer.core_ranges = prod_set;
     fused_writer.compile_time_args = fused_writer_ct;
     fused_writer.config = WriterConfigDescriptor{};
-    fused_writer.runtime_args.reserve(BH);
+    fused_writer.runtime_args.reserve(BH * NP);
 
     KernelDescriptor receiver_reader;
     receiver_reader.kernel_source = kdir + "dataflow/reader_chunk_gdn_scan.cpp";
@@ -331,38 +348,49 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     auto* fs_buf = outputs[1].buffer();
 
     for (uint32_t h = 0; h < BH; h++) {
-        const CoreCoord& pc = prod_cores[h];
         const CoreCoord& rc = rcv_cores[h];
-        // Virtual worker coords for the cross-core NoC transactions. Each side targets a 1x1
-        // rectangle (its single peer), which is orientation-neutral — no NOC_0/NOC_1 coordinate
-        // swap is needed on either kernel regardless of which NoC the risc runs on.
-        const CoreCoord pv = device->worker_core_from_logical_core(pc);
+        // Virtual worker coords for the cross-core NoC transactions. Every rectangle here is 1x1
+        // (a single peer), which is orientation-neutral — no NOC_0/NOC_1 coordinate swap is
+        // needed on either kernel regardless of which NoC the risc runs on.
         const CoreCoord rv = device->worker_core_from_logical_core(rc);
 
-        // Producer: the phased prep RT layout with a per-head contiguous work slice — head h's NC
-        // chunks are the flat work-items [h*NC, h*NC+NC) (wi = h*NC + c), read/computed in order.
-        prep_reader.emplace_runtime_args(
-            pc,
-            {h * NC,
-             NC,
-             q_buf,
-             k_buf,
-             v_buf,
-             g_buf,
-             beta_buf,
-             eye_buf,
-             tril_buf,
-             ones_buf,
-             masks_buf,
-             NC,
-             attrs.HV,
-             attrs.Hk});
-        prep_compute.emplace_runtime_args(pc, {NC});
-        fused_writer.emplace_runtime_args(pc, {NC, static_cast<uint32_t>(rv.x), static_cast<uint32_t>(rv.y)});
+        // Receiver RT prefix: head h, vb=0 (full V), s0 from DRAM; then NP and the producers'
+        // coords (appended in the producer loop below) for the rotating ready credit.
+        std::vector<std::variant<uint32_t, Buffer*>> rcv_args = {h, 0u, NC, s0_buf, NP};
 
-        // Receiver: head h, vb=0 (full V), s0 from DRAM; everything else arrives over the NoC.
-        receiver_reader.emplace_runtime_args(
-            rc, {h, 0u, NC, s0_buf, static_cast<uint32_t>(pv.x), static_cast<uint32_t>(pv.y)});
+        for (uint32_t j = 0; j < NP; j++) {
+            const CoreCoord& pc = prod_cores[h * NP + j];
+            const CoreCoord pv = device->worker_core_from_logical_core(pc);
+            rcv_args.push_back(static_cast<uint32_t>(pv.x));
+            rcv_args.push_back(static_cast<uint32_t>(pv.y));
+
+            // Producer j of head h owns the interleaved chunks c = j, j+NP, ... — as flat
+            // work-items wi = h*NC + c that is start h*NC + j with stride NP (trailing reader
+            // arg). The op host clamps NP <= NC, so every producer owns at least one chunk.
+            const uint32_t cnt = (NC - j + NP - 1) / NP;
+            prep_reader.emplace_runtime_args(
+                pc,
+                {h * NC + j,
+                 cnt,
+                 q_buf,
+                 k_buf,
+                 v_buf,
+                 g_buf,
+                 beta_buf,
+                 eye_buf,
+                 tril_buf,
+                 ones_buf,
+                 masks_buf,
+                 NC,
+                 attrs.HV,
+                 attrs.Hk,
+                 NP});
+            prep_compute.emplace_runtime_args(pc, {cnt});
+            fused_writer.emplace_runtime_args(
+                pc, {NC, NP, j, static_cast<uint32_t>(rv.x), static_cast<uint32_t>(rv.y)});
+        }
+
+        receiver_reader.emplace_runtime_args(rc, rcv_args);
         scan_compute.emplace_runtime_args(rc, {NC});
         scan_writer.emplace_runtime_args(rc, {h, 0u, NC, o_buf, fs_buf});
     }

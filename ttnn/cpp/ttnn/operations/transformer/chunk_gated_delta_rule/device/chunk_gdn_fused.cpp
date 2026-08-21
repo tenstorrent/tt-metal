@@ -3,6 +3,9 @@
 
 #include "chunk_gdn_fused.hpp"
 
+#include <algorithm>
+#include <cstdlib>
+
 #include <tt-metalium/constants.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -59,12 +62,15 @@ void ChunkGdnFusedOperation::validate_on_program_cache_miss(
     TT_FATAL(attrs.chunk_size % TILE_HEIGHT == 0, "chunk_size must be a multiple of 32");
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
-    // One producer + one receiver core per head (NP=1, NV=1).
+    // NP producers + one receiver core per head (NV=1). NP=1 unless QWEN_GDN_NP opted in.
+    TT_FATAL(attrs.np >= 1, "chunk_gdn_fused: np must be >= 1 (got {})", attrs.np);
     const auto grid = in.q.device()->compute_with_storage_grid_size();
     TT_FATAL(
-        2 * attrs.BH <= grid.x * grid.y,
-        "chunk_gdn_fused needs 2*BH ({}) cores, grid has {}x{}={}",
-        2 * attrs.BH,
+        attrs.BH * (1 + attrs.np) <= grid.x * grid.y,
+        "chunk_gdn_fused needs BH*(1+NP) = {}*{} = {} cores, grid has {}x{}={}",
+        attrs.BH,
+        1 + attrs.np,
+        attrs.BH * (1 + attrs.np),
         grid.x,
         grid.y,
         grid.x * grid.y);
@@ -121,6 +127,16 @@ std::vector<Tensor> chunk_gdn_fused(
     const uint32_t num_chunks = qk_flat ? (q_shape[1] / chunk_size) : q_shape[1];
     const uint32_t key_dim = qk_flat ? (q_shape[2] / Hk) : q_shape[3];
     const uint32_t val_dim = v_flat ? (v_shape[2] / HV) : v_shape[3];
+    // F3a producers per head: read HERE (attrs construction), never in the factory — np is hashed,
+    // so an env toggle compiles a fresh program instead of silently serving a stale cached one.
+    // Clamped to num_chunks: a producer beyond NC would own no chunks (wasted core, and the
+    // receiver's rotating credit c % NP would skip it anyway).
+    uint32_t np = 1;
+    if (const char* e = std::getenv("QWEN_GDN_NP")) {
+        const int v_np = std::atoi(e);
+        TT_FATAL(v_np >= 1, "QWEN_GDN_NP must be a positive integer (got '{}')", e);
+        np = std::min<uint32_t>(static_cast<uint32_t>(v_np), num_chunks);
+    }
     auto attrs = ChunkGdnFusedOperation::operation_attributes_t{
         .BH = BH,
         .num_chunks = num_chunks,
@@ -133,6 +149,7 @@ std::vector<Tensor> chunk_gdn_fused(
         .Hk = Hk,
         .qk_norm = qk_norm,
         .scale = scale,
+        .np = np,
         .has_initial_state = initial_state.has_value(),
         .output_final_state = output_final_state,
         .output_mem_config = output_mem_config,
