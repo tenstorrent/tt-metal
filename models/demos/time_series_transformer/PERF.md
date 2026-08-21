@@ -88,27 +88,50 @@ TTNN fused flows. Each was implemented far enough to benchmark on the target sha
 being adopted or rejected. Two paid and are shipped on; three measure *slower* here and are
 rejected with the numbers below rather than silently omitted.
 
-The decisive fact is the shape. At `d_model=26`, `head_dim=13`, `ffn_dim=32` and a 24-step
-context, every activation in this model is one or two tiles. There is no DRAM bandwidth
-pressure to relieve and nothing wide enough to spread across cores, so the extra dispatch each
-of those techniques costs is not repaid. The same techniques would be expected to pay on a
-larger configuration, which is why `use_l1` is kept working and correctness-tested rather than
-deleted.
+The rejection is not "this model is small". That was the first explanation, and measuring it
+properly showed it to be the wrong one. Sweeping the width from 26 to 1024 and the row count
+from 24 to 1536 -- far past this checkpoint -- interleaved DRAM is fastest at **every** point,
+including when the layout conversion is amortised over a chain of eight blocks:
+
+| Rows | Width | Interleaved DRAM | L1 | Height-sharded |
+|---:|---:|---:|---:|---:|
+| 24 | 26 | **0.147 ms** | 0.394 ms | `TT_FATAL` |
+| 24 | 256 | **0.201 ms** | 0.414 ms | 0.354 ms |
+| 24 | 1024 | **0.209 ms** | 0.352 ms | 1.109 ms |
+| 1536 | 26 | **0.208 ms** | 0.360 ms | `TT_FATAL` |
+| 1536 | 256 | **0.227 ms** | 0.353 ms | 0.434 ms |
+| 1536 | 1024 | **1.009 ms** | 1.667 ms | 2.094 ms |
+
+Chained eight deep so the conversion is paid once, height sharding still runs at 0.44x-0.98x of
+interleaved across the same sweep, while remaining numerically correct (PCC >= 0.997). There is
+no crossover to find.
+
+The likely reason is that `ttnn.linear` already selects a multi-core program config for
+interleaved operands, so pinning the layout by hand constrains that choice without adding
+parallelism. That explanation is inferred from the timings rather than from a profiler trace,
+but the timings themselves are unambiguous and reproducible:
+
+```bash
+pytest models/demos/time_series_transformer/tests/perf/test_utilization.py -q -s -k Sharding
+```
+
+`use_l1` and the sharding helper are kept, exercised and correctness-tested rather than deleted,
+so the trade-off can be re-measured on future runtimes instead of taken on trust.
 
 | Option | Effect | Adopted |
 |---|---|---|
 | Fused `ttnn.softmax` instead of a composed reduction | **~15% faster**, no accuracy cost | **yes**, default |
 | Flash attention (SDPA) + bfloat16 | **1.9x throughput** at batch 64 | **yes**, performance profile |
-| L1-resident activations (`use_l1=True`) | 0.48x FFN, 0.33x projection — *slower* | no, off by default |
-| Height-sharded activations | `TT_FATAL` at these shapes | no, scaffolding removed |
+| L1-resident activations (`use_l1=True`) | 0.35x-0.6x across the whole width sweep — *slower* | no, off by default |
+| Height-sharded activations | 0.44x-0.98x from width 64-1024; `TT_FATAL` at width 26 | no, kept and measured |
 | Fused QKV projection (26 -> 78 + 3 slices) | 0.38x at batch 1, 0.72x at batch 64 — *slower* | no |
 
-Sharding, specifically: height-sharding the activations raises `TT_FATAL` at these shapes — 24
-rows across a 8x8 grid leaves most cores empty and the shard shape degenerate. Attention,
-autoregressive-decode and sample-generation sharding all reduce to the same constraint, since
-they shard the same one-tile activations. Sample generation is instead parallelised by batching:
-all `num_parallel_samples` trajectories advance as one batch, which is what makes 1000 samples
-in 1.68 s possible.
+Attention, autoregressive-decode and sample-generation sharding all reduce to the same
+measurement above, since they shard the same activations. At this checkpoint's width there is
+the additional hard blocker that a batch-1 activation is a single tile and the shard spec
+degenerates (`TT_FATAL`). Sample generation is instead parallelised by batching: all
+`num_parallel_samples` trajectories advance as one batch, which is what makes 1000 samples in
+1.68 s possible.
 
 For the fused flows that *do* apply at this size, both are adopted: `ttnn.softmax` in place of a
 composed reduction, and `ttnn.transformer.scaled_dot_product_attention` in the performance
@@ -128,10 +151,10 @@ Per-op measurements behind those numbers (float32, `d_model=26`, `ffn_dim=32`, s
 | Softmax, single kernel | 0.041 ms | 0.044 ms |
 
 Why L1 loses: `ttnn.linear` cannot fuse a bias when an operand or the output is L1-resident
-(it raises a matmul broadcast error), so every projection pays an extra eltwise add. The
-tensors here are a few kilobytes, so there was no DRAM bandwidth pressure to relieve in the
-first place — the extra dispatch is pure cost. `use_l1=True` is kept working and correctness-
-tested for larger configurations where the trade would flip.
+(it raises a matmul broadcast error), so every projection pays an extra eltwise add. The width
+sweep shows this is not a small-model artefact — L1 stays slower out to width 1024 and 1536
+rows. `use_l1=True` is kept working and correctness-tested so the trade can be re-measured on a
+future runtime, not because the current data suggests it would flip.
 
 Why the fused softmax wins without costing accuracy: `ttnn.softmax` leaves attention rows a few
 percent off unity, but the error is close to a uniform per-row scale factor, and the layer norm

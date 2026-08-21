@@ -148,13 +148,16 @@ the residual add removes it, so end to end the fused kernel is no less accurate 
 the reduction by hand (NLL 0.02% vs 0.04%, mean MAE 0.28% vs 0.67%) and is ~15% faster.
 `use_exact_softmax=True` restores the composed version for diagnosing attention numerics.
 
-**Most Stage 2 memory options are pessimizations here and are off.** L1-resident activations
-measure 0.3–0.5x, because `ttnn.linear` cannot fuse a bias when an operand lives in L1 and so
-every projection pays an extra eltwise add — with tensors a few kilobytes wide there was no
-bandwidth pressure to relieve. Height sharding `TT_FATAL`s at these shapes. A fused QKV
-projection is slower than three separate ones, since splitting the wide output costs more than
-the two dispatches it saves. All measured in [PERF.md](PERF.md); `use_l1` stays available and
-correctness-tested for larger configurations.
+**The Stage 2 memory-layout options are pessimizations, and not just because this model is
+small.** Sweeping width from 26 to 1024 and rows from 24 to 1536, interleaved DRAM is fastest at
+every point — height sharding runs at 0.44x–0.98x even with the layout conversion amortised over
+a chain of blocks, and L1 residency stays slower throughout because `ttnn.linear` cannot fuse a
+bias against an L1-resident operand. A fused QKV projection is likewise slower than three
+separate ones. The likely explanation is that `ttnn.linear` already picks a multi-core program
+config for interleaved operands, so pinning the layout by hand constrains it without adding
+parallelism. All measured in [PERF.md](PERF.md), reproducible via
+`tests/perf/test_utilization.py`; both `use_l1` and the sharding helper are kept and
+correctness-tested so the trade can be re-measured later.
 
 **Generation is dispatch-bound, not compute-bound.** A decode step is ~95 TTNN ops on a model
 this small, so wall-clock is dominated by per-op dispatch and host round-trips, not arithmetic.
@@ -309,8 +312,9 @@ HuggingFace, not accuracy on a multivariate benchmark.
   stepped host loop. Mean-mode decoding is always on device.
 - A single forecast cannot fill the 64-core grid: at `d_model=26` every batch-1 activation is
   one tile. Batching is the lever, not sharding — see PERF.md.
-- L1 residency and sharding do not pay off at this model size (see above). Sharding support was
-  removed rather than left as unused scaffolding; `use_l1` is kept, working and tested, but off.
+- L1 residency and manual sharding are slower than interleaved DRAM across the whole measured
+  width range, not only at this checkpoint's size. Both are kept, exercised and correctness-
+  tested, but off by default.
 - Exactly one trace is live at a time. A new `batch * num_parallel_samples` releases the
   previous capture and pays a fresh one (~0.2 s). Holding several live traces is what makes
   tt-metal warn that later allocations may be corrupted, so the recapture is deliberate.

@@ -162,6 +162,58 @@ def get_memory_config(config: TimeSeriesTransformerConfig) -> Optional[ttnn.Memo
     return ttnn.L1_MEMORY_CONFIG if config.use_l1 else None
 
 
+def get_shard_strategy(name: str) -> ttnn.ShardStrategy:
+    if name == "height":
+        return ttnn.ShardStrategy.HEIGHT
+    if name == "width":
+        return ttnn.ShardStrategy.WIDTH
+    if name == "block":
+        return ttnn.ShardStrategy.BLOCK
+    raise ValueError(f"Unsupported shard strategy: {name}")
+
+
+def create_sharded_memory_config(shape: tuple[int, ...], *, device, strategy: ttnn.ShardStrategy) -> ttnn.MemoryConfig:
+    """Spread a 2-D activation across the compute grid.
+
+    Kept so the sharding trade-off can be measured rather than asserted: at this checkpoint's
+    width a batch-1 activation is a single tile and sharding cannot help, but the crossover
+    where it starts to pay is a property of the shape, not of the model.
+    """
+    shape = tuple(int(dim) for dim in shape)
+    if len(shape) < 2:
+        raise ValueError(f"Sharded config expects at least 2 dims, got {shape}.")
+    grid = device.compute_with_storage_grid_size()
+    height = 1
+    for dim in shape[:-1]:
+        height *= dim
+    width = shape[-1]
+
+    max_cores = grid.x * grid.y
+    if strategy == ttnn.ShardStrategy.HEIGHT:
+        shard_height = -(-(-(-height // max_cores)) // TILE_SIZE) * TILE_SIZE
+        num_cores = max(1, -(-height // shard_height))
+        shard_shape = (shard_height, width)
+    elif strategy == ttnn.ShardStrategy.WIDTH:
+        shard_width = -(-(-(-width // max_cores)) // TILE_SIZE) * TILE_SIZE
+        num_cores = max(1, -(-width // shard_width))
+        shard_shape = (height, shard_width)
+    else:
+        return ttnn.create_sharded_memory_config(
+            shape,
+            core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
+            strategy=strategy,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
+    return ttnn.create_sharded_memory_config(
+        shard_shape,
+        core_grid=ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True),
+        strategy=strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
 def config_from_hf(hf_config, **overrides) -> TimeSeriesTransformerConfig:
     """Build a runtime config from a HuggingFace ``TimeSeriesTransformerConfig``."""
     base = dict(
@@ -196,7 +248,9 @@ __all__ = [
     "TILE_SIZE",
     "TimeSeriesTransformerConfig",
     "config_from_hf",
+    "create_sharded_memory_config",
     "get_memory_config",
+    "get_shard_strategy",
     "get_ttnn_dtype",
     "normalize_scaling",
 ]

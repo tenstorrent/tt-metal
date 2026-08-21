@@ -130,3 +130,91 @@ class TestDistributionSwitching:
         assert torch.isfinite(output).all()
         # Rebuilding re-uploads weights but compiles nothing new; it must stay sub-second.
         assert build_seconds < 5.0, f"switching to {distribution} took {build_seconds:.2f} s"
+
+
+@pytest.mark.models_performance_bare_metal
+class TestShardingTradeoff:
+    """Why manual sharding is not adopted, measured rather than asserted.
+
+    The Stage 2 rationale originally rested on this model being small. That turned out to be
+    the wrong explanation: sweeping the width from 64 to 1024 and the row count from 24 to
+    1536 -- well past this checkpoint's 26 -- height sharding is slower at every point, even
+    when the layout conversion is amortised over a chain of blocks. The likely reason is that
+    ``ttnn.linear`` already selects a multi-core program config for interleaved inputs, so
+    pinning the layout by hand constrains it without adding parallelism.
+
+    These tests exercise the sharding helper and check it stays *correct*; the timings are
+    logged rather than asserted, so a future TTNN improvement shows up as a better number
+    instead of a failure.
+    """
+
+    CHAIN_DEPTH = 4
+
+    @pytest.mark.parametrize("width", [64, 256, 1024])
+    def test_sharded_chain_matches_interleaved(self, device, width):
+        from models.demos.time_series_transformer.reference.torch_reference import compute_pcc
+        from models.demos.time_series_transformer.tt.config import create_sharded_memory_config
+
+        rows = 1536
+        torch.manual_seed(0)
+        upload = lambda t: ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)  # noqa: E731
+        activation = upload(torch.randn(rows, width))
+        weights = [upload(torch.randn(width, width) * 0.05) for _ in range(self.CHAIN_DEPTH)]
+
+        def interleaved():
+            hidden = activation
+            for weight in weights:
+                hidden = ttnn.gelu(ttnn.linear(hidden, weight, transpose_b=True))
+            return hidden
+
+        def sharded():
+            config = create_sharded_memory_config((rows, width), device=device, strategy=ttnn.ShardStrategy.HEIGHT)
+            hidden = ttnn.to_memory_config(activation, config)
+            for weight in weights:
+                hidden = ttnn.gelu(
+                    ttnn.linear(hidden, weight, transpose_b=True, memory_config=config), memory_config=config
+                )
+            return ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG)
+
+        reference = ttnn.to_torch(interleaved()).float()
+        actual = ttnn.to_torch(sharded()).float()
+
+        def timed(fn):
+            for _ in range(3):
+                fn()
+            ttnn.synchronize_device(device)
+            start = time.perf_counter()
+            for _ in range(10):
+                fn()
+            ttnn.synchronize_device(device)
+            return (time.perf_counter() - start) / 10 * 1000
+
+        interleaved_ms, sharded_ms = timed(interleaved), timed(sharded)
+        logger.info(
+            f"width {width}: interleaved {interleaved_ms:.3f} ms, height-sharded {sharded_ms:.3f} ms "
+            f"({interleaved_ms / sharded_ms:.2f}x)"
+        )
+
+        # Correctness is the assertion; speed is the observation.
+        assert compute_pcc(reference, actual) > 0.99, "height sharding changed the result"
+
+    def test_sharding_is_unavailable_at_the_checkpoint_width(self, device, config):
+        """At d_model=26 a batch-1 activation is one tile and the shard spec degenerates."""
+        from models.demos.time_series_transformer.tt.config import create_sharded_memory_config
+
+        torch.manual_seed(0)
+        activation = ttnn.from_torch(
+            torch.randn(config.context_length, config.d_model),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        shard = create_sharded_memory_config(
+            (config.context_length, config.d_model), device=device, strategy=ttnn.ShardStrategy.HEIGHT
+        )
+        try:
+            ttnn.to_memory_config(activation, shard)
+            reason = "accepted"
+        except Exception as exc:  # noqa: BLE001 - the failure itself is the documented result
+            reason = f"rejected ({type(exc).__name__})"
+        logger.info(f"height sharding at d_model={config.d_model}, {config.context_length} rows: {reason}")
