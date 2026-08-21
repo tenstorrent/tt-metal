@@ -54,7 +54,6 @@ class NormalizationSmoke : public TTNNFixtureWithSuiteDevice<NormalizationSmoke>
 
 namespace detail {
 
-using ttnn::test_utils::dram_interleaved;
 using ttnn::test_utils::expect_close;
 using ttnn::test_utils::make_device_tensor;
 using ttnn::test_utils::make_device_tensor_mc;
