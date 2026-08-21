@@ -709,6 +709,30 @@ void example_matmul_single() {
     noc_store<0>(out_storage.store(matmul(a, b)), t2, 0);
 }
 
+// matmul(a, b).plus(m): a whole block added to the product while it is still in DST.
+//
+// The point is the trace, and specifically what is NOT in it. There is no second pass --
+// no pack of the product, no wait, no re-read of it as an operand -- just an add_reuse per
+// output tile between the matmul and the pack, taking the addend from its buffer and DST
+// as the other operand. Then matmul_block_init again, because the reuse op reprogrammed
+// the math unit and a later band would otherwise run a matmul against eltwise state.
+void example_matmul_plus() {
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t1 = TensorAccessor(FakeArgs{1}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
+
+    using Sq2 = Shape<2, 2>;
+    Storage<Sq2> a_storage(0);
+    Storage<Sq2> b_storage(1);
+    Storage<Sq2> m_storage(2);
+    Storage<Sq2> out_storage(3);
+
+    ComputeBlock a = noc_load<1>(a_storage, t0, 0).wait();
+    ComputeBlock b = noc_load<1>(b_storage, t1, 0).wait();
+    ComputeBlock m = noc_load<1>(m_storage, t1, 1).wait();
+    noc_store<0>(out_storage.store(matmul(a, b).plus(m)), t2, 0);
+}
+
 // A matmul whose output block does not fit one acquire, so the strategy walks it in row
 // bands. Shape<4,2> @ Shape<2,8> gives a 4x8 output: 32 tiles against a budget of 8, so
 // four bands of one row each.
@@ -873,6 +897,8 @@ int main() {
     ok &= report("unary");
     tt::unified::example_matmul_single();
     ok &= report("matmul_single");
+    tt::unified::example_matmul_plus();
+    ok &= report("matmul_plus");
     tt::unified::example_matmul_banded();
     ok &= report("matmul_banded");
     tt::unified::example_matmul_acc();

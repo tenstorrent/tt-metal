@@ -54,6 +54,7 @@ CB = dict(
     o=20,
     recipl=21,
     mnow=22,
+    colones=23,
 )
 
 MASK_NEG = -30.0  # exp's domain is finite; -1e4 leaves it (see the non-flash attention test)
@@ -119,14 +120,20 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, str
             t.reshape(1, 1, *t.shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
         )
 
+    # A column of ones, sk tiles tall, so the kernel's row sum can be a matmul against
+    # it. Ones in column 0 only, which reproduces the reduction's contract exactly: the
+    # sum lands in column 0 and the rest of the tile stays zero.
+    col_ones = torch.zeros([sk * TILE, TILE])
+    col_ones[:, 0] = 1.0
     tq, tk, tv, tmask = to_dev(q), to_dev(k_dev), to_dev(v_dev), to_dev(mask_dev)
+    tcolones = to_dev(col_ones.to(torch.bfloat16))
     tout = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S_q, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
 
     core_ranges, cores = single_core()
     ct_args = [sq, sk, dt, num_chunks]
-    for t in (tq, tk, tv, tmask, tout):
+    for t in (tq, tk, tv, tmask, tcolones, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    rt_args = [t.buffer_address() for t in (tq, tk, tv, tmask, tout)]
+    rt_args = [t.buffer_address() for t in (tq, tk, tv, tmask, tcolones, tout)]
 
     scores_pages, out_pages, vec_pages = sq * sk, sq * dt, sq
     cbs = [
@@ -140,7 +147,7 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, str
         make_cb(CB["v"], core_ranges, num_pages=stream_buffering * sk * dt),
         make_cb(CB["mask"], core_ranges, num_pages=stream_buffering * scores_pages),
         make_cb(CB["one"], core_ranges, num_pages=1),
-        make_cb(CB["scores"], core_ranges, num_pages=scores_pages),
+        make_cb(CB["colones"], core_ranges, num_pages=sk),
         make_cb(CB["masked"], core_ranges, num_pages=scores_pages),
         make_cb(CB["rowmax"], core_ranges, num_pages=vec_pages),
         make_cb(CB["prob"], core_ranges, num_pages=scores_pages),
@@ -166,7 +173,7 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, str
         runtime_args=rt_args,
         **(fidelity or {}),
     )
-    out = ttnn.generic_op([tq, tk, tv, tmask, tout], program)
+    out = ttnn.generic_op([tq, tk, tv, tmask, tcolones, tout], program)
     got = ttnn.to_torch(out).to(torch.float32)[0, 0]
 
     # The reference divides the scores, where the device pre-divided Q: mathematically the same,
