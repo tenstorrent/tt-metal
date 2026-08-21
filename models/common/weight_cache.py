@@ -294,7 +294,14 @@ def mark_weight_cache_complete(
         marker_tmp.write_text(marker_body)
         os.replace(marker_tmp, marker)
         logger.info(f"Marked ttnn weight cache complete: {marker} ({len(weights)} weights, {len(host)} host-loaded)")
-    except OSError as e:
+    except Exception as e:
+        # Deliberately broad: this function only RECORDS completion -- failing to record must
+        # never kill a build that already succeeded. The concrete case: on a read-only
+        # /mnt/MLPerf, torch.save of the host sidecar raises RuntimeError from torch's C++
+        # serializer (inline_container.cc "Read-only file system"), not OSError, and the narrow
+        # except crashed every read-only cold run of the sidecar models (gemma4/gemma3) right
+        # after a successful build. (#45400 review, finding R5; seen on Gemma-4-E2B bh_p150,
+        # run 32511945147)
         logger.warning(f"Could not write weight-cache completion marker {marker}: {e}")
 
 

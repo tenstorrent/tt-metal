@@ -417,3 +417,21 @@ def test_sidecar_loaded_once_per_warm_run(tmp_path, monkeypatch):
     assert torch.equal(sd["tok_embeddings.weight"], SAMPLE_SD["tok_embeddings.weight"])
     assert len(calls) == 1, f"sidecar torch.load'ed {len(calls)}x per warm run, expected 1"
     assert not _wc._SIDECAR_CACHE, "builder must consume the memoized sidecar entry"
+
+
+def test_mark_survives_non_oserror_write_failure(tmp_path, monkeypatch):
+    """mark_weight_cache_complete only records completion; a failure to record must warn, not
+    raise. torch.save on a read-only mount raises RuntimeError from the C++ serializer (not
+    OSError), which crashed every read-only cold run of the sidecar models right after a
+    successful build. (finding R5, Gemma-4-E2B bh_p150, run 32511945147)"""
+    _touch_tensorbin(tmp_path)
+
+    def _ro_save(*a, **k):
+        raise RuntimeError(
+            "[enforce fail at inline_container.cc:747] . open file failed with strerror: Read-only file system"
+        )
+
+    monkeypatch.setattr(torch, "save", _ro_save)
+    # Must not raise, and must not publish a marker that claims a sidecar it could not write.
+    mark_weight_cache_complete(tmp_path, SAMPLE_SD, is_host_weight=lambda k: k == "tok_embeddings.weight", **SHARED_ID)
+    assert weight_cache_is_complete(tmp_path, **SHARED_ID) is False
