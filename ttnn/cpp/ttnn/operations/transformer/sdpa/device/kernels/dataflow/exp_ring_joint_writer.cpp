@@ -119,10 +119,12 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_out_addr = get_arg_val<uint32_t>(argidx++);
     argidx++;  // skip stats_addr (unused — stats only needed for multi-Q accumulator save)
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    // Only one Q chunk per core is allowed
-    ASSERT(global_q_end - global_q_start <= 1);
+    // Head-serial passes: this core owns flat Q chunks q_base + p * q_stride for p in [0, q_count).
+    const uint32_t q_base = get_arg_val<uint32_t>(argidx++);
+    const uint32_t q_stride = get_arg_val<uint32_t>(argidx++);
+    const uint32_t q_count = get_arg_val<uint32_t>(argidx++);
+    // One Q chunk per pass, and at most kMaxPasses passes (see the program factory).
+    ASSERT(q_count <= 2);
 
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
 
@@ -300,7 +302,11 @@ void kernel_main() {
             // Write final normalized output on last ring iteration.
             const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
 
-            for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+            // Serial passes, same order as the reader and compute: pass p handles head
+            // (p * rows + my_row). Both the AG forwarding below and the output drain are already
+            // parameterized per chunk, so they are correct per pass with no addressing change.
+            for (uint32_t pass = 0; pass < q_count; ++pass) {
+                const uint32_t global_q_chunk = q_base + pass * q_stride;
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;

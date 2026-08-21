@@ -43,14 +43,17 @@ inline constexpr uint32_t kReaderKernelIdx = 0;
 inline constexpr uint32_t kWriterFabricKernelIdx = 2;
 // Per-core reader runtime-arg slot of the first per-link semaphore address; slots
 // kReaderSemaphoreArgBase .. +num_links-1 hold args.semaphore[lnk].address().
-inline constexpr uint32_t kReaderSemaphoreArgBase = 26;
+// Head-serial passes: the Q work descriptor is (q_base, q_stride, q_count) — three args
+// where it used to be (global_q_start, global_q_end) — so every slot after it shifted by 1.
+inline constexpr uint32_t kReaderSemaphoreArgBase = 27;
 // Reader args after the semaphore addresses: ring_size, ring_index, direction.
 inline constexpr uint32_t kReaderTrailingArgCount = 3;
 inline constexpr uint32_t reader_arg_count(uint32_t num_links) {
     return kReaderSemaphoreArgBase + num_links + kReaderTrailingArgCount;
 }
 // Per-core fabric-writer runtime-arg slot of out_ready_sem_addr (= args.semaphore[link].address()).
-inline constexpr uint32_t kWriterFabricOutReadySemArg = 25;
+// Shifted by 1 for the (q_base, q_stride, q_count) Q work descriptor — see kReaderSemaphoreArgBase.
+inline constexpr uint32_t kWriterFabricOutReadySemArg = 26;
 // Fabric-writer args after out_ready_sem_addr: injector x/y, num_muxes, mux index, AG Wt/Ht,
 // gathered k/v addresses.
 inline constexpr uint32_t kWriterFabricArgCount = kWriterFabricOutReadySemArg + 9;
