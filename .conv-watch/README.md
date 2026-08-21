@@ -10,6 +10,16 @@ Scope = the conv family (conv2d/1d/3d, conv_transpose2d, maxpool/avgpool/global/
 adaptive pool, upsample, grid_sample, fold, sliding_window, cnn/tt_cnn) plus the
 two conv-team-owned models **resnet50** and **stable diffusion 1.4**.
 
+> **2026-08-21 — edit-in-place digest (Slack bot API), same as sdpa-watch.**
+> With `~/.conv-watch/slack_bot_token` (xoxb, scope `chat:write`) and
+> `SLACK_CHANNEL_ID` set in `config.sh`, the watcher edits its standing digest
+> message in place while the status is unchanged (tick times accumulate on a
+> `checked:` line, last 48 kept) and posts a new message only on a status
+> change. State in `state.json` under `_slack`. The `sdpawatch` bot must be a
+> member of `#conv-watch` (`/invite @sdpawatch`). Missing token/channel ID →
+> legacy webhook behavior (new message per tick). Full description in
+> `../.sdpa-watch/README.md`.
+
 ## Runtime vs snapshot (read `../.sdpa-watch/README.md` + `SETUP.md` first)
 
 - **Runtime** = `~/.conv-watch/` — the cron job, cache, secrets, logs. Source of truth.
