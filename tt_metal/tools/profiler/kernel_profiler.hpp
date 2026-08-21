@@ -470,8 +470,10 @@ inline __attribute__((always_inline)) void timeStampedData(uint64_t data, Args..
     publish_tail();
 }
 
-// Body for a payload-less 2-word point marker (PP_EVENT).
-inline __attribute__((always_inline)) void mark_point(uint32_t word0) {
+// A compile-time-tagged FLAG with no payload: PP_EVENT, 2 words, and a structural source-location id that
+// the host names from the ELF exactly like a zone. (Same reserve-before-clock-read ordering as mark_time.)
+template <uint32_t data_id>
+inline __attribute__((always_inline)) void recordFlag() {
     ring_ensure_room(SPSC_MARKER_WORDS + 1);
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
@@ -479,16 +481,9 @@ inline __attribute__((always_inline)) void mark_point(uint32_t word0) {
         ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));
         g_prev_timer_hi = hi;
     }
-    ring_write_word(word0);
+    ring_write_word(ppfmt::event_w0(data_id));
     ring_write_word(lo);  // word1: timer_low
     publish_tail();
-}
-
-// A compile-time-tagged FLAG with no payload: PP_EVENT, 2 words, and a structural source-location id that
-// the host names from the ELF exactly like a zone.
-template <uint32_t data_id>
-inline __attribute__((always_inline)) void recordFlag() {
-    mark_point(ppfmt::event_w0(data_id));
 }
 
 }  // namespace kernel_profiler
