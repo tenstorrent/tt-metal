@@ -94,3 +94,55 @@ def test_power_as_activation(device, op_type, exponent):
     tt_out = ttnn.to_torch(z_tt)
 
     assert_with_ulp(z_torch, tt_out, 1)
+
+
+# Regression for issue #52675: the bf16 power path ran a single cubic log2 whose
+# ~2.8e-3 absolute error was amplified by |exponent| (result rel err ~= 0.2%*|y|,
+# unbounded: 18% at y=100, 133% at y=500). bf16 now runs the accurate fp32
+# algorithm (atanh-series log2 + hi/lo argument split + explicit overflow guard),
+# so large exponents must stay within a few ULP of the bf16 golden and overflow
+# must saturate to +inf instead of wrapping to NaN/garbage.
+@pytest.mark.parametrize(
+    "base,exponent",
+    [
+        (0.99609375, 100.0),  # issue repro: 0.8008 (18% off) -> ~0.6761
+        (0.99609375, 500.0),  # issue repro: 0.3295 (133% off) -> ~0.1413
+        (0.99609375, -100.0),
+        (1.125, 64.0),
+        (0.875, -64.0),
+        (2.0, 128.0),  # overflow -> +inf
+        (10.0, 39.0),  # overflow -> +inf
+    ],
+)
+def test_pow_bf16_large_exponent(device, base, exponent):
+    torch.manual_seed(0)
+    torch_base = torch.full([1, 1, 32, 32], base, dtype=torch.bfloat16)
+    torch_output = torch.pow(torch_base, exponent)
+
+    ttnn_base = ttnn.from_torch(torch_base, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.to_torch(ttnn.pow(ttnn_base, exponent))
+
+    if torch_output.isinf().all():
+        assert ttnn_output.isinf().all(), f"pow({base}, {exponent}) should overflow to +inf, got {ttnn_output[0,0,0,0]}"
+        assert (ttnn_output > 0).all(), "overflow produced -inf/NaN instead of +inf"
+    else:
+        assert_with_ulp(torch_output, ttnn_output, 3)
+
+
+# Sweep over a range of bases and large exponents to prove the error no longer
+# grows with |exponent|. Before the fix the median error was 5.8% at y=32 and
+# 29.3% at y=500; after the fix every point is within 3 ULP of the bf16 golden.
+@pytest.mark.parametrize("exponent", [32.0, 100.0, 500.0])
+def test_pow_bf16_large_exponent_sweep(device, exponent):
+    torch.manual_seed(1)
+    bases = torch.logspace(-3, 3, 4096, dtype=torch.float32).reshape(64, 64).to(torch.bfloat16)
+    torch_output = torch.pow(bases, exponent)
+
+    ttnn_base = ttnn.from_torch(bases, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.to_torch(ttnn.pow(ttnn_base, exponent))
+
+    # Skip points where the golden overflows or denormal-flushes; those are
+    # correctly handled but outside the accuracy comparison.
+    finite = torch_output.isfinite() & (torch_output.abs() >= torch.finfo(torch.bfloat16).tiny)
+    assert finite.any(), f"exponent {exponent}: no finite, non-denormal golden outputs to compare"
+    assert_with_ulp(torch_output[finite], ttnn_output[finite], 3)

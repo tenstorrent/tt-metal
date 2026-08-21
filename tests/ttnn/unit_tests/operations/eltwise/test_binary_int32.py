@@ -869,6 +869,16 @@ def test_div_edge_cases(rounding_mode, device):
         (2147483647, 1073741823),
         (1073741823, -2147483647),
         (1073741824, -2147483647),
+        # INT32_MIN dividend: abs(-2**31) is sign-magnitude INT32_MIN, which
+        # converts to -0.0f at the unguarded third conversion site (issue #51476).
+        (-2147483648, 2097152),
+        (-2147483648, 2097153),
+        (-2147483648, 239823930),
+        (-2147483648, -2097152),
+        (-2147483648, 1),
+        (-2147483648, 2147483647),
+        (-2147483648, -2147483647),
+        (-2147483648, 1073741824),
     ]
 
     numerators, denominators = zip(*pairs)

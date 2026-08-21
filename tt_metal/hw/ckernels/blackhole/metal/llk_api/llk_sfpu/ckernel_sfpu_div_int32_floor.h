@@ -66,6 +66,12 @@ sfpi_inline void calculate_div_int32_body(
     // Compute remainder.
     sfpi::vInt r = a - qb;
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
+    // sfpi::abs(INT32_MIN) returns INT32_MIN (sign-magnitude), which converts to
+    // -0.0f; clamp it to 2**31 exactly as the two earlier conversions of the same
+    // kind do (b_f above and a_f above). Without this, the residual correction is
+    // computed from -0.0f * inv_b_f and the quotient is lost (issue #51476).
+    v_if(r_f < 0.0f) { r_f = 0x1.0p31f; }
+    v_endif;
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
