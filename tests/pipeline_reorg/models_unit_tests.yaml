@@ -222,7 +222,7 @@
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      timeout: 28
+      timeout: 25
       tier: 1
   owner_id: U08FBKRKTB8 # Kohei Yamaguchi
   team: models
