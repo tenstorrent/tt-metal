@@ -87,7 +87,7 @@ def _get_stable_sort_modes(mathop):
 
 
 # Every op with a unary SFPU kernel, taken from the same registry the correctness sweep
-# in test_sfpu_unary.py drives, so an op cannot be added there and silently skip perf.
+# in test_eltwise_unary_sfpu.py drives, so an op cannot be added there and silently skip perf.
 # _UNARY_OPS_NOT_SWEPT is deliberately *not* subtracted: those ops (the topk halves) are
 # exempt from the correctness sweep precisely because they are perf-only, so they belong
 # here. Sorted so the parametrize ids are stable across runs.

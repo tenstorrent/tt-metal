@@ -386,7 +386,7 @@ _APPROX_EXP_ACCURACY_XFAIL = {
 # combinations Blackhole can reach XPASSed, at both tile shapes, and no other unary variant
 # XPASSed. So Blackhole's exp approximation holds the default 5% rtol where Wormhole's
 # overshoots by ~5.7%, and Blackhole *asserts* the accuracy rather than tolerating it. Same
-# shape of gate as _WORMHOLE_ONLY_EDGE_CLASSES in test_sfpu_binary.py.
+# shape of gate as _WORMHOLE_ONLY_EDGE_CLASSES in test_eltwise_binary_sfpu.py.
 _APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY = True
 
 

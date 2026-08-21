@@ -88,7 +88,7 @@ def _is_block_float(fmt: DataFormat) -> bool:
         [128, 64],  # tile_cnt: 8
     ],
 )
-def test_perf_eltwise_typecast(
+def test_perf_eltwise_unary_typecast(
     perf_report,
     typecast_case,
     approx_mode,

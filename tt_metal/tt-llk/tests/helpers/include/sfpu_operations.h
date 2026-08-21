@@ -2057,7 +2057,7 @@ void call_binary_sfpu_operation(
         // int32 multiply: out = in0 * in1 (low 32 bits). The kernel loads/stores via
         // plain INT32 (two's-complement dest bits), so the sign-magnitude packer only
         // round-trips non-negative results; the test keeps operands positive with a
-        // product < 2^31 (see test_sfpu_binary_mul_int32).
+        // product < 2^31 (see test_eltwise_binary_sfpu_int).
         SFPU_BINARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, mul_int32, (APPROXIMATION_MODE, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }

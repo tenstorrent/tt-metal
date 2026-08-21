@@ -34,7 +34,7 @@ PERF_TEST_SCHEMAS = {
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
     },
-    "perf_eltwise_binary_fpu": {
+    "perf_eltwise_binary": {
         "version": 3,
         "columns": [
             "dest_acc",
@@ -80,7 +80,7 @@ PERF_TEST_SCHEMAS = {
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
     },
-    "perf_eltwise_typecast": {
+    "perf_eltwise_unary_typecast": {
         "version": 3,
         "columns": [
             "approx_mode",
@@ -285,7 +285,7 @@ PERF_TEST_SCHEMAS = {
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
     },
-    "perf_math_transpose": {
+    "perf_transpose_dest": {
         "version": 3,
         "columns": [
             "dest_acc",
