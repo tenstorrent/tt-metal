@@ -106,7 +106,7 @@ uint32_t _start() {
 
         WAYPOINT("K");
 #ifdef TT_DM_CACHED_SEM_STUBS
-        // When the kernel binds DM_LOCAL_CACHED semaphores: seed their 
+        // When the kernel binds DM_LOCAL_CACHED semaphores: seed their
         // pool rows once per program, and restore them on the way out.
         sem::init_dm_cached();
 #endif
