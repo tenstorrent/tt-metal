@@ -189,3 +189,28 @@ tests/.../reduce/_topk_wide_stable_bench.py under python -m tracy -r -v):
 Cross-trial spread <= 0.03% -> far above noise floor. All TRISCs ~= DK on both legs (pipeline
 saturated; shared transpose/copy DM cost dilutes the comparator penalty relative to the
 network-only 7x instruction ratio).
+
+## FINAL validation (committed tree, fresh JIT)
+- ttnn reduce/test_topk.py: 246 passed / 8 skipped / 80 xfailed (was 235p pre-series; +11 new cells)
+- ttnn test_topk_stable_adversarial.py: 30 passed
+- ttnn data_movement/test_sort.py: 128 passed (shared-LLK-header blast radius)
+- tt-llk python_tests/test_topk.py (BH silicon): 60 passed / 8 skipped (was 42p/6s; +18 rank_stamped)
+- tt-llk test_topk.py under WH ttsim: 18p/2s rank_stamped; 42p/6s all-modes-minus-comparator
+  (comparator-stable = pre-existing ttsim gap: SFPSWAP with index-reg operands unmodeled)
+
+## Commits (nkapre/rankstamp-53557, base 6d49857e9e2 = repair tip)
+- 0b464ed2cb8 C1 LLK primitives + RANK_STAMPED mode (BH+WH), LLK test mode
+- 0456986a725 C2 compute API surface
+- 160d78bf6a7 C3 single-core factory gate + Float32 transport + kernel wiring
+- d422d30ee23 C4 wide tests + cache-boundary test + Tracy bench + perf evidence
+
+## Open items / follow-ons
+- Multicore rank-stamped: needs the mirror-bit stamp variants for m>=1 merges on
+  direction-flipped cores (and the final core's direction base) — the "4 combinations"
+  generalization. u32-prealloc multicore stable stays comparator (correct, slower).
+- K>32 wide stable stays comparator (insertion-cascade precondition failure — fundamental
+  for position-derived ranks, not just unimplemented).
+- ttnn.sort stable=true enablement (C5 of the design) untouched.
+- WH silicon validation: mirror is knob-diff-verified + ttsim-functional only (no WH device here).
+- ttsim gap worth filing upstream: SFPSWAP with LREG4..7 operands under ENABLE_DEST_INDEX
+  (comparator-stable mode unsimulatable).
