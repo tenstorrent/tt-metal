@@ -30,7 +30,7 @@ CB_IN0, CB_IN1, CB_BIAS, CB_OUT, CB_ACC = 0, 1, 2, 16, 24
 TILE = 32
 
 
-def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0):
+def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0, fidelity=None):
     torch.manual_seed(seed)
     a_blocks = [(torch.rand([1, 1, rt * TILE, kt * TILE]) - 0.5).to(torch.bfloat16) for _ in range(k_blocks)]
     b_blocks = [(torch.rand([1, 1, kt * TILE, ct * TILE]) - 0.5).to(torch.bfloat16) for _ in range(k_blocks)]
@@ -98,6 +98,8 @@ def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0):
             + ([("MM_SINGLE_SHOT", "1")] if mode == "single" else [])
             + ([("MM_RELU_EPILOGUE", "1")] if relu == "epilogue" else [])
         ),
+        # So a sweep can pin fidelity to match whatever it compares against.
+        **(fidelity or {}),
     )
 
     logger.info(f"running biased matmul: rt={rt} ct={ct} kt={kt} k_blocks={k_blocks} mode={mode} relu={relu}")

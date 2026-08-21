@@ -2004,6 +2004,48 @@ it, both harnesses now replicate, and `bias()` documents the requirement -- but 
 device can check it, so it is worth knowing about before a third caller appears.
 
 
+### The sweep can measure a bias now, and the whole grid agrees with the spot check
+
+`bench_matmul.py --bias` drives the biased harness against `ttnn.linear` instead of
+`ttnn.matmul`, so both sides carry a bias. Same 240 cells, same 9 holes (the L1 ceiling),
+and the fidelity pin had to be threaded into the bias harness first -- it had no way to set
+it, so every biased number before this was at default fidelity and not comparable to ttnn.
+
+**Against ttnn.linear: 0.86x to 1.41x, median 1.14x, 14 cells faster than ttnn.** That is
+the same distribution as the unbiased sweep's 1.15x median, so fusing a bias costs us about
+what it costs ttnn. The worst cells are 1x1 at kt=32 and kt=64 (1.37x-1.41x), which is the
+usual fixed-overhead-on-a-tiny-block story and not about the bias.
+
+**The fold holds up across the whole grid**, which is worth more than the seven shapes it
+was decided on: with a bias, Dst is faster than L1 in **77 of 77** comparable cells, median
+gap 0.39us. Median ratio by mode is 1.12x for Dst, 1.18x for L1, 1.12x for single-shot.
+
+One number needs care, because read carelessly it looks like the opposite:
+
+| median over 77 cells | unbiased | biased | cost of the bias |
+|---|---|---|---|
+| Dst | -- | -- | +1.18 us |
+| L1 | -- | -- | +0.88 us |
+| L1 minus Dst | +0.83 us | +0.39 us | |
+
+The MARGINAL cost of a bias is lower in L1 (+0.88) than in Dst (+1.18), and adding a bias
+closes the L1-to-Dst gap from 0.83us to 0.39us. That is not evidence against the fold. L1's
+bias pass replaces a copy-out it was already doing in the unbiased case, so part of its
+"bias cost" was already on the books; Dst has no such pass to absorb, so its bias shows up
+entirely as new work. The comparison that decides the fold is fold-vs-two-pass WITHIN Dst,
+which is measured above at 1, 2, 4 and 8 subblocks and favours the fold every time. And in
+absolute terms -- which is what a caller actually pays -- Dst with the fold is the fastest
+biased configuration in every one of the 77 cells.
+
+**Two reporting fixes fell out of building it.** A missing ttnn reference used to print as a
+bare `-` with the reason discarded; it now says why. That immediately showed
+`ttnn.linear` producing zero records under the `operations/matmul` match at m=64 n=128 k=64
+-- it dispatches elsewhere -- so the biased side matches on `operations` instead, which is
+safe because only one op runs inside the bench call and the two agree wherever the narrow
+match works. Nine shapes still have no reference, 27 cells of the 231, almost all of them
+ct=1: ttnn declines to leave records for a single-tile-wide linear. Reported per cell rather
+than hidden.
+
 ### What to test next
 
 Ordered by expected value, with what each result would actually mean. Six candidates are
