@@ -354,6 +354,7 @@ class ColParallelLinear(Module):
         addcmul_scalar: float = 1.0,
         core_grid=None,
         use_heuristic_mmcfg=False,
+        force_transpose: bool = True,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -406,9 +407,12 @@ class ColParallelLinear(Module):
             if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch and addcmul_a is None:
                 return self._forward_fabric_agmm(x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype)
 
-            # Explicit core_grid / default_block_size and swept (M, K, N) table entries keep the
-            # legacy grid, config, and workers derivation; unswept shapes resolve through the v3
-            # rule engine (grid orientation + blocking, see utils/agmm_rules.py).
+            # The op transposes the core grid when force_transpose is set or the output is wide
+            # (M > N), and puts its in0 muxes on whichever axis the worker grid leaves free -- so
+            # the grid has to reserve the matching one (row when transposed, column when not).
+            # get_agmm_config resolves grid, blocking and workers together: an explicit core_grid /
+            # default_block_size and swept (M, K, N) table entries keep the legacy derivation,
+            # unswept shapes go through the v3 rule engine (see utils/agmm_rules.py).
             core_grid, matmul_config, num_workers_per_link = get_agmm_config(
                 M,
                 K,
@@ -421,6 +425,7 @@ class ColParallelLinear(Module):
                 use_heuristic=use_heuristic_mmcfg,
                 fuse_swiglu=self.fuse_swiglu,
                 use_addcmul=addcmul_a is not None,
+                force_transpose=force_transpose,
             )
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
@@ -442,6 +447,7 @@ class ColParallelLinear(Module):
                 topology=self.ccl_manager.topology,
                 cluster_axis=parallel_config.tensor_parallel.mesh_axis,
                 barrier_semaphore=None,
+                force_transpose=force_transpose,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,

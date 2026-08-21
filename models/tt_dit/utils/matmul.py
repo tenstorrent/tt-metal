@@ -372,6 +372,18 @@ def get_matmul_core_grid(mesh_device):
     return core_grid
 
 
+def agmm_worker_grid(full_grid, transpose):
+    """all_gather_minimal_matmul_async matmul worker grid, sized to leave the mux axis free.
+
+    The op places its input muxes on the device's last ROW when the core grid is transposed and its
+    last COLUMN when it is not (see the program factory's `in0_mux_in_column` logic). The matmul
+    workers must therefore avoid that row/column: reserve a row when transposed -> (x, y-1); reserve a
+    column when not -> (x-1, y). `transpose` should be the op's own decision, i.e.
+    `force_transpose or (M > N)`.
+    """
+    return ttnn.CoreCoord(full_grid.x, full_grid.y - 1) if transpose else ttnn.CoreCoord(full_grid.x - 1, full_grid.y)
+
+
 def _compute_heuristic_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, tp_factor: int = -1):
     """Heuristic matmul blocking for shapes absent from the per-grid lookup tables.
 
@@ -623,6 +635,7 @@ def get_agmm_config(
     use_heuristic=False,
     fuse_swiglu=False,
     use_addcmul=False,
+    force_transpose=True,
 ):
     """Resolve (core_grid, MinimalMatmulConfig, num_workers_per_link) for
     `all_gather_minimal_matmul_async`.
@@ -633,22 +646,34 @@ def get_agmm_config(
          `grid_12_9_configs` and entries added via `register_matmul_configs`).
       3. The v3 rule engine (`utils/agmm_rules.py`) -- picks the worker grid (orientation-aware)
          and blocking; blind-validated within 5% of swept optimum on ~96% of shapes. Blackhole
-         only; the rules were fitted against Blackhole L1 and fabric parameters.
+         only; the rules were fitted against Blackhole L1 and fabric parameters. Skipped when
+         `force_transpose` overrides the op's own `M > N` orientation, since the rules derive
+         layout and blocking from that same test and have no fit for the forced orientation.
       4. The legacy warned generic fallback.
+
+    `force_transpose` mirrors the op parameter (whose default is likewise `True`) and must be the
+    value the caller actually passes to the op, since the worker grid has to reserve the mux axis
+    the op will use.
 
     On a v3 hit, an info log prints the config as a paste-able table line: sweep the shape with
     `sweep_mm_block_sizes.py` and paste the winner into `grid_12_9_configs` (or a model table)
     to override the rules permanently.
     """
-    legacy_grid = core_grid or ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
-    legacy_workers = full_grid.x // num_links
+    # The op transposes when the caller forces it or the output is wide, and places its in0 muxes
+    # on the axis the worker grid leaves free -- reserve a row when transposed, a column when not.
+    transpose_core_grid = force_transpose or M > N
+    legacy_grid = core_grid or agmm_worker_grid(full_grid, transpose_core_grid)
+    # in0 senders group along the M-parallel axis (grid.x transposed, grid.y not); split it into
+    # exactly num_links groups, matching the op's `ceil(in0_axis / workers) == num_links` assert.
+    # For the default transposed grid this is the same 6 the old `full_grid.x // num_links` gave.
+    legacy_workers = math.ceil((legacy_grid.x if transpose_core_grid else legacy_grid.y) / num_links)
     table_hit = _grid_config_lookup.get((legacy_grid.x, legacy_grid.y), {}).get((M, K, N)) is not None
     if core_grid is not None or default_block_size is not None or use_heuristic or table_hit:
         config = get_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic)
         return legacy_grid, config, legacy_workers
 
     v3 = None
-    if is_blackhole():
+    if is_blackhole() and transpose_core_grid == (M > N):
         from .agmm_rules import pick_v3
 
         v3 = pick_v3(
