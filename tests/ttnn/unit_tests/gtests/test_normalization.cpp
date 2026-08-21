@@ -1102,9 +1102,7 @@ TEST_F(NormalizationSmoke, GroupNormShardedBlock1x1GammaBeta) {
 
 TEST_F(NormalizationSmoke, GroupNormWelfordInterleaved) {
     // GroupNormNoMcastProgramFactory with use_welford=true (kernels/compute/welford_groupnorm.cpp).
-    // Welford interleaved requires TILE in/out (groupnorm_device_operation.cpp) -- satisfied.
-    // Note: the actively-broken CI welford is the SHARDED v2 path (#53143 / #52700); this
-    // interleaved path passes on both WH (PR-gate ttnn validation smoke) and BH p100a.
+    // Welford interleaved requires TILE in/out (groupnorm_device_operation.cpp)
     auto& device = *device_;
     auto input = detail::make_device_tensor(
         device, ttnn::Shape({1, 1, 32, 64}), detail::gn_golden_input(32, false), DataType::BFLOAT16, Layout::TILE);
