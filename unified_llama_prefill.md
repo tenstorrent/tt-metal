@@ -1689,6 +1689,66 @@ program cost, and no implementation makes that efficient. And a few ttnn referen
 missing (the `-` cells): its one-core matmul declines some shapes, which is recorded rather
 than worked around.
 
+### Diagnosing the 1.3us k-block, and what fixing it would take
+
+Measured first, and it killed the obvious hypothesis. With total K held at 8 tiles and only
+the blocking changed, the cost is dead linear in the number of `accumulate` calls:
+
+| | calls | ours |
+|---|---|---|
+| kb=1, kt=8 | 1 | 3.35 us |
+| kb=2, kt=4 | 2 | 4.89 us |
+| kb=4, kt=2 | 4 | 7.33 us |
+| kb=8, kt=1 | 8 | 11.80 us |
+
+**1.21 us per call.** Three things then locate it:
+
+- **It is not `matmul_block_init`.** Ablating the per-call init entirely -- the 1372-byte
+  function the static analysis flagged, which looked like the answer -- moved kb=8 from
+  11.88 to 11.58us. That is 0.04us per call, 3% of it. The suspicion was wrong.
+- **It is not the data.** Per-call cost against output block size is 1.32us at one tile,
+  1.42 at four, 1.50 at eight -- essentially flat with a ~0.025us/tile slope. A cost that
+  does not scale with the block is synchronisation, not movement.
+- **It is almost exactly a whole matmul PASS.** passcost prices a standalone single-shot
+  matmul pass at 1.066us. So an `accumulate` call in a k-loop costs what an independent
+  matmul costs: the loop buys nothing.
+
+That last one is the diagnosis. Every call is a self-contained pass -- `tile_regs_acquire`,
+matmul, pack, `cb_push_back`, then `cb_wait_front` and `cb_pop_front` on the buffer it just
+wrote, then release. The wait is the serialisation: the math thread blocks until the packer
+has landed the partial before the next k-block may start, so consecutive k-blocks cannot
+overlap. Both modes pay it, which is why Dst and L1 measured within 0.01x of each other --
+Dst through its reload, L1 through the push/pop that rewinds the write pointer. The comment
+already says that push/pop pair is load-bearing for correctness, and it is; it is also what
+costs.
+
+**The fix is to make the k-loop ONE pass: hold the partial in DST across calls.** Acquire
+once, matmul every k-block into the same DST slots, pack once at the end. That is precisely
+what `kb=1, kt=8` already does, and it is the fast case -- so the fix is to let a blocked K
+behave like an unblocked one.
+
+Expected impact, taking the per-call cost down to the matmul issue itself (~0.05us):
+
+| | now | fixed | vs ttnn now | vs ttnn fixed |
+|---|---|---|---|---|
+| kb=4, 1x1 | 7.33 us | ~3.5 us | 2.47x | ~1.2x |
+| kb=8, 1x1 | 11.80 us | ~3.5 us | ~4x | ~1.2x |
+
+**Where this matters is not attention.** Flash's matmuls are single-shot, so it is untouched
+by this. What it touches is every projection and FFN matmul, where K is the hidden size --
+2048 elements is 64 tiles, far past what one block holds, so those matmuls are necessarily
+blocked and pay this on every step. That is most of a transformer's arithmetic.
+
+**What it costs to do.** Today each `accumulate` call is deliberately self-contained; the
+strategy's own comment explains that it reprograms the block dimensions rather than trusting
+earlier state, because a broadcast or reduction between calls would otherwise leave the
+units configured for something else. Holding DST across the loop gives that up: the
+Accumulator would own the register file from first call to finish, and any other op
+interleaved into the loop would corrupt the partial silently. So the change is not the
+arithmetic, it is the ownership -- the acquire and release move into the Accumulator, and the
+"nothing else may touch DST here" rule has to be expressed rather than assumed. It also does
+NOT lift hole 1: the partial living in DST still needs rt*ct <= 8.
+
 ### What to test next
 
 Ordered by expected value, with what each result would actually mean. Six candidates are
