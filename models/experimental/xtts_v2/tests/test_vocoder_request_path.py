@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the request path's vocoder length bucketing (tt/ttnn_xtts_model.py).
+"""Tests for the vocoder half of the request path (tt/ttnn_xtts_model.py).
 
 The vocoder is compiled and traced at a fixed set of frame counts (VOC_BUCKETS); each request
 pads z up to its bucket and trims the waveform back. What is pinned here: the bucket a length maps

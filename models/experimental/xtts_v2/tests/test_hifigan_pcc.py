@@ -78,19 +78,8 @@ def test_hifigan_pcc(device):
 
 if __name__ == "__main__":
     import sys
-    import time
 
-    dev = None
-    for attempt in range(20):
-        try:
-            dev = ttnn.open_device(device_id=0, l1_small_size=65536)
-            break
-        except Exception as e:  # device momentarily busy (shared with main session)
-            print(f"open_device attempt {attempt} failed ({e}); retrying in 45s")
-            time.sleep(45)
-    if dev is None:
-        print("FAILED could not open device")
-        sys.exit(1)
+    dev = ttnn.open_device(device_id=0, l1_small_size=65536)
     try:
         dev.enable_program_cache()
         ok, msg = run_hifigan_pcc(dev)
