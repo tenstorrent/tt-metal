@@ -6,7 +6,11 @@
 // factory, for every op under ttnn/cpp/ttnn/operations/normalization/
 // (softmax, layernorm, rmsnorm, their distributed pre/post all-gather stages,
 // groupnorm, batch_norm), plus tests for the front-end code paths that pick
-// between factories. Each test uses small deterministic inputs with exact
+// between factories. Known-broken factories are kept as DISABLED_ repros or
+// excluded with an issue reference in the section comments: distributed
+// pre-all-gather Welford (#51231, hang class), sharded groupnorm Welford
+// (#53143/#52700), batch_norm one-sided running stats (#51230).
+// Each test uses small deterministic inputs with exact
 // closed-form expected outputs (or op-tolerance where accumulation forces it),
 // so a kernel that runs but produces garbage fails.
 //
@@ -236,6 +240,32 @@ TEST_F(NormalizationSmoke, SoftmaxGeneralH) {
     const auto out = ttnn::softmax(x, -2);
     // Softmax over H=64 zeros -> uniform 1/64 (2^-6, exact in bf16).
     detail::expect_close(detail::to_float_vector(out), std::vector<float>(H * W, 1.0f / 64.0f), 0.0f, 1e-3f);
+}
+
+TEST_F(NormalizationSmoke, SoftmaxGeneralWLarge) {
+    // SoftmaxProgramFactoryGeneralWLarge: rank-5 keeps dim=-1 off the attention path, and
+    // W=4096 (Wt=128) overflows the 512KB L1 small-path budget in
+    // is_softmax_general_w_small_available, so the Large factory is selected.
+    auto& device = *device_;
+    constexpr uint32_t H = 32, W = 4096;
+    const ttnn::Shape shape({1, 1, 1, H, W});
+    const std::vector<float> zeros(H * W, 0.0f);
+    const auto x = detail::make_device_tensor<float>(device, shape, zeros, DataType::BFLOAT16, Layout::TILE);
+    const auto out = ttnn::softmax(x, -1);
+    // Zero rows -> uniform 1/4096 (2^-12, exact in bf16); rtol per the wide-row drift policy.
+    detail::expect_close(detail::to_float_vector(out), std::vector<float>(H * W, 1.0f / 4096.0f), 0.2f, 1e-5f);
+}
+
+TEST_F(NormalizationSmoke, SoftmaxGeneralHLarge) {
+    // SoftmaxProgramFactoryGeneralHLarge: dim=-2 with H=4096 (Ht=128) overflows the same
+    // 512KB budget in is_softmax_general_h_small_available.
+    auto& device = *device_;
+    constexpr uint32_t H = 4096, W = 32;
+    const ttnn::Shape shape({1, 1, H, W});
+    const std::vector<float> zeros(H * W, 0.0f);
+    const auto x = detail::make_device_tensor<float>(device, shape, zeros, DataType::BFLOAT16, Layout::TILE);
+    const auto out = ttnn::softmax(x, -2);
+    detail::expect_close(detail::to_float_vector(out), std::vector<float>(H * W, 1.0f / 4096.0f), 0.2f, 1e-5f);
 }
 
 TEST_F(NormalizationSmoke, SoftmaxGeneralC) {
@@ -822,6 +852,25 @@ TEST_F(NormalizationSmoke, DistributedPostGammaBeta) {
     const auto v = detail::to_float_vector(out);
     const auto expected = detail::dist_norm_alternating(32 * 64, 3.0f, -1.0f);
     detail::expect_close(v, expected, 0.0f, 0.06f);
+}
+
+TEST_F(NormalizationSmoke, DISABLED_DistributedLayerNormPostWelford) {
+    // KNOWN BUG (disabled; run with --gtest_also_run_disabled_tests): #51231 --
+    // LayerNormPostAllGatherWelfordProgramFactory returns garbage (measured -64512 where the
+    // golden is -1, every element, BH p100a 2026-08-21). use_welford=true on the post stage,
+    // fed by the plain pre stage (num_devices = 1); same +-1 golden as the end-to-end cell.
+    // Enable when #51231 closes. The pre-all-gather Welford factory stays untested: same
+    // issue, hang class.
+    auto& device = *device_;
+    const ttnn::Shape shape({1, 1, 32, 64});
+    const auto x_data = detail::dist_norm_alternating(32 * 64, 1.0f, -1.0f);
+    auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
+
+    auto stats = ttnn::layer_norm_pre_all_gather(x);
+    const ttnn::prim::LayerNormProgramConfig cfg = ttnn::prim::LayerNormDefaultProgramConfig{.use_welford = true};
+    auto out =
+        ttnn::layer_norm_post_all_gather(x, stats, 1e-6f, std::nullopt, std::nullopt, std::nullopt, std::nullopt, cfg);
+    detail::expect_close(detail::to_float_vector(out), x_data, 0.0f, 0.03f);
 }
 
 // ---------------------------------------------------------------------------
