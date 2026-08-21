@@ -798,44 +798,52 @@ def prefill_sdpa_compute_kernel_config(device):
     it is a per-arch decision, which is why this is one function and an env knob
     rather than five inline literals:
 
-      * ``hifi3`` (**default**) — HiFi3 + fp32 dest-acc, the runtime's own
-        recommendation for Wormhole under #38306. Measured *better* than the HiFi4
-        default, not merely safer; see the numbers below.
-      * ``hifi4`` — HiFi4 + fp32 dest-acc, the previous default. On **Wormhole B0
+      * ``hifi4_nodest`` (**default**) — HiFi4 without fp32 dest-acc. Gives up the
+        reduce precision #47311 removed, but measures better than either dest-acc
+        arm end to end on *both* variants, and is #38306-safe.
+      * ``hifi4`` — HiFi4 + fp32 dest-acc, the original default. On **Wormhole B0
         this is the combination #38306 covers**. SDPA does not call
         ``verify_numerical_configuration`` (only matmul / reduction / softmax do),
         so it never warned, which is why the exposure here went unnoticed while the
-        decode ``lm_head`` matmul was busy printing the warning for it.
-      * ``hifi4_nodest`` — HiFi4 without dest-acc: the other way out of #38306, at
-        the cost of the reduce precision #47311 removed. Also better than the old
-        default, but worse than ``hifi3``.
+        decode ``lm_head`` matmul was busy printing the warning for it. Still the
+        best setting for 12B by a small margin — see below.
+      * ``hifi3`` — HiFi3 + fp32 dest-acc, the runtime's own recommendation for
+        Wormhole under #38306. Better than ``hifi4`` on 31B, but worse than
+        ``hifi4_nodest`` on both variants.
 
-    Why HiFi3 is the default. Measured on the per-layer PCC ladder
-    against the HF reference (31B, 1x8, len512 prefill), which is bit-deterministic
-    across repeats — three baseline runs returned 0.017292
-    identically, so these differences are real and not run-to-run noise:
+    Why hifi4_nodest is the default. Measured on
+    ``test_teacher_forcing_e2e[prefill_512-max_new_tokens_500-1x8]``, WH T3K 1x8,
+    which is bit-reproducible across repeats (two identical 12B runs returned
+    top-1 75.85% and KL 0.440552 exactly), so these differences are real:
 
-        hifi4 (old default)    total PCC lost 0.017292
-        hifi3                  total PCC lost 0.015299   (-11.5%)
-        hifi4_nodest           total PCC lost 0.015868   (-8.2%)
+        setting          12B top-1 / KL          31B top-1 / KL      #38306
+        hifi4            80.44% / 0.292035       73.05% / 0.875192   exposed
+        hifi3            79.44% / 0.335644       75.65% / 0.671577   safe
+        hifi4_nodest     79.24% / 0.309582       76.65% / 0.579870   safe
 
-    HiFi3 is also never the more expensive fidelity. Set
-    ``GEMMA4_PREFILL_SDPA_FIDELITY=hifi4`` to restore the previous default.
+    So the default trades ~1.2pp of 12B top-1 (KL +6%) for +3.6pp on 31B
+    (KL -34%), and removes the hardware-bug exposure on both. 12B's own optimum is
+    the ``hifi4`` it used to have, which is the #38306 combination — there is no
+    single setting that is both best-everywhere and safe, and this is the chosen
+    compromise rather than an oversight. Override per deployment with
+    ``GEMMA4_PREFILL_SDPA_FIDELITY``.
 
-    Do not score further A/Bs of this knob on end-to-end token counts: at the
-    sample sizes those cases run, a token rate cannot separate two fidelity
-    settings. Use the ladder, or the teacher-forcing decision-distance block.
+    Score further A/Bs of this knob on the teacher-forcing decision-distance block
+    (KL / max|dlogit|), not on token counts and not on the per-layer PCC ladder:
+    the ladder ranked ``hifi3`` above ``hifi4_nodest`` on 31B prefill hidden states
+    (0.015299 vs 0.015868) and the e2e ranking is the other way round, so the
+    ladder is indicative for localising error, not for picking between fidelities.
 
-    Blackhole is unaffected by #38306; the default is the same there, since HiFi3
-    measured better on accuracy grounds independently of the bug.
+    Blackhole is unaffected by #38306; the default is the same there, since
+    hifi4_nodest measured best on accuracy grounds independently of the bug.
     """
-    mode = os.environ.get("GEMMA4_PREFILL_SDPA_FIDELITY", "hifi3").lower()
+    mode = os.environ.get("GEMMA4_PREFILL_SDPA_FIDELITY", "hifi4_nodest").lower()
     if mode == "hifi4":
         fidelity, dest_acc = ttnn.MathFidelity.HiFi4, True
-    elif mode == "hifi4_nodest":
-        fidelity, dest_acc = ttnn.MathFidelity.HiFi4, False
-    else:
+    elif mode == "hifi3":
         fidelity, dest_acc = ttnn.MathFidelity.HiFi3, True
+    else:
+        fidelity, dest_acc = ttnn.MathFidelity.HiFi4, False
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=fidelity,
