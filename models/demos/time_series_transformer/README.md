@@ -16,6 +16,7 @@ encoder-decoder transformer for probabilistic time-series forecasting.
 - Parity-checked against the HuggingFace reference at every stage
 - Two runtime profiles: a float32 accuracy profile and a bfloat16 + flash-attention profile
 - Univariate and multivariate (`input_size > 1`) inputs, with observed-mask handling
+- Streaming (online) forecasting over a rolling window
 - Scales to 2048-step context, 256 series per batch, and 1000 sampled trajectories
 
 Reference checkpoint: [`huggingface/time-series-transformer-tourism-monthly`](https://huggingface.co/huggingface/time-series-transformer-tourism-monthly)
@@ -46,6 +47,7 @@ time_series_transformer/
 │   ├── distribution.py         parameter projection, domain maps, sampling
 │   ├── inputs.py               scaler, lags, covariate assembly
 │   ├── state_io.py             checkpoint discovery and loading
+│   ├── streaming.py            rolling-window online forecasting
 │   ├── trace.py                trace capture and replay for generation
 │   └── model.py                end-to-end model, forward, generate
 └── tests/
@@ -55,8 +57,12 @@ time_series_transformer/
     │   ├── test_layers.py          encoder and decoder stacks
     │   ├── test_distribution.py    all three distribution heads
     │   ├── test_e2e_model.py       forward, generate, runtime options
+    │   ├── test_multivariate.py    input_size > 1 parity
+    │   ├── test_streaming.py       online forecasting
     │   └── test_benchmark.py       forecast quality on tourism-monthly
     └── perf/                   latency / throughput / scaling gates
+        ├── test_perf.py            gates, scaling, trace lifecycle, pipelining
+        └── test_perf_report.py     repository-standard perf CSV
 ```
 
 ## Setup
@@ -106,6 +112,9 @@ pytest models/demos/time_series_transformer/tests/pcc/ -q
 
 # Latency / throughput / sample-generation gates
 pytest models/demos/time_series_transformer/tests/perf/ -q -s
+
+# Repository-standard performance report (writes perf_*.csv)
+pytest models/demos/time_series_transformer/tests/perf/test_perf_report.py -q -s
 ```
 
 Measured numbers and the environment they came from are in [PERF.md](PERF.md).
@@ -234,6 +243,41 @@ A two-layer stack is held to 0.99 rather than 0.999 because attention on this ch
 out near 0.9998 — the residual is device float32 matmul precision, already present in QK^T,
 and compute-kernel fidelity does not move it (HiFi4 with fp32 accumulate measures the same as
 the default).
+
+## Streaming inference
+
+`tt/streaming.py` wraps the model in a rolling window for online forecasting: seed it with
+`past_length` observations, then call `observe()` as each new sample arrives and `forecast()`
+whenever a forecast is wanted.
+
+```python
+from models.demos.time_series_transformer.tt.streaming import StreamingForecaster
+
+stream = StreamingForecaster(model, past_values=..., past_time_features=...)
+stream.observe(new_value, new_time_feature)
+forecast = stream.forecast(future_time_features)
+```
+
+The window length is fixed, which is the point: every forecast presents identical shapes, so
+the captured trace is reused across updates instead of being recaptured. `tests/pcc/
+test_streaming.py` checks that rolling forward N steps gives the same forecast as presenting
+the equivalent window directly, that the observed mask streams through to the scaler, and that
+no update forces a recapture.
+
+## Pipelining
+
+Encoder, all `prediction_length` decoder steps, and the distribution head are captured as a
+**single trace**, so a forecast is one dispatch rather than one per step, and there is no host
+gap between the stages to overlap:
+
+| Measurement | Result |
+|---|---|
+| Trace executions per 24-step forecast | **1** |
+| Share of forecast wall-clock inside that dispatch | **90%** (15.4 ms of 17.1 ms) |
+
+Asserted in `tests/perf/test_perf.py::TestPipelining`, which counts dispatches rather than
+taking the claim on trust. The remaining 10% is host-side input construction and the single
+readback; there is no second device stage left to overlap it with at batch 1.
 
 ## Multivariate support
 

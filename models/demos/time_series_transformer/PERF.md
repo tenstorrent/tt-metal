@@ -8,11 +8,22 @@ Numbers below come from direct pytest runs in `models/demos/time_series_transfor
 - Checkpoint: `huggingface/time-series-transformer-tourism-monthly` (`d_model=26`, 2+2 layers,
   2 heads, context 24, horizon 24, Student's t output)
 
-## Benchmark command
+## Benchmark commands
 
 ```bash
+# Gates, scaling, trace lifecycle and pipelining
 pytest models/demos/time_series_transformer/tests/perf/test_perf.py -q -s
+
+# Repository-standard performance report; writes perf_time_series_transformer_*.csv
+pytest models/demos/time_series_transformer/tests/perf/test_perf_report.py -q -s
+
+# Correctness, including multivariate, streaming and the tourism benchmark
+pytest models/demos/time_series_transformer/tests/pcc/ -q
 ```
+
+The standard report is emitted through `models.perf.perf_utils.prep_perf_report`, so it carries
+the same columns as every other demo (Model, Setting, Batch, First/Second Run, Compile Time,
+Inference Time, Throughput). It is produced for both runtime profiles.
 
 ## Stage 1 targets
 
@@ -169,6 +180,27 @@ so they are projected on the first step and reused by the remaining twenty-three
 the loop consumes only the distribution's pre-affine mean, which for Student's t and Normal is
 the loc projection passed through the domain map unchanged -- so two of the three parameter
 heads and the entire domain map were dead weight inside the rollout (-1.8 ms).
+
+## Pipelining
+
+Encoder, all decoder steps and the distribution head are captured as one trace, so the Stage 3
+pipelining requirements are met by construction rather than by overlapping separate dispatches:
+
+| Requirement | How it is met | Evidence |
+|---|---|---|
+| Overlap encoder with decoder initialisation | Both inside one capture; the encoder's *input* crosses the host boundary, not its output | `TestPipelining::test_encoder_runs_inside_the_trace` |
+| Pipeline decoder steps | 24 steps unrolled into the same trace | `TestPipelining::test_forecast_is_one_dispatch` |
+| Overlap distribution computation | The head is captured with the decoder | same |
+
+| Measurement | Result |
+|---|---:|
+| Trace executions per 24-step forecast | **1** |
+| Forecast wall-clock | 17.14 ms |
+| Inside the single dispatch | **15.41 ms (90%)** |
+
+The residual 10% is host-side input construction plus one readback. At batch 1 there is no
+second device stage to overlap it against; across concurrent requests a second command queue
+would be the next lever, and is not implemented.
 
 ## Stage 3 stretch targets
 

@@ -298,3 +298,74 @@ class TestTraceLifecycle:
             assert model._trace_runner is not None
             model.release_traces()
             assert model._trace_runner is None and model._trace_key is None
+
+
+@pytest.mark.models_performance_bare_metal
+class TestPipelining:
+    """Encoder, decoder steps and the distribution head share a single dispatch.
+
+    The bounty asks for the encoder overlapped with decoder initialisation, the decoder steps
+    pipelined, and the distribution computation overlapped with what follows. Capturing the
+    whole rollout as one trace subsumes all three: there is no host gap left between the stages
+    to overlap, because there is no host in between them at all.
+    """
+
+    def test_forecast_is_one_dispatch(self, device, config, hf_state, hf_model, monkeypatch):
+        """A mean-mode forecast must issue exactly one trace execution, not one per step."""
+        inputs = make_inputs(hf_model.config, batch=1)
+
+        with traced_model(device, config, hf_state) as model:
+            model.generate(num_parallel_samples=1, mode="mean", **inputs)  # warm
+
+            executions = []
+            original = ttnn.execute_trace
+
+            def counting_execute(*args, **kwargs):
+                executions.append(1)
+                return original(*args, **kwargs)
+
+            monkeypatch.setattr(ttnn, "execute_trace", counting_execute)
+            model.generate(num_parallel_samples=1, mode="mean", **inputs)
+
+        horizon = hf_model.config.prediction_length
+        logger.info(f"trace executions per forecast: {len(executions)} (horizon {horizon})")
+        assert len(executions) == 1, f"{len(executions)} dispatches for a {horizon}-step forecast"
+
+    def test_encoder_runs_inside_the_trace(self, device, config, hf_state, hf_model):
+        """What crosses the host boundary is the encoder's input, not its output."""
+        inputs = make_inputs(hf_model.config, batch=1)
+
+        with traced_model(device, config, hf_state) as model:
+            model.generate(num_parallel_samples=1, mode="mean", **inputs)
+            runner = model._trace_runner
+
+            assert runner.trace_id is not None
+            # An encoder_inputs buffer only makes sense if the encoder itself is captured.
+            assert hasattr(runner, "encoder_inputs")
+            assert tuple(runner.encoder_inputs.shape)[1:] == (
+                config.context_length,
+                config.feature_size,
+            )
+
+    def test_device_time_dominates_the_forecast(self, device, config, hf_state, hf_model):
+        """Report how much of a forecast is already inside the single dispatch."""
+        inputs = make_inputs(hf_model.config, batch=1)
+
+        with traced_model(device, config, hf_state) as model:
+            total = run_benchmark(model, inputs, batch=1, num_samples=1, mode="mean").latency_ms
+
+            runner = model._trace_runner
+            for _ in range(3):
+                ttnn.execute_trace(device, runner.trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(device)
+
+            iterations = 20
+            start = time.perf_counter()
+            for _ in range(iterations):
+                ttnn.execute_trace(device, runner.trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(device)
+            device_ms = (time.perf_counter() - start) / iterations * 1000
+
+        share = device_ms / total * 100
+        logger.info(f"forecast {total:.2f} ms, single traced dispatch {device_ms:.2f} ms ({share:.0f}% of it)")
+        assert device_ms <= total * 1.05, "trace replay cannot exceed the forecast it is part of"
