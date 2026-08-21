@@ -294,3 +294,22 @@ def test_atanh(device, h, w):
     # The log1p reformulation makes the fp32 path stable on (-1, 1); the default
     # [0, 1) input exercises the small-x stable region.
     run_unary_test(device, h, w, ttnn.atanh, ulp=2)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("low, high", [(-30.0, 30.0), (-4.0, 4.0)])
+def test_log_sigmoid(device, h, w, low, high):
+    # For x > 0 the output *is* the residual -log1p(exp(-x)), which decays to
+    # 1e-13 by x = 30: the error that matters is relative, and a [0, 1) input
+    # would exercise neither that decay nor the x -> -inf asymptote.
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.linspace(low, high, h * w, dtype=torch.float32).reshape(h, w)
+    golden_function = ttnn.get_golden_function(ttnn.log_sigmoid)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.log_sigmoid(input_tensor))
+
+    assert_with_ulp(torch_output_tensor, output_tensor, 4)
