@@ -21,7 +21,7 @@ from .rope import apply as apply_rope
 
 # TODO: Delete this Function once ttml gains split_heads, the single-tensor inverse of
 # heads_fusion (bmijanovicTT)
-# Issue: #
+# Issue: #53777
 # heads_creation wants a fused (B, 1, S, 3E) qkv; Wan projects q/k/v separately.
 class SplitHeads(Function):
     """(B, 1, S, heads*head_dim) -> (B, heads, S, head_dim), one tensor at a time.
@@ -54,7 +54,7 @@ class _RMSNorm(AbstractModuleBase):
             return ttml.ops.rmsnorm.rmsnorm(x, self.weight.tensor, self.eps)
 
         # TODO: Use ttml rmsnorm_distributed when implemented (bmijanovicTT)
-        # Issue: #
+        # Issue: #53775
 
         # REPLICATED, not the SHARDED default: scatter's backward already replicates, so the
         # default's reduce-scatter would inflate the gradient by exactly TP.
@@ -111,10 +111,5 @@ class WanAttention(AbstractModuleBase):
             q = apply_rope(q, rope_params)
             k = apply_rope(k, rope_params)
 
-        # TODO: Use fused sdpa once AttentionMaskType::None is selectable (bmijanovicTT)
-        # Issue: #
-
-        # Composite, not fused: the fused kernel defaults to a causal mask when none is
-        # passed, and Wan attends bidirectionally.
         attn = ttml.ops.attention.scaled_dot_product_attention_composite(q, k, v, mask)
         return self.to_out(ttml.ops.multi_head_utils.heads_fusion(attn))

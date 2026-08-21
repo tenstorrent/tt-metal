@@ -2,17 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Wan2.2 T2V-A14B style LoRA — the single config for all four pipeline stages.
-#
-#   python pipeline.py preprocess -c <this file>
-#   python pipeline.py precompute -c <this file>
-#   python pipeline.py train      -c <this file>
-#   python pipeline.py infer      -c <this file>
-#
-# Keys map 1:1 onto fields of `Config` in sources/examples/lora_wan2_2/pipeline_config.py
-# (uppercased). Unknown keys are an error, not a silent no-op.
-# One-off tweaks without editing this file: --set MAX_STEPS=100
-
 model:
   model_id: "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
   # A14B is a 2-expert MoE. high-noise handles t >= boundary_ratio, low-noise below.
@@ -30,7 +19,6 @@ data:
   train_h: 512
   train_w: 512
   train_frames: 1
-  # Rare token: the base model ignores it, the LoRA learns it -> style trigger.
   trigger: "lg, "
   # Drop "lego/blocky/minifigure" clauses so the trigger alone carries the style.
   strip_style_words: true
@@ -46,24 +34,20 @@ data:
 lora:
   lora_rank: 32
   lora_alpha: 32
-  # "attn" reproduces what the CUDA reference actually trains; "attn+ffn" what it
-  # intended (see README on the ff/ffn mismatch).
   lora_target_set: attn
-  # "kaiming" (ttml default) | "gaussian" (PEFT parity)
   lora_a_init: kaiming
   lora_path: "cache/wan22_14b_lego/wan22_14b_lego_lora.safetensors"
 
 optimizer:
   lr: 1.0e-4
   weight_decay: 0.01
-  # Must be 0 at TP>1: ttml.core.clip_grad_norm is per-device.
-  grad_clip: 1.0
+  grad_clip: 0.0
 
 training:
   seed: 42
   dtype: bfloat16
-  # -> RunnerType.MemoryEfficient (activation recompute)
   gradient_checkpointing: true
+  conv3d_patch_embed: false
   batch: 1
   grad_accum: 4
   max_steps: 3000
@@ -96,8 +80,6 @@ inference:
   infer_low_lora: ""
 
 device:
-  # [DP, TP] for train; the two VAE height/width parallel factors for precompute.
-  # [4, 8] = all 32 chips of a Blackhole Galaxy.
   mesh_shape: [4, 8]
 
 logging:

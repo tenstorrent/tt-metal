@@ -5,7 +5,8 @@
 """Patchify / unpatchify.
 
 Wan's patch embedding is a Conv3d whose stride equals its kernel, so it is a linear map
-over non-overlapping patches: host rearrange plus a Linear, no conv3d op.
+over non-overlapping patches: host rearrange plus a Linear. `to_ndhwc` serves the optional
+ttnn conv3d path instead, which runs the conv on device and skips the host rearrange.
 
 The two orders differ -- the conv weight contracts over (channels, p_t, p_h, p_w) while
 proj_out emits (p_t, p_h, p_w, channels).
@@ -67,3 +68,12 @@ def conv3d_weight_to_linear(weight: np.ndarray) -> np.ndarray:
     """Checkpoint (dim, C, p_t, p_h, p_w) -> ttml linear weight (1, 1, dim, C*p_t*p_h*p_w)."""
     out_dim = weight.shape[0]
     return np.ascontiguousarray(weight.reshape(out_dim, -1)[None, None])
+
+
+def to_ndhwc(latent: np.ndarray) -> np.ndarray:
+    """(B, C, F, H, W) -> (B, F, H, W, C), the activation layout ttnn conv3d expects.
+
+    No companion weight helper: ttnn reorders the checkpoint weight itself, into a blocked
+    permutation only prepare_conv3d_weights produces consistently.
+    """
+    return np.ascontiguousarray(latent.transpose(0, 2, 3, 4, 1))
