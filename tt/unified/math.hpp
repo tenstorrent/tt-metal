@@ -560,6 +560,24 @@ struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Tr, Chain>> {
 
     template <typename Operand>
     auto bias(const Operand& operand) const {
+        // A fused bias needs the whole output block in ONE acquire, and this is where that
+        // can be said. A bias is applied by reading the finished total back out of a buffer
+        // and broadcast-adding to it -- metal's add_tiles_bcast_* take both operands from
+        // buffers and neither from DST -- so there is no in-place form to band, and
+        // run_banded consequently has no bias handling at all. Without this assert a
+        // single-shot store(matmul(a, b).bias(v)) over 8 output tiles took the banded path
+        // and dropped the bias silently.
+        //
+        // Nothing is lost by rejecting it here: the accumulating path already refused the
+        // same shape, so this only moves the error to the call site and covers the
+        // single-shot case too. Lifting it means banding the bias pass, which is the same
+        // work as banding a reload.
+        static_assert(
+            geometry::out_subblock_num_tiles <= kMaxDstTiles,
+            "a fused bias needs the matmul's whole output block in one acquire, and this one "
+            "exceeds the 8-tile DST budget. Split the output into subblocks of at most 8 "
+            "tiles, or add the bias as a separate pass afterwards. Note that an UNBIASED "
+            "single-shot matmul has no such limit -- it walks row bands.");
         // A bias is one row broadcast down the output block, so its shape is fixed by
         // the geometry. This was a runtime ASSERT on the page count, which could only
         // fire in an asserts-enabled build and only once the kernel ran.
@@ -1426,6 +1444,8 @@ struct Strategy<FPUFusion> {
         using G = typename Node::geometry;
         using Chain = typename Node::chain;
         constexpr uint32_t kTranspose = G::transpose;
+        // No bias handling, and none needed: bias() static_asserts that the output fits one
+        // acquire, so a biased matmul never reaches this path.
         constexpr uint32_t kBandRows = dst_band_rows(G::rt_dim, G::ct_dim);
         static_assert(
             kBandRows > 0,
