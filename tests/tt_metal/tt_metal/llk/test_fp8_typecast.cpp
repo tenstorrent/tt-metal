@@ -427,6 +427,40 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTransposeSpecMatchesLegacy) {
 }
 
 // ============================================================================
+// Reconfig data format (srcA, matched-format): the id-free (2.0) reconfig_data_format_srca kernel must
+// produce output bit-for-bit identical to the legacy CB-id reconfig_data_format_srca kernel on the same
+// input (differential equivalence; reuses run_fp8_typecast). Per tile: reconfig srcA to c_0's OWN format
+// (matched format -- exercises the "always programs" 1-arg overload with old==new, must not corrupt data),
+// copy c_0 -> DST, pack -> c_16. The two kernels differ ONLY in the reconfig_data_format_srca call (legacy
+// CB-id vs experimental::), isolating the change.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixReconfigSrcaSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 64;
+    auto src_vec = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+
+    auto legacy = run_fp8_typecast(
+        mesh_device,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_srca_legacy.cpp");
+    auto spec = run_fp8_typecast(
+        mesh_device,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_srca_2_0.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
 // Copy-block: the id-free (2.0) copy_block kernel must produce output bit-for-bit identical to the legacy
 // CB-id copy_block kernel on the same input (differential equivalence; reuses the single-core classic-CB
 // harness run_fp8_typecast). Input is processed in blocks of 4 tiles: copy_block c_0 -> DST, pack -> c_16.
