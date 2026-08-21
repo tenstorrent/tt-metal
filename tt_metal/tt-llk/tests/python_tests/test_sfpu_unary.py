@@ -1196,6 +1196,138 @@ def test_eqz_fresh_cpp(fresh_cpp_impl, edge_values):
     )
 
 
+_FLOAT_ZERO_COMP_MATHOPS = [
+    MathOperation.NotEqualZero,
+    MathOperation.LessThanZero,
+    MathOperation.GreaterThanZero,
+    MathOperation.LessThanEqualZero,
+    MathOperation.GreaterThanEqualZero,
+]
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+@pytest.mark.parametrize("edge_values", [False, True], ids=["functional", "edges"])
+@pytest.mark.parametrize("mathop", _FLOAT_ZERO_COMP_MATHOPS, ids=lambda m: m.name)
+def test_float_zero_comp_fresh_cpp(mathop, fresh_cpp_impl, edge_values):
+    """A/B the fresh semantic float zero-comparisons against the production
+    all-raw-TTI calculate_comp float path with identical inputs (laneED
+    sem-only audit; the test_eqz_fresh_cpp / laneBR pattern extended to the
+    five comparisons that hand kernel also implements).
+
+    The production float comparison-to-zero body is one handwritten kernel
+    for all six modes (metal ckernel_sfpu_comp.h calculate_comp: SFPSETSGN /
+    SFPSETCC / SFPIADD-against-inf choreography, zero typed statements) — the
+    corpus had it booked as "hand==semantic source".  These nodes give each
+    remaining mode a semantic arm under the production golden and tolerance.
+
+    Edge-leg rationale (dest_acc=Yes, exact +0.0/-0.0 stimuli) is inherited
+    verbatim from test_eqz_fresh_cpp: -0.0 only survives to DEST on the
+    32-bit unpack-to-dest path, and the zero-sign answer is exactly what
+    separates a sign-blind body from the golden (torch treats -0.0 == 0, so
+    ltz/gtz answer 0 and lez/gez answer 1 on both zeros)."""
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes if edge_values else DestAccumulation.No
+    spec_A = None
+    if edge_values:
+        spec_A = edge_spec(
+            mathop,
+            formats.input_format,
+            formats.output_format,
+            specials=specials_safe(
+                formats.input_format, formats.output_format, dest_acc
+            ),
+        )
+        assert spec_A is not None
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=spec_A,
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [3, 1], ids=["production_lut", "fresh_cpp"])
+def test_tanh_lut_fresh_cpp(fresh_cpp_impl):
+    """A/B the byte-untouched production approximation-mode LUT tanh against
+    the fresh semantic tanh body under one golden/tolerance contract (laneED
+    sem-only audit).
+
+    The hand arm is calculate_tanh<APPROXIMATION_MODE=true> — the raw
+    3-region SFPLUT kernel (LReg0-2 coefficient choreography, imm16 table
+    0x1DFF/0x481A/0xFF00), reached natively by building with approx mode ON
+    (impl 3 has no selector branch for tanh, so it falls through to the
+    production dispatch; the generic unary sweep skips Tanh at
+    approx_mode:Yes, so before this node NO test ever raced that kernel).
+    The sem arm is the fresh polynomial body at approx mode OFF — the approx
+    flag is exactly the hand-vs-sem body axis; stimuli, golden (torch.tanh)
+    and tolerance are identical.
+
+    Tolerance derivation: the LUT is piecewise linear on |x| with breakpoints
+    at 1.0 and 2.0 (the registered TanhDerivativeLut golden models the same
+    table).  Its worst error against exact tanh is at |x| -> 1.0-:
+    |0.90625 - tanh(1.0)| = |0.90625 - 0.76159| ~ 0.145, so atol = 0.16
+    bounds the approximation class the production kernel actually ships
+    (the SigmoidAppx/GeluAppx exact-golden + loose-tolerance precedent)."""
+    approx = ApproximationMode.Yes if fresh_cpp_impl == 3 else ApproximationMode.No
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        approx,
+        MathOperation.Tanh,
+        FastMode.No,
+        [64, 64],
+        custom_atol=0.16,
+        custom_rtol=0.05,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [3, 1], ids=["production_lut6", "fresh_cpp"])
+def test_sigmoid_lut_fresh_cpp(fresh_cpp_impl):
+    """A/B the byte-untouched LEGACY tt-llk 6-segment SFPLUTFP32 sigmoid hand
+    kernel against the fresh semantic sigmoid body under one golden/tolerance
+    contract (laneED sem-only audit).
+
+    The hand arm (impl 3) is tt_llk_blackhole/common/inc/sfpu/
+    ckernel_sfpu_sigmoid.h _calculate_sigmoid_ — lut2() over LReg0/1/2/4/5/6
+    with the packed 6-segment coefficient table — a kernel the corpus
+    manifest records as class D-ABSENT (zero test-source inclusion, zero
+    dispatch anywhere under tests/): a genuinely distinct handwritten sigmoid
+    that no node had ever raced.  It is NOT the 3-segment metal sigmoid_appx
+    (raced by the sigmoidappx row) and NOT the typed metal calculate_sigmoid
+    (raced by the sigmoid row).  The sem arm is the fresh sigmoid body.
+
+    Tolerance derivation: golden is exact sigmoid (the SigmoidAppx
+    precedent).  The 6-segment table's worst error against exact sigmoid is
+    at the |x| = 4 knee: |0.9998 - sigmoid(4.0)| ~ 0.018, so
+    atol = 0.05 bounds the table's approximation class with margin.
+
+    Formats mirror the sigmoid family's other corr nodes (Float32->Float32,
+    the standard-profile BH-legal dest_acc:No combination; the fp16-coded
+    table itself dominates the error budget on any float pipeline)."""
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        MathOperation.Sigmoid,
+        FastMode.No,
+        [64, 64],
+        custom_atol=0.05,
+        custom_rtol=0.05,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
 @pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
 def test_clamp_fresh_cpp(fresh_cpp_impl):
     """A/B the fresh semantic clamp (typed float bounds) against the production
@@ -1397,6 +1529,12 @@ _CAUSAL_LIFT_B2_F32_OPS = [
     MathOperation.Softshrink,
     MathOperation.Softsign,
     MathOperation.UnaryGe,
+    # laneED sem-only audit: GeluAppx's production body is the 6-segment
+    # SFPLUTFP32 hand kernel calculate_gelu_appx (NOT a typed body) — this
+    # node pair gives it the semantic arm it never had.  Golden = exact gelu,
+    # tolerance = the registered GeluAppx CUSTOM_TOLERANCES entry; the fresh
+    # exact-gelu body passes the loose contract trivially.
+    MathOperation.GeluAppx,
 ]
 _CAUSAL_LIFT_B2_F16B_OPS = [
     MathOperation.Log,

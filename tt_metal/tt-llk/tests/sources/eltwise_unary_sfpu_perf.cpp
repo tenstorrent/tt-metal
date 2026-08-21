@@ -130,6 +130,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "fresh_cpp/bitwisenot.h"
 #include "fresh_cpp/castfp32tofp16a.h"
 #include "fresh_cpp/celu.h"
+#include "fresh_cpp/comp.h"
+// Byte-untouched legacy tt-llk LUT sigmoid (6-segment SFPLUTFP32 hand kernel,
+// laneED sem-only audit): impl-3 hand arm of test_perf_lut_variant_fresh_cpp.
+#include "sfpu/ckernel_sfpu_sigmoid.h"
 // Canonical per-op semantic bodies (storm contract: fresh_cpp/README.md).
 #include "fresh_cpp/acosh_fitted.h"
 #include "fresh_cpp/celu_fitted.h"
@@ -200,6 +204,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Omitting it defaulted to false -> a different approx path -> mismatch.
         test_utils::
             call_unary_sfpu_operation_init<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, FAST_MODE, STABLE_SORT, CLAMP_NEGATIVE>();
+#if FRESH_CPP_IMPL == 3
+        // impl 3 = explicitly selected byte-untouched hand LUT variant (laneED
+        // sem-only audit): the legacy tt-llk 6-segment SFPLUTFP32 sigmoid needs
+        // its LReg coefficient loads (no production dispatch reaches it).
+        if constexpr (SFPU_UNARY_OPERATION == SfpuType::sigmoid)
+        {
+            llk_math_eltwise_unary_sfpu_init<SfpuType::sigmoid>(ckernel::sfpu::_init_sigmoid_<APPROX_MODE>);
+        }
+#endif
         PROFILER_SYNC();
     }
     {
@@ -347,6 +360,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::equal_zero)
                         {
                             SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_eqz_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        // laneED sem-only audit: remaining float zero-comparisons
+                        // (production = the all-raw-TTI calculate_comp hand kernel).
+                        else if constexpr (
+                            FRESH_CPP_IMPL == 1 &&
+                            (SFPU_UNARY_OPERATION == SfpuType::not_equal_zero || SFPU_UNARY_OPERATION == SfpuType::less_than_zero ||
+                             SFPU_UNARY_OPERATION == SfpuType::greater_than_zero || SFPU_UNARY_OPERATION == SfpuType::less_than_equal_zero ||
+                             SFPU_UNARY_OPERATION == SfpuType::greater_than_equal_zero))
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_comp_fresh_cpp, (SFPU_UNARY_OPERATION, ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        // laneED sem-only audit: semantic arm for the GeluAppx contract.
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::gelu_appx)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        // laneED sem-only audit: impl 3 = byte-untouched legacy tt-llk
+                        // 6-segment SFPLUTFP32 sigmoid hand kernel.
+                        else if constexpr (FRESH_CPP_IMPL == 3 && SFPU_UNARY_OPERATION == SfpuType::sigmoid)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, _calculate_sigmoid_, (APPROX_MODE, ITERATIONS), block_tile, VectorMode::None, ITERATIONS);
                         }
                         // Storm-lane S1 selectors (fresh_cpp/<op>.h semantic bodies).
                         else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::abs)
@@ -992,6 +1028,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::equal_zero)
                         {
                             SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_eqz_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        // laneED sem-only audit: remaining float zero-comparisons
+                        // (production = the all-raw-TTI calculate_comp hand kernel).
+                        else if constexpr (
+                            FRESH_CPP_IMPL == 1 &&
+                            (SFPU_UNARY_OPERATION == SfpuType::not_equal_zero || SFPU_UNARY_OPERATION == SfpuType::less_than_zero ||
+                             SFPU_UNARY_OPERATION == SfpuType::greater_than_zero || SFPU_UNARY_OPERATION == SfpuType::less_than_equal_zero ||
+                             SFPU_UNARY_OPERATION == SfpuType::greater_than_equal_zero))
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_comp_fresh_cpp, (SFPU_UNARY_OPERATION, ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        // laneED sem-only audit: semantic arm for the GeluAppx contract.
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::gelu_appx)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        // laneED sem-only audit: impl 3 = byte-untouched legacy tt-llk
+                        // 6-segment SFPLUTFP32 sigmoid hand kernel.
+                        else if constexpr (FRESH_CPP_IMPL == 3 && SFPU_UNARY_OPERATION == SfpuType::sigmoid)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, _calculate_sigmoid_, (APPROX_MODE, ITERATIONS), block_tile, VectorMode::None, ITERATIONS);
                         }
                         // Storm-lane S1 selectors (fresh_cpp/<op>.h semantic bodies).
                         else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::abs)
