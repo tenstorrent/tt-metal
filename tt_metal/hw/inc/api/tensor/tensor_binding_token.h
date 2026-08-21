@@ -6,6 +6,12 @@
 
 #include <cstdint>
 
+// Extraction of LLK metadata is only possible on compute kernels.
+#ifdef COMPILE_FOR_TRISC
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#endif
+
+#include "internal/llk_metadata.h"
 #include "api/tensor/tensor_accessor_args.h"
 
 namespace tensor_accessor {
@@ -29,7 +35,7 @@ namespace tensor_accessor {
 // == How does it work? ==
 // For each kernel tensor binding, headergen emits the following into kernel_bindings_generated.h:
 //   - A type alias:  using my_TA_name_t = TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>;
-//   - A token value: constexpr my_TA_name_t my_TA_name{};
+//   - A token value: constexpr my_TA_name_t my_TA_name{{.format = ..., .face_r_dim = ...}};
 //
 // This indirection gives us ultimate future-proofing flexibility over what actually goes into the
 // TensorBindingToken. We can change TensorBindingToken at any time, or add a wrapper-type indirection,
@@ -44,6 +50,27 @@ struct TensorBindingToken {
     using args_t = TensorAccessorArgs<CTA_OFFSET>;
     static constexpr args_t args{};
     static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
+
+    constexpr TensorBindingToken(binding_details::LLKMetadata llk) noexcept : llk_metadata_(llk) {}
+
+#ifdef COMPILE_FOR_TRISC
+    // Converts to a LLKMemDescriptor, which contains LLK relevant information about the tensor.
+    // These metadata are automatically derived from the host side through the TensorSpec associated with the tensor
+    // binding.
+    friend constexpr ckernel::experimental::LLKMemDescriptor to_llk_mem_descriptor(TensorBindingToken token) {
+        static_assert(!args_t::is_dram, "to_llk_mem_descriptor: DRAM TensorBindingToken has no node-local L1 region");
+        return {
+            token.llk_metadata_.format,
+            ckernel::TensorShape{
+                token.llk_metadata_.face_r_dim,
+                token.llk_metadata_.face_c_dim,
+                token.llk_metadata_.num_faces_r_dim,
+                token.llk_metadata_.num_faces_c_dim}};
+    }
+#endif
+
+private:
+    binding_details::LLKMetadata llk_metadata_;
 };
 
 }  // namespace tensor_accessor

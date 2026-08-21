@@ -21,8 +21,14 @@
 #include "tools/profiler/noc_debugging_profiler.hpp"
 #endif
 
+// Extraction of LLK metadata is only possible on compute kernels.
+#ifdef COMPILE_FOR_TRISC
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#endif
+
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
+#include "internal/llk_metadata.h"
 #include "api/lock.h"
 #include "api/core_local_mem.h"
 #include <type_traits>
@@ -80,6 +86,10 @@ template <bool IsWrite, typename ReleaseFunc>
 struct DFBBindingToken {
     explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
 
+    // Binding token constructor when host supplies LLK metadata.
+    // See "Entry format metadata" section in DataflowBufferSpec on host side for more details.
+    constexpr DFBBindingToken(uint16_t id, binding_details::LLKMetadata llk) noexcept : id_(id), llk_metadata_(llk) {}
+
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
 
     // Implicit conversion to uint32_t:
@@ -88,8 +98,25 @@ struct DFBBindingToken {
     // This conversion is constexpr; it's intended for Gen1 use only.
     constexpr operator uint32_t() const noexcept { return id_; }
 
+#ifdef COMPILE_FOR_TRISC
+    // Converts to a LLKMemDescriptor, which contains LLK relevant information about the dataflow buffer.
+    //
+    // These metadata are passed in from the host side through the DataflowBufferSpec associated with the DFB binding.
+    // See "Entry format metadata" section in DataflowBufferSpec on host side for more details.
+    friend constexpr ckernel::experimental::LLKMemDescriptor to_llk_mem_descriptor(DFBBindingToken token) {
+        return {
+            token.llk_metadata_.format,
+            ckernel::TensorShape{
+                token.llk_metadata_.face_r_dim,
+                token.llk_metadata_.face_c_dim,
+                token.llk_metadata_.num_faces_r_dim,
+                token.llk_metadata_.num_faces_c_dim}};
+    }
+#endif
+
 private:
     uint16_t id_;
+    binding_details::LLKMetadata llk_metadata_{};
 };
 
 class DataflowBuffer {

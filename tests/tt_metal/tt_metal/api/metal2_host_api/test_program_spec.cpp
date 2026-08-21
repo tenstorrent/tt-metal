@@ -31,6 +31,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <array>
 #include <filesystem>
 #include <numeric>
 #include <optional>
@@ -104,6 +105,7 @@ static_assert(hashable_v<DataflowBufferSpec>, "DataflowBufferSpec must be hashab
 static_assert(
     hashable_v<CrossNodeDataflowBufferSpec>, "CrossNodeDataflowBufferSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreSpec>, "SemaphoreSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<ScratchpadSpec>, "ScratchpadSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<TensorParameter>, "TensorParameter must be hashable via ttsl reflection");
 
 // KernelSpec subcomponents
@@ -1611,6 +1613,124 @@ TEST_F(ProgramSpecTestQuasar, DifferentScratchpadSizeProducesDifferentKernelHash
     EXPECT_NE(hash_small, hash_large) << "Scratchpads of different sizes must produce different kernel hashes.";
 }
 
+TEST_F(ProgramSpecTestQuasar, ScratchpadLlkFormatAffectsKernelHash) {
+    auto make_spec = [](std::optional<tt::DataFormat> format) {
+        ProgramSpec spec = MakeMinimalValidProgramSpec();
+        spec.scratchpads = {ScratchpadSpec{
+            .unique_id = ScratchpadSpecName{"pad"},
+            .size_per_node = 1024,
+            .data_format_metadata = format,
+        }};
+        spec.kernels[1].scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+        return spec;
+    };
+
+    Program prog_none = MakeProgramFromSpec(*mesh_device_, make_spec(std::nullopt));
+    Program prog_f16 = MakeProgramFromSpec(*mesh_device_, make_spec(tt::DataFormat::Float16_b));
+    Program prog_f32 = MakeProgramFromSpec(*mesh_device_, make_spec(tt::DataFormat::Float32));
+
+    auto hash_none = prog_none.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();
+    auto hash_f16 = prog_f16.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();
+    auto hash_f32 = prog_f32.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();
+    EXPECT_NE(hash_none, hash_f16);
+    EXPECT_NE(hash_f16, hash_f32);
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBTileMetadataAffectsKernelHash) {
+    auto make_spec = [](std::optional<Tile> tile) {
+        ProgramSpec spec = MakeMinimalValidProgramSpec();
+        spec.dataflow_buffers[0].tile_format_metadata = tile;
+        return spec;
+    };
+
+    Program prog_default = MakeProgramFromSpec(*mesh_device_, make_spec(std::nullopt));
+    Program prog_wide = MakeProgramFromSpec(*mesh_device_, make_spec(Tile{{16, 32}}));
+
+    auto hash_default = prog_default.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();
+    auto hash_wide = prog_wide.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();
+    EXPECT_NE(hash_default, hash_wide);
+}
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadFormatUnsupportedOnArchFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Bfp8,
+    }};
+    spec.kernels[1].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("ScratchpadSpec 'scratch_0' has data format")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadTileWithoutFormatFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .tile_format_metadata = Tile{{32, 32}},
+    }};
+    spec.kernels[1].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("no data_format_metadata")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadFaceGeometryWithoutFormatFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 4},
+    }};
+    spec.kernels[1].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("no data_format_metadata")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadInvalidFaceGeometryFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 0},
+    }};
+    spec.kernels[1].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face_r_dim == 0")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadFaceGridDoesNotFitTileFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .tile_format_metadata = Tile{{32, 32}},
+        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 9, .num_faces = 8},
+    }};
+    spec.kernels[1].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face grid")));
+}
+
 TEST_F(ProgramSpecTestQuasar, TensorBindingOnComputeKernelIsAccepted) {
     // A tensor binding on a compute kernel is legal: the kernel constructs a LocalTensorAccessor
     // (NOC-free) from the binding token rather than a TensorAccessor. ValidateProgramSpec accepts it;
@@ -1961,6 +2081,55 @@ TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has data format")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBInvalidFaceGeometryFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 0};
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face_r_dim == 0")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBFaceGridDoesNotFitTileFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.tile_format_metadata = Tile{{32, 32}};
+    dfb.unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 9, .num_faces = 8};
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face grid")));
 }
 
 TEST_F(ProgramSpecTestQuasar, TooManyDFBsFailsValidation) {
@@ -2847,6 +3016,8 @@ static_assert(
     "DataflowBufferSpec must remain an aggregate to support designated initializers");
 static_assert(
     std::is_aggregate_v<SemaphoreSpec>, "SemaphoreSpec must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<ScratchpadSpec>, "ScratchpadSpec must remain an aggregate to support designated initializers");
 static_assert(std::is_aggregate_v<DataMovementGen1Config>, "DataMovementGen1Config must remain an aggregate");
 static_assert(std::is_aggregate_v<DataMovementGen2Config>, "DataMovementGen2Config must remain an aggregate");
 static_assert(std::is_aggregate_v<ComputeGen1Config>, "ComputeGen1Config must remain an aggregate");
@@ -2926,6 +3097,27 @@ TEST(AggregateSpecTypes, DataflowBufferSpecDesignatedInitializers) {
     };
 
     EXPECT_EQ(borrowed_dfb.borrowed_from, std::optional<TensorParamName>{TensorParamName{"input_tensor"}});
+}
+
+TEST(AggregateSpecTypes, ScratchpadSpecDesignatedInitializers) {
+    ScratchpadSpec pad{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+    };
+    EXPECT_EQ(pad.unique_id.get(), "pad");
+    EXPECT_EQ(pad.size_per_node, 1024u);
+    EXPECT_FALSE(pad.data_format_metadata.has_value());
+    EXPECT_FALSE(pad.tile_format_metadata.has_value());
+    EXPECT_FALSE(pad.unpack_face_geometry_metadata.has_value());
+
+    ScratchpadSpec with_format{
+        .unique_id = ScratchpadSpecName{"pad_fmt"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    EXPECT_EQ(with_format.data_format_metadata, tt::DataFormat::Float16_b);
+    EXPECT_FALSE(with_format.tile_format_metadata.has_value());
+    EXPECT_FALSE(with_format.unpack_face_geometry_metadata.has_value());
 }
 
 TEST(AggregateSpecTypes, WorkUnitSpecDesignatedInitializers) {
@@ -4042,6 +4234,265 @@ void kernel_main() {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     IDevice* device = mesh_device_->get_devices()[0];
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, ScratchpadComputeBindWithoutFormatSucceeds) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    Scratchpad<int32_t> pad(scratch::pad);
+    volatile uint32_t base = pad.get_base_address();
+    (void)base;
+}
+)"};
+
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 1024}};
+    spec.kernels[1].scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, ScratchpadFormatAloneSucceeds) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+void kernel_main() {
+    Scratchpad<uint32_t> pad(scratch::pad);
+    constexpr auto desc = to_llk_mem_descriptor(scratch::pad);
+    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
+    static_assert(desc.shape.face_r_dim == 16);
+    static_assert(desc.shape.face_c_dim == 16);
+    static_assert(desc.shape.num_faces_r_dim == 2);
+    static_assert(desc.shape.num_faces_c_dim == 2);
+    (void)pad;
+}
+)"};
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    }};
+    spec.kernels[1].scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, ScratchpadFormatAndTileSucceeds) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+void kernel_main() {
+    Scratchpad<uint32_t> pad(scratch::pad);
+    constexpr auto desc = to_llk_mem_descriptor(scratch::pad);
+    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
+    static_assert(desc.shape.face_r_dim == 16);
+    static_assert(desc.shape.face_c_dim == 16);
+    static_assert(desc.shape.num_faces_r_dim == 1);
+    static_assert(desc.shape.num_faces_c_dim == 2);
+    (void)pad;
+}
+)"};
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .tile_format_metadata = Tile{{16, 32}},
+    }};
+    spec.kernels[1].scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, ScratchpadFormatAndFaceGeometrySucceeds) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+void kernel_main() {
+    Scratchpad<uint32_t> pad(scratch::pad);
+    constexpr auto desc = to_llk_mem_descriptor(scratch::pad);
+    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
+    static_assert(desc.shape.face_r_dim == 1);
+    static_assert(desc.shape.face_c_dim == 16);
+    static_assert(desc.shape.num_faces_r_dim == 2);
+    static_assert(desc.shape.num_faces_c_dim == 2);
+    (void)pad;
+}
+)"};
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 4},
+    }};
+    spec.kernels[1].scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorDFBDefaultTileCompiles) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+void kernel_main() {
+    DataflowBuffer in(dfb::input_dfb);
+    constexpr auto desc = to_llk_mem_descriptor(dfb::input_dfb);
+    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
+    static_assert(desc.shape.face_r_dim == 16);
+    static_assert(desc.shape.face_c_dim == 16);
+    static_assert(desc.shape.num_faces_r_dim == 2);
+    static_assert(desc.shape.num_faces_c_dim == 2);
+    (void)in;
+}
+)"};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorDFBFaceGeometryCompiles) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.dataflow_buffers[0].unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 4};
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+void kernel_main() {
+    DataflowBuffer in(dfb::input_dfb);
+    constexpr auto desc = to_llk_mem_descriptor(dfb::input_dfb);
+    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
+    static_assert(desc.shape.face_r_dim == 1);
+    static_assert(desc.shape.face_c_dim == 16);
+    static_assert(desc.shape.num_faces_r_dim == 2);
+    static_assert(desc.shape.num_faces_c_dim == 2);
+    (void)in;
+}
+)"};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// An L1-sharded tensor whose page tile is exactly `tile_shape`, so to_llk_mem_descriptor sees a
+// non-default face grid.
+TensorParameter MakeL1ShardedTiledTensor(std::string name, std::array<uint32_t, 2> tile_shape) {
+    return MakeShardedTensorParameter(
+        std::move(name),
+        tt::tt_metal::Shape{1, 1, tile_shape[0], tile_shape[1]},
+        tile_shape,
+        /*num_cores=*/1,
+        Tile{tile_shape});
+}
+
+TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorL1TensorDefaultCompiles) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.tensor_parameters = {MakeShardedTensorParameter("a", tt::tt_metal::Shape{1, 1, 32, 32}, {32, 32}, 2)};
+    BindTensorParameterToKernel(spec.kernels[1], "a", "a");
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/tensor/local_tensor_accessor.h"
+void kernel_main() {
+    LocalTensorAccessor<uint32_t> a(tensor::a);
+    constexpr auto desc = to_llk_mem_descriptor(tensor::a);
+    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
+    static_assert(desc.shape.face_r_dim == 16);
+    static_assert(desc.shape.face_c_dim == 16);
+    static_assert(desc.shape.num_faces_r_dim == 2);
+    static_assert(desc.shape.num_faces_c_dim == 2);
+    (void)a;
+}
+)"};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorL1Tensor16x32Compiles) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.tensor_parameters = {MakeL1ShardedTiledTensor("a", {16, 32})};
+    BindTensorParameterToKernel(spec.kernels[1], "a", "a");
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/tensor/local_tensor_accessor.h"
+void kernel_main() {
+    LocalTensorAccessor<uint32_t> a(tensor::a);
+    constexpr auto desc = to_llk_mem_descriptor(tensor::a);
+    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
+    static_assert(desc.shape.face_r_dim == 16);
+    static_assert(desc.shape.face_c_dim == 16);
+    static_assert(desc.shape.num_faces_r_dim == 1);
+    static_assert(desc.shape.num_faces_c_dim == 2);
+    (void)a;
+}
+)"};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorL1Tensor32x16Compiles) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.tensor_parameters = {MakeL1ShardedTiledTensor("a", {32, 16})};
+    BindTensorParameterToKernel(spec.kernels[1], "a", "a");
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/tensor/local_tensor_accessor.h"
+void kernel_main() {
+    LocalTensorAccessor<uint32_t> a(tensor::a);
+    constexpr auto desc = to_llk_mem_descriptor(tensor::a);
+    static_assert(desc.format == static_cast<uint8_t>(DataFormat::Float16_b));
+    static_assert(desc.shape.face_r_dim == 16);
+    static_assert(desc.shape.face_c_dim == 16);
+    static_assert(desc.shape.num_faces_r_dim == 2);
+    static_assert(desc.shape.num_faces_c_dim == 1);
+    (void)a;
+}
+)"};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, ToLlkMemDescriptorDramTensorFailsCompile) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.tensor_parameters = {MakeMinimalTensorParameter("a")};
+    BindTensorParameterToKernel(spec.kernels[1], "a", "a");
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+void kernel_main() {
+    constexpr auto desc = to_llk_mem_descriptor(tensor::a);
+    (void)desc;
+}
+)"};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DRAM")));
 }
 
 // Compile-only: a range-based for loop over a Scratchpad must compile. Exercises begin()/end() and the

@@ -13,6 +13,8 @@
 #include <utility>
 #include <vector>
 
+#include "llk_operand_facts.hpp"
+
 namespace tt::tt_metal {
 
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.
@@ -97,7 +99,7 @@ public:
     //  - Semaphore bindings
     //  - Tensor bindings
     virtual void process_dataflow_buffer_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
+        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id, const LlkOperandFacts&)>) const {}
     virtual void process_semaphore_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
 
@@ -111,20 +113,25 @@ public:
     //    slot for runtime accessor fields (currently: shape, for sharded TensorParameters with
     //    dynamic_tensor_shape=true). The binding occupies (1 + num_runtime_field_crta_words)
     //    CRTA words in total.
+    //  - llk_facts: the operand's compile-time format + face grid, baked onto the binding token.
     // (The tensor_parameter_name is also part of TensorBindingHandle, but we don't need it for codegen.)
     virtual void process_tensor_binding_handles(std::function<void(
                                                     const std::string& accessor_name,
                                                     uint32_t cta_offset,
                                                     uint32_t addr_crta_offset,
-                                                    uint32_t num_runtime_field_crta_words)>) const {}
+                                                    uint32_t num_runtime_field_crta_words,
+                                                    const LlkOperandFacts&)>) const {}
 
     // Scratchpad binding callback emits the codegen-relevant fields:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `scratch::` namespace
     //  - size_bytes: the scratchpad's per-node size, emitted as the binding token's compile-time size
     //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
     //    scratchpad's (framework-allocated) L1 base address
+    //  - llk_facts: the operand's compile-time format + face grid, baked onto the binding token.
     virtual void process_scratchpad_binding_handles(
-        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
+        std::function<void(
+            const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word, const LlkOperandFacts&)>)
+        const {}
 
     // Named RTA/CRTA schema (Metal 2.0 APIs).
     // The order of names determines the byte offset of each arg within the named-args

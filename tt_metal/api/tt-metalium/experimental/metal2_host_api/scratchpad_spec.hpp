@@ -5,8 +5,12 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
+#include <tt-metalium/face_geometry.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal::experimental {
@@ -57,6 +61,32 @@ struct ScratchpadSpec {
     // Size of the SRAM ("L1") region reserved on each node, in bytes.
     // (Only occupies space on nodes where the scratchpad's bound kernel instances run.)
     uint32_t size_per_node = 0;
+
+    ////////////////////////////////////
+    // Entry format metadata
+    ////////////////////////////////////
+
+    // The fields in this section are used to convey scratchpad entry format metadata to the
+    // Low-Level Kernel (LLK) device APIs (compute primitives).
+    // (These only need to be considered for scratchpads that are bound to a compute kernel.)
+
+    // These fields are identical as those in the DataflowBufferSpec.
+
+    // The data format is required if LLK metadata is needed to be extract at device side.
+    std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
+
+    // Optional; if unspecified, the default tile format (32x32) is assumed
+    std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
+
+    // Optional override for this scratchpad's tile face layout.
+    //
+    // A tile is physically stored as a grid of fixed-size sub-blocks called "faces". The compute
+    // engine normally infers how many faces a tile has, and how many rows each face holds, from
+    // `tile_format_metadata`. Set this field only when an entry does not occupy a full tile, so it
+    // holds fewer faces and/or shorter faces than the default; the compute engine then reads exactly
+    // that much data instead of a whole tile. `FaceGeometry` carries those two values (rows-per-face
+    // and number of faces).
+    std::optional<FaceGeometry> unpack_face_geometry_metadata = std::nullopt;
 };
 
 }  // namespace tt::tt_metal::experimental

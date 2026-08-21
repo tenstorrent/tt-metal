@@ -7,9 +7,18 @@
 #include <cstdint>
 #include <type_traits>
 
+// Extraction of LLK metadata is only possible on compute kernels.
+#ifdef COMPILE_FOR_TRISC
+#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#endif
+
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
+#include "internal/llk_metadata.h"
 #include "experimental/kernel_args.h"
+
+template <typename T>
+class Scratchpad;
 
 // Opaque handle for a Program-scope scratchpad binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
@@ -29,12 +38,43 @@ public:
     explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
 
+    // Binding token constructor when host supplies LLK metadata.
+    // See "Entry format metadata" section in ScratchpadSpec on host side for more details.
+    constexpr ScratchpadBindingToken(
+        uint32_t crta_offset, uint32_t size_in_bytes, binding_details::LLKMetadata llk) noexcept :
+        crta_offset_(crta_offset), size_in_bytes_(size_in_bytes), llk_metadata_(llk) {}
+
+#ifdef COMPILE_FOR_TRISC
+    // Converts to a LLKMemDescriptor, which contains LLK relevant information about the scratchpad.
+    //
+    // These metadata are optionally provided from the host side through the ScratchpadSpec associated with
+    // the scratchpad binding. When the data format is not provided on the host side, the behavior of this function is
+    // undefined.
+    friend constexpr ckernel::experimental::LLKMemDescriptor to_llk_mem_descriptor(ScratchpadBindingToken token) {
+        if (token.llk_metadata_.format == binding_details::LLKMetadata::kNoFormat) {
+            // Needs to call a helper function here to avoid ASSERT macro expanding into inline asm,
+            // inline asm is not supported in constexpr functions in C++17.
+            token.llk_metadata_missing();
+        }
+        return {
+            token.llk_metadata_.format,
+            ckernel::TensorShape{
+                token.llk_metadata_.face_r_dim,
+                token.llk_metadata_.face_c_dim,
+                token.llk_metadata_.num_faces_r_dim,
+                token.llk_metadata_.num_faces_c_dim}};
+    }
+#endif
+
 private:
     template <typename T>
     friend class Scratchpad;
 
+    void llk_metadata_missing() const { ASSERT(false, "ScratchpadBindingToken with no data format is undefined"); }
+
     uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
     uint32_t size_in_bytes_;  // static per-node size
+    binding_details::LLKMetadata llk_metadata_{};
 };
 
 /**

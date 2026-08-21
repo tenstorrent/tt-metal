@@ -27,6 +27,9 @@ namespace ckernel {
 namespace experimental {
 
 // The compile-time descriptor the LLK APIs accept as an NTTP: buffer L1 format + tile geometry.
+//
+// In Metal 2.0, this information can be injected from the host side. A kernel obtains a LLKMemDescriptor
+// from a Metal 2.0 BindingToken by calling to_llk_mem_descriptor(token).
 struct LLKMemDescriptor {
     std::uint8_t format;  // buffer L1 format (what the unpacker reads / the packer writes)
     TensorShape shape;    // tile geometry; derive num_faces / tile dims via TensorShape helpers
@@ -102,11 +105,6 @@ constexpr LLKMemDescriptor to_llk_mem_descriptor(Cb<CbId> /*cb*/) {
             unpack_tile_face_r_dim[CbId], MAX_FACE_C_DIM, unpack_num_faces_r_dim[CbId], unpack_num_faces_c_dim[CbId]}};
 #endif
 }
-
-// Future source accessors + overloads (additive -- no op/call-site change), once each exposes constexpr
-// format + TensorShape:
-//   constexpr LLKMemDescriptor to_llk_mem_descriptor(DFBBindingToken token);          // DFB
-//   constexpr LLKMemDescriptor to_llk_mem_descriptor(ScratchpadBindingToken token);   // Scratchpad
 
 }  // namespace experimental
 }  // namespace ckernel
