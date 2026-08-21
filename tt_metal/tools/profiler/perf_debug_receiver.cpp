@@ -250,7 +250,9 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         const PerfDebugRawRecType rt = type == PP_ZONE_ATOMIC  ? PerfDebugRawRecType::ZoneAtomic
                                        : type == PP_ZONE_START ? PerfDebugRawRecType::ZoneStart
                                                                : PerfDebugRawRecType::ZoneEnd;
-        zone_markers++;
+        // Counts COMPLETED zones (an atomic packet or a legacy pair's END half), not marker halves --
+        // the report prints it verbatim, so a START must not contribute.
+        zone_markers += (type != PP_ZONE_START) ? 1 : 0;
         // PRODUCER-STALL, matched by ELF-resolved NAME via the id table: a producer RISC blocked on
         // a FULL ring. STALL_ONLY mode only -- on a normal run this per-marker probe is redundant
         // (the control plane reads the workers' own L1 stall counters at teardown) and measures ~10%
@@ -293,7 +295,10 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
 
 #if defined(__AVX2__)
     auto emit_zones8 = [&](uint32_t lane, uint32_t th, uint32_t prog, __m256i w0s, __m256i w1s) {
-        zone_markers += 8;
+        // Completed-zone count: this block is 8 LEGACY marker halves; only the ENDs are finished zones
+        // (bit27 of word0 -> sign bit via <<4, one movemask+popcount for all 8).
+        zone_markers += static_cast<unsigned>(__builtin_popcount(
+            static_cast<uint32_t>(_mm256_movemask_ps(_mm256_castsi256_ps(_mm256_slli_epi32(w0s, 4))))));
         // Order invariant at block endpoints only: the producer guarantees monotonicity inside a run, so
         // in-block inversions would need a producer bug, while the boundary compare still catches every
         // head-mirror/resync error class. th is block-constant, so comparing on it is exact.
@@ -766,7 +771,7 @@ void PerfDebugReceiver::log_report() const {
             s.passes,
             ticks_to_ms(s.decode_ticks),
             s.records,
-            s.zone_markers / 2,
+            s.zone_markers,
             s.stall_zones,
             s.decode.resync_events,
             s.decode.resync_words,
@@ -790,7 +795,7 @@ void PerfDebugReceiver::log_report() const {
     const double wall_ms = (first_tsc != 0 && last_tsc > first_tsc) ? ticks_to_ms(last_tsc - first_tsc) : 0.0;
     const double d2h_gb = total_pages * static_cast<double>(kPageBytes) / 1e9;
     const double wire_gb = total_wire_words * 4.0 / 1e9;
-    const double mzones = total_zone_markers / 2.0 / 1e6;
+    const double mzones = total_zone_markers / 1e6;  // zone_markers counts completed zones directly
     auto rate = [](double num, double ms) { return ms > 0.0 ? num / (ms / 1e3) : 0.0; };
     log_info(
         tt::LogMetal,
