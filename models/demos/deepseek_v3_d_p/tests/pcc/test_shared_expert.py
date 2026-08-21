@@ -25,18 +25,6 @@ from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def _ci_unsupported_param_combos(**params):
-    on_ci = params["on_ci"]
-    fabric_config = params["device_params"]["fabric_config"]
-
-    if not on_ci:
-        return False
-    if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING:
-        return True
-    return False
-
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim",
     [

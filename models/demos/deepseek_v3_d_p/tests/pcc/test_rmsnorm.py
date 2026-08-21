@@ -25,21 +25,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def _ci_unsupported_param_combos_rmsnorm_distributed(**params):
-    on_ci = params["on_ci"]
-    isl_per_chip = params["isl_per_chip"]
-    fabric_config = params["device_params"]["fabric_config"]
-
-    if not on_ci:
-        return False
-    if isl_per_chip == 4096:
-        return True
-    if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING:
-        return True
-    return False
-
-
-def _ci_unsupported_param_combos_rmsnorm_single_chip(**params):
+def _ci_unsupported_param_combos(**params):
     on_ci = params["on_ci"]
     isl_per_chip = params["isl_per_chip"]
 
@@ -50,7 +36,7 @@ def _ci_unsupported_param_combos_rmsnorm_single_chip(**params):
     return False
 
 
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_rmsnorm_distributed)
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "isl_per_chip, emb_dim, epsilon, num_links", [(3200, 7168, 1e-6, 1), (4096, 7168, 1e-6, 1)], ids=["3.2K", "4K"]
 )
@@ -166,7 +152,7 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     logger.debug("PCC test passed!")
 
 
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_rmsnorm_single_chip)
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize("isl_per_chip, emb_dim, epsilon", [(3200, 7168, 1e-6), (4096, 7168, 1e-6)], ids=["3.2K", "4K"])
 def test_rmsnorm_single_chip(device, isl_per_chip, emb_dim, epsilon):
     """
