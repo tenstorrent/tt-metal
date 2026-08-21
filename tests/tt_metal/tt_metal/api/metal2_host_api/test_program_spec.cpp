@@ -45,7 +45,7 @@
 #include "impl/host_api/temp_quasar_api.hpp"  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_metal.hpp>  // for CompileProgram (JIT trigger)
+#include <tt-metalium/tt_metal.hpp>                      // for CompileProgram (JIT trigger)
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgsConfig / ArgConfig::RuntimePageSize
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -3439,6 +3439,83 @@ TEST_F(ProgramSpecTestGen1, DFBMixedKindProducersOnSameNodeSucceedsWithFlag) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
+TEST_F(ProgramSpecTestGen1, DFBComputeSelfLoopWithoutFlagLowersToIntraTensix) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec;
+    spec.name = "compute_self_loop";
+
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {compute};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
+
+    auto program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto dfb_id = program.impl().get_dfb_handle("dfb");
+    const auto& config = program.impl().get_dataflow_buffer(dfb_id)->config;
+    ASSERT_TRUE(config.tensix_scope.has_value());
+    EXPECT_EQ(config.tensix_scope, dfb::TensixScope::INTRA);
+}
+
+TEST_F(ProgramSpecTestGen1, DFBDataMovementEndpointsUseExplicitSync) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec;
+    spec.name = "gen1_dm_explicit_sync";
+
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    auto program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto dfb_id = program.impl().get_dfb_handle("dfb");
+    const auto& config = program.impl().get_dataflow_buffer(dfb_id)->config;
+    EXPECT_FALSE(config.enable_producer_implicit_sync);
+    EXPECT_FALSE(config.enable_consumer_implicit_sync);
+}
+
+TEST_F(ProgramSpecTestGen1, DFBComputeSelfLoopAndDMParticipantWithFlagLowersToPlainExplicitSyncCB) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "compute_self_loop_with_dm_participant";
+
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    auto dm = MakeMinimalGen1DMKernel("dm", DataMovementProcessor::RISCV_0);
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.advanced_options.allow_instance_multi_binding = true;
+
+    // Both kernels intentionally bind both sides: on Gen1 this escape hatch represents one
+    // legacy circular buffer shared across RISCs, not an intra-Tensix credit-flow DFB.
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "compute_out"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "compute_in"));
+    dm.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "dm_out"));
+    dm.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "dm_in"));
+
+    spec.kernels = {compute, dm};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute", "dm"})};
+
+    auto program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto dfb_id = program.impl().get_dfb_handle("dfb");
+    const auto& config = program.impl().get_dataflow_buffer(dfb_id)->config;
+    EXPECT_FALSE(config.tensix_scope.has_value());
+    EXPECT_FALSE(config.enable_producer_implicit_sync);
+    EXPECT_FALSE(config.enable_consumer_implicit_sync);
+}
+
 TEST_F(ProgramSpecTestGen1, MultiThreadedDMKernelFails) {
     NodeCoord node{0, 0};
 
@@ -4782,9 +4859,7 @@ TEST_F(ProgramSpecTestGen1, CompilerIncludePathsForwardedToKernelConfig) {
 // bound to the same producer/consumer kernels in a single WorkUnit on a single node.
 namespace {
 ProgramSpec MakeAliasProgramSpec(
-    const NodeCoord& node,
-    const DataflowBufferSpec& dfb_a,
-    const DataflowBufferSpec& dfb_b) {
+    const NodeCoord& node, const DataflowBufferSpec& dfb_a, const DataflowBufferSpec& dfb_b) {
     ProgramSpec spec;
 
     KernelSpec producer = MakeMinimalGen2DMKernel("producer_kernel");
@@ -4815,8 +4890,7 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnMismatchedTotalSize) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("different total sizes")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different total sizes")));
 }
 
 TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnAsymmetricDeclaration) {
@@ -4864,8 +4938,7 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBMatmulStyleSucceeds) {
     ProgramSpec spec;
     spec.kernels = {producer, consumer, other};
     spec.dataflow_buffers = {dfb_a, dfb_b};
-    spec.work_units = {
-        MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel", "other_kernel"})};
+    spec.work_units = {MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel", "other_kernel"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }

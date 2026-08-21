@@ -1783,3 +1783,55 @@ used for disposition. The authoritative final logs are
 `/tmp/pool2d-legacy-cache-hit-wall-bench-split.log` and
 `/tmp/pool2d-migrated-cache-hit-wall-bench-split.log`; the disposable benchmark
 source and detached worktree were removed after capture.
+
+### Conv3D migration implementation and validation (2026-08-21)
+
+Conv3D now has one `ProgramArtifacts`/`ProgramSpec`/`ProgramRunArgs` boundary
+and three `TT_KERNEL` entry points. The factory names every tensor, DFB,
+semaphore, compile-time argument, and fixed runtime argument; only the reducer
+and worker coordinate arrays use advanced runtime varargs. Direct and gather
+readers, disabled/chain/multicast weight sharing, reduction, bias, halo/mask,
+FP32 partials, streaming output, and padding/layout specializations remain
+conditionally exact. Compute alone explicitly requests O3. Full tensor specs
+participate in the operation hash, so cache hits cannot reuse stale accessor
+metadata while still rebinding fresh tensor addresses.
+
+Conv3D exposed a Gen1 framework defect: an explicitly multi-bound compute
+self-loop plus data-movement participant was inferred as an intra-Tensix DFB,
+contradicting the escape hatch's promised plain-CB lowering. The framework now
+suppresses intra-Tensix scope for `allow_instance_multi_binding` and excludes
+Gen1 DM endpoints from Gen2 implicit-sync voting. Three focused regression
+tests pin ordinary compute self-loops, ordinary Gen1 DM endpoints, and the
+multi-bound shared-CB case. The complete `ProgramSpecTestGen1.*` suite passes
+66/66 (`/tmp/conv3d-metal2-review-program-spec-gen1.log`).
+
+The exact final `./build_metal.sh --release` build/install passed
+(`/tmp/conv3d-metal2-final-release-build.log`). From fresh caches, the final
+unit suite passed 36/36 in 69.36 seconds with 0/222 JIT hits
+(`/tmp/conv3d-metal2-final-source-unit.log`), and the complete nightly suite
+accounted for all 1,613 nodes: 1,606 passed, five existing skips, and two
+existing xfails in 1,202.65 seconds with 0/2,642 JIT hits
+(`/tmp/conv3d-metal2-final-source-nightly.log`). Forced cold-JIT representatives
+for direct/no-share, gather/multicast, and gather/chain+reduction all passed
+with worktree library provenance and zero JIT hits
+(`/tmp/conv3d-metal2-review2-cold-*.log`). For every topology, fresh same-key
+allocations kept the program-cache count stable, repeated outputs were
+bit-exact, and three trace replays were bit-exact
+(`/tmp/conv3d-metal2-final-contract-*.log`).
+
+The final synchronized 101-call wall-time medians were 173,371 ns for direct,
+200,900 ns for multicast, and 308,181 ns for chain/reduction, versus frozen
+legacy medians of 175,866, 204,001, and 310,210 ns respectively. Final Tracy
+FW/kernel medians were 97,642.5/96,847 ns, 106,242/105,400 ns, and
+219,122/218,276 ns, versus legacy 101,035/100,248, 106,560/105,725, and
+219,826/218,992 ns. Thus every synchronized wall and device-program median is
+non-regressed. Authoritative final logs are `/tmp/conv3d-metal2-final-wall-*.log`;
+Tracy reports are under `generated/profiler/reports/2026_08_21_13_20_49`,
+`2026_08_21_13_21_03`, and `2026_08_21_13_21_17`.
+
+Three Opus high-effort review passes drove cache-hash hardening, exact
+reduction-only shared-CB topology, compile-time feature pinning, NOC-orientation
+unification, dead-specialization removal, and stronger framework tests. The
+final pass found no actionable correctness, API, cache, topology, performance,
+UB, specialization, or maintainability issue and ended with explicit
+`APPROVED` (`/tmp/conv3d-metal2-opus-review-3.txt`).

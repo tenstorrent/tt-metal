@@ -314,20 +314,17 @@ Tensor Conv3dDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto& weight_tensor = tensor_args.weight_tensor;
-    const auto& bias_tensor = tensor_args.bias_tensor;
     operation::Hash hash = operation::hash_operation<Conv3dDeviceOperation>(
         args,
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_tensor.logical_shape(),
-        weight_tensor.dtype(),
-        weight_tensor.memory_config(),
-        weight_tensor.logical_shape(),
-        bias_tensor.has_value(),
-        tensor_args.halo_buffer.has_value(),
-        tensor_args.pad_offset_tensor.has_value());
+        tensor_args.input_tensor.tensor_spec(),
+        tensor_args.weight_tensor.tensor_spec(),
+        tensor_args.bias_tensor ? std::optional<tt::tt_metal::TensorSpec>{tensor_args.bias_tensor->tensor_spec()}
+                                : std::nullopt,
+        tensor_args.halo_buffer ? std::optional<tt::tt_metal::TensorSpec>{tensor_args.halo_buffer->tensor_spec()}
+                                : std::nullopt,
+        tensor_args.pad_offset_tensor
+            ? std::optional<tt::tt_metal::TensorSpec>{tensor_args.pad_offset_tensor->tensor_spec()}
+            : std::nullopt);
 
     return hash;
 }

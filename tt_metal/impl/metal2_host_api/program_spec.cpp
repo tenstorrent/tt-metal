@@ -623,7 +623,6 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 // representative of every device in the mesh.
 
 void ValidateNodeBounds(const ProgramSpec& spec) {
-
     MetalEnvImpl& env_impl = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
 
     // Handle the mock device case (for cheap unit testing)
@@ -647,25 +646,24 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
     // No need for dispatch-specific checks (and dispatch-specific error messages confuse users)
     const CoreCoord compute_grid = tt::get_compute_grid_size(env_impl, chip_id, num_hw_cqs, dispatch_core_config);
 
-    auto check_target_nodes = [&](const Nodes& target_nodes,
-                                  std::string_view entity_type,
-                                  std::string_view entity_name) {
-        const NodeRangeSet range_set = to_node_range_set(target_nodes);
-        for (const NodeRange& range : range_set.ranges()) {
-            for (const NodeCoord& node : range) {
-                TT_FATAL(
-                    node.x < compute_grid.x && node.y < compute_grid.y,
-                    "{} '{}' targets node ({},{}), which is out of bounds. "
-                    "The compute worker grid on this device is {}x{}.",
-                    entity_type,
-                    entity_name,
-                    node.x,
-                    node.y,
-                    compute_grid.x,
-                    compute_grid.y);
+    auto check_target_nodes =
+        [&](const Nodes& target_nodes, std::string_view entity_type, std::string_view entity_name) {
+            const NodeRangeSet range_set = to_node_range_set(target_nodes);
+            for (const NodeRange& range : range_set.ranges()) {
+                for (const NodeCoord& node : range) {
+                    TT_FATAL(
+                        node.x < compute_grid.x && node.y < compute_grid.y,
+                        "{} '{}' targets node ({},{}), which is out of bounds. "
+                        "The compute worker grid on this device is {}x{}.",
+                        entity_type,
+                        entity_name,
+                        node.x,
+                        node.y,
+                        compute_grid.x,
+                        compute_grid.y);
+                }
             }
-        }
-    };
+        };
 
     for (const auto& work_unit : spec.work_units) {
         check_target_nodes(work_unit.target_nodes, "WorkUnitSpec", work_unit.name);
@@ -1627,7 +1625,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     total_size_a == total_size_b,
                     "Aliased DFBs '{}' and '{}' have different total sizes ({} vs {} bytes). "
                     "Aliased DFBs must have the same total size (entry_size * num_entries).",
-                    dfb.unique_id, alias_name, total_size_a, total_size_b);
+                    dfb.unique_id,
+                    alias_name,
+                    total_size_a,
+                    total_size_b);
 
                 // Rule 3: same node coverage.
                 const auto& nodes_b = collected.dfb_node_set.at(alias_name);
@@ -1714,10 +1715,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
             if (nodes_intersect(work_unit.target_nodes, other_work_unit.target_nodes)) {
                 TT_FATAL(
-                    false,
-                    "WorkUnitSpecs '{}' and '{}' overlap in target nodes",
-                    work_unit.name,
-                    other_work_unit.name);
+                    false, "WorkUnitSpecs '{}' and '{}' overlap in target nodes", work_unit.name, other_work_unit.name);
             }
         }
     }
@@ -2569,8 +2567,13 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         }
         return false;
     }();
+    // Gen1 instance-multi-binding is an escape hatch for legacy shared-CB topologies. It must
+    // remain a plain circular buffer even if one of its participants is a compute self-loop;
+    // interpreting that overlap as an intra-Tensix credit-flow DFB would no longer be plain-CB
+    // lowering and is incompatible with a DM participant on the same buffer.
+    const bool force_plain_gen1_cb = dfb_spec->advanced_options.allow_instance_multi_binding;
     std::optional<experimental::dfb::TensixScope> tensix_scope;
-    if (is_self_loop && producer->is_compute_kernel()) {
+    if (is_self_loop && producer->is_compute_kernel() && !force_plain_gen1_cb) {
         tensix_scope = experimental::dfb::TensixScope::INTRA;
     }
 
@@ -2585,11 +2588,11 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
             if (!ep.kernel->is_data_movement_kernel()) {
                 continue;
             }
-            any_dm = true;
             const auto& dm_config = std::get<DataMovementHardwareConfig>(ep.kernel->hw_config);
             if (!std::holds_alternative<DataMovementGen2Config>(dm_config)) {
                 continue;
             }
+            any_dm = true;
             if (DmKernelDisablesImplicitSync(std::get<DataMovementGen2Config>(dm_config), dfb_spec->unique_id)) {
                 disabled = true;
             }
@@ -2646,8 +2649,7 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec, ContextId context_i
 // This is deliberate, done so ProgramSpec stays hashable for TTNN's program caching.
 // For now, just convert to the map types that the core runtime expects.
 // TODO: Fix this inefficiency eventually.
-std::unordered_map<std::string, uint32_t> to_named_compile_args_map(
-    const KernelSpec::CompileTimeArgs& bindings) {
+std::unordered_map<std::string, uint32_t> to_named_compile_args_map(const KernelSpec::CompileTimeArgs& bindings) {
     return std::unordered_map<std::string, uint32_t>(bindings.begin(), bindings.end());
 }
 std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOptions::Defines& defines) {
