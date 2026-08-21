@@ -93,12 +93,29 @@ void kernel_main() {
         REL();
         rotated_in_interm_cb_obj.push_back(Wt);
 
-        // sin_interim = rotated * sin
-        ckl::mul<
-            ckl::input(rotated_in_interm_cb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-            ckl::input(sin_cb, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::output(sin_interm_cb, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd)>(
-            ckl::IterationShape::one_tile());
+        // sin_interim = rotated * sin. The binary format state is established by the caller's
+        // compute_kernel_hw_startup above; preserve the legacy path by keeping reconfiguration
+        // caller-owned while using Ckl for the CB lifecycle and tile operation.
+        mul_init(rotated_in_interm_cb, sin_cb);
+        ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Mul,
+                ckl::input(
+                    rotated_in_interm_cb,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::InputTileMapping::Scalar,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    sin_cb,
+                    ckl::BroadcastDim::None,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::InputTileMapping::Scalar,
+                    ckl::DataFormatReconfig::Disabled)>{},
+            ckl::PackTile<ckl::output(
+                sin_interm_cb, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{});
 
         // cos_interim = x * cos
         mul_init(in_cb, cos_cb);
