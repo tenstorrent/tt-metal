@@ -20,7 +20,6 @@ jobs:
 
       - name: Check GitHub API rate limit
         env:
-          # PAT with Administration:read (required to list self-hosted runners).
           GH_TOKEN: ${{ secrets.RUNNER_API_TOKEN }}
         run: gh api rate_limit
 
@@ -42,17 +41,16 @@ jobs:
           mkdir -p generated/github_runner
           COLLECTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          # Shape must match dags/pipelines/github_runner/pydantic_models.py in
-          # data_airflow: {collected_at, runners:[{id,name,os,status,busy,labels}]}.
-          # Labels are flattened from GitHub's {name,...} objects to name strings.
-          # IN_SERVICE is derived downstream from the labels; version is optional.
+          # drop any whose name contains (case-insensitively) runner, xla, forge, torch, syseng, or mlir.
           jq -n \
             --arg ts "$COLLECTED_AT" \
             --slurpfile pages runners_raw.json '
           {
             collected_at: $ts,
             runners: [
-              $pages[] | .runners[]? | {
+              $pages[] | .runners[]?
+              | select((.name // "") | test("runner|xla|forge|torch|syseng|mlir"; "i") | not)
+              | {
                 id,
                 name,
                 os,
@@ -73,20 +71,9 @@ jobs:
           mv generated/github_runner/github_runner_snapshot.json \
              generated/github_runner/${TS}_github_runner_snapshot.json
 
-      # Download this from the run's Summary page to inspect / push to STG.
-      - name: Upload snapshot as artifact
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: github-runner-snapshot
-          path: generated/github_runner/*.json
-          if-no-files-found: error
-
-      # TEMPORARY: also SFTP on the branch push so we can test the real upload
-      # end-to-end before merge. Requires aws_s3 + aws_sftp applied (bucket +
-      # github-runner-writer user). Revert to `== 'schedule'` (or drop the gate)
-      # when removing the temporary push trigger before merge.
+      # Uploads on both the scheduled run and a manual workflow_dispatch, so the
+      # pipeline can be re-tested end-to-end from the default branch on demand.
       - name: Upload runner data via SFTP
-        if: github.event_name == 'push' || github.event_name == 'schedule'
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_GITHUB_RUNNER_WRITER_KEY }}
