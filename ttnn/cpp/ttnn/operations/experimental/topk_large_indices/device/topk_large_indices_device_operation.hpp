@@ -20,7 +20,11 @@ struct TopkLargeIndicesDeviceOperation {
     using tensor_return_value_t = topk_large_indices::tensor_return_value_t;
     using spec_return_value_t = topk_large_indices::spec_return_value_t;
 
-    using program_factory_t = std::variant<program::TopkLargeIndicesProgramFactory>;
+    using program_factory_t =
+        std::variant<program::TopkLargeIndicesProgramFactory, program::TopkLargeIndicesMultiCoreProgramFactory>;
+
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
@@ -33,8 +37,15 @@ struct TopkLargeIndicesDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 
+    // num_slices, row_start, and row_count are composite-internal (the hybrid row split and the
+    // remainder window's tree launch); the public API passes only (input, k, valid_length).
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length);
+        const Tensor& input_tensor,
+        uint32_t k,
+        std::optional<uint32_t> valid_length,
+        std::optional<uint32_t> num_slices = std::nullopt,
+        std::optional<uint32_t> row_start = std::nullopt,
+        std::optional<uint32_t> row_count = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
