@@ -332,9 +332,14 @@ ttnn::operations::generic::tensor_return_value_t generic_op(
     const std::vector<Tensor>& io_tensors,
     const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
     using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
+    // Structural, not semantic: the only thing this op needs from io_tensors is that back() names
+    // the output tensor, since tensor_return_value_t is a Tensor. A program that reads no tensor
+    // (a generator: fill/iota/random) or reads and writes one (in-place) legitimately passes a
+    // single tensor. A caller who forgot to pre-allocate an output still gets a precise error
+    // downstream: their tensor_args entry for the output names an out-of-range io_tensors index.
     TT_FATAL(
-        io_tensors.size() >= 2,
-        "io_tensors must contain at least one input tensor and one output tensor, got {} tensors.",
+        !io_tensors.empty(),
+        "io_tensors must contain at least the output tensor as its last element, got {} tensors.",
         io_tensors.size());
 
     auto tensor_args = OperationType::tensor_args_t{.io_tensors = io_tensors, .output_tensor = io_tensors.back()};

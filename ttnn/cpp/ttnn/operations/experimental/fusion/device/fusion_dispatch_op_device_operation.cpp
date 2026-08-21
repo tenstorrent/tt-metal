@@ -78,9 +78,13 @@ ttnn::operations::experimental::fusion::fusion_dispatch_tensor_return_value_t fu
     const std::vector<Tensor>& io_tensors,
     const ttnn::operations::experimental::fusion::fusion_dispatch_operation_attributes_t& operation_attributes) {
     using OperationType = ttnn::operations::experimental::fusion::FusionDispatchOpDeviceOperation;
+    // Structural only, matching ttnn::prim::generic_op: back() must name the output tensor because
+    // the return value is a Tensor. Nothing here reads an input tensor -- create_descriptor returns
+    // the Python-patched descriptor verbatim, and patch_stale_descriptor addresses io_tensors by the
+    // indices recorded in address_slots -- so a one-tensor fused chain (generator or in-place) is fine.
     TT_FATAL(
-        io_tensors.size() >= 2,
-        "io_tensors must contain at least one input tensor and one output tensor, got {} tensors.",
+        !io_tensors.empty(),
+        "io_tensors must contain at least the output tensor as its last element, got {} tensors.",
         io_tensors.size());
 
     auto tensor_args = OperationType::tensor_args_t{.io_tensors = io_tensors, .output_tensor = io_tensors.back()};
