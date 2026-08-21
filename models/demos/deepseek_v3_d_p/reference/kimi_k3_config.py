@@ -12,7 +12,8 @@ Values from HuggingFace config.json for Kimi-K3 (``text_config``), whose ``model
 the TT stack reads lives under ``text_config``.
 
 K3 is a **hybrid**: of its 93 layers only 24 are full-attention (MLA) layers, the rest are KDA
-linear-attention layers. Only the MLA side is modelled here.
+linear-attention layers. The MLA dimensions are spelled out below; the KDA ones are handed to
+``KDAConfig`` through :func:`kimi_k3_kda_config`.
 
 MLA deltas vs Kimi-K2.6:
   * 96 attention heads (K2.6: 64)
@@ -30,6 +31,9 @@ included, is plain bf16. Only the MoE routed experts are quantized.
 """
 
 import types
+from typing import Any
+
+from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 
 
 class KimiK3Config:
@@ -93,11 +97,21 @@ class KimiK3Config:
                                52, 56, 60, 64, 68, 72, 76, 80, 84, 88, 92, 93]
     # fmt: on
 
-    # KDA (linear attention) sizing, recorded for completeness; no TT implementation exists yet.
+    # KDA (linear attention) sizing. ``head_k_dim`` and ``head_v_dim`` are both KDA_HEAD_DIM.
     KDA_NUM_HEADS = 96
     KDA_HEAD_DIM = 128
     KDA_SHORT_CONV_KERNEL_SIZE = 4
     KDA_GATE_LOWER_BOUND = -5.0
+    KDA_USE_FULL_RANK_GATE = True
+
+    # Device-side KDA tuning, not checkpoint fields: chunks per distributed-affine summary group,
+    # and the output projection's per-core output block width.
+    KDA_SUMMARY_GROUP_CHUNKS = 20
+    KDA_OUTPUT_PROJECTION_OUT_BLOCK_W = 4
+
+    # 0-indexed layer index the single-layer KDA tests load weights for. Layer 0 is also KDA but
+    # pairs it with the dense MLP (``NUM_DENSE_LAYERS``); 1 is the first KDA layer in an MoE block.
+    FIRST_KDA_LAYER = 1
 
     # AttnRes (attention-side, out of scope here; recorded so the delta is not lost)
     ATTN_RES_BLOCK_SIZE = 12
@@ -133,6 +147,32 @@ class KimiK3Config:
         if layer_idx not in ids:
             raise ValueError(f"model layer {layer_idx} is a KDA layer, not an MLA layer; MLA layers are {ids}")
         return ids.index(layer_idx)
+
+
+def kimi_k3_model_config() -> dict[str, Any]:
+    """The HF-JSON-shaped subset of K3's ``text_config`` that ``KDAConfig`` reads.
+
+    ``KDAConfig.from_model_config`` parses the checkpoint's own nested JSON, so the KDA constants
+    are handed back in that shape rather than as keyword arguments.
+    """
+    return {
+        "hidden_size": KimiK3Config.EMB_SIZE,
+        "num_hidden_layers": KimiK3Config.NUM_LAYERS,
+        "num_attention_heads": KimiK3Config.NUM_ATTENTION_HEADS,
+        "rms_norm_eps": KimiK3Config.RMS_NORM_EPS,
+        "linear_attn_config": {
+            "num_heads": KimiK3Config.KDA_NUM_HEADS,
+            "head_dim": KimiK3Config.KDA_HEAD_DIM,
+            "short_conv_kernel_size": KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE,
+            "use_full_rank_gate": KimiK3Config.KDA_USE_FULL_RANK_GATE,
+            "gate_lower_bound": KimiK3Config.KDA_GATE_LOWER_BOUND,
+        },
+    }
+
+
+def kimi_k3_kda_config() -> KDAConfig:
+    """Reference KDA configuration for one Kimi-K3 KDA layer."""
+    return KDAConfig.from_model_config(kimi_k3_model_config())
 
 
 def kimi_k3_hf_config(max_seq: int = 8192):

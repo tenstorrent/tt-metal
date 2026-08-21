@@ -21,6 +21,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.kda.state_store import KdaStateStore
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
@@ -28,7 +29,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
-from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock, is_kda_layer
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
 
@@ -200,6 +201,21 @@ class TtPrefillTransformer(LightweightModule):
         # length so the block's flat KV slot (cache_user_id * layer_num + cache_layer_idx)
         # matches the per-rank cache sized to num_layers. With kv_only_last_layer, the last block is
         # built kv_only=True (only attn_norm + the KV branch of MLA).
+        # Hybrid variants (Kimi-K3) run KDA on most layers, and a KDA layer writes no KV slab. The kvpe
+        # cache therefore holds one slot per MLA layer of this rank's slice, not one per layer, so both
+        # the block's flat slot arithmetic (cache_user_id * layer_num + cache_layer_idx) and the slot
+        # forward() hands each layer count MLA layers only. On a full-attention model every layer is an
+        # MLA layer and this collapses to the identity.
+        self.kv_slot_of_layer = []
+        next_kv_slot = 0
+        for local_idx in range(num_layers):
+            if is_kda_layer(model_cfg, first_layer_idx + local_idx):
+                self.kv_slot_of_layer.append(None)
+            else:
+                self.kv_slot_of_layer.append(next_kv_slot)
+                next_kv_slot += 1
+        self.num_mla_layers = next_kv_slot
+
         self.layers = []
         for local_idx in range(num_layers):
             layer_idx = first_layer_idx + local_idx
@@ -229,7 +245,7 @@ class TtPrefillTransformer(LightweightModule):
                 weight_cache_path=weight_cache_path,
                 is_chunked=is_chunked,
                 slot_num=slot_num,
-                layer_num=num_layers,
+                layer_num=self.num_mla_layers,
                 max_seq_len=max_seq_len,
                 kv_only=kv_only_last_layer and is_last,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
@@ -237,6 +253,12 @@ class TtPrefillTransformer(LightweightModule):
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
             )
             self.layers.append(layer)
+
+        # --- KDA carries (hybrid variants only) ---
+        # ttKDA retains nothing across calls, so the recurrent + convolution carries need an owner
+        # outside the layer; this instance is it, the KDA counterpart of the caller-owned kvpe cache.
+        kda_layers = {layer.layer_idx: layer.kda for layer in self.layers if layer.is_kda}
+        self.kda_states = KdaStateStore(kda_layers) if kda_layers else None
 
         # --- Final norm (last token-emitting rank only) ---
         # Built iff is_last_rank and not kv_only_last_layer: a kv_only last layer (chunked prefill)
@@ -460,7 +482,8 @@ class TtPrefillTransformer(LightweightModule):
                 h,
                 rope_tensors,
                 kvpe_cache,
-                cache_layer_idx=i,
+                # A KDA layer writes no KV slab, so it has no slot; pass 0, which it never reads.
+                cache_layer_idx=self.kv_slot_of_layer[i] if self.kv_slot_of_layer[i] is not None else 0,
                 return_intermediates=return_intermediates,
                 d2h_service=d2h_service,
                 record_dev=record_dev,
@@ -475,6 +498,7 @@ class TtPrefillTransformer(LightweightModule):
                 return_indexer_indices=reuse,
                 index_kv_cache=index_kv_cache,
                 metadata=metadata,
+                kda_states=self.kda_states,
             )
             if reuse:
                 h, _, new_idx = ret
