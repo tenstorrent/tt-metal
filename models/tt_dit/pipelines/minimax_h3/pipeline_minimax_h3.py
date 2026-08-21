@@ -18,7 +18,8 @@ frame of conditioning rows pinned at `t = 0.999` for every denoising step.
 What runs where
 ---------------
 The packed sequence holds all three modalities at once and is denoised by one 50-layer stack on
-the mesh (TP=4 x SP=8). Everything that decides *which* row gets which treatment is host-side and
+the mesh (TP=4 on axis 0, SP on axis 1 -- 8 on a Galaxy, 32 on a quad; see `_PRESETS_BH`).
+Everything that decides *which* row gets which treatment is host-side and
 already gated bit-exact against the reference --- the layout, the fp64 rotary grid, the per-row
 timestep plan, both schedulers. That split is deliberate: those values are checkpoint contracts
 where a reassociation is a silent desync between audio and video, and they cost nothing on host.
@@ -74,7 +75,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash
-from ...utils.tensor import bf16_tensor, from_torch
+from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch
 from .adaln_precompute import precompute_adaln_table, request_step_timesteps
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
@@ -129,6 +130,53 @@ AUDIO_SHIFT = 3.0
 # Cache namespace under TT_DIT_CACHE_DIR. `utils.cache` keys each entry on this plus the subfolder,
 # the parallel config, the mesh shape, the dtype and the FSDP flag.
 MODEL_NAME = "minimax-h3"
+
+# Per-mesh-shape defaults, following `pipelines/wan/pipeline_wan.py`'s `_PRESETS_BH`. An unlisted
+# shape raises rather than defaulting, so it cannot silently ring-collective over a line fabric.
+#
+# TP stays on axis 0 at factor 4 and SP absorbs every extra device: TP does a per-layer collective and
+# axis 0 is intra-host, while SP hides its KV all-gather inside ring attention and tolerates the
+# inter-host hop. TP=4 also fits the shapes -- 56 // 4 = 14 heads, 5376 % (32 * 4) == 0 for the norms.
+_PRESETS_BH: dict[tuple[int, ...], dict] = {
+    # One Blackhole Galaxy: the working point MiniMaxH3.md documents.
+    (4, 8): {"tp_axis": 0, "sp_axis": 1, "num_links": 2, "topology": ttnn.Topology.Ring, "coresident": True},
+    # Quad Blackhole Galaxy, 4 MPI hosts x 32 chips. Same axes, links and topology; SP goes 8 -> 32,
+    # which moves the SP alignment to 32 * TILE_SIZE = 1024 and re-keys every packed length.
+    #
+    # `trace_denoise` is quad-only, mirroring Wan's `traced = mesh_shape == (4, 32)`: at SP=32 a step
+    # is dispatch-bound, so the trace is what makes the extra devices pay. 4x8 has enough work per
+    # chip to not need it.
+    (4, 32): {
+        "tp_axis": 0,
+        "sp_axis": 1,
+        "num_links": 2,
+        "topology": ttnn.Topology.Ring,
+        # Every stage stays resident: evicting the transformer drops the per-request buffers it caches
+        # (the padded-sequence zero rows), and rebuilding those inside a trace capture is a fatal write.
+        "coresident": True,
+        "trace_denoise": True,
+    },
+}
+
+
+def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -> dict:
+    """The measured defaults for this mesh shape, or `{}` when unlisted and `required` is False.
+
+    An unlisted shape is only an error when something is left to the preset to fill in; a caller that
+    passes every parallel setting explicitly is running an untuned shape deliberately.
+    """
+    shape = tuple(mesh_shape)
+    preset = _PRESETS_BH.get(shape)
+    if preset is None:
+        if not required:
+            return {}
+        known = ", ".join(str(s) for s in _PRESETS_BH)
+        msg = (
+            f"no MiniMax-H3 preset for mesh shape {shape}; known shapes are {known}. Pass tp_axis, "
+            "sp_axis, num_links and topology explicitly to run an untuned shape."
+        )
+        raise ValueError(msg)
+    return preset
 
 
 def draw_request_latents(
@@ -202,15 +250,32 @@ class MiniMaxH3Pipeline:
         *,
         mesh_device: ttnn.MeshDevice,
         weights_dir: str | os.PathLike,
-        tp_axis: int = 0,
-        sp_axis: int = 1,
-        num_links: int = 2,
-        topology: ttnn.Topology = ttnn.Topology.Ring,
-        coresident: bool = True,
+        tp_axis: int | None = None,
+        sp_axis: int | None = None,
+        num_links: int | None = None,
+        topology: ttnn.Topology | None = None,
+        coresident: bool | None = None,
         task: str = "t2va",
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
+        # Only consult the preset for what the caller left unset, so an untuned shape with every
+        # parallel setting supplied runs rather than raising -- the escape hatch `create_pipeline`
+        # documents. `coresident` is residency rather than parallelism and has a safe default, so it
+        # does not hold the hatch shut for callers that cannot pass it.
+        supplied = (tp_axis, sp_axis, num_links, topology)
+        preset = resolve_mesh_preset(tuple(mesh_device.shape), required=any(v is None for v in supplied))
+        tp_axis = preset["tp_axis"] if tp_axis is None else tp_axis
+        sp_axis = preset["sp_axis"] if sp_axis is None else sp_axis
+        num_links = preset["num_links"] if num_links is None else num_links
+        topology = preset["topology"] if topology is None else topology
+        coresident = preset.get("coresident", True) if coresident is None else coresident
+        self.trace_denoise = preset.get("trace_denoise", False)
+        # Denoise generations completed. Tracing engages only after one untraced pass; see `_denoise`.
+        # The request a live trace was captured at: shapes plus the AdaLN cache object. A capture is
+        # only valid for that exact request, so both are compared before reusing it.
+        self._trace_signature: tuple | None = None
+        self._trace_adaln_cache = None
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
         # weights differ. Fixed at construction because each is 62 GB and switching would
@@ -260,6 +325,11 @@ class MiniMaxH3Pipeline:
         self._vae = None
         self._encoder_state_loaded = False
         self._image_processor = None
+        # `"yuv420"` builds the VAE for the device-stitched path: the canvas is blended, clamped and
+        # colour-converted on device, and `_decode_video` returns planar `(T, H*3//2, W)` uint8 for
+        # `export_video_audio_yuv` instead of a `(1, 3, T, H, W)` float tensor. Off by default because
+        # it changes this method's return type, and every quality gate reads the float one.
+        self.vae_output_type = "float"  # "float" | "uint8" | "yuv420"
         self._video_processor = None
         self._vision_tower = None
         self._vision_config = None
@@ -284,13 +354,17 @@ class MiniMaxH3Pipeline:
         *,
         mesh_device: ttnn.MeshDevice,
         weights_dir: str | os.PathLike | None = None,
-        tp_axis: int = 0,
-        sp_axis: int = 1,
-        num_links: int = 2,
-        topology: ttnn.Topology = ttnn.Topology.Ring,
+        tp_axis: int | None = None,
+        sp_axis: int | None = None,
+        num_links: int | None = None,
+        topology: ttnn.Topology | None = None,
         task: str = "t2va",
     ) -> "MiniMaxH3Pipeline":
-        """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`."""
+        """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
+
+        The parallel configuration defaults to this mesh shape's entry in `_PRESETS_BH`; pass any of
+        `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
+        """
         weights_dir = weights_dir or os.environ.get("MINIMAX_H3_MODEL_PATH")
         if not weights_dir:
             raise ValueError(
@@ -306,6 +380,19 @@ class MiniMaxH3Pipeline:
             topology=topology,
             task=task,
         )
+
+    @staticmethod
+    def _ranks_agree(local: bool) -> bool:
+        """Whether *every* rank sees `local` as true. A collective; all ranks must call it.
+
+        A per-rank `Path.is_file()` must not gate collective work: a shared cache can disagree between
+        hosts, and a rank taking a cached early return skips collectives the others are still waiting
+        in, which deadlocks rather than fails. Unanimity, as `utils/cache.py` does for the weight
+        cache, so a partially populated cache costs a recompute instead of a hang.
+        """
+        if not ttnn.using_distributed_env():
+            return local
+        return all(ttnn.distributed_context_allgather_int(1 if local else 0))
 
     def _read_config(self, subfolder: str) -> dict:
         path = self.weights_dir / subfolder / "config.json"
@@ -739,8 +826,8 @@ class MiniMaxH3Pipeline:
             pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
             **vision_kwargs,
         )
-        # Replicated across the mesh: read one replica rather than composing all 32 and discarding 31.
-        embeds = ttnn.to_torch(ttnn.get_device_tensors(taps[0])[0]).float()
+        embeds = local_device_to_torch(taps[0]).float()
+
         return embeds, tags
 
     # ------------------------------------------------------------------ denoiser
@@ -767,6 +854,7 @@ class MiniMaxH3Pipeline:
             ccl_manager=self.ccl_manager,
             parallel_config=self.dit_parallel_config,
             precomputed_adaln=True,
+            cache_padding=self.trace_denoise,
         )
 
         # Cache-aware: on a hit this reads pre-sharded device tensors instead of 62 GB of
@@ -843,7 +931,9 @@ class MiniMaxH3Pipeline:
         )
 
         path = self._adaln_cache_path(num_inference_steps)
-        if path.is_file():
+        # Unanimous even though both branches are host-only: a rank reading a half-written table
+        # diverges numerically and silently.
+        if self._ranks_agree(path.is_file()):
             logger.info(f"AdaLN table from cache: {path}")
             table = torch.load(path, weights_only=False)
         else:
@@ -860,7 +950,19 @@ class MiniMaxH3Pipeline:
                 freq_dim=self.transformer_config["freq_dim"],
             )
             logger.info(f"AdaLN table built in {time.time() - t0:.1f}s ({table.nbytes() / 1e9:.3f} GB); caching")
-            torch.save(table, path)
+            is_distributed = ttnn.using_distributed_env()
+            try:
+                if not is_distributed or int(ttnn.distributed_context_get_rank()) == 0:
+                    torch.save(table, path)
+            except OSError as exc:
+                # Warn rather than raise: the table is already in memory, so a failed write costs a
+                # recompute next run and nothing else. Every rank then misses the cache together,
+                # since `_ranks_agree` reads the same absent file, so the ranks stay consistent.
+                logger.warning(f"could not cache the AdaLN table to {path}: {exc}")
+            finally:
+                # In `finally`, so a write error on rank 0 cannot leave its peers blocked here.
+                if is_distributed:
+                    ttnn.distributed_context_barrier()
 
         self._adaln_cache = MiniMaxH3AdalnCache(
             table,
@@ -970,7 +1072,21 @@ class MiniMaxH3Pipeline:
         want_encoder = encode_shape is not None
         if self._vae is None:
             logger.info("building the video VAE")
-            self._vae = MiniMaxH3Vae(self.vae_config, mesh_device=self.mesh_device, weight_loader=self._cache_submodel)
+            # Used only for the wave readback, which keeps the decode off the MPI path; the VAE's
+            # forward runs no collectives.
+            yuv = self.vae_output_type == "yuv420"
+            unit_pixels = self.vae_output_type in ("uint8", "yuv420")
+            self._vae = MiniMaxH3Vae(
+                self.vae_config,
+                mesh_device=self.mesh_device,
+                weight_loader=self._cache_submodel,
+                ccl_manager=self.ccl_manager,
+                device_stitch=yuv,
+                # Folded into `proj_out`, so the decoder emits the `[-1, 1]` both the colour kernel
+                # and the uint8 cast take, and `_decode_video` is left with at most a range shift.
+                pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD) if unit_pixels else None,
+                readback_uint8=self.vae_output_type == "uint8",
+            )
             state = self._read_safetensors("vae")
             self._vae.load_decoder_state(state)
             if want_encoder:
@@ -1087,6 +1203,7 @@ class MiniMaxH3Pipeline:
                 resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
                 resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
                 mesh_device=self.mesh_device,
+                ccl_manager=self.ccl_manager,
             )
 
             def read_state() -> dict[str, torch.Tensor]:
@@ -1592,6 +1709,19 @@ class MiniMaxH3Pipeline:
         )
         logger.info(f"warmup ({task}) done in {time.time() - t0:.1f}s, padded_len={self.last_padded_len}")
 
+    def release_traces(self) -> None:
+        """Release the captured denoise trace, as `WanPipeline.release_traces` does.
+
+        A trace holds device buffers for the whole request and nothing else drops them. A no-op when
+        nothing was traced.
+        """
+        transformer = self._transformer
+        if transformer is None:
+            return
+        tracer = MiniMaxH3Transformer3DModel.traced_step._tracers.get(transformer)
+        if tracer is not None:
+            tracer.release_trace()
+
     def _denoise(
         self,
         transformer: MiniMaxH3Transformer3DModel,
@@ -1663,6 +1793,31 @@ class MiniMaxH3Pipeline:
 
         timesteps = scheduler.timesteps
         audio_timesteps = audio_scheduler.timesteps
+
+        # Trace the per-step forward where the preset asks for it, as Wan does on the quad only. At
+        # SP=32 a step is dominated by dispatching 50 blocks from host across four MPI ranks rather
+        # than by the matmuls, and a trace replaces that dispatch with one replay.
+        #
+        # Requires the precomputed-AdaLN path, which owns `timestep`; see `traced_step`.
+        #
+        # `traced_step` has one unkeyed `Tracer` per transformer, so a capture is valid only for the
+        # request it was taken at: a different packed length fails the tracer's shape checks, and the
+        # AdaLN tables are captured by *address*, so a rebuilt cache would replay the old schedule's
+        # modulation. Release the trace whenever either changes -- which also lets the transformer
+        # reallocate its padding buffer at the new shape without a live trace referencing the old one.
+        signature = (tuple(video_rows.shape), tuple(audio_rows.shape), tuple(prompt_embeds.shape), len(timesteps))
+        warm = signature == self._trace_signature and adaln_cache is self._trace_adaln_cache
+        if not warm:
+            self.release_traces()
+            self._trace_signature = None
+            self._trace_adaln_cache = None
+
+        # Not on the first generation at a signature: a capture can neither compile a program nor
+        # allocate a buffer, and `CCLManager` fills its persistent buffers lazily. One untraced
+        # generation does both, so the first pass at a shape runs untraced and later ones are traced.
+        traced = self.trace_denoise and adaln_cache is not None and warm
+        if traced:
+            transformer.traced_adaln_cache = adaln_cache
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
         for i, t in enumerate(timesteps):
@@ -1694,24 +1849,36 @@ class MiniMaxH3Pipeline:
             tt_adaln = self._row_indices(adaln_indices(layout.token_tags, step_row_index), padded_len)
             tt_tsi = self._row_indices(step_row_index, padded_len)
 
-            video_velocity, audio_velocity = transformer(
-                video_1BVC=tt_video,
-                audio_1BAC=tt_audio,
-                prompt_1BLP=tt_prompt,
-                condition_blocks=tt_cond,
-                timestep=tt_timestep,
-                adaln_indices=tt_adaln,
-                timestep_indices=tt_tsi,
-                rope_cos=rope_cos,
-                rope_sin=rope_sin,
-                adaln_cache=adaln_cache,
-            )
+            if traced:
+                video_velocity, audio_velocity = transformer.traced_step(
+                    video_1BVC=tt_video,
+                    audio_1BAC=tt_audio,
+                    prompt_1BLP=tt_prompt,
+                    condition_blocks=tt_cond,
+                    adaln_indices=tt_adaln,
+                    timestep_indices=tt_tsi,
+                    rope_cos=rope_cos,
+                    rope_sin=rope_sin,
+                    traced=True,
+                )
+            else:
+                video_velocity, audio_velocity = transformer(
+                    video_1BVC=tt_video,
+                    audio_1BAC=tt_audio,
+                    prompt_1BLP=tt_prompt,
+                    condition_blocks=tt_cond,
+                    timestep=tt_timestep,
+                    adaln_indices=tt_adaln,
+                    timestep_indices=tt_tsi,
+                    rope_cos=rope_cos,
+                    rope_sin=rope_sin,
+                    adaln_cache=adaln_cache,
+                )
 
-            # Replicated after the model's SP gather: read one replica. The model returns the *target*
-            # rows only, so reshape to the row width rather than to `video_rows.shape`, which still
-            # counts the condition rows.
-            v = ttnn.to_torch(ttnn.get_device_tensors(video_velocity)[0]).reshape(-1, video_rows.shape[-1]).float()
-            a = ttnn.to_torch(ttnn.get_device_tensors(audio_velocity)[0]).reshape(-1, audio_rows.shape[-1]).float()
+            # The model returns the *target* rows only, so reshape to the row width rather than to
+            # `video_rows.shape`, which still counts the condition rows.
+            v = local_device_to_torch(video_velocity).reshape(-1, video_rows.shape[-1]).float()
+            a = local_device_to_torch(audio_velocity).reshape(-1, audio_rows.shape[-1]).float()
 
             # tt_dit's scheduler returns the next sample directly; only the diffusers one wraps it.
             # Each stream steps its own schedule -- shift 12.0 for video, 3.0 for audio.
@@ -1729,6 +1896,9 @@ class MiniMaxH3Pipeline:
             if i % 10 == 0 or i == len(timesteps) - 1:
                 logger.info(f"  step {i + 1}/{len(timesteps)} t={float(t):.4f}")
 
+        # This request is now warm: a later call with the same signature may trace.
+        self._trace_signature = signature
+        self._trace_adaln_cache = adaln_cache
         steady_steps = max(len(timesteps) - 1, 1)
         logger.info(
             f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "
@@ -1773,7 +1943,17 @@ class MiniMaxH3Pipeline:
             self.patch_size,
         )
         latents = self._denormalize(latents, self.vae_config.latents_mean, self.vae_config.latents_std)
-        video = vae.decode(latents)
+        video = vae.decode(latents, output_type="yuv420" if self.vae_output_type == "yuv420" else "float")
+        if self.vae_output_type == "yuv420":
+            # De-normalized, clamped and colour-converted on device; nothing left to do on host.
+            return video
+        if self.vae_output_type == "uint8":
+            # `float_to_uint8` already applied *both* halves of the mapping on device: `proj_out`'s
+            # fold put pixels in [-1, 1], and the cast then took [-1, 1] -> [0, 255]. So the decode
+            # returns 0..255 and the only step left is the scale. Treating it as [-1, 1] here (as
+            # `add(1).mul(0.5).clamp(0,1)` does) de-normalizes twice and saturates every pixel at or
+            # above 1/255 to white -- measured mean 0.994 against a correct 0.345.
+            return video.float().div_(255.0)
         # The VAE emits ImageNet-normalized RGB.
         video = self._denormalize(video.float(), MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD).clamp(0, 1)
         return video

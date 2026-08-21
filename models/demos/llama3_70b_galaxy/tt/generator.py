@@ -1574,6 +1574,11 @@ class Generator(WarmupForwardMixin):
             sm_bs = seed_manager.max_batch_size
             rank_remap = slot_remap[0:sm_bs]
             seed_manager.apply_slot_remap(rank_remap)
+        # Drop seed state of slots no longer live (a request finishing at
+        # the batch tail is never vacated by condense), so its ghost seed
+        # cannot inflate a later request's salt.
+        if active_seed_slots is not None:
+            seed_manager.deactivate_slots_except(active_seed_slots)
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)

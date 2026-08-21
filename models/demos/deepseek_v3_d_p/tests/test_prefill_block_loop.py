@@ -34,10 +34,11 @@ from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
@@ -84,47 +85,20 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
 )
 @pytest.mark.parametrize("skip_reference", [False, True], ids=["with_ref", "no_ref"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (1, 1),
             {},
             1,
-            ttnn.Topology.Linear,
             id="mesh-1x1",
         ),
         pytest.param(
             (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2,  # num_links = 2
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4-2link",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.EMB_SIZE),
             2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4-2link",
         ),
         # FABRIC_2D variants — shared list defined in conftest.py (also used by
         # test_prefill_transformer.py). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
@@ -141,12 +115,12 @@ def test_prefill_block_loop(
     skip_reference,
     gate_fallback_mode,
     num_links,
-    topology,
     model_path,
     hf_config,
     state_dict,
     tokenizer,
 ):
+    topology = per_axis_topology(device_params.get("fabric_config", ttnn.FabricConfig.DISABLED))
     # Perf runs (skip_reference=True) measure once; PCC/divergence runs loop for 30 iters
     num_iters = 1 if skip_reference else 30
     # --- Validate fixtures ---
@@ -155,8 +129,8 @@ def test_prefill_block_loop(
     if state_dict is None:
         pytest.skip("State dict not available (no pretrained weights)")
 
-    # isl_2k56 / isl_12k8 exist only for the 4x4 sub-torus sweep and are not part of CI coverage on
-    # any mesh; skip them under CI.
+    # These sequence lengths belong to the existing 4x4 subtorus sweep, which is intentionally
+    # local/experimental until a dedicated CI owner exists.
     if (os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ) and isl_total in (2560, 12800):
         pytest.skip("isl_2k56 / isl_12k8 are subtorus-4x4-only; not run in CI")
 
@@ -173,16 +147,11 @@ def test_prefill_block_loop(
     emb_dim = config.hidden_size
     first_k_dense = config.first_k_dense_replace  # 3
     n_routed = config.n_routed_experts  # 256
-    # The 4x4 sub-torus has 16 chips vs the 8x4 galaxy's 32, so the full 256 experts pack
-    # 256/16=16 experts/chip. Halve to 128 so each chip holds 128/16=8 experts, matching the 8x4
-    # (256/32=8). The device grouped-gate kernels (deepseek_grouped_gate / moe_grouped_topk) hard-
-    # require exactly 256 experts, so the 128-expert path MUST use the host gate — forced below.
-    # The first n_routed experts (gate rows + expert weights) are kept; applies to the (4,4) mesh.
-    # Opt out with DS_4X4_FULL_EXPERTS=1 to keep all 256 experts (16/chip) and honor the requested
-    # gate (e.g. real device gate) — viable at small ISL where 256 experts still fit L1.
+    # Preserve the existing 4x4 diagnostic's per-chip expert load: 128/16 == 256/32. The device
+    # grouped-gate kernels require 256 experts, so this path uses the host gate below.
     halve_experts_4x4 = mesh_shape == [4, 4] and not os.environ.get("DS_4X4_FULL_EXPERTS")
     if halve_experts_4x4:
-        n_routed = config.n_routed_experts // 2  # 128
+        n_routed = config.n_routed_experts // 2
         config.n_routed_experts = n_routed
         logger.info(f"[4x4 sub-torus] Using half the routed experts: {n_routed} (8 experts/chip)")
     # Synthetic expert modes:
@@ -212,10 +181,6 @@ def test_prefill_block_loop(
     else:
         layer_type = "dense" if is_dense else "MoE"
 
-    # 4x4 sub-torus runs 128 routed experts, but the device grouped-gate kernels require exactly
-    # 256 — so 128 experts can only route through the HOST gate. Drive the MoE run from the
-    # gate_device param (forced to HOST_ALL) and skip the redundant gate_host param so the matrix
-    # doesn't double-run the identical host-gate config.
     if halve_experts_4x4 and not is_dense:
         if gate_fallback_mode == GateComputeMode.HOST_ALL:
             pytest.skip(
@@ -289,8 +254,8 @@ def test_prefill_block_loop(
             }
             logger.info(f"Zeroed gate weights: weight={gate_shape}, bias={bias_shape}")
         else:
-            # [:n_routed] is a no-op at the full 256 and keeps the first 128 gate rows/biases on
-            # the 4x4 sub-torus, matching the first 128 routed_expert_weights loaded below.
+            # At 128 routed experts, keep the first 128 gate rows/biases in lockstep with the
+            # routed-expert weights loaded below.
             layer_sd["gate_weights"] = {
                 "weight": layer_dequant["mlp.gate.weight"][:n_routed],
                 "e_score_correction_bias": layer_dequant["mlp.gate.e_score_correction_bias"][:n_routed],
@@ -467,8 +432,6 @@ def test_prefill_block_loop(
     # ------------------------------------------------------------------
     # 3. Create TT block & infrastructure
     # ------------------------------------------------------------------
-    # The block reads the routed-expert count from model_cfg.NUM_ROUTED_EXPERTS. Mirror the 4x4
-    # halving via a subclass so the shared DeepSeekV3Config class is left untouched.
     if halve_experts_4x4:
 
         class _SubtorusHalfExperts(DeepSeekV3Config):

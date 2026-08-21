@@ -66,9 +66,9 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
     // per_core_M_max: CB-sized max per-core M. The runtime per_core_M is picked
-    // from the device count below; the down matmul packs the full max ring (so
-    // cb_out carries per_core_M_max rows) and this writer emits only the first
-    // (runtime) per_core_M of them.
+    // from the device count below; compute always hands cb_out per_core_M_max rows
+    // (real output for the first per_core_M, unwritten filler after) and this
+    // writer emits only the first (runtime) per_core_M of them.
     constexpr uint32_t per_core_M_max = get_compile_time_arg_val(2);
     constexpr uint32_t per_core_N_gu = get_compile_time_arg_val(3);
     constexpr uint32_t per_core_N_d = get_compile_time_arg_val(4);
@@ -102,15 +102,10 @@ void kernel_main() {
     constexpr uint32_t in0_block_w_gu = get_compile_time_arg_val(21);
     constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(22);
     constexpr uint32_t writer_split_up = get_compile_time_arg_val(23);
-    // When the compute tail-skips the last down block's K padding, the down
-    // matmul never reduces the N-OOB hidden columns, so the `up` read can skip
-    // zero-filling them. Derived identically to the reader's down_k_tail_skip.
-    constexpr bool down_k_tail_skip = get_compile_time_arg_val(24) != 0;
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
-    // Full compile-time M-subblock count of cb_out (the down matmul copies the
-    // full max ring). The writer DRAINS all of them but only WRITES the first
-    // (runtime) per_core_M rows (see the drain loop below).
+    // Full compile-time M-subblock count of cb_out. The writer DRAINS all of them
+    // but only WRITES the first (runtime) per_core_M rows (see the drain loop below).
     constexpr uint32_t d_in1_num_subblocks_M = per_core_M_max / d_out_subblock_h;
     constexpr uint32_t d_in1_num_subblocks_N = per_core_N_d / d_out_subblock_w;
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
@@ -125,7 +120,7 @@ void kernel_main() {
     // out, then start (direct-write), then up (UP_SPLIT). The accessors are
     // constructed unconditionally; start_acc is used only when direct_write,
     // up_acc only when writer_split_up.
-    constexpr uint32_t out_accessor_offset = 25;
+    constexpr uint32_t out_accessor_offset = 24;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
@@ -213,22 +208,13 @@ void kernel_main() {
                         for (uint32_t n = 0; n < per_core_N_gu; ++n) {
                             const uint32_t row = kb * in0_block_w_gu + k;
                             const uint32_t col = my_nt_gu * per_core_N_gu + n;
+                            // N-OOB hidden padding column left UNWRITTEN: its up output lands
+                            // on a down K position the down matmul never reduces (the compute
+                            // bounds its K-loop by real_k_tiles), so stale L1 is dropped.
                             if (col < N_gate_tiles_full) {
                                 const uint32_t tile_idx = row * N_gate_tiles_full + col;
                                 noc_up.async_read(
                                     up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
-                            } else {
-                                // N-OOB hidden padding column: garbage up output feeds the
-                                // down matmul's K reduction, so keep it zero UNLESS the down
-                                // tail-skips the last block's padding (down_k_tail_skip) —
-                                // then this column is never reduced and the garbage is dropped.
-                                if constexpr (!down_k_tail_skip) {
-                                    volatile tt_l1_ptr uint64_t* p =
-                                        reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
-                                    for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
-                                        p[i] = 0;
-                                    }
-                                }
                             }
                             l1_w_up += up_tile_bytes;
                         }
@@ -246,11 +232,10 @@ void kernel_main() {
         const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
         const uint32_t row0 = chunk * chunk_M_max + my_mt * per_core_M;
         const uint32_t col0 = my_nt_d * per_core_N_d;
-        // The DOWN matmul packs and pushes the FULL compile-time-MAX ring (its
-        // L1_ACC needs full-ring cycling), so DRAIN all d_in1_num_subblocks_M
-        // rows to keep cb_out balanced — but only WRITE the first per_core_M
-        // (runtime) rows; the rest are MAC-skipped zeros that map onto other
-        // cores' rows and must not be emitted (the sb_m < per_core_M guard below).
+        // Compute pushes the FULL compile-time-MAX row count to cb_out, so DRAIN all
+        // d_in1_num_subblocks_M rows to keep it balanced — but only WRITE the first
+        // per_core_M (runtime) rows; the rest are uncomputed filler that maps onto
+        // other cores' rows and must not be emitted (the sb_m < per_core_M guard).
         const uint32_t sb_m_bound = d_in1_num_subblocks_M;
         for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
             for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
@@ -275,8 +260,8 @@ void kernel_main() {
                         //     rows extend past count_tiles when count_tiles
                         //     is not chunk-aligned.
                         //   * sb_m < per_core_M: cb_out carries per_core_M_max
-                        //     rows (full ring); rows past the runtime per_core_M
-                        //     are zeros that belong to other cores — never write.
+                        //     rows; rows past the runtime per_core_M are filler
+                        //     mapping onto other cores' rows — never write.
                         if (sb_m < per_core_M && col < N_down_tiles_full && row < M_tiles_full && row < count_tiles) {
                             // The destination tile-row must stay inside the
                             // (possibly shared) output buffer. ttnn::insert

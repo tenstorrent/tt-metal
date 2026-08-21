@@ -259,15 +259,28 @@ inline void _generic_moe_gate_top16_merge_instances_()
     _generic_moe_gate_top16_store_outputs_();
 }
 
-template <bool normalize, int num_total_experts>
-inline void _generic_moe_gate_top16_(std::uint32_t eps, std::uint32_t scale)
+template <bool normalize, int num_selected_experts, int num_total_experts, bool zero_tail, bool full_sort, bool do_extra_scale = false>
+inline void _generic_moe_gate_top16_(std::uint32_t eps, std::uint32_t scale, std::uint32_t extra_scale = 0)
 {
+    static_assert(num_selected_experts >= 9 && num_selected_experts <= 16);
+
     _generic_moe_gate_top16_sort_to_instance_<num_total_experts>();
     _generic_moe_gate_top16_merge_instances_();
 
+    if constexpr (num_selected_experts < 16 || full_sort)
+    {
+        _generic_moe_gate_top16_bitonic16_directional_<0>();
+        _generic_moe_gate_top16_store_outputs_();
+    }
+
+    if constexpr (num_selected_experts < 16 && (zero_tail || normalize))
+    {
+        _generic_moe_gate_zero_tail_<num_selected_experts - 8, 8>();
+    }
+
     if constexpr (normalize)
     {
-        _generic_moe_gate_normalize_<16, generic_moe_gate_scores_tile>(eps, scale);
+        _generic_moe_gate_normalize_<16, generic_moe_gate_scores_tile, do_extra_scale>(eps, scale, extra_scale);
     }
 }
 

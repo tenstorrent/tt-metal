@@ -6,6 +6,7 @@ import glob
 import os
 import re
 from dataclasses import fields
+from datetime import datetime, timezone
 from functools import reduce
 from pathlib import Path
 from typing import Any, ClassVar
@@ -13,6 +14,7 @@ from typing import Any, ClassVar
 import pandas as pd
 import pytest
 
+from ..chip_architecture import ChipArchitecture
 from ..counters import print_counters, read_counters
 from ..device import BootMode
 from ..format_config import FormatConfig
@@ -40,7 +42,7 @@ from .schema import (
 
 # Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
 # match the marker values the kernels record; a mismatch silently empties the
-# TILE_LOOP mask in _postprocess_tile_loop (no KeyError raised).
+# TILE_LOOP mask in postprocess_tile_loop (no KeyError raised).
 INIT_MARKER = "INIT"
 TILE_LOOP_MARKER = "TILE_LOOP"
 
@@ -74,13 +76,22 @@ _CODE_SIZE_COMPONENTS = {
     PerfRunType.UNPACK_ISOLATE: ["unpack"],
     PerfRunType.MATH_ISOLATE: ["math"],
     PerfRunType.PACK_ISOLATE: ["pack"],
+    PerfRunType.SFPU_ISOLATE: ["sfpu"],
 }
 
 # Common postprocessing
 
 
-def _postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
+def postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
+    """Derive per-tile TILE_LOOP figures from a raw report frame.
 
+    Divides each TILE_LOOP row's un-prefixed ``mean(...)``/``std(...)`` wall-clock
+    columns by ``loop_factor * tile_cnt`` (run-type-prefixed ``*_pct`` metric
+    columns are deliberately left untouched). Pure ``DataFrame -> DataFrame``, no
+    hardware — so it is the canonical way to turn the RAW stored table (a CSV or a
+    Parquet batch) into per-tile values downstream. Non-TILE_LOOP rows pass through
+    unchanged.
+    """
     if frame.empty:
         return pd.DataFrame()
 
@@ -244,7 +255,7 @@ class PerfReport:
         frame = pd.concat(self._frames, ignore_index=True)
         mask = pd.concat(self._masks, ignore_index=True)
 
-        frame = _postprocess_tile_loop(frame[mask])
+        frame = postprocess_tile_loop(frame[mask])
 
         self._frames = [pd.DataFrame(), frame]
         self._masks = [pd.Series(), pd.Series(True, index=frame.index)]
@@ -428,11 +439,60 @@ def _assert_combined_schema(dfs: list[pd.DataFrame], label: str):
     )
 
 
+def _ci_provenance() -> dict:
+    """Run-context provenance for a published Parquet batch, read from the CI
+    environment (best-effort defaults when run off-CI)."""
+    event = os.environ.get("GITHUB_EVENT_NAME", "")
+    return {
+        "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
+        "arch": os.environ.get("CHIP_ARCH", "unknown"),
+        "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "pipeline": "PR" if event == "pull_request" else "nightly",
+        "pr_number": os.environ.get("PR_NUMBER") or None,
+    }
+
+
+def _write_run_parquet(raw_csv_paths, out_dir) -> None:
+    """Publish the run's raw per-test CSVs as one Parquet batch beside them, so a
+    nightly/PR run emits both CSV and Parquet from the same data.
+
+    Raw is the canonical stored form (matching the historical migration): the
+    per-tile figures are derivable downstream (TILE_LOOP mean/std divided by
+    ``loop_factor * tile_cnt``, both present as columns), so storing raw keeps the
+    table lossless without a redundant per-tile copy.
+
+    Schema drift (unknown columns, or values that would coerce to NULL) raises
+    ``PerfSchemaError`` so the session fails instead of writing a lossy batch.
+    Other Parquet write failures (missing pyarrow, I/O) are logged and do not
+    break the CSV report, which is already on disk.
+    """
+    if not raw_csv_paths:
+        return
+    try:
+        from .parquet import convert_csvs_to_parquet
+
+        prov = _ci_provenance()
+        parquet_path = Path(out_dir) / f"{prov['run_id']}.parquet"
+        convert_csvs_to_parquet(
+            sorted(raw_csv_paths), parquet_path, strict=True, **prov
+        )
+        logger.info(f"Wrote run Parquet batch: {parquet_path}")
+    except ValueError as exc:
+        raise PerfSchemaError(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — Parquet is additive; CSV is primary
+        logger.warning(f"perf Parquet batch not written: {type(exc).__name__}: {exc}")
+
+
 def combine_perf_reports():
     """
     Combine performance report CSV files into two files per base name:
     - One for regular files (without .post.csv)
     - One for post files (with .post.csv)
+
+    Also publishes the run's raw combined CSVs as one Parquet batch
+    (perf_data/<run_id>.parquet) so a run emits both CSV and Parquet.
+    Unknown Parquet columns raise ``PerfSchemaError`` (CSV is already written).
     """
 
     unique_module_names = get_unique_base_names(TestConfig.PERF_DATA_DIR)
@@ -444,6 +504,7 @@ def combine_perf_reports():
     if not output_dir.exists():
         output_dir.mkdir(parents=True, exist_ok=True)
 
+    raw_outputs = []  # combined raw per-test CSVs, published together as Parquet
     for base_name in unique_module_names:
         csv_files = glob.glob(
             os.path.join(TestConfig.PERF_DATA_DIR, f"{base_name}.gw*.csv")
@@ -489,6 +550,7 @@ def combine_perf_reports():
             ).reset_index(drop=True)
             output_regular = os.path.join(temp_output_dir, f"{base_name}.csv")
             combined_regular.to_csv(output_regular, index=False)
+            raw_outputs.append(output_regular)
 
         if post_files:
             dfs_post = []
@@ -537,6 +599,8 @@ def combine_perf_reports():
 
         for file in regular_files + post_files + counter_files:
             Path(file).unlink()
+
+    _write_run_parquet(raw_outputs, output_dir)
 
 
 class PerfConfig(TestConfig):
@@ -622,7 +686,8 @@ class PerfConfig(TestConfig):
                 formats_config[0].unpack_A_dst,
                 formats_config[0].unpack_B_dst,
                 formats_config[0].output_format,
-                formats_config[0].sfpu_math,
+                formats_config[0].sfpu_src,
+                formats_config[0].sfpu_dst,
             ]
             if formats_config and formats_config[0]
             else []
@@ -685,6 +750,40 @@ class PerfConfig(TestConfig):
         other_cols = [c for c in combined.columns if not c.startswith(TEXT_SIZE_PREFIX)]
         return combined[other_cols + text_size_cols]
 
+    @staticmethod
+    def _validate_profiler_stats(stats_df: pd.DataFrame, run_type: PerfRunType) -> None:
+        """Reject missing or invalid wall-clock output for a requested run type."""
+        if stats_df.empty:
+            raise ValueError(
+                f"Profiler produced no timing statistics for requested run type "
+                f"{run_type.name}. Check profiler zone coverage and handshakes."
+            )
+
+        expected_mean_prefix = f"{stat_prefix(MEAN)}{run_type.name}"
+        mean_columns = [
+            column
+            for column in stats_df.columns
+            if column.startswith(expected_mean_prefix)
+        ]
+        if not mean_columns:
+            raise ValueError(
+                f"Profiler statistics for requested run type {run_type.name} "
+                f"contain no mean timing column with prefix "
+                f"{expected_mean_prefix!r}: {list(stats_df.columns)}"
+            )
+
+        negative_values = {
+            column: stats_df.loc[stats_df[column] < 0, column].tolist()
+            for column in mean_columns
+            if (stats_df[column] < 0).any()
+        }
+        if negative_values:
+            raise ValueError(
+                f"Profiler produced negative mean timing values for requested "
+                f"run type {run_type.name}: {negative_values}. Check profiler "
+                f"zone handshakes."
+            )
+
     def run(self, perf_report: PerfReport, run_count=1):
         results = []
         counter_results_list = []
@@ -727,6 +826,11 @@ class PerfConfig(TestConfig):
                 TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
             )
             components = _CODE_SIZE_COMPONENTS.get(run_type)
+            # 4-TRISC tests include SFPU_ISOLATE; L1_TO_L1 code size must count sfpu.elf too.
+            if run_type == PerfRunType.L1_TO_L1 and any(
+                rt == PerfRunType.SFPU_ISOLATE for _, _, rt in self.run_configs
+            ):
+                components = ["unpack", "math", "pack", "sfpu"]
             if components is not None:
                 code_sizes[run_type] = sum(
                     TestConfig.get_elf_text_size(elf_dir / f"{c}.elf")
@@ -767,9 +871,16 @@ class PerfConfig(TestConfig):
                 variant_raw_data.append(profiler_data)
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
-            # WC build emits no ZONE_START/ZONE_END events (ZONE_SCOPED muted) — stats df is empty.
             stats_df = get_stats(ProfilerData.concat(variant_raw_data))
-            if not stats_df.empty:
+            # A WC build intentionally suppresses ZONE_SCOPED timing events and
+            # emits counter metrics instead. Quasar excludes the WC TRISC flag,
+            # so it still requires wall-clock stats even when counters are requested.
+            counter_only_build = (
+                TestConfig.ENABLE_PERF_COUNTERS
+                and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
+            )
+            if not stats_df.empty or not counter_only_build:
+                PerfConfig._validate_profiler_stats(stats_df, run_type)
                 results.append(stats_df)
 
             if variant_counter_results:
@@ -839,20 +950,27 @@ class PerfConfig(TestConfig):
 
 
 def create_test_or_perf_config(
-    *, is_perf: bool, run_types: list[PerfRunType], test_config_kwargs: dict
+    *,
+    is_perf: bool,
+    run_types: list[PerfRunType],
+    test_config_kwargs: dict,
+    boot_mode: BootMode | None = None,
 ) -> TestConfig:
     """Create the common functional or performance configuration.
 
     The configuration is returned without running it so callers can apply
-    operation-specific format adjustments before execution.
+    operation-specific format adjustments before execution. ``boot_mode`` is
+    functional-only because ``PerfConfig`` owns its fixed performance boot mode.
     """
     if is_perf:
         return PerfConfig(run_types=list(run_types), **test_config_kwargs)
 
-    return TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        }
-    )
+    functional_kwargs = {
+        **test_config_kwargs,
+        "templates": test_config_kwargs["templates"]
+        + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+    }
+    if boot_mode is not None:
+        functional_kwargs["boot_mode"] = boot_mode
+
+    return TestConfig(**functional_kwargs)
