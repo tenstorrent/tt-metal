@@ -4,6 +4,11 @@ name: "LLK perf gate impl"
 on:
   workflow_call:
     inputs:
+      arch:
+        description: "Architecture to gate on (wormhole or blackhole)"
+        required: false
+        default: wormhole
+        type: string
       baseline_run_id:
         description: "The workflow run ID of the perf measurement to gate against"
         required: false
@@ -33,7 +38,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@0b93645e9e0d6c9882fc7902038978ad1a988142 # v5.0.0
@@ -43,14 +48,13 @@ jobs:
       - name: Install dependencies
         run: |
           pip install pandas snowflake-connector-python
-          # sshpass is available in most CI environments; if not: apt-get install sshpass
+          apt-get update && apt-get install -y sshpass
 
       # Query Snowflake for the latest main baseline
       - name: Get branch point commit
         id: branch_point
         run: |
-          git fetch origin main --quiet
-          BRANCH_POINT=$(git merge-base origin/main HEAD)
+          BRANCH_POINT="${{ github.event.pull_request.base.sha }}"
           echo "branch_point=$BRANCH_POINT" >> $GITHUB_OUTPUT
           echo "Comparing against branch point: $BRANCH_POINT"
 
@@ -63,11 +67,12 @@ jobs:
           SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
           SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
           BASELINE_COMMIT: ${{ steps.branch_point.outputs.branch_point }}
-          ARCH: wormhole
+          ARCH: ${{ inputs.arch }}
         run: |
           python3 - <<'PYTHON'
           import os
           import json
+          from datetime import datetime
           from snowflake.connector import connect
 
           # Snowflake credentials from GitHub secrets
@@ -81,50 +86,59 @@ jobs:
 
           cursor = conn.cursor()
 
-          # Query: Get the latest baseline for this architecture at the branch point
-          # If exact commit exists, use it; otherwise use the latest before it
-          query = """
+          # Query: Try exact commit first, then fall back to latest before branch point
+          # ordered by commit date (or main ordinal if available)
+          query_exact = """
           SELECT commit_sha, timestamp, run_id
           FROM llk_baselines
-          WHERE arch = %s
-            AND timestamp = (
-              SELECT MAX(timestamp)
-              FROM llk_baselines
-              WHERE arch = %s
-                AND commit_sha <= %s
-            )
+          WHERE arch = %s AND commit_sha = %s
+          ORDER BY timestamp DESC
           LIMIT 1
           """
 
-          cursor.execute(query, (os.environ['ARCH'], os.environ['ARCH'], os.environ['BASELINE_COMMIT']))
+          cursor.execute(query_exact, (os.environ['ARCH'], os.environ['BASELINE_COMMIT']))
           result = cursor.fetchone()
+
+          if not result:
+            query_latest = """
+            SELECT commit_sha, timestamp, run_id
+            FROM llk_baselines
+            WHERE arch = %s AND commit_sha <= %s
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """
+            cursor.execute(query_latest, (os.environ['ARCH'], os.environ['BASELINE_COMMIT']))
+            result = cursor.fetchone()
+
           cursor.close()
           conn.close()
 
+          have_baseline = False
           if result:
             commit_sha, timestamp, run_id = result
             print(f"✓ Found baseline: {commit_sha} ({timestamp})")
             with open('baseline_metadata.json', 'w') as f:
               json.dump({
                 'commit_sha': commit_sha,
-                'timestamp': timestamp,
+                'timestamp': timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp),
                 'run_id': run_id
               }, f)
+            have_baseline = True
           else:
             print("⚠️  No baseline found; this may be the first run")
-            # Store empty metadata; gate will skip comparison
             with open('baseline_metadata.json', 'w') as f:
               json.dump({}, f)
+
+          with open('have_baseline.txt', 'w') as f:
+            f.write('true' if have_baseline else 'false')
           PYTHON
 
       - name: Download baseline perf_data from SFTP
         env:
           SFTP_HOST: ${{ secrets.SFTP_HOST }}
           SFTP_USER: ${{ secrets.SFTP_USER }}
-          SFTP_PASS: ${{ secrets.SFTP_PASSWORD }}
+          SSHPASS: ${{ secrets.SFTP_PASSWORD }}
         run: |
-          set +e  # Don't fail if baseline doesn't exist (first run)
-
           # Read baseline commit from metadata
           BASELINE_COMMIT=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', ''))")
 
@@ -136,15 +150,17 @@ jobs:
           mkdir -p baseline_perf
 
           echo "Downloading baseline from SFTP: perf_${BASELINE_COMMIT}/"
-          sshpass -p "${SFTP_PASS}" sftp -o StrictHostKeyChecking=no \
+          if sshpass -e sftp -r -o StrictHostKeyChecking=accept-new \
             "${SFTP_USER}@${SFTP_HOST}:/baselines/llk/perf_${BASELINE_COMMIT}/" \
-            baseline_perf/ || {
-            echo "⚠️  Could not download baseline (may be staging -> baselines delay)"
-            exit 0
-          }
-
-          echo "✓ Baseline downloaded"
-          find baseline_perf -name "*.csv" | wc -l | xargs echo "CSV files:"
+            baseline_perf/ 2>&1; then
+            echo "✓ Baseline downloaded"
+            CSV_COUNT=$(find baseline_perf -name "*.csv" -not -name "*.post.csv" | wc -l)
+            echo "CSV files: $CSV_COUNT"
+          else
+            echo "❌ Could not download baseline from SFTP (dir may not exist or auth failed)"
+            rm -rf baseline_perf
+            exit 1
+          fi
 
       # Download current run artifacts (perf_data CSVs from the build job)
       - name: Download current run artifacts
@@ -157,6 +173,9 @@ jobs:
       - name: Compare regressions
         id: compare
         run: |
+          set +e
+          BASELINE_SHA=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', '${{ steps.branch_point.outputs.branch_point }}'))")
+
           python3 ${{ env.LLK_PATH }}/perf/regression_compare.py \
             --current 'current_perf/**/*.csv' \
             --baseline 'baseline_perf/**/*.csv' \
@@ -165,17 +184,17 @@ jobs:
             --run-types '${{ inputs.run_types }}' \
             --report perf_gate_report.md \
             --test 'LLK perf' \
-            --baseline-sha "${{ github.event.workflow_run.head_commit }}" \
-            --current-sha "${{ github.sha }}" \
+            --baseline-sha "$BASELINE_SHA" \
+            --current-sha "${{ github.event.pull_request.head.sha }}" \
             --baseline-label "main branch point" \
             --current-label "PR branch"
           EXIT_CODE=$?
           echo "gate_exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
-          exit 0  # Don't fail the step; let the check step decide
+          exit 0  # Don't fail the step; let the verdict step decide
 
       # Post the report as a PR comment
       - name: Comment on PR
-        if: github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
@@ -188,16 +207,23 @@ jobs:
               body: report
             });
 
-      # Check whether the gate passed
+      # Check whether baseline was found and gate passed
       - name: Gate verdict
-        if: steps.compare.outputs.gate_exit_code != '0'
+        if: always()
         run: |
-          echo "❌ Performance regressions detected"
-          cat perf_gate_report.md
-          exit 1
+          HAVE_BASELINE=$(cat have_baseline.txt)
+          EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
 
-      - name: Gate passed
-        if: steps.compare.outputs.gate_exit_code == '0'
-        run: |
+          if [ "$HAVE_BASELINE" != "true" ]; then
+            echo "⚠️  No baseline found; gate skipped (first run or data missing)"
+            exit 0
+          fi
+
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "❌ Performance regressions detected"
+            cat perf_gate_report.md
+            exit 1
+          fi
+
           echo "✅ No regressions detected"
           cat perf_gate_report.md

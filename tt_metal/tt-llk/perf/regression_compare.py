@@ -321,8 +321,13 @@ def main(argv=None):
     ap.add_argument("--current-label", help="what the current side is")
     a = ap.parse_args(argv)
 
-    current = sorted(glob.glob(a.current))
-    baseline = sorted(glob.glob(a.baseline))
+    current = sorted(glob.glob(a.current, recursive=True))
+    baseline = sorted(glob.glob(a.baseline, recursive=True))
+
+    # Exclude .post.csv files (postprocessed versions halve the cycle counts)
+    current = [p for p in current if not p.endswith(".post.csv")]
+    baseline = [p for p in baseline if not p.endswith(".post.csv")]
+
     if not current or not baseline:
         raise SystemExit(
             f"no CSVs matched (current={len(current)}, baseline={len(baseline)})"
@@ -335,6 +340,15 @@ def main(argv=None):
         min_cycles=a.min_cycles,
         run_types=a.run_types,
     )
+
+    # Fail if zero points were compared (e.g., all-new configs, run-type filter mismatch)
+    if not result["records"]:
+        print(
+            f"❌ No points compared. "
+            f"Check: run-types filter matches CSV content, run-types={a.run_types}"
+        )
+        raise SystemExit(1)
+
     report = render_report(
         result,
         threshold=a.threshold,

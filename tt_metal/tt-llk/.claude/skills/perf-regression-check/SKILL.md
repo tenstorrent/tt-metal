@@ -13,14 +13,14 @@ description: >
 
 Compares **current** = the branch's HEAD against **baseline** = `git merge-base origin/main HEAD`
 (the exact main commit the branch was cut from). Runs the same perf test on both, N iterations
-each, takes the median per point, and flags points where current is slower by more than the
-threshold. Self-contained: uses only `perf_regression_compare.py` (in `.claude/scripts/`), so
-it works on any branch whether or not the perf infra is merged.
+each, takes the median per point, and flags regressions using a two-clause rule: a point is a
+regression when it is **more than threshold% slower AND more than 30 cycles slower** (both must hold).
+Uses the canonical `regression_compare.py` module at `tt_metal/tt-llk/perf/regression_compare.py`.
 
 ## Inputs to collect from the user (ask if not given)
 - **test** (required): the perf test module, e.g. `perf_math_matmul`. One test per run.
 - **arch**: `wormhole` or `blackhole`. Infer from the machine if possible (`tt-smi`), else ask.
-- **threshold**: default `0.05` (5%).
+- **threshold**: default `0.02` (2%) — measured from five-run noise baselines.
 - **iterations**: default `3` per side.
 - **speed_of_light**: default off. If used, apply the SAME flag to both sides.
 
@@ -77,12 +77,16 @@ python "$SCRIPT" \
   --current  "$WORK/current_run_*.csv" \
   --baseline "$WORK/baseline_run_*.csv" \
   --threshold <threshold> \
+  --min-cycles 30 \
   --report "$WORK/regression_report.md" \
   --test <test> --baseline-sha "$BASELINE" --current-sha "$CURRENT"
 ```
-It prints and writes a Markdown report (verdict + top-25 regressions), plus a full
-`regression_report.regressions.csv` with every regression. It exits non-zero if any regression is
-found.
+It prints and writes a Markdown report (verdict + top-25 regressions), plus companion CSVs:
+- `regression_report.points.csv` — all compared points, worst delta first
+- `regression_report.regressions.csv` — regressions only
+
+It exits non-zero if any regression is found. The `--min-cycles` parameter enforces the two-clause rule:
+a regression must exceed both the percentage threshold AND 30 cycles.
 
 **4. Present the result.** Show the verdict and the top regressions. Point the user to
 `$WORK/regression_report.md` and the companion `.regressions.csv`. If there are many "new points",
@@ -90,6 +94,11 @@ explain the branch changed the test's sweep/configs (so those points have no bas
 
 ## Interpreting results (tell the user)
 - Comparison is **per (marker, sweep-config)**; `mean(<run_type>)` cycles, median across iterations.
+- **Two-clause rule:** a point is flagged as a regression when it is **both** more than 2% slower
+  **AND** more than 30 cycles slower. This prevents false positives: percentage alone fires on small
+  markers (INIT/UNINIT, few hundred cycles, where 25-cycle jitter looks like 5-10%), and cycles alone
+  fires on large markers (TILE_LOOP, thousands of cycles, where 1.9% variance is still hundreds of
+  cycles). Together, they catch real regressions while ignoring measurement noise.
 - A cleanest comparison is when only the **kernel/LLK code** changed, not the test's sweep — then
   every config has a baseline. If the test itself changed, expect "new points".
 - **Noise:** 3 iterations + median reduces it, but deltas near the threshold can still be noise;
