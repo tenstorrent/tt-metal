@@ -14,9 +14,9 @@
   cmd: cd tt_metal/tt-llk/tests && ./run_ttsim_regression.sh
   skus:
     sim_wh_n150_xl:
-      timeout: 45
+      timeout: 60
     sim_bh_p150_xl:
-      timeout: 45
+      timeout: 180
     sim_quasar_xl:
       timeout: 180
   team: llk

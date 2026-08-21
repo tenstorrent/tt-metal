@@ -309,8 +309,8 @@ llk:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70
   weekly:
-    sim_wh_n150_xl: 45
-    sim_bh_p150_xl: 45
+    sim_wh_n150_xl: 60
+    sim_bh_p150_xl: 180
     sim_quasar_xl: 180
 
 models:
