@@ -708,7 +708,12 @@ def test_exp_ring_joint_attention_sparse_frames_accuracy(add_last_frame, reset_s
     sp_size, _tp_size, _arch = calculate_mesh_config(num_devices)
 
     nf = sp_size  # one frame per shard
-    tokens_per_frame = 64  # 2 tiles, tile-aligned; also the q/k chunk size
+    # 8 tiles per frame; also the q/k chunk size. exp requires the streaming-compute path, which
+    # needs qk_in0_num_subblocks > 1 and Sk_chunk_t % (dst_size / qk_out_subblock_h) == 0. A tiny
+    # 2-tile chunk (tokens_per_frame=64) fails both and trips the "Streaming compute must be enabled"
+    # static_assert; Sq=Sk=8 satisfies streaming for dst_size 8 and 16. See use_streaming_compute in
+    # exp_ring_joint_sdpa_program_factory.cpp.
+    tokens_per_frame = 256
     window = 3
     b, nh, d = 1, 8, HEAD_DIM
     total_seq = nf * tokens_per_frame
