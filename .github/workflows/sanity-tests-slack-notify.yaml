@@ -40,9 +40,9 @@ jobs:
     # minutes, and the culprits step below may legitimately wait hours for the
     # parent commit's retry cycle to settle.
     runs-on: ubuntu-latest
-    # Must cover the culprits step's parent-settling wait budget (MAX_WAIT_MS,
-    # 270 min) plus the remaining steps, while staying under GitHub's 6h
-    # hosted-runner job cap.
+    # Must cover the culprits step's parent-settling wait budget (270 min,
+    # DEFAULT_MAX_WAIT_MS in .github/scripts/sanity-notify/culprits.js) plus
+    # the remaining steps, while staying under GitHub's 6h hosted-runner cap.
     timeout-minutes: 300
     #
     # ============================ FINALITY GATE =============================
@@ -177,6 +177,18 @@ jobs:
             });
             core.setOutput('already_notified', 'false');
 
+      # Provides the decision module for the culprits step below and the
+      # composite action used after it.
+      - name: Checkout notify scripts and resolve-slack-mentions action
+        if: steps.claim.outputs.already_notified != 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 5
+        with:
+          sparse-checkout: |
+            .github/scripts/sanity-notify
+            .github/actions/resolve-slack-mentions
+          sparse-checkout-cone-mode: true
+
       - name: Find culprit PRs since last green run
         id: culprits
         if: steps.claim.outputs.already_notified != 'true'
@@ -184,171 +196,48 @@ jobs:
         env:
           CURRENT_HEAD_SHA: ${{ steps.context.outputs.head_sha }}
         with:
+          # One-commit-back edge detection. The decision logic (parent
+          # resolution, per-run finality, settle-polling, culprit building)
+          # lives in .github/scripts/sanity-notify/culprits.js -- the single
+          # source of truth shared by this step, its unit tests
+          # (culprits.test.js, run with `node --test`), and the historical
+          # backtest (backtest.js). See the module for the invariants.
           script: |
+            const { findBaseline, buildCulpritEntries } = require('./.github/scripts/sanity-notify/culprits.js');
+
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const currentHeadSha = process.env.CURRENT_HEAD_SHA;
 
-            // ================== ONE-COMMIT-BACK EDGE DETECTION ==================
-            // Only the immediate git parent is ever consulted (main is linear via
-            // merge queue). If any of the parent's push runs finally succeeded,
-            // main was green immediately before this commit -- so this commit
-            // broke it. If the parent conclusively never succeeded, or never
-            // settles within the wait budget below, abstain -- never guess
-            // further back.
-            //
-            // The parent's runs are resolved by exact head_sha -- a point lookup
-            // keyed by the sha we ask for -- never by position in a recency-sorted
-            // listWorkflowRuns page, which is not guaranteed to be a complete or
-            // current window. A lagging index can make the point lookup MISS
-            // (-> abstain); it can never return the wrong commit's runs. The diff
-            // is always exactly one commit (parent..current), which structurally
-            // bounds who one message can blame.
-            const { data: commit } = await github.rest.git.getCommit({ owner, repo, commit_sha: currentHeadSha });
-            const parentSha = commit.parents[0]?.sha;
-            if (!parentSha) {
-              core.warning(`${currentHeadSha} has no parent commit; skipping.`);
+            const result = await findBaseline({
+              github,
+              owner,
+              repo,
+              headSha: currentHeadSha,
+              log: core.info,
+              warn: core.warning,
+            });
+
+            if (result.decision !== 'notify') {
               core.setOutput('should_notify', 'false');
               return;
             }
 
-            // A single head_sha can have several push runs (duplicate deliveries
-            // have produced two success runs for one sha) -- fetch them all; ANY
-            // final success counts as a green parent. head_sha is an exact-match
-            // filter (requires the full 40-char sha); the event/branch filters
-            // exclude the merge_group run of the same sha.
-            const fetchParentRuns = async () => {
-              const { data: resp } = await github.rest.actions.listWorkflowRuns({
-                owner,
-                repo,
-                workflow_id: 'sanity-tests.yaml',
-                head_sha: parentSha,
-                branch: 'main',
-                event: 'push',
-                per_page: 10,
-              });
-              return resp.workflow_runs;
-            };
-
-            // Mirrors this workflow's own top-level finality gate, applied to a
-            // PARENT run: success is always final; 'failure' is only final once
-            // _auto-retry-post-commit.yaml's retry budget (MAX_ATTEMPTS = 3, must
-            // stay in sync with that workflow) is exhausted -- before that, a
-            // retry may still be queued even though the attempt already shows
-            // status 'completed'. Every other conclusion is final immediately,
-            // since only 'failure' triggers a retry at all.
-            const isFinal = (run) => run.status === 'completed' &&
-              (run.conclusion !== 'failure' || run.run_attempt >= 3);
-
-            // The parent may not be decided yet when this job starts: our own
-            // trigger can finish while the parent is still mid retry cycle, in
-            // the short window where a failed attempt reads 'completed' before
-            // the retry workflow re-queues it, or before the search index
-            // surfaces the parent's run at all. All of those are "not settled":
-            // poll until the parent settles or the wait budget runs out.
-            //  - any FINAL success               -> baseline found; proceed now.
-            //  - all found runs final,
-            //    none succeeded                  -> conclusively not green; abstain now.
-            //  - anything else (no runs yet,
-            //    or some run not yet final)      -> sleep and re-poll.
-            const POLL_INTERVAL_MS = 5 * 60 * 1000;
-            const MAX_WAIT_MS = 270 * 60 * 1000; // job timeout-minutes (300) minus headroom for later steps
-
-            const describeRuns = (runs) => runs.length === 0
-              ? 'no runs found'
-              : runs.map(r => `#${r.run_number}=${r.conclusion ?? r.status}(attempt ${r.run_attempt})`).join(', ');
-
-            const startedAtMs = Date.now();
-            let baselineRun = null;
-            for (;;) {
-              const parentRuns = await fetchParentRuns();
-
-              baselineRun = parentRuns.find(r => isFinal(r) && r.conclusion === 'success');
-              if (baselineRun) break; // a confirmed success decides it; never wait on sibling runs
-
-              if (parentRuns.length > 0 && parentRuns.every(isFinal)) {
-                core.info(`Parent ${parentSha} conclusively never succeeded (${describeRuns(parentRuns)}); main may already be red. Abstaining.`);
-                core.setOutput('should_notify', 'false');
-                return;
-              }
-
-              const elapsedMs = Date.now() - startedAtMs;
-              const elapsedMin = Math.round(elapsedMs / 60000);
-              if (elapsedMs + POLL_INTERVAL_MS > MAX_WAIT_MS) {
-                core.warning(`Timed out after ${elapsedMin} min waiting for parent ${parentSha} to settle (${describeRuns(parentRuns)}); abstaining.`);
-                core.setOutput('should_notify', 'false');
-                return;
-              }
-              core.info(`[${elapsedMin} min elapsed] Parent ${parentSha} not settled yet (${describeRuns(parentRuns)}); polling again in ${POLL_INTERVAL_MS / 60000} min.`);
-              await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-            }
-
-            core.info(`Parent ${parentSha} was green (run #${baselineRun.run_number}); ${currentHeadSha} broke main.`);
             core.setOutput('should_notify', 'true');
-            core.setOutput('prev_run_url', baselineRun.html_url);
-            core.setOutput('prev_run_number', String(baselineRun.run_number));
+            core.setOutput('prev_run_url', result.baselineRun.html_url);
+            core.setOutput('prev_run_number', String(result.baselineRun.run_number));
 
-            const { data: cmp } = await github.rest.repos.compareCommits({
+            const { entries, logins } = await buildCulpritEntries({
+              github,
               owner,
               repo,
-              base: parentSha,
-              head: currentHeadSha,
+              baseSha: result.parentSha,
+              headSha: currentHeadSha,
             });
 
-            // PR titles and commit subjects are attacker-controlled (anyone who can
-            // open a PR) and end up inside Slack `<url|label>` mrkdwn links below --
-            // must be entity-escaped the same way notify-slack-on-mention.yaml
-            // escapes user-supplied text, or a crafted title could break out of the
-            // link syntax or smuggle in a broadcast mention like <!subteam^...>.
-            const escapeSlack = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-            const entries = [];
-            const seenPrNumbers = new Set();
-
-            for (const commit of cmp.commits) {
-              const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-                owner,
-                repo,
-                commit_sha: commit.sha,
-              });
-
-              if (pulls.length > 0) {
-                for (const pr of pulls) {
-                  if (seenPrNumbers.has(pr.number)) continue;
-                  seenPrNumbers.add(pr.number);
-                  entries.push({
-                    type: 'pr',
-                    number: pr.number,
-                    url: pr.html_url,
-                    title: escapeSlack(pr.title),
-                    authorLogin: pr.user ? pr.user.login : null,
-                  });
-                }
-              } else {
-                // No associated PR (direct push, or API lag right after merge) --
-                // fall back to the commit's own author so a culprit is never silently dropped.
-                entries.push({
-                  type: 'commit',
-                  sha: commit.sha,
-                  url: commit.html_url,
-                  title: escapeSlack(commit.commit.message.split('\n')[0]),
-                  authorLogin: commit.author ? commit.author.login : null,
-                });
-              }
-            }
-
-            core.info(`Found ${entries.length} culprit entr${entries.length === 1 ? 'y' : 'ies'} for ${currentHeadSha} (parent baseline run #${baselineRun.run_number})`);
+            core.info(`Found ${entries.length} culprit entr${entries.length === 1 ? 'y' : 'ies'} for ${currentHeadSha} (parent baseline run #${result.baselineRun.run_number})`);
             core.setOutput('entries', JSON.stringify(entries));
-            core.setOutput('logins_json',
-              JSON.stringify([...new Set(entries.map(e => e.authorLogin).filter(l => l !== null))].sort()));
-
-      - name: Checkout resolve-slack-mentions action
-        if: steps.culprits.outputs.should_notify == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 5
-        with:
-          sparse-checkout: .github/actions/resolve-slack-mentions
-          sparse-checkout-cone-mode: true
+            core.setOutput('logins_json', JSON.stringify(logins));
 
       - name: Resolve Slack mentions for culprits
         id: mentions
