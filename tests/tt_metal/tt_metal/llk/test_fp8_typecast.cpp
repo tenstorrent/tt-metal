@@ -51,7 +51,11 @@ static vector<std::uint32_t> run_fp8_typecast(
     const vector<std::uint32_t>& src_vec,
     std::uint32_t num_tiles,
     bool fp32_dest_acc_en,
-    const std::string& compute_kernel) {
+    const std::string& compute_kernel,
+    // CB depth in tiles. Default 1 (streaming double-... single-buffer, as the per-tile kernels use). Block
+    // kernels that keep >1 tile resident (copy_block/pack_block: wait_front(BLOCK)) must pass a depth >= their
+    // block size, else wait_front/reserve_back can never be satisfied in a 1-tile CB and the device deadlocks.
+    std::uint32_t cb_depth_tiles = 1) {
     IDevice* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
@@ -73,12 +77,14 @@ static vector<std::uint32_t> run_fp8_typecast(
         .buffer_type = BufferType::DRAM};
     auto dst_buffer = CreateBuffer(dst_config);
 
-    CircularBufferConfig cb_src_config = CircularBufferConfig(input_tile_size, {{tt::CBIndex::c_0, input_fmt}})
-                                             .set_page_size(tt::CBIndex::c_0, input_tile_size);
+    CircularBufferConfig cb_src_config =
+        CircularBufferConfig(cb_depth_tiles * input_tile_size, {{tt::CBIndex::c_0, input_fmt}})
+            .set_page_size(tt::CBIndex::c_0, input_tile_size);
     CreateCircularBuffer(program, core, cb_src_config);
 
-    CircularBufferConfig cb_dst_config = CircularBufferConfig(output_tile_size, {{tt::CBIndex::c_16, output_fmt}})
-                                             .set_page_size(tt::CBIndex::c_16, output_tile_size);
+    CircularBufferConfig cb_dst_config =
+        CircularBufferConfig(cb_depth_tiles * output_tile_size, {{tt::CBIndex::c_16, output_fmt}})
+            .set_page_size(tt::CBIndex::c_16, output_tile_size);
     CreateCircularBuffer(program, core, cb_dst_config);
 
     auto reader = CreateKernel(
@@ -384,6 +390,75 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTransposeDestSpecMatchesLegacy) {
         num_tiles,
         /*fp32_dest_acc_en=*/false,
         "tests/tt_metal/tt_metal/test_kernels/compute/transpose_dest_2_0.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Copy-block: the id-free (2.0) copy_block kernel must produce output bit-for-bit identical to the legacy
+// CB-id copy_block kernel on the same input (differential equivalence; reuses the single-core classic-CB
+// harness run_fp8_typecast). Input is processed in blocks of 4 tiles: copy_block c_0 -> DST, pack -> c_16.
+// The two kernels differ ONLY in the copy_block call (legacy vs experimental::), isolating the change.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixCopyBlockSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 64;  // multiple of the 4-tile block size
+    auto src_vec = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+
+    auto legacy = run_fp8_typecast(
+        mesh_device,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/copy_block_legacy.cpp",
+        /*cb_depth_tiles=*/num_tiles);
+    auto spec = run_fp8_typecast(
+        mesh_device,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/copy_block_2_0.cpp",
+        /*cb_depth_tiles=*/num_tiles);
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Pack-block: the id-free (2.0) pack_block kernel must produce output bit-for-bit identical to the legacy
+// CB-id pack kernel on the same input (differential equivalence; reuses the single-core classic-CB harness
+// run_fp8_typecast). Both process the input in blocks of 4 tiles: per block, copy c_0[0..3] -> DST[0..3]
+// (legacy copy_tile in BOTH), then pack the 4-tile block to c_16. The kernels differ ONLY in the block pack:
+// a legacy in-order pack_tile loop vs experimental::pack_block, isolating pack_block. num_tiles is a mult of 4.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixPackBlockSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 64;
+    auto src_vec = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+
+    auto legacy = run_fp8_typecast(
+        mesh_device,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_block_legacy.cpp",
+        /*cb_depth_tiles=*/num_tiles);
+    auto spec = run_fp8_typecast(
+        mesh_device,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_block_2_0.cpp",
+        /*cb_depth_tiles=*/num_tiles);
 
     EXPECT_EQ(legacy, spec);
 }

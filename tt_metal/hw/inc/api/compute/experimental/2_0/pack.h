@@ -63,6 +63,40 @@ ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst) {
           PackMode::Default>(ifrom_dst, out.l1_address)));
 }
 
+// clang-format off
+/**
+ * Experimental id-free block pack. Packs `ntiles` consecutive tiles from the DST register to consecutive L1
+ * addresses in the output operand -- the block/loop form of pack_tile. It is a thin compute-layer loop over the
+ * 2.0 pack_tile: tile i is read from DST[ifrom_dst + i] and written to
+ * out.l1_address + (start_out_tile + i) * tile_stride_words(Format, Shape), so the per-tile output stride is
+ * derived from the COMPILE-TIME output tile geometry (internal/llk_descriptor.h), not from a CB page size. With
+ * start_out_tile = 0 this reproduces exactly the L1 layout a legacy in-order pack_tile loop would write (each
+ * consecutive call advancing by one tile). Each pack_tile uses absolute (out-of-order) addressing; there is no
+ * internal fifo pointer, so the caller supplies the block base once and the op indexes from it. No id, no formats.
+ *
+ * | Param Type | Name          | Description                                                | Type        | Valid Range                          | Required |
+ * |------------|---------------|------------------------------------------------------------|-------------|--------------------------------------|----------|
+ * | Template   | Format        | Output buffer L1 data format (deduced from LLKOperand)     | DataFormat  |                                      | True     |
+ * | Template   | Shape         | Output tile geometry (deduced from LLKOperand)            | TensorShape |                                      | True     |
+ * | Function   | ifrom_dst     | Index of the first tile in the DST register               | uint32_t    | 0 to 15                              | True     |
+ * | Function   | out           | The output L1 operand (format+shape+block base address)   | LLKOperand  |                                      | True     |
+ * | Function   | ntiles        | Number of tiles to pack from DST to L1                     | uint32_t    | ifrom_dst + ntiles <= DST size (16) | True     |
+ * | Function   | start_out_tile| Starting output tile index (offset into the block base)   | uint32_t    | N/A                                  | False    |
+ */
+// clang-format on
+template <DataFormat Format, TensorShape Shape>
+ALWI void pack_block(
+    std::uint32_t ifrom_dst, LLKOperand<Format, Shape> out, std::uint32_t ntiles, std::uint32_t start_out_tile = 0) {
+    static_assert(is_legal_tile_shape(Shape), "pack_block: illegal output tile shape.");
+    // Per-tile output stride from the compile-time geometry (folds to a constant); matches the CB one-tile page.
+    constexpr std::uint32_t stride = tile_stride_words(LLKOperand<Format, Shape>::descriptor.format, Shape);
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        // pack_tile is itself PACK()-wrapped, so the engine calls stay on the packer thread.
+        experimental::pack_tile(
+            LLKOperand<Format, Shape>(out.l1_address + (start_out_tile + i) * stride), ifrom_dst + i);
+    }
+}
+
 #endif  // ARCH_BLACKHOLE
 
 }  // namespace experimental
