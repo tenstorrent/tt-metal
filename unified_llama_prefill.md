@@ -1494,11 +1494,19 @@ node-construction site must remember to copy, and sites keep forgetting:
   chained form: reverting one builder takes the trace from 10 add_reuse lines to 5.
 - `bias()` dropped `addend_cb` -- fixed when `add` landed.
 - `run_banded` ignores `bias_cb` entirely, so a single-shot `store(matmul(a, b).bias(v))`
-  with a >8-tile output silently drops the bias. Still open. The ACCUMULATING path is safe:
-  its static_assert fires, which `--rt 4 --ct 4` confirms.
+  with a >8-tile output silently dropped the bias. **Fixed**, and without touching
+  `MatmulNode`'s signature: `bias()` knows `geometry::out_subblock_num_tiles` at compile
+  time, so it static_asserts there. The error lands at the call site instead of the shape
+  being mishandled downstream, and nothing is lost -- the accumulating path already refused
+  the same shape, so this only extends the refusal to the single-shot case. A compile-only
+  probe confirms both halves: the 4x4 bias fails with the intended message, and the same
+  16-tile output WITHOUT a bias still compiles and bands.
 
-Three instances of one bug class, all silent. Making the addend part of `MatmulNode`'s TYPE
-turns every one into a compile error, which is what the merge is actually for.
+Three instances of one bug class, all silent, all now closed. Two needed the field threaded
+through by hand; the third turned out to be expressible as a static_assert because the
+geometry is already in the type. The remaining argument for making the addend part of
+`MatmulNode`'s TYPE is that it would have prevented the first two rather than requiring them
+to be found.
 
 ### What to test next
 
