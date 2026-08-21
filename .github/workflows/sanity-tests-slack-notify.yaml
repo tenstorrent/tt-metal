@@ -36,11 +36,14 @@ permissions:
 
 jobs:
   notify:
-    runs-on: ubuntu-slim
-    # Several unbounded network calls (Slack pagination, GitHub API) below --
-    # bound the whole job well under GitHub's long default so a stalled
-    # request can't occupy the runner indefinitely.
-    timeout-minutes: 10
+    # ubuntu-latest, not ubuntu-slim: slim runners hard-cap execution at 15
+    # minutes, and the culprits step below may legitimately wait hours for the
+    # parent commit's retry cycle to settle.
+    runs-on: ubuntu-latest
+    # Must cover the culprits step's parent-settling wait budget (MAX_WAIT_MS,
+    # 270 min) plus the remaining steps, while staying under GitHub's 6h
+    # hosted-runner job cap.
+    timeout-minutes: 300
     #
     # ============================ FINALITY GATE =============================
     # _auto-retry-post-commit.yaml only re-runs a "Sanity tests" push run when
@@ -188,12 +191,11 @@ jobs:
 
             // ================== ONE-COMMIT-BACK EDGE DETECTION ==================
             // Only the immediate git parent is ever consulted (main is linear via
-            // merge queue). If any of the parent's push runs succeeded, main was
-            // green immediately before this commit -- so this commit broke it.
-            // Anything else about the parent (failure, cancelled, skipped, still
-            // running, or no run found even after retrying for index lag) means
-            // we cannot be certain main was green immediately before us: abstain,
-            // never guess further back.
+            // merge queue). If any of the parent's push runs finally succeeded,
+            // main was green immediately before this commit -- so this commit
+            // broke it. If the parent conclusively never succeeded, or never
+            // settles within the wait budget below, abstain -- never guess
+            // further back.
             //
             // The parent's runs are resolved by exact head_sha -- a point lookup
             // keyed by the sha we ask for -- never by position in a recency-sorted
@@ -212,13 +214,10 @@ jobs:
 
             // A single head_sha can have several push runs (duplicate deliveries
             // have produced two success runs for one sha) -- fetch them all; ANY
-            // success counts as a green parent. head_sha is an exact-match filter
-            // (requires the full 40-char sha); the event/branch filters exclude
-            // the merge_group run of the same sha.
-            const RETRY_DELAYS_MS = [0, 5000, 15000]; // tolerate transient index lag
-            let parentRuns = [];
-            for (const delay of RETRY_DELAYS_MS) {
-              if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+            // final success counts as a green parent. head_sha is an exact-match
+            // filter (requires the full 40-char sha); the event/branch filters
+            // exclude the merge_group run of the same sha.
+            const fetchParentRuns = async () => {
               const { data: resp } = await github.rest.actions.listWorkflowRuns({
                 owner,
                 repo,
@@ -228,17 +227,60 @@ jobs:
                 event: 'push',
                 per_page: 10,
               });
-              parentRuns = resp.workflow_runs;
-              if (parentRuns.length > 0) break;
-            }
+              return resp.workflow_runs;
+            };
 
-            const baselineRun = parentRuns.find(r => r.conclusion === 'success');
-            if (!baselineRun) {
-              core.info(parentRuns.length === 0
-                ? `No "Sanity tests" push run found for parent ${parentSha} after retries; abstaining.`
-                : `Parent ${parentSha}'s run(s) never succeeded (${parentRuns.map(r => `#${r.run_number}=${r.conclusion ?? r.status}`).join(', ')}); main may already be red. Abstaining.`);
-              core.setOutput('should_notify', 'false');
-              return;
+            // Mirrors this workflow's own top-level finality gate, applied to a
+            // PARENT run: success is always final; 'failure' is only final once
+            // _auto-retry-post-commit.yaml's retry budget (MAX_ATTEMPTS = 3, must
+            // stay in sync with that workflow) is exhausted -- before that, a
+            // retry may still be queued even though the attempt already shows
+            // status 'completed'. Every other conclusion is final immediately,
+            // since only 'failure' triggers a retry at all.
+            const isFinal = (run) => run.status === 'completed' &&
+              (run.conclusion !== 'failure' || run.run_attempt >= 3);
+
+            // The parent may not be decided yet when this job starts: our own
+            // trigger can finish while the parent is still mid retry cycle, in
+            // the short window where a failed attempt reads 'completed' before
+            // the retry workflow re-queues it, or before the search index
+            // surfaces the parent's run at all. All of those are "not settled":
+            // poll until the parent settles or the wait budget runs out.
+            //  - any FINAL success               -> baseline found; proceed now.
+            //  - all found runs final,
+            //    none succeeded                  -> conclusively not green; abstain now.
+            //  - anything else (no runs yet,
+            //    or some run not yet final)      -> sleep and re-poll.
+            const POLL_INTERVAL_MS = 5 * 60 * 1000;
+            const MAX_WAIT_MS = 270 * 60 * 1000; // job timeout-minutes (300) minus headroom for later steps
+
+            const describeRuns = (runs) => runs.length === 0
+              ? 'no runs found'
+              : runs.map(r => `#${r.run_number}=${r.conclusion ?? r.status}(attempt ${r.run_attempt})`).join(', ');
+
+            const startedAtMs = Date.now();
+            let baselineRun = null;
+            for (;;) {
+              const parentRuns = await fetchParentRuns();
+
+              baselineRun = parentRuns.find(r => isFinal(r) && r.conclusion === 'success');
+              if (baselineRun) break; // a confirmed success decides it; never wait on sibling runs
+
+              if (parentRuns.length > 0 && parentRuns.every(isFinal)) {
+                core.info(`Parent ${parentSha} conclusively never succeeded (${describeRuns(parentRuns)}); main may already be red. Abstaining.`);
+                core.setOutput('should_notify', 'false');
+                return;
+              }
+
+              const elapsedMs = Date.now() - startedAtMs;
+              const elapsedMin = Math.round(elapsedMs / 60000);
+              if (elapsedMs + POLL_INTERVAL_MS > MAX_WAIT_MS) {
+                core.warning(`Timed out after ${elapsedMin} min waiting for parent ${parentSha} to settle (${describeRuns(parentRuns)}); abstaining.`);
+                core.setOutput('should_notify', 'false');
+                return;
+              }
+              core.info(`[${elapsedMin} min elapsed] Parent ${parentSha} not settled yet (${describeRuns(parentRuns)}); polling again in ${POLL_INTERVAL_MS / 60000} min.`);
+              await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
             }
 
             core.info(`Parent ${parentSha} was green (run #${baselineRun.run_number}); ${currentHeadSha} broke main.`);
