@@ -77,9 +77,12 @@ def run(device, rt, ct, kt, k_blocks=1, mode="dst", bias=False, seed=0):
 
     # A bias reaches a restore site nothing else here does: in L1 mode the biased
     # finish is a separate branch with its own matmul_block_init afterwards.
+    # Replicated down all 32 rows of each tile, which is what bias() requires: two of the
+    # three paths add it with an elementwise FPU dest-reuse add and read every row. Leaving
+    # rows 1..31 zeroed -- as this test did -- applies the bias to one output row in 32.
     bias_row = ((torch.rand([ct * TILE]) - 0.5) * 4.0).to(torch.bfloat16)
     bias_t = torch.zeros([1, 1, TILE, ct * TILE], dtype=torch.bfloat16)
-    bias_t[0, 0, 0, :] = bias_row
+    bias_t[0, 0, :, :] = bias_row
 
     dram = ttnn.DRAM_MEMORY_CONFIG
     ta = ttnn.from_torch(
