@@ -30,10 +30,10 @@ void test_interleaved_l1_buffer_impl(
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     auto& cq = device.mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, *interleaved_buffer, host_buffer, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(*interleaved_buffer, host_buffer, /*blocking=*/true);
 
     std::vector<uint32_t> readback_buffer;
-    distributed::EnqueueReadMeshBuffer(cq, readback_buffer, *interleaved_buffer, /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(readback_buffer, *interleaved_buffer, /*blocking=*/true);
 
     EXPECT_EQ(host_buffer, readback_buffer);
 
@@ -47,10 +47,10 @@ void test_interleaved_l1_buffer_impl(
     std::vector<uint32_t> second_host_buffer = create_random_vector_of_bfloat16(
         second_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
-    distributed::EnqueueWriteMeshBuffer(cq, *second_interleaved_buffer, second_host_buffer, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(*second_interleaved_buffer, second_host_buffer, /*blocking=*/true);
 
     std::vector<uint32_t> second_readback_buffer;
-    distributed::EnqueueReadMeshBuffer(cq, second_readback_buffer, *second_interleaved_buffer, /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(second_readback_buffer, *second_interleaved_buffer, /*blocking=*/true);
 
     EXPECT_EQ(second_host_buffer, second_readback_buffer);
 }

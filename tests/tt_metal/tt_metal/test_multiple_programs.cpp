@@ -200,14 +200,14 @@ TEST_F(UnitMeshFixture, MultiplePrograms) {
         convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(src0_tensor.get_values()));
     auto src0_activations = pack_bfloat16_vec_into_uint32_vec(src0_activations_tile_layout);
     auto& cq = this->device().mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, *src0_dram_buffer, src0_activations, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(*src0_dram_buffer, src0_activations, /*blocking=*/true);
 
     tt::deprecated::Tensor<bfloat16> src1_tensor = tt::deprecated::initialize_tensor<bfloat16>(
         shape, tt::deprecated::Initialize::ZEROS, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
     auto src1_activations_tile_layout =
         convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(src1_tensor.get_values()));
     auto src1_activations = pack_bfloat16_vec_into_uint32_vec(src1_activations_tile_layout);
-    distributed::EnqueueWriteMeshBuffer(cq, *src1_dram_buffer, src1_activations, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(*src1_dram_buffer, src1_activations, /*blocking=*/true);
 
     write_program_runtime_args_to_device(
         program1,
@@ -222,7 +222,7 @@ TEST_F(UnitMeshFixture, MultiplePrograms) {
     slow_dispatch::LaunchProgram(this->device(), program1, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> intermediate_result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, intermediate_result_vec, *dst_dram_buffer, /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(intermediate_result_vec, *dst_dram_buffer, /*blocking=*/true);
 
     // Validate Intermediate Result
     EXPECT_EQ(src0_activations, intermediate_result_vec) << "Eltwise binary did not produce expected result";
@@ -231,7 +231,7 @@ TEST_F(UnitMeshFixture, MultiplePrograms) {
     auto identity = create_identity_matrix(32, 32, 32);
     auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-    distributed::EnqueueWriteMeshBuffer(cq, *src1_dram_buffer, weights, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(*src1_dram_buffer, weights, /*blocking=*/true);
 
     write_program_runtime_args_to_device(
         program2,
@@ -246,7 +246,7 @@ TEST_F(UnitMeshFixture, MultiplePrograms) {
     slow_dispatch::LaunchProgram(this->device(), program2, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, *dst_dram_buffer, /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(result_vec, *dst_dram_buffer, /*blocking=*/true);
 
     // Validate - matmul with identity should give same result
     EXPECT_EQ(intermediate_result_vec, result_vec);

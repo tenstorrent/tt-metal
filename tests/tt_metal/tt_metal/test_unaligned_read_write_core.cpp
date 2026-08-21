@@ -64,11 +64,10 @@ TEST_F(UnitMeshFixture, UnalignedReadWriteCore) {
         for (auto& v : src_vec_dram_interleaved_case) {
             v = static_cast<uint8_t>(std::rand() % 256);
         }
-        distributed::EnqueueWriteMeshBuffer(
-            cq, *device_dram_interleaved_buffer, src_vec_dram_interleaved_case, /*blocking=*/true);
+        cq.enqueue_write_mesh_buffer(*device_dram_interleaved_buffer, src_vec_dram_interleaved_case, /*blocking=*/true);
         std::vector<uint8_t> result_vec_dram_interleaved_case;
-        distributed::EnqueueReadMeshBuffer(
-            cq, result_vec_dram_interleaved_case, *device_dram_interleaved_buffer, /*blocking=*/true);
+        cq.enqueue_read_mesh_buffer(
+            result_vec_dram_interleaved_case, *device_dram_interleaved_buffer, /*blocking=*/true);
         pass &= (src_vec_dram_interleaved_case == result_vec_dram_interleaved_case);
         TT_FATAL(pass, "Error");
         log_info(LogTest, "Passed Non-4-byte-aligned Read Write DRAM Interleaved Buffer Test");
@@ -95,12 +94,10 @@ TEST_F(UnitMeshFixture, UnalignedReadWriteCore) {
             v = static_cast<uint8_t>(std::rand() % 256);
         }
 
-        distributed::EnqueueWriteMeshBuffer(
-            cq, *device_dram_sharded_buffer, src_vec_dram_sharded_case, /*blocking=*/true);
+        cq.enqueue_write_mesh_buffer(*device_dram_sharded_buffer, src_vec_dram_sharded_case, /*blocking=*/true);
 
         std::vector<uint8_t> result_vec_dram_sharded_case;
-        distributed::EnqueueReadMeshBuffer(
-            cq, result_vec_dram_sharded_case, *device_dram_sharded_buffer, /*blocking=*/true);
+        cq.enqueue_read_mesh_buffer(result_vec_dram_sharded_case, *device_dram_sharded_buffer, /*blocking=*/true);
         pass &= (src_vec_dram_sharded_case == result_vec_dram_sharded_case);
         TT_FATAL(pass, "Error");
         log_info(LogTest, "Passed Non-4-byte-aligned Read Write DRAM Sharded Buffer Test");
@@ -121,12 +118,10 @@ TEST_F(UnitMeshFixture, UnalignedReadWriteCore) {
             v = static_cast<uint8_t>(std::rand() % 256);
         }
 
-        distributed::EnqueueWriteMeshBuffer(
-            cq, *device_l1_interleaved_buffer, src_vec_l1_interleaved_case, /*blocking=*/true);
+        cq.enqueue_write_mesh_buffer(*device_l1_interleaved_buffer, src_vec_l1_interleaved_case, /*blocking=*/true);
 
         std::vector<uint8_t> result_vec_l1_interleaved_case;
-        distributed::EnqueueReadMeshBuffer(
-            cq, result_vec_l1_interleaved_case, *device_l1_interleaved_buffer, /*blocking=*/true);
+        cq.enqueue_read_mesh_buffer(result_vec_l1_interleaved_case, *device_l1_interleaved_buffer, /*blocking=*/true);
         pass &= (src_vec_l1_interleaved_case == result_vec_l1_interleaved_case);
         TT_FATAL(pass, "Error");
         log_info(LogTest, "Passed Non-4-byte-aligned Read Write L1 Interleaved Buffer Test");
@@ -153,11 +148,10 @@ TEST_F(UnitMeshFixture, UnalignedReadWriteCore) {
             v = static_cast<uint8_t>(std::rand() % 256);
         }
 
-        distributed::EnqueueWriteMeshBuffer(cq, *device_l1_sharded_buffer, src_vec_l1_sharded_case, /*blocking=*/true);
+        cq.enqueue_write_mesh_buffer(*device_l1_sharded_buffer, src_vec_l1_sharded_case, /*blocking=*/true);
 
         std::vector<uint8_t> result_vec_l1_sharded_case;
-        distributed::EnqueueReadMeshBuffer(
-            cq, result_vec_l1_sharded_case, *device_l1_sharded_buffer, /*blocking=*/true);
+        cq.enqueue_read_mesh_buffer(result_vec_l1_sharded_case, *device_l1_sharded_buffer, /*blocking=*/true);
         pass &= (src_vec_l1_sharded_case == result_vec_l1_sharded_case);
         TT_FATAL(pass, "Error");
         log_info(LogTest, "Passed Non-4-byte-aligned Read Write L1 Sharded Buffer Test");

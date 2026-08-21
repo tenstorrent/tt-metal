@@ -193,7 +193,7 @@ void run_bcast_test(distributed::MeshDevice& mesh_device, BcastDim::Enum bcast_d
         &mesh_device);
     uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
     auto& cq = mesh_device.mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, *src1_dram_buffer, bcast_tiled_u32, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(*src1_dram_buffer, bcast_tiled_u32, /*blocking=*/true);
 
     std::vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(src0_dram_buffer).append_to(reader_compile_time_args);
@@ -254,12 +254,12 @@ void run_bcast_test(distributed::MeshDevice& mesh_device, BcastDim::Enum bcast_d
 
     // Execute
     vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 10.0f, 0x1234);
-    distributed::EnqueueWriteMeshBuffer(cq, *src0_dram_buffer, src0_vec, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(*src0_dram_buffer, src0_vec, /*blocking=*/true);
 
     slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
 
     vector<uint32_t> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, *dst_dram_buffer, /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(result_vec, *dst_dram_buffer, /*blocking=*/true);
 
     // Validation
     auto comparison_function = [](float a, float b) {

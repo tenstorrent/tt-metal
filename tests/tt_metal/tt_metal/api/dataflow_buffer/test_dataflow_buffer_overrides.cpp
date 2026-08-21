@@ -160,19 +160,19 @@ static void run_dfb_size_override_test(
         EXPECT_EQ(dfb->config.entry_size, eff_entry_size);
         EXPECT_EQ(dfb->config.num_entries, eff_num_entries);
 
-        distributed::EnqueueWriteMeshBuffer(cq, in_tensor.mesh_buffer(), input, /*blocking=*/true);
+        cq.enqueue_write_mesh_buffer(in_tensor.mesh_buffer(), input, /*blocking=*/true);
         if (mesh_device.arch() == ARCH::QUASAR) {
             // TODO #38042: barrier not yet uplifted for Quasar; wait for the DRAM write to land.
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             std::vector<uint32_t> rdback;
-            distributed::EnqueueReadMeshBuffer(cq, rdback, in_tensor.mesh_buffer(), /*blocking=*/true);
+            cq.enqueue_read_mesh_buffer(rdback, in_tensor.mesh_buffer(), /*blocking=*/true);
             tt_driver_atomics::mfence();
             ASSERT_EQ(rdback, input);
         }
         slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
 
         std::vector<uint32_t> output;
-        distributed::EnqueueReadMeshBuffer(cq, output, out_tensor.mesh_buffer(), /*blocking=*/true);
+        cq.enqueue_read_mesh_buffer(output, out_tensor.mesh_buffer(), /*blocking=*/true);
         EXPECT_EQ(output, input);
     }
 }

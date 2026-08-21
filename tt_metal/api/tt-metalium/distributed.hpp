@@ -70,37 +70,11 @@ void ReadShard(
 
 template <typename DType>
 void EnqueueWriteMeshBuffer(
-    MeshCommandQueue& mesh_cq, const MeshBuffer& mesh_buffer, const std::vector<DType>& src, bool blocking = false) {
-    TT_FATAL(
-        src.size() * sizeof(DType) >= mesh_buffer.size(),
-        "Source vector is too small for mesh buffer: mesh buffer size={} bytes, source size={} * {} bytes",
-        mesh_buffer.size(),
-        src.size(),
-        sizeof(DType));
-
-    mesh_cq.enqueue_write_mesh_buffer(mesh_buffer, src.data(), blocking);
-}
-
-template <typename DType>
-void EnqueueWriteMeshBuffer(
     MeshCommandQueue& mesh_cq,
     std::shared_ptr<MeshBuffer>& mesh_buffer,
     const std::vector<DType>& src,
     bool blocking = false) {
-    EnqueueWriteMeshBuffer(mesh_cq, *mesh_buffer, src, blocking);
-}
-
-template <typename DType>
-void EnqueueReadMeshBuffer(
-    MeshCommandQueue& mesh_cq, std::vector<DType>& dst, const MeshBuffer& mesh_buffer, bool blocking = true) {
-    // This API supports reading MeshBuffers sharded across devices
-    // and a Unit-MeshBuffer with a replicated layout.
-    if (mesh_buffer.global_layout() == MeshBufferLayout::SHARDED) {
-        dst.resize(mesh_buffer.global_shard_spec().global_size / sizeof(DType));
-    } else {
-        dst.resize(mesh_buffer.size() / sizeof(DType));
-    }
-    mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
+    mesh_cq.enqueue_write_mesh_buffer(*mesh_buffer, src, blocking);
 }
 
 template <typename DType>
@@ -109,7 +83,7 @@ void EnqueueReadMeshBuffer(
     std::vector<DType>& dst,
     std::shared_ptr<MeshBuffer>& mesh_buffer,
     bool blocking = true) {
-    EnqueueReadMeshBuffer(mesh_cq, dst, *mesh_buffer, blocking);
+    mesh_cq.enqueue_read_mesh_buffer(dst, *mesh_buffer, blocking);
 }
 
 // Make the current thread block until the event is recorded by the associated MeshCommandQueue.

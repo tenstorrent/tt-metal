@@ -41,7 +41,7 @@ TEST_F(UnitMeshFixture, Host_UAF_WriteToBuffer_SanityCheck) {
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
     EXPECT_DEATH(
-        distributed::EnqueueWriteMeshBuffer(this->device().mesh_command_queue(), *buffer, data, /*blocking=*/true),
+        this->device().mesh_command_queue().enqueue_write_mesh_buffer(*buffer, data, /*blocking=*/true),
         ".*Use-After-Free.*WriteToBuffer.*");
 }
 
@@ -56,7 +56,7 @@ TEST_F(UnitMeshFixture, Host_UAF_ReadFromBuffer_SanityCheck) {
 
     std::vector<uint32_t> out;
     EXPECT_DEATH(
-        distributed::EnqueueReadMeshBuffer(this->device().mesh_command_queue(), out, *buffer, /*blocking=*/true),
+        this->device().mesh_command_queue().enqueue_read_mesh_buffer(out, *buffer, /*blocking=*/true),
         ".*Use-After-Free.*ReadFromBuffer.*");
 }
 
@@ -108,7 +108,7 @@ TEST_F(UnitMeshFixture, Host_UAF_WriteToBuffer_SharedPtrOverload_SanityCheck) {
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
     EXPECT_DEATH(
-        distributed::EnqueueWriteMeshBuffer(this->device().mesh_command_queue(), *buffer, data, /*blocking=*/true),
+        this->device().mesh_command_queue().enqueue_write_mesh_buffer(*buffer, data, /*blocking=*/true),
         ".*Use-After-Free.*WriteToBuffer.*");
 }
 
@@ -125,10 +125,10 @@ TEST_F(UnitMeshFixture, Host_UAF_Allocated_NoViolation) {
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
     auto& cq = this->device().mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, *buffer, data, /*blocking=*/true);  // must NOT abort
+    cq.enqueue_write_mesh_buffer(*buffer, data, /*blocking=*/true);  // must NOT abort
 
     std::vector<uint32_t> out;
-    distributed::EnqueueReadMeshBuffer(cq, out, *buffer, /*blocking=*/true);  // must NOT abort
+    cq.enqueue_read_mesh_buffer(out, *buffer, /*blocking=*/true);  // must NOT abort
     EXPECT_EQ(out, data);
 
     ::unsetenv("TT_METAL_EMULE_ASAN");

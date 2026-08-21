@@ -103,7 +103,7 @@ TEST_F(UnitMeshFixture, MultiCoreKernelSameRuntimeArgs) {
         src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     auto& cq = this->device().mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, *src_dram_buffer, src_vec, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(*src_dram_buffer, src_vec, /*blocking=*/true);
 
     const std::array unary_reader_args{
         (std::uint32_t)src_dram_buffer->address(), (std::uint32_t)0, (std::uint32_t)num_tiles};
@@ -116,7 +116,7 @@ TEST_F(UnitMeshFixture, MultiCoreKernelSameRuntimeArgs) {
     slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, *dst_dram_buffer, /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(result_vec, *dst_dram_buffer, /*blocking=*/true);
 
     EXPECT_EQ(src_vec, result_vec);
 }
@@ -151,7 +151,7 @@ TEST_F(UnitMeshFixture, MultiCoreKernelUniqueRuntimeArgs) {
         src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     auto& cq = this->device().mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, *src_dram_buffer, src_vec, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(*src_dram_buffer, src_vec, /*blocking=*/true);
 
     const std::array unary_reader_args{
         (std::uint32_t)src_dram_buffer->address(), (std::uint32_t)0, (std::uint32_t)num_tiles};
@@ -172,13 +172,13 @@ TEST_F(UnitMeshFixture, MultiCoreKernelUniqueRuntimeArgs) {
     slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec_1;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec_1, *dst_dram_buffer_1, /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(result_vec_1, *dst_dram_buffer_1, /*blocking=*/true);
 
     std::vector<uint32_t> result_vec_2;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec_2, *dst_dram_buffer_2, /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(result_vec_2, *dst_dram_buffer_2, /*blocking=*/true);
 
     std::vector<uint32_t> result_vec_3;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec_3, *dst_dram_buffer_3, /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(result_vec_3, *dst_dram_buffer_3, /*blocking=*/true);
 
     EXPECT_EQ(src_vec, result_vec_1);
     EXPECT_EQ(src_vec, result_vec_2);

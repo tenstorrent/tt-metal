@@ -17,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -85,6 +86,17 @@ public:
     void enqueue_write_mesh_buffer(const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) {
         enqueue_write_mesh_buffer(*buffer, host_data, blocking);
     }
+    template <typename DType>
+    void enqueue_write_mesh_buffer(const MeshBuffer& buffer, const std::vector<DType>& src, bool blocking) {
+        TT_FATAL(
+            src.size() * sizeof(DType) >= buffer.size(),
+            "Source vector is too small for mesh buffer: mesh buffer size={} bytes, source size={} * {} bytes",
+            buffer.size(),
+            src.size(),
+            sizeof(DType));
+
+        enqueue_write_mesh_buffer(buffer, src.data(), blocking);
+    }
     virtual void enqueue_write_mesh_buffer(const MeshBuffer& buffer, const void* host_data, bool blocking) = 0;
     // If PinnedMemory is attached to a HostBuffer used within the enqueue_write, the contents of the memory must not be
     // modified until the enqueue_write has completed on the device. This may be checked by any of
@@ -116,6 +128,16 @@ public:
     // MeshBuffer Read APIs
     void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
         enqueue_read_mesh_buffer(host_data, *buffer, blocking);
+    }
+    // Supports reading MeshBuffers sharded across devices, and a Unit-MeshBuffer with a replicated layout.
+    template <typename DType>
+    void enqueue_read_mesh_buffer(std::vector<DType>& dst, const MeshBuffer& buffer, bool blocking) {
+        if (buffer.global_layout() == MeshBufferLayout::SHARDED) {
+            dst.resize(buffer.global_shard_spec().global_size / sizeof(DType));
+        } else {
+            dst.resize(buffer.size() / sizeof(DType));
+        }
+        enqueue_read_mesh_buffer(dst.data(), buffer, blocking);
     }
     virtual void enqueue_read_mesh_buffer(void* host_data, const MeshBuffer& buffer, bool blocking) = 0;
     void enqueue_read_shards(

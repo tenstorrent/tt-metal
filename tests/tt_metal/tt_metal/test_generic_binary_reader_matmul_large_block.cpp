@@ -283,14 +283,14 @@ TEST_F(UnitMeshFixture, GenericBinaryReaderMatmulLargeBlock) {
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         auto activations_tile_transposed = transpose_tiles(activations, M, K, in0_block_w);
         auto& cq = this->device().mesh_command_queue();
-        distributed::EnqueueWriteMeshBuffer(cq, *src0_dram_buffer, activations_tile_transposed, /*blocking=*/true);
+        cq.enqueue_write_mesh_buffer(*src0_dram_buffer, activations_tile_transposed, /*blocking=*/true);
 
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
         auto identity_tilized = tilize_swizzled(identity, K * 32, N * 32);
         auto weights_tile_layout =
             convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        distributed::EnqueueWriteMeshBuffer(cq, *src1_dram_buffer, weights, /*blocking=*/true);
+        cq.enqueue_write_mesh_buffer(*src1_dram_buffer, weights, /*blocking=*/true);
         slow_dispatch::WriteToL1(this->device(), core, source_addresses_in_l1_addr, source_addresses);
 
         tt_metal::SetRuntimeArgs(program, generic_binary_reader_kernel, core, generic_binary_reader_args);
@@ -300,7 +300,7 @@ TEST_F(UnitMeshFixture, GenericBinaryReaderMatmulLargeBlock) {
         slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
         std::vector<uint32_t> result_vec;
-        distributed::EnqueueReadMeshBuffer(cq, result_vec, *dst_dram_buffer, /*blocking=*/true);
+        cq.enqueue_read_mesh_buffer(result_vec, *dst_dram_buffer, /*blocking=*/true);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

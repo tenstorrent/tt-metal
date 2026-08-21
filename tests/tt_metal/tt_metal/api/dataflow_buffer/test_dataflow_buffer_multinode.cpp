@@ -109,13 +109,13 @@ static void run_single_dfb_multicore_2_0(
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
         0, 1000000, 2 * num_entries * entry_size / sizeof(uint32_t));
     auto& cq = mesh_device.mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, in_tensor.mesh_buffer(), input, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(in_tensor.mesh_buffer(), input, /*blocking=*/true);
     m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
 
     slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> output;
-    distributed::EnqueueReadMeshBuffer(cq, output, out_tensor.mesh_buffer(), /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(output, out_tensor.mesh_buffer(), /*blocking=*/true);
     EXPECT_EQ(input, output) << "M2 multi-core DFB identity mismatch";
 }
 
@@ -216,13 +216,13 @@ static void run_concurrent_dfbs_program_2_0(
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
         0, 1000000, total_entries * entry_size / sizeof(uint32_t));
     auto& cq = mesh_device.mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, in_tensor.mesh_buffer(), input, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(in_tensor.mesh_buffer(), input, /*blocking=*/true);
     m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
 
     slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> output;
-    distributed::EnqueueReadMeshBuffer(cq, output, out_tensor.mesh_buffer(), /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(output, out_tensor.mesh_buffer(), /*blocking=*/true);
     EXPECT_EQ(input, output) << "M2 concurrent DFBs mismatch";
 }
 
@@ -360,7 +360,7 @@ static void run_sequential_4_dfbs_2_0(
     for (uint32_t i = 0; i < 4; ++i) {
         inputs[i] = tt::test_utils::generate_uniform_random_vector<uint32_t>(
             0, 100, num_entries * entry_size / sizeof(uint32_t));
-        distributed::EnqueueWriteMeshBuffer(cq, in_tensors[i].mesh_buffer(), inputs[i], /*blocking=*/true);
+        cq.enqueue_write_mesh_buffer(in_tensors[i].mesh_buffer(), inputs[i], /*blocking=*/true);
         m2_writeshard_barrier_uint32(mesh_device, in_tensors[i], inputs[i]);
     }
 
@@ -368,7 +368,7 @@ static void run_sequential_4_dfbs_2_0(
 
     for (uint32_t i = 0; i < 4; ++i) {
         std::vector<uint32_t> output;
-        distributed::EnqueueReadMeshBuffer(cq, output, out_tensors[i].mesh_buffer(), /*blocking=*/true);
+        cq.enqueue_read_mesh_buffer(output, out_tensors[i].mesh_buffer(), /*blocking=*/true);
         EXPECT_EQ(inputs[i], output) << "M2 sequential 4xDFB[" << i << "] output mismatch";
     }
 }
@@ -562,7 +562,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     auto& cq = this->device().mesh_command_queue();
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         std::vector<uint32_t> output;
-        distributed::EnqueueReadMeshBuffer(cq, output, out_tensors[i].mesh_buffer(), /*blocking=*/true);
+        cq.enqueue_read_mesh_buffer(output, out_tensors[i].mesh_buffer(), /*blocking=*/true);
         EXPECT_EQ(inputs[i], output) << "M2 concurrent Tensix→DM 4xDFB[" << i << "] mismatch";
     }
 }

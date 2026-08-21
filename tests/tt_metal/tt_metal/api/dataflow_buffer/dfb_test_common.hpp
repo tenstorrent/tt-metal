@@ -122,8 +122,7 @@ inline void m2_writeshard_barrier_uint32(
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     std::vector<T> rdback;
-    distributed::EnqueueReadMeshBuffer(
-        unit_mesh.mesh_command_queue(), rdback, in_tensor.mesh_buffer(), /*blocking=*/true);
+    unit_mesh.mesh_command_queue().enqueue_read_mesh_buffer(rdback, in_tensor.mesh_buffer(), /*blocking=*/true);
     tt_driver_atomics::mfence();
     ASSERT_EQ(rdback, input) << "M2: WriteShard did not complete before LaunchProgram (Quasar emu #38042)";
 }
@@ -428,7 +427,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, total_words);
     auto& cq = mesh_device.mesh_command_queue();
     if (in_tensor) {
-        distributed::EnqueueWriteMeshBuffer(cq, in_tensor->mesh_buffer(), input, /*blocking=*/true);
+        cq.enqueue_write_mesh_buffer(in_tensor->mesh_buffer(), input, /*blocking=*/true);
         m2_writeshard_barrier_uint32(mesh_device, *in_tensor, input);
     }
 
@@ -475,7 +474,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     // Verify (DM consumer only — Tensix consumer doesn't write DRAM).
     if (p.consumer_type == M2PorCType::DM) {
         std::vector<uint32_t> output;
-        distributed::EnqueueReadMeshBuffer(cq, output, out_tensor->mesh_buffer(), /*blocking=*/true);
+        cq.enqueue_read_mesh_buffer(output, out_tensor->mesh_buffer(), /*blocking=*/true);
         // For Tensix→DM ring-pressure with STRIDED, each consumer reads ring slot
         // (c % num_entries), so expected output is the corresponding input slice.
         if (p.producer_type == M2PorCType::TENSIX && entries_per_core > p.num_entries &&

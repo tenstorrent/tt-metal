@@ -77,7 +77,7 @@ TEST_F(UnitMeshFixture, DatacopyOutputInL1) {
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
     auto& cq = this->device().mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, *src_dram_buffer, src_vec, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(*src_dram_buffer, src_vec, /*blocking=*/true);
 
     SetRuntimeArgs(program, unary_reader_kernel, core, {(std::uint32_t)src_dram_buffer->address(), 0, num_tiles});
     SetRuntimeArgs(
@@ -92,7 +92,7 @@ TEST_F(UnitMeshFixture, DatacopyOutputInL1) {
     slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, *dst_l1_buffer, /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(result_vec, *dst_l1_buffer, /*blocking=*/true);
 
     // Validation
     EXPECT_EQ(src_vec, result_vec);

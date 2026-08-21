@@ -120,7 +120,7 @@ TEST_F(UnitMeshFixture, TransposeHC) {
     std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 100U, 0x1234);
     auto src_4f_16 = u16_from_u32_vector(src0_vec);
     auto& cq = this->device().mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, *src0_dram_buffer, src0_vec, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(*src0_dram_buffer, src0_vec, /*blocking=*/true);
 
     SetRuntimeArgs(program, reader_kernel, core, {dram_buffer_src0_addr, 0U, W, H, C, HW, N, CHW});
     SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, 0U, num_tensor_tiles});
@@ -128,7 +128,7 @@ TEST_F(UnitMeshFixture, TransposeHC) {
     slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, *dst_dram_buffer, /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(result_vec, *dst_dram_buffer, /*blocking=*/true);
 
     // Validation
     auto comparison_function = [](float a, float b) {
