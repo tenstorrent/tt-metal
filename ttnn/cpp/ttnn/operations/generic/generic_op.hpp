@@ -18,7 +18,9 @@ namespace ttnn {
 
 // GenericOp exposes everything needed to construct and write an operation on device for the user.
 // This includes: cb attributes, data movement attributes, compute attributes, rt args, compile time args.
-// Unlike other operations, must create and pass in output tensor with the input tensors.
+// Unlike other operations, must create and pass in output tensor with the input tensors. Only the
+// output is required: a generator program (no tensor read) or a single-tensor in-place program
+// passes a one-element io_tensors.
 // See tests/ttnn/unit_tests/gtests/test_generic_op.cpp for some examples.
 // The main use case right now is an interface for PyKernel to pass dynamic kernel paths.
 
