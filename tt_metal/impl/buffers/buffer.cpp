@@ -93,30 +93,16 @@ void validate_buffer_parameters(
     const BufferType& buffer_type,
     const TensorMemoryLayout& buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_spec,
-    const std::optional<BufferDistributionSpec>& buffer_distribution_spec,
-    const AllocatorImpl& allocator) {
+    const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
     if (is_sharded(buffer_layout)) {
         TT_FATAL(
             shard_spec.has_value() || buffer_distribution_spec.has_value(),
             "Buffer was specified as sharded but does not have shard_spec or buffer_distribution_spec specified");
 
-        // Every shard core must own a bank of this buffer type. Nothing else on the allocation path
-        // checks this: the allocator is handed a shard *count*, not the coordinates, so an invalid
-        // core survives construction and is only caught later by whichever op happens to resolve a
-        // bank id for it -- or not caught at all, in which case the shard lands on a bank that does
-        // not exist. Applies to both the ND (BufferDistributionSpec) and legacy (ShardSpecBuffer)
-        // paths.
-        //
-        // L1_SMALL is checked against the L1 bank map. The two are filled by the same loop over the
-        // same logical cores, so they agree on which coordinates are legal, but the L1_SMALL map is
-        // left empty entirely when the device is opened without a small region -- the default -- so
-        // asking it directly would reject every core on such a device. Whether a small region
-        // exists is the allocator's business and it reports that itself; it is not a bad shard grid,
-        // and buffers that are never allocated (graph capture hooks the allocation out) legitimately
-        // never ask.
-        const BufferType bank_type = buffer_type == BufferType::L1_SMALL ? BufferType::L1 : buffer_type;
-        const bool bank_backed = bank_type == BufferType::DRAM || bank_type == BufferType::L1;
-        if (bank_backed) {
+        // DRAM banks are 1D: bank_id is a core's logical x-coordinate and the grid is a single row.
+        // A shard core off row 0 aliases onto an existing bank and corrupts data. Applies to both the
+        // ND (BufferDistributionSpec) and legacy (ShardSpecBuffer) paths.
+        if (buffer_type == BufferType::DRAM) {
             std::vector<CoreCoord> shard_cores;
             if (buffer_distribution_spec.has_value()) {
                 shard_cores = buffer_distribution_spec->cores();
@@ -124,28 +110,12 @@ void validate_buffer_parameters(
                 shard_cores = corerange_to_cores(shard_spec->grid());
             }
             for (const auto& core : shard_cores) {
-                // Checked separately from the bank lookup below because a DRAM core off row 0 is a
-                // real coordinate -- logical y indexes a DRAM view's subchannels -- it is just not a
-                // bank. The allocator keys DRAM banks as {bank_id, 0}, so such a core aliases onto
-                // bank x and corrupts it, which a bare "no bank here" message would not explain.
-                if (buffer_type == BufferType::DRAM) {
-                    TT_FATAL(
-                        core.y == 0,
-                        "Invalid DRAM shard grid: shard core ({}, {}) is not on row 0. DRAM banks are 1D "
-                        "(bank_id == logical x-coordinate), so every shard core must have y == 0.",
-                        core.x,
-                        core.y);
-                }
                 TT_FATAL(
-                    allocator.has_bank(bank_type, core),
-                    "Invalid shard grid: shard core ({}, {}) has no {} bank on this device, which has "
-                    "{} of them. Derive the shard grid from the device (dram_grid_size() for DRAM, "
-                    "compute_with_storage_grid_size() for L1) rather than assuming a fixed size -- a "
-                    "harvested device exposes fewer banks than an unharvested one of the same type.",
+                    core.y == 0,
+                    "Invalid DRAM shard grid: shard core ({}, {}) is not on row 0. DRAM banks are 1D "
+                    "(bank_id == logical x-coordinate), so every shard core must have y == 0.",
                     core.x,
-                    core.y,
-                    enchantum::to_string(bank_type),
-                    allocator.get_num_banks(bank_type));
+                    core.y);
             }
         }
     } else {
@@ -386,8 +356,7 @@ Buffer::Buffer(
     } else {
         this->allocator_ = device->allocator_impl().get();
     }
-    validate_buffer_parameters(
-        size, page_size, buffer_type, buffer_layout_, shard_spec_, buffer_distribution_spec_, *this->allocator_);
+    validate_buffer_parameters(size, page_size, buffer_type, buffer_layout_, shard_spec_, buffer_distribution_spec_);
     unique_id_ = next_unique_id.fetch_add(1);
 }
 
