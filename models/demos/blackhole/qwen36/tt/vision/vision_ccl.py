@@ -17,10 +17,39 @@ reduce-scattering to a fractured one. Weights stay sharded, so no TP compute is 
 tower is not run redundantly. The cost is that an all-reduce moves more data than a reduce_scatter.
 """
 
+import os
+
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
+
+_VISION_CCL_UNTUNED = (10, 2)
+_VISION_CCL_TUNED = (10, 4)
+_VISION_CCL_TUNED_DEVICES = ("N300", "T3K")
 
 
-def all_reduce_replicated(x, tt_ccl, topology, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+def vision_ccl_tuning(device_name=None):
+    """``(chunks_per_sync, num_workers_per_link)`` for vision-tower collectives.
+
+    ``(10, 4)`` on Wormhole N300/T3K; ``(10, 2)`` elsewhere. ``QWEN36_VISION_CCL=0`` forces
+    untuned; ``QWEN36_VISION_CCL=cps,wpl`` overrides on any arch.
+    """
+    override = os.environ.get("QWEN36_VISION_CCL")
+    if override == "0":
+        return _VISION_CCL_UNTUNED
+    if override and "," in override:
+        chunks_per_sync, num_workers_per_link = (int(t) for t in override.split(","))
+        return chunks_per_sync, num_workers_per_link
+    if is_wormhole_b0() and device_name in _VISION_CCL_TUNED_DEVICES:
+        return _VISION_CCL_TUNED
+    return _VISION_CCL_UNTUNED
+
+
+def vision_ccl_kwargs(device_name=None):
+    chunks_per_sync, num_workers_per_link = vision_ccl_tuning(device_name)
+    return {"chunks_per_sync": chunks_per_sync, "num_workers_per_link": num_workers_per_link}
+
+
+def all_reduce_replicated(x, tt_ccl, topology, memory_config=ttnn.DRAM_MEMORY_CONFIG, ccl_kwargs=None):
     """Sum per-device partials, leaving the FULL-width result replicated on every device.
 
     Gathers along dim 0 rather than dim 3: stacking the partials on the batch axis carries no
@@ -37,9 +66,8 @@ def all_reduce_replicated(x, tt_ccl, topology, memory_config=ttnn.DRAM_MEMORY_CO
         topology=topology,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-        chunks_per_sync=10,
-        num_workers_per_link=2,
         num_buffers_per_channel=2,
+        **(ccl_kwargs if ccl_kwargs is not None else vision_ccl_kwargs()),
     )
     reduced = ttnn.experimental.fast_reduce_nc(
         gathered,
