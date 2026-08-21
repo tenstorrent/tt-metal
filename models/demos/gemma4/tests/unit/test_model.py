@@ -1191,9 +1191,9 @@ def test_single_decode(mesh_device, reset_seeds, request):
     logger.info(f"Single decode complete (TP={tp}, pos={decode_pos + 1}); next token id = {next_token}")
 
 
-def test_batched_prefill_slice_memcfg_31b_batch32_only():
-    from models.demos.gemma4.tt.model import _GEMMA4_31B_HIDDEN_SIZE, _use_31b_batch32_host_batched_extract
+def test_use_31b_batch32_host_batched_extract_scope():
+    from models.demos.gemma4.tt.model import GEMMA4_31B_HIDDEN_SIZE, _use_31b_batch32_host_batched_extract
 
-    assert _use_31b_batch32_host_batched_extract(_GEMMA4_31B_HIDDEN_SIZE, target_batch=32) is True
-    assert _use_31b_batch32_host_batched_extract(_GEMMA4_31B_HIDDEN_SIZE, target_batch=8) is False
+    assert _use_31b_batch32_host_batched_extract(GEMMA4_31B_HIDDEN_SIZE, target_batch=32) is True
+    assert _use_31b_batch32_host_batched_extract(GEMMA4_31B_HIDDEN_SIZE, target_batch=8) is False
     assert _use_31b_batch32_host_batched_extract(3840, target_batch=32) is False

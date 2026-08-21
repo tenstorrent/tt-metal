@@ -8,6 +8,7 @@ import os
 import torch
 from loguru import logger
 
+from models.demos.gemma4.tt.model import GEMMA4_31B_HIDDEN_SIZE
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
@@ -882,10 +883,25 @@ def warmup_gemma4_batched_prefill_traces(
     # 31B batch-32 defaults to ``all`` so measured prefill replays row-span traces
     # instead of cold-capturing them in-band (WH T3K L1 clash at span ≥16).
     chunk_spans_env = os.environ.get("GEMMA4_WARMUP_CHUNK_SPANS")
-    auto_chunk_spans = (
-        chunk_spans_env is None and getattr(generator.model[0], "hidden_size", 0) == 5376 and max_batch_size >= 32
-    )
+    auto_hidden = getattr(generator.model[0], "hidden_size", None)
+    auto_chunk_spans = chunk_spans_env is None and auto_hidden == GEMMA4_31B_HIDDEN_SIZE and max_batch_size >= 32
     chunk_spans_mode = ("all" if auto_chunk_spans else (chunk_spans_env or "0")).lower()
+    # Log it: the auto path is keyed on an attribute lookup, so a rename would turn
+    # it off silently and the span >= 16 L1 clash would come back as a hard failure
+    # with nothing in the log to say the warmup had opted out.
+    if auto_chunk_spans:
+        logger.info(
+            "Gemma4 batched prefill warmup: auto chunk-span warmup ON "
+            "(hidden_size={}, max_batch_size={}) -- set GEMMA4_WARMUP_CHUNK_SPANS to override.",
+            auto_hidden,
+            max_batch_size,
+        )
+    elif chunk_spans_env is None and max_batch_size >= 32:
+        logger.debug(
+            "Gemma4 batched prefill warmup: auto chunk-span warmup off (hidden_size={} != {}).",
+            auto_hidden,
+            GEMMA4_31B_HIDDEN_SIZE,
+        )
     if chunk_spans_mode not in ("0", "false", "no"):
         reachable = [span for span in SUPPORTED_PREFILL_BATCH_SIZES if user_cap < span <= max_batch_size]
         if chunk_spans_mode not in ("all", "every"):
