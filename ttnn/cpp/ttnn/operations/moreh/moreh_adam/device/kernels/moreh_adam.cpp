@@ -85,11 +85,11 @@ void kernel_main() {
         ckl::input(dfb_tmp2_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig);
     constexpr auto tmp2_output =
         ckl::output(dfb_tmp2_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig);
+    constexpr auto exp_avg_sq_input =
+        ckl::input(tmp_dfb_exp_avg_sq_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig);
 #ifdef AMSGRAD
     constexpr auto max_exp_avg_sq_input =
         ckl::input(dfb_max_exp_avg_sq_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig);
-    constexpr auto exp_avg_sq_input =
-        ckl::input(tmp_dfb_exp_avg_sq_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig);
     constexpr auto max_exp_avg_sq_output = ckl::output(
         tmp_dfb_max_exp_avg_sq_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig);
 #endif
