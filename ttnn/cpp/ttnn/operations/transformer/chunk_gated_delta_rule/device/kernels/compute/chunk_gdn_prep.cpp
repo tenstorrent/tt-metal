@@ -70,7 +70,10 @@ constexpr GdnPrepCbs CBS{
     .scr3 = cb_scr3,
     .s3 = cb_s3,
     .dl = cb_dl,
-    .mask = cb_mask};
+    .mask = cb_mask,
+    // GDN_SFPU_TINV prototype: bf16 L-staging tile. cb_out (c_16) is declared bf16 by both
+    // factories and untouched by prep otherwise; harmless when the define is off.
+    .lstage = cb_out};
 
 }  // namespace
 

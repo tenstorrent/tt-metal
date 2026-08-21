@@ -48,6 +48,19 @@ inline constexpr bool kGdnHoistReconfig = true;
 inline constexpr bool kGdnHoistReconfig = false;
 #endif
 
+// GDN_SFPU_TINV (PROTOTYPE define, set only by the fused factory on its producer compute kernel):
+// replace the Ct==1 WY inverse (invert_block) with the Blackhole SFPU triangle-solve LLK from
+// PR #53437 (optimized microcode from review comment 3802921292, PRE-NEGATED-L contract — prep's
+// negN tile is fed to the solve unchanged, staged once to a bf16 CB). bf16-quantized L makes this
+// a deliberate violation of the bit-exactness contract above (reviewed PCC-downgrade prototype,
+// measurement only — see gdn_sfpu_study/numerics_ab.py method (d) for the expected error band).
+#if defined(GDN_SFPU_TINV) && defined(ARCH_BLACKHOLE)
+#include "api/compute/triangle_solve.h"
+inline constexpr bool kGdnSfpuTinv = true;
+#else
+inline constexpr bool kGdnSfpuTinv = false;
+#endif
+
 inline void WAIT(uint32_t cb, uint32_t n) { CircularBuffer(cb).wait_front(n); }
 inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
 
@@ -375,6 +388,36 @@ inline void invert_block(
     CircularBuffer(A).pop_front(1);  // + off -> out
 }
 
+#if defined(GDN_SFPU_TINV) && defined(ARCH_BLACKHOLE)
+// PROTOTYPE: T_inv = (I - negN)^-1 for ONE 32x32 tile via the SFPU triangle solve.
+//   negN   : fp32 CB, tile 0 = -strictly_lower(N) (prep's cb.scr3) — exactly the PRE-NEGATED L
+//            the optimized LLK microcode consumes (unit diagonal implicit, never read).
+//   cb_eye : identity tile (RHS = I, so X = (I - negN)^-1 = T_inv directly).
+//   lstage : 1-tile-capable bf16 CB (the LLK reads L element-wise from L1 as bf16) — the fused
+//            producer reuses c_16 (fcb::out, declared bf16, untouched by prep).
+//   out    : cb.Tinv (fp32).
+// Caller: WAIT(out, 1) then POP(lstage, 1) — pop L only after T_inv is committed.
+inline void sfpu_tinv(uint32_t negN, uint32_t cb_eye, uint32_t lstage, uint32_t out) {
+    // Stage negN as bf16 (fp32 -> bf16 rounding happens at this pack — the method-(d) quantization).
+    cpy_t(negN, 0, lstage);
+    WAIT(lstage, 1);
+    CircularBuffer cb_l(lstage);
+    cb_reserve_back(out, 1);
+    tile_regs_acquire();
+    // RHS = I -> DST[0]. srcA was just configured fp32 by cpy_t (negN fp32); eye is fp32 too.
+    copy_tile_to_dst_init_short(cb_eye);
+    copy_tile(cb_eye, 0, 0);
+    triangle_solve_tile_init();
+    triangle_solve_tile(cb_l, 0, /*idst_in=*/0, /*idst_out=*/1);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_reconfig_data_format(out);  // packer is still bf16 from the L staging pack — restore fp32
+    pack_tile(1, out, 0);
+    tile_regs_release();
+    cb_push_back(out, 1);
+}
+#endif
+
 // out[1,Ct] row-form = transpose of col[Ct,1]; produces Ct tiles (each row0 = a 32-chunk of col).
 inline void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
     cb_reserve_back(o, Ct);
@@ -450,6 +493,9 @@ struct GdnPrepCbs {
     uint32_t scr1, scr2, scr3, s3;
     uint32_t dl;    // alias of the vnew slot in prep (1 tile used)
     uint32_t mask;  // alias of the u slot in prep (3 quadrant-mask tiles)
+    // bf16 L-staging CB for the GDN_SFPU_TINV prototype (alias of the unused-in-prep cb_out slot;
+    // consumed only when the define is set).
+    uint32_t lstage;
 };
 
 // CB map for scan_step — one field per CB the body touches (the state CBs S/s2/s3/final are
@@ -582,10 +628,19 @@ inline void prep_chunk(
     // writer would wrongly consume). None alias src (cb.scr3), out, or the Ct==2 persistents
     // (cb.supd/cb.stmp).
     if (Ct == 1) {
+#if defined(GDN_SFPU_TINV) && defined(ARCH_BLACKHOLE)
+        // PROTOTYPE: SFPU triangle solve replaces the Horner WY inverse (reviewed PCC-downgrade,
+        // NOT bit-exact with the phased path — measurement only).
+        sfpu_tinv(cb.scr3, cb.eye, cb.lstage, cb.Tinv);
+        WAIT(cb.Tinv, cc);
+        POP(cb.lstage, 1);  // pop L only after T_inv is committed
+        POP(cb.scr3, cc);
+#else
         // Single 32x32 block: T_inv is just its inverse.
         invert_block(cb.scr3, 0, cb.Tinv, cb.scr1, cb.scr2, cb.eye, cb.mask, cb.S, cb.final_s, cb.s2, cb.s3);
         WAIT(cb.Tinv, cc);
         POP(cb.scr3, cc);
+#endif
     } else if (Ct == 2) {
         // 2x2 tile-block lower-triangular. negN tiles: 0=(0,0), 2=(1,0), 3=(1,1); (0,1)=0.
         // Diagonal inverses Mi11, Mi22, then off-diagonal Mi21 = -Mi22 @ A21 @ Mi11.

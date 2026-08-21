@@ -281,7 +281,10 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     prep_compute.compile_time_args = prep_compute_ct;
     prep_compute.config = fused_compute_cfg();
     // Fused-only perf: hoisted WY-path reconfigs (see chunk_gdn_math.hpp kGdnHoistReconfig).
-    prep_compute.defines = {{"GDN_HOIST_RECONFIG", "1"}};
+    // GDN_SFPU_TINV (PROTOTYPE): Ct==1 WY inverse via the SFPU triangle solve — NOT bit-exact
+    // with the phased path (see chunk_gdn_math.hpp). Kernel-side ARCH_BLACKHOLE guard makes
+    // non-BH compile-safe (falls back to the Horner path).
+    prep_compute.defines = {{"GDN_HOIST_RECONFIG", "1"}, {"GDN_SFPU_TINV", "1"}};
     prep_compute.runtime_args.reserve(BH);
 
     KernelDescriptor fused_writer;
