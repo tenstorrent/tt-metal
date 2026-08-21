@@ -549,11 +549,11 @@ struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Tr, Chain>> {
     // the same shape. The attention mask is the motivating case, where it turns
     // matmul-then-add into just the matmul.
     template <typename Operand>
-    auto plus(const Operand& operand) const {
+    auto add(const Operand& operand) const {
         static_assert(
             same_shape_v<typename Operand::shape, typename geometry::out_shape>,
             "a fused addend must have the matmul's OUTPUT shape -- for one row broadcast "
-            "down the block, that is bias(), not plus()");
+            "down the block, that is bias(), not add()");
         MatmulNode<SA, SB, Tr, Chain> out{{}, in0_cb, in1_cb, bias_cb, operand.get_cb_id()};
         return out;
     }
@@ -571,7 +571,7 @@ struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Tr, Chain>> {
         // nothing to notice; more and the kernel and the geometry disagree about
         // the shape. Checked here rather than in the strategy because this is where
         // the operand's page count is still in hand.
-        // Carries addend_cb through: without it, .plus(m).bias(v) would drop the addend
+        // Carries addend_cb through: without it, .add(m).bias(v) would drop the addend
         // silently -- the fused add would just not happen, and the result would look
         // like a plain biased matmul rather than like an error.
         MatmulNode<SA, SB, Tr, Chain> out{{}, in0_cb, in1_cb, operand.get_cb_id(), addend_cb};
@@ -582,7 +582,7 @@ struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Tr, Chain>> {
     uint32_t in1_cb;
     uint32_t bias_cb = kNoBias;
     // A whole block added to the product, distinct from bias_cb, which is one row
-    // broadcast. See plus() above.
+    // broadcast. See add() above.
     uint32_t addend_cb = kNoBias;
 };
 
@@ -1014,29 +1014,34 @@ auto rsqrt(const N& n) {
     return expr::Un<RsqrtOp, N>{{}, n};
 }
 
+// Each of these rebuilds the node with one more link on its chain, and each has to carry
+// BOTH operand fields across. Forgetting addend_cb here is not a compile error and not a
+// crash: it silently drops the fused add, so matmul(q, k).add(mask).relu() would come out
+// as relu(A@B). It was wrong that way until this comment existed. Making the addend part
+// of the node's TYPE would make the omission impossible rather than merely commented.
 template <typename SA, typename SB, TransposeB Tr, typename Chain>
 auto relu(const MatmulNode<SA, SB, Tr, Chain>& m) {
-    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, ReluOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, ReluOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb, m.addend_cb};
 }
 
 template <typename SA, typename SB, TransposeB Tr, typename Chain>
 auto exp_(const MatmulNode<SA, SB, Tr, Chain>& m) {
-    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, ExpOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, ExpOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb, m.addend_cb};
 }
 
 template <typename SA, typename SB, TransposeB Tr, typename Chain>
 auto recip(const MatmulNode<SA, SB, Tr, Chain>& m) {
-    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, RecipOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, RecipOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb, m.addend_cb};
 }
 
 template <typename SA, typename SB, TransposeB Tr, typename Chain>
 auto sqrt_(const MatmulNode<SA, SB, Tr, Chain>& m) {
-    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, SqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, SqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb, m.addend_cb};
 }
 
 template <typename SA, typename SB, TransposeB Tr, typename Chain>
 auto rsqrt(const MatmulNode<SA, SB, Tr, Chain>& m) {
-    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, RsqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, RsqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb, m.addend_cb};
 }
 
 // A broadcast is spelled with the ordinary operators, the marker on the right telling
@@ -1552,7 +1557,7 @@ struct Strategy<FPUFusion> {
             in1_index += G::in1_row_stride;
         }
 
-        // Before the chain, so matmul(a, b).plus(m).relu() is relu(A@B + m).
+        // Before the chain, so matmul(a, b).add(m).relu() is relu(A@B + m).
         if (node.addend_cb != kNoBias) {
             AddOp::fpu_reuse_init<true>(node.addend_cb);
             for (uint32_t t = 0; t < kAccTiles; ++t) {

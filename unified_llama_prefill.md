@@ -1450,7 +1450,7 @@ wrong sum. `reduce_max` stays a reduction; a maximum has no matmul form.
 
 **The mask fold is a wash on time, and the reason corrects an earlier claim in this file.**
 The list said folding it "removes a whole 64-tile pass", which is true, and predicted a win,
-which was wrong. `plus` replaces the add pass's FPU add with a dest-reuse add: the MATH
+which was wrong. `add` replaces the add pass's FPU add with a dest-reuse add: the MATH
 thread issues one instruction per output tile either way. What actually disappears is 64
 packs and 128 unpacks -- and pack and unpack have slack, while math is the constraint. So
 **removing L1 round trips does not help while math is the bottleneck**, and the general
@@ -1461,13 +1461,44 @@ It is kept anyway, for L1 rather than time: the scores buffer is gone, 64 pages 
 and sq is L1-bound. That lifted 128-wide heads from sq=6 to **sq=8** and is most of why
 Qwen3 0.6B and Llama 3.2 3B moved 235.4 -> 223.2us.
 
-`plus` is a genuine addition to the matmul node, distinct from `bias` -- a whole block of the
+`add` is a genuine addition to the matmul node, distinct from `bias` -- a whole block of the
 output's shape rather than one row broadcast down it -- and applies in both the plain and
 banded paths, before the epilogue chain so `matmul(a,b).plus(m).relu()` is `relu(A@B + m)`.
 Two things it has to do that the trace pins: put `matmul_block_init` back afterwards, since
 the reuse op reprograms the math unit and a later band would otherwise run a matmul against
-eltwise state; and carry `addend_cb` through `bias()`, or `.plus(m).bias(v)` would drop the
+eltwise state; and carry `addend_cb` through `bias()`, or `.add(m).bias(v)` would drop the
 addend and look like a plain biased matmul rather than an error.
+
+### Deferred: merging bias into add
+
+`plus` is now `add`. Merging `bias` into it -- writing a bias as
+`matmul(a, b).add(bcast<Axis::Rows>(bias))` -- is specced but not done. The spelling works:
+`reduce_shape<out_shape, Axis::Rows>` IS `Shape<1, ct_dim>`, which is exactly the shape
+`bias()` demands, so the type system already agrees that a Rows-broadcast of that shape
+belongs to this output block.
+
+What stops it being cosmetic is that the two forms cannot cost the same. Metal's
+`add_tiles_bcast_rows` reads BOTH operands from circular buffers and writes DST; there is
+no DST-operand form. So a block addend is in place and free (one FPU op per tile), while a
+broadcast addend has to stay `bias_finish`: pack the product out, re-acquire, read it back,
+broadcast-add, pack again. One API, two costs about 2x apart. The LLK does template
+`src_b_bcast_type` and `binary_reuse_dest` independently, so an in-place broadcast add is
+plausible -- but metal exposes no wrapper for the combination and this library has only ever
+called public `ckernel::` entry points, so that is a separate spike.
+
+The real argument for the merge is that `bias_cb` and `addend_cb` are runtime fields every
+node-construction site must remember to copy, and sites keep forgetting:
+
+- the five unary chain builders dropped `addend_cb`, so `matmul(q, k).add(mask).relu()`
+  silently produced `relu(A@B)`. **Fixed here**, and `example_matmul_add` now covers the
+  chained form: reverting one builder takes the trace from 10 add_reuse lines to 5.
+- `bias()` dropped `addend_cb` -- fixed when `add` landed.
+- `run_banded` ignores `bias_cb` entirely, so a single-shot `store(matmul(a, b).bias(v))`
+  with a >8-tile output silently drops the bias. Still open. The ACCUMULATING path is safe:
+  its static_assert fires, which `--rt 4 --ct 4` confirms.
+
+Three instances of one bug class, all silent. Making the addend part of `MatmulNode`'s TYPE
+turns every one into a compile error, which is what the merge is actually for.
 
 ### What to test next
 
