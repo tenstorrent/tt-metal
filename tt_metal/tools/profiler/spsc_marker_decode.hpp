@@ -19,6 +19,7 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -86,6 +87,10 @@ struct SpanDecodeState {
     uint64_t head_lag = 0;
     uint64_t anomalies = 0;  // torn run / truncated run / undecodable word
     uint64_t unknown_core_frames = 0;
+    // Vector-block accounting (diagnostic): records taken by the 8-wide zone/atomic paths vs the scalar
+    // fallback, and how often a would-be vector block was rejected by the per-lane type screen -- i.e. how
+    // much the 2-word/3-word record mix on a stall-heavy wire is fragmenting the SIMD path.
+    uint64_t vec_zone_recs = 0, vec_atomic_recs = 0, scalar_recs = 0, vec_block_rejects = 0;
 
     void reset(uint32_t num_cores) {
         timer_hi.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
@@ -101,6 +106,39 @@ struct SpscIgnoreProg {
 
 // Sentinel default for the vectorized zone-block sink: without a real one the walk stays scalar.
 struct SpscNoZones8 {};
+struct SpscNoAtomic8 {};
+
+#if defined(__AVX2__)
+// Deinterleave EIGHT consecutive 3-word atomic records (24 contiguous words) into vectors of word0
+// (type|id27), word1 (ts low) and word2 (duration). Output lane j belongs to record j; the stride-3
+// scatter across three source vectors costs 9 lane permutes + 6 blends, against 24 scalar loads.
+inline void spsc_load_atomic8(const uint32_t* src, __m256i& w0s, __m256i& w1s, __m256i& w2s) {
+    const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src));
+    const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 8));
+    const __m256i v2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 16));
+    const __m256i iA0 = _mm256_setr_epi32(0, 3, 6, 0, 0, 0, 0, 0);
+    const __m256i iB0 = _mm256_setr_epi32(0, 0, 0, 1, 4, 7, 0, 0);
+    const __m256i iC0 = _mm256_setr_epi32(0, 0, 0, 0, 0, 0, 2, 5);
+    const __m256i iA1 = _mm256_setr_epi32(1, 4, 7, 0, 0, 0, 0, 0);
+    const __m256i iB1 = _mm256_setr_epi32(0, 0, 0, 2, 5, 0, 0, 0);
+    const __m256i iC1 = _mm256_setr_epi32(0, 0, 0, 0, 0, 0, 3, 6);
+    const __m256i iA2 = _mm256_setr_epi32(2, 5, 0, 0, 0, 0, 0, 0);
+    const __m256i iB2 = _mm256_setr_epi32(0, 0, 0, 3, 6, 0, 0, 0);
+    const __m256i iC2 = _mm256_setr_epi32(0, 0, 1, 0, 0, 1, 4, 7);
+    w0s = _mm256_blend_epi32(
+        _mm256_blend_epi32(_mm256_permutevar8x32_epi32(v0, iA0), _mm256_permutevar8x32_epi32(v1, iB0), 0b00111000),
+        _mm256_permutevar8x32_epi32(v2, iC0),
+        0b11000000);
+    w1s = _mm256_blend_epi32(
+        _mm256_blend_epi32(_mm256_permutevar8x32_epi32(v0, iA1), _mm256_permutevar8x32_epi32(v1, iB1), 0b00011000),
+        _mm256_permutevar8x32_epi32(v2, iC1),
+        0b11100000);
+    w2s = _mm256_blend_epi32(
+        _mm256_blend_epi32(_mm256_permutevar8x32_epi32(v0, iA2), _mm256_permutevar8x32_epi32(v1, iB2), 0b00011100),
+        _mm256_permutevar8x32_epi32(v2, iC2),
+        0b11100000);
+}
+#endif
 
 inline void spsc_prefetch(const void* p) {
 #if defined(__x86_64__)
@@ -134,19 +172,27 @@ inline void spsc_prefetch(const void* p) {
 // The optional emit_zones8(lane, timer_hi, prog, w0s, w1s) sink receives EIGHT consecutive 2-word zone
 // markers at once, deinterleaved into AVX2 vectors of word0s and word1s, whenever a 16-word block passes
 // the all-zone type screen -- the dominant case in a busy frame, and where the scalar walk's per-record
-// cost lives.
+// cost lives. emit_atomic8(lane, timer_hi, prog, w0s, w1s, w2s, n) is the same idea for up to EIGHT
+// 3-word PP_ZONE_ATOMIC records (w2s = durations): n <= 8 leading lanes are valid, the rest are
+// speculative over-read and must not be emitted. Without it the atomic wire decodes entirely scalar.
 template <
     typename EmitMarker,
     typename EmitData,
     typename EmitProg = SpscIgnoreProg,
-    typename EmitZones8 = SpscNoZones8>
+    typename EmitZones8 = SpscNoZones8,
+    typename EmitAtomic8 = SpscNoAtomic8>
 inline uint32_t spsc_decode_frame(
     SpanDecodeState& st,
     const uint32_t* frame,
     EmitMarker&& emit,
     EmitData&& emit_data,
     EmitProg&& emit_prog = SpscIgnoreProg{},
-    EmitZones8&& emit_zones8 = SpscNoZones8{}) {
+    EmitZones8&& emit_zones8 = SpscNoZones8{},
+    EmitAtomic8&& emit_atomic8 = SpscNoAtomic8{},
+    // Total words in the frame buffer. Nonzero authorizes the atomic block path to LOAD (never emit) up
+    // to 24 words past a lane's live run -- the bytes exist in the frame/bounce buffer -- which lets
+    // run-tails and sticky-split blocks go through the vector path with a partial count.
+    uint32_t frame_words = 0) {
     const uint32_t* ctrl = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
     const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_CORE_XY]);
     if (xy_it == st.core_of_xy.end()) {
@@ -227,12 +273,37 @@ inline uint32_t spsc_decode_frame(
                         if (_mm256_movemask_epi8(_mm256_cmpgt_epi32(types, _mm256_set1_epi32(1))) == 0) {
                             const __m256i w1s = _mm256_permute4x64_epi64(odd, _MM_SHUFFLE(3, 1, 2, 0));
                             emit_zones8(lane, th, pg, w0s, w1s);
+                            st.vec_zone_recs += 8;
                             i += 16;
+                            continue;
+                        }
+                        st.vec_block_rejects++;
+                    }
+                }
+                if constexpr (!std::is_same_v<std::decay_t<EmitAtomic8>, SpscNoAtomic8>) {
+                    const uint32_t idx = (hm + i) & kSpscRingMask;
+                    // The ring mirror is fully readable, so a partial block may over-READ stale words
+                    // beyond the run; `n` caps what is decoded and emitted.
+                    if (t == PP_ZONE_ATOMIC && i + 3 <= run && idx + 24 <= kSpscRingCap) {
+                        __m256i w0s, w1s, w2s;
+                        spsc_load_atomic8(ring + idx, w0s, w1s, w2s);
+                        const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
+                        const uint32_t mask = static_cast<uint32_t>(_mm256_movemask_epi8(
+                            _mm256_cmpeq_epi32(types, _mm256_set1_epi32(PP_ZONE_ATOMIC))));
+                        // countr_zero(0) == 32 -> n = 8 on a full match; lane 0 always matches (t checked).
+                        uint32_t n = static_cast<uint32_t>(std::countr_zero(~mask)) / 4;
+                        n = std::min(n, (run - i) / 3);
+                        if (n != 0) {
+                            emit_atomic8(lane, th, pg, w0s, w1s, w2s, n);
+                            st.vec_atomic_recs += n;
+                            st.vec_block_rejects += (mask != 0xFFFFFFFFu) ? 1 : 0;
+                            i += 3 * n;
                             continue;
                         }
                     }
                 }
 #endif
+                st.scalar_recs++;
                 if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
                     if (i + 2 > run) {
                         st.anomalies++;
@@ -338,12 +409,36 @@ inline uint32_t spsc_decode_frame(
                     if (_mm256_movemask_epi8(_mm256_cmpgt_epi32(types, _mm256_set1_epi32(1))) == 0) {
                         const __m256i w1s = _mm256_permute4x64_epi64(odd, _MM_SHUFFLE(3, 1, 2, 0));
                         emit_zones8(lane, th, pg, w0s, w1s);
+                        st.vec_zone_recs += 8;
                         i += 16;
+                        continue;
+                    }
+                    st.vec_block_rejects++;
+                }
+            }
+            if constexpr (!std::is_same_v<std::decay_t<EmitAtomic8>, SpscNoAtomic8>) {
+                // A full block fits inside the run; a partial one may over-read into the rest of the
+                // frame buffer when the caller vouched for its size (frame_words).
+                if (t == PP_ZONE_ATOMIC && i + 3 <= run &&
+                    (i + 24 <= run || (frame_words != 0 && p + i + 24 <= frame + frame_words))) {
+                    __m256i w0s, w1s, w2s;
+                    spsc_load_atomic8(p + i, w0s, w1s, w2s);
+                    const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
+                    const uint32_t mask = static_cast<uint32_t>(
+                        _mm256_movemask_epi8(_mm256_cmpeq_epi32(types, _mm256_set1_epi32(PP_ZONE_ATOMIC))));
+                    uint32_t n = static_cast<uint32_t>(std::countr_zero(~mask)) / 4;
+                    n = std::min(n, (run - i) / 3);
+                    if (n != 0) {
+                        emit_atomic8(lane, th, pg, w0s, w1s, w2s, n);
+                        st.vec_atomic_recs += n;
+                        st.vec_block_rejects += (mask != 0xFFFFFFFFu) ? 1 : 0;
+                        i += 3 * n;
                         continue;
                     }
                 }
             }
 #endif
+            st.scalar_recs++;
             if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
                 if (i + 2 > run) {
                     st.anomalies++;

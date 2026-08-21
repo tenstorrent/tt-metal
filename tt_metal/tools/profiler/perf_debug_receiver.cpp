@@ -360,6 +360,54 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         }
         pos += 8;
     };
+    auto emit_atomic8 = [&](
+                            uint32_t lane, uint32_t th, uint32_t prog, __m256i w0s, __m256i w1s, __m256i w2s,
+                            uint32_t n) {
+        zone_markers += n;
+        const uint64_t ts_first =
+            (static_cast<uint64_t>(th) << 32) | static_cast<uint32_t>(_mm256_extract_epi32(w1s, 0));
+        alignas(32) uint32_t w1_arr[8];
+        _mm256_store_si256(reinterpret_cast<__m256i*>(w1_arr), w1s);
+        const uint64_t ts_last = (static_cast<uint64_t>(th) << 32) | w1_arr[n - 1];
+        order_regressions += ts_first < last_ts[lane] ? 1 : 0;
+        last_ts[lane] = ts_last;
+        if (min_ts == 0) {
+            min_ts = ts_first;
+        }
+        max_ts = ts_last;
+        // No PRODUCER-STALL probe here: the scalar path only counts STALL starts on the 2-word wire
+        // (type == PP_ZONE_START), so atomic records are exempt on both paths alike.
+        if (!sink) {
+            return;
+        }
+        const __m256i ids = _mm256_and_si256(w0s, _mm256_set1_epi32(0x07FFFFFF));
+        // A complete zone: type = Zone (0), so meta carries only lane and dev; duration rides quadword 2's
+        // high half above prog.
+        const uint64_t meta64 = static_cast<uint64_t>((lane << 16) | (dev << 26)) << 32;
+        alignas(32) uint32_t id_arr[8];
+        alignas(32) uint32_t dur_arr[8];
+        _mm256_store_si256(reinterpret_cast<__m256i*>(id_arr), ids);
+        _mm256_store_si256(reinterpret_cast<__m256i*>(dur_arr), w2s);
+        const uint64_t th_hi = static_cast<uint64_t>(th) << 32;
+        const uint64_t prog64 = prog;
+        const uint64_t slot0 = pos & ring_mask;
+        if (slot0 + n <= ring_mask + 1) {
+            auto* q = reinterpret_cast<long long*>(ring_base + slot0 * sizeof(PerfDebugRawRec));
+            for (uint32_t k = 0; k < n; k++, q += 3) {
+                _mm_stream_si64(q + 0, static_cast<long long>(th_hi | w1_arr[k]));
+                _mm_stream_si64(q + 1, static_cast<long long>(meta64 | id_arr[k]));
+                _mm_stream_si64(q + 2, static_cast<long long>((static_cast<uint64_t>(dur_arr[k]) << 32) | prog64));
+            }
+        } else {
+            for (uint32_t k = 0; k < n; k++) {
+                auto* q = reinterpret_cast<long long*>(w.emit_slot_ptr(pos + k));
+                _mm_stream_si64(q + 0, static_cast<long long>(th_hi | w1_arr[k]));
+                _mm_stream_si64(q + 1, static_cast<long long>(meta64 | id_arr[k]));
+                _mm_stream_si64(q + 2, static_cast<long long>((static_cast<uint64_t>(dur_arr[k]) << 32) | prog64));
+            }
+        }
+        pos += n;
+    };
 #endif
 
     const uint64_t t0 = tsc_now();
@@ -402,12 +450,14 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         if (sink) {
             w.emit_reserve(pos + fw);
         }
+        const uint64_t tf0 = tsc_now();
 #if defined(__AVX2__)
-        const uint32_t payload =
-            profiler::spsc_decode_frame(s.decode, frame, emit, emit_data, profiler::SpscIgnoreProg{}, emit_zones8);
+        const uint32_t payload = profiler::spsc_decode_frame(
+            s.decode, frame, emit, emit_data, profiler::SpscIgnoreProg{}, emit_zones8, emit_atomic8, fw);
 #else
         const uint32_t payload = profiler::spsc_decode_frame(s.decode, frame, emit, emit_data);
 #endif
+        s.frame_ticks += tsc_now() - tf0;
         if (payload != 0 && payload != w1) {
             s.bad_frames++;
         }
@@ -415,7 +465,9 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         pages_done += fw / kernel_profiler::SPSC_SPAN_PAGE_WORDS;
         frames++;
         if (frames % kAckBatchFrames == 0) {
+            const uint64_t ta0 = tsc_now();
             s.sock->pop(pages_done - acked_pages, true);
+            s.ack_ticks += tsc_now() - ta0;
             acked_pages = pages_done;
         }
     }
@@ -430,7 +482,9 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     s.max_zone_ts = max_ts;
     s.decode_ticks += tsc_now() - t0;
     if (pages_done > acked_pages) {
+        const uint64_t ta0 = tsc_now();
         s.sock->pop(pages_done - acked_pages, true);
+        s.ack_ticks += tsc_now() - ta0;
     }
     if (pages_done == 0) {
         if (s.producers_done.load(std::memory_order_acquire)) {
@@ -779,7 +833,8 @@ void PerfDebugReceiver::log_report() const {
         last_tsc = std::max(last_tsc, s.last_commit_tsc);
         log_info(
             tt::LogMetal,
-            "[perf-debug receiver] d{}/s{}: {} frames ({:.1f} MB) in {} passes | decode {:.1f} ms | {} records "
+            "[perf-debug receiver] d{}/s{}: {} frames ({:.1f} MB) in {} passes | decode {:.1f} ms (frame {:.1f} + "
+            "ack {:.1f} + other {:.1f}) | {} records "
             "({} zones, {} stall-zones) | resyncs {} ({} words) | head-lag {} | anomalies {} | bad frames {} | "
             "unknown-core frames {} | order regressions {} [MUST be 0]",
             s.dev,
@@ -788,6 +843,9 @@ void PerfDebugReceiver::log_report() const {
             s.pages * static_cast<double>(kPageBytes) / 1e6,
             s.passes,
             ticks_to_ms(s.decode_ticks),
+            ticks_to_ms(s.frame_ticks),
+            ticks_to_ms(s.ack_ticks),
+            ticks_to_ms(s.decode_ticks - std::min(s.decode_ticks, s.frame_ticks + s.ack_ticks)),
             s.records,
             s.zone_markers / 2,
             s.stall_zones,
@@ -798,6 +856,19 @@ void PerfDebugReceiver::log_report() const {
             s.bad_frames,
             s.decode.unknown_core_frames,
             s.order_regressions);
+        const uint64_t vrec = s.decode.vec_zone_recs + s.decode.vec_atomic_recs;
+        const uint64_t allrec = vrec + s.decode.scalar_recs;
+        log_info(
+            tt::LogMetal,
+            "[perf-debug receiver] d{}/s{} decode paths: {:.1f}% vectorized ({} zone8 + {} atomic8), {} scalar, "
+            "{} vec-block rejects",
+            s.dev,
+            s.sock_idx,
+            allrec ? 100.0 * static_cast<double>(vrec) / static_cast<double>(allrec) : 0.0,
+            s.decode.vec_zone_recs,
+            s.decode.vec_atomic_recs,
+            s.decode.scalar_recs,
+            s.decode.vec_block_rejects);
     }
     uint64_t consumer_drops = 0;
     for (const auto& c : consumers_report_) {
