@@ -209,6 +209,8 @@ FORCE_INLINE void recordNocEventWithID(
         has_required_addrgen_traits_v<AddrGen>,
         "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
     auto [decoded_x, decoded_y] = decode_noc_id_into_coord<addrgen.is_dram>(noc_id, noc);
+#if defined(ARCH_QUASAR)
+    // The DRAM backend's non-dropping (debug-dump) mode wants the local addresses for the dst trailer.
     if constexpr (kernel_profiler::NON_DROPPING) {
         auto noc_addr_local =
             decode_noc_addr_to_local_addr(get_noc_addr_from_bank_id<addrgen.is_dram>(noc_id, offset, noc));
@@ -216,6 +218,11 @@ FORCE_INLINE void recordNocEventWithID(
     } else {
         recordNocEvent<noc_event_type, posted>(decoded_x, decoded_y, num_bytes, vc, noc, 0, 0);
     }
+#else
+    (void)local_addr;
+    (void)offset;
+    recordNocEvent<noc_event_type, posted>(decoded_x, decoded_y, num_bytes, vc, noc, 0, 0);
+#endif
 }
 
 template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, bool posted, typename NocAddrU64>
@@ -223,12 +230,18 @@ FORCE_INLINE void recordNocEventWithAddr(
     uint32_t local_addr, NocAddrU64 noc_addr, uint32_t num_bytes, int8_t vc, uint8_t noc) {
     static_assert(std::is_same_v<NocAddrU64, uint64_t>);
     auto [decoded_x, decoded_y] = decode_noc_addr_to_coord(noc_addr);
+#if defined(ARCH_QUASAR)
+    // DRAM-backend non-dropping mode -- see recordNocEventWithID above.
     if constexpr (kernel_profiler::NON_DROPPING) {
         auto noc_addr_local = decode_noc_addr_to_local_addr(noc_addr);
         recordNocEvent<noc_event_type, posted>(decoded_x, decoded_y, num_bytes, vc, noc, local_addr, noc_addr_local);
     } else {
         recordNocEvent<noc_event_type, posted>(decoded_x, decoded_y, num_bytes, vc, noc, 0, 0);
     }
+#else
+    (void)local_addr;
+    recordNocEvent<noc_event_type, posted>(decoded_x, decoded_y, num_bytes, vc, noc, 0, 0);
+#endif
 }
 }  // namespace noc_event_profiler
 
@@ -291,11 +304,21 @@ FORCE_INLINE void recordNocEventWithAddr(
         }                                                                  \
     }
 
-// preemptive quick push if transitioning from unlinked state to linked state
+// Preemptive quick push if transitioning from unlinked to linked state -- a DRAM-backend concept
+// (flush the L1 buffer before a linked transaction sequence). The streaming backend has no DRAM push
+// and defines no such call; swallow the args so callers compile identically.
+#if defined(ARCH_QUASAR)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)         \
     {                                                           \
         kernel_profiler::quick_push_if_linked(cmd_buf, linked); \
     }
+#else
+#define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked) \
+    {                                                   \
+        (void)(cmd_buf);                                \
+        (void)(linked);                                 \
+    }
+#endif
 
 #else
 

@@ -76,13 +76,6 @@
 namespace kernel_profiler {
 
 extern uint32_t wIndex;  // producer tail (monotonic word count for this RISC's ring)
-extern uint32_t stackSize;
-extern uint32_t traceCount;
-
-// Host-side ID (run/program id) carried in the low word of the STICKY_META context packet. Fed by
-// set_host_counter() (the DeviceZoneSetCounter hook) -- realizes the TODO there. The host forward-fills
-// it onto following markers. 0 until set (currently ~0 on worker cores until a program_host_id is plumbed).
-[[maybe_unused]] static uint32_t hostZoneId = 0;
 
 // SPSC publish gate for the DeviceValidateProfiler filter. publish_tail() only advances the
 // consumer-visible ring tail while this is true. On "validator" RISCs (those whose FW loop calls
@@ -106,8 +99,6 @@ inline constexpr bool PROFILER_VALIDATES_ZONE = false;
 extern uint32_t sums[SUM_COUNT];
 extern uint32_t sumIDs[SUM_COUNT];
 
-constexpr uint32_t NOC_ALIGNMENT_FACTOR = 4;
-
 // TRACE-ONLY mode (PROFILER_OPT_DO_TRACE_ONLY / TRACE_ON_TENSIX) has been REMOVED from this producer.
 // It gated the FW/KERNEL wrapper markers behind a per-replay state machine and forced myRiscID=0; the drainer
 // path does not use it and it only obscured the live code. The parked DRAM producer
@@ -117,10 +108,6 @@ constexpr bool DO_SUM = true;
 #else
 constexpr bool DO_SUM = false;
 #endif
-
-// SPSC backend never drops — it blocks on a full ring — so dropping is always off.
-// (Kept because noc_event_profiler.hpp references kernel_profiler::NON_DROPPING.)
-constexpr bool NON_DROPPING = false;
 
 constexpr int WALL_CLOCK_HIGH_INDEX = 1;
 constexpr int WALL_CLOCK_LOW_INDEX = 0;
@@ -145,12 +132,6 @@ static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in 
 // correctness depended on the numeric ordinals of an enum this backend does not own. The id now carries
 // the source-location hash and nothing else; the kind travels as its own argument.
 enum class ZoneKind : uint32_t { Start = 0, End = 1, Total = 2 };
-
-// The id is the 27-bit structural zone id (hostdevcommon/profiler_zone_id.h). Kept as functions (rather
-// than a bare mask at call sites) because the host name map is keyed on this same value.
-constexpr uint32_t get_const_id(uint32_t id) { return id & TT_ZONE_ID_MASK; }
-
-inline __attribute__((always_inline)) uint32_t get_id(uint32_t id) { return id & TT_ZONE_ID_MASK; }
 
 // ---- SPSC ring primitives -------------------------------------------------
 
@@ -369,32 +350,6 @@ inline __attribute__((always_inline)) void mark_time(uint32_t timer_id, ZoneKind
     publish_tail();
 }
 
-// Emit the STICKY_META context packet (2 words) into ALL of this core's RISC rings, not just the
-// caller's. Each per-RISC ring the drainer drains needs its own (core_x, core_y, risc) + host_id header so
-// the host can forward-fill that identity onto the following raw markers -- letting the drainer reader
-// bulk-copy them with NO per-marker reshape. The type sits in the same valid/type bits (w0[31], w0[30:28])
-// the host reads on any marker, so a sticky is distinguished before its payload is decoded.
-//
-// Called from set_host_counter (BRISC's assign-ID hook). Safe to populate sibling rings because at that
-// point BRISC is the only active RISC -- the others are out of reset but not yet emitting (run_triscs is
-// later). init_profiler() has already zeroed the rings this launch. For sibling rings the sticky lands
-// first; only BRISC's own ring has its FW ZONE_START ahead of the sticky (fine -- FW zone carries no ID).
-inline __attribute__((always_inline)) void mark_sticky_meta() {
-    // Retired: the combined (identity+id) context packet is gone. Identity is injected by the drainer
-    // reader (STICKY_SRC); the runtime host-id is emitted as STICKY_PROG from set_host_counter. Kept
-    // as a no-op in case anything still references it.
-    return;
-}
-
-// Fixed-index write retained only for the trace-only build mode (writes directly into the ring storage
-// region; not used by the default SPSC path). 2-word marker: word0 = type|hash, word1 = timer_low.
-inline __attribute__((always_inline)) void mark_time_at_index_inlined(
-    uint32_t index, uint32_t timer_id, ZoneKind kind = ZoneKind::Start) {
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    profiler_data_buffer[myRiscID].data[index] = ppfmt::zone_w0(timer_id, kind);
-    profiler_data_buffer[myRiscID].data[index + 1] = p_reg[WALL_CLOCK_LOW_INDEX];
-}
-
 // No dropped-timestamp bookkeeping: the ring blocks rather than dropping, so the only way to lose a
 // marker is after PROFILER_TERMINATE releases a producer at teardown.
 
@@ -407,7 +362,6 @@ inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValu
     // misassigns zones across op boundaries on back-to-back launches (measured ~2x unions). On BRISC
     // it is held unpublished until DeviceValidateProfiler commits the launch (an idle core rewinds
     // it), matching the FW zone's validity gate; subordinates only run committed launches.
-    hostZoneId = counterValue;
     if (counterValue >> 27) {
         ring_ensure_room(2);
         ring_write_word(ppfmt::w0(ppfmt::T_STICKY_PROG_EXT, 0));
@@ -436,7 +390,6 @@ inline __attribute__((always_inline)) void set_profiler_zone_valid(bool conditio
 
 __attribute__((noinline)) void init_profiler(
     uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0) {
-    stackSize = 0;
     for (int i = 0; i < SUM_COUNT; i++) {
         sumIDs[i] = 0;
         sums[i] = 0;
@@ -484,7 +437,8 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
     for (int i = 0; i < SUM_COUNT; i++) {
         if (sums[i] > 0) {
             ring_ensure_room(SPSC_MARKER_WORDS);
-            ring_write_word(ppfmt::zone_w0(get_id(sumIDs[i]), ZoneKind::Total));  // word0: PP_ZONE_TOTAL | hash
+            ring_write_word(
+                ppfmt::zone_w0(sumIDs[i], ZoneKind::Total));  // word0: PP_ZONE_TOTAL | id (masked in zone_w0)
             ring_write_word(sums[i]);  // word1: accumulated sum (host reads-as-sum by type, not a timer)
         }
     }
@@ -492,17 +446,6 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
 }
 
 __attribute__((noinline)) void finish_profiler() { risc_finished_profiling(); }
-
-// Retained only because backend-agnostic headers (noc_event/fabric_event/perf_counters/
-// noc_debugging) call them unconditionally. They are no-ops here: this backend has no DRAM push.
-inline __attribute__((always_inline)) void quick_push_if_linked(uint32_t cmd_buf, bool linked) {
-    (void)cmd_buf;
-    (void)linked;
-}
-
-inline __attribute__((always_inline)) void flush_to_dram_if_full(uint32_t additional_slots = 0) {
-    (void)additional_slots;
-}
 
 template <uint32_t timer_id>
 struct profileScope {
@@ -595,8 +538,6 @@ inline __attribute__((always_inline)) void recordFlag() {
     mark_point(ppfmt::event_w0(data_id));
 }
 
-inline __attribute__((always_inline)) void increment_trace_count() { traceCount++; }
-
 }  // namespace kernel_profiler
 
 #include "noc_event_profiler.hpp"
@@ -646,16 +587,12 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 
 #define DeviceZoneSetCounter(counter) kernel_profiler::set_host_counter(counter);
 
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_AERISC)
-#define DeviceProfilerInit() kernel_profiler::traceCount = 0;
-#else
+// Trace hooks: the NAMES must exist because shared firmware calls them unconditionally, and they are
+// real on the DRAM backend (kernel_profiler_push.hpp owns trace-replay). Here they are empty -- this
+// backend keeps no trace counter; nothing read it since trace-only mode was removed.
 #define DeviceProfilerInit()
-#endif
-
-// Trace-only mode is gone; the hook stays (firmware calls it) but does nothing.
 #define DeviceTraceOnlyProfilerInit()
-
-#define DeviceIncrementTraceCount() kernel_profiler::increment_trace_count();
+#define DeviceIncrementTraceCount()
 
 #else
 

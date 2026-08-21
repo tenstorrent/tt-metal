@@ -43,7 +43,6 @@ FORCE_INLINE void recordFabricNocEvent(
                                         : KernelProfilerNocEventMetadata::NocType::NOC_0;
     fabric_noc_event.routing_fields_type = packet_type;
 
-    kernel_profiler::flush_to_dram_if_full();
     kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
 }
 
@@ -69,7 +68,6 @@ FORCE_INLINE void recordFabricNocEventMulticast(
                                         : KernelProfilerNocEventMetadata::NocType::NOC_0;
     fabric_noc_event.routing_fields_type = packet_type;
 
-    kernel_profiler::flush_to_dram_if_full();
     kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
 }
 
@@ -102,7 +100,6 @@ FORCE_INLINE void recordFabricScatterEvent(
         fabric_scatter_event.num_chunks = num_chunks;
         fabric_scatter_event.routing_fields_type = packet_type;
 
-        kernel_profiler::flush_to_dram_if_full();
         kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
     }
 }
@@ -114,7 +111,6 @@ FORCE_INLINE void recordRoutingFields1D(uint32_t routing_fields) {
         KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS_1D;
     event_routing_fields.data.fabric_routing_fields_1d.routing_fields_value = routing_fields;
 
-    kernel_profiler::flush_to_dram_if_full();
     kernel_profiler::timeStampedData<STATIC_ID>(event_routing_fields.asU64());
 }
 
@@ -161,7 +157,6 @@ FORCE_INLINE void recordRoutingFields2D(
         routing_fields_2d.is_mcast = true;
     }
 
-    kernel_profiler::flush_to_dram_if_full();
     kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
 }
 

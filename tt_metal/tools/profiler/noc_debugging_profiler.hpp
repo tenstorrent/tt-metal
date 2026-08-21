@@ -24,7 +24,9 @@ FORCE_INLINE void recordScopedLockEvent(uint32_t locked_address_base, uint32_t n
     ev_md.setEventType(event_type);
     ev_md.setLockedRegion(locked_address_base, num_bytes);
 
-    kernel_profiler::flush_to_dram_if_full();
+#if defined(ARCH_QUASAR)
+    kernel_profiler::flush_to_dram_if_full();  // DRAM backend: make L1 room before the marker
+#endif
     kernel_profiler::timeStampedData<noc_debugging_profiler::kNocDebugZoneId>(ev_md.asU64());
 }
 
