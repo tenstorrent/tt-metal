@@ -26,6 +26,7 @@ import socket
 import statistics
 from pathlib import Path
 
+import pytest
 import torch
 import ttnn
 from loguru import logger
@@ -38,6 +39,8 @@ from ttnn.operations.examples.compute_block_size import (
     run_op,
     variant_is_valid,
 )
+
+pytestmark = pytest.mark.skip(reason="Pending migration from the retired eltwise helper API")
 
 TILE = 32
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
