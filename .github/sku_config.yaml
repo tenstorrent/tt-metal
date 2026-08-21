@@ -262,3 +262,7 @@ skus:
     runs_on:
       - tt-ubuntu-2204-large-stable
     ttsim_lib: libttsim_bh_x32.so
+  sim_quasar:
+    runs_on:
+      - ubuntu-latest
+    ttsim_lib: libttsim_qsr.so
