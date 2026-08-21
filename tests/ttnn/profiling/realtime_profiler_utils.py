@@ -125,17 +125,13 @@ def profile_realtime_program_merged(
     return result, per_program
 
 
-def collect_op_durations_merged(
-    device, run_fn, kernel_path, *, iters=1, allow_stale_prefix=False, verbose=False
-) -> list[float]:
-    """Return one device-program duration per ``run_fn`` invocation.
-
-    ``kernel_path`` identifies the program from the kernel sources attached to each real-time
-    profiler record. Callers must warm up compilation before using this helper: only work inside
-    its profiler window is measured. ``allow_stale_prefix`` is for callback consumers that start
-    after earlier device work: it discards older matching records in dispatch order, but still
-    requires exactly ``iters`` newest records from ``run_fn``.
-    """
+def assert_op_duration_merged(
+    device, run_fn, kernel_path, *, expected_ns, margin, label, iters=1, verbose=False
+) -> float:
+    """Median device duration of the one program whose kernel sources contain ``kernel_path``, over
+    ``iters`` runs of ``run_fn`` in a single profiler window, asserted within +/-``margin`` of
+    ``expected_ns``. Requires one match per run so the number is attributable to that op; ``verbose``
+    logs every program in the window, and a wrong match count dumps them and fails."""
 
     def run_all():
         for _ in range(iters):
@@ -150,31 +146,19 @@ def collect_op_durations_merged(
                 f"kernels={sorted({source.rsplit('/', 1)[-1] for source in entry['kernel_sources']})}"
             )
 
+    if verbose:
+        dump(logger.info)
+
     matched = [
         entry["duration_ns"]
         for entry in per_program.values()
         if any(kernel_path in source.replace("\\", "/") for source in entry["kernel_sources"])
     ]
-    if len(matched) < iters or (len(matched) != iters and not allow_stale_prefix):
+    if len(matched) != iters:
         if not verbose:
             dump(logger.error)
         raise AssertionError(f"expected {iters} programs matching {kernel_path}, got {len(matched)}")
-    if allow_stale_prefix:
-        matched = matched[-iters:]
-    if verbose:
-        dump(logger.info)
-    return matched
 
-
-def assert_op_duration_merged(
-    device, run_fn, kernel_path, *, expected_ns, margin, label, iters=1, verbose=False
-) -> float:
-    """Median device duration of the one program whose kernel sources contain ``kernel_path``, over
-    ``iters`` runs of ``run_fn`` in a single profiler window, asserted within +/-``margin`` of
-    ``expected_ns``. Requires one match per run so the number is attributable to that op; ``verbose``
-    logs every program in the window, and a wrong match count dumps them and fails."""
-
-    matched = collect_op_durations_merged(device, run_fn, kernel_path, iters=iters, verbose=verbose)
     median_ns = statistics.median(matched)
     lower, upper = expected_ns * (1 - margin), expected_ns * (1 + margin)
     logger.info(
