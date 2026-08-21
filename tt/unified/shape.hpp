@@ -45,7 +45,19 @@ struct Shape {
     static_assert(rank > 0, "a Shape needs at least one dimension");
 
     static constexpr uint32_t dims[rank] = {Dims...};
-    static constexpr uint32_t dim(uint32_t i) { return dims[i]; }
+
+    // dim(2) is the third dimension; dim(-1) is the last and dim(-rank) the first, the
+    // way Python indexes. Negative is the useful half: a shape's meaning is anchored at
+    // the END -- dim(-1) is columns and dim(-2) rows whatever the rank -- so counting
+    // back is how the code that does not care about rank wants to ask.
+    //
+    // Out of range is a compile error, not a wrong answer. `dims[i]` outside the array is
+    // ill-formed in a constant expression, and a negative index past -rank wraps to a
+    // large unsigned value that is equally ill-formed, so both fail wherever this is
+    // evaluated at compile time -- which is everywhere a Shape is asked about itself.
+    static constexpr uint32_t dim(int32_t i) {
+        return dims[i < 0 ? static_cast<uint32_t>(static_cast<int32_t>(rank) + i) : static_cast<uint32_t>(i)];
+    }
 
     // One tile per circular-buffer page in v1, so the page count is the product. This
     // is the name the CB protocol speaks in, and it stays that name -- reading it off
@@ -72,7 +84,7 @@ struct with_hw_impl;
 template <uint32_t... D, uint32_t H, uint32_t W, std::size_t... I>
 struct with_hw_impl<Shape<D...>, H, W, std::index_sequence<I...>> {
     using S = Shape<D...>;
-    using type = Shape<(I == S::rank - 2 ? H : (I == S::rank - 1 ? W : S::dim(I)))...>;
+    using type = Shape<(I == S::rank - 2 ? H : (I == S::rank - 1 ? W : S::dim(static_cast<int32_t>(I))))...>;
 };
 
 template <typename S, uint32_t H, uint32_t W>
