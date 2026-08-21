@@ -75,8 +75,8 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 
 // Metal 2.0 op-porting stepping-stone factory concept: factories that return
 // ProgramArtifacts (a ProgramSpec + ProgramRunArgs + any op-owned tensors) from
-// create_program_artifacts. The framework adapter builds a mesh-wide MeshWorkload
-// from the spec via experimental::MakeMeshWorkloadFromSpec on cache miss, and
+// create_program_artifacts. The framework adapter maps that same ProgramSpec onto
+// tensor_coords via experimental::MakeMeshWorkloadFromSpecs on cache miss, and
 // patches every TensorArg (io and op-owned alike) via experimental::UpdateTensorArgs
 // on cache hit.
 //
