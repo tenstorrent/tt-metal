@@ -712,7 +712,7 @@ def _verify_dst_vs_golden(table, device_map: dict, triples: list, slot_traces: d
     when you want the transport and the model correctness reported separately.
 
     FULL DEPTH, ALWAYS. ``_read_slot_kv_and_check_pcc`` takes a slot and a trace, not a layer list: it
-    walks every layer of the model and reports the min. There is no layer subset to pass, which is why
+    walks every layer of the model and reports each of its caches' min. There is no layer subset to pass, which is why
     the caller (``_verify_migrated_slots``) decides whether this check may run at all rather than passing
     one down — see the gate there. Unlike ``_verify_dst_vs_src_bytes``, this cannot honour
     PREFILL_VERIFY_MIGRATION_LAYERS, and it must not run against a partially migrated destination.
@@ -727,14 +727,18 @@ def _verify_dst_vs_golden(table, device_map: dict, triples: list, slot_traces: d
             continue
         logger.info(f"[migration_driver] verify golden: dst slot {dst} (migrated from {src}) over [0,{real_len})")
         try:
-            pcc = producer._read_slot_kv_and_check_pcc(table, device_map, dst, real_len, trace_dir)
+            slot_mins = producer._read_slot_kv_and_check_pcc(table, device_map, dst, real_len, trace_dir)
         except Exception as e:
             logger.error(f"[migration_driver] verify golden: dst slot {dst} read/PCC raised {type(e).__name__}: {e}")
             failures.append((src, dst, float("nan")))
             continue
         checked += 1
+        # The reader reports one min per MODEL cache (a sparse model migrates its index cache too); gate on
+        # the weakest and print the breakdown so a regression names the cache that moved wrong.
+        pcc = min(slot_mins.values())
         min_pcc = min(min_pcc, pcc)
-        print(f"[migration_driver] AFTER dst_slot={dst} (src={src}) min_pcc={pcc:.6f}")
+        per_cache = "".join(f" {cache}_pcc={value:.6f}" for cache, value in slot_mins.items())
+        print(f"[migration_driver] AFTER dst_slot={dst} (src={src}) min_pcc={pcc:.6f}{per_cache}")
         if pcc < threshold:
             failures.append((src, dst, pcc))
 
