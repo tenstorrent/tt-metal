@@ -122,22 +122,58 @@ void kernel_main() {
     constexpr int dfb_outbeta_id = dfb_out0_id;
 #endif
 
-    constexpr auto offset_scalar_input = [](uint32_t dfb_id, ckl::WaitPolicy wait, ckl::PopPolicy pop) {
-        return ckl::input(
-            dfb_id,
-            wait,
-            pop,
-            ckl::InputTileMapping::Scalar,
-            ckl::DataFormatReconfig::Disabled,
-            ckl::TileAddressing::Offset);
-    };
-    constexpr auto streaming_input = [](uint32_t dfb_id) {
-        return ckl::input(dfb_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
-    };
-    constexpr auto streaming_output = [](uint32_t dfb_id) {
-        return ckl::output(
-            dfb_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
-    };
+    constexpr auto normalization_in_scalar_offset_input = ckl::input(
+        dfb_normalization_in_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto ex_global_scalar_offset_input = ckl::input(
+        dfb_ex_global_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto ex2pe_scalar_offset_input = ckl::input(
+        dfb_ex2pe_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto input_mask_scalar_offset_input = ckl::input(
+        dfb_input_mask_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto gamma_scalar_offset_input = ckl::input(
+        dfb_gamma_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto beta_scalar_offset_input = ckl::input(
+        dfb_beta_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto xmm_per_tile_input =
+        ckl::input(dfb_xmm_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    constexpr auto x_per_tile_input =
+        ckl::input(dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    constexpr auto xmm_per_tile_output = ckl::output(
+        dfb_xmm_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    constexpr auto x_per_tile_output =
+        ckl::output(dfb_x_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
+    constexpr auto ex2pe_per_tile_output = ckl::output(
+        dfb_ex2pe_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
 
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_eps(dfb_eps_id);
@@ -316,12 +352,12 @@ void kernel_main() {
                 ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Add,
-                    offset_scalar_input(dfb_ex_global_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ex_global_scalar_offset_input,
                     ckl::input(
                         dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled)>{
                     1 + (g << 1), 0u},
                 ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
-                ckl::PackTile<streaming_output(dfb_ex2pe_id)>{});
+                ckl::PackTile<ex2pe_per_tile_output>{});
         }
         // End Variance Calc
 
@@ -357,11 +393,9 @@ void kernel_main() {
                         ckl::IterationShape::one_tile(),
                         ckl::BinaryFpu<
                             ckl::BinaryFpuOp::Sub,
-                            offset_scalar_input(dfb_normalization_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                            ckl::input(
-                                offset_scalar_input(dfb_ex_global_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                                ckl::BroadcastDim::Scalar)>{tile_id, g << 1},
-                        ckl::PackTile<streaming_output(dfb_xmm_id)>{});
+                            normalization_in_scalar_offset_input,
+                            ckl::input(ex_global_scalar_offset_input, ckl::BroadcastDim::Scalar)>{tile_id, g << 1},
+                        ckl::PackTile<xmm_per_tile_output>{});
 
                     // Normalize the centered input: (x - mean) * rsqrt(variance + epsilon).
                     reconfig_data_format(dfb_in0_id, dfb_xmm_id, dfb_ex_global_id, dfb_ex2pe_id);
@@ -369,11 +403,9 @@ void kernel_main() {
                         ckl::IterationShape::one_tile(),
                         ckl::BinaryFpu<
                             ckl::BinaryFpuOp::Mul,
-                            streaming_input(dfb_xmm_id),
-                            ckl::input(
-                                offset_scalar_input(dfb_ex2pe_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                                ckl::BroadcastDim::Scalar)>{0u, g},
-                        ckl::PackTile<streaming_output(dfb_xmm_id)>{});
+                            xmm_per_tile_input,
+                            ckl::input(ex2pe_scalar_offset_input, ckl::BroadcastDim::Scalar)>{0u, g},
+                        ckl::PackTile<xmm_per_tile_output>{});
 
                     // Apply the current group's row selector.
                     const uint32_t mask_offset = g * block_w;
@@ -383,21 +415,18 @@ void kernel_main() {
                         ckl::IterationShape::one_tile(),
                         ckl::BinaryFpu<
                             ckl::BinaryFpuOp::Mul,
-                            streaming_input(dfb_xmm_id),
-                            ckl::input(
-                                offset_scalar_input(dfb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                                ckl::BroadcastDim::Row)>{0u, mask_index},
-                        ckl::PackTile<streaming_output(dfb_xmm_id)>{});
+                            xmm_per_tile_input,
+                            ckl::input(input_mask_scalar_offset_input, ckl::BroadcastDim::Row)>{0u, mask_index},
+                        ckl::PackTile<xmm_per_tile_output>{});
 
                     // Accumulate contributions when a tile spans multiple groups.
                     if (group_offset == 0) {
-                        ckl::copy<streaming_input(dfb_xmm_id), streaming_output(dfb_x_id)>(
-                            ckl::IterationShape::one_tile());
+                        ckl::copy<xmm_per_tile_input, x_per_tile_output>(ckl::IterationShape::one_tile());
                     } else {
                         // Not the first group for this tile: add what is already in dfb_x.
                         reconfig_data_format_srca(dfb_xmm_id, dfb_x_id);
                         reconfig_data_format_srcb(dfb_input_mask_id, dfb_xmm_id);
-                        ckl::add<streaming_input(dfb_x_id), streaming_input(dfb_xmm_id), streaming_output(dfb_x_id)>(
+                        ckl::add<x_per_tile_input, xmm_per_tile_input, x_per_tile_output>(
                             ckl::IterationShape::one_tile());
                     }
 
@@ -442,11 +471,9 @@ void kernel_main() {
                         ckl::IterationShape::one_tile(),
                         ckl::BinaryFpu<
                             ckl::BinaryFpuOp::Mul,
-                            streaming_input(dfb_x_id),
-                            ckl::input(
-                                offset_scalar_input(dfb_gamma_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                                ckl::BroadcastDim::Row)>{0u, nt},
-                        ckl::PackTile<streaming_output(dfb_x_id)>{});
+                            x_per_tile_input,
+                            ckl::input(gamma_scalar_offset_input, ckl::BroadcastDim::Row)>{0u, nt},
+                        ckl::PackTile<x_per_tile_output>{});
                 }
 
                 if constexpr (do_beta) {
@@ -459,11 +486,9 @@ void kernel_main() {
                         ckl::IterationShape::one_tile(),
                         ckl::BinaryFpu<
                             ckl::BinaryFpuOp::Add,
-                            streaming_input(dfb_x_id),
-                            ckl::input(
-                                offset_scalar_input(dfb_beta_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                                ckl::BroadcastDim::Row)>{0u, nt},
-                        ckl::PackTile<streaming_output(dfb_x_id)>{});
+                            x_per_tile_input,
+                            ckl::input(beta_scalar_offset_input, ckl::BroadcastDim::Row)>{0u, nt},
+                        ckl::PackTile<x_per_tile_output>{});
                 }
 
                 // Write out the final output
@@ -485,7 +510,13 @@ void kernel_main() {
                     pack_reconfig_data_format(write_dfb_id);
                 }
 #endif
-                ckl::copy<streaming_input(dfb_x_id), streaming_output(write_dfb_id)>(ckl::IterationShape::one_tile());
+                ckl::copy<
+                    x_per_tile_input,
+                    ckl::output(
+                        write_dfb_id,
+                        ckl::ReservePolicy::PerTile,
+                        ckl::PushPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::one_tile());
 #ifndef UNTILIZE_OUT
                 if constexpr (enable_fp32_reconfig) {
                     pack_reconfig_data_format(dfb_xmm_id);

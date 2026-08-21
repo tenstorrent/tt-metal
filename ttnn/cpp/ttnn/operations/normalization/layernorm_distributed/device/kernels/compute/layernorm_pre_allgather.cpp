@@ -48,6 +48,12 @@ void kernel_main() {
     constexpr auto reduce_type = unpack_fp32_active ? PoolType::SUM : PoolType::AVG;
     constexpr auto reduce_fp32_mode = unpack_fp32_active ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
     DataflowBuffer dfb_reduce(dfb::reduce);
+    constexpr auto in0_input =
+        ckl::input(dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+    constexpr auto res_input =
+        ckl::input(dfb::res, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+    constexpr auto input_squared =
+        ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
 
 #ifdef FUSE_PRE_ADD
     compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
@@ -63,30 +69,14 @@ void kernel_main() {
         if constexpr (unpack_fp32_active) {
             ckl::binary_sfpu<
                 ckl::AddBinary<>,
-                ckl::input(
-                    dfb::in0,
-                    ckl::WaitPolicy::PerBlockSize,
-                    ckl::PopPolicy::PerBlockSize,
-                    ckl::InputTileMapping::Block),
-                ckl::input(
-                    dfb::res,
-                    ckl::WaitPolicy::PerBlockSize,
-                    ckl::PopPolicy::PerBlockSize,
-                    ckl::InputTileMapping::Block),
+                in0_input,
+                res_input,
                 ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                 squaring_shape);
         } else {
             ckl::add<
-                ckl::input(
-                    dfb::in0,
-                    ckl::WaitPolicy::PerBlockSize,
-                    ckl::PopPolicy::PerBlockSize,
-                    ckl::InputTileMapping::Block),
-                ckl::input(
-                    dfb::res,
-                    ckl::WaitPolicy::PerBlockSize,
-                    ckl::PopPolicy::PerBlockSize,
-                    ckl::InputTileMapping::Block),
+                in0_input,
+                res_input,
                 ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                 squaring_shape);
         }
@@ -95,11 +85,11 @@ void kernel_main() {
         if constexpr (unpack_fp32_active) {
             ckl::unary<
                 ckl::Square<>,
-                ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+                input_squared,
                 ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
         } else {
             ckl::square<
-                ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+                input_squared,
                 ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
         }
 

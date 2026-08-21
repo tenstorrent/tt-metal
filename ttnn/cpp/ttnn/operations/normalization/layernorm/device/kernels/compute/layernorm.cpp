@@ -117,6 +117,48 @@ void kernel_main() {
     constexpr uint32_t dfb_x_id = dfb_in_id;
 #endif
 
+    constexpr auto in_input = ckl::input(
+        dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+    constexpr auto inb_input = ckl::input(
+        dfb_inb_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+    constexpr auto x_input =
+        ckl::input(dfb_x_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+    constexpr auto xmm_input = ckl::input(
+        dfb_xmm_id,
+        ckl::WaitPolicy::Cumulative,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Block,
+        ckl::DataFormatReconfig::Disabled);
+    constexpr auto fusion_input = ckl::input(
+        dfb_fusion_id,
+        ckl::WaitPolicy::PerBlockSize,
+        ckl::PopPolicy::PerBlockSize,
+        ckl::InputTileMapping::Block,
+        ckl::DataFormatReconfig::Disabled);
+    constexpr auto gamma_input = ckl::input(
+        dfb_gamma_id,
+        ckl::BroadcastDim::Row,
+        ckl::WaitPolicy::Upfront,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Block,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto beta_input = ckl::input(
+        dfb_beta_id,
+        ckl::BroadcastDim::Row,
+        ckl::WaitPolicy::Upfront,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Block,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto xmm_output = ckl::output(
+        dfb_xmm_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize, ckl::DataFormatReconfig::Disabled);
+    constexpr auto xmm2_output = ckl::output(
+        dfb_xmm2_id,
+        ckl::ReservePolicy::PerBlockSize,
+        ckl::PushPolicy::PerBlockSize,
+        ckl::DataFormatReconfig::Disabled);
+
 #ifdef TILIZE_IN
     compute_kernel_hw_startup(dfb_in_rm_id, dfb_in_rm_id, dfb_in_id);
 #elif defined(FUSE_PRE_ADD)
@@ -159,10 +201,8 @@ void kernel_main() {
         // to full block size as well so pre-add/no-pre-add
         // can be handled the same way.
         ckl::add<
-            ckl::input(
-                dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
-            ckl::input(
-                dfb_inb_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
+            in_input,
+            inb_input,
             ckl::output(dfb_x_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(row_shape);
         // by the end of this loop we should end up with Wt tiles in dfb_x_id
 #ifndef RMSNORM
@@ -186,14 +226,9 @@ void kernel_main() {
 
         // x - E[x]; the mean stays resident for the whole row.
         ckl::sub<
-            ckl::input(
-                dfb_x_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
+            x_input,
             ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::output(
-                dfb_xmm_id,
-                ckl::ReservePolicy::PerBlockSize,
-                ckl::PushPolicy::PerBlockSize,
-                ckl::DataFormatReconfig::Disabled)>(row_shape);
+            xmm_output>(row_shape);
         dfb_ex_obj.pop_front(1);
 
 #ifndef FUSE_PRE_ADD
@@ -203,18 +238,7 @@ void kernel_main() {
 
         // Preserve dfb_xmm_id for the normalization pass; the variance path consumes only its square.
         // compute temp = xmm*xmm = (x-E[x])^2
-        ckl::square<
-            ckl::input(
-                dfb_xmm_id,
-                ckl::WaitPolicy::Cumulative,
-                ckl::PopPolicy::None,
-                ckl::InputTileMapping::Block,
-                ckl::DataFormatReconfig::Disabled),
-            ckl::output(
-                dfb_xmm2_id,
-                ckl::ReservePolicy::PerBlockSize,
-                ckl::PushPolicy::PerBlockSize,
-                ckl::DataFormatReconfig::Disabled)>(row_shape);
+        ckl::square<xmm_input, xmm2_output>(row_shape);
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
 #endif
@@ -276,22 +300,7 @@ void kernel_main() {
                 reconfig_data_format_srcb(dfb_ex2pe_id, dfb_gamma_id);
                 ckl::eltwise_chain(
                     block_shape,
-                    ckl::BinaryFpu<
-                        ckl::BinaryFpuOp::Mul,
-                        ckl::input(
-                            dfb_fusion_id,
-                            ckl::WaitPolicy::PerBlockSize,
-                            ckl::PopPolicy::PerBlockSize,
-                            ckl::InputTileMapping::Block,
-                            ckl::DataFormatReconfig::Disabled),
-                        ckl::input(
-                            dfb_gamma_id,
-                            ckl::BroadcastDim::Row,
-                            ckl::WaitPolicy::Upfront,
-                            ckl::PopPolicy::None,
-                            ckl::InputTileMapping::Block,
-                            ckl::DataFormatReconfig::Disabled,
-                            ckl::TileAddressing::Offset)>{0u, block.start()},
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, fusion_input, gamma_input>{0u, block.start()},
                     // Activation must be applied last. If do_beta != 0 then
                     // activation will be applied after the beta addition.
                     // Otherwise, we can apply the activation here.
@@ -312,22 +321,7 @@ void kernel_main() {
                 }
                 ckl::eltwise_chain(
                     block_shape,
-                    ckl::BinaryFpu<
-                        ckl::BinaryFpuOp::Add,
-                        ckl::input(
-                            dfb_fusion_id,
-                            ckl::WaitPolicy::PerBlockSize,
-                            ckl::PopPolicy::PerBlockSize,
-                            ckl::InputTileMapping::Block,
-                            ckl::DataFormatReconfig::Disabled),
-                        ckl::input(
-                            dfb_beta_id,
-                            ckl::BroadcastDim::Row,
-                            ckl::WaitPolicy::Upfront,
-                            ckl::PopPolicy::None,
-                            ckl::InputTileMapping::Block,
-                            ckl::DataFormatReconfig::Disabled,
-                            ckl::TileAddressing::Offset)>{0u, block.start()},
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Add, fusion_input, beta_input>{0u, block.start()},
                     ckl::Optional<fused_activation_enabled, FusedActivation>{},
                     ckl::PackTile<ckl::output(
                         dfb_out_id,
