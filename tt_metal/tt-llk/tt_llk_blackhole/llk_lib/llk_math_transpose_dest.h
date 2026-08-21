@@ -182,7 +182,7 @@ inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
     // byte (e.g. bf16 0x4400 = 768.0) when the Src zero-substitution flag is at the operand DEFAULT,
     // corrupting ordinary finite values (same hazard as reduce_row_perform_transpose). transpose_dest
     // owns the PRESERVE policy here — asserted in execute (not init) so it survives any
-    // llk_math_hw_configure that ran after the init; skip-if-set keeps it cheap. tt-metal#49924.
+    // llk_math_hw_configure that ran after the init; skip-if-set keeps it cheap.
     math::_configure_preserve_zero_flag_state_();
 
     if constexpr (is_32bit)

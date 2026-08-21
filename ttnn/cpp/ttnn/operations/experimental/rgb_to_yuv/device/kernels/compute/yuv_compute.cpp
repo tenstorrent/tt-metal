@@ -102,7 +102,7 @@ FORCE_INLINE void typecast_and_pack(uint32_t cb_bf16, uint32_t cb_u8) {
     MATH((llk_math_reconfig_remap(false)));
 #endif
     // Mid-kernel re-init (startup already done in kernel_main): datacopy unpack+math via copy_init,
-    // pack format via pack_reconfig -- the call-once init_sfpu was migrated off (tt-metal#22948).
+    // pack format via pack_reconfig -- the call-once init_sfpu was migrated off.
     copy_init(cb_bf16);
     pack_reconfig_data_format(cb_u8);
     tile_regs_acquire();

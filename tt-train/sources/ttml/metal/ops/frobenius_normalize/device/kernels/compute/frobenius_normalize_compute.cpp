@@ -93,7 +93,7 @@ void kernel_main() {
         cb_wait_front(cb_sq_acc, 1);
 
         // Mid-kernel phase switch (hw startup already done at kernel top): reconfig SrcA + Pack for the
-        // new operands instead of a mid-kernel init_sfpu. TODO(#22948): verify formats on tt-train.
+        // new operands instead of a mid-kernel init_sfpu.
         reconfig_data_format_srca(cb_sq_acc);
         pack_reconfig_data_format(cb_sq_partial);
 

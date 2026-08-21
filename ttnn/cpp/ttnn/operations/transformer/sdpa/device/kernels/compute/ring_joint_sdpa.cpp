@@ -8,7 +8,7 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
 // This kernel reconfigs ~30x; inlining the LLK Src zero-flag DEFAULT configurator at each site pushes
-// the program over the kernel-config buffer. Force it out-of-line here (tt-metal#49924).
+// the program over the kernel-config buffer. Force it out-of-line here.
 #define LLK_ZEROFLAG_OUTLINE 1
 
 #include "api/compute/compute_kernel_api.h"

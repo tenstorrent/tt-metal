@@ -656,7 +656,7 @@ inline void matmul_configure_mop_throttled(
  * @param rt_dim: Number of row tiles in the output block.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
  * @note @ref _llk_math_matmul_ runs the configured matmul with matching template args.
- * @note Establishes the operand-driven DEFAULT Src zero-substitution state (tt-metal#49924); @ref
+ * @note Establishes the operand-driven DEFAULT Src zero-substitution state; @ref
  *       _llk_math_matmul_ asserts this precondition under LLK asserts, so a prior op that left PRESERVE
  *       must be followed by this init (or a format-changing reconfig) before the matmul.
  */
@@ -688,7 +688,7 @@ inline void _llk_math_matmul_init_(
     }
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    // tt-metal#49924 (zero-flag solidification): matmul never sets the Src zero-substitution flag itself, so
+    // Matmul never sets the Src zero-substitution flag itself, so
     // re-establish the operand-driven DEFAULT here. A preceding copy_init/datacopy op may have left the flag in
     // PRESERVE. Relying on a reconfig_data_format to clear it is not enough: the metal wrapper
     // llk_math_reconfig_data_format_srca(old, new) skips the LLK reconfig entirely when old == new format, so on a
@@ -727,7 +727,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
 {
     llk::san::operation_check<llk::san::Operation::Matmul>(math_fidelity, THROTTLE_LEVEL, ct_dim, rt_dim);
 
-    // Zero-flag leak guard (tt-metal#49924). MVMUL reads ALU_ACC_CTRL_Zero_Flag_disabled_src, which for
+    // Zero-flag leak guard. MVMUL reads ALU_ACC_CTRL_Zero_Flag_disabled_src, which for
     // denormal Src operands changes the result (flush vs keep — measured on WH n150 / BH p150b). Matmul is
     // a "runs-in-DEFAULT" op: it never sets the flag itself and relies on hw_configure / a format-changing
     // reconfig having established the format-driven DEFAULT. If a prior copy_init/datacopy op left the flag in
