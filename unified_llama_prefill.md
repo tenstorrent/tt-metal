@@ -1290,6 +1290,42 @@ Llama 3.2 1B at S=512, 235us for 3B.
 Still missing for a real layer: GQA head mapping, multi-core partitioning, and a q-loop,
 so a prefill is N launches where ttnn's is one. All phase 11.
 
+### Is the multi-launch structure making the comparison unfair?
+
+Fair question, since a causal head is N launches for us and one program for ttnn. Measured
+rather than assumed: hold the key-chunk size at sk=8 and vary how many chunks one launch
+does, and the slope is the marginal cost of a chunk while the intercept is what a launch
+pays regardless.
+
+| | marginal per k-chunk | per-launch fixed |
+|---|---|---|
+| d=64, sq=8 | 51.5 us | 17.4 us |
+| d=256, sq=4 | 48.3 us | 18.8 us |
+
+17-19us per launch looks like it would matter -- 2 launches for Llama at S=512, 4 for
+Gemma. But almost none of it is amortizable, because of WHAT it is:
+
+- kernel startup, bounded by the whole-program floor of ~1.6us that passcost measures;
+- the Q load, which is per q-chunk by definition -- each chunk has its own queries;
+- the softmax tail, likewise: `recip(l)` on sq tiles then `o * bcast(recip)` on sq*dt,
+  and each q-chunk has its own output.
+
+Only the startup goes away in a fused q-loop, so the honest figure is about 2us times
+(N-1): **1% for Llama at S=512, 2% for Gemma.** The 1.5x is a real compute gap, not a
+dispatch artifact.
+
+One thing that measurement DID surface: the tail's `recip` is **9.53us at sq=8**, which is
+a directly measured number (8 tiles of recip against the copy baseline) and 5% of Llama's
+190us. recip is SFPU-only at 1.19us/tile and, unlike exp, exposes no approximation
+parameter, so there is no cheap version of it to switch to.
+
+What this does NOT establish: the real dispatch gap between launches. Timing the launches
+together gives a span 3.0ms wide for two launches, but that is the test harness rebuilding
+tensors and the program descriptor on every call, not the pipeline. Isolating it would need
+the programs built once and enqueued back to back, which is phase 11's shape anyway. The
+sum-of-device-times used throughout is the right basis for comparing compute, and it is
+what both sides are measured with.
+
 ### What to test next
 
 Ordered by expected value, with what each result would actually mean. Six candidates are
