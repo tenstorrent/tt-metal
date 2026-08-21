@@ -705,3 +705,52 @@ def test_minimal_matmul_strided_reduce_scatter_block_sweep(
 
     if skipped:
         logger.warning(f"[block sweep] {len(skipped)}/{len(configs)} configs failed on device: {skipped}")
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("num_links", [2], ids=["2link"])
+@pytest.mark.parametrize("cluster_axis", [0, 1], ids=["axis_0", "axis_1"])
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+def test_minimal_matmul_strided_reduce_scatter_fused_concat_non_aligned(mesh_device, num_links, cluster_axis, topology):
+    """MMRS fused concat with non-tile-aligned Ka and Kb (TG/galaxy).
+
+    K=32 per device (logical), Ka=11 (non-aligned prefix), Kb=21 (non-aligned suffix).
+    Weight is per-segment tile-padded: prefix rows [0..11) real, zeros to tile 32,
+    suffix rows [32..53) real, zeros to tile 64.  K_padded=64 (2 tiles), mm_block_k=64.
+    """
+    if mesh_device.shape[cluster_axis] == 1:
+        pytest.skip(f"cluster_axis={cluster_axis} has only 1 device in this mesh, reduce-scatter ring size must be > 1")
+
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    run_minimal_matmul_strided_reduce_scatter_impl(
+        mesh_device,
+        M=128,
+        K=32,  # logical per-device K: Ka=11 + Kb=21
+        N=512,
+        dim=3,
+        num_links=num_links,
+        input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mem_config_input=mem_config,
+        mem_config_mm=mem_config,
+        mem_config_rs=mem_config,
+        topology=topology,
+        mm_block_m=128,
+        mm_block_k=64,  # K_padded=64=2t, 2 divides 2
+        mm_block_n=64,
+        subblock_h=1,
+        subblock_w=1,
+        mm_core_grid=ttnn.CoreCoord(8, 2),
+        chunk_width_in_mm_blocks=1,
+        rs_mode="fused",
+        cluster_axis=cluster_axis,
+        fused_concat=True,
+        fused_concat_ka=11,  # Ka=11: non-tile-aligned prefix (padded to 32)
+    )

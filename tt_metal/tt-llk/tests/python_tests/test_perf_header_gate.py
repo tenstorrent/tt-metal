@@ -6,7 +6,7 @@
 
 The per-test gate re-derives, for every WH/BH perf test, the columns its CSV
 would carry (statically, from that test's ``PerfConfig`` parameters) and compares
-them to the recorded schema in ``helpers/perf_test_schemas.py``. A change to one
+them to the recorded schema in ``helpers/perf/test_schemas.py``. A change to one
 test's columns fails with a per-test diff, so you can see exactly which test
 changed and how — and, because each test carries a ``version``, two reports of
 the same test are comparable by that number.
@@ -57,7 +57,7 @@ def _assert_schemas_match(catalog, live, arch):
 
     msg = [
         f"{arch} per-perf-test CSV schema(s) drifted from "
-        f"helpers/perf_test_schemas.py:",
+        f"helpers/perf/test_schemas.py:",
         "",
         *problems,
         "",
@@ -68,14 +68,14 @@ def _assert_schemas_match(catalog, live, arch):
 
 
 def test_perf_test_schemas_match():
-    ps = load_pure_module("perf_test_schemas.py")
+    ps = load_pure_module("test_schemas.py")
     _assert_schemas_match(
         ps.PERF_TEST_SCHEMAS, derive_perf_test_schemas(quasar=False), "WH/BH"
     )
 
 
 def test_perf_test_schemas_match_qsr():
-    ps = load_pure_module("perf_test_schemas.py")
+    ps = load_pure_module("test_schemas.py")
     _assert_schemas_match(
         ps.PERF_TEST_SCHEMAS_QSR, derive_perf_test_schemas(quasar=True), "Quasar"
     )
@@ -85,11 +85,11 @@ def test_perf_test_schemas_match_qsr():
 
 
 def test_run_type_names_match_source():
-    ps = load_pure_module("perf_schema.py")
+    ps = load_pure_module("schema.py")
     live = enum_member_names("llk_params.py", "PerfRunType")
     assert live == set(ps.RUN_TYPE_NAMES), (
         f"PerfRunType members {sorted(live)} drifted from "
-        f"perf_schema.RUN_TYPE_NAMES {sorted(ps.RUN_TYPE_NAMES)}. Update the "
+        f"helpers/perf/schema.py RUN_TYPE_NAMES {sorted(ps.RUN_TYPE_NAMES)}. Update the "
         f"catalog: a run-type name prefixes every metric/counter header."
     )
 
@@ -110,11 +110,11 @@ def test_metric_bases_match_source():
         and isinstance(key.value, str)
         and key.value.endswith("_pct")
     }
-    ps = load_pure_module("perf_schema.py")
+    ps = load_pure_module("schema.py")
     assert live == set(ps.METRIC_BASES), (
         f"Efficiency metric names drifted. In source but not catalog: "
         f"{sorted(live - set(ps.METRIC_BASES))}; in catalog but not source: "
-        f"{sorted(set(ps.METRIC_BASES) - live)}. Update perf_schema.METRIC_BASES."
+        f"{sorted(set(ps.METRIC_BASES) - live)}. Update helpers/perf/schema.py METRIC_BASES."
     )
 
 
@@ -122,7 +122,7 @@ def test_metric_bases_match_source():
 
 
 def _load_perf_schema():
-    return load_pure_module("perf_schema.py")
+    return load_pure_module("schema.py")
 
 
 def _reserved_headers() -> set:

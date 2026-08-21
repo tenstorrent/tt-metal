@@ -13,12 +13,8 @@ from helpers.chip_architecture import ChipArchitecture
 from helpers.device_io import read_words_from_device
 from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.logger import logger
-from helpers.perf import PerfReport
-from helpers.perf_schema import (
-    LOOP_FACTOR_COLUMN,
-    MARKER,
-    TEST_NAME_COLUMN,
-)
+from helpers.perf.core import PerfReport
+from helpers.perf.schema import LOOP_FACTOR_COLUMN, MARKER, TEST_NAME_COLUMN
 from helpers.profiler import Profiler, ProfilerData
 from helpers.test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
 

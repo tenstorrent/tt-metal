@@ -19,6 +19,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/allocator.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "test_host_kernel_common.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
@@ -135,7 +136,7 @@ public:
     void RunProgramNonblocking(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
-            tt::tt_metal::detail::LaunchProgram(device->get_devices()[0], program, false);
+            tt::tt_metal::slow_dispatch::LaunchProgram(*device, program, false);
         } else {
             tt::tt_metal::distributed::MeshCommandQueue& cq = device->mesh_command_queue();
             // Create a mesh workload from the program
@@ -287,10 +288,28 @@ protected:
 };
 
 class NightlyFabric2DUDMModeFixture : public Fabric2DUDMModeFixture {
+private:
+    inline static bool insufficient_devices_ = false;
+
 protected:
+    static void SetUpTestSuite() {
+        insufficient_devices_ = tt::tt_metal::GetNumAvailableDevices() < 8;
+        if (insufficient_devices_) {
+            return;
+        }
+        Fabric2DUDMModeFixture::SetUpTestSuite();
+    }
+
+    static void TearDownTestSuite() {
+        if (!insufficient_devices_) {
+            Fabric2DUDMModeFixture::TearDownTestSuite();
+        }
+    }
+
     void SetUp() override {
-        if (devices_.size() < 8) {
-            GTEST_SKIP() << "Test requires at least 8 devices (2x4 mesh), found " << devices_.size();
+        if (insufficient_devices_) {
+            GTEST_SKIP() << "Test requires at least 8 devices (2x4 mesh), found "
+                         << tt::tt_metal::GetNumAvailableDevices();
         }
         Fabric2DUDMModeFixture::SetUp();
     }
@@ -413,7 +432,8 @@ void FabricUnicastCommon(
     NocPacketType noc_packet_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& pair_ordered_dirs,
     FabricApiType api_type = FabricApiType::Linear,
-    bool with_state = false);
+    bool with_state = false,
+    bool use_non_default_handshake_noc = false);
 
 void UDMFabricUnicastCommon(
     BaseFabricFixture* fixture,

@@ -12,12 +12,6 @@ on:
           - all
           - tteager
           - trace stress
-          - resnet
-          - sd35_large
-          - flux1
-          - motif
-          - qwenimage
-          - mochi
           - deepseek-modules
       platform:
         required: false
@@ -51,6 +45,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -64,6 +59,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   t3000-integration-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/t3000-integration-tests-impl.yaml
     with:

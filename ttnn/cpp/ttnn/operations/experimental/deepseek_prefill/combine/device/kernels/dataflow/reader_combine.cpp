@@ -135,9 +135,9 @@ void kernel_main() {
         expert_end_idx,
         linearized_mesh_coord);
 
+#if INIT_ZEROS
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
-#if INIT_ZEROS
     // Hybrid row output-zeroing: this core zeroes its assigned page range, then waits for untilizer row cores
     {
         uint32_t page_start = get_arg_val<uint32_t>(rt_args++);

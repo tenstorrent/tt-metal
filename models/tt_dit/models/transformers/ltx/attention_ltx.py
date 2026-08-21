@@ -16,7 +16,7 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils.matmul import get_matmul_config
+from ....utils.matmul import get_fabric_agmm_config, get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .quant_config import LtxQuantProfile
@@ -139,10 +139,42 @@ class LTXAttention(Module):
         # kwargs forward through LoRAColParallelLinear's **kwargs to the base linear.
         ColCls = LoRAColParallelLinear if lora_enabled else ColParallelLinear
 
+        # Fuse the per-head gate into the QKV/Q matmul via variable-width chunks
+        tp_factor = parallel_config.tensor_parallel.factor
+        uses_fused_agmm = tp_factor > 1 and ccl_manager is not None and ccl_manager.topology == ttnn.Topology.Ring
+        # A fused linear carries a single weight dtype, but the quant profile holds the gate at bf16
+        # while quantizing qkv/q, so the two cannot share one matmul: fusion is bf16-only.
+        self.fuse_gate = apply_gated_attention and uses_fused_agmm and quant_config is None
+
+        # Gate is num_heads/TP columns per device (sub-tile); pad to a whole tile so it's a legal chunk.
+        self.gate_width_per_device = self.n_local_heads
+        self.gate_padded_per_device = ((self.n_local_heads + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        gate_fused_width = self.gate_padded_per_device * tp_factor
+
         if is_self:
-            self.to_qkv = ColCls(dim, 3 * dim, chunks=3, **col_parallel_kwargs, **qk("qkv"))
+            if self.fuse_gate:
+                self.to_qkv = ColCls(
+                    dim,
+                    3 * dim + gate_fused_width,
+                    chunks=4,
+                    chunk_sizes=[dim, dim, dim, gate_fused_width],
+                    **col_parallel_kwargs,
+                    **qk("qkv"),
+                )
+            else:
+                self.to_qkv = ColCls(dim, 3 * dim, chunks=3, **col_parallel_kwargs, **qk("qkv"))
         else:
-            self.to_q = ColCls(self.query_input_dim, dim, **col_parallel_kwargs, **qk("q"))
+            if self.fuse_gate:
+                self.to_q = ColCls(
+                    self.query_input_dim,
+                    dim + gate_fused_width,
+                    chunks=2,
+                    chunk_sizes=[dim, gate_fused_width],
+                    **col_parallel_kwargs,
+                    **qk("q"),
+                )
+            else:
+                self.to_q = ColCls(self.query_input_dim, dim, **col_parallel_kwargs, **qk("q"))
             self.to_kv = ColCls(self.kv_input_dim, 2 * dim, chunks=2, **col_parallel_kwargs, **qk("kv"))
 
         self.to_out = ColCls(
@@ -156,13 +188,10 @@ class LTXAttention(Module):
             **qk("out"),
         )
 
-        # Per-head gate, sharded on num_heads to match the SDPA-output head layout. bf16 matches the
-        # reference (which runs the gate in the model's working dtype). Sigmoid is a standalone op:
-        # fusing it into the matmul trips minimal_matmul's sigmoid VecMode assert (needs C/RC). The
-        # ×2 stays a separate multiply (2·sigmoid is nonlinear, can't fold).
+        # Per-head gate, sharded on num_heads to match the SDPA-output head layout
         self.apply_gated_attention = apply_gated_attention
-        if apply_gated_attention:
-            # Gate weight stays bf16 (runs in the model's working dtype), but it consumes the shared
+        if apply_gated_attention and not self.fuse_gate:
+            # Standalone gate weight stays bf16 (the model's working dtype) while consuming the shared
             # bf8 activation, so its output is pinned back to bf16 like the quantized projections.
             self.to_gate_logits = ColParallelLinear(
                 in_features=self.query_input_dim,
@@ -171,6 +200,7 @@ class LTXAttention(Module):
                 dtype=ttnn.bfloat16,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                fsdp_mesh_axis=fsdp_mesh_axis,
                 ccl_manager=ccl_manager,
                 **qk("gate"),
             )
@@ -298,6 +328,38 @@ class LTXAttention(Module):
             merged = merged.reshape(merged.shape[0], len(tensors) * self.num_heads * self.head_dim)
             return merged.T
 
+        def _pad_gate_to_tile(t: torch.Tensor) -> torch.Tensor:
+            """Zero-pad each device's gate block from n_local_heads up to a whole tile (device-major)."""
+            n_dev = self.parallel_config.tensor_parallel.factor
+            pad = self.gate_padded_per_device - self.n_local_heads
+            if pad == 0:
+                return t
+            blocks = []
+            for d in range(n_dev):
+                blocks.append(t[d * self.n_local_heads : (d + 1) * self.n_local_heads])
+                blocks.append(torch.zeros(pad, *t.shape[1:], dtype=t.dtype))
+            return torch.cat(blocks, dim=0)
+
+        def _gate_state_or_zeros(reference: torch.Tensor, want_bias: bool) -> dict[str, torch.Tensor]:
+            """Gate substate, zero-filled when the checkpoint has none (zeros -> identity gating)."""
+            g = pop_substate(state, "to_gate_logits")
+            if "weight" not in g:
+                g["weight"] = torch.zeros(self.num_heads, reference.shape[1], dtype=reference.dtype)
+            if want_bias and "bias" not in g:
+                g["bias"] = torch.zeros(self.num_heads, dtype=reference.dtype)
+            return g
+
+        def _interleave_device_major(tensors: list[torch.Tensor]):
+            """Like _interleave_heads but for per-device widths that differ (q/k/v head_dim vs gate)."""
+            n_dev = self.parallel_config.tensor_parallel.factor
+            reshaped = []
+            for t in tensors:
+                t = t.T  # [in, out]
+                assert t.shape[1] % n_dev == 0, f"projection width {t.shape[1]} not divisible by TP={n_dev}"
+                reshaped.append(t.reshape(t.shape[0], n_dev, t.shape[1] // n_dev))
+            merged = torch.cat(reshaped, dim=2)
+            return merged.reshape(merged.shape[0], -1).T
+
         if self.is_self:
             q_state = pop_substate(state, "to_q")
             k_state = pop_substate(state, "to_k")
@@ -310,12 +372,30 @@ class LTXAttention(Module):
             if "bias" in k_state:
                 k_state["bias"] = _permute_qk(k_state["bias"])
 
-            state["to_qkv.weight"] = _interleave_heads([q_state["weight"], k_state["weight"], v_state["weight"]])
-            if "bias" in q_state:
-                bias = _interleave_heads(
-                    [q_state["bias"].unsqueeze(-1), k_state["bias"].unsqueeze(-1), v_state["bias"].unsqueeze(-1)]
+            if self.fuse_gate:
+                # Fold the gate in as a 4th chunk, device-major: device d holds [q_d | k_d | v_d | gate_d].
+                g_state = _gate_state_or_zeros(q_state["weight"], "bias" in q_state)
+                g_state = {k: _pad_gate_to_tile(v) for k, v in g_state.items()}
+                state["to_qkv.weight"] = _interleave_device_major(
+                    [q_state["weight"], k_state["weight"], v_state["weight"], g_state["weight"]]
                 )
-                state["to_qkv.bias"] = bias.squeeze(-1)
+                if "bias" in q_state:
+                    bias = _interleave_device_major(
+                        [
+                            q_state["bias"].unsqueeze(-1),
+                            k_state["bias"].unsqueeze(-1),
+                            v_state["bias"].unsqueeze(-1),
+                            g_state["bias"].unsqueeze(-1),
+                        ]
+                    )
+                    state["to_qkv.bias"] = bias.squeeze(-1)
+            else:
+                state["to_qkv.weight"] = _interleave_heads([q_state["weight"], k_state["weight"], v_state["weight"]])
+                if "bias" in q_state:
+                    bias = _interleave_heads(
+                        [q_state["bias"].unsqueeze(-1), k_state["bias"].unsqueeze(-1), v_state["bias"].unsqueeze(-1)]
+                    )
+                    state["to_qkv.bias"] = bias.squeeze(-1)
         else:
             k_state = pop_substate(state, "to_k")
             v_state = pop_substate(state, "to_v")
@@ -328,6 +408,15 @@ class LTXAttention(Module):
                 state["to_q.weight"] = _permute_qk(state["to_q.weight"])
             if "to_q.bias" in state:
                 state["to_q.bias"] = _permute_qk(state["to_q.bias"])
+
+            if self.fuse_gate and "to_q.weight" in state:
+                # Cross-attn: gate rides along with Q as a 2nd chunk.
+                g_state = _gate_state_or_zeros(state["to_q.weight"], "to_q.bias" in state)
+                g_state = {k: _pad_gate_to_tile(v) for k, v in g_state.items()}
+                state["to_q.weight"] = _interleave_device_major([state["to_q.weight"], g_state["weight"]])
+                if "to_q.bias" in state and "bias" in g_state:
+                    bias = _interleave_device_major([state["to_q.bias"].unsqueeze(-1), g_state["bias"].unsqueeze(-1)])
+                    state["to_q.bias"] = bias.squeeze(-1)
 
             state["to_kv.weight"] = _interleave_heads([k_state["weight"], v_state["weight"]])
             if "bias" in k_state:
@@ -365,6 +454,50 @@ class LTXAttention(Module):
         if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
             M, K, N_out = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
+
+            # Known shapes route the addcmul to_out to the strided AG-matmul (out = a + scalar*matmul*b)
+            fabric_cfg = get_fabric_agmm_config(M, K, N_out, 1, full_grid)
+            if fabric_cfg is not None:
+                tp_axis = parallel_config.tensor_parallel.mesh_axis
+                dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+                fabric_matmul_config = ttnn.MinimalMatmulConfig(
+                    M_block_size=fabric_cfg.M_block_size,
+                    K_block_size=fabric_cfg.K_block_size,
+                    N_block_size=fabric_cfg.N_block_size,
+                    subblock_h=fabric_cfg.subblock_h,
+                    subblock_w=fabric_cfg.subblock_w,
+                    compute_with_storage_grid_size=fabric_cfg.mm_core_grid,
+                )
+                outputs = ttnn.experimental.strided_all_gather_minimal_matmul_async(
+                    x,
+                    weight,
+                    persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                        x.shape, 3, tp_axis, dtype=x.get_dtype()
+                    ),
+                    dim=3,
+                    multi_device_global_semaphore=self.ccl_manager.get_strided_ag_mm_semaphore(
+                        tp_axis, fabric_cfg.num_workers_per_link
+                    ),
+                    strided_all_gather_core_grid_offset=fabric_cfg.ag_core_grid_offset,
+                    num_links=self.ccl_manager.num_links,
+                    memory_config_ag=dram,
+                    topology=self.ccl_manager.topology,
+                    cluster_axis=tp_axis,
+                    bias=to_out.bias.data if to_out.bias is not None else None,
+                    config=fabric_matmul_config,
+                    memory_config_mm=dram,
+                    compute_kernel_config=compute_kernel_config or to_out.compute_config,
+                    num_workers_per_link=fabric_cfg.num_workers_per_link,
+                    num_buffers_per_channel=fabric_cfg.num_buffers_per_channel,
+                    read_local_slice_from_input=True,
+                    fused_ternary_input_a=addcmul_residual,
+                    fused_ternary_input_b=addcmul_gate,
+                    fused_ternary_scalar=1.0,
+                    chunks=1,
+                )
+                # Op returns [all_gather_output, matmul_chunk_0]; take the single matmul chunk.
+                return outputs[1]
+
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
             matmul_config = get_matmul_config(M, K, N_out, core_grid)
 
@@ -413,8 +546,12 @@ class LTXAttention(Module):
         return output
 
     def _gate_is_live(self) -> bool:
-        """True when the gate projection will actually run (and so will gather its input)."""
-        return self.apply_gated_attention and self.to_gate_logits.weight._data is not None
+        """True when the gate projection will actually run (and so will gather its input).
+
+        A fused gate has no projection of its own — it falls out of the QKV/Q matmul — so it neither
+        runs nor gathers, and ``to_gate_logits`` is never built.
+        """
+        return self.apply_gated_attention and not self.fuse_gate and self.to_gate_logits.weight._data is not None
 
     def _compute_gate(
         self, spatial_1BND: ttnn.Tensor, qkv_parallel_config: DiTParallelConfig | None
@@ -424,13 +561,23 @@ class LTXAttention(Module):
             return None
 
         gate_logits = self.to_gate_logits(spatial_1BND, parallel_config=qkv_parallel_config)
-        gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
+        return self._gate_from_logits(gate_logits)
 
-        # (1, B, N, H_local) -> (B, H_local, N, 1) in one pass: the N<->H_local swap is the real
-        # data movement, and the leading unit axis is parked into the trailing broadcast slot (over
-        # E). Replaces squeeze+transpose+unsqueeze (the unsqueeze was a retile, not a free view).
-        gate = ttnn.permute(gate, (1, 3, 2, 0))
-        return gate
+    def _unpad_gate_logits(self, gate_logits: ttnn.Tensor) -> ttnn.Tensor:
+        """Drop the tile padding from the fused gate chunk, leaving n_local_heads real columns."""
+        if self.gate_padded_per_device == self.gate_width_per_device:
+            return gate_logits
+        shape = gate_logits.shape
+        return ttnn.slice(
+            gate_logits,
+            [0, 0, 0, 0],
+            [shape[0], shape[1], shape[2], self.gate_width_per_device],
+        )
+
+    def _gate_from_logits(self, gate_logits: ttnn.Tensor) -> ttnn.Tensor:
+        """2 * sigmoid(logits) as (B, H_local, N, 1); shared by the fused and unfused paths."""
+        gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
+        return ttnn.permute(gate, (1, 3, 2, 0))
 
     def forward(
         self,
@@ -478,15 +625,23 @@ class LTXAttention(Module):
 
         qkv_parallel_config = None if (use_nonfused_agmm or dedup_gate_gather) else self.parallel_config
 
-        # Per-head gate, computed before QKV consumes spatial_1BND.
-        gate_bhne = self._compute_gate(spatial_1BND, qkv_parallel_config)
+        # When fused, the gate falls out of the QKV/Q matmul below; otherwise it's its own projection.
+        gate_bhne = None if self.fuse_gate else self._compute_gate(spatial_1BND, qkv_parallel_config)
 
         if self.is_self:
-            q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
-                spatial_1BND,
-                compute_kernel_config=self.mm_compute_kernel_config,
-                parallel_config=qkv_parallel_config,
-            )
+            if self.fuse_gate:
+                q_1BNF, k_1BNF, v_1BNF, gate_logits = self.to_qkv(
+                    spatial_1BND,
+                    compute_kernel_config=self.mm_compute_kernel_config,
+                    parallel_config=qkv_parallel_config,
+                )
+                gate_bhne = self._gate_from_logits(self._unpad_gate_logits(gate_logits))
+            else:
+                q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
+                    spatial_1BND,
+                    compute_kernel_config=self.mm_compute_kernel_config,
+                    parallel_config=qkv_parallel_config,
+                )
         else:
             kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
             # Cross K/V: gather TP-sharded context for to_kv (replicated text prompt is already full).
@@ -501,11 +656,19 @@ class LTXAttention(Module):
                         )
                     else:
                         kv_parallel_config = self.parallel_config
-            q_1BNF = self.to_q(
-                spatial_1BND,
-                compute_kernel_config=self.mm_compute_kernel_config,
-                parallel_config=qkv_parallel_config,
-            )
+            if self.fuse_gate:
+                q_1BNF, gate_logits = self.to_q(
+                    spatial_1BND,
+                    compute_kernel_config=self.mm_compute_kernel_config,
+                    parallel_config=qkv_parallel_config,
+                )
+                gate_bhne = self._gate_from_logits(self._unpad_gate_logits(gate_logits))
+            else:
+                q_1BNF = self.to_q(
+                    spatial_1BND,
+                    compute_kernel_config=self.mm_compute_kernel_config,
+                    parallel_config=qkv_parallel_config,
+                )
             k_1BNF, v_1BNF = self.to_kv(
                 kv_input,
                 compute_kernel_config=self.mm_compute_kernel_config,

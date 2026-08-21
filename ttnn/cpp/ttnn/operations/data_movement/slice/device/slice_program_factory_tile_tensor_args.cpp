@@ -5,6 +5,8 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
 
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+
 #include <optional>
 #include <span>
 #include <tt-metalium/work_split.hpp>
@@ -188,6 +190,15 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
     desc.kernels.push_back(std::move(writer_desc));
 
     return desc;
+}
+
+void SliceTileTensorArgsProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const SliceParams& args,
+    const SliceInputs& tensor_args,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    patch_slice_program_addresses(program, SliceTileTensorArgsProgramFactory{}, args, tensor_args, output);
 }
 
 }  // namespace ttnn::prim

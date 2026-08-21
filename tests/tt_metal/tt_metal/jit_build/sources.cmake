@@ -8,5 +8,6 @@ set(UNIT_TESTS_JIT_BUILD_SRC
     test_jit_build_telemetry.cpp
     test_jit_compile_deduper.cpp
     test_kernel_signature_parser.cpp
+    test_named_ct_arg_map.cpp
     test_sync_build_steps.cpp
 )

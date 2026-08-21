@@ -52,6 +52,15 @@ enum ThreadId
     IsolateSfpuThreadId = 3
 };
 
+// Selects how a float32 SFPU result is narrowed when it is stored back into a
+// bf16 DEST. Ignored when fp32 DEST accumulation is enabled, since no narrowing
+// happens in that case.
+enum class DstRoundingMode : std::uint8_t
+{
+    Default     = 0, // SFPSTORE truncates fp32->bf16 on all architectures; no software rounding
+    NearestEven = 1, // IEEE 754 round-to-nearest-even, applied in software before the store
+};
+
 enum class BinaryOp : std::uint8_t
 {
     ADD,
@@ -67,6 +76,7 @@ enum class BinaryOp : std::uint8_t
     QUANT,
     REQUANT,
     DEQUANT,
+    ATAN2,
 };
 
 // For instructions that address lower/upper 16 bits of a register

@@ -2930,3 +2930,127 @@ def test_untilize_nd_shard_to_same_shard_spec_uneven_input_shard_spec(
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor)
 
     assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
+
+
+# --- Codegen-path coverage ---
+#
+# ttnn.untilize routes gate-supported cases to codegen and the rest to native, and offers no way to
+# ask for one: the verification-only entries below live in the private module for that reason (see
+# untilize_force.hpp). The nightly routing suite only asserts the *rejected* cases fall back to
+# native, so nothing there fails if a codegen kernel itself breaks -- these pin codegen and compare
+# it against native on the same input. That comparison is exact for every dtype below because
+# untilize only relayouts values, so any mismatch is a real kernel bug rather than tolerance.
+#
+# One case per writer the program factory can pick (untilize_codegen_supported.cpp decides which
+# shapes are in scope at all):
+#   multi-tile-row, tile-aligned -> row-parallel writer, one tile row per core
+#   single tile-row, Wt > 1      -> column-parallel writer, tile columns split across the grid
+#   non-tile-aligned bfloat16    -> row-parallel writer's unpadding path, which skips pad rows
+# bfloat8_b appears only tile-aligned: the gate routes non-aligned bfloat8_b to native because
+# the reference casts it to bfloat16 first, a step this implementation does not have.
+codegen_supported_cases = [
+    # (tensor_shape, dtype, output_buffer_type)
+    ([2, 2, 64, 128], ttnn.bfloat16, ttnn.BufferType.DRAM),
+    ([2, 2, 64, 128], ttnn.bfloat8_b, ttnn.BufferType.DRAM),
+    ([2, 2, 64, 128], ttnn.bfloat16, ttnn.BufferType.L1),
+    ([32, 512], ttnn.bfloat16, ttnn.BufferType.DRAM),
+    ([1, 2, 100, 68], ttnn.bfloat16, ttnn.BufferType.DRAM),
+]
+
+codegen_case_ids = [
+    "row_parallel|bfloat16|dram",
+    "row_parallel|bfloat8_b|dram",
+    "row_parallel|bfloat16|l1",
+    "column_parallel|bfloat16|dram",
+    "unpadding|bfloat16|dram",
+]
+
+
+_force_native = ttnn._ttnn.operations.data_movement.untilize_force_native
+_force_codegen = ttnn._ttnn.operations.data_movement.untilize_force_codegen
+
+
+def _codegen_input_tensor(device, tensor_shape, dtype):
+    return ttnn.from_torch(
+        torch.randn(tensor_shape, dtype=torch.bfloat16), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+
+@pytest.mark.parametrize("tensor_shape, dtype, output_buffer_type", codegen_supported_cases, ids=codegen_case_ids)
+def test_untilize_codegen(device, tensor_shape, dtype, output_buffer_type):
+    torch.manual_seed(42)
+    input_ttnn_tensor = _codegen_input_tensor(device, tensor_shape, dtype)
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)
+
+    golden = _force_native(input_ttnn_tensor, memory_config=output_memory_config)
+    output = _force_codegen(input_ttnn_tensor, memory_config=output_memory_config)
+
+    assert output.shape == golden.shape, f"Output shape {output.shape} does not match native shape {golden.shape}"
+    assert_equal(ttnn.to_torch(golden), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize(
+    "tensor_shape",
+    [[2, 2, 64, 128], [32, 512]],
+    ids=["row_parallel", "column_parallel"],
+)
+def test_pc_untilize_codegen(device, tensor_shape):
+    torch.manual_seed(42)
+    num_iters = 3
+    input_tensors = [_codegen_input_tensor(device, tensor_shape, ttnn.bfloat16) for _ in range(num_iters)]
+    goldens = [ttnn.to_torch(_force_native(tensor)) for tensor in input_tensors]
+
+    for i in range(num_iters):
+        with device.cache_entries_counter.measure():
+            output = _force_codegen(input_tensors[i])
+
+        assert_equal(goldens[i], ttnn.to_torch(output))
+        if i == 0:
+            base_count = device.cache_entries_counter.total
+        else:
+            assert device.cache_entries_counter.total == base_count, "program cache entries differ on same configs"
+
+
+# The sub_core_grids factory shares its writer kernel
+# (writer_unary_stick_layout_split_rows_interleaved_parallel_columns) with the
+# parallelize-column factory. That kernel consumes (num_sticks / TILE_HEIGHT) *
+# num_tiles_per_core tiles via wait_front, but reader/compute only push
+# num_tiles_per_core tiles per core. ntiles_per_column > 1 violates this
+# producer/consumer contract, so validate_on_program_cache_miss must reject it.
+@pytest.mark.parametrize(
+    "input_shape, num_cores",
+    [
+        ([1, 1, 64, 1024], 8),  # ntiles_per_column=2
+        ([1, 1, 96, 512], 8),  # ntiles_per_column=3
+    ],
+)
+def test_untilize_sub_core_grids_multi_tile_height_rejected(device, input_shape, num_cores, expect_error):
+    """Tall tensors (ntiles_per_column > 1) with sub_core_grids must be rejected, not hung."""
+    torch.manual_seed(0)
+    input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
+    input_ttnn = ttnn.from_torch(
+        input_torch,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    with expect_error(RuntimeError, "sub_core_grid untilize only supports"):
+        ttnn.untilize(input_ttnn, use_multicore=True, sub_core_grids=sub_core_grids)
+
+
+def test_untilize_sub_core_grids_single_tile_height(device):
+    """Single-tile-height tensor (ntiles_per_column == 1) with sub_core_grids still works."""
+    torch.manual_seed(0)
+    input_shape = [1, 1, 32, 1024]  # height=32 = one tile row → ntiles_per_column=1
+    num_cores = 8
+    input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
+    input_ttnn = ttnn.from_torch(
+        input_torch,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    output = ttnn.untilize(input_ttnn, use_multicore=True, sub_core_grids=sub_core_grids)
+    assert_equal(input_torch, ttnn.to_torch(output))
