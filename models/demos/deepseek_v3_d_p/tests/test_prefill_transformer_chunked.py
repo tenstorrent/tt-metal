@@ -1152,16 +1152,11 @@ def test_glm_prefill_transformer_chunked(
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE
-                ),
-                # Single expert group + device gate, like Kimi and GLM: the MoE routing all-gather's
-                # semaphores go to L1_SMALL. 768 B is the adapter's l1_small_size (dense MLA, so none
-                # of GLM's extra sparse-gather allowance is needed).
-                "l1_small_size": 768,
-            },
+            # Fabric2D torus profile, matching the other 8x4 rows in this file: upstream retired
+            # FABRIC_1D here and it now skips as "unfeasible on the given hardware".
+            # l1_small_size 768 is the adapter's (single expert group + device gate puts the MoE
+            # routing all-gather's semaphores in L1_SMALL; dense MLA needs no sparse-gather slack).
+            torus_xy_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE, l1_small_size=768),
             2,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -1226,19 +1221,13 @@ def test_mistral4_prefill_transformer_chunked(
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE
-                ),
-                # Single expert group + device gate: MoE routing all-gather semaphores go to
-                # L1_SMALL (the adapter's l1_small_size; dense MLA needs no sparse-gather slack).
-                "l1_small_size": 768,
-                # Required by use_trace=True: without it conftest logs "No trace region size" and
-                # the captured trace buffers come from general DRAM instead of a reserved region --
-                # unbounded, and trace_bytes() reports 0.00 MB because the TRACE pool is empty.
-                "trace_region_size": 256 * 1024 * 1024,
-            },
+            # trace_region_size is required by use_trace=True: without it conftest logs "No trace
+            # region size", the captured buffers come from general DRAM, and trace_bytes() reads 0.
+            torus_xy_device_params(
+                fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=768,
+                trace_region_size=256 * 1024 * 1024,
+            ),
             2,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
