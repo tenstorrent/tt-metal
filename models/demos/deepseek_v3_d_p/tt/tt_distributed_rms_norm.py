@@ -269,46 +269,65 @@ class TtDistributedRmsNorm(LightweightModule):
         )
         logger.debug(f"Pre-all-gather stats shape: {tt_stats.shape}")
 
-        # Step 2: Gather stats across cluster_axis. high_bw_all_gather requires topology metadata
-        # for every mesh axis through cluster_axis. Pipeline-parallel runners may expose a 1D tensor
-        # distribution on a 2D mesh, so preserve the general all_gather path for those tensors.
-        use_high_bw_all_gather = _supports_high_bw_all_gather(tt_stats, self.cluster_axis)
-        if use_high_bw_all_gather:
-            # high_bw_all_gather writes into a caller-provided DRAM tensor, so allocate its
-            # fixed-shape output once and reuse it across forwards.
-            if self._gathered_stats is None:
-                gathered_shape = list(tt_stats.shape)
-                gathered_shape[3] *= self.mesh_device.shape[self.cluster_axis]
-                self._gathered_stats = ttnn.empty(
-                    gathered_shape,
-                    dtype=tt_stats.dtype,
-                    layout=tt_stats.layout,
-                    device=self.mesh_device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-            tt_gathered_stats = ttnn.experimental.high_bw_all_gather(
-                tt_stats,
-                dim=3,
-                output_tensor=self._gathered_stats,
-                cluster_axis=self.cluster_axis,
-                num_links=self.num_links,
-            )
+        # Step 2: Gather stats across cluster_axis.
+        #
+        # TP=1 is handled before choosing a gather at all: ttnn.all_gather TT_FATALs at
+        # num_devices == 1 rather than degenerating to a copy, and with no TP split each device
+        # already holds the full hidden dim, so its local sum(x^2) IS the global statistic. Kept as a
+        # pass-through into rms_norm_post_all_gather rather than switching to a plain ttnn.rms_norm,
+        # so the TP=1 path cannot drift numerically from the TP>1 one.
+        #
+        # Stays False on the TP=1 and fallback paths, which own their gathered tensor; only
+        # high_bw_all_gather writes into the reused self._gathered_stats buffer, which step 3 must
+        # NOT deallocate. At TP=1 the "gathered" tensor aliases tt_stats -- freshly allocated by
+        # rms_norm_pre_all_gather this forward -- so letting step 3 free it is both correct and the
+        # reason the branch below does not free it itself.
+        use_high_bw_all_gather = False
+        if self.mesh_device.shape[self.cluster_axis] == 1:
+            tt_gathered_stats = tt_stats  # aliased; freed once by step 3, after it is used
+            logger.debug("cluster_axis length 1 (TP=1): skipping the stats all-gather (identity)")
         else:
-            logger.debug(
-                f"Falling back to all_gather: tensor topology does not represent cluster_axis={self.cluster_axis}"
-            )
-            all_gather_kwargs = {
-                "input_tensor": tt_stats,
-                "dim": 3,
-                "cluster_axis": self.cluster_axis,
-                "num_links": self.num_links,
-                "topology": self.topology,
-            }
-            if self.stats_memcfg is not None:
-                all_gather_kwargs["memory_config"] = self.stats_memcfg
-            tt_gathered_stats = ttnn.all_gather(**all_gather_kwargs)
-        ttnn.deallocate(tt_stats)
-        logger.debug(f"Gathered stats shape: {tt_gathered_stats.shape}")
+            # high_bw_all_gather requires topology metadata for every mesh axis through
+            # cluster_axis. Pipeline-parallel runners may expose a 1D tensor distribution on a 2D
+            # mesh, so preserve the general all_gather path for those tensors.
+            use_high_bw_all_gather = _supports_high_bw_all_gather(tt_stats, self.cluster_axis)
+            if use_high_bw_all_gather:
+                # high_bw_all_gather writes into a caller-provided DRAM tensor, so allocate its
+                # fixed-shape output once and reuse it across forwards.
+                if self._gathered_stats is None:
+                    gathered_shape = list(tt_stats.shape)
+                    gathered_shape[3] *= self.mesh_device.shape[self.cluster_axis]
+                    self._gathered_stats = ttnn.empty(
+                        gathered_shape,
+                        dtype=tt_stats.dtype,
+                        layout=tt_stats.layout,
+                        device=self.mesh_device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                tt_gathered_stats = ttnn.experimental.high_bw_all_gather(
+                    tt_stats,
+                    dim=3,
+                    output_tensor=self._gathered_stats,
+                    cluster_axis=self.cluster_axis,
+                    num_links=self.num_links,
+                )
+            else:
+                logger.debug(
+                    f"Falling back to all_gather: tensor topology does not represent cluster_axis={self.cluster_axis}"
+                )
+                all_gather_kwargs = {
+                    "input_tensor": tt_stats,
+                    "dim": 3,
+                    "cluster_axis": self.cluster_axis,
+                    "num_links": self.num_links,
+                    "topology": self.topology,
+                }
+                if self.stats_memcfg is not None:
+                    all_gather_kwargs["memory_config"] = self.stats_memcfg
+                tt_gathered_stats = ttnn.all_gather(**all_gather_kwargs)
+            # Only safe once a gather actually produced a NEW tensor; at TP=1 the two alias.
+            ttnn.deallocate(tt_stats)
+            logger.debug(f"Gathered stats shape: {tt_gathered_stats.shape}")
 
         # Step 3: Post-all-gather - normalize using gathered global stats
         tt_output = ttnn.rms_norm_post_all_gather(
