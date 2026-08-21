@@ -160,24 +160,37 @@ if [ -n "$SBH" ]; then prose_mentions R4 "${SBH:0:12}" "libttsim bh"; fi
 if [ -n "$SWH" ]; then prose_mentions R4 "${SWH:0:12}" "libttsim wh"; fi
 
 # ---- R5/R6: baseline header anchors ----
-anchor_check() { # anchor_check <rule> <anchor-text> <expected-64hex> <what>
-  local rule=$1 anchor=$2 pin=$3 what=$4
+anchor_check() { # anchor_check <rule> <anchor-text> <expected-64hex> <what> [<file>]
+  local rule=$1 anchor=$2 pin=$3 what=$4 file=${5:-$BASELINE}
   local lines n
-  lines=$(grep -nE "^#.*[0-9a-f]{12}[^ ]* \($anchor\)" "$BASELINE")
+  lines=$(grep -nE "^#.*[0-9a-f]{12}[^ ]* \($anchor\)" "$file")
   n=$(printf '%s' "$lines" | grep -c . || true)
   if [ "$n" -ne 1 ]; then
-    fail "$rule" "baseline header must carry exactly one '$anchor' anchor line (found $n) in $BASELINE"
-    [ -n "$lines" ] && printf '%s\n' "$lines" | sed "s|^|    $BASELINE:|"
+    fail "$rule" "baseline header must carry exactly one '$anchor' anchor line (found $n) in $file"
+    [ -n "$lines" ] && printf '%s\n' "$lines" | sed "s|^|    $file:|"
     return
   fi
   if ! printf '%s\n' "$lines" | grep -q "${pin:0:12}"; then
     fail "$rule" "baseline header's $what anchor disagrees with the conf pin — the header is describing a stale pin (waves 5–6 V1):"
-    printf '%s\n' "$lines" | sed "s|^|    $BASELINE:|"
+    printf '%s\n' "$lines" | sed "s|^|    $file:|"
     echo "    $CONF: reviewed $what pin = $pin"
   fi
 }
 [ -n "$CC1" ] && anchor_check R5 "CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256" "$CC1" "cc1plus"
 [ -n "$SBH" ] && anchor_check R6 "CURRENT sweep_2x2.conf PINNED_SIM_BH_SHA256" "$SBH" "BH sim"
+
+# ---- R5b/R6b: KERNEL-scoped (v2) baseline header anchors (lane ET) ----
+# The v2 baseline carries the VERDICT anchors (end-to-end KERNEL cells,
+# owner ratification 2026-08-21) and is pin-anchored exactly like v1.
+# Absent file = v2 not yet seeded (bootstrap): recorded, not RED — the
+# sweep's handover rule keeps the v1 checks at full severity until then.
+KBASELINE=${BASELINE%_v1.tsv}_v2.tsv
+if [ "$KBASELINE" != "$BASELINE" ] && [ -f "$KBASELINE" ]; then
+  [ -n "$CC1" ] && anchor_check R5b "CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256" "$CC1" "cc1plus" "$KBASELINE"
+  [ -n "$SBH" ] && anchor_check R6b "CURRENT sweep_2x2.conf PINNED_SIM_BH_SHA256" "$SBH" "BH sim" "$KBASELINE"
+else
+  echo "conf-lint: note [R5b/R6b] KERNEL (v2) baseline not present ($KBASELINE) — verdict anchors unseeded; v1 checks stay at full severity"
+fi
 
 # ---- R7: LLK-pristine (owner ruling 2026-08-17) ----
 # The tt_llk_* library trees must be byte-identical to the reviewed upstream

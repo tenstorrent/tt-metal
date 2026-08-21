@@ -184,6 +184,18 @@ TSV with provenance pointing at the evidence dir, and land it through normal
 review.  A win→loss flip is never "updated over": it is a STOP event that
 must be bisected first.
 
+**Two baselines per chip class (owner ratification 2026-08-21, lane ET):**
+`sfpu_device_baseline_<class>_v1.tsv` carries the DIAGNOSTIC (body-zone)
+anchors; `sfpu_device_baseline_<class>_v2.tsv` carries the KERNEL-scoped
+VERDICT anchors — absolute end-to-end device kernel time at the
+drain-inclusive `KERNEL` profiler marker, which now decides every row's
+WIN/PARITY/LOSS class (`kernel_vs_hand_pct`).  Seed/refresh v2 with
+`tools/seed_kernel_baseline.py --evidence-root <run>` and land it through
+the same reviewed procedure, citing the run's `KERNEL-DELTA.md`.  Until v2
+carries a row, the sweep's handover rule keeps the v1 checks at full RED
+severity; once it does, v1 checks demote to YELLOW `diag` lines on that
+row.  `conf_lint.sh` R5b/R6b anchor the v2 header to the reviewed pins.
+
 ## One-command 2x2 sweep (HANDOFF §1/§3 protocol as code)
 
 `sweep_2x2.py` regenerates the full `{semantic, hand} × {passes OFF, ON}`

@@ -53,6 +53,11 @@ DATE=${SWEEP_DATE:-$(date +%Y%m%d)}
 EV="$EVIDENCE_ROOT/nightly-$DATE"
 BASELINE="$HERE/sfpu_device_baseline_${CHIP_CLASS}_v1.tsv"
 [ -f "$BASELINE" ] || { echo "FATAL: no baseline for chip class '$CHIP_CLASS' ($BASELINE)"; exit 2; }
+# KERNEL-scoped (v2) VERDICT baseline (lane ET, owner ratification
+# 2026-08-21): passed when seeded; absent = bootstrap (kernel ratios report
+# no-baseline, v1 diagnostic checks keep full severity — handover rule).
+KBASELINE="$HERE/sfpu_device_baseline_${CHIP_CLASS}_v2.tsv"
+[ -f "$KBASELINE" ] || KBASELINE=""
 
 # Evidence-root collision guard (incident 2026-08-20: the pin-14 weekly's
 # date-derived root collided with the existing pin-12 weekly-20260820 — 15
@@ -103,6 +108,8 @@ python3 "$HERE/selftest_knob_legs_semleg.py" > "$EV/selftest-knob-legs-semleg.tx
   || GATE_SELFTEST_RC=1
 python3 "$HERE/selftest_dst_layout_32b.py" > "$EV/selftest-dst-layout-32b.txt" 2>&1 \
   || GATE_SELFTEST_RC=1
+python3 "$HERE/selftest_e2e_metric.py" > "$EV/selftest-e2e-metric.txt" 2>&1 \
+  || { echo "FATAL: e2e-metric (dual-zone verdict) self-test failed (see $EV/selftest-e2e-metric.txt)"; exit 2; }
 # Record the conf-lint verdict (already enforced above, pre-source) in-evidence.
 { mv /tmp/nightly-selftest-conf-lint.$$ "$EV/selftest-conf-lint.txt" 2>/dev/null || true; }
 { mv /tmp/nightly-selftest-wrapper-lib.$$ "$EV/selftest-wrapper-lib.txt" 2>/dev/null || true; }
@@ -230,6 +237,7 @@ PYTHONUNBUFFERED=1 stdbuf -oL -eL python3 "$HERE/sweep_2x2.py" \
   --skip-craq-gate \
   --allow-hardware \
   --baseline "$BASELINE" \
+  ${KBASELINE:+--kernel-baseline "$KBASELINE"} \
   --max-drift-pct "$MAX_DRIFT_PCT" \
   --max-abs-drift-pct "$MAX_ABS_DRIFT_PCT" \
   --red-loss-growth-pct "$RED_LOSS_GROWTH_PCT" \
