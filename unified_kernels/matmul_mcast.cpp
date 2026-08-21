@@ -103,8 +103,8 @@ void kernel_main() {
     // The row this core sits in, and the column it sits in. Every core in a row
     // runs the same row statement; which side of the handshake it takes is a
     // runtime decision on its own coordinate.
-    const u::LogicalMcast row{u::LogicalCoord{me.y, 0}, u::Extent{1, MM_GRID_W}};
-    const u::LogicalMcast col{u::LogicalCoord{0, me.x}, u::Extent{MM_GRID_H, 1}};
+    const u::LogicalMcast row{u::LogicalCoord::yx(me.y, 0), u::Extent::hw(1, MM_GRID_W)};
+    const u::LogicalMcast col{u::LogicalCoord::yx(0, me.x), u::Extent::hw(MM_GRID_H, 1)};
 
 #if defined(MM_ACC_L1)
     u::Accumulator<Out, u::AccumulatorMode::L1> acc(acc_storage, out_storage);

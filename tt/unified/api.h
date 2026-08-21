@@ -48,9 +48,26 @@ class ComputeBlock;
 // are all data-movement-only names.
 // ---------------------------------------------------------------------------
 
+// Both coordinate types are built by NAME, never by position: LogicalCoord::xy(x, y)
+// and LogicalCoord::yx(y, x) construct the same thing from arguments in opposite orders,
+// and the call says which one you meant.
+//
+// The reason is that the two conventions in play disagree. Metal writes coordinates x
+// first -- get_noc_addr(x, y), CoreCoord(x, y) -- while these structs store y first, and
+// tensor code everywhere else (torch, and every framework that follows it) is row-major
+// and reads y first too. A bare pair is therefore ambiguous to a reader and silently
+// wrong when guessed, and the failure is not a crash: a multicast rectangle addressed
+// through transposed corners still runs, on the wrong cores.
+//
+// The constructors are private so there is no positional form to guess at. That also
+// makes these non-aggregates, so `LogicalCoord{1, 2}` no longer compiles -- which is the
+// point, since that spelling was the ambiguous one.
 struct PhysicalCoord {
     uint32_t y;
     uint32_t x;
+
+    static constexpr PhysicalCoord yx(uint32_t y, uint32_t x) { return PhysicalCoord(y, x); }
+    static constexpr PhysicalCoord xy(uint32_t x, uint32_t y) { return PhysicalCoord(y, x); }
 
     // This core's own physical coordinate, on this thread's NOC.
     //
@@ -67,13 +84,25 @@ struct PhysicalCoord {
 
     uint64_t get_noc_addr(uintptr_t l1_addr) const;
 
-    bool operator==(PhysicalCoord o) const { return y == o.y && x == o.x; }
-    bool operator!=(PhysicalCoord o) const { return !(*this == o); }
+    // constexpr like the factories: a coordinate can now be built at compile time, so
+    // comparing two of them should be answerable there as well.
+    constexpr bool operator==(PhysicalCoord o) const { return y == o.y && x == o.x; }
+    constexpr bool operator!=(PhysicalCoord o) const { return !(*this == o); }
+
+private:
+    // explicit as well as private: inside the class, `return {y, x}` would otherwise
+    // still reach this constructor by list-initialisation, which is the positional form
+    // the factories exist to remove. Now even the implementation has to name an order.
+    explicit constexpr PhysicalCoord(uint32_t y_in, uint32_t x_in) : y(y_in), x(x_in) {}
 };
 
 struct LogicalCoord {
     uint32_t y;
     uint32_t x;
+
+    // See PhysicalCoord above for why these are named rather than positional.
+    static constexpr LogicalCoord yx(uint32_t y, uint32_t x) { return LogicalCoord(y, x); }
+    static constexpr LogicalCoord xy(uint32_t x, uint32_t y) { return LogicalCoord(y, x); }
 
     // Correct on ALL projections, unlike PhysicalCoord::this_core(): compute is
     // told its logical position by the firmware even though it cannot resolve it
@@ -85,14 +114,38 @@ struct LogicalCoord {
 
     uint64_t get_noc_addr(uintptr_t l1_addr) const;
 
-    bool operator==(LogicalCoord o) const { return y == o.y && x == o.x; }
-    bool operator!=(LogicalCoord o) const { return !(*this == o); }
+    // constexpr like the factories: a coordinate can now be built at compile time, so
+    // comparing two of them should be answerable there as well.
+    constexpr bool operator==(LogicalCoord o) const { return y == o.y && x == o.x; }
+    constexpr bool operator!=(LogicalCoord o) const { return !(*this == o); }
+
+private:
+    // explicit as well as private: inside the class, `return {y, x}` would otherwise
+    // still reach this constructor by list-initialisation, which is the positional form
+    // the factories exist to remove. Now even the implementation has to name an order.
+    explicit constexpr LogicalCoord(uint32_t y_in, uint32_t x_in) : y(y_in), x(x_in) {}
 };
 
 // The h x w extent of a core rectangle. Not a tile shape -- see Shape.
+// Built by name for the same reason the coordinates are, and the confusion is the same
+// one: this holds h before w, while metal's grid sizes go the other way -- a CoreCoord or
+// compute_with_storage_grid_size is (x, y), meaning (w, h). hw(h, w) and wh(w, h) build the
+// same extent from arguments in opposite orders, and the call says which was meant.
+//
+// A transposed extent is another silent failure: a 1 x N multicast row addressed as N x 1
+// covers a column instead, which still runs and still writes, just to the wrong cores.
 struct Extent {
     uint32_t h;
     uint32_t w;
+
+    static constexpr Extent hw(uint32_t h, uint32_t w) { return Extent(h, w); }
+    static constexpr Extent wh(uint32_t w, uint32_t h) { return Extent(h, w); }
+
+    constexpr bool operator==(Extent o) const { return h == o.h && w == o.w; }
+    constexpr bool operator!=(Extent o) const { return !(*this == o); }
+
+private:
+    explicit constexpr Extent(uint32_t h_in, uint32_t w_in) : h(h_in), w(w_in) {}
 };
 
 // A multicast rectangle, inclusive of both corners.
