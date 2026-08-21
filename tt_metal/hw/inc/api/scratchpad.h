@@ -33,10 +33,11 @@ public:
     explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
 
-    // A scratchpad used as an LLK operand additionally bakes its format + face grid for a future
-    // to_llk_mem_descriptor(ScratchpadBindingToken). That converter was dropped in the rebase onto main;
-    // see llk_operand.h. Plain working memory uses the two-arg form.
-    constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes, LLKMetadata llk) noexcept :
+    // Binding token constructor when host supplies LLK metadata.
+    // See "Entry format metadata" in ScratchpadSpec. to_llk_mem_descriptor(ScratchpadBindingToken)
+    // was dropped in the rebase onto main; see llk_operand.h. Plain working memory uses the two-arg form.
+    constexpr ScratchpadBindingToken(
+        uint32_t crta_offset, uint32_t size_in_bytes, binding_details::LLKMetadata llk) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes), llk_metadata_(llk) {}
 
 private:
@@ -45,7 +46,7 @@ private:
 
     uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
     uint32_t size_in_bytes_;  // static per-node size
-    LLKMetadata llk_metadata_{};
+    binding_details::LLKMetadata llk_metadata_{};
 };
 
 /**

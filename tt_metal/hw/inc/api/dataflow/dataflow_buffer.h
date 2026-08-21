@@ -91,10 +91,10 @@ template <bool IsWrite, typename ReleaseFunc>
 struct DFBBindingToken {
     explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
 
-    // Compute endpoints additionally bake the operand's LLK format + face grid for a future
-    // to_llk_mem_descriptor(DFBBindingToken). That converter was dropped in the rebase onto main;
-    // see llk_operand.h. DM-only DFBs use the id-only constructor.
-    constexpr DFBBindingToken(uint16_t id, LLKMetadata llk) noexcept : id_(id), llk_metadata_(llk) {}
+    // Binding token constructor when host supplies LLK metadata.
+    // See "Entry format metadata" in DataflowBufferSpec. to_llk_mem_descriptor(DFBBindingToken)
+    // was dropped in the rebase onto main; see llk_operand.h. DM-only DFBs use the id-only constructor.
+    constexpr DFBBindingToken(uint16_t id, binding_details::LLKMetadata llk) noexcept : id_(id), llk_metadata_(llk) {}
 
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
 
@@ -106,7 +106,7 @@ struct DFBBindingToken {
 
 private:
     uint16_t id_;
-    LLKMetadata llk_metadata_{};
+    binding_details::LLKMetadata llk_metadata_{};
 };
 
 // Compile-time handle for a CrossNode/PrefetcherPipe *relay* local DFB binding.
