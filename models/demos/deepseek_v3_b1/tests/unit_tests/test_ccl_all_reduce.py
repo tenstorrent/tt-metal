@@ -1362,8 +1362,6 @@ def test_ccl_all_reduce_gather_allgather_4x2_smoke(bh_2d_mesh_device):
         ttnn_result,
         mesh_composer=ttnn.ConcatMesh2dToTensor(submesh, mesh_shape=submesh.shape, dims=(0, 1)),
     )
-    compare_cols = slice(2, None)
-
     if allgather_enabled:
         expected_allgather = torch.cat(row_reduced, dim=0)
         for row in range(mesh_rows):
@@ -1374,7 +1372,7 @@ def test_ccl_all_reduce_gather_allgather_4x2_smoke(bh_2d_mesh_device):
                 ]
                 device_idx = row * mesh_cols + col
                 assert torch.allclose(
-                    received[:, compare_cols], expected_allgather[:, compare_cols], rtol=1e-2, atol=1e-2
+                    received, expected_allgather, rtol=1e-2, atol=1e-2
                 ), f"All-gather output mismatch for device {device_idx} in 4x2 smoke"
     else:
         for row in range(mesh_rows):
@@ -1385,5 +1383,5 @@ def test_ccl_all_reduce_gather_allgather_4x2_smoke(bh_2d_mesh_device):
                 ]
                 device_idx = row * mesh_cols + col
                 assert torch.allclose(
-                    received[:, compare_cols], row_reduced[row][:, compare_cols], rtol=1e-2, atol=1e-2
+                    received, row_reduced[row], rtol=1e-2, atol=1e-2
                 ), f"All-reduce output mismatch for device {device_idx} in 4x2 smoke"
