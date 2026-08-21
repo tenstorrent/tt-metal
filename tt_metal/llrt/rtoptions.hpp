@@ -184,26 +184,14 @@ class RunTimeOptions {
     bool is_custom_fabric_mesh_graph_desc_path_set = false;
     std::string custom_fabric_mesh_graph_desc_path;
 
-    // Path to a Factory System Descriptor (FSD): the "as-built"/expected description of what the
-    // cluster's topology *should* look like, as opposed to the Physical System Descriptor (PSD) that
-    // tooling discovers live from the running hardware. Users supply it via
-    // `tt-run --factory-system-descriptor <path>`, which is plumbed down to every rank as the
-    // TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH env var (env/RTOptions is the single source of truth for
-    // the path). The intent is to let rank-binding generation map against the known-good factory
-    // topology instead of relying on live discovery, which is slow and can misbehave on partially
-    // reachable or degraded clusters.
-    //
-    // TEMPORARY: this is currently plumbing only. The path is carried end-to-end but not yet consumed
-    // for mapping -- generate_rank_bindings still performs live PSD discovery and only logs that an FSD
-    // was supplied ("FSD provided, falling back to live PSD discovery"). There is no behavior change
-    // yet; this option exists so the wiring can land ahead of the logic that uses it.
-    //
-    // EVENTUAL SOLUTION: derive the topology directly from the FSD -- build a PhysicalSystemDescriptor
-    // from the FSD-derived cluster descriptor and skip live discovery -- with a coverage check that
-    // falls back to live PSD discovery when the FSD doesn't cover the requested hosts/topology (PSD
-    // discovery remains the default). Once that consumption path lands, this stops being a no-op
-    // passthrough. See Plan.md for the staged rollout (Stage 1: plumbing, this PR; Stage 2:
-    // consumption).
+    // Path to a Factory System Descriptor (FSD): the "as-built"/expected description of the cluster's
+    // topology, as opposed to the Physical System Descriptor (PSD) that tooling discovers live from the
+    // running hardware. Users supply it via `tt-run --factory-system-descriptor <path>`, which is
+    // plumbed to every rank as the TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH env var (env/RTOptions is the
+    // single source of truth for the path). It lets rank-binding generation map against the known-good
+    // factory topology instead of relying on live discovery, which is slow and can misbehave on
+    // partially reachable or degraded clusters.
+    // See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.
     std::string factory_system_descriptor_path;
 
     bool build_map_enabled = false;

@@ -509,6 +509,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // When set, tooling may map against it instead of live-discovering the PSD.
         // Default: unset (fall back to live PSD discovery)
         // Usage: export TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=/path/to/fsd.textproto
+        // See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.
         case EnvVarID::TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH:
             this->factory_system_descriptor_path = std::string(value);
             break;
