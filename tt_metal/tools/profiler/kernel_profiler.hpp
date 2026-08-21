@@ -66,10 +66,12 @@
 
 #include "internal/ethernet/erisc.h"
 
-// Dispatch kernels NEVER profile on this backend, PROFILER_OPT_DO_DISPATCH_CORES or not: the drainer's
-// lane tables cover the profiled worker grid only, so a dispatch core emitting into its (undrained,
-// lossless-blocking) SPSC ring would wedge at the first full ring. Dispatch builds take the no-op
-// branch at the bottom of this file like any unprofiled build.
+// The one DISPATCH_KERNEL mention this backend keeps, and it is load-bearing: PROFILE_KERNEL is a
+// GLOBAL jit-build define (set for every kernel when the profiler is on, dispatch included), the
+// dispatch kernels contain DeviceZoneScoped* sites, and the drainer's lane tables cover the profiled
+// worker grid only. Gating them out is what keeps a dispatch core from emitting into an undrained,
+// lossless-blocking ring -- measured failure: the ring fills, the dispatch core blocks, and the NEXT
+// device open's drainer bring-up wedges at its write barrier (heartbeat stuck, phase=11).
 #if defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL)
 namespace kernel_profiler {
 
@@ -657,21 +659,10 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 #define DeviceZoneScopedMainN(name) \
     kernel_profiler::profileScopeLifecycle zone_fw_lifecycle = kernel_profiler::profileScopeLifecycle();
 
-// KERNEL wrapper: REPORTS, as an ordinary scope -- same profileScope path as DeviceZoneScopedN, so a real
-// model run shows a "<RISC>-KERNEL" span per kernel invocation alongside any op-level zones.
-// Toggle kept as a bisect handle: set SPSC_KERNEL_WRAPPER_ZONE 0 to make this silent again. It was used to
-// clear this change of a ResNet teardown hang in wait_for_dispatch_cores -- the hang reproduces with the
-// wrapper zone OFF too, so it is NOT caused by emitting KERNEL zones (see FINDINGS / the perf_debug
-// teardown note). Useful because the SPSC ring is lossless-BLOCKING: any core emitting into a ring that
-// nobody drains wedges forever, so "who is emitting" is always worth being able to bisect.
-#define SPSC_KERNEL_WRAPPER_ZONE 1
-#if SPSC_KERNEL_WRAPPER_ZONE
-#define DeviceZoneScopedMainChildN(name) \
-    TT_ZONE_DEFINE_ID(hash, name);       \
-    kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
-#else
-#define DeviceZoneScopedMainChildN(name) (void(sizeof(name)))
-#endif
+// KERNEL wrapper: an ordinary zone, nothing more -- a real model run shows a "<RISC>-KERNEL" span per
+// kernel invocation alongside any op-level zones. (The old SPSC_KERNEL_WRAPPER_ZONE bisect toggle is
+// gone; it had already cleared the ResNet teardown hang of any connection to KERNEL-zone emission.)
+#define DeviceZoneScopedMainChildN(name) DeviceZoneScopedN(name)
 
 #define DeviceZoneScopedSumN1(name) \
     TT_ZONE_DEFINE_ID(hash, name);  \
