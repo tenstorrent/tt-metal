@@ -86,9 +86,33 @@ class MistralSmall4119BAdapter(MLAPrefillAdapter):
     moe_pcc_threshold = 0.971
     prefill_trace_layout = "single_file"
 
-    # No reference_* classes wired. transformers' Mistral4Attention is the correct upstream reference,
-    # but its forward takes a precomputed `position_embeddings` and no `past_key_value`/`use_cache`,
-    # so run_reference_mla cannot call it as-is; and the DeepSeek MoE reference expects a
-    # `gate.e_score_correction_bias` that Mistral's plain softmax router does not have. Leaving these
-    # None makes those comparisons skip rather than error; the device path is still checked against
-    # MLAReference in test_mla.py.
+    # --- CPU reference ---------------------------------------------------------------------------
+    # The reference of record is the *composed* one in
+    # `models/demos/deepseek_v3_d_p/reference/mistral_small_4/` (the GLM-5.1 pattern): tests import
+    # `mistral4_decoder_layer_reference` directly and it assembles MLAReference (the same truth that
+    # validates test_mla.test_mistral4_mla) + rms_norm/residual + `mistral4_moe_reference`, whose
+    # routing calls HF's own `Mistral4MoE.route_tokens_to_experts`. That package also owns
+    # `mistral4_torch_config` (namespace -> real `Mistral4Config`) and
+    # `unpack_stacked_expert_weights` for this checkpoint's packed `[128, 4096, 4096]` gate_up_proj.
+    #
+    # All three `reference_*_cls` hooks stay UNSET, deliberately — each consumer construction site
+    # was checked and none of them can drive the upstream `Mistral4*` classes:
+    #   * reference_attention_cls: `run_reference_mla` calls `attn(hidden_states=..., attention_mask=...,
+    #     position_ids=..., past_key_value=None, use_cache=False)`, but `Mistral4Attention.forward`
+    #     requires a precomputed `position_embeddings` (2nd positional) and names its cache
+    #     `past_key_values` -> TypeError. MLAReference covers this comparison instead.
+    #   * reference_moe_cls: `run_reference_moe` builds `cls(cfg)` from the DeepSeek-shaped namespace
+    #     `mistral4_hf_config()` returns, then `load_state_dict(..., strict=True)` with
+    #     `gate.e_score_correction_bias` and per-expert `experts.{i}.gate_proj.weight`. Mistral's
+    #     router has no correction bias, its experts are stacked (`experts.gate_up_proj`), and
+    #     `Mistral4NaiveMoe.__init__` reads `config.num_local_experts`, which exists only via
+    #     `Mistral4Config.attribute_map` and so can never come off a SimpleNamespace.
+    #   * reference_model_cls: no full-model comparison is wired for this variant by design — the GLM
+    #     pattern *is* the composed block reference. The base property raises NotImplementedError,
+    #     which is the honest answer for `transformer_helpers`' whole-model paths.
+    # Leaving the two Optional hooks None makes those comparisons skip rather than error.
+    #
+    # Nothing is imported here: tests/conftest.py imports every adapter at collection time, so a
+    # top-level torch/transformers import in this module would tax (or break) collection for the
+    # whole test directory. If a hook ever becomes wirable, add it as a lazy @property that imports
+    # inside the body (see adapters/kimi_k2_6.py).

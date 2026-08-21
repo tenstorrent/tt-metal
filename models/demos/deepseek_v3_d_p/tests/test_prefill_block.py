@@ -30,9 +30,15 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.glm_5_1 import glm_decoder_layer_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4 import mistral4_decoder_layer_reference
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_119b_config import Mistral4Small119BConfig
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused, num_full_indexer_layers
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
+    indexer_layer_is_reused,
+    num_full_indexer_layers,
+    resolve_has_indexer,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
@@ -1125,4 +1131,247 @@ def test_glm_prefill_block(
 
     _, pcc_msg = assert_with_pcc(ref.unsqueeze(0), tt_out, GLM_BLOCK_OUTPUT_PCC)
     logger.info(f"[glm block {layer_type}] block output PCC: {pcc_msg}")
+    ttnn.synchronize_device(mesh_device)
+
+
+# ---------------------------------------------------------------------------
+# Mistral-Small-4-119B block test
+# ---------------------------------------------------------------------------
+# Dense MLA (no indexer — resolve_has_indexer(mistral4_hf_config()) is False, asserted below) plus a
+# 128-expert top-4 MoE FFN. Same family as DeepSeek/Kimi on the device side, but it follows the GLM
+# pattern above rather than run_model(): Mistral has NO runnable HF reference model wired — all three
+# `reference_*_cls` hooks on the adapter are deliberately unset, each with the construction site that
+# rejects it recorded there — so run_model()/create_hf_model() has nothing to call. Instead this
+# COMPOSES the CPU reference this repo owns
+# (reference.mistral_small_4.mistral4_decoder_layer_reference): x + MLA_cpu(attn_norm(x)) then
+# + FFN(ffn_norm(x + mla_out)), exactly TtPrefillBlock.forward. Its MLA half is the same
+# create_mla_reference truth that validates test_mla.test_mistral4_mla.
+#
+# seq5120 matches the rest of the mistral4 suite, and 8192 is the hard ceiling for ANY comparison
+# here: above 8192 the real model scales queries by 1 + 0.1*log(1 + floor(pos/8192))
+# (get_llama_4_attn_scale — 7-14% on later tokens) and ttMLA has no equivalent, so a longer run
+# measures that gap instead of the port. For the same reason the reference's `apply_llama4_attn_scale`
+# is left at its default False and never passed here: False is what the device computes, so False is
+# what a PCC test must compare against (see reference/mistral_small_4/block.py's docstring, which
+# implements the flag so the gap can be demonstrated deliberately rather than hidden).
+#
+# Weights are RANDOM for both sides, unconditionally — unlike the GLM block above there is no
+# pretrained branch to fall into. No prefill ttnn cache has been built for this variant (the adapter's
+# ttnn_cache_default is ""), the checkpoint contains no dense-FFN layer at all (first_k_dense_replace
+# = 0), and its routed experts are packed into one [128, 4096, 4096] gate_up_proj, so
+# `packed_expert_checkpoint = True` makes the pretrained fixture load attention only
+# (routed_expert_weights = None). Real-weight coverage lives in test_mla.test_mistral4_mla (pretrained
+# MLA) and the op-level dispatch/combine tests.
+MISTRAL4_BLOCK_OUTPUT_PCC = 0.98
+
+
+# `layer_type="dense"` is architecturally SYNTHETIC for this model: first_k_dense_replace = 0, so all
+# 36 real layers are MoE and TtPrefillBlock's `is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS` can
+# never be False under the production constants. This shim is the only way to build the dense case at
+# all. Safe because NUM_DENSE_LAYERS has exactly two readers (tt_prefill_block.py:123 in
+# build_ttnn_cache, which this test never calls, and :256's is_moe) and nothing under tt/ reads
+# `config.first_k_dense_replace`, so the shim cannot desync the two halves of the block. Treat the
+# dense case as a plumbing check on norm -> MLA -> residual -> norm -> TtFfn -> residual (and on the
+# 12288-wide intermediate_size the config carries but no real layer uses), NOT a real configuration.
+class _Mistral4SyntheticDenseConfig(Mistral4Small119BConfig):
+    NUM_DENSE_LAYERS = 1  # makes layer_idx=0 a dense-FFN block; every other constant is inherited
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                # (sp, tp) = (8, 4): SP 8 on axis 0, TP 4 on axis 1 — the whole-galaxy shape the
+                # mistral4 long-seq matmul configs were tuned on. FABRIC_1D + a router config sized to
+                # this model's own FABRIC_PAYLOAD_SIZE (4096 == hidden), matching its dense-MLA + MoE
+                # family (test_kimi_prefill_block) rather than GLM's DSA FABRIC_2D.
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=Mistral4Small119BConfig.FABRIC_PAYLOAD_SIZE
+                ),
+                # The adapter's l1_small_size, verbatim: routing_use_l1_small_for_semaphores=True
+                # (below) puts the MoE routing all-gather's semaphores in L1_SMALL. Routing consumes
+                # 512 B; the remaining 256 B is for MLA high-bandwidth-gather semaphores.
+                "l1_small_size": 768,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
+@pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
+@pytest.mark.parametrize("variant", ["mistral_small_4_119b"], indirect=True, ids=["mistral4"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 is validated on Blackhole only")
+@pytest.mark.timeout(0)
+def test_mistral4_prefill_block(
+    variant,
+    config_only,
+    random_weights,
+    mesh_device,
+    device_params,
+    num_links,
+    topology,
+    seq_len,
+    layer_type,
+):
+    """One fused Mistral-Small-4 decoder block (dense MLA + norm/residual + dense|MoE FFN) vs composed CPU ref."""
+    is_moe = layer_type == "moe"
+    config = config_only
+    # random_weights resolves off the same config_only instance (one fixture cache per test), so the
+    # MLA weight shapes cannot disagree with `config`. These are the very weights
+    # test_mla.test_mistral4_mla validates the dense MLA with on this mesh.
+    _, mla_weights = random_weights
+    # Device-path field only (rope-table sizing). The composed reference never reads it, and — unlike
+    # test_mla's reference — mistral4_decoder_layer_reference does not mutate config either.
+    config.max_seq_len = seq_len
+    # Dense MLA: natural rope tables and NO indexer key cache (the GLM block above is the sparse/DSA
+    # counterpart). Asserted rather than assumed, so a config that ever grew an indexer fails loudly
+    # here instead of silently needing the indexed-rope + index_kv_cache wiring.
+    assert not resolve_has_indexer(config), "mistral4 is dense MLA; the sparse/DSA wiring is not set up here"
+    layer_idx = 0  # first_k_dense_replace = 0 -> layer 0 is already a real MoE layer
+    model_cfg = Mistral4Small119BConfig if is_moe else _Mistral4SyntheticDenseConfig
+    hidden = config.hidden_size
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = list(mesh_device.shape)
+
+    # --- random weights, shared by device and reference ---
+    # _glm_norm_weight / _glm_random_dense_ffn_weights are shape-parametric (hidden, intermediate,
+    # seed) with no GLM-specific math in them, so they are reused as-is rather than copied.
+    attn_norm_w, ffn_norm_w = _glm_norm_weight(hidden, 1), _glm_norm_weight(hidden, 2)
+    if is_moe:
+        gate_weights, routed, shared = _glm_random_moe_weights(
+            hidden,
+            Mistral4Small119BConfig.MOE_INTERMEDIATE_SIZE,
+            Mistral4Small119BConfig.NUM_ROUTED_EXPERTS,
+            seed=3,
+        )
+        # Mistral's router (HF Mistral4TopkRouter) owns only `weight` — it has NO
+        # e_score_correction_bias. The device gate indexes that key unconditionally
+        # (tt/moe/tt_moe.py:100 and :275), so hand it the mathematical identity: an all-zero bias.
+        # The composed reference ignores the key entirely (reference/mistral_small_4/moe.py).
+        gate_weights["e_score_correction_bias"] = torch.zeros_like(gate_weights["e_score_correction_bias"])
+        moe_weights = {
+            "gate_weights": gate_weights,
+            "routed_expert_weights": routed,
+            "shared_expert_weights": shared,
+        }
+        ffn_weights = None
+    else:
+        ffn_weights = _glm_random_dense_ffn_weights(hidden, config.intermediate_size, seed=3)
+        moe_weights = None
+    device_state_dict = {"attn_norm_weight": attn_norm_w, "mla_weights": mla_weights, "ffn_norm_weight": ffn_norm_w}
+    if is_moe:
+        device_state_dict.update(
+            gate_weights=moe_weights["gate_weights"],
+            routed_expert_weights=moe_weights["routed_expert_weights"],
+            shared_expert_weights=moe_weights["shared_expert_weights"],
+        )
+    else:
+        device_state_dict["ffn_weights"] = ffn_weights
+
+    # --- device block ---
+    logger.info(
+        f"[mistral4 block {layer_type}] building TtPrefillBlock layer_idx={layer_idx} seq_len={seq_len} "
+        f"mesh={mesh_shape}"
+    )
+    block = TtPrefillBlock(
+        mesh_device=mesh_device,
+        config=config,
+        model_cfg=model_cfg,
+        state_dict=device_state_dict,
+        layer_idx=layer_idx,
+        seq_len=seq_len,
+        # Worst case for the flat dispatch buffer: the whole SP group (8 chips x 640 tokens = 5120)
+        # lands on one of this chip's 4 local experts, i.e. 4 * 5120 = 20480 raw tokens == factor 4.
+        # 8 is 2x headroom on that bound (and the value the DeepSeek/Kimi block cases run with).
+        dispatch_buffer_capacity_factor=8,
+        num_links=num_links,
+        topology=topology,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        # n_group = 1 with a device gate, so the adapter routes the routing all-gather's semaphores
+        # into L1_SMALL (paired with l1_small_size=768 in device_params above).
+        routing_use_l1_small_for_semaphores=True,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,  # the adapter's default_gate_mode
+        # Random weights only (see the header): nothing is loaded from, or written to, a ttnn cache.
+        weight_cache_path=None,
+        # No layer_num: dense MLA's single-shot cache write goes through fill_cache_for_user_, which
+        # ignores it. Only the sparse path (the GLM block above) needs layer_num=1.
+    )
+    kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,  # dense-MLA format, as in test_mla.test_mistral4_mla
+        hf_config=config,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+    )
+    # Dense attention: natural (non-indexed) rope tables, and no index_kv_cache to hand forward().
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors(seq_len)
+
+    # --- input (full, host) + sharded device copy ---
+    torch.manual_seed(7)
+    # bf16 is required, not incidental: the reference's MLA module is .to(torch.bfloat16), so an fp32
+    # input would be silently downcast on the reference side only.
+    x = torch.randn(1, seq_len, hidden, dtype=torch.bfloat16)
+    shard_dims = [None, None]
+    shard_dims[tp_axis] = -1
+    shard_dims[sp_axis] = -2
+    tt_x = ttnn.from_torch(
+        x.unsqueeze(0),  # [1, 1, seq, hidden]
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    logger.info(f"[mistral4 block {layer_type}] running device block")
+    # actual_isl=seq_len: every token is real, so the MoE's padding-aware routing config comes out the
+    # identity — passed explicitly rather than left None so that code path is the one exercised.
+    # is_balanced=False throughout, and actual_start defaults to 0, i.e. the sequential layout.
+    out = block.forward(tt_x, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, actual_isl=seq_len)
+    if isinstance(out, tuple):
+        out = out[0]
+    tt_out = ttnn.to_torch(
+        out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+    ).to(torch.bfloat16)
+
+    # --- composed reference (reference/mistral_small_4): assembles MLA + norm/residual + FFN ---
+    # The second return is the KVPE cache in test_mla's [1, 1, seq, kv_lora_rank + qk_rope] layout (NOT
+    # GLM's SparseMLAReference.kvpe_cache object). It is deliberately NOT compared here: this model is
+    # rope_interleave=True, so the PE half needs the interleave-aware halves comparison
+    # (test_prefill_block_chunked's cache_half_pccs(pe_interleave=True)) rather than run_model's
+    # straight slice-and-compare, and KVPE fidelity for this model is already covered by
+    # test_mla.test_mistral4_mla. Wire it here once the interleaved layout is confirmed on device.
+    logger.info(
+        f"[mistral4 block {layer_type}] composing CPU reference via "
+        f"reference.mistral_small_4.mistral4_decoder_layer_reference"
+    )
+    ref, _ = mistral4_decoder_layer_reference(
+        config, mla_weights, attn_norm_w, ffn_norm_w, x, seq_len, ffn_weights=ffn_weights, moe_weights=moe_weights
+    )
+
+    # EXPECTED FAILURE on the `moe` case — wired faithfully on purpose, NOT tuned to pass. The real
+    # router is softmax (`router_logits.softmax(-1)`, transformers/models/mistral4/modeling_mistral4.py
+    # :226, which the reference executes via HF's own Mistral4MoE.route_tokens_to_experts), while the
+    # device gate is sigmoid-only: the ttnn op rejects anything else (moe_grouped_topk.cpp:23
+    # TT_THROW), the host golden agrees (tt/moe/validation_helpers.py:27), and mistral4 declares no
+    # SCORE_FUNC so TtMoEGatePrefill takes the sigmoid default (tt_moe_gate_prefill.py:155). Both are
+    # monotone in the logits, so with the zero bias above the top-4 SELECTION still matches (a
+    # non-zero bias would break even that); the top-4 WEIGHTS never do, because
+    # softmax-then-renormalize != sigmoid-then-normalize over the same four logits and both sides
+    # normalize (norm_topk_prob=True, route_scale=1.0). So the moe case fails PCC unconditionally, by
+    # construction. The threshold is NOT lowered, the reference is NOT switched to sigmoid, and this is
+    # NOT xfailed: the number this prints is the size of a real gap that needs a softmax score_func on
+    # the device op, and any of those three would throw that measurement away.
+    _, pcc_msg = assert_with_pcc(ref.unsqueeze(0), tt_out, MISTRAL4_BLOCK_OUTPUT_PCC)
+    logger.info(f"[mistral4 block {layer_type}] block output PCC: {pcc_msg}")
     ttnn.synchronize_device(mesh_device)

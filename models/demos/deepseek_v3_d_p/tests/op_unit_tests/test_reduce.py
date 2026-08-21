@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_119b_config import Mistral4Small119BConfig
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_sparse_combine_output,
@@ -258,6 +259,10 @@ REDUCE_MODELS = [
     ("dsv4_pro", DeepSeekV4ProConfig, True),
     ("dsv4_flash", DeepSeekV4FlashConfig, True),
     ("gptoss_120b", GptOss120BConfig, True),
+    # Mistral-Small-4-119B: emb_dim 4096, topk 4. Top-4 is the smallest topk here that the mesh-4x2
+    # mapper can still shard across the two dispatch groups (2 each) — top-1 needs the linear-4
+    # mesh, which is why it has its own test above.
+    ("mistral4", Mistral4Small119BConfig, True),
 ]
 
 

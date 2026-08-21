@@ -13,7 +13,8 @@ on:
           k3_mla, k3_mla_perf, kv_cache_table, prefill_block, prefill_transformer, kimi_mla, kimi_moe,
           kimi_prefill_block, kimi_chunked, kimi_chunked_padded, kimi_dflash, glm_chunked, dsa_mla, dsa_mla_glm, glm_moe, glm_prefill_block, glm_chunked_accuracy, prefill_block_determinism,
           prefill_transformer_determinism, prefill_runner, minimax_prefill_kv_pcc,
-          minimax_prefill_perf, high_bw_all_gather_perf.
+          minimax_prefill_perf, high_bw_all_gather_perf, mistral4_mla,
+          mistral4_kv_cache_table, mistral4_mla_chunked, mistral4_moe_ops.
           The "module" group also runs every stage; the "sdpa_perf" group runs
           ring-joint SDPA and high-bandwidth all-gather perf checks.
         required: false
