@@ -11,11 +11,10 @@
 // device-side. Frames with SPSC_SPAN_RAW_FLAG in word 0 instead carry the whole raw span (five full
 // rings at fixed offsets, windows circular) -- the drainer's high-fill fallback, where packing would
 // cost write issues to save almost nothing. Inside each window is a packet run (spsc_packet.h):
-// ZONE_START/END/TOTAL markers
-// (2 words), STICKY_TIMER (1 word, per-lane wall-clock high half), STICKY_PROG (1 word, per-lane
-// runtime host-id in low27; 2-word PROG_EXT escape past 2^27), EVENT (2 words, a payload-less flag)
-// and DATA (3 + size words, self-describing -- the length lives in its word2). The producer publishes
-// its tail only on packet boundaries, so a window never ends mid-packet.
+// ZONE_ATOMIC packets (3 words: id | end timer_low | duration), legacy ZONE_START/END markers (2 words), STICKY_TIMER
+// (1 word, per-lane wall-clock high half), STICKY_PROG (1 word, per-lane runtime host-id in low27; 2-word PROG_EXT
+// escape past 2^27), EVENT (2 words, a payload-less flag) and DATA (3 + size words, self-describing -- the length lives
+// in its word2). The producer publishes its tail only on packet boundaries, so a window never ends mid-packet.
 #pragma once
 
 #include <algorithm>
@@ -44,6 +43,7 @@ static_assert(
 // Same argument for the three codes the DRISC self-profiling packer in profiler_common.h emits directly.
 static_assert(PP_ZONE_START == kernel_profiler::SPSC_TYPE_ZONE_START, "ZONE_START wire code disagrees");
 static_assert(PP_ZONE_END == kernel_profiler::SPSC_TYPE_ZONE_END, "ZONE_END wire code disagrees");
+static_assert(PP_ZONE_ATOMIC == kernel_profiler::SPSC_TYPE_ZONE_ATOMIC, "ZONE_ATOMIC wire code disagrees");
 static_assert(PP_STICKY_TIMER == kernel_profiler::SPSC_TYPE_STICKY_TIMER, "STICKY_TIMER wire code disagrees");
 static_assert(PP_TYPE_SHIFT == kernel_profiler::SPSC_SPAN_TYPE_SHIFT, "packet type field moved");
 // The DRISC drain kernel keeps its OWN copy of the PP_DATA packer (it cannot include kernel_profiler.hpp),
@@ -86,11 +86,10 @@ struct SpanDecodeState {
     uint64_t resync_words = 0;
     uint64_t head_lag = 0;
     uint64_t anomalies = 0;  // torn run / truncated run / undecodable word
-    uint64_t unknown_core_frames = 0;
-    // Vector-block accounting (diagnostic): records taken by the 8-wide zone/atomic paths vs the scalar
-    // fallback, and how often a would-be vector block was rejected by the per-lane type screen -- i.e. how
-    // much the 2-word/3-word record mix on a stall-heavy wire is fragmenting the SIMD path.
+    // Vector-block accounting: records taken by the 8-wide pair/atomic paths vs the scalar fallback, and
+    // how often a would-be vector block was rejected by the type screen (record-type mix fragmenting SIMD).
     uint64_t vec_zone_recs = 0, vec_atomic_recs = 0, scalar_recs = 0, vec_block_rejects = 0;
+    uint64_t unknown_core_frames = 0;
 
     void reset(uint32_t num_cores) {
         timer_hi.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
@@ -104,7 +103,7 @@ struct SpscIgnoreProg {
     void operator()(uint32_t /*lane*/, uint32_t /*prog*/) const {}
 };
 
-// Sentinel default for the vectorized zone-block sink: without a real one the walk stays scalar.
+// Sentinel defaults for the vectorized block sinks: without real ones the walk stays scalar.
 struct SpscNoZones8 {};
 struct SpscNoAtomic8 {};
 
@@ -148,16 +147,12 @@ inline void spsc_prefetch(const void* p) {
 #endif
 }
 
-// Decode ONE whole packed BULK_SPAN frame in place. For each marker calls
-//   emit(lane, wire_type, zone_id27, full_ts, prog, duration)
-//     ZONE_START/END: full_ts is the marker's time, duration 0. ZONE_TOTAL: full_ts is the sum, duration 0.
-//     ZONE_ATOMIC: full_ts is the zone's END and duration is its length, so start = full_ts - duration.
-//     Duration is its own arg rather than riding the prog slot because op attribution keys on prog
-//     (perf_debug_ops_csv drops records with prog == 0), so an atomic zone must keep both.
-// where zone_id27 is the FULL 27-bit structural zone id (tu_id << TT_ZONE_LOCAL_BITS | local --
-// hostdevcommon/profiler_zone_id.h; it was a 16-bit source-location hash before, and the mask that
-// truncated it here is gone),
-// and for each PP_DATA/PP_EVENT
+// Decode ONE whole packed BULK_SPAN frame in place. For each zone packet calls
+//   emit(lane, wire_type, zone_id27, full_ts, dur, prog)
+// where for ZONE_ATOMIC full_ts is the zone END and dur its 32-bit duration (start = end - dur), and
+// for the legacy ZONE_START/END markers (stall zone, >3.2s fallback) dur is 0.
+// zone_id27 is the FULL 27-bit structural zone id (hostdevcommon/profiler_zone_id.h).
+// For each PP_DATA/PP_EVENT it calls
 //   emit_data(lane, wire_type, id, full_ts, prog, payload_words, n)   (payload in place, hi-word first)
 // and emit_prog(lane, prog) whenever a lane's sticky host-id changes.
 //
@@ -171,10 +166,11 @@ inline void spsc_prefetch(const void* p) {
 // decode begins at the larger of the two: adopt-and-count on a loss, skip the overlap on a lag.
 // The optional emit_zones8(lane, timer_hi, prog, w0s, w1s) sink receives EIGHT consecutive 2-word zone
 // markers at once, deinterleaved into AVX2 vectors of word0s and word1s, whenever a 16-word block passes
-// the all-zone type screen -- the dominant case in a busy frame, and where the scalar walk's per-record
-// cost lives. emit_atomic8(lane, timer_hi, prog, w0s, w1s, w2s, n) is the same idea for up to EIGHT
-// 3-word PP_ZONE_ATOMIC records (w2s = durations): n <= 8 leading lanes are valid, the rest are
-// speculative over-read and must not be emitted. Without it the atomic wire decodes entirely scalar.
+// the all-zone type screen. emit_atomic8(lane, timer_hi, prog, w0s, w1s, w2s, n) is the same idea for up
+// to EIGHT 3-word ZONE_ATOMIC records (w2s = durations): n <= 8 leading lanes are valid, the rest are
+// speculative over-read and must not be emitted. Atomic zones are the dominant wire type, so without it
+// the wire decodes essentially scalar. frame_words (linear path only) authorizes the 24-word block load
+// to over-read past a lane's live window up to the frame end -- the FIFO always holds the whole page.
 template <
     typename EmitMarker,
     typename EmitData,
@@ -189,9 +185,6 @@ inline uint32_t spsc_decode_frame(
     EmitProg&& emit_prog = SpscIgnoreProg{},
     EmitZones8&& emit_zones8 = SpscNoZones8{},
     EmitAtomic8&& emit_atomic8 = SpscNoAtomic8{},
-    // Total words in the frame buffer. Nonzero authorizes the atomic block path to LOAD (never emit) up
-    // to 24 words past a lane's live run -- the bytes exist in the frame/bounce buffer -- which lets
-    // run-tails and sticky-split blocks go through the vector path with a partial count.
     uint32_t frame_words = 0) {
     const uint32_t* ctrl = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
     const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_CORE_XY]);
@@ -253,15 +246,28 @@ inline uint32_t spsc_decode_frame(
             }
             uint32_t i = 0;
             while (i < run) {
-                const uint32_t w0 = ring[(hm + i) & kSpscRingMask];
-                const uint32_t t = pp_type(w0);
 #if defined(__AVX2__)
-                // Screening only ever matches 2-word markers, so gate the attempt on the leading type: an
-                // all-atomic stream would otherwise pay two AVX loads, two shuffles and a movemask per
-                // 3-word record, every one of them rejected.
+                if constexpr (!std::is_same_v<std::decay_t<EmitAtomic8>, SpscNoAtomic8>) {
+                    const uint32_t idx = (hm + i) & kSpscRingMask;
+                    if (i + 24 <= run && idx + 24 <= kSpscRingCap && pp_type(ring[idx]) == PP_ZONE_ATOMIC) {
+                        __m256i w0s, w1s, w2s;
+                        spsc_load_atomic8(ring + idx, w0s, w1s, w2s);
+                        const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
+                        const uint32_t eq = static_cast<uint32_t>(
+                            _mm256_movemask_epi8(_mm256_cmpeq_epi32(types, _mm256_set1_epi32(PP_ZONE_ATOMIC))));
+                        const uint32_t n = std::countr_zero(~eq) / 4;
+                        if (n != 0) {
+                            emit_atomic8(lane, th, pg, w0s, w1s, w2s, n);
+                            st.vec_atomic_recs += n;
+                            i += 3 * n;
+                            continue;
+                        }
+                        st.vec_block_rejects++;
+                    }
+                }
                 if constexpr (!std::is_same_v<std::decay_t<EmitZones8>, SpscNoZones8>) {
                     const uint32_t idx = (hm + i) & kSpscRingMask;
-                    if (t <= PP_ZONE_END && i + 16 <= run && idx + 16 <= kSpscRingCap) {
+                    if (i + 16 <= run && idx + 16 <= kSpscRingCap) {
                         const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ring + idx));
                         const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ring + idx + 8));
                         const __m256i even = _mm256_castps_si256(_mm256_shuffle_ps(
@@ -280,50 +286,27 @@ inline uint32_t spsc_decode_frame(
                         st.vec_block_rejects++;
                     }
                 }
-                if constexpr (!std::is_same_v<std::decay_t<EmitAtomic8>, SpscNoAtomic8>) {
-                    const uint32_t idx = (hm + i) & kSpscRingMask;
-                    // The ring mirror is fully readable, so a partial block may over-READ stale words
-                    // beyond the run; `n` caps what is decoded and emitted.
-                    if (t == PP_ZONE_ATOMIC && i + 3 <= run && idx + 24 <= kSpscRingCap) {
-                        __m256i w0s, w1s, w2s;
-                        spsc_load_atomic8(ring + idx, w0s, w1s, w2s);
-                        const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
-                        const uint32_t mask = static_cast<uint32_t>(_mm256_movemask_epi8(
-                            _mm256_cmpeq_epi32(types, _mm256_set1_epi32(PP_ZONE_ATOMIC))));
-                        // countr_zero(0) == 32 -> n = 8 on a full match; lane 0 always matches (t checked).
-                        uint32_t n = static_cast<uint32_t>(std::countr_zero(~mask)) / 4;
-                        n = std::min(n, (run - i) / 3);
-                        if (n != 0) {
-                            emit_atomic8(lane, th, pg, w0s, w1s, w2s, n);
-                            st.vec_atomic_recs += n;
-                            st.vec_block_rejects += (mask != 0xFFFFFFFFu) ? 1 : 0;
-                            i += 3 * n;
-                            continue;
-                        }
-                    }
-                }
 #endif
-                st.scalar_recs++;
-                if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
-                    if (i + 2 > run) {
-                        st.anomalies++;
-                        break;
-                    }
-                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
-                    const uint64_t ts = (t == PP_ZONE_TOTAL) ? w1 : pp_full_ts(th, w1);
-                    emit(lane, t, pp_low27(w0), ts, pg, 0);  // full 27-bit structural id
-                    i += 2;
-                } else if (t == PP_ZONE_ATOMIC) {
-                    // Complete zone: ts is the END and the duration rides its own arg, so the sink needs no
-                    // pairing state. start = ts - duration.
+                const uint32_t w0 = ring[(hm + i) & kSpscRingMask];
+                const uint32_t t = pp_type(w0);
+                if (t == PP_ZONE_ATOMIC) {
                     if (i + 3 > run) {
                         st.anomalies++;
                         break;
                     }
                     const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
                     const uint32_t w2 = ring[(hm + i + 2) & kSpscRingMask];
-                    emit(lane, t, pp_low27(w0), pp_full_ts(th, w1), pg, w2);
+                    emit(lane, t, pp_low27(w0), pp_full_ts(th, w1), w2, pg);  // ts = END, w2 = duration
+                    st.scalar_recs++;
                     i += 3;
+                } else if (t == PP_ZONE_START || t == PP_ZONE_END) {
+                    if (i + 2 > run) {
+                        st.anomalies++;
+                        break;
+                    }
+                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    emit(lane, t, pp_low27(w0), pp_full_ts(th, w1), 0, pg);  // full 27-bit structural id
+                    i += 2;
                 } else if (t == PP_STICKY_TIMER) {
                     th = pp_timer_hi(w0);
                     i += 1;
@@ -391,13 +374,34 @@ inline uint32_t spsc_decode_frame(
         }
         uint32_t i = 0;
         while (i < run) {
-            const uint32_t w0 = p[i];
-            const uint32_t t = pp_type(w0);
 #if defined(__AVX2__)
-            // See the ring-path copy above: screening matches 2-word markers only, so gate on the leading
-            // type rather than letting an atomic stream fail the scan once per record.
+            if constexpr (!std::is_same_v<std::decay_t<EmitAtomic8>, SpscNoAtomic8>) {
+                const bool loadable = i + 24 <= run ||
+                                      (frame_words != 0 &&
+                                       static_cast<uint32_t>(p - frame) + i + 24 <= frame_words &&
+                                       i + 3 <= run);
+                if (loadable && pp_type(p[i]) == PP_ZONE_ATOMIC) {
+                    __m256i w0s, w1s, w2s;
+                    spsc_load_atomic8(p + i, w0s, w1s, w2s);
+                    const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
+                    const uint32_t eq = static_cast<uint32_t>(
+                        _mm256_movemask_epi8(_mm256_cmpeq_epi32(types, _mm256_set1_epi32(PP_ZONE_ATOMIC))));
+                    uint32_t n = std::countr_zero(~eq) / 4;
+                    const uint32_t avail = (run - i) / 3;
+                    if (n > avail) {
+                        n = avail;
+                    }
+                    if (n != 0) {
+                        emit_atomic8(lane, th, pg, w0s, w1s, w2s, n);
+                        st.vec_atomic_recs += n;
+                        i += 3 * n;
+                        continue;
+                    }
+                    st.vec_block_rejects++;
+                }
+            }
             if constexpr (!std::is_same_v<std::decay_t<EmitZones8>, SpscNoZones8>) {
-                if (t <= PP_ZONE_END && i + 16 <= run) {
+                if (i + 16 <= run) {
                     const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + i));
                     const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + i + 8));
                     const __m256i even = _mm256_castps_si256(
@@ -416,45 +420,25 @@ inline uint32_t spsc_decode_frame(
                     st.vec_block_rejects++;
                 }
             }
-            if constexpr (!std::is_same_v<std::decay_t<EmitAtomic8>, SpscNoAtomic8>) {
-                // A full block fits inside the run; a partial one may over-read into the rest of the
-                // frame buffer when the caller vouched for its size (frame_words).
-                if (t == PP_ZONE_ATOMIC && i + 3 <= run &&
-                    (i + 24 <= run || (frame_words != 0 && p + i + 24 <= frame + frame_words))) {
-                    __m256i w0s, w1s, w2s;
-                    spsc_load_atomic8(p + i, w0s, w1s, w2s);
-                    const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
-                    const uint32_t mask = static_cast<uint32_t>(
-                        _mm256_movemask_epi8(_mm256_cmpeq_epi32(types, _mm256_set1_epi32(PP_ZONE_ATOMIC))));
-                    uint32_t n = static_cast<uint32_t>(std::countr_zero(~mask)) / 4;
-                    n = std::min(n, (run - i) / 3);
-                    if (n != 0) {
-                        emit_atomic8(lane, th, pg, w0s, w1s, w2s, n);
-                        st.vec_atomic_recs += n;
-                        st.vec_block_rejects += (mask != 0xFFFFFFFFu) ? 1 : 0;
-                        i += 3 * n;
-                        continue;
-                    }
-                }
-            }
 #endif
-            st.scalar_recs++;
-            if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
+            const uint32_t w0 = p[i];
+            const uint32_t t = pp_type(w0);
+            if (t == PP_ZONE_ATOMIC) {
+                if (i + 3 > run) {
+                    st.anomalies++;
+                    break;
+                }
+                emit(lane, t, pp_low27(w0), pp_full_ts(th, p[i + 1]), p[i + 2], pg);  // ts = END, [2] = duration
+                st.scalar_recs++;
+                i += 3;
+            } else if (t == PP_ZONE_START || t == PP_ZONE_END) {
                 if (i + 2 > run) {
                     st.anomalies++;
                     break;
                 }
                 const uint32_t w1 = p[i + 1];
-                const uint64_t ts = (t == PP_ZONE_TOTAL) ? w1 : pp_full_ts(th, w1);
-                emit(lane, t, pp_low27(w0), ts, pg, 0);  // full 27-bit structural id
+                emit(lane, t, pp_low27(w0), pp_full_ts(th, w1), 0, pg);  // full 27-bit structural id
                 i += 2;
-            } else if (t == PP_ZONE_ATOMIC) {
-                if (i + 3 > run) {
-                    st.anomalies++;
-                    break;
-                }
-                emit(lane, t, pp_low27(w0), pp_full_ts(th, p[i + 1]), pg, p[i + 2]);
-                i += 3;
             } else if (t == PP_STICKY_TIMER) {
                 th = pp_timer_hi(w0);
                 i += 1;

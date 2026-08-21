@@ -373,16 +373,25 @@ constexpr static std::uint32_t SPSC_SPAN_RAW_FLAG = 1u;
 // instead. These are the two encodings it needs, defined here where the wire's producer, its host decoder
 // and the frame layout above all already live. Codes MUST match spsc_packet.h's PP_* -- asserted in
 // spsc_marker_decode.hpp, which is the one place that sees both headers.
-static constexpr std::uint32_t SPSC_TYPE_ZONE_START = 0;
-static constexpr std::uint32_t SPSC_TYPE_ZONE_END = 1;
+// Producer tail-publish batch (kernel_profiler.hpp publish_tail_batched): the published TAIL can lag
+// true ring occupancy by up to this many words between fenced publishes. The drainer's anti-stall
+// pacing valves subtract it, so they fire on the earliest occupancy the lag could be hiding.
+static constexpr std::uint32_t SPSC_PUBLISH_BATCH_WORDS = 64;
+
+static constexpr std::uint32_t SPSC_TYPE_ZONE_START = 0;   // legacy pair (workers: stall zone, >3.2s fallback)
+static constexpr std::uint32_t SPSC_TYPE_ZONE_END = 1;     // legacy pair
+static constexpr std::uint32_t SPSC_TYPE_ZONE_ATOMIC = 2;  // one whole zone: id | end timer_low | duration32
 static constexpr std::uint32_t SPSC_TYPE_STICKY_TIMER = 9;
 static constexpr std::uint32_t SPSC_TIMER_HI_MASK = 0x7FFFFFFu;  // the 27-bit low field of word0
 
+// FULL 27 bits. This mask was 0xFFFF once, and that truncation was invisible: markers rendered
+// perfectly and only their NAMES could not be resolved. Any change to the id width has to be made in
+// EVERY copy of the packer at once -- this one, ppfmt in kernel_profiler.hpp, and pp_* in spsc_packet.h.
+inline std::uint32_t spsc_zone_atomic_w0(std::uint32_t zone_id) {
+    return (SPSC_TYPE_ZONE_ATOMIC << SPSC_SPAN_TYPE_SHIFT) | (zone_id & TT_ZONE_ID_MASK);
+}
+
 inline std::uint32_t spsc_marker_w0(std::uint32_t type, std::uint32_t zone_id) {
-    // FULL 27 bits. This mask was 0xFFFF, and that truncation was invisible: markers rendered perfectly,
-    // with correct timestamps and nesting, and only their NAMES could not be resolved. Any change to the
-    // id width has to be made in EVERY copy of the packer at once -- this one, ppfmt in
-    // kernel_profiler.hpp, and pp_* in spsc_packet.h.
     return (type << SPSC_SPAN_TYPE_SHIFT) | (zone_id & TT_ZONE_ID_MASK);
 }
 inline std::uint32_t spsc_sticky_timer_w0(std::uint32_t timer_hi) {

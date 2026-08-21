@@ -8,7 +8,7 @@ void kernel_main() {
     for (int i = 0; i < LOOP_COUNT; i++) {
         DeviceZoneScopedN("TEST-FULL");
         DeviceTimestampedData("TEST", i + ((uint64_t)1 << 32));
-        DeviceRecordEvent(i);
+        DeviceTimestampedData("TEST-EVENT", i);
 // Max unroll size
 #pragma GCC unroll 65534
         for (int j = 0; j < LOOP_SIZE; j++) {

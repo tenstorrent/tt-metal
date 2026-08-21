@@ -432,12 +432,7 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
         uint32_t ref_cnt_val = read_reg[0];
         uint32_t counter_val = read_reg[1];
         PerfCounter counter(counter_val, ref_cnt_val, counters[i].first);
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2);
-        kernel_profiler::timeStampedData<
-            kPerfCounterZoneId,
-            kernel_profiler::DoingDispatch::DISPATCH,
-            kernel_profiler::PacketTypes::TS_DATA_16B>(counter.raw_data_1, counter.raw_data_2);
+        kernel_profiler::time_stamped_data<kPerfCounterZoneId>(counter.raw_data_1, counter.raw_data_2);
     }
     // Toggle start bit to clear the counters for this group
     cntl_reg[2] = 0;
