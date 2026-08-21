@@ -15,8 +15,8 @@ file adds the three checks that matrix cannot express:
      the next merge and corrupt the returned SET.
   2. DIFFERENTIAL: the default (macro) build's packed output must be
      byte-identical to the ``DISABLE_TOPK_XL_SFPLOADMACRO`` (shipping-body)
-     build on identical stimuli. This is the same macro==software evidence
-     shape the silicon probe (test_topk_unfused_macro_probe.py) validated.
+     build on identical stimuli. This directly checks the macro and software
+     bodies on identical stimuli.
   3. MUTATION CONTROL: ``TOPK_XL_MACRO_MUTATE`` zeroes the macro Sequence
      words, degenerating every SFPLOADMACRO into a plain SFPLOAD — the
      documented "schedule nothing" failure mode that issue-rate timing
@@ -65,11 +65,12 @@ class TOPK_XL_MACRO_KNOBS(TemplateParameter):
     """Build-header knobs for the unfused SFPLOADMACRO path.
 
     ``opt_out`` emits ``#define DISABLE_TOPK_XL_SFPLOADMACRO 1`` — the header
-    rebuilds the byte-identical pre-macro bodies. ``mutate`` emits
+    rebuilds the pre-macro 18-issue body shape while retaining INT32 value
+    moves. ``mutate`` emits
     ``#define TOPK_XL_MACRO_MUTATE 1`` — the header zeroes the macro Sequence
     words (schedule nothing). Defined here rather than in
     helpers/test_variant_parameters.py because exactly one header consumes
-    them (same rationale as perf_topk_merge_macro.py's parameter classes).
+    them.
     """
 
     opt_out: bool = False

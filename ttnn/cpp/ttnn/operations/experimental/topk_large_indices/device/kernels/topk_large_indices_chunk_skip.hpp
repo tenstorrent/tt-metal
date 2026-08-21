@@ -282,7 +282,8 @@ inline void chunk_skip_configure() {
 #ifdef TRISC_MATH
     ckernel::configure_dest_access<ckernel::MathThreadId>(DataFormat::Float32, /*enable_swizzle=*/true);
     ckernel::tensix_sync();
-    ckernel::wait(1000);  // let the config settle before the first MMIO read
+    // Match the dprint DEST-MMIO recipe's conservative posted-config-write settle delay.
+    ckernel::wait(1000 /* cycles */);
 #endif
 }
 

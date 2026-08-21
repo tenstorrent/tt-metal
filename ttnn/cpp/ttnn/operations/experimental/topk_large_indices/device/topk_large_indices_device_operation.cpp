@@ -364,14 +364,11 @@ std::optional<HybridSplit> hybrid_row_split(
     // bounded.
     const uint32_t n = shape[shape.rank() - 1];
     const uint32_t searched = std::min(valid_length.value_or(n), n);
-    // Model on the searched width. Note the rect window's slice boundaries
-    // are position-based over the LOGICAL row, so a short valid prefix
-    // empties trailing slices and the busy ones keep near-full per-slice
-    // work (measured at buf=1M/valid=512k k=2048: remainder 1424us vs 720us
-    // when the trees are sized to the valid width) -- degraded, but still
-    // well ahead of the row-parallel wave (2204us/row-set at that shape), so
-    // the split stays profitable at any valid_length. Runtime slice
-    // rebalancing from valid_length is the follow-up that recovers the gap.
+    // Model on the searched width. `compute_slice_runtime` distributes valid
+    // chunks evenly over the selected slices at launch time, so a short valid
+    // prefix does not strand trailing slices. The model still uses `searched`
+    // here so cfg.num_slices reflects the work actually performed rather than
+    // the physical buffer width.
     const auto cfg = operations::experimental::topk_large_indices::program::compute_column_split_config(
         k, searched, r2, grid, std::nullopt, /*allow_multi_row=*/true);
     if (!cfg.enabled) {

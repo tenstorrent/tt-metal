@@ -57,8 +57,9 @@ def _assert_topk_values_match(torch_input, tt_indices, k, valid_length=None):
 @pytest.mark.parametrize(
     "rows,n,k,valid_length",
     [
-        # 160 rows exceed an 80-core fence -> hybrid two-dispatch path, both
-        # dispatches inside the fence. The production 1M/512k prefill cell.
+        # 160 rows exceed an 80-core fence. Explicit sub_core_grids intentionally
+        # disables the two-dispatch hybrid, covering the restricted single-launch
+        # path on the production 1M/512k prefill cell.
         (160, 1048576, 2048, 524288),
         # Multi-row rectangle (tree) engine inside the fence.
         (32, 65536, 2048, None),

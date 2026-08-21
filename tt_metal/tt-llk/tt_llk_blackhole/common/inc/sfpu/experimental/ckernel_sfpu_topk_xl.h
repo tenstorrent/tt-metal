@@ -131,6 +131,10 @@ namespace ckernel
 namespace sfpu
 {
 
+#ifdef TOPK_XL_STABLE_TIES
+constexpr std::uint32_t STAMP_COMPLEMENT_MASK_LO16 = 0xFFFF;
+#endif
+
 // =============================================================================
 //  MOP Expander programs
 // =============================================================================
@@ -235,9 +239,9 @@ inline void topk_rebuild_build2048_mop_config()
 // SFPLOADMACRO.md:140). Under SFPU index-tracking mode (LaneConfig bit [2],
 // which the unfused path enables) a macro-scheduled SFPSWAP still performs the
 // argmin/argmax companion swap of LReg[4+VC] <-> LReg[4+VD] — verified
-// bit-identical against the software swap by
-// tests/python_tests/test_topk_unfused_macro_probe.py (arms 1/2/4 green with
-// a sensitivity-proven mutation control, Blackhole silicon, 2026-08-16).
+// covered on Blackhole by the macro-vs-opt-out differential and
+// schedule-nothing mutation control in
+// tt_metal/tt-llk/tests/python_tests/test_topk_xl_unfused_macro.py.
 //
 // The macro body is 16 issues against the shipping 18 issues + 2 two-cycle
 // (plus index-tracking stall) SFPSWAPs (~20-22 cycles):
@@ -245,19 +249,19 @@ inline void topk_rebuild_build2048_mop_config()
 //     i0..i3   4x SFPLOAD  (INT32)  index regs LREG4..7 — MUST precede the
 //                                    macros: the companion swap reads/writes
 //                                    LREG4..7 the cycle after each macro.
-//     i4       SFPLOAD  (FP32)      first VC provider
+//     i4       SFPLOAD  (INT32)     first VC provider
 //     i5       SFPLOADMACRO m0      loads first macroVD; Simple: SFPSWAP,
 //                                    MAD: SFPNOP (footnote ‡), Store: delay 2
-//     i6       SFPLOAD  (FP32)      second VC provider  — the plain load
+//     i6       SFPLOAD  (INT32)     second VC provider  — the plain load
 //                                    between macros IS the 2-slot separation
 //                                    rule (a macro-scheduled SFPSWAP owns the
 //                                    Simple sub-unit for 2 cycles and is
 //                                    exempt from the automatic stall)
 //     i7       SFPLOADMACRO m1
 //     i8       SFPNOP               m0's store fires here — keep it store-free
-//     i9       SFPSTORE (FP32)      first VC register
+//     i9       SFPSTORE (INT32)     first VC register
 //     i10      SFPNOP               m1's store fires here
-//     i11      SFPSTORE (FP32)      second VC register
+//     i11      SFPSTORE (INT32)     second VC register
 //     i12..i14 3x SFPSTORE (INT32)  LREG4/5/6
 //     i15      SFPSTORE (INT32)     LREG7 — carries the Dst-advance fold
 //                                    (kept in software so every inc_dst_addr
@@ -284,7 +288,8 @@ inline void topk_rebuild_build2048_mop_config()
 // 16-issue body, and LREG7's store carries the shipping ADDR_MOD fold.
 //
 // Opt-out: define DISABLE_TOPK_XL_SFPLOADMACRO (or the global
-// DISABLE_SFPLOADMACRO) to rebuild the byte-identical pre-macro bodies.
+// DISABLE_SFPLOADMACRO) to rebuild the pre-macro 18-issue body shape while
+// retaining the INT32 value moves described above.
 // TOPK_XL_MACRO_MUTATE is a TEST-ONLY hook: it zeroes the Sequence words so
 // every SFPLOADMACRO degenerates into a plain SFPLOAD ("schedule nothing"),
 // which silently drops the compare-exchanges AND the macro stores — the
@@ -600,7 +605,7 @@ inline void _topk_xl_init_()
         // — so the stamp can only keep state in LREG0..3 plus constants.
         // LREG13/14 are also the separate-indices decode masks, but the
         // stable-ties decode is a chunk-field strip that reads neither.
-        _sfpu_load_config32_(p_sfpu::LREG11, 0x0, 0xFFFF);
+        _sfpu_load_config32_(p_sfpu::LREG11, 0x0, STAMP_COMPLEMENT_MASK_LO16);
         _sfpu_load_config32_(p_sfpu::LREG13, 0x0, K / 16);
         _sfpu_load_config32_(p_sfpu::LREG14, 0x0, 2 * K - 1);
 #endif
@@ -2202,7 +2207,7 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
         // macroVD = LREG2/3 and the templates' VC = LREG0/1. Every scheduled
         // store retires inside the body — no trailing SFPNOPs needed.
         topk_xl_unfused_macro::program_templates<false>();
-        load_replay_buf<Exec>(0, body_len, [] { topk_xl_unfused_macro::ce_full<indices_offset, distance, 8 /* inc_dst_addr */, false>(); });
+        load_replay_buf<Exec>(0, body_len, [] { topk_xl_unfused_macro::ce_full<indices_offset, distance, 8 /* inc_dst_addr */, false /* ascending */>(); });
 #else
         load_replay_buf<Exec>(
             0,
@@ -2365,7 +2370,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         {
 #if TOPK_XL_UNFUSED_MACRO
             // ── Stride-64 — 16-slot macro body, recording IS iter 0 ────────
-            topk_xl_unfused_macro::record_ce_full<indices_offset, 64, 8>(dir);
+            topk_xl_unfused_macro::record_ce_full<indices_offset, 64, 8 /* inc_dst_addr */>(dir);
             for (int i = 1; i < 8; i++)
             {
                 lltt::replay(0, 16);
@@ -2382,7 +2387,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
                 {
                     if (i == 0 && j == 0)
                     {
-                        topk_xl_unfused_macro::record_ce_full<indices_offset, 32, 8>(dir);
+                        topk_xl_unfused_macro::record_ce_full<indices_offset, 32, 8 /* inc_dst_addr */>(dir);
                     }
                     else if (j < 3)
                     {
@@ -2391,7 +2396,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
                     else
                     {
                         lltt::replay(0, 15);
-                        topk_xl_unfused_macro::ce_tail<indices_offset, 32, 40>();
+                        topk_xl_unfused_macro::ce_tail<indices_offset, 32, 40 /* inc_dst_addr */>();
                     }
                 }
             }
@@ -2404,7 +2409,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
                 {
                     if (i == 0 && j == 0)
                     {
-                        topk_xl_unfused_macro::record_ce_full<indices_offset, 16, 8>(dir);
+                        topk_xl_unfused_macro::record_ce_full<indices_offset, 16, 8 /* inc_dst_addr */>(dir);
                     }
                     else if (j == 0)
                     {
@@ -2413,7 +2418,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
                     else
                     {
                         lltt::replay(0, 15);
-                        topk_xl_unfused_macro::ce_tail<indices_offset, 16, 24>();
+                        topk_xl_unfused_macro::ce_tail<indices_offset, 16, 24 /* inc_dst_addr */>();
                     }
                 }
             }
@@ -2696,7 +2701,7 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
                 // carries the ADDR_MOD_4 (+8) tail; the last body of each
                 // outer iter replays [0, 15) and emits the ADDR_MOD_3
                 // (+40) fold tail, preserving the shipping stride walk.
-                topk_xl_unfused_macro::record_ce_full<indices_offset, 32, 8>(dir);
+                topk_xl_unfused_macro::record_ce_full<indices_offset, 32, 8 /* inc_dst_addr */>(dir);
                 for (int i = 0; i < (row_scale_factor >> 1); i++)
                 {
                     if (!(i == 0))
@@ -2706,7 +2711,7 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
                     lltt::replay(0, 16);
                     lltt::replay(0, 16);
                     lltt::replay(0, 15);
-                    topk_xl_unfused_macro::ce_tail<indices_offset, 32, 40>();
+                    topk_xl_unfused_macro::ce_tail<indices_offset, 32, 40 /* inc_dst_addr */>();
                 }
                 TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 #else
@@ -2745,14 +2750,14 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
 #if TOPK_XL_UNFUSED_MACRO
             // ── stride-16 — 16-slot macro body; every second body replays
             // [0, 15) and emits the ADDR_MOD_2 (+24) fold tail.
-            topk_xl_unfused_macro::record_ce_full<indices_offset, 16, 8>(dir);
+            topk_xl_unfused_macro::record_ce_full<indices_offset, 16, 8 /* inc_dst_addr */>(dir);
             lltt::replay(0, 15);
-            topk_xl_unfused_macro::ce_tail<indices_offset, 16, 24>();
+            topk_xl_unfused_macro::ce_tail<indices_offset, 16, 24 /* inc_dst_addr */>();
             for (int i = 1; i < row_scale_factor; i++)
             {
                 lltt::replay(0, 16);
                 lltt::replay(0, 15);
-                topk_xl_unfused_macro::ce_tail<indices_offset, 16, 24>();
+                topk_xl_unfused_macro::ce_tail<indices_offset, 16, 24 /* inc_dst_addr */>();
             }
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 #else
@@ -2857,7 +2862,7 @@ inline void _topk_xl_add_lsb_indices_init_()
     // LREG11 = 0x0000FFFF for the sign-conditioned stamp complement (stamp
     // sites and every lo16 consumer). Clobbers the hardware default (-1.0f)
     // for the rest of the program, like the LREG12..14 writes below.
-    _sfpu_load_config32_(p_sfpu::LREG11, 0x0, 0xFFFF);
+    _sfpu_load_config32_(p_sfpu::LREG11, 0x0, STAMP_COMPLEMENT_MASK_LO16);
 #endif
 }
 
@@ -3172,16 +3177,16 @@ inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
 // 256K) flow needs to pack values out first, then overwrite the value half
 // of each DST word with zero, then pack out indices.
 
-// Program ADDR_MOD_0 with a +2 increment: the two Dest rows of an SFPU
+// Reprogram ADDR_MOD_0 with a +2 increment: the two Dest rows of an SFPU
 // load/store. Used by both `remove_msb_values` and `separate_indices`,
 // which both walk the K-element region 32 datums at a time. Also sets
 // ADDR_MOD_7 (zero advance) for the load part of the sequence.
 inline void _topk_xl_remove_msb_values_init_()
 {
-    // ADDR_MOD_0, +2 (one group of 32 lanes). Under TOPK_XL_STABLE_TIES
-    // `_topk_xl_init_` programs the same +2 into ADDR_MOD_0 (rank stamps),
-    // so re-latching here is redundant-but-idempotent; either way it never
-    // collides with the unfused +24 fold living in ADDR_MOD_2.
+    // ADDR_MOD_0, +2 (one group of 32 lanes). Under TOPK_XL_STABLE_TIES,
+    // `_topk_xl_init_` programs +4 for the rank-stamp walk; this post-reduction
+    // phase intentionally replaces it with +2. It never collides with the
+    // unfused +24 fold living in ADDR_MOD_2.
     addr_mod_t {
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
@@ -3199,7 +3204,7 @@ inline void _topk_xl_remove_msb_values_init_()
 
 #ifdef TOPK_XL_STABLE_TIES
     // LREG11 = 0x0000FFFF for the stamp-complement inverse below.
-    _sfpu_load_config32_(p_sfpu::LREG11, 0x0, 0xFFFF);
+    _sfpu_load_config32_(p_sfpu::LREG11, 0x0, STAMP_COMPLEMENT_MASK_LO16);
 #endif
 }
 
@@ -3259,7 +3264,7 @@ inline void _topk_xl_separate_indices_init_(std::uint32_t group_id_bit_shift)
 
 #ifdef TOPK_XL_STABLE_TIES
     // LREG11 = 0x0000FFFF for the stamp-complement inverse in the body.
-    _sfpu_load_config32_(p_sfpu::LREG11, 0x0, 0xFFFF);
+    _sfpu_load_config32_(p_sfpu::LREG11, 0x0, STAMP_COMPLEMENT_MASK_LO16);
 #endif
 }
 
