@@ -1184,13 +1184,7 @@ class TestConfig:
             '#include "operand.h"',
             '#include "llk_defs.h"',
             f"{sfpu_types_include}",
-            (
-                # perf.h provides PerfRunType (needed for the PERF_RUN_TYPE declaration below).
-                # Test sources that use MEASURE_PERF_COUNTERS get counters.h via params.h.
-                '#include "perf.h"'
-                if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
-                else ""
-            ),
+            '#include "perf.h"',
             '#include "tensix_types.h"',
             "#define RUNTIME_PARAMETERS  [[maybe_unused]] const struct RuntimeParams&",
             f"constexpr bool l1_acc_en = {self.l1_acc.value};",

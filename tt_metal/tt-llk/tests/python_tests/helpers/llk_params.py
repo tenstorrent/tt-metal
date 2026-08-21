@@ -755,6 +755,18 @@ class ImpliedMathFormat(Enum):
     Yes = "true"
 
 
+class SyncChainOp(Enum):
+    UNPACK = 0
+    FPU = 1
+    SFPU = 2
+    PACK = 3
+
+
+class DestSyncScheme(Enum):
+    Semaphore = "false"
+    Dvalid = "true"
+
+
 class UnpackerEngine(Enum):
     """
     Enum for unpacker engine selection.
