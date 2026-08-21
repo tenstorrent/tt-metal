@@ -35,6 +35,7 @@ like any other hole.
 
     python bench_matmul.py
     python bench_matmul.py --rt 1 2 4 --ct 1 2 4 --kt 4 64
+    python bench_matmul.py --bias            # ours vs ttnn.linear
 """
 
 import argparse
@@ -99,9 +100,9 @@ def ours(device, matmul, rt, ct, kt, k_blocks, mode, min_pcc):
     return us, ""
 
 
-def theirs(device, m, n, k, cache={}):
-    """ttnn.matmul on one core at HiFi2, in microseconds."""
-    key = (m, n, k)
+def theirs(device, m, n, k, bias=False, cache={}):
+    """ttnn matmul (or linear, with a bias) on one core at HiFi2, in microseconds."""
+    key = (m, n, k, bias)
     if key in cache:
         return cache[key]
     a = ttnn.from_torch(
@@ -110,19 +111,45 @@ def theirs(device, m, n, k, cache={}):
     b = ttnn.from_torch(
         torch.randn([1, 1, k, n], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
+    # ttnn.linear takes the bias as one row and broadcasts it, which is its own business:
+    # what is being compared is the cost of a biased matmul on each side, not the layout
+    # each one demands of the caller.
+    v = (
+        ttnn.from_torch(
+            torch.randn([1, 1, 1, n], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        if bias
+        else None
+    )
     ckc = ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2)
+    why = ""
     try:
+        call = (
+            (lambda: ttnn.linear(a, b, bias=v, core_grid=ttnn.CoreGrid(y=1, x=1), compute_kernel_config=ckc))
+            if bias
+            else (lambda: ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1), compute_kernel_config=ckc))
+        )
+        # ttnn.linear does not always land under operations/matmul -- at m=64 n=128 k=64
+        # it dispatches somewhere else entirely and that match sees zero records, which
+        # showed up as a missing reference until the reason got reported. "operations" is
+        # broad, but only one op runs inside this bench call, so nothing else can match it;
+        # on the shapes where the narrow match DOES work the two agree. The unbiased side
+        # keeps the narrow match so its numbers stay comparable with earlier sweeps.
         us = bench(
             device,
-            lambda: ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1), compute_kernel_config=ckc),
+            call,
             iters=8,
             warmup=2,
-            match="operations/matmul",
+            match="operations" if bias else "operations/matmul",
         )["median_us"]
-    except Exception:  # noqa: BLE001 - record the gap rather than abort the sweep
+    except Exception as exc:  # noqa: BLE001 - record the gap rather than abort the sweep
         us = None
-    cache[key] = us
-    return us
+        why = f"ttnn declined: {classify(exc)}"
+    cache[key] = (us, why)
+    return cache[key]
 
 
 def main(argv=None):
@@ -135,9 +162,16 @@ def main(argv=None):
     p.add_argument("--k-blocks", type=int, default=1)
     p.add_argument("--modes", nargs="+", default=["dst", "l1", "single"], choices=["dst", "l1", "single"])
     p.add_argument("--pcc", type=float, default=0.99, help="correctness gate before a cell is timed")
+    # A biased matmul is a different kernel on both sides -- ours fuses the bias into the
+    # subblock loop in dst/single and pays a second pass in l1, and ttnn's is linear rather
+    # than matmul -- so it is a mode of the sweep, not another axis crossed with it.
+    p.add_argument("--bias", action="store_true", help="sweep matmul WITH a fused bias")
     args = p.parse_args(argv)
 
-    import test_unified_matmul as matmul
+    if args.bias:
+        import test_unified_matmul_bias as matmul
+    else:
+        import test_unified_matmul as matmul
 
     device = ttnn.open_device(device_id=0)
     rows = []
@@ -150,12 +184,21 @@ def main(argv=None):
                 for rt in args.rt:
                     for ct in args.ct:
                         us, note = ours(device, matmul, rt, ct, kt, kb, mode, args.pcc)
-                        ref = theirs(device, rt * TILE, ct * TILE, kt * kb * TILE) if us is not None else None
-                        rows.append((mode, kb, kt, rt, ct, us, ref, note))
+                        ref, ref_why = (
+                            theirs(device, rt * TILE, ct * TILE, kt * kb * TILE, args.bias)
+                            if us is not None
+                            else (None, "")
+                        )
+                        # A missing reference is the sweep's own blind spot, not a property
+                        # of our kernel, so it goes in the note rather than being dropped.
+                        rows.append((mode, kb, kt, rt, ct, us, ref, note or ref_why))
     finally:
         ttnn.close_device(device)
 
-    logger.info("one core, HiFi2 both sides. MACs = rt*ct*kt*k_blocks tile-multiplies.")
+    logger.info(
+        f"one core, HiFi2 both sides, {'WITH a fused bias (ttnn.linear)' if args.bias else 'no bias'}. "
+        "MACs = rt*ct*kt*k_blocks tile-multiplies."
+    )
     logger.info(
         f"  {'mode':4s} {'kb':>3s} {'kt':>3s} {'rt':>3s} {'ct':>3s} {'MACs':>5s} "
         f"{'ours':>9s} {'ttnn':>9s} {'ratio':>6s}  note"
@@ -171,6 +214,7 @@ def main(argv=None):
         logger.info(
             f"  {mode:4s} {kb:3d} {kt:3d} {rt:3d} {ct:3d} {macs:5d} {us:7.2f}us "
             f"{(f'{ref:7.2f}us' if ref else '        -'):>9s} {(f'{r:.2f}x' if r else '-'):>6s}"
+            f"{'  ' + note if note else ''}"
         )
         if r and r > 2.0:
             holes.append(("rate", mode, kb, kt, rt, ct, f"{r:.2f}x"))
