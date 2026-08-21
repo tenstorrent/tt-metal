@@ -15,10 +15,17 @@ prefill. So a whole head is the SUM over q-chunks, each with its own key extent:
 chunk i attends to (i+1)*S_q keys. Reporting only the last chunk would overstate the
 per-chunk cost by about 2x.
 
-Shapes are bounded by the DST register file, not by taste. The scores matmul produces
-sq*sk tiles and the PV matmul sq*dt, and each has to fit the 8-tile half-sync budget,
-so sq*sk <= 8 and sq*dt <= 8. A 256-wide head (dt=8) therefore gets sq=1: 32 query
-rows per launch.
+sq is no longer set by a rule. Single-shot matmuls walk row bands, so an output block
+wider than the 8-tile DST budget is fine, and what runs out instead is circular-buffer
+space -- q, o, pv and scores all scale with sq. The ceiling is therefore probed rather
+than derived: 8 for 64- and 96-wide heads, 6 for 128, 4 for 256, against the 4, 2, 2 and
+1 the old DST rule forced.
+
+But the largest sq is NOT the fastest, because causal work grows with the q-chunk. A
+prefill in chunks of Q computes S*(S+Q)/2 tiles of scores, so a coarser chunk computes
+more of the triangle it is going to throw away. Fewer launches pull one way and wasted
+masked work the other, and which wins depends on the shape. So sq is SEARCHED, and the
+table reports the one that won.
 
     python bench_models.py --seq 512
 """
@@ -36,6 +43,11 @@ TILE = 32
 
 # The smallest published config of each family, since this is one chip. head_dim is what
 # the kernel actually sees; n_heads and n_kv are recorded to size a full layer.
+# sq=1 is not a candidate: it is what the old DST rule forced on wide heads, and banding
+# exists precisely so nothing has to run that narrow. Measuring it costs the most launches
+# of any candidate for the least likely win.
+SQ_CANDIDATES = (2, 4, 6, 8)
+
 MODELS = [
     # name                      head_dim  n_heads  n_kv
     ("Llama 3.2 1B", 64, 32, 8),
@@ -56,15 +68,30 @@ def largest_divisor(extent, cap):
     return 1
 
 
+_SQ_CACHE = {}
+
+
+def probe_sq(device, flash, dt, fid):
+    """Largest sq this head width can allocate and compute. L1-bound, so measured."""
+    if dt in _SQ_CACHE:
+        return _SQ_CACHE[dt]
+    for sq in (16, 8, 6, 4, 2, 1):
+        try:
+            got, want = flash.run(device, sq, min(8, sq), dt, 1, True, fidelity=fid)
+            if (got - want).abs().max().item() / want.abs().max().item() < 0.08:
+                _SQ_CACHE[dt] = sq
+                return sq
+        except Exception:  # noqa: BLE001 - out of L1 for this sq, try a smaller one
+            continue
+    _SQ_CACHE[dt] = 0
+    return 0
+
+
 def plan(head_dim, seq):
-    """(sq, k_tiles) for this head width, or None if the shape cannot be expressed."""
+    """(dt, k_tiles) for this shape, or None if it cannot be expressed at all."""
     if head_dim % TILE or seq % TILE:
         return None
-    dt = head_dim // TILE
-    sq = 8 // dt  # sq * dt <= 8, the PV matmul's output block
-    if sq == 0:
-        return None
-    return sq, seq // TILE
+    return head_dim // TILE, seq // TILE
 
 
 def main(argv=None):
@@ -95,32 +122,37 @@ def main(argv=None):
                 if got is None:
                     rows.append((name, head_dim, seq, None, None, None, "shape not expressible"))
                     continue
-                sq, k_tiles = got
-                dt = head_dim // TILE
-                if sq > k_tiles:
-                    rows.append((name, head_dim, seq, None, None, None, "sequence shorter than one q block"))
+                dt, k_tiles = got
+                sq_max = min(probe_sq(device, flash, dt, fid), k_tiles)
+                if sq_max == 0:
+                    rows.append((name, head_dim, seq, None, None, None, "no sq fits in L1"))
                     continue
 
-                # One entry per q-chunk, each against the keys it can actually see.
-                total, chunk_plan = 0.0, []
-                for i in range(k_tiles // sq):
-                    extent = (i + 1) * sq
-                    sk = largest_divisor(extent, min(8 // sq, extent))
-                    st = bench(
-                        device,
-                        lambda s=sq, e=extent, c=extent // sk: flash.run(device, s, e, dt, c, True, fidelity=fid),
-                        iters=args.iters,
-                        warmup=2,
-                        match="flash_attention.cpp",
-                    )
-                    total += st["median_us"]
-                    chunk_plan.append((extent, sk))
+                # Search sq rather than maximise it: more query rows per launch means
+                # fewer launches, but more of the causal triangle computed and then
+                # masked away. Which wins depends on the shape, so measure both.
+                best = None
+                for sq in (c for c in SQ_CANDIDATES if c <= sq_max and k_tiles % c == 0):
+                    total = 0.0
+                    for i in range(k_tiles // sq):
+                        extent = (i + 1) * sq  # chunk i sees only the keys up to its own rows
+                        sk = largest_divisor(extent, min(8, extent))
+                        st = bench(
+                            device,
+                            lambda s=sq, e=extent, c=extent // sk: flash.run(device, s, e, dt, c, True, fidelity=fid),
+                            iters=args.iters,
+                            warmup=2,
+                            match="flash_attention.cpp",
+                        )
+                        total += st["median_us"]
+                    if best is None or total < best[1]:
+                        best = (sq, total, k_tiles // sq)
+                sq, total, nchunks = best
                 # Heads are independent, so a layer is not n_heads serial passes: it is
-                # however many rounds the grid needs. 72 worker cores on this part, and
-                # 32 heads fit in one round.
+                # however many rounds the grid needs.
                 rounds = -(-n_heads // 64)
                 per_layer = total * rounds
-                rows.append((name, head_dim, seq, sq, total, per_layer, f"{len(chunk_plan)} q-chunks"))
+                rows.append((name, head_dim, seq, sq, total, per_layer, f"{nchunks} q-chunks, sq<={sq_max}"))
                 logger.info(
                     f"{name} d={head_dim} S={seq}: per head {total:.1f}us, "
                     f"layer on a 64-core grid {per_layer:.0f}us ({rounds} round(s) of {n_heads} heads)"

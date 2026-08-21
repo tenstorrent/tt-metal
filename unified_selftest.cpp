@@ -709,6 +709,36 @@ void example_matmul_single() {
     noc_store<0>(out_storage.store(matmul(a, b)), t2, 0);
 }
 
+// A matmul whose output block does not fit one acquire, so the strategy walks it in row
+// bands. Shape<4,2> @ Shape<2,8> gives a 4x8 output: 32 tiles against a budget of 8, so
+// four bands of one row each.
+//
+// The trace is the verification, and there are two things in it that a plain "it ran"
+// would not catch. Operand A's tile index has to advance by kt_dim per BAND -- band r
+// starts at r*kt_dim -- while operand B restarts at 0 every band, because the unpacker
+// walks A as row*kt_dim + k and B as k*ct_dim + col. And the four packs have to be four
+// separate pack_blocks inside ONE reserve/push pair, since pack_block advances the write
+// pointer and only cb_push_back rewinds it: a push between bands would stack all four on
+// top of each other.
+//
+// Both were wrong in the first draft and both were caught on device by the error going to
+// 2.5 and 3.5 -- but on device they are one number, and here they are visible.
+void example_matmul_banded() {
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t1 = TensorAccessor(FakeArgs{1}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
+
+    using A = Shape<4, 2>;
+    using B = Shape<2, 8>;
+    Storage<A> a_storage(0);
+    Storage<B> b_storage(1);
+    Storage<Shape<4, 8>> out_storage(3);
+
+    ComputeBlock a = noc_load<1>(a_storage, t0, 0).wait();
+    ComputeBlock b = noc_load<1>(b_storage, t1, 0).wait();
+    noc_store<0>(out_storage.store(matmul(a, b)), t2, 0);
+}
+
 // The FPU path: a two-k-block matmul accumulated through a separate buffer,
 // with a DST-side relu epilogue on the final block.
 void example_matmul_acc() {
@@ -843,6 +873,8 @@ int main() {
     ok &= report("unary");
     tt::unified::example_matmul_single();
     ok &= report("matmul_single");
+    tt::unified::example_matmul_banded();
+    ok &= report("matmul_banded");
     tt::unified::example_matmul_acc();
     ok &= report("matmul_acc");
     tt::unified::example_reduce();
