@@ -13,11 +13,13 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, reverse_reorder_tensor_chunks
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     BH_NUM_DRAM_BANKS,
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
@@ -42,15 +44,8 @@ from tests.ttnn.utils_for_testing import assert_equal
 )
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-        },
-    ],
-    ids=["line", "ring"],
+    [torus_xy_device_params()],
+    ids=["torus-xy"],
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
@@ -86,8 +81,7 @@ def test_kv_cache_table(
     else:
         config, weights = request.getfixturevalue("random_weights")
 
-    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
-    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+    topology = per_axis_topology(device_params["fabric_config"])
 
     sp_axis = 0
     tp_axis = 1
@@ -203,15 +197,8 @@ def test_kv_cache_table(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-        },
-    ],
-    ids=["line", "ring"],
+    [torus_xy_device_params()],
+    ids=["torus-xy"],
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
@@ -247,8 +234,7 @@ def test_kimi_kv_cache_table(
 
     logger.info(f"model={variant.name} num_heads={config.num_attention_heads} hidden={config.hidden_size}")
 
-    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
-    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+    topology = per_axis_topology(device_params["fabric_config"])
 
     sp_axis = 0
     tp_axis = 1
@@ -337,15 +323,8 @@ def test_kimi_kv_cache_table(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-        },
-    ],
-    ids=["line", "ring"],
+    [torus_xy_device_params()],
+    ids=["torus-xy"],
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", [5 * 1024, 10 * 1024, 25 * 1024], ids=["seq5k", "seq10k", "seq25k"])
@@ -451,12 +430,8 @@ def test_kimi_kv_cache_mock(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        },
-    ],
-    ids=["line"],
+    [torus_xy_device_params()],
+    ids=["torus-xy"],
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", [5 * 1024, 10 * 1024], ids=["seq5k", "seq10k"])
@@ -645,8 +620,7 @@ def test_glm_kv_cache_table(
     block-cyclic layout coincides with the sequential (Kimi) layout, so no chunk reorder is needed.
     """
     config = config_only
-    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
-    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+    topology = per_axis_topology(device_params["fabric_config"])
 
     sp_axis = 0
     tp_axis = 1
@@ -836,16 +810,12 @@ def test_glm_kv_cache_table(
 # the indexer runs and fills the index-key cache), fills both the KVPE and indexer caches, builds the
 # merged 2-config kimi table (config 0 = KVPE, config 1 = index), and reads every 32-token chunk back.
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(2, 4), (8, 4)],
-    ids=["2x4", "8x4"],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    ids=["line"],
-    indirect=True,
+    "mesh_device,device_params",
+    [
+        pytest.param((2, 4), fabric2d_device_params(), id="fabric2d-2x4"),
+        pytest.param((8, 4), torus_xy_device_params(), id="torus-xy-8x4"),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("seq_len", [5 * 1024], ids=["seq5k"])
 @pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
@@ -865,8 +835,7 @@ def test_glm52_kv_cache_table(
     both, read back chunk-by-chunk. This is the SP-only baseline that main lacks for GLM-5.2.
     """
     config = config_only
-    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
-    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+    topology = per_axis_topology(device_params["fabric_config"])
 
     sp_axis = 0
     tp_axis = 1

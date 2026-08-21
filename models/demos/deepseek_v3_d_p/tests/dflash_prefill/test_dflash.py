@@ -17,9 +17,10 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_dflash_kv_cache
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -31,12 +32,6 @@ CHUNK_GLOBAL = 5120
 
 # Per-user cache depth
 MAX_SEQ_LEN = 11 * CHUNK_GLOBAL
-
-_FABRIC_2D = {
-    "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-    "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-    "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-}
 
 
 def _unrotate_blockcyclic(rotated: torch.Tensor, sp: int, chunk_global: int) -> torch.Tensor:
@@ -74,15 +69,14 @@ def _read_cache_natural(cache, mesh_device, mesh_shape, sp: int, chunk_global: i
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            _FABRIC_2D,
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -91,7 +85,6 @@ def test_dflash_pcc(
     mesh_device,
     device_params,
     num_links,
-    topology,
     ctx_len,
     n_chunks,
     use_pretrained,
@@ -99,6 +92,7 @@ def test_dflash_pcc(
     drafter_state_dict,
     hf_context_kv,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])[1]
     logger.info(f"weights={'pretrained' if use_pretrained else 'random'}  ctx_len={ctx_len}  n_chunks={n_chunks}")
     cfg = drafter_cfg
     sd = drafter_state_dict
@@ -184,15 +178,14 @@ _MULTITURN_ITERS = [
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
 @pytest.mark.parametrize("iters_isl", _MULTITURN_ITERS)
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            _FABRIC_2D,
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -201,13 +194,13 @@ def test_dflash_multiturn_pcc(
     mesh_device,
     device_params,
     num_links,
-    topology,
     iters_isl,
     use_pretrained,
     drafter_cfg,
     drafter_state_dict,
     hf_context_kv,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])[1]
     cfg = drafter_cfg
     sd = drafter_state_dict
 
