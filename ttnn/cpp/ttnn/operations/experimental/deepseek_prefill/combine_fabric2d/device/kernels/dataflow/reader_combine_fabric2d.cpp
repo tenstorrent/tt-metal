@@ -502,4 +502,9 @@ void kernel_main() {
     reader.run_schedule();
     reader.run_local_phase();
     reader.end_stream();
+
+    // Back to zero for the next launch, which starts its own count at zero. The upstream sender cannot bump
+    // this again: we only got past the last chunk by reading its sentinel, so everything it owes us has
+    // arrived, and its drain targets a sink address rather than this semaphore.
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr), 0);
 }

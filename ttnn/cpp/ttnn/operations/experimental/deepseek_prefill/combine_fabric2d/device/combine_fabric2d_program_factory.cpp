@@ -137,9 +137,12 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 // The reader/sender ring handshake is two monotonic single-writer counters, plus one counter the upstream
 // chip's sender bumps as it fills this stream's forwarding region.
 //
-// GlobalSemaphores rather than the op's own L1 region for one reason: the framework ZEROES them before
-// launch. Raw L1 keeps whatever the previous program left there, and a stale `freed` underflows the reader's
-// free-slot arithmetic — a silent buffer overwrite, not a clean failure.
+// GlobalSemaphores rather than the op's own L1 region so they sit at an address uniform across the mesh:
+// `fwd_arrived` is bumped by the upstream chip, which has to know where it lives.
+//
+// Nothing zeroes them between launches — they outlive the cached workload — so the kernels reset all three at
+// end of stream. Skipping that leaves the next launch reading this one's totals, and a stale `freed`
+// underflows the reader's free-slot arithmetic into a silent buffer overwrite rather than a clean failure.
 struct RingSemaphores {
     tt::tt_metal::GlobalSemaphore filled;
     tt::tt_metal::GlobalSemaphore freed;

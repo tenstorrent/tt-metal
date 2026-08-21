@@ -13,9 +13,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
 namespace {
 
-// Fastest of the fixed layouts measured on a Blackhole galaxy; the columns below it were within 2% of each
-// other and every other layout swept was at least 9% slower.
-constexpr uint32_t worker_column(StreamId stream) { return stream + 1; }
+// One packed column per stream, row 0. Of the fixed layouts swept on a Blackhole galaxy these were the
+// steadiest run to run and within 2% of the fastest; every layout spread further across the grid was at
+// least 9% slower.
+constexpr uint32_t worker_column(StreamId stream) { return stream; }
 
 StreamPlacements decide_device_placement(
     ttnn::MeshDevice* mesh, const ttnn::MeshCoordinate& coord, uint32_t axis, uint32_t num_links) {

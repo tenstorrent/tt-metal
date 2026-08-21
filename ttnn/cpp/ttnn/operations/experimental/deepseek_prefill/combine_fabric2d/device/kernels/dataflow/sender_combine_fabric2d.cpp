@@ -184,4 +184,10 @@ void kernel_main() {
 
     noc_async_writes_flushed();
     fabric_connections.close();
+
+    // Both ring counters back to zero for the next launch, which starts its own counts at zero. Safe here
+    // and only here: the reader's last act was publishing the CMD_END slot this kernel has just drained, so
+    // nothing is still reading or bumping either of them.
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.filled_addr), 0);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.freed_addr), 0);
 }
