@@ -4,6 +4,7 @@
 #include "argmax_device_operation.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -11,10 +12,12 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include <cstdlib>
+#include <algorithm>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -228,34 +231,37 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     const auto src_cb_page_size0 = round_up_to_mul32(red_dim_units0 * input_unit_size);
     const auto src_cb_page_size1 = num_cores1 > 0 ? round_up_to_mul32(red_dim_units1 * input_unit_size) : 0u;
 
-    const auto max_src_cb_page_size = src_cb_page_size0 > src_cb_page_size1 ? src_cb_page_size0 : src_cb_page_size1;
+    // Doubling src_cb is the only extra L1 cost, but it has to be charged against the region the
+    // CBs actually get: base allocator address up to lowest_occupied_compute_l1_address(), with
+    // each CB rounded to the DRAM alignment (see ProgramImpl::allocate_circular_buffers).
+    const uint32_t cb_alignment = device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
+    const auto cb_alloc_size = [cb_alignment](uint64_t cb_size) {
+        return tt::align(cb_size, static_cast<uint64_t>(cb_alignment));
+    };
 
-    // Doubling src_cb is the only extra L1 cost. Cap CB usage at half of L1 so a marginal
-    // speedup can never break an otherwise-working program.
-    const bool l1_fits_secondary_dm = ((2 * max_src_cb_page_size) + dst_page_size + red_idxs_page_size +
-                                       red_vals_page_size) <= (device->l1_size_per_core() / 2);
+    // A core belongs to exactly one src_cb group, so charge the larger group.
+    const uint64_t shared_cb_bytes =
+        cb_alloc_size(dst_page_size) + cb_alloc_size(red_idxs_page_size) + cb_alloc_size(red_vals_page_size);
+    const uint64_t dual_src_cb_bytes =
+        std::max(cb_alloc_size(2ull * src_cb_page_size0), cb_alloc_size(2ull * src_cb_page_size1));
 
-    // Forces the single-kernel path, which is bit-identical to the pre-split behaviour:
-    // the A/B measurement baseline and a bisection handle if a shape regresses. Read once
-    // per process -- the program cache keys on op attributes, not the environment, so a
-    // value changing between calls would serve a cached program built under the other.
-    static const bool secondary_dm_disabled = [] {
-        const char* env = std::getenv("TT_METAL_ARGMAX_DISABLE_DUAL_RISC");
-        return env != nullptr && env[0] == '1';
-    }();
+    const auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address();
+    const uint64_t cb_region_end =
+        lowest_occupied_l1.has_value() ? lowest_occupied_l1.value() : device->l1_size_per_core();
+    const uint64_t cb_region_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint64_t l1_available_for_cbs = cb_region_end > cb_region_base ? cb_region_end - cb_region_base : 0;
+
+    const bool l1_fits_secondary_dm = (dual_src_cb_bytes + shared_cb_bytes) <= l1_available_for_cbs;
 
     // Split the inner (j) loop across both data movement processors; a single kernel leaves
-    // RISCV_0 idle. The halves fill disjoint entries of this core's partial slot, so the
-    // cross-core protocol is unchanged: only the primary ships the slot, signals done_sem
-    // and runs the final reduction. reduce_all is excluded -- inner_dim_units == 1 and its
-    // accumulator spans the whole j range, so it needs a value merge, not a partition.
-    const bool use_secondary_dm =
-        (not secondary_dm_disabled) && (not reduce_all) && (inner_dim_units >= 2) && l1_fits_secondary_dm;
+    // RISCV_0 idle. The halves fill disjoint entries of this core's partial slot, so the cross-core
+    // protocol is unchanged. reduce_all is excluded: its accumulator spans the whole j range, so it
+    // would need a value merge rather than a partition.
+    const bool use_secondary_dm = (not reduce_all) && (inner_dim_units >= 2) && l1_fits_secondary_dm;
     const uint32_t src_cb_copies = use_secondary_dm ? 2 : 1;
 
-    // Even split, biased to the secondary when odd. The split point is a compile time arg
-    // shared by a whole core group, so it cannot be tuned per core (e.g. to compensate the
-    // reduce core for also running the merge).
+    // Even split, biased to the secondary when odd. The split point is a compile time arg shared
+    // by a whole core group, so it cannot be tuned per core.
     const uint32_t primary_j_end = use_secondary_dm ? (inner_dim_units / 2) : inner_dim_units;
 
     log_debug(
@@ -348,8 +354,8 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     // Allocate two semaphores for synchronization (cores -> reducer core) and (reducer core -> cores)
     const uint32_t start_sem_idx = 0;
     const uint32_t done_sem_idx = 1;
-    // Secondary -> primary handoff, local to one core. Always allocated (one L1 word) so
-    // semaphore ids do not depend on use_secondary_dm; only used when the split is on.
+    // Secondary -> primary handoff, local to one core. Always allocated so semaphore ids do not
+    // depend on use_secondary_dm.
     const uint32_t partial_ready_sem_idx = 2;
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = start_sem_idx,
@@ -431,8 +437,8 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     const std::string kernel_path =
         "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp";
 
-    // Per-instance args: this processor's j sub-range, its private half of src_cb, and
-    // whether it owns the cross-core reduction.
+    // Per-instance args: this processor's j sub-range, its half of src_cb, and whether it owns the
+    // cross-core reduction.
     const auto make_compile_args = [&](uint32_t j_start, uint32_t j_end, uint32_t src_cb_offset, bool owns_reduction) {
         std::vector<uint32_t> args = base_compile_args;
         args.push_back(partial_ready_sem_idx);
@@ -459,9 +465,9 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
         return k;
     };
 
-    // RISCV_1 owns the cross-core protocol (start_sem multicast, done_sem, partial-slot
-    // write, final reduction). RISCV_0 only scans its j sub-range and hands off through
-    // partial_ready_sem.
+    // RISCV_1 owns the cross-core protocol (start_sem multicast, done_sem, partial-slot write,
+    // final reduction); its NOC1 pinning is asserted in the kernel. RISCV_0 only scans its j
+    // sub-range and hands off through partial_ready_sem.
     const auto make_primary = [&](const CoreRangeSet& kernel_cores) {
         return make_kernel(
             kernel_cores,
@@ -477,8 +483,7 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
             make_compile_args(primary_j_end, inner_dim_units, src_cb_offset, /*owns_reduction=*/false));
     };
 
-    // Both processors on a core take identical runtime args; only their compile time args
-    // differ, so emit the list from one place.
+    // Both processors on a core take identical runtime args; only their compile time args differ.
     const auto emplace_core_args = [&](KernelDescriptor& kernel,
                                        const CoreCoord& core,
                                        uint32_t core_index,

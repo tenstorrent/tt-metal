@@ -60,8 +60,7 @@ inline void find_argmax_for_core(
     const uint32_t j_start,
     const uint32_t j_end,
     const uint32_t src_cb_offset) {
-    // inner_dim_units stays the FULL count: it is the page stride and part of the
-    // reduce_all index. Only the iteration range narrows to [j_start, j_end).
+    // inner_dim_units stays the FULL count: it is the page stride and part of the reduce_all index.
     for (uint32_t j = j_start; j < j_end; ++j) {
         noc.async_read(
             s_src,
@@ -314,16 +313,18 @@ void kernel_main() {
     // This processor's private half of src_cb: primary 0, secondary one page in.
     constexpr uint32_t src_cb_offset = get_compile_time_arg_val(31);
 
-    // True on the processor that runs the cross-core protocol and writes the output.
+    // Runs the cross-core protocol and writes the output.
     constexpr bool owns_reduction = (bool)get_compile_time_arg_val(32);
 
-    // True when a second data movement processor is active on this core.
+    // A second data movement processor is active on this core.
     constexpr bool has_secondary_dm = (bool)get_compile_time_arg_val(33);
 
     static_assert(j_start < j_end, "Empty inner range: this processor would do no work.");
     static_assert(
         !(reduce_all && has_secondary_dm), "reduce_all cannot be split: its accumulator spans the whole inner range.");
     static_assert(owns_reduction || has_secondary_dm, "Secondary launched without a primary.");
+    // Fail the build, not the device, if the multicast ever moves off NOC1 (see below).
+    static_assert(!owns_reduction || noc_index == 1, "The reduction owner must run on NOC1.");
 
     constexpr auto s_src_args = TensorAccessorArgs<34>();
     constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
@@ -375,9 +376,8 @@ void kernel_main() {
     // Semaphores
     Semaphore<> start_sem(start_sem_idx);
     Semaphore<> done_sem(done_sem_idx);
-    // Monotonic: secondary ups once per k, primary waits for k+1, so no reset is needed.
-    // wait_min also invalidates the L1 cache while polling, which is what makes the
-    // secondary's red_idxs / red_vals stores visible to the primary.
+    // Monotonic, so no reset is needed. wait_min also invalidates the L1 cache while polling,
+    // which is what makes the secondary's red_idxs / red_vals stores visible to the primary.
     Semaphore<> partial_ready_sem(partial_ready_sem_idx);
 
     uint32_t max_idx = 0;
@@ -386,10 +386,10 @@ void kernel_main() {
     // -------------------------------------------------------------------------
     // Main loop - run by all cores
     for (uint32_t k = 0; k < outer_dim_units; ++k) {
-        // Only the primary drives start_sem: semaphores are per-core, so two processors
-        // setting them would race. It also keeps the multicast on NOC1, matching the
-        // end-before-start corner order the host passes. From NOC0 that rectangle inverts
-        // and only one core is signalled -- the hang reported against the original PR.
+        // Only the primary drives start_sem: semaphores are per-core, so two processors setting
+        // them would race. It also keeps the multicast on NOC1, whose coordinate space matches the
+        // end-before-start corner order the host passes; from NOC0 the rectangle inverts and only
+        // one core is signalled -- the hang reported against the original PR.
         if (is_reduce_core && owns_reduction) {
             // done_sem is zero-initialized by the dispatcher before the kernel
             // launches, so the k == 0 iteration needs no reset. Resetting it here
@@ -449,11 +449,10 @@ void kernel_main() {
             src_cb_offset);
 
         if constexpr (not reduce_all) {
-            // The secondary fills only its [j_start, j_end) entries and hands off, taking no
-            // part in the cross-core protocol: done_sem still expects num_cores and the
-            // output write stays single-sourced. No free-slot semaphore is needed to stop it
-            // overwriting a partial still being shipped -- its next iteration blocks on the
-            // start_sem wait above, which advances only after the reduce core merged k.
+            // The secondary fills only its [j_start, j_end) entries and hands off, taking no part
+            // in the cross-core protocol. It cannot overwrite a partial still being shipped: its
+            // next iteration blocks on the start_sem wait above, which advances only after the
+            // reduce core merged k.
             if constexpr (not owns_reduction) {
                 partial_ready_sem.up(1);
                 continue;
