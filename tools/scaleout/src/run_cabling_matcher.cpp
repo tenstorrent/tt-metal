@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <map>
@@ -28,6 +29,7 @@ struct Config {
     std::string pattern_deployment_path;
     std::string pattern_template;
     std::string pattern_fsd_path;
+    std::vector<std::string> library_paths;
     TierScope tier = TierScope::Full;
     MatchOptions options;
 };
@@ -53,7 +55,10 @@ Config parse_arguments(int argc, char** argv) {
         "The pattern is a cabling descriptor, or one graph_template out of one, and the target is the\n"
         "descriptor to search. A match is an assignment of pattern hosts to target hosts under which\n"
         "every pattern cable is a cable the target actually has. Either side can instead be a factory\n"
-        "system descriptor, which asks whether a built system implements the scheme, or more than it.");
+        "system descriptor, which asks whether a built system implements the scheme, or more than it.\n\n"
+        "With --library the question is turned around: every scheme in a set of descriptors is looked\n"
+        "for in one target, which reports what the target is built out of rather than whether one\n"
+        "guess about it holds.");
 
     options.add_options()(
         "c,cabling",
@@ -83,6 +88,11 @@ Config parse_arguments(int argc, char** argv) {
         "Factory system descriptor to use as the pattern, in place of --pattern-cabling. Asks whether one built "
         "system's wiring is reproduced in another",
         cxxopts::value<std::string>()->default_value(""))(
+        "l,library",
+        "Search the target for every graph_template of these descriptors (files, or directories whose "
+        ".textproto files are each read on their own) instead of for one pattern, and report the largest "
+        "scheme each host belongs to. Repeatable",
+        cxxopts::value<std::vector<std::string>>())(
         "i,identity",
         "How strictly ports must correspond: strict (same port id), chip (same ASIC reached, treating a port "
         "that spans two ASICs as reaching either), relaxed (port ids ignored)",
@@ -123,7 +133,9 @@ Config parse_arguments(int argc, char** argv) {
         std::cout << "  " << argv[0] << " -c st_sc36.textproto -p sc36.textproto -t bh_glx_pod --identity chip\n";
         std::cout << "  # Does an SC36 pod sit inside an ST-SC36 system, comparing chips rather than port ids?\n\n";
         std::cout << "  " << argv[0] << " -f built_system.textproto -p sc36.textproto -t bh_glx_pod\n";
-        std::cout << "  # Does a built system, as recorded in its FSD, implement the SC36 pod scheme?\n";
+        std::cout << "  # Does a built system, as recorded in its FSD, implement the SC36 pod scheme?\n\n";
+        std::cout << "  " << argv[0] << " -f built_system.textproto -l descriptors/ --identity chip\n";
+        std::cout << "  # Which of the known schemes is this system built out of, and where?\n";
         exit(0);
     }
 
@@ -135,6 +147,9 @@ Config parse_arguments(int argc, char** argv) {
     config.pattern_deployment_path = result["pattern-deployment"].as<std::string>();
     config.pattern_template = result["pattern-template"].as<std::string>();
     config.pattern_fsd_path = result["pattern-fsd"].as<std::string>();
+    if (result.contains("library")) {
+        config.library_paths = result["library"].as<std::vector<std::string>>();
+    }
 
     // Listing what a descriptor offers is a question about one file, so it needs neither a target to
     // search nor a template to look for.
@@ -162,7 +177,19 @@ Config parse_arguments(int argc, char** argv) {
         throw std::invalid_argument("A target is required, given with --cabling or --fsd");
     }
 
-    if (!config.pattern_fsd_path.empty()) {
+    // A library is searched for in place of a pattern, not alongside one.
+    if (!config.library_paths.empty()) {
+        if (!config.pattern_cabling_path.empty() || !config.pattern_deployment_path.empty() ||
+            !config.pattern_template.empty() || !config.pattern_fsd_path.empty()) {
+            throw std::invalid_argument(
+                "--library says what to look for, so it cannot be combined with the --pattern-* options");
+        }
+        for (const auto& path : config.library_paths) {
+            if (!std::filesystem::exists(path)) {
+                throw std::invalid_argument("Library path not found: '" + path + "'");
+            }
+        }
+    } else if (!config.pattern_fsd_path.empty()) {
         if (!config.pattern_cabling_path.empty() || !config.pattern_deployment_path.empty() ||
             !config.pattern_template.empty()) {
             throw std::invalid_argument(
@@ -220,6 +247,21 @@ int main(int argc, char** argv) {
     try {
         Config config = parse_arguments(argc, argv);
 
+        MatchGraph target =
+            config.fsd_path.empty()
+                ? MatchGraph::load(
+                      config.cabling_path, config.deployment_path, "", TierScope::Full, config.cabling_path)
+                : MatchGraph::from_fsd(config.fsd_path, config.fsd_path + " (fsd)");
+
+        if (!config.library_paths.empty()) {
+            LibraryResult result = score_library(config.library_paths, target, config.options, config.tier);
+            std::cout << format_library_result(target, result, config.options);
+            bool anything_fits = std::any_of(result.findings.begin(), result.findings.end(), [](const auto& finding) {
+                return !finding.host_sets.empty();
+            });
+            return anything_fits ? 0 : 1;
+        }
+
         MatchGraph pattern = [&] {
             if (!config.pattern_fsd_path.empty()) {
                 return MatchGraph::from_fsd(config.pattern_fsd_path, config.pattern_fsd_path + " (fsd)");
@@ -238,12 +280,6 @@ int main(int argc, char** argv) {
                 config.tier,
                 label);
         }();
-
-        MatchGraph target =
-            config.fsd_path.empty()
-                ? MatchGraph::load(
-                      config.cabling_path, config.deployment_path, "", TierScope::Full, config.cabling_path)
-                : MatchGraph::from_fsd(config.fsd_path, config.fsd_path + " (fsd)");
 
         MatchResult result = match(pattern, target, config.options);
         std::cout << format_result(pattern, target, result, config.options);

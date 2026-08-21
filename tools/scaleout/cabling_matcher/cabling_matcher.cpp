@@ -1179,6 +1179,157 @@ MatchResult match(const MatchGraph& pattern, const MatchGraph& target, const Mat
     return result;
 }
 
+namespace {
+
+// Descriptor files a library path stands for. A directory holds a scheme per file rather than one
+// scheme spread across it, so unlike --cabling the files are read separately and not merged.
+std::vector<std::string> expand_library_path(const std::string& path) {
+    if (!std::filesystem::is_directory(path)) {
+        return {path};
+    }
+    std::vector<std::string> files;
+    for (const auto& entry : std::filesystem::directory_iterator(path)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".textproto") {
+            files.push_back(entry.path().string());
+        }
+    }
+    std::sort(files.begin(), files.end());
+    if (files.empty()) {
+        throw std::runtime_error("No .textproto descriptors in library directory: " + path);
+    }
+    return files;
+}
+
+// The target hosts a match lands on, sorted. Isolated pattern hosts take no part in the search, so
+// this can be smaller than the scheme's host count.
+std::vector<uint32_t> match_host_set(const ComponentResult& component, const Match& match) {
+    std::vector<uint32_t> hosts;
+    hosts.reserve(component.pattern_hosts.size());
+    for (uint32_t pattern_host : component.pattern_hosts) {
+        hosts.push_back(match.host_map[pattern_host]);
+    }
+    std::sort(hosts.begin(), hosts.end());
+    return hosts;
+}
+
+bool is_subset(const std::vector<uint32_t>& inner, const std::vector<uint32_t>& outer) {
+    return std::includes(outer.begin(), outer.end(), inner.begin(), inner.end());
+}
+
+}  // namespace
+
+LibraryResult score_library(
+    const std::vector<std::string>& paths, const MatchGraph& target, const MatchOptions& options, TierScope tier) {
+    LibraryResult result;
+
+    struct Loaded {
+        LibraryEntry entry;
+        MatchGraph graph;
+    };
+    std::vector<Loaded> loaded;
+    for (const auto& path : paths) {
+        for (const auto& file : expand_library_path(path)) {
+            std::string stem = std::filesystem::path(file).stem().string();
+            for (const auto& template_name : list_graph_templates(file)) {
+                std::string name = fmt::format("{} :: {}", stem, template_name);
+                try {
+                    MatchGraph graph = MatchGraph::load(file, "", template_name, tier, name);
+                    // A scheme in pieces has no single answer to where it sits: the placements would be
+                    // the cross product of the pieces', and which piece went where would be arbitrary.
+                    if (graph.components().size() > 1) {
+                        throw std::runtime_error(fmt::format(
+                            "its cables leave it in {} disconnected pieces, so where it sits is not one answer",
+                            graph.components().size()));
+                    }
+                    if (graph.cables().empty()) {
+                        throw std::runtime_error(
+                            tier == TierScope::OwnLevel ? "it declares no cables of its own"
+                                                        : "it has no cables, so any hosts would do");
+                    }
+                    LibraryEntry entry{
+                        .source = file,
+                        .template_name = template_name,
+                        .name = name,
+                        .num_hosts = graph.hosts().size(),
+                        .num_cables = graph.cables().size()};
+                    loaded.push_back(Loaded{.entry = std::move(entry), .graph = std::move(graph)});
+                } catch (const std::exception& e) {
+                    result.skipped.emplace_back(name, e.what());
+                }
+            }
+        }
+    }
+
+    // Largest first, so that the schemes worth reporting come before the ones they subsume.
+    std::sort(loaded.begin(), loaded.end(), [](const Loaded& lhs, const Loaded& rhs) {
+        if (lhs.entry.num_hosts != rhs.entry.num_hosts) {
+            return lhs.entry.num_hosts > rhs.entry.num_hosts;
+        }
+        if (lhs.entry.num_cables != rhs.entry.num_cables) {
+            return lhs.entry.num_cables > rhs.entry.num_cables;
+        }
+        return lhs.entry.name < rhs.entry.name;
+    });
+
+    MatchOptions entry_options = options;
+    entry_options.allow_disconnected = false;  // the disconnected ones were skipped above
+    for (const auto& [entry, graph] : loaded) {
+        LibraryFinding finding;
+        try {
+            MatchResult matched = match(graph, target, entry_options);
+            finding.inconclusive = matched.inconclusive();
+            for (const auto& component : matched.components) {
+                finding.stopped_at_limit = finding.stopped_at_limit || component.stopped_at_limit;
+                for (const auto& one : component.matches) {
+                    finding.host_sets.push_back(match_host_set(component, one));
+                }
+                if (component.matches.empty() && component.diagnosis) {
+                    finding.stuck_at = fmt::format(
+                        "placed {} of {} cables, then had nowhere for {}",
+                        component.diagnosis->cables_placed,
+                        graph.cables().size(),
+                        cable_to_string(graph.cables()[component.diagnosis->pattern_cable]));
+                }
+            }
+            std::sort(finding.host_sets.begin(), finding.host_sets.end());
+        } catch (const std::exception& e) {
+            result.skipped.emplace_back(entry.name, e.what());
+            continue;
+        }
+        result.entries.push_back(entry);
+        result.findings.push_back(std::move(finding));
+    }
+
+    for (size_t inner = 0; inner < result.entries.size(); ++inner) {
+        if (result.findings[inner].host_sets.empty()) {
+            continue;
+        }
+        for (size_t outer = 0; outer < inner; ++outer) {
+            const auto& outer_sets = result.findings[outer].host_sets;
+            // Two schemes of the same size are alternatives rather than one containing the other,
+            // however their host sets happen to fall.
+            bool larger = std::tie(result.entries[outer].num_hosts, result.entries[outer].num_cables) >
+                          std::tie(result.entries[inner].num_hosts, result.entries[inner].num_cables);
+            if (outer_sets.empty() || !larger) {
+                continue;
+            }
+            bool covers = std::all_of(
+                result.findings[inner].host_sets.begin(),
+                result.findings[inner].host_sets.end(),
+                [&outer_sets](const std::vector<uint32_t>& set) {
+                    return std::any_of(
+                        outer_sets.begin(), outer_sets.end(), [&set](const std::vector<uint32_t>& outer) {
+                            return is_subset(set, outer);
+                        });
+                });
+            if (covers) {
+                result.findings[inner].covered_by.push_back(outer);
+            }
+        }
+    }
+    return result;
+}
+
 std::string to_string(PortIdentity identity) {
     switch (identity) {
         case PortIdentity::Strict: return "strict";
@@ -1329,6 +1480,133 @@ std::string format_result(
                         "      trays on {}: {}\n", pattern.hosts()[pattern_host].name, fmt::join(trays, " "));
                 }
             }
+        }
+    }
+    return out.str();
+}
+
+std::string format_library_result(const MatchGraph& target, const LibraryResult& result, const MatchOptions& options) {
+    // Hostnames are the point of the report, but a scheme spanning tens of hosts should not push the
+    // rest of it off the screen.
+    constexpr size_t kMaxNamesShown = 6;
+    auto host_names = [&target](const std::vector<uint32_t>& hosts) {
+        std::vector<std::string> names;
+        for (size_t index = 0; index < hosts.size() && index < kMaxNamesShown; ++index) {
+            names.push_back(target.hosts()[hosts[index]].name);
+        }
+        std::string listed = fmt::format("{}", fmt::join(names, ", "));
+        return hosts.size() > kMaxNamesShown ? fmt::format("{}, and {} more", listed, hosts.size() - kMaxNamesShown)
+                                             : listed;
+    };
+
+    std::ostringstream out;
+    out << fmt::format(
+        "Target:  {} ({} hosts, {} cables)\n", target.label(), target.hosts().size(), target.cables().size());
+    out << fmt::format("Library: {} scheme(s)\n", result.entries.size());
+    out << fmt::format(
+        "Mode:    {}, port identity {}, {}\n",
+        to_string(options.mode),
+        to_string(options.port_identity),
+        to_string(options.tray_symmetry));
+    for (const auto& note : target.notes()) {
+        out << fmt::format("Note (Target): {}\n", note);
+    }
+    out << "\n";
+
+    size_t matched_count = 0;
+    for (const auto& finding : result.findings) {
+        matched_count += finding.host_sets.empty() ? 0 : 1;
+    }
+    if (matched_count == 0) {
+        out << "NOTHING IN THE LIBRARY FITS\n";
+    }
+
+    for (size_t index = 0; index < result.entries.size(); ++index) {
+        const auto& entry = result.entries[index];
+        const auto& finding = result.findings[index];
+        if (finding.host_sets.empty()) {
+            continue;
+        }
+        out << fmt::format("{} ({} host(s), {} cable(s))\n", entry.name, entry.num_hosts, entry.num_cables);
+        std::string qualifier = finding.stopped_at_limit ? " (stopped at --max-matches; there may be more)" : "";
+        out << fmt::format("  fits {} place(s){}\n", finding.host_sets.size(), qualifier);
+        // Coverage is transitive and the entries are largest first, so naming the largest scheme this
+        // one sits inside says everything the rest of them would.
+        if (!finding.covered_by.empty()) {
+            out << fmt::format("  every one of them inside {}\n", result.entries[finding.covered_by.front()].name);
+        }
+        for (const auto& hosts : finding.host_sets) {
+            out << fmt::format("    {}\n", host_names(hosts));
+            if (hosts.size() != entry.num_hosts) {
+                out << fmt::format(
+                    "      ({} of its {} hosts have no cables to place them, so any host would serve)\n",
+                    entry.num_hosts - hosts.size(),
+                    entry.num_hosts);
+            }
+        }
+    }
+
+    std::vector<size_t> unmatched;
+    for (size_t index = 0; index < result.entries.size(); ++index) {
+        if (result.findings[index].host_sets.empty()) {
+            unmatched.push_back(index);
+        }
+    }
+    if (!unmatched.empty()) {
+        out << "\nDoes not fit\n";
+        for (size_t index : unmatched) {
+            const auto& finding = result.findings[index];
+            out << fmt::format(
+                "  {} ({} host(s), {} cable(s)){}\n",
+                result.entries[index].name,
+                result.entries[index].num_hosts,
+                result.entries[index].num_cables,
+                finding.inconclusive ? " -- undecided, the search budget ran out" : "");
+            if (!finding.stuck_at.empty()) {
+                out << fmt::format("    {}\n", finding.stuck_at);
+            }
+        }
+    }
+
+    if (!result.skipped.empty()) {
+        out << "\nNot asked about\n";
+        for (const auto& [name, reason] : result.skipped) {
+            out << fmt::format("  {}: {}\n", name, reason);
+        }
+    }
+
+    // What each target host is part of, largest scheme first. This is the question the library scan
+    // exists to answer, so it is worth stating directly rather than leaving to be read off the above.
+    if (matched_count != 0) {
+        out << "\nLargest scheme each host belongs to\n";
+        std::vector<bool> claimed(target.hosts().size(), false);
+        for (size_t index = 0; index < result.entries.size(); ++index) {
+            std::vector<uint32_t> newly_claimed;
+            for (const auto& hosts : result.findings[index].host_sets) {
+                for (uint32_t host : hosts) {
+                    if (!claimed[host]) {
+                        claimed[host] = true;
+                        newly_claimed.push_back(host);
+                    }
+                }
+            }
+            if (!newly_claimed.empty()) {
+                std::sort(newly_claimed.begin(), newly_claimed.end());
+                out << fmt::format(
+                    "  {}: {} host(s) -- {}\n",
+                    result.entries[index].name,
+                    newly_claimed.size(),
+                    host_names(newly_claimed));
+            }
+        }
+        std::vector<uint32_t> unclaimed;
+        for (uint32_t host = 0; host < target.hosts().size(); ++host) {
+            if (!claimed[host]) {
+                unclaimed.push_back(host);
+            }
+        }
+        if (!unclaimed.empty()) {
+            out << fmt::format("  nothing in the library: {} host(s) -- {}\n", unclaimed.size(), host_names(unclaimed));
         }
     }
     return out.str();
