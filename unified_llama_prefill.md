@@ -1665,8 +1665,13 @@ k-blocks together. A real matmul with a long K and a wide output has to split th
 today.
 
 **Hole 2, rate: each k-block costs about 1.3us, and ttnn's k-steps cost nearly nothing.**
-This is the sharper finding, and it falls out of comparing two ways to spell the same
-arithmetic. K = 8 tiles as ONE block against the same K as FOUR blocks, at 1x1 output:
+RETRACTED -- this was self-inflicted, and the sweep's own axes are what hid it. The sweep
+varied k_blocks and only ever at kt in {2, 8}, so it never asked what ONE call with a large
+kt costs. It costs nothing extra: kt is not a DST dimension. Nothing here is wrong about
+what was measured, but "ttnn's k-steps cost nearly nothing" and ours cost 1.3us is a
+comparison between ttnn doing the arithmetic in one call and us choosing to split it. The
+sweep now sweeps kt instead, and the retraction is worked through under "The k-loop was the
+mistake" below. Left in place because the reasoning that followed from it is instructive. K = 8 tiles as ONE block against the same K as FOUR blocks, at 1x1 output:
 
 | | ours | ttnn | ratio |
 |---|---|---|---|
@@ -1809,6 +1814,39 @@ constraint you are designing around is real -- I never verified that a large `kt
 problem before building machinery to avoid needing one. Second, for the fourth time this
 session: I priced the mechanism I had just been reading about without checking what else was
 in the same measurement.
+
+### Re-swept on kt: no rate holes left, and parity with ttnn at size
+
+With kt as the axis and k_blocks pinned to 1, `bench_matmul.py` covers 332 cells across
+rt, ct in {1,2,4,8}, kt in {1,2,8,32,64} and all three carry modes. The result is much
+duller than the previous sweep, which is the point -- the interesting holes it used to
+report were ones we were making ourselves.
+
+**64 holes, and 60 of them are the one real limit:** `rt*ct > 8` refused on the two
+accumulating modes. Single-shot covers those shapes by row banding, so the gap remains
+exactly hole 1 above. Of the remaining four, three are new and correct: at kt=64 the
+operands are rt*kt and kt*ct tiles, so 4x8, 8x4 and 8x8 exhaust L1 -- 512 tiles an operand
+is 1MB, and there are two of them. That is the ceiling that actually bounds kt, it is a
+chip limit rather than a library one, and the sweep now names it. The last is one transient
+"no profiler records".
+
+**Zero rate holes.** Nothing is above 2x; the worst cell anywhere is 1.41x. And the gap
+closes as the work grows:
+
+| kt=64 | ours | ttnn | ratio |
+|---|---|---|---|
+| 1x1 | 14.51 us | 10.64 us | 1.36x |
+| 1x2 | 21.19 us | 17.16 us | 1.23x |
+| 1x4 | 34.67 us | 30.75 us | 1.13x |
+| 1x8 | 61.61 us | 61.12 us | **1.01x** |
+| 8x1 | 62.98 us | 60.92 us | 1.03x |
+
+So there is no shape-dependent cliff and no arithmetic deficit: at a real projection's worth
+of work we are at parity, and the 1.2-1.4x at smaller shapes is the fixed per-pass cost the
+flash work has been chasing all along, now visible without a softmax around it. A 1x1 kt=1
+matmul at 2.23us against a 0.061us/MAC best rate is the same statement -- 36x the best
+per-MAC cost, and no implementation makes two tile-multiplies efficient. The per-MAC filter
+flagging those is a property of the filter, not a hole.
 
 ### What to test next
 
