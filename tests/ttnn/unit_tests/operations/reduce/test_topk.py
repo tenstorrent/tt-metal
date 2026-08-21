@@ -1047,3 +1047,115 @@ def test_topk_stable_index_parity(W, k, largest, device):
 
     assert_equal(golden_values, ttnn_torch_values)
     assert_equal(order, ttnn_torch_indices)
+
+
+def _stable_topk_golden(input, k, largest):
+    # torch.topk is NOT stable, so derive the golden from a stable argsort instead.
+    order = torch.argsort(input, dim=-1, descending=largest, stable=True)[..., :k]
+    values = torch.gather(input, -1, order)
+    return values, order
+
+
+@pytest.mark.parametrize("W, k", ((8192, 32),))  # multi-core band, 32-bit index CBs
+@pytest.mark.parametrize("index_dtype", (ttnn.uint32, ttnn.int32))
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_index_parity_32bit_preallocated(W, k, index_dtype, largest, device):
+    """stable=True with preallocated 32-bit index outputs must keep the torch-stable
+    tie order. Routes 32-bit index CBs through the multi-core band (W in [8192, 65535),
+    pow2, k <= 64), i.e. the comparator-stable network with UInt32 index transport."""
+    torch.manual_seed(1)
+    shape = [1, 1, 32, W]
+    # Few distinct values (negative and positive) -> many exact ties in every row.
+    input = torch.randint(-4, 4, shape).to(torch.bfloat16)
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    out_shape = shape.copy()
+    out_shape[-1] = k
+    value_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    index_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.int32), index_dtype, layout=ttnn.Layout.TILE, device=device
+    )
+
+    ttnn_values, ttnn_indices = ttnn.topk(
+        ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True, output_tensor=(value_tensor, index_tensor)
+    )
+    assert ttnn_indices.dtype == index_dtype
+
+    ttnn_torch_values = ttnn.to_torch(ttnn_values)
+    ttnn_torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64)
+
+    assert_equal(golden_values, ttnn_torch_values)
+    assert_equal(order, ttnn_torch_indices)
+
+
+@pytest.mark.parametrize("W, k", ((64, 32), (8192, 32)))
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_index_parity_float32(W, k, largest, device):
+    """stable=True with FLOAT32 values must keep the torch-stable tie order. FLOAT32
+    forces 32-bit index CBs and fp32 dest, exercising the INT32 index load/store arms
+    of the comparator-stable network (single-core at W=64; W=8192 takes whatever the
+    factory selects for fp32 in the multi-core band)."""
+    torch.manual_seed(2)
+    shape = [1, 1, 32, W]
+    # Small integers, exactly representable in fp32 -> exact ties, both signs.
+    input = torch.randint(-4, 4, shape).to(torch.float32)
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+
+    ttnn_torch_values = ttnn.to_torch(ttnn_values)
+    ttnn_torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64)
+
+    assert_equal(golden_values, ttnn_torch_values)
+    assert_equal(order, ttnn_torch_indices)
+
+
+@pytest.mark.parametrize("W, k", ((65536, 32),))
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_index_parity_wide_u32(W, k, largest, device):
+    """stable=True at W >= 65536: indices no longer fit 16 bits, so the auto-selected
+    index dtype is UINT32 and the single-core path must run the comparator-stable
+    network in 32-bit dest (INT32 index arms)."""
+    torch.manual_seed(3)
+    shape = [1, 1, 32, W]
+    input = torch.randint(-4, 4, shape).to(torch.bfloat16)
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+    assert ttnn_indices.dtype == ttnn.uint32
+
+    ttnn_torch_values = ttnn.to_torch(ttnn_values)
+    ttnn_torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64)
+
+    assert_equal(golden_values, ttnn_torch_values)
+    assert_equal(order, ttnn_torch_indices)
+
+
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_float32_signed_zero(largest, device):
+    """FLOAT32 rows mixing +0.0 and -0.0: torch treats them as one tie class (broken by
+    index); the sign-magnitude comparator must not split them into two classes."""
+    torch.manual_seed(4)
+    W, k = 64, 32
+    shape = [1, 1, 32, W]
+    input = torch.randn(shape, dtype=torch.float32)
+    # Interleave +0.0 / -0.0 across half of each row, spanning the k boundary for both
+    # directions (the rest are +/- normals).
+    input[..., 0:32:2] = 0.0
+    input[..., 1:32:2] = -0.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+
+    ttnn_torch_values = ttnn.to_torch(ttnn_values)
+    ttnn_torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64)
+
+    # torch.eq treats -0.0 == 0.0, so the values check is sign-insensitive by design.
+    assert_equal(golden_values, ttnn_torch_values)
+    assert_equal(order, ttnn_torch_indices)
