@@ -378,9 +378,12 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     }
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    // UnpackToDestFp32 unpacks c_0 straight into the fp32 DEST, bypassing the SrcA tf32 truncation.
+    // UnpackToDestFp32 unpacks c_0 (and RM cb_acc) into the fp32 DEST, bypassing SrcA tf32.
     if (fp32_sfpu_reduce) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        if (rm_path) {
+            unpack_to_dest_mode[CBIndex::c_5] = UnpackToDestMode::UnpackToDestFp32;
+        }
     }
 
     KernelDescriptor reader_desc;
