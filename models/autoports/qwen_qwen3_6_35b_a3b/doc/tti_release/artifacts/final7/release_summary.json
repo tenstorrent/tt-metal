@@ -1,0 +1,82 @@
+{
+  "model": "Qwen/Qwen3.6-35B-A3B",
+  "device": "P300X2",
+  "server_mode": "external_no_docker_autoport_vllm",
+  "service_port": 8031,
+  "readiness_status": "release-readiness-ci-subset-pass",
+  "workflow": "release",
+  "limit_samples_mode": "ci-nightly",
+  "run_completed_utc": "2026-08-21T13:26:34Z",
+  "run_rc": 0,
+  "report_regenerated_from_final7_sections": true,
+  "report_regeneration_reason": "Refresh r1_gpqa_diamond gated-dataset waiver evidence; final7 raw section data unchanged.",
+  "tti_acceptance": true,
+  "acceptance_blockers": 0,
+  "autoport_code_path": "models/autoports/qwen_qwen3_6_35b_a3b",
+  "model_impl": "qwen36-autoport",
+  "stock_impl_paths_present": false,
+  "docker_server": false,
+  "local_server": false,
+  "context": {
+    "context_contract": 262144,
+    "runtime_spec_max_context": 262144,
+    "runtime_spec_max_tokens_all_users_override": 262144,
+    "vllm_max_model_len": 262144
+  },
+  "evals": {
+    "leaderboard_ifeval": {
+      "status": "pass",
+      "score_percent": 89.28571428571429,
+      "ratio_to_reference": 0.9591332504642205,
+      "tolerance": 0.05,
+      "sample_rows": 28
+    },
+    "r1_gpqa_diamond": {
+      "status": "issue-waived",
+      "reason": "gated Hugging Face dataset Idavidrein/gpqa failed before inference",
+      "evidence": [
+        "logs/tti_release_ci_nightly_final7.log lines 123-171",
+        "https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/gpqa/README.md",
+        "https://huggingface.co/datasets/Idavidrein/gpqa",
+        "https://huggingface.co/docs/hub/en/datasets-gated"
+      ]
+    },
+    "meta_ifeval": {
+      "present_in_report": false
+    },
+    "meta_gpqa_cot": {
+      "present_in_report": false
+    }
+  },
+  "benchmarks": [
+    {
+      "isl": 128,
+      "osl": 128,
+      "concurrency": 1,
+      "completed": 1,
+      "failed": 0,
+      "mean_ttft_ms": 6132.6177,
+      "decode_throughput_tps": 9.2926,
+      "target_check": "pass"
+    },
+    {
+      "isl": 100,
+      "osl": 100,
+      "concurrency": 32,
+      "completed": 32,
+      "failed": 0,
+      "mean_ttft_ms": 150266.1268,
+      "decode_throughput_tps": 12.8211,
+      "target_check": "pass"
+    }
+  ],
+  "spec_tests": {
+    "logger_fork_safety": "pass",
+    "vllm_param_conformance": "pass",
+    "pytest_cases_passed": 22,
+    "pytest_cases_failed": 0
+  },
+  "copied_report": "reports/tti_release_final7_report.md",
+  "copied_report_data": "reports/tti_release_final7_report_data.json",
+  "copied_runtime_spec": "artifacts/final7/runtime_model_spec.json"
+}

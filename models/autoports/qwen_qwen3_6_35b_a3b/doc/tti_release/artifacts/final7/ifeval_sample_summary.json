@@ -1,0 +1,18 @@
+{
+  "task": "leaderboard_ifeval",
+  "limit_samples_mode": "ci-nightly",
+  "lm_eval_limit": 0.05,
+  "num_sample_rows": 28,
+  "prompt_level_strict_acc": 0.8928571428571429,
+  "prompt_level_loose_acc": 0.8928571428571429,
+  "inst_level_strict_acc": 0.9069767441860465,
+  "inst_level_loose_acc": 0.9302325581395349,
+  "strict_fail_doc_ids": [6, 9, 23],
+  "loose_fail_doc_ids": [6, 9, 23],
+  "empty_doc_ids": [23],
+  "prompt_char_length_min_max": [72, 399],
+  "output_char_length_min_max": [0, 6368],
+  "raw_sample_jsonl_copied": false,
+  "source_sample_jsonl": "/localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/release_cache_final7/workflow_logs/reports_output/release/Qwen3.6-35B-A3B_p300x2_release/eval_id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_release/Qwen__Qwen3.6-35B-A3B/samples_leaderboard_ifeval_2026-08-21T12-27-05.821711.jsonl",
+  "source_results_json": "artifacts/final7/leaderboard_ifeval_results_aggregate.json"
+}

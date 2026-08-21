@@ -1,0 +1,108 @@
+{
+  "model_id": "id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_smoke",
+  "impl": {
+    "impl_id": "qwen36_autoport",
+    "impl_name": "qwen36-autoport",
+    "repo_url": "https://github.com/tenstorrent/tt-metal",
+    "code_path": "models/autoports/qwen_qwen3_6_35b_a3b"
+  },
+  "hf_model_repo": "Qwen/Qwen3.6-35B-A3B",
+  "model_name": "Qwen3.6-35B-A3B",
+  "inference_engine": "vLLM",
+  "device_type": "P300X2",
+  "device_model_spec": {
+    "device": "P300X2",
+    "max_concurrency": 32,
+    "max_context": 262144,
+    "max_tokens_all_users_override": 262144,
+    "perf_targets_map": {},
+    "default_impl": true,
+    "perf_reference": [
+      {
+        "isl": 8,
+        "osl": 8,
+        "max_concurrency": 1,
+        "num_prompts": 1,
+        "task_type": "text",
+        "targets": {
+          "target": {
+            "ttft_ms": 30000.0,
+            "tput_user": 1.0,
+            "tput": 1.0,
+            "tolerance": 0.5
+          }
+        }
+      }
+    ],
+    "vllm_args": {
+      "block_size": "32",
+      "max_model_len": "262144",
+      "max_num_seqs": "32",
+      "max_num_batched_tokens": "262144",
+      "async_scheduling": true,
+      "enable_auto_tool_choice": true,
+      "reasoning_parser": "qwen3",
+      "tool_call_parser": "qwen3_coder",
+      "served_model_name": "Qwen/Qwen3.6-35B-A3B"
+    },
+    "override_tt_config": {
+      "sample_on_device_mode": "all",
+      "trace_region_size": 384000000,
+      "fabric_config": "FABRIC_1D_RING"
+    },
+    "env_vars": {
+      "HF_MODEL": "Qwen/Qwen3.6-35B-A3B",
+      "MESH_DEVICE": "P300x2",
+      "TT_QWEN35_TEXT_VER": "qwen36_autoport"
+    },
+    "tensor_cache_timeout": 2400.0,
+    "known_issues": [],
+    "eval_max_retries": 1
+  },
+  "system_requirements": null,
+  "env_vars": {
+    "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1"
+  },
+  "tt_metal_commit": "f2bdeec2f41255c106b859601e094ad2cfa9ecca",
+  "vllm_commit": "b2d90800d77ba04a54462dad1384641d17e1db47",
+  "hf_weights_repo": "Qwen/Qwen3.6-35B-A3B",
+  "param_count": 35,
+  "min_disk_gb": 90,
+  "min_ram_gb": 88,
+  "model_type": "LLM",
+  "repacked": 0,
+  "version": null,
+  "docker_image": null,
+  "status": "EXPERIMENTAL",
+  "code_link": null,
+  "override_tt_config": {},
+  "supported_modalities": [
+    "text"
+  ],
+  "uses_tensor_model_cache": true,
+  "has_builtin_warmup": true,
+  "metadata": {
+    "tti_version": "0.19.0",
+    "tti_sha": "872bbdf6563db2c66c4cff7a37b10df218a9b406",
+    "autoport_dir": "models/autoports/qwen_qwen3_6_35b_a3b",
+    "context_contract": "models/autoports/qwen_qwen3_6_35b_a3b/doc/context_contract.json",
+    "optimized_vllm_evidence": "models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_vllm/",
+    "server_mode": "external_no_docker_autoport_vllm",
+    "service_port": "8031",
+    "prompt_format": "openai_chat_completions",
+    "reasoning_parser_name": "qwen3",
+    "tool_call_parser_name": "qwen3_coder"
+  },
+  "cli_args": {
+    "model": "Qwen3.6-35B-A3B",
+    "workflow": "benchmarks",
+    "device": "p300x2",
+    "tt_device": "p300x2",
+    "docker_server": false,
+    "local_server": false,
+    "server_url": null,
+    "service_port": "8031",
+    "disable_trace_capture": true,
+    "runtime_model_spec_json": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/tti_release/specs/qwen36_35b_a3b_autoport_smoke_runtime_spec.json"
+  }
+}

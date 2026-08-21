@@ -1,0 +1,4 @@
+chat_http_code=200
+choices=1
+prompt_tokens=19
+completion_tokens=8

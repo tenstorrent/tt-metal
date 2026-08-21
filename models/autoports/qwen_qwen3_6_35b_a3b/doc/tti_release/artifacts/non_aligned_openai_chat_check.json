@@ -1,0 +1,36 @@
+{
+  "model": "Qwen/Qwen3.6-35B-A3B",
+  "endpoint": "http://127.0.0.1:8031/v1/chat/completions",
+  "tokenizer_class": "Qwen2Tokenizer",
+  "chat_template_present": true,
+  "prompt_token_length": 33,
+  "prompt_token_length_source": "len(tokenizer.apply_chat_template(...).input_ids)",
+  "divisible_by_32": false,
+  "divisible_by_64": false,
+  "divisible_by_128": false,
+  "http_status": 200,
+  "choices": 1,
+  "usage": {
+    "prompt_tokens": 33,
+    "total_tokens": 41,
+    "completion_tokens": 8,
+    "prompt_tokens_details": null
+  },
+  "request": {
+    "model": "Qwen/Qwen3.6-35B-A3B",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a precise release smoke checker."
+      },
+      {
+        "role": "user",
+        "content": "Give a short answer about non aligned prompt handling."
+      }
+    ],
+    "max_tokens": 8,
+    "temperature": 0.0,
+    "stream": false
+  },
+  "response_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/tti_release/artifacts/non_aligned_openai_chat_response.json"
+}

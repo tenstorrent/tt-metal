@@ -1,0 +1,266 @@
+usage: run.py [-h] [--model MODEL] --workflow
+              {stress_tests,agentic_traces,evals,agentic,serving_bench,benchmarks,server,prefill_decode,release,spec_tests}
+              [--tt-device {super_cluster,n150,cpu,gpu,p100,blackhole_galaxy,n300,galaxy_t3k,p150x8,p150,n150x4,p150x4,e150,p300,quad_galaxy,galaxy,dual_galaxy,p300x2,t3k}]
+              [--impl {tt-transformers,qwen3-32b-galaxy,llama3-70b-galaxy,qwen36-blackhole,tt-vllm-plugin,forge-vllm-plugin,gpt-oss,whisper,deepseek-r1-galaxy,speecht5-tts}]
+              [--engine {forge,vllm,media}] [--local-server] [--docker-server]
+              [-it] [--workflow-args WORKFLOW_ARGS]
+              [--service-port SERVICE_PORT] [--server-url SERVER_URL]
+              [--bind-host BIND_HOST] [--disable-trace-capture]
+              [--disable-metal-timeout] [--percentile-report] [--dev-mode]
+              [--override-docker-image OVERRIDE_DOCKER_IMAGE]
+              [--device-id DEVICE_ID]
+              [--override-tt-config OVERRIDE_TT_CONFIG]
+              [--vllm-override-args VLLM_OVERRIDE_ARGS] [--reset-venvs]
+              [--runtime-model-spec-json RUNTIME_MODEL_SPEC_JSON]
+              [--tt-metal-python-venv-dir TT_METAL_PYTHON_VENV_DIR]
+              [--tt-metal-home TT_METAL_HOME] [--vllm-dir VLLM_DIR]
+              [--limit-samples-mode LIMIT_SAMPLES_MODE]
+              [--eval-samples EVAL_SAMPLES] [--skip-system-sw-validation]
+              [--ci-mode] [--streaming STREAMING]
+              [--preprocessing PREPROCESSING]
+              [--sdxl_num_prompts SDXL_NUM_PROMPTS]
+              [--tools {vllm,genai,aiperf,guidellm}] [--goodput SLO]
+              [--no-auth] [--concurrency-sweeps] [--print-docker-cmd]
+              [--host-volume [HOST_VOLUME]] [--host-hf-cache [HOST_HF_CACHE]]
+              [--host-weights-dir HOST_WEIGHTS_DIR] [--image-user IMAGE_USER]
+              [--markers MARKERS [MARKERS ...]] [--match-all-markers]
+              [--exclude-markers EXCLUDE_MARKERS [EXCLUDE_MARKERS ...]]
+              [--model-category MODEL_CATEGORY [MODEL_CATEGORY ...]]
+              [--suite-category SUITE_CATEGORY] [--test-name TEST_NAME]
+              [--skip-prerequisites] [--list-tests]
+              [--serving-bench-suites SERVING_BENCH_SUITES]
+              [--served-model SERVED_MODEL] [--agentic-traces]
+              [--agentic-traces-mode {full,ci}]
+              [--agentic-traces-sources AGENTIC_TRACES_SOURCES]
+              [--agentic-traces-duration SECONDS]
+              [--agentic-traces-git-ref REF]
+              [--agentic-traces-metrics-url URL] [--prefix-cache]
+              [--prefix-cache-preset {ci,full,highcache_50k}]
+              [--prefix-cache-scenarios PREFIX_CACHE_SCENARIOS]
+              [--prefix-cache-arrival {constant,poisson,gamma}]
+              [--prefix-cache-request-rate PREFIX_CACHE_REQUEST_RATE]
+              [--prefix-cache-scenarios-json PREFIX_CACHE_SCENARIOS_JSON]
+              [--prefix-cache-trace PREFIX_CACHE_TRACE]
+              [--prefix-cache-goodput SLO] [--prefix-cache-metrics-url URL]
+              [--jwt-secret JWT_SECRET] [--spec-decode]
+              [--spec-decode-preset {ci,full}]
+              [--spec-decode-warmup-requests SPEC_DECODE_WARMUP_REQUESTS]
+
+A CLI for running workflows with optional docker, device, and workflow-args.
+
+options:
+  -h, --help            show this help message and exit
+  --model MODEL         Model to run. Required for every workflow except prefill_decode, which serves a mock stack chosen by --served-model and only needs a placeholder spec (auto-picked when --model is omitted).
+  --workflow {stress_tests,agentic_traces,evals,agentic,serving_bench,benchmarks,server,prefill_decode,release,spec_tests}
+                        Workflow to run (choices: stress_tests, agentic_traces, evals, agentic, serving_bench, benchmarks, server, prefill_decode, release, spec_tests)
+  --tt-device {super_cluster,n150,cpu,gpu,p100,blackhole_galaxy,n300,galaxy_t3k,p150x8,p150,n150x4,p150x4,e150,p300,quad_galaxy,galaxy,dual_galaxy,p300x2,t3k}
+                        Tenstorrent device option (choices: super_cluster, n150, cpu, gpu, p100, blackhole_galaxy, n300, galaxy_t3k, p150x8, p150, n150x4, p150x4, e150, p300, quad_galaxy, galaxy, dual_galaxy, p300x2, t3k). Defaults to the largest supported device available on the host.
+  --impl {tt-transformers,qwen3-32b-galaxy,llama3-70b-galaxy,qwen36-blackhole,tt-vllm-plugin,forge-vllm-plugin,gpt-oss,whisper,deepseek-r1-galaxy,speecht5-tts}
+                        Implementation option (choices: tt-transformers, qwen3-32b-galaxy, llama3-70b-galaxy, qwen36-blackhole, tt-vllm-plugin, forge-vllm-plugin, gpt-oss, whisper, deepseek-r1-galaxy, speecht5-tts)
+  --engine {forge,vllm,media}
+                        Inference engine override (choices: forge, vllm, media). Defaults to the model spec default inference_engine.
+  --local-server        Run inference server on localhost
+  --docker-server       Run inference server in Docker container
+  -it, --interactive    Run docker in interactive mode
+  --workflow-args WORKFLOW_ARGS
+                        Additional workflow arguments (e.g., 'param1=value1 param2=value2')
+  --service-port SERVICE_PORT
+                        SERVICE_PORT
+  --server-url SERVER_URL
+                        Base URL of an already-running inference server to target (e.g. 'http://192.168.1.10'). Overrides the default http://127.0.0.1. Use together with --service-port when not using --docker-server or --local-server.
+  --bind-host BIND_HOST
+                        Host interface to bind published docker service port to (default: 0.0.0.0)
+  --disable-trace-capture
+                        Disables trace capture requests, use to speed up execution if inference server already runnning and traces captured.
+  --disable-metal-timeout
+                        Disable tt-metal operation timeout and auto-triage on hang.
+  --percentile-report   Generate detailed percentile reports for stress tests (includes p05, p25, p50, p95, p99 for TTFT, TPOT, ITL, E2EL)
+  --dev-mode            Resolve the model spec from the dev catalog (workflows/model_specs/dev/) and forward it into the Docker container, overriding its prebuilt prod catalog. Also bind-mounts host source dirs (reference_config/, utils/, tests/, plus vllm-tt-metal/src or tt-media-server/) so live host edits are picked up. Has no effect when --runtime-model-spec-json is given.
+  --override-docker-image OVERRIDE_DOCKER_IMAGE
+                        Override the Docker image used by --docker-server, ignoring the model config
+  --device-id DEVICE_ID
+                        Tenstorrent device IDs, integer or comma-separated list of non-negative PCI indices (e.g. '0' for /dev/tenstorrent/0)
+  --override-tt-config OVERRIDE_TT_CONFIG
+                        Override TT config as JSON string (e.g., '{"data_parallel": 16}')
+  --vllm-override-args VLLM_OVERRIDE_ARGS
+                        Override vLLM arguments as JSON string (e.g., '{"max_model_len": 4096, "enable_chunked_prefill": true}')
+  --reset-venvs         If there are Python dependency issues, remove .workflow_venvs/ directory so it can be automatically recreated.
+  --runtime-model-spec-json RUNTIME_MODEL_SPEC_JSON
+                        Use runtime model specification from JSON file
+  --tt-metal-python-venv-dir TT_METAL_PYTHON_VENV_DIR
+                        [for --local-server] TT-Metal python venv directory, PYTHON_ENV_DIR in tt-metal usage, must be pre-built with python_env setup and vLLM installed.
+  --tt-metal-home TT_METAL_HOME
+                        [for --local-server] Host path to a built tt-metal repo containing python_env/ and build/lib/. Defaults to TT_METAL_HOME from the environment when set.
+  --vllm-dir VLLM_DIR   [for --local-server] Host path to the vLLM source tree to export as vllm_dir and append to PYTHONPATH. Defaults to vllm_dir from the environment when set, otherwise tt-metal-home/vllm.
+  --limit-samples-mode LIMIT_SAMPLES_MODE
+                        Predefined eval dataset limit mappings: ['ci-nightly', 'ci-long', 'ci-commit', 'smoke-test']
+  --eval-samples EVAL_SAMPLES
+                        Per-task doc_id filter passed to lm-eval as --samples. Accepts a JSON string '{"task_name": [int, ...]}' or a path to a JSON file. Indices are zero-based. Mutually exclusive with --limit-samples-mode. Text/LLM evals only.
+  --skip-system-sw-validation
+                        Skips the system software validation step (no tt-smi or tt-topology verification)
+  --ci-mode             Enables CI-mode, which indirectly sets other flags to facilitate CI environments
+  --streaming STREAMING
+                        Enable or disable streaming for evals and benchmarks (true/false). Default is false.
+  --preprocessing PREPROCESSING
+                        Enable or disable preprocessing for evals and benchmarks (true/false). Default is false.
+  --sdxl_num_prompts SDXL_NUM_PROMPTS
+                        Number of prompts to use for SDXL (default: 1)
+  --tools {vllm,genai,aiperf,guidellm}
+                        Benchmarking tool to use: 'vllm' for vLLM benchmark_serving.py (default), 'genai' for genai-perf (Triton SDK), 'aiperf' for AIPerf (https://github.com/ai-dynamo/aiperf), 'guidellm' for GuideLLM (https://github.com/vllm-project/guidellm).
+  --goodput SLO         AIPerf --goodput SLO string applied to the LLM benchmark sweep (--workflow benchmarks --tools aiperf): space-separated KEY:VALUE pairs where KEY is a metric tag and VALUE is in the metric's display unit. Reports the fraction of requests meeting every threshold. Valid tags include time_to_first_token (ms), request_latency (ms), inter_token_latency (ms), output_token_throughput_per_user (tokens/s). Only used by the 'aiperf' tool; ignored by vllm/genai/guidellm. Example: 'time_to_first_token:4000 output_token_throughput_per_user:45'.
+  --no-auth             Disable vLLM API key authorization in the server (skips JWT_SECRET requirement)
+  --concurrency-sweeps  Expand benchmark sweep concurrencies to powers-of-2 up to model max.
+  --print-docker-cmd    Print simplified Docker run command and exit (does not start server)
+  --host-volume [HOST_VOLUME]
+                        Host directory for persistent cache/log/tensor storage. If the flag is given without a path, defaults to persistent_volume/ in the repo root. For --docker-server, omitting it uses a Docker named volume. For --local-server, omitting it still uses the repo persistent_volume/ path.
+  --host-hf-cache [HOST_HF_CACHE]
+                        Host HuggingFace cache directory to reuse for model weights. If the flag is given without a path, defaults to HOST_HF_HOME, then HF_HOME, then ~/.cache/huggingface. For --local-server, tensor cache/logs still use the host volume path.
+  --host-weights-dir HOST_WEIGHTS_DIR
+                        Host directory containing pre-downloaded model weights. For --local-server, tensor cache/logs still use the host volume path.
+  --image-user IMAGE_USER
+                        UID to pass to docker run --user (default: 1000). Set to match the UID the image was built with. Default release images use UID 1000. Override only when using a custom image built with a different UID.
+
+SPEC_TESTS workflow:
+  Arguments for --workflow spec_tests (server tests with marker-based filtering)
+
+  --markers MARKERS [MARKERS ...]
+                        Filter tests by markers (e.g., load smoke fast)
+  --match-all-markers   Require ALL markers to match (default: ANY marker matches)
+  --exclude-markers EXCLUDE_MARKERS [EXCLUDE_MARKERS ...]
+                        Exclude tests with these markers (e.g., slow heavy)
+  --model-category MODEL_CATEGORY [MODEL_CATEGORY ...]
+                        Filter by model category (CNN, EMBEDDING)
+  --suite-category SUITE_CATEGORY
+                        Load suites for a specific category (e.g., cnn, embedding)
+  --test-name TEST_NAME
+                        Filter by specific test class name (e.g., CnnLoadTest)
+  --skip-prerequisites  Skip prerequisite tests (DeviceLivenessTest)
+  --list-tests          List matching tests without running them (dry-run)
+
+serving_bench workflow:
+  Arguments for --workflow serving_bench (shell benchmark suites against a running server, routed to the workflow engine)
+
+  --serving-bench-suites SERVING_BENCH_SUITES
+                        Comma-separated serving-bench suites to run (default: all suites under test_module/serving_bench, e.g. agentic_bench, benchmark). Suite knobs (DURATION, TARGET_CONCURRENCY, ...) are read from the environment; --limit-samples-mode selects a knob preset.
+
+prefill_decode workflow:
+  Arguments for --workflow prefill_decode (brings up the disaggregated mock stack and runs the smoke suite)
+
+  --served-model SERVED_MODEL
+                        HF repo id the prefill_decode mock stack should serve, e.g. moonshotai/Kimi-K2.6. Must have a tokenizer dir under tt-media-server/cpp_server/tokenizers/. Overrides the model derived from --model; lets you serve a model with no catalog entry. Defaults to the --model's HF repo, then run_stack.sh's built-in default.
+
+Agentic-traces benchmark:
+  Arguments for --workflow agentic_traces, and --workflow release --agentic-traces (routed to the workflow engine)
+
+  --agentic-traces      Add the agentic trace replay to --workflow release, as a child alongside evals/benchmarks/spec_tests, so its Blocks land in the same release report. Opt-in because a full-mode run adds roughly an hour of profiling per configured run on top of the rest of the release. Requires --workflow release; use --workflow agentic_traces to run it on its own.
+  --agentic-traces-mode {full,ci}
+                        Duration profile for the agentic-traces runs (default: full). 'full' is the reference run used for reportable numbers; 'ci' is the shortest run the InferenceX scenario permits (900s of profiling). Per-mode durations come from the model's entry in reference_config/agentic_traces/.
+  --agentic-traces-sources AGENTIC_TRACES_SOURCES
+                        Comma-separated trace sources to run (inferencex_agentx, swarmone). When unset, runs every source configured for the model. swarmone has no client integration yet and fails fast if selected.
+  --agentic-traces-duration SECONDS
+                        Override the mode's profiling duration. The InferenceX scenario rejects anything below 900s.
+  --agentic-traces-git-ref REF
+                        Override the InferenceX revision cloned into the AGENTIC_TRACES venv. Defaults to the ref pinned for the ModelSpec; results are only comparable across runs on the same ref.
+  --agentic-traces-metrics-url URL
+                        Extra Prometheus /metrics endpoint holding the prefix-cache counters, for a deployment whose load target does not expose them (e.g. the cpp_server worker(s) behind a Dynamo frontend). AIPerf scrapes the load target regardless. Accepts a URL, host:port, or host:port/metrics; repeatable.
+
+Prefix-cache benchmark:
+  Arguments for --workflow benchmarks --prefix-cache (routed to the workflow engine)
+
+  --prefix-cache        Switch --workflow benchmarks to the AIPerf prefix-caching scenario sweep. Routes the run through the workflow engine. Requires --workflow benchmarks.
+  --prefix-cache-preset {ci,full,highcache_50k}
+                        Preset for --prefix-cache (default: full). 'ci' is a short regression sweep; 'highcache_50k' simulates the customer trillion-scale shape (50K shared/cacheable prefix + 5K new ISL + 500 OSL at concurrency 32, ~90.9% steady-state hit-rate) with a matched zero-prefix baseline for TTFT-uplift comparison.
+  --prefix-cache-scenarios PREFIX_CACHE_SCENARIOS
+                        Comma-separated subset of prefix-cache scenarios (shared_system, prefix_pool, multi_turn, baseline, mooncake_trace). When unset, runs every scenario from the preset.
+  --prefix-cache-arrival {constant,poisson,gamma}
+                        Override the arrival pattern for every prefix-cache run.
+  --prefix-cache-request-rate PREFIX_CACHE_REQUEST_RATE
+                        Override the target request rate (req/s) for every prefix-cache run.
+  --prefix-cache-scenarios-json PREFIX_CACHE_SCENARIOS_JSON
+                        Path to a custom prefix-cache scenarios JSON file.
+  --prefix-cache-trace PREFIX_CACHE_TRACE
+                        Path to a mooncake-format JSONL trace file for mooncake_trace scenarios.
+  --prefix-cache-goodput SLO
+                        AIPerf --goodput SLO string: space-separated KEY:VALUE pairs (metric tag : value in display unit). Reports requests/sec meeting every threshold. Tags include time_to_first_token (ms), request_latency (ms), inter_token_latency (ms), output_token_throughput_per_user (tokens/s). Overrides the preset/scenario goodput. Example: 'time_to_first_token:4000 output_token_throughput_per_user:45'.
+  --prefix-cache-metrics-url URL
+                        Worker /metrics endpoint with the tt_prefix_cache_* counters, forwarded to AIPerf as --server-metrics (load stays on the frontend). Accepts a full URL, host:port, or host:port/metrics. Repeatable for multi-worker deployments. Without it the scrape hits the prefix-unaware frontend and hit-rate is null.
+  --jwt-secret JWT_SECRET
+                        JWT secret for prefix-cache / spec-decode runs that hit an inference server behind JWT auth. Reads $JWT_SECRET when omitted.
+
+Speculative-decoding benchmark:
+  Arguments for --workflow benchmarks --spec-decode (routed to the workflow engine)
+
+  --spec-decode         Switch --workflow benchmarks to the AIPerf speculative-decoding sweep over SPEED-Bench. Scrapes the vLLM vllm:spec_decode_* counters per run for acceptance rate / mean accepted length. The server's speculative_config is out of scope and must be set by whoever launched it. Routes the run through the workflow engine. Requires --workflow benchmarks.
+  --spec-decode-preset {ci,full}
+                        Preset for --spec-decode (default: full). 'ci' is a short regression sweep.
+  --spec-decode-warmup-requests SPEC_DECODE_WARMUP_REQUESTS
+                        Short chat-completion warmup requests sent before the spec-decode sweep (default: 4; 0 disables).
+
+Available models:
+  Qwen-Image
+  Qwen3-Embedding-4B
+  Qwen2.5-72B-Instruct
+  gpt-oss-120b
+  AFM-4.5B
+  Llama-3.2-11B-Vision-Instruct
+  Z-Image-Turbo
+  Llama-3.1-70B-Instruct
+  efficientnet
+  Llama-3.2-1B-Instruct
+  Llama-3.1-8B
+  mobilenetv2
+  QwQ-32B
+  Qwen2.5-72B
+  whisper-large-v3
+  segformer
+  Qwen3-32B
+  Llama-3.1-8B-Instruct
+  vit
+  gpt-oss-20b
+  Qwen3-4B
+  Qwen2.5-VL-7B-Instruct
+  DeepSeek-R1-0528
+  stable-diffusion-xl-1.0-inpainting-0.1
+  speecht5_tts
+  gemma-3-4b-it
+  Qwen2.5-7B
+  gemma-4-31B-it
+  Qwen3-Embedding-8B
+  bge-large-en-v1.5
+  Llama-3.1-70B
+  DeepSeek-R1-Distill-Llama-70B
+  Falcon3-7B-Instruct
+  resnet-50
+  Qwen-Image-2512
+  gemma-3-1b-it
+  distil-large-v3
+  Qwen3.6-27B
+  Qwen2.5-VL-32B-Instruct
+  Qwen2.5-VL-72B-Instruct
+  mochi-1-preview
+  Motif-Image-6B-Preview
+  vovnet
+  unet
+  medgemma-27b-it
+  Wan2.2-T2V-A14B-Diffusers
+  stable-diffusion-xl-base-1.0-img-2-img
+  Llama-3.2-90B-Vision-Instruct
+  FLUX.1-dev
+  Llama-3.2-1B
+  Qwen2.5-7B-Instruct
+  Llama-3.2-11B-Vision
+  Mistral-7B-Instruct-v0.3
+  Llama-3.2-90B-Vision
+  gemma-3-27b-it
+  stable-diffusion-xl-base-1.0
+  stable-diffusion-3.5-large
+  medgemma-4b-it
+  Qwen3-VL-32B-Instruct
+  Llama-3.2-3B-Instruct
+  FLUX.1-schnell
+  Qwen2.5-Coder-32B-Instruct
+  Qwen2.5-VL-3B-Instruct
+  Llama-3.3-70B-Instruct
+  Llama-3.2-3B
+  Qwen3-8B
+  yolox_nano

@@ -1,0 +1,132 @@
+No validation is done, loading runtime model spec from JSON: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/tti_release/specs/qwen36_35b_a3b_autoport_smoke_runtime_spec.json
+2026-08-20 19:09:44,946 - run.py:1031 - INFO: TT-Inference version: 0.19.0
+2026-08-20 19:09:44,946 - run.py:1032 - INFO: TT-Inference SHA: 872bbdf6563d
+2026-08-20 19:09:44,946 - run.py:1033 - INFO:
+============================================================
+tt-inference-server run.py CLI args summary
+============================================================
+
+Model Options:
+  model:                      Qwen3.6-35B-A3B
+  device:                     p300x2
+  impl:                       None
+  engine:                     None
+  workflow:                   benchmarks
+  tools:                      vllm
+
+Optional args:
+  dev_mode:                   False
+  docker_server:              False
+  local_server:               False
+  no_auth:                    True
+  tt_metal_python_venv_dir:   None
+  tt_metal_home:              /localdev/vkovacevic/tt-metal
+  vllm_dir:                   /localdev/vkovacevic/vllm
+  service_port:               8031
+  bind_host:                  0.0.0.0
+  docker_override_image:      None
+  docker_interactive:         False
+  device_id:                  None
+  disable_trace_capture:      True
+  override_tt_config:         None
+  vllm_override_args:         None
+  workflow_args:              None
+  limit_samples_mode:         None
+  eval_samples:               None
+  skip_system_sw_validation:  True
+
+Host Storage Options:
+  host_volume:                None
+  host_hf_cache:              None
+  host_weights_dir:           None
+  image_user:                 1000
+
+============================================================
+2026-08-20 19:09:44,946 - run.py:1039 - INFO: Runtime model spec saved to: /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/smoke_cache_retry/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-20_19-09-44_id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_smoke_FLyuMV8w.json
+2026-08-20 19:09:44,946 - validate_setup.py:296 - INFO: Starting local setup validation
+2026-08-20 19:09:44,946 - validate_setup.py:332 - INFO: ✅ validating local setup completed
+2026-08-20 19:09:44,946 - run.py:1153 - INFO: Model Qwen3.6-35B-A3B (model_type=LLM) routes through the workflow engine.
+2026-08-20 19:09:44,947 - runner.py:31 - INFO: → command=benchmarks
+2026-08-20 19:09:44,947 - utils.py:272 - INFO: Running command: /localdev/vkovacevic/tt-metal/python_env/bin/python3 /localdev/vkovacevic/tt-inference-server/launchers/run_llm_bench.py --model Qwen3.6-35B-A3B --workflow benchmarks --device p300x2 --service-port 8031 --runtime-model-spec-json /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/smoke_cache_retry/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-20_19-09-44_id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_smoke_FLyuMV8w.json --output-dir /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/smoke_cache_retry/workflow_logs/reports_output/benchmarks --tools vllm
+2026-08-20 19:09:44,971 [INFO] run_log: sub-dir already exists for llm_vllm: /localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/artifacts
+2026-08-20 19:09:44,971 [INFO] run_log: Running command: /localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/python --index-strategy unsafe-best-match --override /localdev/vkovacevic/tt-inference-server/requirements/llm-vllm-overrides.txt -r /localdev/vkovacevic/tt-inference-server/requirements/llm-vllm.txt
+2026-08-20 19:09:44,974 [INFO] run_log: Using Python 3.11.16 environment at: .workflow_venvs/.venv_llm_vllm
+2026-08-20 19:09:44,981 [INFO] run_log: Checked 7 packages in 6ms
+2026-08-20 19:09:44,981 [INFO] tt_llm_bench_launcher: Launching run_workflows.py for --tools vllm inside venv: /localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/python
+2026-08-20 19:09:45,134 [INFO] workflow_module.runner: → command=workflow
+2026-08-20 19:09:45,134 [INFO] workflow.benchmarks: === Workflow start: benchmarks | model=Qwen3.6-35B-A3B device=P300X2 port=8031 output=/localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/smoke_cache_retry/workflow_logs/reports_output/benchmarks/Qwen3.6-35B-A3B_p300x2_benchmarks ===
+2026-08-20 19:09:45,151 [INFO] workflow.benchmarks: → task=llm_benchmark tools=vllm
+2026-08-20 19:09:45,153 [INFO] test_module.llm_tests.llm_benchmark_tests: Running LLM benchmark: tool=vllm over 1 sweep point(s)
+2026-08-20 19:09:45,153 [INFO] llm_module.server_control: Waiting for inference server at http://127.0.0.1:8031/health (timeout 1200s)
+2026-08-20 19:09:45,155 [INFO] llm_module.server_control: ✅ Inference server is healthy at http://127.0.0.1:8031/health
+2026-08-20 19:09:45,155 [INFO] llm_module.runner: Running vllm sweep point 1/1  isl=8 osl=8 max_conc=1 n=1
+2026-08-20 19:09:45,155 [INFO] llm_module.drivers._subprocess: Executing: /localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model Qwen/Qwen3.6-35B-A3B --dataset-name random --max-concurrency 1 --num-prompts 1 --random-input-len 8 --random-output-len 8 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/smoke_cache_retry/workflow_logs/reports_output/benchmarks/Qwen3.6-35B-A3B_p300x2_benchmarks/llm/benchmark_Qwen__Qwen3.6-35B-A3B_2026-08-20_19-09-45_isl-8_osl-8_maxcon-1_n-1.json --host 127.0.0.1 --port 8031 --extra-body {"truncate_prompt_tokens": "8"} --header Accept-Encoding=identity
+INFO 08-20 19:09:51 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-20 19:09:51 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 08-20 19:09:51 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 08-20 19:09:53 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x78137e9bf4c0>, seed=0, num_prompts=1, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=8, random_output_len=8, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url=None, host='127.0.0.1', port=8031, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='Qwen/Qwen3.6-35B-A3B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=False, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/smoke_cache_retry/workflow_logs/reports_output/benchmarks/Qwen3.6-35B-A3B_p300x2_benchmarks/llm/benchmark_Qwen__Qwen3.6-35B-A3B_2026-08-20_19-09-45_isl-8_osl-8_maxcon-1_n-1.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-95d6e316-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=600, extra_body={'truncate_prompt_tokens': '8'})
+INFO 08-20 19:09:54 [datasets.py:612] Sampling input_len from [8, 8] and output_len from [8, 8]
+Starting initial single prompt test run...
+
+Waiting for endpoint to become up in 600 seconds
+|          | 00:00 elapsed, ? remaining
+|          | 00:00 elapsed, 00:08 remaining
+|          | 00:02 elapsed, 707:55:16 remaining
+Initial test run completed.
+
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/1 [00:00<?, ?it/s]
+100%|██████████| 1/1 [00:01<00:00,  1.86s/it]
+100%|██████████| 1/1 [00:01<00:00,  1.86s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     1
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  1.86
+Total input tokens:                      8
+Total generated tokens:                  8
+Request throughput (req/s):              0.54
+Output token throughput (tok/s):         4.30
+Peak output token throughput (tok/s):    9.00
+Peak concurrent requests:                1.00
+Total token throughput (tok/s):          8.61
+---------------Time to First Token----------------
+Mean TTFT (ms):                          1097.63
+Median TTFT (ms):                        1097.63
+P99 TTFT (ms):                           1097.63
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          108.76
+Median TPOT (ms):                        108.76
+P99 TPOT (ms):                           108.76
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           95.16
+Median ITL (ms):                         57.27
+P99 ITL (ms):                            444.17
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          1858.94
+Median E2EL (ms):                        1858.94
+P99 E2EL (ms):                           1858.94
+==================================================
+2026-08-20 19:09:58,739 [INFO] test_module.llm_tests.llm_performance_tests: LLM sweep produced 1 Block(s) over 1 sweep point(s)
+2026-08-20 19:09:58,739 [INFO] workflow_module.blocks_sink: BlockAccumulator: +1 block(s), total=1
+2026-08-20 19:09:58,739 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=Qwen__Qwen3.6-35B-A3B_P300X2 targets={'tool': 'vllm', 'model': 'Qwen/Qwen3.6-35B-A3B', 'device': 'P300X2', 'timestamp': '2026-08-20 19:09:58'}
+2026-08-20 19:09:58,739 [INFO] workflow.benchmarks: ✅ task=llm_benchmark blocks=1 kind=benchmarks (13.6s)
+2026-08-20 19:09:58,739 [INFO] workflow.benchmarks: Acceptance: PASS (0 blocker(s))
+2026-08-20 19:09:58,740 [INFO] report_module.report_file_saver: Saved markdown to: /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/smoke_cache_retry/workflow_logs/reports_output/benchmarks/report_Qwen__Qwen3.6-35B-A3B_2026-08-20T190958+0000.md
+2026-08-20 19:09:58,740 [INFO] report_module.report_file_saver: Saved JSON to: /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/smoke_cache_retry/workflow_logs/reports_output/benchmarks/data/report_data_Qwen__Qwen3.6-35B-A3B_2026-08-20T190958+0000.json
+2026-08-20 19:09:58,740 [INFO] report_module.report_file_saver: Saved JSON to: /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/smoke_cache_retry/workflow_logs/reports_output/benchmarks/data/report_data_Qwen__Qwen3.6-35B-A3B_2026-08-20T190958+0000.json
+2026-08-20 19:09:58,740 [INFO] report_module.generator: Generated report: md=/localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/smoke_cache_retry/workflow_logs/reports_output/benchmarks/report_Qwen__Qwen3.6-35B-A3B_2026-08-20T190958+0000.md, json=/localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/smoke_cache_retry/workflow_logs/reports_output/benchmarks/data/report_data_Qwen__Qwen3.6-35B-A3B_2026-08-20T190958+0000.json
+2026-08-20 19:09:58,740 [INFO] workflow.benchmarks: Wrote markdown: /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/smoke_cache_retry/workflow_logs/reports_output/benchmarks/report_Qwen__Qwen3.6-35B-A3B_2026-08-20T190958+0000.md
+2026-08-20 19:09:58,740 [INFO] workflow.benchmarks: Wrote json:     /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/smoke_cache_retry/workflow_logs/reports_output/benchmarks/data/report_data_Qwen__Qwen3.6-35B-A3B_2026-08-20T190958+0000.json
+2026-08-20 19:09:58,740 [INFO] workflow.benchmarks: === Workflow done: benchmarks (rc=0) ===
+2026-08-20 19:09:58,740 [INFO] workflow_module.runner: ✅ command=workflow rc=0
+2026-08-20 19:09:58,764 - runner.py:42 - INFO: ✅ command=benchmarks rc=0
+2026-08-20 19:09:58,764 - run.py:1172 - INFO: Completed run.py.
+2026-08-20 19:09:58,764 - run.py:1178 - INFO: The output of the workflows is not checked and any errors will be in the logs above and in the saved log file.
+2026-08-20 19:09:58,764 - run.py:1182 - INFO: If you encounter any issues please share the log file in a GitHub issue and server log if available.
+2026-08-20 19:09:58,764 - run.py:1186 - INFO: This log file is saved on local machine at: /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/smoke_cache_retry/workflow_logs/run_logs/run_2026-08-20_19-09-44_id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_smoke_benchmarks_4YN99GOg.log

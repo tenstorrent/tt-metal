@@ -1,0 +1,189 @@
+No validation is done, loading runtime model spec from JSON: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/tti_release/specs/qwen36_35b_a3b_autoport_release_runtime_spec.json
+2026-08-21 05:41:24,017 - run.py:1031 - INFO: TT-Inference version: 0.19.0
+2026-08-21 05:41:24,017 - run.py:1032 - INFO: TT-Inference SHA: 872bbdf6563d
+2026-08-21 05:41:24,017 - run.py:1033 - INFO:
+============================================================
+tt-inference-server run.py CLI args summary
+============================================================
+
+Model Options:
+  model:                      Qwen3.6-35B-A3B
+  device:                     p300x2
+  impl:                       None
+  engine:                     None
+  workflow:                   evals
+  tools:                      vllm
+
+Optional args:
+  dev_mode:                   False
+  docker_server:              False
+  local_server:               False
+  no_auth:                    True
+  tt_metal_python_venv_dir:   None
+  tt_metal_home:              /localdev/vkovacevic/tt-metal
+  vllm_dir:                   /localdev/vkovacevic/vllm
+  service_port:               8031
+  bind_host:                  0.0.0.0
+  docker_override_image:      None
+  docker_interactive:         False
+  device_id:                  None
+  disable_trace_capture:      True
+  override_tt_config:         None
+  vllm_override_args:         None
+  workflow_args:              None
+  limit_samples_mode:         ci-nightly
+  eval_samples:               None
+  skip_system_sw_validation:  True
+
+Host Storage Options:
+  host_volume:                None
+  host_hf_cache:              None
+  host_weights_dir:           None
+  image_user:                 1000
+
+============================================================
+2026-08-21 05:41:24,017 - run.py:1039 - INFO: Runtime model spec saved to: /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-21_05-41-24_id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_release_luMA991C.json
+2026-08-21 05:41:24,017 - validate_setup.py:296 - INFO: Starting local setup validation
+2026-08-21 05:41:24,017 - validate_setup.py:332 - INFO: ✅ validating local setup completed
+2026-08-21 05:41:24,018 - run.py:1153 - INFO: Model Qwen3.6-35B-A3B (model_type=LLM) routes through the workflow engine.
+2026-08-21 05:41:24,018 - runner.py:31 - INFO: → command=evals
+2026-08-21 05:41:24,018 - utils.py:272 - INFO: Running command: /localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python --index-strategy unsafe-best-match -r /localdev/vkovacevic/tt-inference-server/requirements/workflow-run-script.txt
+Using Python 3.10.21 environment at: .workflow_venvs/.venv_workflow_run_script
+Checked 19 packages in 3ms
+2026-08-21 05:41:24,026 - utils.py:272 - INFO: Running command: /localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/python --index-strategy unsafe-best-match -r /localdev/vkovacevic/tt-inference-server/requirements/evals-common.txt
+Using Python 3.10.21 environment at: .workflow_venvs/.venv_evals_common
+Resolved 103 packages in 751ms
+Checked 103 packages in 0.59ms
+2026-08-21 05:41:24,790 - workflow_venvs.py:768 - INFO: chat-streaming patch already present in /localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/models/api_models.py
+2026-08-21 05:41:24,790 - utils.py:272 - INFO: Running command: /localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python /localdev/vkovacevic/tt-inference-server/run_workflows.py --model Qwen3.6-35B-A3B --workflow evals --device p300x2 --service-port 8031 --runtime-model-spec-json /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-21_05-41-24_id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_release_luMA991C.json --output-dir /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/reports_output/evals
+2026-08-21 05:41:24,975 [INFO] workflow_module.runner: → command=workflow
+2026-08-21 05:41:24,975 [INFO] workflow.evals: === Workflow start: evals | model=Qwen3.6-35B-A3B device=P300X2 port=8031 output=/localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/reports_output/evals/Qwen3.6-35B-A3B_p300x2_evals ===
+2026-08-21 05:41:24,989 [INFO] workflow.evals: → task=llm_eval
+2026-08-21 05:41:24,989 [INFO] llm_module.server_control: Waiting for inference server at http://127.0.0.1:8031/health (timeout 2400s)
+2026-08-21 05:41:24,991 [INFO] llm_module.server_control: ✅ Inference server is healthy at http://127.0.0.1:8031/health
+2026-08-21 05:41:24,991 [INFO] test_module.llm_tests.llm_eval_tests: Running eval task=leaderboard_ifeval
+2026-08-21 05:41:24,991 [INFO] test_module.llm_tests.llm_eval_tests: Running command: /localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval --tasks leaderboard_ifeval --model local-chat-completions --model_args model=Qwen/Qwen3.6-35B-A3B,base_url=http://127.0.0.1:8031/v1/chat/completions,tokenizer_backend=huggingface,max_length=262144,timeout=14400,num_concurrent=32,max_retries=1 --gen_kwargs 'stream=false,max_gen_toks=8192,until=[],do_sample=true,temperature=1.0,top_k=20,top_p=0.95,min_p=0.0,presence_penalty=1.5,repetition_penalty=1.0,seed=42' --output_path /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/reports_output/evals/Qwen3.6-35B-A3B_p300x2_evals/eval_id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_release --seed 42 --num_fewshot 0 --batch_size 1 --log_samples --show_config --apply_chat_template --trust_remote_code --confirm_run_unsafe_code --limit 0.05
+2026-08-21 05:41:25,134 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:25 WARNING  [config.evaluate_config:281] --limit SHOULD ONLY BE USED FOR TESTING. REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT.
+2026-08-21 05:41:25,134 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:25 INFO     [config.evaluate_config:301] Using default fewshot_as_multiturn=True.
+2026-08-21 05:41:26,729 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:26 INFO     [_cli.run:376] Selected Tasks: ['leaderboard_ifeval']
+2026-08-21 05:41:27,238 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:27 INFO     [evaluator:210] Setting random seed to 42 | Setting numpy seed to 42 | Setting torch manual seed to 42 | Setting fewshot manual seed to 42
+2026-08-21 05:41:27,238 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:27 WARNING  [evaluator:222] generation_kwargs: {'stream': False, 'max_gen_toks': 8192, 'until': [], 'do_sample': True, 'temperature': 1.0, 'top_k': 20, 'top_p': 0.95, 'min_p': 0.0, 'presence_penalty': 1.5, 'repetition_penalty': 1.0, 'seed': 42} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
+2026-08-21 05:41:27,238 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:27 INFO     [evaluator:235] Initializing local-chat-completions model, with arguments: {'model': 'Qwen/Qwen3.6-35B-A3B', 'base_url': 'http://127.0.0.1:8031/v1/chat/completions', 'tokenizer_backend': 'huggingface', 'max_length': 262144, 'timeout': 14400, 'num_concurrent': 32, 'max_retries': 1, 'trust_remote_code': True}
+2026-08-21 05:41:27,242 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:27 INFO     [models.api_models:310] Using max length 262144 - 1
+2026-08-21 05:41:27,242 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:27 INFO     [models.api_models:331] Using tokenizer huggingface
+2026-08-21 05:41:29,534 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:29 INFO     [tasks:700] Selected tasks:
+2026-08-21 05:41:29,534 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:29 INFO     [tasks:691] Task: leaderboard_ifeval (leaderboard/ifeval/ifeval.yaml)
+2026-08-21 05:41:29,534 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:29 INFO     [evaluator:313] leaderboard_ifeval: Using gen_kwargs: {'until': [], 'do_sample': True, 'temperature': 1.0, 'max_gen_toks': 8192, 'stream': False, 'top_k': 20, 'top_p': 0.95, 'min_p': 0.0, 'presence_penalty': 1.5, 'repetition_penalty': 1.0, 'seed': 42}
+2026-08-21 05:41:29,534 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:29 INFO     [evaluator:328] num_fewshot has been set to 0 for leaderboard_ifeval in its config. Manual configuration will be ignored.
+2026-08-21 05:41:29,534 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:29 WARNING  [evaluator:489] Chat template formatting change affects loglikelihood and multiple-choice tasks. See docs/chat-template-readme.md for details.
+2026-08-21 05:41:29,535 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:29 INFO     [api.task:310] Building contexts for leaderboard_ifeval on rank 0...
+2026-08-21 05:41:29,536 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-08-21 05:41:29,536 [INFO] test_module.llm_tests.llm_eval_tests: 0%|          | 0/28 [00:00<?, ?it/s]
+2026-08-21 05:41:29,536 [INFO] test_module.llm_tests.llm_eval_tests: 100%|██████████| 28/28 [00:00<00:00, 65793.00it/s]
+2026-08-21 05:41:29,536 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:29 INFO     [evaluator:583] Running generate_until requests
+2026-08-21 05:41:29,537 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:05:41:29 INFO     [models.api_models:1006] Tokenized requests are disabled. Context + generation length is not checked.
+2026-08-21 05:41:29,537 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-08-21 06:06:01,772 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   0%|          | 0/28 [00:00<?, ?it/s]
+2026-08-21 06:06:09,806 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   4%|▎         | 1/28 [24:32<11:02:30, 1472.23s/it]
+2026-08-21 06:09:15,487 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   7%|▋         | 2/28 [24:40<4:24:44, 610.94s/it]
+2026-08-21 06:13:26,521 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  11%|█         | 3/28 [27:45<2:53:38, 416.76s/it]
+2026-08-21 06:18:39,111 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  14%|█▍        | 4/28 [31:56<2:20:31, 351.33s/it]
+2026-08-21 06:20:15,911 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  18%|█▊        | 5/28 [37:09<2:09:19, 337.36s/it]
+2026-08-21 06:21:07,226 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  21%|██▏       | 6/28 [38:46<1:33:42, 255.57s/it]
+2026-08-21 06:21:47,877 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  25%|██▌       | 7/28 [39:37<1:06:04, 188.79s/it]
+2026-08-21 06:23:02,884 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  29%|██▊       | 8/28 [40:18<47:12, 141.63s/it]
+2026-08-21 06:24:04,191 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  32%|███▏      | 9/28 [41:33<38:15, 120.80s/it]
+2026-08-21 06:25:58,786 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  36%|███▌      | 10/28 [42:34<30:43, 102.44s/it]
+2026-08-21 06:26:36,000 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  39%|███▉      | 11/28 [44:29<30:04, 106.16s/it]
+2026-08-21 06:32:45,976 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  43%|████▎     | 12/28 [45:06<22:42, 85.18s/it]
+2026-08-21 06:35:53,696 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  46%|████▋     | 13/28 [51:16<42:51, 171.46s/it]
+2026-08-21 06:39:19,119 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  50%|█████     | 14/28 [54:24<41:09, 176.37s/it]
+2026-08-21 06:46:09,362 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  54%|█████▎    | 15/28 [57:49<40:06, 185.13s/it]
+2026-08-21 06:51:12,667 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  57%|█████▋    | 16/28 [1:04:39<50:34, 252.89s/it]
+2026-08-21 06:52:35,938 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  61%|██████    | 17/28 [1:09:43<49:08, 268.05s/it]
+2026-08-21 06:53:23,835 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  64%|██████▍   | 18/28 [1:11:06<35:25, 212.52s/it]
+2026-08-21 06:58:07,999 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  68%|██████▊   | 19/28 [1:11:54<24:27, 163.08s/it]
+2026-08-21 07:00:00,843 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  71%|███████▏  | 20/28 [1:16:38<26:35, 199.43s/it]
+2026-08-21 07:02:34,586 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  75%|███████▌  | 21/28 [1:18:31<20:14, 173.44s/it]
+2026-08-21 07:17:12,561 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  79%|███████▊  | 22/28 [1:21:05<16:45, 167.53s/it]
+2026-08-21 07:24:21,655 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  82%|████████▏ | 23/28 [1:35:43<31:43, 380.72s/it]
+2026-08-21 07:25:20,284 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  86%|████████▌ | 24/28 [1:42:52<26:20, 395.24s/it]
+2026-08-21 07:33:20,784 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  89%|████████▉ | 25/28 [1:43:50<14:42, 294.24s/it]
+2026-08-21 07:41:00,399 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  93%|█████████▎| 26/28 [1:51:51<11:40, 350.12s/it]
+2026-08-21 08:59:13,720 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  96%|█████████▋| 27/28 [1:59:30<06:22, 382.97s/it]
+2026-08-21 08:59:13,720 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API: 100%|██████████| 28/28 [3:17:44<00:00, 1676.14s/it]
+2026-08-21 08:59:13,720 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API: 100%|██████████| 28/28 [3:17:44<00:00, 423.72s/it]
+2026-08-21 08:59:14,185 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:08:59:14 INFO     [loggers.evaluation_tracker:269] Saving results aggregated
+2026-08-21 08:59:14,185 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:08:59:14 INFO     [loggers.evaluation_tracker:119] Saving per-task samples to /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/reports_output/evals/Qwen3.6-35B-A3B_p300x2_evals/eval_id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_release/Qwen__Qwen3.6-35B-A3B/*.jsonl
+2026-08-21 08:59:15,035 [INFO] test_module.llm_tests.llm_eval_tests: Running eval task=r1_gpqa_diamond
+2026-08-21 08:59:15,035 [INFO] test_module.llm_tests.llm_eval_tests: Running command: /localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval --tasks r1_gpqa_diamond --model local-chat-completions --model_args model=Qwen/Qwen3.6-35B-A3B,base_url=http://127.0.0.1:8031/v1/chat/completions,tokenizer_backend=huggingface,max_length=262144,timeout=14400,num_concurrent=1,max_retries=1 --gen_kwargs 'stream=false,max_gen_toks=32768,until=[],do_sample=true,temperature=1.0,top_k=20,top_p=0.95,min_p=0.0,presence_penalty=1.5,repetition_penalty=1.0,seed=42' --output_path /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/reports_output/evals/Qwen3.6-35B-A3B_p300x2_evals/eval_id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_release --seed 42 --num_fewshot 0 --batch_size 1 --log_samples --show_config --apply_chat_template --trust_remote_code --confirm_run_unsafe_code --limit 0.05
+2026-08-21 08:59:15,184 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:08:59:15 WARNING  [config.evaluate_config:281] --limit SHOULD ONLY BE USED FOR TESTING. REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT.
+2026-08-21 08:59:15,184 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:08:59:15 INFO     [config.evaluate_config:301] Using default fewshot_as_multiturn=True.
+2026-08-21 08:59:17,203 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:08:59:17 INFO     [_cli.run:376] Selected Tasks: ['r1_gpqa_diamond']
+2026-08-21 08:59:17,767 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:08:59:17 INFO     [evaluator:210] Setting random seed to 42 | Setting numpy seed to 42 | Setting torch manual seed to 42 | Setting fewshot manual seed to 42
+2026-08-21 08:59:17,767 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:08:59:17 WARNING  [evaluator:222] generation_kwargs: {'stream': False, 'max_gen_toks': 32768, 'until': [], 'do_sample': True, 'temperature': 1.0, 'top_k': 20, 'top_p': 0.95, 'min_p': 0.0, 'presence_penalty': 1.5, 'repetition_penalty': 1.0, 'seed': 42} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
+2026-08-21 08:59:17,767 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:08:59:17 INFO     [evaluator:235] Initializing local-chat-completions model, with arguments: {'model': 'Qwen/Qwen3.6-35B-A3B', 'base_url': 'http://127.0.0.1:8031/v1/chat/completions', 'tokenizer_backend': 'huggingface', 'max_length': 262144, 'timeout': 14400, 'num_concurrent': 1, 'max_retries': 1, 'trust_remote_code': True}
+2026-08-21 08:59:17,772 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:08:59:17 INFO     [models.api_models:310] Using max length 262144 - 1
+2026-08-21 08:59:17,772 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:08:59:17 INFO     [models.api_models:313] Concurrent requests are disabled. To enable concurrent requests, set `num_concurrent` > 1.
+2026-08-21 08:59:17,772 [INFO] test_module.llm_tests.llm_eval_tests: 2026-08-21:08:59:17 INFO     [models.api_models:331] Using tokenizer huggingface
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: Traceback (most recent call last):
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval", line 10, in <module>
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: sys.exit(cli_evaluate())
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/__main__.py", line 10, in cli_evaluate
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: parser.execute(args)
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/_cli/harness.py", line 60, in execute
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: args.func(args)
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/_cli/run.py", line 379, in _execute
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: results = simple_evaluate(
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/utils.py", line 491, in _wrapper
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: return fn(*args, **kwargs)
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/evaluator.py", line 291, in simple_evaluate
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: task_dict = get_task_dict(
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 646, in get_task_dict
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: task_name_from_string_dict = task_manager.load_task_or_group(
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 428, in load_task_or_group
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: collections.ChainMap(
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 430, in <lambda>
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: lambda task: self._load_individual_task_or_group(task),
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 328, in _load_individual_task_or_group
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: return _load_task(task_config, task=name_or_config)
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/tasks/__init__.py", line 288, in _load_task
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: task_object = ConfigurableTask(config=config)
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/api/task.py", line 747, in __init__
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: self.download(self.config.dataset_kwargs)
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/lm_eval/api/task.py", line 863, in download
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: self.dataset = datasets.load_dataset(
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/datasets/load.py", line 2132, in load_dataset
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: builder_instance = load_dataset_builder(
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/datasets/load.py", line 1853, in load_dataset_builder
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: dataset_module = dataset_module_factory(
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/datasets/load.py", line 1717, in dataset_module_factory
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: raise e1 from None
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: File "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/lib/python3.10/site-packages/datasets/load.py", line 1701, in dataset_module_factory
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: raise DatasetNotFoundError(message) from e
+2026-08-21 08:59:19,755 [INFO] test_module.llm_tests.llm_eval_tests: datasets.exceptions.DatasetNotFoundError: Dataset 'Idavidrein/gpqa' is a gated dataset on the Hub. Visit the dataset page at https://huggingface.co/datasets/Idavidrein/gpqa to ask for access.
+2026-08-21 08:59:20,442 [ERROR] test_module.llm_tests.llm_eval_tests: ⛔ subprocess.Popen command failed with return code: 1
+command: /localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_evals_common/bin/lm_eval --tasks r1_gpqa_diamond --model local-chat-completions --model_args model=Qwen/Qwen3.6-35B-A3B,base_url=http://127.0.0.1:8031/v1/chat/completions,tokenizer_backend=huggingface,max_length=262144,timeout=14400,num_concurrent=1,max_retries=1 --gen_kwargs 'stream=false,max_gen_toks=32768,until=[],do_sample=true,temperature=1.0,top_k=20,top_p=0.95,min_p=0.0,presence_penalty=1.5,repetition_penalty=1.0,seed=42' --output_path /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/reports_output/evals/Qwen3.6-35B-A3B_p300x2_evals/eval_id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_release --seed 42 --num_fewshot 0 --batch_size 1 --log_samples --show_config --apply_chat_template --trust_remote_code --confirm_run_unsafe_code --limit 0.05
+
+See error messages in logs above this RuntimeError for details on actual cause of failure.
+
+This command is optional or can be recovered from failure (check=False set). Continuing ...
+
+2026-08-21 08:59:20,443 [INFO] workflow_module.blocks_sink: BlockAccumulator: +2 block(s), total=2
+2026-08-21 08:59:20,443 [INFO] workflow_module.blocks_sink:   - kind=evals id=Qwen3.6-35B-A3B_P300X2 targets={'task_name': 'leaderboard_ifeval', 'tolerance': 0.05, 'published_score': 93.09, 'published_score_ref': 'https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4'}
+2026-08-21 08:59:20,443 [INFO] workflow_module.blocks_sink:   - kind=evals id=Qwen3.6-35B-A3B_P300X2 targets={'task_name': 'r1_gpqa_diamond'}
+2026-08-21 08:59:20,443 [INFO] workflow.evals: ✅ llm_eval blocks=2 kind=evals (11875.5s)
+2026-08-21 08:59:20,443 [INFO] workflow.evals: Acceptance: PASS (0 blocker(s))
+2026-08-21 08:59:20,444 [INFO] report_module.report_file_saver: Saved markdown to: /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/reports_output/evals/report_Qwen__Qwen3.6-35B-A3B_2026-08-21T085920+0000.md
+2026-08-21 08:59:20,444 [INFO] report_module.report_file_saver: Saved JSON to: /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/reports_output/evals/data/report_data_Qwen__Qwen3.6-35B-A3B_2026-08-21T085920+0000.json
+2026-08-21 08:59:20,444 [INFO] report_module.report_file_saver: Saved JSON to: /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/reports_output/evals/data/report_data_Qwen__Qwen3.6-35B-A3B_2026-08-21T085920+0000.json
+2026-08-21 08:59:20,444 [INFO] report_module.generator: Generated report: md=/localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/reports_output/evals/report_Qwen__Qwen3.6-35B-A3B_2026-08-21T085920+0000.md, json=/localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/reports_output/evals/data/report_data_Qwen__Qwen3.6-35B-A3B_2026-08-21T085920+0000.json
+2026-08-21 08:59:20,444 [INFO] workflow.evals: Wrote markdown: /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/reports_output/evals/report_Qwen__Qwen3.6-35B-A3B_2026-08-21T085920+0000.md
+2026-08-21 08:59:20,444 [INFO] workflow.evals: Wrote json:     /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/reports_output/evals/data/report_data_Qwen__Qwen3.6-35B-A3B_2026-08-21T085920+0000.json
+2026-08-21 08:59:20,444 [INFO] workflow.evals: === Workflow done: evals (rc=0) ===
+2026-08-21 08:59:20,444 [INFO] workflow_module.runner: ✅ command=workflow rc=0
+2026-08-21 08:59:20,468 - runner.py:42 - INFO: ✅ command=evals rc=0
+2026-08-21 08:59:20,468 - run.py:1172 - INFO: Completed run.py.
+2026-08-21 08:59:20,468 - run.py:1178 - INFO: The output of the workflows is not checked and any errors will be in the logs above and in the saved log file.
+2026-08-21 08:59:20,468 - run.py:1182 - INFO: If you encounter any issues please share the log file in a GitHub issue and server log if available.
+2026-08-21 08:59:20,468 - run.py:1186 - INFO: This log file is saved on local machine at: /localdev/vkovacevic/tti-release/qwen36_35b_a3b_20260820/evalfix_cache8/workflow_logs/run_logs/run_2026-08-21_05-41-24_id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_release_evals_nDcxfaFz.log

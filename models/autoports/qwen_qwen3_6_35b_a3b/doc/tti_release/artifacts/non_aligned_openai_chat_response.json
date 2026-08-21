@@ -1,0 +1,36 @@
+{
+  "id": "chatcmpl-bde39fddd98660ac",
+  "object": "chat.completion",
+  "created": 1787252461,
+  "model": "Qwen/Qwen3.6-35B-A3B",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [],
+        "reasoning": "Here's a thinking process:\n\n1"
+      },
+      "logprobs": null,
+      "finish_reason": "length",
+      "stop_reason": null,
+      "token_ids": null
+    }
+  ],
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "prompt_tokens": 33,
+    "total_tokens": 41,
+    "completion_tokens": 8,
+    "prompt_tokens_details": null
+  },
+  "prompt_logprobs": null,
+  "prompt_token_ids": null,
+  "kv_transfer_params": null
+}

@@ -1,0 +1,415 @@
+{
+    "metadata": {
+        "model_name": "Qwen/Qwen3.6-35B-A3B",
+        "device": "P300X2",
+        "generated_at": "2026-08-21T12:27:13+00:00",
+        "report_id": "id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_release_2026-08-21_13-26-34",
+        "workflow": "release",
+        "server_mode": "API",
+        "run_command": "python run.py --model Qwen3.6-35B-A3B --runtime-model-spec-json /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/tti_release/specs/qwen36_35b_a3b_autoport_release_runtime_spec.json --tt-device p300x2 --workflow release --service-port 8031 --tools vllm --no-auth --skip-system-sw-validation --limit-samples-mode ci-nightly --disable-trace-capture",
+        "runtime_model_spec_json": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/tti_release/artifacts/final7/runtime_model_spec.json",
+        "model_id": "id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_release",
+        "model_repo": "Qwen/Qwen3.6-35B-A3B",
+        "inference_engine": "vLLM",
+        "tt_metal_commit": "f2bdeec2f41255c106b859601e094ad2cfa9ecca",
+        "vllm_commit": "b2d90800d77ba04a54462dad1384641d17e1db47",
+        "model_impl": "qwen36-autoport",
+        "report_regenerated_at": "2026-08-21T13:44:41Z",
+        "report_regeneration_reason": "Refresh r1_gpqa_diamond gated-dataset waiver evidence; final7 raw section data unchanged."
+    },
+    "sections": [
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "leaderboard_ifeval",
+                "tolerance": 0.05,
+                "published_score": 93.09,
+                "published_score_ref": "https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4",
+                "gpu_reference_score": 93.09,
+                "gpu_reference_score_ref": "https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4",
+                "score": 89.28571428571429,
+                "ratio_to_published": 0.9591332504642205,
+                "ratio_to_reference": 0.9591332504642205,
+                "accuracy_check": 2
+            },
+            "title": "LLM Eval \u2014 leaderboard_ifeval",
+            "task_type": "llm",
+            "id": "Qwen3.6-35B-A3B_P300X2",
+            "targets": {
+                "task_name": "leaderboard_ifeval",
+                "tolerance": 0.05,
+                "published_score": 93.09,
+                "published_score_ref": "https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4"
+            }
+        },
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "r1_gpqa_diamond",
+                "tolerance": 0.1,
+                "published_score": 86.0,
+                "published_score_ref": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B",
+                "score": null,
+                "accuracy_check": 3,
+                "error": "no eval results parsed (rc=1)"
+            },
+            "title": "LLM Eval \u2014 r1_gpqa_diamond",
+            "task_type": "llm",
+            "id": "Qwen3.6-35B-A3B_P300X2",
+            "targets": {
+                "task_name": "r1_gpqa_diamond"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 1,
+                "input_sequence_length": 128,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 6132.6177,
+                "p50_ttft": 6132.6177,
+                "p99_ttft": 6132.6177,
+                "mean_tpot_ms": 60.1681,
+                "mean_e2el_ms": 13773.9694,
+                "tps_decode_throughput": 9.2926,
+                "request_throughput": 0.0726,
+                "error_request_count": null,
+                "target_check": 2,
+                "target_checks": {
+                    "target": {
+                        "ttft": 10000.0,
+                        "ttft_ratio": 0.6132617699999999,
+                        "ttft_check": 2,
+                        "tput_user": 10.0,
+                        "tput_user_ratio": 1.662010267899435,
+                        "tput_user_check": 2,
+                        "tput": 7.0,
+                        "tput_ratio": 1.3275142857142856,
+                        "tput_check": 2
+                    }
+                }
+            },
+            "title": "vLLM Benchmark Targets \u2014 ISL 128 / OSL 128, concurrency 1",
+            "id": "Qwen__Qwen3.6-35B-A3B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "Qwen/Qwen3.6-35B-A3B",
+                "device": "P300X2",
+                "timestamp": "2026-08-21 12:27:48"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 32,
+                "input_sequence_length": 100,
+                "output_sequence_length": 100.0,
+                "mean_ttft_ms": 150266.1268,
+                "p50_ttft": 154946.9702,
+                "p99_ttft": 154948.2818,
+                "mean_tpot_ms": 1003.2259,
+                "mean_e2el_ms": 249585.4894,
+                "tps_decode_throughput": 12.8211,
+                "request_throughput": 0.1282,
+                "error_request_count": null,
+                "target_check": 2,
+                "target_checks": {
+                    "target": {
+                        "ttft": 180000.0,
+                        "ttft_ratio": 0.8348118155555555,
+                        "ttft_check": 2,
+                        "tput_user": 0.8,
+                        "tput_user_ratio": 1.2459805912108128,
+                        "tput_user_check": 2,
+                        "tput": 10.0,
+                        "tput_ratio": 1.2821099999999999,
+                        "tput_check": 2
+                    }
+                }
+            },
+            "title": "vLLM Benchmark Targets \u2014 ISL 100 / OSL 100, concurrency 32",
+            "id": "Qwen__Qwen3.6-35B-A3B_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "Qwen/Qwen3.6-35B-A3B",
+                "device": "P300X2",
+                "timestamp": "2026-08-21 12:32:16"
+            }
+        },
+        {
+            "kind": "spec_tests",
+            "data": {
+                "success": true,
+                "child_result": "OK",
+                "status": "pass",
+                "attempts": 1,
+                "logs": [],
+                "elapsed_seconds": 0.01129833608865738,
+                "test_name": "LoggerForkSafetyTest",
+                "description": "Test for logging fork safety to prevent deadlocks"
+            },
+            "title": "Logger Fork Safety",
+            "task_type": "unit",
+            "id": "Qwen3.6-35B-A3B_P300X2",
+            "targets": {
+                "num_of_devices": 4
+            }
+        },
+        {
+            "kind": "spec_tests",
+            "data": {
+                "endpoint_url": "http://127.0.0.1:8031/v1/chat/completions",
+                "model_name": "Qwen/Qwen3.6-35B-A3B",
+                "task_name": "vllm_chat_completions",
+                "parameter_conformance_summary": [
+                    {
+                        "test_case": "test_coherence_verbatim_echo",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "status": "\u2705 PASS",
+                        "summary": "3/3 passed"
+                    },
+                    {
+                        "test_case": "test_logprobs",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    },
+                    {
+                        "test_case": "test_n",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    },
+                    {
+                        "test_case": "test_non_uniform_seeding",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "status": "\u2705 PASS",
+                        "summary": "9/9 passed"
+                    },
+                    {
+                        "test_case": "test_seed_reproducibility",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    }
+                ],
+                "detailed_test_results": [
+                    {
+                        "test_case": "test_coherence_verbatim_echo",
+                        "parametrization": "test_coherence_verbatim_echo",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[temperature-0.0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[top_k-1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[top_p-0.01]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_logprobs",
+                        "parametrization": "test_logprobs",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "parametrization": "test_max_tokens[10]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "parametrization": "test_max_tokens[5]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_n",
+                        "parametrization": "test_n[2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_n",
+                        "parametrization": "test_n[3]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_non_uniform_seeding",
+                        "parametrization": "test_non_uniform_seeding",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-repeat_trap-messages0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-repeat_trap-messages0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-repeat_trap-messages0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_seed_reproducibility",
+                        "parametrization": "test_seed_reproducibility",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "parametrization": "test_stop[stop_seq0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "parametrization": "test_stop[stop_seq1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    }
+                ],
+                "success": true,
+                "status": "pass",
+                "attempts": 1,
+                "logs": [
+                    "/localdev/vkovacevic/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/lib/python3.10/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option \"asyncio_default_fixture_loop_scope\" is unset.",
+                    "The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: \"function\", \"class\", \"module\", \"package\", \"session\"",
+                    "",
+                    "  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))",
+                    "......................                                                   [100%]",
+                    "22 passed in 3256.83s (0:54:16)"
+                ],
+                "elapsed_seconds": 3257.100108932238,
+                "test_name": "VLLMParamConformanceTest",
+                "description": "vLLM chat/completions parameter conformance"
+            },
+            "title": "Vllm Chat Completions",
+            "task_type": "functional",
+            "id": "Qwen3.6-35B-A3B_P300X2",
+            "targets": {
+                "num_of_devices": 4,
+                "num_concurrent_requests": 4
+            }
+        }
+    ],
+    "acceptance_criteria": true,
+    "acceptance_blockers": {},
+    "acceptance_criteria_metadata": {
+        "enforcement_result": "PASS",
+        "model_status": "EXPERIMENTAL",
+        "categories": [
+            {
+                "name": "Benchmarks",
+                "status": "PASS",
+                "total": 2,
+                "passed": 2,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Evals",
+                "status": "PASS",
+                "total": 2,
+                "passed": 1,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {
+                    "evals:LLM Eval \u2014 r1_gpqa_diamond": "Accuracy check failed. (waived: issue-waive: r1_gpqa_diamond fails before inference because the lm-eval GPQA task requires the gated Hugging Face dataset Idavidrein/gpqa; this environment does not have accepted dataset terms/access. Current upstream evidence: final7 run log lines 123-171; lm-evaluation-harness GPQA README says this dataset is gated and requires accepting terms/login before running the task (https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/gpqa/README.md); the Hugging Face dataset page says users must agree to share contact information to access files (https://huggingface.co/datasets/Idavidrein/gpqa); Hugging Face gated-dataset docs say gated dataset files require authenticated access after requesting/receiving access (https://huggingface.co/docs/hub/en/datasets-gated). Rerun GPQA after access is granted. This does not waive meta_gpqa_cot.)"
+                }
+            },
+            {
+                "name": "Spec Tests",
+                "status": "PASS",
+                "total": 1,
+                "passed": 1,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            }
+        ]
+    },
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u2705 `PASS`\n- Model status: `EXPERIMENTAL`\n- Benchmarks: \u2705 `PASS` (2/2 passed)\n- Evals: \u2705 `PASS` (1/2 passed, 1 waived)\n- Spec Tests: \u2705 `PASS` (1/1 passed)\n- All acceptance criteria passed."
+}
