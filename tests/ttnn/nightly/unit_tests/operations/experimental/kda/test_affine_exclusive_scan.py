@@ -466,5 +466,5 @@ def test_affine_exclusive_scan_rejects_invalid_configuration(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-    with expect_error(RuntimeError, "output memory configuration must be interleaved"):
+    with expect_error(RuntimeError, "output memory layout must be INTERLEAVED"):
         _run(a_tt, b_tt, state_tt, 4, memory_config=sharded)
