@@ -341,10 +341,17 @@ class Qwen36ModelArgs(ModelArgs):
 
         # Prefill matmul factory (M = seq_len). Shared by MLP down-proj, attention in/out-proj, and
         # GDN in/out-proj. On Blackhole the grid is already wider (8x10) with more L1 headroom, so the
-        # full per_core_N-wide output/intermediate CB fits (validated there); WH's grid tops out at
+        # full per_core_N-wide output/intermediate CB fits (validated there); N300's grid tops out at
         # 8x8 with less L1/core, and a full decoder layer's combined GDN+attention+MLP CBs on this
-        # config alone were measured to overflow (1.68-1.85MB vs WH's 1.5MB max) — halve it there (see
-        # create_prefill_matmul_program_config's halve_out_block).
+        # config alone were measured to overflow (1.68-1.85MB vs N300's 1.5MB max) — halve it there
+        # (see create_prefill_matmul_program_config's halve_out_block).
+        #
+        # DELIBERATE narrowing (Wormhole gating audit, item 10): this used to be
+        # `not tpc.is_blackhole()`, so T3K halved its output block too even though the 1.68-1.85MB
+        # vs. 1.5MB overflow above was measured on N300's 8x8 grid specifically, not T3K's. Narrowed
+        # to wh_9b_n300 on purpose -- T3K now gets the un-halved (Blackhole-style) block, accepting
+        # that tradeoff without T3K L1-budget measurements of its own. Don't revert this to
+        # is_blackhole() without measuring T3K's actual grid/L1 headroom first.
         self._prefill_grid = tpc.prefill_grid_default()
         self.prefill_tuning = tpc.prefill_tuning(tp)
         self.prefill_progcfg = lambda seq_len, k, n: tpc.create_prefill_matmul_program_config(
@@ -353,7 +360,7 @@ class Qwen36ModelArgs(ModelArgs):
             n,
             grid_size=self._prefill_grid,
             tuning=self.prefill_tuning,
-            halve_out_block=not tpc.is_blackhole(),
+            halve_out_block=tpc.wh_9b_n300(self),
         )
         # WORMHOLE ONLY: dedicated one-K-pass factory for the GDN in-projection, paired with
         # COMPUTE_HIFI2_NO_FP32_ACC (gdn/tp.py's _col_proj passes both together — the blocking is only

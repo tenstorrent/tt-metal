@@ -241,9 +241,11 @@ class TPGatedDeltaNet:
         # repeat_interleave, matmul-native recurrence output, L1-resident rec_state, beta/g left at
         # their natural rank). MEASURED and validated on N300 + Qwen3.5-9B only, so Blackhole keeps
         # its tuned path byte-for-byte and the 27B (dim 5120) keeps the geometry it was validated
-        # with. Same dim-based gate as _qkv_l1_tuned_for_this_model in forward_prefill (HF_MODEL is
-        # often a hashed snapshot dir, so name-based checks are unreliable).
-        self._decode_tile_opt = (not tpc.is_blackhole()) and args.dim <= 4096
+        # with. Uses wh_9b_n300 directly (not the is_blackhole()+dim<=4096 pair this used to be)
+        # so a hypothetical N150-9B doesn't inherit an N300-only-validated path by coincidence --
+        # the comment's own claim is now what the gate actually checks (Wormhole gating audit,
+        # item 4).
+        self._decode_tile_opt = tpc.wh_9b_n300(args)
         self.Dk = args.gdn_dk
         self.Dv = args.gdn_dv
         self.qkv_dim_tp = args.gdn_qkv_dim_tp
@@ -427,7 +429,13 @@ class TPGatedDeltaNet:
         # put max_b at 62 >= 32 so _decode_batch_split stops splitting) but op-to-op gap
         # 5,473->7,903us (+44.4%), for a WORSE effective total (~9,836 vs ~8,390us) -- this step is
         # dispatch-bound, so the split path's more-numerous launches actually schedule tighter.
-        if tpc.is_blackhole() and os.environ.get("QWEN35_GDN_STATE_BF16") != "1":
+        # DELIBERATE narrowing (Wormhole gating audit, item 2): this used to be tpc.is_blackhole(),
+        # which gave T3K and N150 the same bf16 state as N300 -- unvalidated on either. Narrowed to
+        # wh_9b_n300 on purpose, accepting that T3K/N150 now fall into the fp32-state branch below
+        # (matching Blackhole's dtype, not because they're Blackhole, but because fp32 is the safe
+        # default absent validation). If T3K measurements later justify bf16 state there too, add it
+        # to wh_9b_n300's definition in tp_common.py, not by reverting this to is_blackhole().
+        if not tpc.wh_9b_n300(self.args) and os.environ.get("QWEN35_GDN_STATE_BF16") != "1":
             self.rec_state = z((self.B, self.Nv, self.Dk, self.Dv), dtype=ttnn.float32)
         else:
             self.rec_state = z((self.B, self.Nv, self.Dk, self.Dv))
@@ -1197,6 +1205,7 @@ class TPGatedDeltaNet:
                 weight_taps=tw["conv_taps"],
                 bias_dev=None,
                 valid_len=valid_len,
+                model_args=self.args,
             )
         ttnn.deallocate(qkv)
 
@@ -1698,6 +1707,7 @@ class TPGatedDeltaNet:
             weight_taps=tw["conv_taps"],
             bias_dev=None,
             valid_len=valid_lens,
+            model_args=self.args,
         )
         ttnn.deallocate(qkv)
 
@@ -1909,6 +1919,10 @@ class TPGatedDeltaNet:
         # shared upstream function, which does not take it. _decode_tile_opt is False on BH anyway,
         # so gate the kwarg itself rather than passing tile_opt=False into a signature without it.
         _rec_kw = {"tile_opt": True} if self._decode_tile_opt else {}
+        # model_args: lets recurrent_gated_delta_rule_decode_dispatch scope its WH fork to
+        # wh_9b_n300 instead of is_blackhole() (Wormhole gating audit, item 1) -- see
+        # recurrent_decode_wh.py's dispatch docstring for the deliberate T3K/N150 perf tradeoff.
+        _rec_kw["model_args"] = self.args
         if _bstep >= B:
             o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
                 q,
