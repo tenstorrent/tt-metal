@@ -748,6 +748,10 @@ inline void calculate_bitonic_topk_rebuild(
 // Defined so compute_kernel_api.h resolves the symbol on all architectures.
 inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t /*tile_index*/) {}
 inline void _topk_uint16_move_dest_tile_to_pack_half_(std::uint32_t /*tile_index*/) {}
+// Rank-stamped strip stub: the mode itself is static_asserted off on Quasar (see topk_init /
+// the network entries), so this is unreachable; it exists only so the arch-independent
+// compute API (topk_strip_rank_tags) compiles.
+inline void _topk_strip_rank_tags_(std::uint32_t /*dst_tile_index*/) {}
 
 }  // namespace sfpu
 }  // namespace ckernel

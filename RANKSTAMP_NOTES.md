@@ -121,3 +121,17 @@ UInt32-format CBs corrupt under pack_tile<true>, #53466).
 - WH: mirror applied; knob-normalized diff of all new sections = IDENTICAL except intended
   WH-only SETC16/STALLWAIT(STALL_CFG) brackets in the strip (mirrors move_dest_tile helper).
   ttsim WH build kicked off for functional sim check.
+
+## C1 WH verification (final)
+- ttsim WH (libttsim_wh built from ttsim-private): rank_stamped cells 18p/2s; full suite minus
+  comparator-stable 42p/6s. PRE-EXISTING sim gap: comparator-stable trips ttsim
+  "UnsupportedFunctionality: tensix_sfpswap: ENABLE_DEST_INDEX: lreg_c=5" (explicit SFPSWAP on
+  index regs L4-7 unmodeled; silicon supports it). ttsim also enforces the TEN-2932 ALU-write
+  verify, so the stamp's register discipline is machine-checked on WH.
+
+## C2
+- compute_kernel_api.h: rank_stamped template on topk_local_sort/topk_merge/topk_rebuild,
+  topk_tile_init<fused, rank_stamped>, new topk_stamp_local_positions<largest>(idst),
+  topk_strip_rank_tags(idst). topk_merge gains runtime rank_base (explicitly forwarded).
+- quasar: _topk_strip_rank_tags_ no-op stub (unreachable; mode static_asserted off).
+- Fresh-JIT ttnn smoke post-change: 24 passed.

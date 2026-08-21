@@ -710,16 +710,17 @@ ALWI void silu_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init,
  * | i_start_step    | The start step to perform if i_start_phase == i_end_phase                  | int32    | 4 to 6                                                | False    |
  * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool     | true, false                                           | False    |
+ * | rank_stamped    | Sort [bf16 value | rank tag] keys with the unstable network (u32 indices)  | bool     | true, false                                           | False    |
  */
 // clang-format on
-template <bool stable_sort = false, bool fused = false>
+template <bool stable_sort = false, bool fused = false, bool rank_stamped = false>
 ALWI void topk_local_sort(
     std::uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_bitonic_topk_phases_steps,
-        (true /* APPROXIMATE */, DST_ACCUM_MODE, stable_sort, fused),
+        (true /* APPROXIMATE */, DST_ACCUM_MODE, stable_sort, fused, rank_stamped),
         idst,
         VectorMode::RC_custom,
         idir,
@@ -759,21 +760,23 @@ ALWI void topk_local_sort(
  * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
  * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool     | true, false                                           | False    |
+ * | rank_stamped    | Re-stamp both runs' rank tags and merge with the unstable network          | bool     | true, false                                           | False    |
+ * | rank_base       | Rank offset of this call's run positions (32*t for a K=64 split call)      | uint32_t | 0 to 32                                               | False    |
  */
 // clang-format on
-template <bool idir = false, bool stable_sort = false, bool fused = false>
-ALWI void topk_merge(std::uint32_t idst, int m_iter, int k) {
+template <bool idir = false, bool stable_sort = false, bool fused = false, bool rank_stamped = false>
+ALWI void topk_merge(std::uint32_t idst, int m_iter, int k, std::uint32_t rank_base = 0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_bitonic_topk_merge,
-        (true /* APPROXIMATE */, DST_ACCUM_MODE, idir, stable_sort, fused),
+        (true /* APPROXIMATE */, DST_ACCUM_MODE, idir, stable_sort, fused, rank_stamped),
         idst,
         VectorMode::RC_custom,
         m_iter,
         k,
-        0u /* rank_base: unused outside rank-stamped mode; passed explicitly because the
-              SFPU wrapper forwards through a callable, where default arguments do not apply */));
+        rank_base /* passed explicitly (not defaulted at the LLK): the SFPU wrapper forwards
+                     through a callable, where default arguments do not apply */));
 }
 
 // topK rebuild
@@ -808,15 +811,16 @@ ALWI void topk_merge(std::uint32_t idst, int m_iter, int k) {
  * | skip_second     | Whether or not to skip second tile                                         | int32    | 0 to 1                                                | True     |
  * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool     | true, false                                           | False    |
+ * | rank_stamped    | Rebuild [bf16 value | rank tag] keys with the unstable network             | bool     | true, false                                           | False    |
  */
 // clang-format on
-template <bool stable_sort = false, bool fused = false>
+template <bool stable_sort = false, bool fused = false, bool rank_stamped = false>
 ALWI void topk_rebuild(std::uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_bitonic_topk_rebuild,
-        (true /* APPROXIMATE */, DST_ACCUM_MODE, stable_sort, fused),
+        (true /* APPROXIMATE */, DST_ACCUM_MODE, stable_sort, fused, rank_stamped),
         idst,
         VectorMode::RC_custom,
         idir,
@@ -828,11 +832,13 @@ ALWI void topk_rebuild(std::uint32_t idst, bool idir, int m_iter, int k, int log
 
 /**
  * Please refer to documentation for any_init. fused selects the fused-key init (index tracking
- * off; packed [bf16|u16] keys carry the index inside the sort word).
+ * off; packed [bf16|u16] keys carry the index inside the sort word). rank_stamped selects the
+ * rank-stamped init (index tracking ON — the true u32 indices ride the tracked swaps — plus the
+ * rank-tag complement constant).
  */
-template <bool fused = false>
+template <bool fused = false, bool rank_stamped = false>
 ALWI void topk_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */, fused)));
+    MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */, fused, rank_stamped)));
 }
 
 // clang-format off
@@ -891,6 +897,45 @@ ALWI void topk_defuse_tile(std::uint32_t idst, std::uint32_t num_tiles) {
         VectorMode::RC_custom,
         num_tiles));
 }
+
+// clang-format off
+/**
+ * Stamps one freshly transposed 2-tile TopK slab's value words with sign-conditioned LOCAL RANK
+ * tags in their free low 16 bits, in place in DST: word = [bf16 value | rank XOR (0xFFFF iff
+ * value_pos XNOR largest)], rank = the datum's 64-column sequence position. -0.0 is folded into
+ * the +0.0 tie class on the way. The plain UNSTABLE network then sorts distinct keys whose
+ * equal-value order is the torch-stable index order, while the true (u32) index tiles at DST
+ * idst+2..idst+3 ride the index-tracking swaps untouched. Requires 32-bit DEST and the
+ * rank-stamped init (topk_tile_init<false, true>). Run once per freshly loaded slab, before
+ * every topk_local_sort call in rank-stamped mode; topk_merge re-stamps its runs internally.
+ * DST must be in acquired state.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | largest         | The requested global sort order (true = largest-first)                     | bool     | true, false                                           | True     |
+ * | idst            | The index of the first value tile of the slab in the DST register buffer   | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+template <bool largest>
+ALWI void topk_stamp_local_positions(std::uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_topk_stamp_local_positions,
+        (true /* APPROXIMATE */, largest),
+        idst,
+        VectorMode::RC_custom));
+}
+
+/**
+ * Clears the low 16 bits (stale rank tags) of one rank-stamped value tile in DST, leaving exact
+ * [bf16|0x0000] words so the following Float32->bf16 pack cannot RNE-round on tag bits. Must run
+ * on MATH while DEST is still acquired, after the final transpose back to row layout (same
+ * calling convention as topk_uint16_move_dest_tile_to_pack_half).
+ */
+ALWI void topk_strip_rank_tags(std::uint32_t idst) { MATH((ckernel::sfpu::_topk_strip_rank_tags_(idst))); }
 
 // clang-format off
 /**
