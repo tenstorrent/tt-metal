@@ -402,9 +402,14 @@ void kernel_main() {
     constexpr uint32_t kLiveWords = kNumRisc * kRingWords;
     constexpr uint32_t kFillTarget = (kLiveWords * kFillPct) / 100u;
     // The producers are LOSSLESS and block at ring capacity, so the controller must never pace a core into
-    // a stall. Above this per-RISC occupancy the gap collapses to 0 regardless of fill.
-    constexpr uint32_t kPaceHighWater = (kRingWords * 3u) / 4u;
-    constexpr uint32_t kPaceCritical = (kRingWords * 7u) / 8u;  // hard stop: a producer is about to block
+    // a stall. Above this per-RISC occupancy the gap collapses to 0 regardless of fill. The scan reads
+    // the PUBLISHED tail, which lags true occupancy by up to SPSC_PUBLISH_BATCH_WORDS (the producer's
+    // batched fence) -- subtract that lag so the valves fire on what the lag could be hiding, or a paced
+    // slow-rate capture stalls producers the valves never saw coming (measured: delay 200 went 0 -> ~8k
+    // stalls when the batch landed without this).
+    constexpr uint32_t kPaceHighWater = (kRingWords * 3u) / 4u - kernel_profiler::SPSC_PUBLISH_BATCH_WORDS;
+    constexpr uint32_t kPaceCritical =
+        (kRingWords * 7u) / 8u - kernel_profiler::SPSC_PUBLISH_BATCH_WORDS;  // hard stop: about to block
     constexpr uint32_t kPrefix = kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
     constexpr uint32_t kSlotWords = kPrefix + kSpanWords;  // 2,640
     constexpr uint32_t kSlotBytes = kSlotWords * 4u;       // 10,560

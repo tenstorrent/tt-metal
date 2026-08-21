@@ -362,6 +362,11 @@ constexpr static std::uint32_t SPSC_SPAN_RAW_FLAG = 1u;
 // instead. These are the two encodings it needs, defined here where the wire's producer, its host decoder
 // and the frame layout above all already live. Codes MUST match spsc_packet.h's PP_* -- asserted in
 // spsc_marker_decode.hpp, which is the one place that sees both headers.
+// Producer tail-publish batch (kernel_profiler.hpp publish_tail_batched): the published TAIL can lag
+// true ring occupancy by up to this many words between fenced publishes. The drainer's anti-stall
+// pacing valves subtract it, so they fire on the earliest occupancy the lag could be hiding.
+static constexpr std::uint32_t SPSC_PUBLISH_BATCH_WORDS = 64;
+
 static constexpr std::uint32_t SPSC_TYPE_ZONE_START = 0;
 static constexpr std::uint32_t SPSC_TYPE_ZONE_END = 1;
 static constexpr std::uint32_t SPSC_TYPE_STICKY_TIMER = 9;

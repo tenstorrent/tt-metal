@@ -169,14 +169,16 @@ inline __attribute__((always_inline)) void publish_tail() {
 }
 
 // Batched publish for the marker hot paths: the FENCE is what pays the posted ring stores' latency,
-// so paying it once per 64-word batch instead of per packet is most of the close-side saving. The
+// so paying it once per SPSC_PUBLISH_BATCH_WORDS batch instead of per packet is most of the close-side saving. The
 // trigger is wIndex crossing a 64-word boundary -- no counter state, just shifts on values already in
-// registers. Visibility lags by at most 64 words WITHIN a launch; every launch still ends fully
+// registers. Visibility lags by at most one batch WITHIN a launch; every launch still ends fully
 // published (finish_profiler), launch boundaries publish (set_host_counter / set_profiler_zone_valid),
 // and the stall path publishes before it waits. Losslessness is untouched -- blocking is
 // head-vs-wIndex, and the room reserve never depends on the published tail.
 inline __attribute__((always_inline)) void publish_tail_batched(uint32_t words_written) {
-    if (__builtin_expect((wIndex >> 6) != ((wIndex - words_written) >> 6), 0)) {
+    constexpr uint32_t kBatchShift = __builtin_ctz(SPSC_PUBLISH_BATCH_WORDS);
+    static_assert((1u << kBatchShift) == SPSC_PUBLISH_BATCH_WORDS, "batch must be a power of two");
+    if (__builtin_expect((wIndex >> kBatchShift) != ((wIndex - words_written) >> kBatchShift), 0)) {
         publish_tail();
     }
 }
