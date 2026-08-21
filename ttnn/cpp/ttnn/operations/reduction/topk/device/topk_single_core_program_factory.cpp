@@ -62,7 +62,6 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     const uint32_t input_tile_size = tile_size(input_cb_data_format);
     const uint32_t value_tile_size = tile_size(output_val_cb_data_format);
     const uint32_t index_tile_size = tile_size(output_ind_cb_data_format);
-    const uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
     // Tensor shape and dimension calculations
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
@@ -91,6 +90,20 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
 
     // Number of tiles needed to store K top elements
     const uint32_t Ktiles = tt::div_up(args.k, tile_width);
+
+    // Rank-stamped stable mode: bf16-family values with 32-bit index CBs (wide rows / preallocated
+    // 32-bit indices) sort as [bf16 value | local-rank tag] keys on the plain UNSTABLE network while
+    // the true u32 indices ride the index-tracking swaps — replacing the 7-instruction-per-compare
+    // index-aware comparator. fp32 values keep the comparator (their words have no free low bits for
+    // a tag). Ktiles must be 1: with more than one output tile the insertion CASCADE feeds a level's
+    // loser tile into the next level, where a displaced OLD element can meet a NEWER accumulator
+    // element — the position-derived rank ranges would break that tie backwards. The value-side
+    // intermediates switch to raw Float32 transport so the tag bits (and exact bf16 bits) survive
+    // the pack/unpack round trips, exactly like the fused-key engine's packed CBs.
+    const bool rank_stamped_stable = args.stable && !is_fp32_input && !uint16_output && (Ktiles == 1);
+    const tt::DataFormat sort_val_cb_data_format =
+        rank_stamped_stable ? tt::DataFormat::Float32 : compute_cb_data_format;
+    const uint32_t sort_val_tile_size = tile_size(sort_val_cb_data_format);
 
     // Pipeline Flow:
     // Input DFB -> Reader Kernel -> Transposed DFBs -> Compute Kernel -> Result Prep DFBs -> Output DFBs -> Writer
@@ -148,9 +161,9 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     // precision and avoids shared-exponent corruption of tiles adjacent to inf values.
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = TRANSPOSED_VAL_DFB,
-        .entry_size = compute_tile_size,
+        .entry_size = sort_val_tile_size,
         .num_entries = transposed_cb_tile_count,
-        .data_format_metadata = compute_cb_data_format,
+        .data_format_metadata = sort_val_cb_data_format,
     });
 
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
@@ -163,9 +176,9 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     // Uses bf16 when input is bfp8/bfp4 (same rationale as TRANSPOSED_VAL_DFB).
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = RESULT_PREP_VAL_DFB,
-        .entry_size = compute_tile_size,
+        .entry_size = sort_val_tile_size,
         .num_entries = result_prep_cb_tile_count,
-        .data_format_metadata = compute_cb_data_format,
+        .data_format_metadata = sort_val_cb_data_format,
     });
 
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
@@ -291,6 +304,14 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
             {TRANSPOSED_VAL_DFB, UnpackMode::UnpackToDest},
             {RESULT_PREP_VAL_DFB, UnpackMode::UnpackToDest},
         };
+    } else if (rank_stamped_stable) {
+        // The tagged value words travel as raw Float32 tiles; unpack them straight to the 32-bit
+        // dest so the tag bits are preserved. The INPUT buffer stays on the source path: the bf16
+        // datacopy exact-widens fresh values to [bf16|0x0000] (the fused engine's precondition).
+        compute_unpack_modes = {
+            {TRANSPOSED_VAL_DFB, UnpackMode::UnpackToDest},
+            {RESULT_PREP_VAL_DFB, UnpackMode::UnpackToDest},
+        };
     }
 
     KernelSpec compute{
@@ -298,7 +319,10 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
         .source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp",
         // A compute kernel's legacy default optimization level is O3, while the Metal 2.0
         // default is O2 for every kernel kind, so it has to be stated to keep the level.
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .compiler_options =
+            {.defines = rank_stamped_stable ? KernelSpec::CompilerOptions::Defines{{"TOPK_RANK_STAMPED_STABLE", "1"}}
+                                            : KernelSpec::CompilerOptions::Defines{},
+             .opt_level = KernelBuildOptLevel::O3},
         // The four workspace buffers are touched by this kernel alone, which both fills and
         // drains each of them, so each is bound at both endpoints under one accessor name.
         .dfb_bindings =
