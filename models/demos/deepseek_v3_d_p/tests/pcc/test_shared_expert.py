@@ -9,7 +9,6 @@ Compares TorchExpert (reference) against TtSharedExpert (multi-chip TTNN)
 to verify correctness of multi-chip sharding and CCL operations.
 """
 
-
 import pytest
 import torch
 from loguru import logger

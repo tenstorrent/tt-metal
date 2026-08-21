@@ -192,13 +192,6 @@ MESH_CONFIGS = [
         id="fabric2d-mesh-2x2",
     ),
     pytest.param(
-        (4, 2),
-        fabric2d_device_params(),
-        2,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-        id="fabric2d-mesh-4x2",
-    ),
-    pytest.param(
         (2, 4),
         fabric2d_device_params(),
         2,
@@ -393,25 +386,11 @@ def _validate_gate(
 
 def _ci_unsupported_param_combos_forward_pass(**params):
     on_ci = params["on_ci"]
-    fabric_config = params["device_params"]["fabric_config"]
     gate_fallback_mode = params["gate_fallback_mode"]
 
     if not on_ci:
         return False
-    if fabric_config != ttnn.FabricConfig.FABRIC_2D:
-        return True
     if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
-        return True
-    return False
-
-
-def _ci_unsupported_param_combos_hash_gate_forward_pass(**params):
-    on_ci = params["on_ci"]
-    fabric_config = params["device_params"]["fabric_config"]
-
-    if not on_ci:
-        return False
-    if fabric_config != ttnn.FabricConfig.FABRIC_2D:
         return True
     return False
 
@@ -593,7 +572,6 @@ HASH_GATE_MODES = [
 ]
 
 
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_hash_gate_forward_pass)
 @pytest.mark.parametrize("gate_model", ["dsv4_pro", "dsv4_flash"])
 @pytest.mark.parametrize("gate_compute_mode", HASH_GATE_MODES)
 @pytest.mark.parametrize(

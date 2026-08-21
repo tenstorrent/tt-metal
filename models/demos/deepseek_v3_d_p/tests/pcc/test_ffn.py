@@ -9,7 +9,6 @@ Compares TorchExpert (reference) against TtFFN (multi-chip TTNN)
 to verify correctness with DeepSeek 671B FFN dimensions.
 """
 
-
 import pytest
 import torch
 from loguru import logger

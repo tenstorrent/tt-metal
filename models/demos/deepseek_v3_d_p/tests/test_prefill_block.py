@@ -498,13 +498,10 @@ def run_model(
 def _ci_unsupported_param_combos(**params):
     on_ci = params["on_ci"]
     is_balanced = params["is_balanced"]
-    fabric_config = params["device_params"].get("fabric_config")
 
     if not on_ci:
         return False
     if not is_balanced:
-        return True
-    if fabric_config != ttnn.FabricConfig.FABRIC_2D:
         return True
     return False
 
@@ -534,7 +531,7 @@ def _ci_unsupported_param_combos(**params):
         pytest.param(
             (2, 4),
             fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-            1,
+            2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
         ),

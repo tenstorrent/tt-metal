@@ -29,11 +29,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Confi
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
-    fabric2d_device_params,
-    torus_xy_device_params,
-    torus_y_device_params,
-)
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_moe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -686,13 +682,10 @@ def run_model(
 
 def _ci_unsupported_param_combos_ds_moe(**params):
     on_ci = params["on_ci"]
-    fabric_config = params["device_params"]["fabric_config"]
     gate_fallback_mode = params["gate_fallback_mode"]
 
     if not on_ci:
         return False
-    if fabric_config != ttnn.FabricConfig.FABRIC_2D:
-        return True
     if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
         return True
     return False
@@ -735,20 +728,6 @@ def _ci_unsupported_param_combos_ds_moe(**params):
     "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (8, 1),
-            torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-            2 if is_blackhole() else 1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="torus-y-8x1",
-        ),
-        pytest.param(
-            (4, 2),
-            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-            2 if is_blackhole() else 1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="fabric2d-mesh-4x2",
-        ),
-        pytest.param(
             (2, 4),
             fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
@@ -761,22 +740,6 @@ def _ci_unsupported_param_combos_ds_moe(**params):
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
-        ),
-        # The production galaxy transport (the e2e prefill block runs 8x4 over FABRIC_2D);
-        # the only 8x4 config the CI uncollect predicate keeps.
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-mesh-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -840,18 +803,11 @@ def test_ds_moe(
     "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (8, 1),
-            torus_y_device_params(fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
-            2 if is_blackhole() else 1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="torus-y-8x1",
-        ),
-        pytest.param(
-            (4, 2),
+            (2, 4),
             fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="fabric2d-mesh-4x2",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4",
         ),
         pytest.param(
             (8, 4),

@@ -403,13 +403,11 @@ def run_model(
 
 def _ci_unsupported_param_combos(**params):
     on_ci = params["on_ci"]
-    fabric_config = params["device_params"]["fabric_config"]
     is_balanced = params["is_balanced"]
 
     if not on_ci:
         return False
-    if fabric_config != ttnn.FabricConfig.FABRIC_2D:
-        return True
+
     if not is_balanced:
         return True
     return False
