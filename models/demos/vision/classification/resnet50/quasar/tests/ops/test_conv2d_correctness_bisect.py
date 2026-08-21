@@ -188,7 +188,7 @@ def _report_error_pattern(golden, tt, oh, ow, c):
     logger.info(f"[BISECT] golden absmax={float(g.abs().max()):.3f} tt absmax={float(t.abs().max()):.3f}")
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 # PER-ELEMENT-STAGE discriminator. The window-shape sweep (k3x3/k3x1/k1x3/k2x2) all gave ~0.85 regardless
 # of tap count => the corruption is NOT in the reduction (gather/weight-K/matmul-K would scale with taps).

@@ -33,7 +33,7 @@ def _emit_configure(
     unpack_B_dst: DataFormat,
 ) -> str:
     if _is_unary_broadcast_unpacker(compute_node):
-        return f"_llk_unpack_configure_unary_<p_unpacr::UNP_B>({unpack_B_dst.cpp_underlying_value});\n"
+        return f"_llk_unpack_configure_unary_<p_unpacr::UNP_B>(static_cast<DataFormat>({unpack_B_dst.cpp_underlying_value}));\n"
 
     is_unary = is_unary_unpacker(compute_node)
     has_reuse_dest = compute_node.reuse_dest != EltwiseBinaryReuseDestType.NONE
@@ -44,11 +44,11 @@ def _emit_configure(
         code += f"_llk_math_upk_to_dest_hw_configure_<false, {dest_acc}, false>();\n"
 
     if is_unary and ((dest_acc == "true" and not unpack_to_dest) or has_reuse_dest):
-        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>({unpack_A_dst.cpp_underlying_value}, {unpack_A_dst.cpp_underlying_value});\n"
+        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}), static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}));\n"
     elif is_unary:
-        code += f"_llk_unpack_configure_unary_<p_unpacr::UNP_A>({unpack_A_dst.cpp_underlying_value});\n"
+        code += f"_llk_unpack_configure_unary_<p_unpacr::UNP_A>(static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}));\n"
     else:
-        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>({unpack_A_dst.cpp_underlying_value}, {unpack_B_dst.cpp_underlying_value});\n"
+        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}), static_cast<DataFormat>({unpack_B_dst.cpp_underlying_value}));\n"
 
     return code
 

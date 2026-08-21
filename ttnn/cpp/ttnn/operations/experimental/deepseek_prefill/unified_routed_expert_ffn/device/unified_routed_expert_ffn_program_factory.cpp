@@ -730,11 +730,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         in0_block_w_gu,                       // 21
         K_gate_tiles,                         // 22
         static_cast<uint32_t>(up_mode == 2),  // 23 writer_split_up
-        // down_k_tail_skip: when the compute tail-skips the last down block's
-        // K padding, the down matmul never reduces the N-OOB hidden columns, so
-        // the writer's `up` read can skip zero-filling them. Must match the
-        // reader's identically-derived constexpr.
-        static_cast<uint32_t>((K_down_tiles_padded - K_down_tiles) < in0_block_w_d),  // 24 down_k_tail_skip
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start (direct-write), then up (UP_SPLIT).
@@ -830,8 +825,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
     std::map<std::string, std::string> compute_defines{};
     compute_defines["PACKER_L1_ACC"] = "1";
-    // Dst-accumulator mode -> compute kernel: the SwiGLU-OAI dst budget and the
-    // SFPU fp32-dest template derive from this, staying in sync with
+    // Dst-accumulator mode -> compute kernel: the fused-binary-activation dst budget and
+    // the SFPU fp32-dest template derive from this, staying in sync with
     // DST_CAPACITY / ComputeConfig.fp32_dest_acc_en (single source above).
     compute_defines["FP32_DEST_ACC_EN"] = kFp32DestAccEn ? "1" : "0";
     if (op.activation == RoutedExpertActivation::SwiGluOai) {
@@ -839,10 +834,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // clamp(up,±L), (up+1)*gate*sigmoid(alpha*gate). Bakes alpha=1.702,
         // limit=7.0 (SwiGLUConfigGPTOSS) in the kernel.
         compute_defines["SWIGLU_OAI"] = "1";
+    } else if (op.activation == RoutedExpertActivation::SituGlu) {
+        // SiTU-GLU (Kimi K3), with beta_gate=4.0 / beta_up=25.0 baked into the kernel.
+        compute_defines["SITU_GLU"] = "1";
     }
     if (fuse_bias) {
-        // FUSE_BIAS: add gate/up bias (broadcast across rows) before the
-        // SwiGLU-OAI activation and down bias after the down matmul (gpt-oss).
+        // FUSE_BIAS: add gate/up bias (broadcast across rows) before the fused binary
+        // activation and down bias after the down matmul. Validation restricts this to
+        // the activations that have that branch.
         compute_defines["FUSE_BIAS"] = "1";
     }
 
@@ -1007,6 +1006,26 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             up_done_sem_id,                        // 8
         };
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
+
+        // Compute: how many of this core's N subblocks hold REAL output columns.
+        // per_core_N is the GRID-ceil'd width, so the highest-gx cores own phantom
+        // columns past the true N; their weights are never read from DRAM, so
+        // MACing them just burns cycles on stale L1. A subblock straddling the
+        // boundary still has real columns, hence the ceil — only wholly-phantom
+        // subblocks are skipped. The compute keeps its FULL-width reserve/push
+        // (cb_activated feeds the fixed-size activated mcast, cb_out the writer's
+        // fixed-size drain); this bounds the MAC only.
+        const uint32_t valid_n_gu = std::min(
+            per_core_N_gu,
+            (N_gate_tiles_full > my_nt_gu * per_core_N_gu) ? N_gate_tiles_full - my_nt_gu * per_core_N_gu : 0u);
+        const uint32_t valid_n_d = std::min(
+            per_core_N_d,
+            (N_down_tiles_full > my_nt_d * per_core_N_d) ? N_down_tiles_full - my_nt_d * per_core_N_d : 0u);
+        std::vector<uint32_t> compute_args = {
+            (valid_n_gu + gu_out_subblock_w - 1) / gu_out_subblock_w,  // 0 gu valid N subblocks
+            (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w,     // 1 down valid N subblocks
+        };
+        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, compute_args);
     }
 
     return cached_program_t{
