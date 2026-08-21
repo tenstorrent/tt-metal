@@ -496,8 +496,8 @@ class TTSampling(LightweightModule):
         live ("Statically allocated circular buffers ... clash with L1 buffers on
         core range [0-0 - 0-0]"). Untilizing in ``_ARGMAX_UNTILIZE_CHUNK``-wide
         pieces caps the CB at the chunk stick (~64 KB) and then concatenates them
-        for a single multi-core argmax; measured 5.0 ms vs 4.5 ms for the
-        monolithic untilize at vocab 262144 / batch 32 on WH.
+        for a single multi-core argmax, for a small cost over the monolithic
+        untilize.
 
         Narrower rows (the Galaxy configs that already ship this path) keep the
         single untilize — they never approached the L1 ceiling.

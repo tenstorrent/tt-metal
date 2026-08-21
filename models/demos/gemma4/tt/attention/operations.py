@@ -174,17 +174,16 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
     * **decode** (``decode=True`` and M<=32): ``weights.qkv_decode_config``, the
       swept narrow-N 1D-mcast program + compute-kernel config (see
       ``dram_sharded.decode_1d_matmul_config``). auto spreads this shape one
-      N-tile per core and collapses the output subblock to 1x1, running at 33% of
-      DRAM peak; fewer cores with a larger ``per_core_N`` fixes it.
+      N-tile per core and collapses the output subblock to 1x1, stalling the
+      reload/pack pipeline; fewer cores with a larger ``per_core_N`` fixes it.
     * **prefill** (everything else): ``interleaved_prefill_config``. Prefill output
       is DRAM interleaved so prefill SDPA keeps a clean L1 for its static CBs
       (L1 QKV out under SDPA clashed on WH 8x8). When the prefill L1 budget allows,
       in0 is hoisted from DRAM to L1 interleaved before the matmul (or landed
       there by input_layernorm S2I) — see ``hoist_prefill_matmul_in0_if_needed``.
 
-    NOTE the decode config is NOT bit-exact against auto (maxabs ~7 on the
-    [32,2048] output), though it IS closer to an fp32 reference than auto is
-    (PCC 0.999994 vs 0.999922). It changes generated text by forking greedy
+    NOTE the decode config is NOT bit-exact against auto, though it IS closer to
+    an fp32 reference than auto is. It changes generated text by forking greedy
     decoding, so it is gated by ``GEMMA4_QKV_DECODE_PROGCFG``.
     """
     if isinstance(weights.wqkv, DramShardedLinear):
@@ -336,8 +335,7 @@ def apply_rope(tensor, cos_cache, sin_cache, token_index=None, memory_config=Non
     # trailing rows are ordinary tile padding, so no device copy is needed. The
     # follow-up ``result[:, :, :orig_shape[2]]`` this used to do was a
     # full-extent (identity) slice on the already-corrected logical shape, yet
-    # still launched a real SliceDeviceOperation: 2 per layer x 60 layers =
-    # 120 ops / ~0.43 ms per decode step on 31B.
+    # still launched a real SliceDeviceOperation twice per layer.
     if token_index is not None and result.shape[2] != orig_shape[2]:
         result = ttnn.reshape(
             result,
@@ -709,8 +707,8 @@ def concat_heads(
         # [1, 1, batch, hidden_local] just like the old transpose+concat path.
         # The padding is trailing tile padding, so a (logical, padded) reshape
         # expresses the trim as metadata; the old ``out[:, :, :batch, :]`` slice
-        # launched a real SliceDeviceOperation per layer (60 ops / ~0.22 ms per
-        # decode step on 31B) to produce a bit-identical tensor.
+        # launched a real SliceDeviceOperation per layer to produce a
+        # bit-identical tensor.
         if out.shape[2] != batch:
             out = ttnn.reshape(
                 out,
@@ -755,11 +753,9 @@ def apply_output_projection(tensor, weights: AttentionWeights, memory_config=Non
         out = prefill_linear_above_cutoff(tensor, weights.o_proj, out_memory_config=memory_config)
         tensor.deallocate(True)
         return out
-    # Decode: land the projection in L1 instead of DRAM. Bit-exact (the matmul
-    # keeps its program config, only the writeback target changes) and measured
-    # 38.9 -> 33.8 us in isolation (sweeps/mm_l1_progcfg.py ARM=l1, "in0 DRAM,
-    # out L1", torch.equal-clean). The [1,1,32,5376] result is 344 KB and its
-    # only consumer is the all-reduce.
+    # Decode: land the projection in L1 instead of DRAM. Bit-exact -- the matmul
+    # keeps its program config, only the writeback target changes. The
+    # [1,1,32,5376] result is 344 KB and its only consumer is the all-reduce.
     if tuned_out_memcfg is None and memory_config is None and rows <= ttnn.TILE_SIZE:
         tuned_out_memcfg = ttnn.L1_MEMORY_CONFIG
     act, act_l1 = hoist_prefill_matmul_in0_if_needed(tensor, program_config)
@@ -806,33 +802,24 @@ def prefill_sdpa_compute_kernel_config(device):
         ``verify_numerical_configuration`` (only matmul / reduction / softmax do),
         so it never warned, which is why the exposure here went unnoticed while the
         decode ``lm_head`` matmul was busy printing the warning for it. Still the
-        best setting for 12B by a small margin — see below.
+        best setting for 12B, by a small margin.
       * ``hifi3`` — HiFi3 + fp32 dest-acc, the runtime's own recommendation for
         Wormhole under #38306. Better than ``hifi4`` on 31B, but worse than
         ``hifi4_nodest`` on both variants.
 
-    Why hifi4_nodest is the default. Measured on
-    ``test_teacher_forcing_e2e[prefill_512-max_new_tokens_500-1x8]``, WH T3K 1x8,
-    which is bit-reproducible across repeats (two identical 12B runs returned
-    top-1 75.85% and KL 0.440552 exactly), so these differences are real:
-
-        setting          12B top-1 / KL          31B top-1 / KL      #38306
-        hifi4            80.44% / 0.292035       73.05% / 0.875192   exposed
-        hifi3            79.44% / 0.335644       75.65% / 0.671577   safe
-        hifi4_nodest     79.24% / 0.309582       76.65% / 0.579870   safe
-
-    So the default trades ~1.2pp of 12B top-1 (KL +6%) for +3.6pp on 31B
-    (KL -34%), and removes the hardware-bug exposure on both. 12B's own optimum is
+    Why hifi4_nodest is the default: it gives up a little 12B top-1 to gain more
+    on 31B, and removes the hardware-bug exposure on both. 12B's own optimum is
     the ``hifi4`` it used to have, which is the #38306 combination — there is no
     single setting that is both best-everywhere and safe, and this is the chosen
     compromise rather than an oversight. Override per deployment with
-    ``GEMMA4_PREFILL_SDPA_FIDELITY``.
+    ``GEMMA4_PREFILL_SDPA_FIDELITY``. Judge it on
+    ``test_teacher_forcing_e2e``, which is bit-reproducible across repeats.
 
     Score further A/Bs of this knob on the teacher-forcing decision-distance block
     (KL / max|dlogit|), not on token counts and not on the per-layer PCC ladder:
-    the ladder ranked ``hifi3`` above ``hifi4_nodest`` on 31B prefill hidden states
-    (0.015299 vs 0.015868) and the e2e ranking is the other way round, so the
-    ladder is indicative for localising error, not for picking between fidelities.
+    the ladder ranks ``hifi3`` above ``hifi4_nodest`` on 31B prefill hidden states
+    while the e2e ranking is the other way round, so the ladder is indicative for
+    localising error, not for picking between fidelities.
 
     Blackhole is unaffected by #38306; the default is the same there, since
     hifi4_nodest measured best on accuracy grounds independently of the bug.

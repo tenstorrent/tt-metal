@@ -240,34 +240,21 @@ def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE):
     choice is already at the DRAM-bandwidth ceiling and forcing a config only
     ever costs time. But when N per device is narrow relative to the grid, auto
     spreads N one tile per core and the output subblock collapses to 1x1, which
-    stalls the reload/pack pipeline: the Gemma4-31B fused QKV projection
-    (K=5376, N=2048) ran 64 cores / per_core_N=1 / subblock 1x1 at **33% of
-    DRAM peak**. Using FEWER cores with a larger ``per_core_N`` fixes it.
-
-    Trace-replay sweep on 1x8 WH (bf16 act x bfp8 weight, M=32) over
-    grid x per_core_N x out_subblock_w x in0_block_w, PCC vs an fp32 reference
-    against the on-device bfp8 weight (so the gap is accumulation error only):
-
-      | matmul                   | auto              | this config       |
-      |--------------------------|-------------------|-------------------|
-      | qkv sliding K5376 N2048  | 121.6us  .999923  |  66.5us  .999993  |
-      | qkv global  K5376 N3072  | 110.8us  .999922  |  90.9us  .999995  |
-      | gate_up     K5376 N5376  | 152.0us  202 GB/s | (auto wins)       |
-      | down_proj   K2688 N5376  |  81.0us  190 GB/s | (auto wins)       |
-      | o_proj      K1024 N5376  |  37.6us  156 GB/s | (auto wins)       |
-      | o_proj glob K2048 N5376  |  64.9us  180 GB/s | (auto wins)       |
+    stalls the reload/pack pipeline. Using FEWER cores with a larger
+    ``per_core_N`` fixes it.
 
     So a config is returned ONLY in the narrow-N regime (``n_tiles <
-    2 * grid_cores``); everything else keeps auto. A DRAM-width-sharded
-    (``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``) arm was swept
-    over the same shapes and lost badly on Wormhole (12-47 GB/s vs 95-202) —
-    see ``can_dram_shard``, which is Blackhole-only for the same reason.
+    2 * grid_cores``); everything else keeps auto — for the wide shapes a forced
+    config loses to auto. A DRAM-width-sharded
+    (``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``) arm loses badly
+    on Wormhole — see ``can_dram_shard``, which is Blackhole-only for the same
+    reason.
 
     ``fp32_dest_acc_en=True`` is part of the win: forcing the blocking changes
     how many products land in DST before packing, and fp32 accumulation costs
     nothing here (the matmul is DRAM-bandwidth-bound, not DST-bound) while
-    taking PCC to 0.999993 — *better* than auto's 0.999923. ``packer_l1_acc``
-    must stay True; False measured PCC 0.9988 at every in0_block_w.
+    improving accumulation accuracy over auto. ``packer_l1_acc`` must stay
+    True — False degrades PCC at every ``in0_block_w``.
     """
     if os.environ.get("GEMMA4_QKV_DECODE_PROGCFG", "1").lower() in ("0", "false", "no"):
         return None
@@ -284,10 +271,8 @@ def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE):
     if cores < 2:
         return None
     # WIDTH-MAJOR grid (fewest rows). Orientation is NOT free for a 1D mcast
-    # matmul even at a fixed core count — measured on the two 31B QKV shapes:
-    #   K=5376 N=2048: 8x4 = 66.5 us   vs   4x8 = 93.1 us  (auto 121.4)
-    #   K=5376 N=3072: 8x6 = 94.4 us   vs   6x8 = 138.4 us (auto 110.8)
-    # i.e. the tall variant is not just slower, it can lose to auto outright.
+    # matmul even at a fixed core count: the tall variant is not just slower, it
+    # can lose to auto outright.
     rows = next((y for y in range(1, grid.y + 1) if cores % y == 0 and cores // y <= grid.x), None)
     if rows is None:
         return None
@@ -465,13 +450,9 @@ def _prefill_hifi4_ckc():
 def prefill_linear_above_cutoff(x, weight, *, out_memory_config=None):
     """``ttnn.linear`` with cutoff-sized 2D CBs when M exceeds ``_PREFILL_CUTOFF``.
 
-    Isolation measurement (WH 1x8, HiFi2, bfp8):
-    down 2048×2688×5376 auto 1672µs → reshape 1198µs (1.42x); o_proj 2048×1024×5376
-    646µs → 576µs (1.12x). gate_up / QKV at M=2048: auto already wins.
-
-    12B isolation (M=4096, K=N=3840): gate_up
-    reshape+LoFi 1976µs vs auto+LoFi 2199µs (1.11x, PCC 0.99985). SharedMLP
-    uses this path only for ``m >= 4096`` so 31B's 2048-chunk auto+LoFi stays.
+    The reshape wins for ``down`` and ``o_proj``; at M=2048 ``gate_up`` / QKV are
+    already better under auto. SharedMLP therefore takes this path only for
+    ``m >= 4096``, so 31B's 2048-chunk auto+LoFi stays.
 
     Reshape is metadata-only (tile-aligned). CBs stay sized to the cutoff so this
     is safe under a full layer, unlike pinning ``prefill_progcfg`` at full M.
@@ -509,10 +490,9 @@ def prefill_linear_above_cutoff(x, weight, *, out_memory_config=None):
 def l1_block_sharded_memcfg(rows, cols, grid=None):
     """L1 BLOCK_SHARDED memory config for a 2D activation/output ``(rows, cols)``.
 
-    Matches ``sweeps/sweep_common.act_memcfg(..., "l1_block_sharded")``: split
-    row-tiles over y and col-tiles over x, taking the largest divisors that fit
-    the worker grid. Used for the fused-QKV prefill matmul output — the measured
-    winner in ``test_qkv_matmul_sweep`` (M=128 K=5376 N=2048 → CoreGrid 8x4).
+    Splits row-tiles over y and col-tiles over x, taking the largest divisors that
+    fit the worker grid. Used for the fused-QKV prefill matmul output — the
+    measured winner for M=128 K=5376 N=2048 (CoreGrid 8x4).
     """
     if grid is None:
         grid = prefill_grid_default()  # (x, y) = (cols, rows) of worker grid
@@ -540,11 +520,10 @@ def interleaved_prefill_config(m, k, n):
     Off Blackhole ``can_dram_shard`` is always False, so the projections never
     reach ``DramShardedLinear`` and ttnn auto-selects with no program config at
     all. For the fused QKV shape (M=128 K=5376 N=2048 at TP=8) it picks
-    ``per_core_N=1``, which forces ``out_subblock_w=1`` and starves the FPU —
-    39.9% DRAM and 10.9% FPU in the 1x8 profile, saturating neither.
-    ``prefill_progcfg`` returns 8x8 / ``in0_block_w=4`` / ``out_subblock 1x4``
-    for that shape, measured ~1.35x faster at identical PCC by
-    ``models/demos/gemma4/sweeps/test_qkv_matmul_sweep.py``.
+    ``per_core_N=1``, which forces ``out_subblock_w=1`` and starves the FPU,
+    saturating neither DRAM nor the FPU. ``prefill_progcfg`` returns 8x8 /
+    ``in0_block_w=4`` / ``out_subblock 1x4`` for that shape, which measured faster
+    at identical PCC.
 
     Bounded by ``_PREFILL_CUTOFF`` for the same reason ``DramShardedLinear``
     chunks there: the 2D kernel's CBs scale with ``per_core_M``, so pinning this
@@ -631,8 +610,8 @@ def prefill_progcfg_1d(m, k, n, cores=None, in0_block_w=None, grid_size=None, fu
 
     Sweep family for the fused gate+up shape: every core holds all of M and a
     slice of N. Measured winner for M=128 K=5376 N=5376 (31B TP=8) is
-    ``1d_c42_bw4`` — see ``test_gate_up_matmul_sweep``. Returns ``None`` when
-    no valid core count divides N-tiles into the worker grid.
+    ``1d_c42_bw4``. Returns ``None`` when no valid core count divides N-tiles into
+    the worker grid.
 
     ``fuse_batch`` must be ``True`` when in0 is sharded (ttnn TT_FATAL otherwise);
     leave ``False`` for the interleaved-in0 sweep winner path.
@@ -679,11 +658,10 @@ def interleaved_gate_up_prefill_config(m, k, n):
     gate+up on a DRAM-*interleaved* weight, or all-``None`` for ttnn auto.
 
     Off Blackhole ``can_dram_shard`` is False, so ``SharedMLP.gate_up_proj`` is a
-    bare ``ttnn.linear``. ``test_gate_up_matmul_sweep`` ranks the overall winner
-    for M=128 K=5376 N=5376 at TP=8 as ``1d_c42_bw4`` + L1-interleaved in0/out
-    (HiFi2 sweep). CKC is ``_prefill_hifi4_ckc``. ``test_gate_up_output_slice_cost``
-    confirmed L1-interleaved out is consumable by the GeGLU ``ttnn.slice`` split
-    (and faster as a matmul+slice group than DRAM out).
+    bare ``ttnn.linear``. The swept winner for M=128 K=5376 N=5376 at TP=8 is
+    ``1d_c42_bw4`` + L1-interleaved in0/out. CKC is ``_prefill_hifi4_ckc``.
+    L1-interleaved out is consumable by the GeGLU ``ttnn.slice`` split, and faster
+    as a matmul+slice group than DRAM out.
 
     Same ``_PREFILL_CUTOFF`` band as ``interleaved_prefill_config``: residency
     measured ``in0+out`` L1 interleaved up to ISL 1024 on WH; above that (and for
@@ -705,8 +683,8 @@ def interleaved_down_proj_prefill_config(m, k, n):
     SharedMLP ``down_proj`` on a DRAM-*interleaved* weight, or all-``None`` for
     ttnn auto.
 
-    ``test_down_proj_matmul_sweep`` ranks the overall winner for M=128 K=2688
-    N=5376 at TP=8 as ``1d_c42_bw4`` + L1-interleaved in0/out (HiFi2 sweep).
+    The swept winner for M=128 K=2688 N=5376 at TP=8 is ``1d_c42_bw4`` +
+    L1-interleaved in0/out.
     CKC is ``_prefill_hifi4_ckc``. Same ``prefill_progcfg_1d`` family as gate+up
     (Nt=168 → 42 cores); K differs (2688 vs 5376) but ``in0_block_w=4`` still
     divides Kt=84.
@@ -816,7 +794,7 @@ def interleaved_o_proj_prefill_config(m, k, n, grid=None):
     output L1 *block-sharded*.
 
     Program config is the full-width 2D ``prefill_progcfg`` — ``2d_8x8_bw4`` at
-    this shape on WH, matching the ``test_o_proj_sharded_output`` case. The grid is
+    this shape on WH. The grid is
     pinned to ``prefill_grid_default()`` rather than left to ``_best_prefill_cols``
     (which picks 7 columns here) because the block-sharded output needs 8 shard
     columns for Nt=168, and a shard grid wider than the compute grid is a
@@ -827,53 +805,32 @@ def interleaved_o_proj_prefill_config(m, k, n, grid=None):
     large on 31B and a regression on 12B, so it cannot be a global default. Do not
     flip it on globally without measuring the variant you care about.
 
-    On **31B** it is a substantial accuracy win that the throughput measurement
-    below could not see, because that measurement's PCC check read 0.99993 on
-    *every* arm — per-op, the arms are indistinguishable. That check is the wrong
-    instrument: the difference compounds through 60 layers, and the
-    per-layer hidden-state PCC ladder against the HF reference (31B 1x8 len512,
-    bit-deterministic across repeats) measures
-    **total PCC lost 0.024539 -> 0.016006, a 34.8% reduction**. End to end on
-    ``test_teacher_forcing_e2e[prefill_512-max_new_tokens_500-1x8]``: KL(HF||TT) mean
-    0.671577 -> 0.458668, top-1 75.65% -> 78.64%, worst-step logit PCC 0.424 ->
-    0.459, confident flips 6 -> 3, outside-HF-top-5 28 -> 11.
+    On **31B** it is an accuracy win that a per-op PCC check cannot see: per-op the
+    arms are indistinguishable, and the difference only shows up once it has
+    compounded through all 60 layers. Judge this config on the per-layer
+    hidden-state PCC ladder against the HF reference and on
+    ``test_teacher_forcing_e2e``, not on a single op.
 
-    On **12B** the same config regresses accuracy. On
-    ``test_teacher_forcing_e2e[prefill_512-max_new_tokens_500-1x8]`` (bit-reproducible
-    across repeats) enabling it moves top-1 79.44% -> 75.85% and KL(HF||TT) mean
-    0.335644 -> 0.440552. The tuning pins a full-width 2D program config whose
-    block-sharded output grid depends on ``n``: 31B has n=5376 (Nt=168, 8 shard
-    columns) and 12B has n=3840 (Nt=120), so the blocking, subblock structure and
-    accumulation order differ per variant. A per-variant gate (the mesh/variant
-    keying ``Gemma4Precision`` already uses) is the right home for this if it is
-    ever turned on by default.
+    On **12B** the same config regresses accuracy. The tuning pins a full-width 2D
+    program config whose block-sharded output grid depends on ``n``: 31B has n=5376
+    (Nt=168, 8 shard columns) and 12B has n=3840 (Nt=120), so the blocking,
+    subblock structure and accumulation order differ per variant. A per-variant
+    gate (the mesh/variant keying ``Gemma4Precision`` already uses) is the right
+    home for this if it is ever turned on by default.
 
     The cost is bounded and one-off, not per-token: this config only fires for
     ``TILE_SIZE < m <= _PREFILL_CUTOFF`` (see the guard below), so decode (m=32)
     keeps the auto path untouched and pays nothing. Prefill pays the wired-vs-auto
-    delta once per layer per prefill — with the interleave-back that
-    ``apply_allreduce`` adds, ~61.5 us x 60 layers ~= 3.7 ms of TTFT. The decode-side
-    gain is inherited: a better prefill o_proj writes a better KV cache, and every
-    subsequent decode step reads it.
+    delta once per layer per prefill. The decode-side gain is inherited: a better
+    prefill o_proj writes a better KV cache, and every subsequent decode step reads
+    it.
 
-    ``test_o_proj_wired_config_vs_auto`` on WH 1x8
-    (64 iters x 8 repeats, best-of, host micros, PCC 0.99993 on every arm):
-
-    ==========================  ========  ========
-    arm                             µs    vs auto
-    ==========================  ========  ========
-    auto (production)               78.0     1.00x
-    wired matmul, L1 in0            84.3     0.93x
-    wired + interleave_back        139.5     0.56x
-    wired, DRAM in0 + hoist        184.9     0.42x
-    ==========================  ========  ========
-
-    Two separate losses. The matmul itself is within noise of auto. And the CCL
-    allreduce cannot consume a block-sharded input, so ``apply_allreduce`` must add
-    a ``sharded_to_interleaved`` back to DRAM (~55 µs) — more than the matmul could
-    win. Hoisting in0 from DRAM instead of landing concat_heads in L1 costs another
-    ~45 µs, which is why ``o_proj_input_memcfg`` exists. Absolute host micros swing
-    ~2x run to run; the ranking is what has been stable.
+    Throughput-wise there are two separate losses. The matmul itself is within
+    noise of auto. And the CCL allreduce cannot consume a block-sharded input, so
+    ``apply_allreduce`` must add a ``sharded_to_interleaved`` back to DRAM — more
+    than the matmul could win. Hoisting in0 from DRAM instead of landing
+    concat_heads in L1 costs more still, which is why ``o_proj_input_memcfg``
+    exists.
 
     Same ``_PREFILL_CUTOFF`` band as the other tuned prefill configs: decode
     (``M<=32``) and long context return all-``None`` and keep the prior auto path.
@@ -901,8 +858,8 @@ def lm_head_decode_config(mesh_device, m, k, n):
     """``(program_config, out_memory_config, compute_kernel_config)`` for decode
     / last-token ``lm_head``, or all-``None`` for ttnn auto.
 
-    ``test_lm_head_matmul_sweep`` overall winner at M=32 K=5376 N=32768 (31B TP=8):
-    ``1d_c64_bw1`` + DRAM in0 + L1-interleaved out + HiFi4 bf16 (~1.08x vs auto).
+    Swept winner at M=32 K=5376 N=32768 (31B TP=8): ``1d_c64_bw1`` + DRAM in0 +
+    L1-interleaved out + HiFi4 bf16.
     Scoped to ``m_tiles==1`` and ``n <= 64K`` — the same regime as the prior
     ``_get_lm_head_program_config`` guard (full-vocab tp=1 and multi-row-tile
     prefill fall back to auto).
@@ -913,8 +870,8 @@ def lm_head_decode_config(mesh_device, m, k, n):
 
       * ``hifi3_destacc`` (**default**) — HiFi3 + fp32 dest-acc, the runtime's own
         recommendation for Wormhole under #38306, keeping the dest-acc that
-        ``b040c13f3a6`` wanted. Measured equal to ``hifi4_destacc`` and free of
-        the bug exposure; see the numbers below.
+        ``b040c13f3a6`` wanted. Measures equal to ``hifi4_destacc`` and is free of
+        the bug exposure.
       * ``hifi4_destacc`` — HiFi4 + fp32 dest-acc, the previous default. This is a
         matmul, so it calls ``verify_numerical_configuration``, and on Wormhole B0
         it emits "output accuracy can be worse with HiFi4 than HiFi3 due to a
@@ -924,16 +881,10 @@ def lm_head_decode_config(mesh_device, m, k, n):
       * ``hifi4`` — HiFi4 without dest-acc, the pre-``b040c13f3a6`` behaviour. Also
         #38306-safe, but measurably worse than either of the above.
 
-    Why HiFi3 is the default. ``test_lm_head_bfp8_weight_decode_batch32``
-    [wormhole_b0-1x8] on 31B, op PCC: ``hifi4_destacc`` 0.9999652094 (warns),
-    ``hifi3_destacc`` 0.9999652102 (silent), ``hifi4`` 0.9998385074 (silent). So
-    the dest-acc gain is real and HiFi3 keeps all of it, differing from HiFi4 in
-    the ninth decimal while leaving the buggy combination. End-to-end on
-    ``test_teacher_forcing_e2e[prefill_512-max_new_tokens_500-1x8]``, 31B: top-1
-    and top-5 identical (73.05% / 94.41%), logit PCC mean identical (0.939216),
-    KL(HF||TT) mean 0.874795 vs 0.875192 — i.e. a wash on accuracy, and HiFi3 is
-    never the more expensive fidelity. Set ``GEMMA4_LM_HEAD_FIDELITY=hifi4_destacc``
-    to restore the previous default.
+    Why HiFi3 is the default: the dest-acc gain is real and HiFi3 keeps all of it,
+    so it matches ``hifi4_destacc`` per-op and end-to-end while leaving the buggy
+    combination behind — and HiFi3 is never the more expensive fidelity. Set
+    ``GEMMA4_LM_HEAD_FIDELITY=hifi4_destacc`` to restore the previous default.
 
     Score any further A/B on per-step logit KL / PCC (``test_teacher_forcing_e2e``'s
     decision-distance block), not on token-flip counts: at the sample sizes those

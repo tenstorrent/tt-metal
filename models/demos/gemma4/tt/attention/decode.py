@@ -145,8 +145,8 @@ def decode_forward(
     # 1. Fused QKV projection. Land the output straight in L1: the only consumer
     # is ``nlp_create_qkv_heads_decode``, which needs an L1 input anyway (see
     # split_qkv_heads_decode). Writing DRAM and copying back cost one extra
-    # CopyDeviceOperation per layer (60 ops / ~0.18 ms per decode step on 31B)
-    # plus a full DRAM round-trip of the fused QKV. At decode M=32 the tensor is
+    # CopyDeviceOperation per layer plus a full DRAM round-trip of the fused
+    # QKV. At decode M=32 the tensor is
     # tiny (2048-3072 cols bf16 = 128-192 KB across the grid).
     xqkv = apply_qkv_projection(hidden_states, weights, memory_config=ttnn.L1_MEMORY_CONFIG, decode=True)
 

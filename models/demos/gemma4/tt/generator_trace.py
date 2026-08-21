@@ -96,8 +96,7 @@ def maybe_auto_enable_chunked_prefill_trace(
       * not ``bounded_sliding`` (bounded final-chunk KV cannot safely replay)
       * ``max_seq_len > prefill_chunk`` (otherwise a single chunk is enough)
 
-    Measured on WH T3K 31B long-4k (chunk=2048, packet 6144): warm TTFT
-    ~1737 ms eager → ~1699 ms traced (~−2%). Needs WH ``trace_region_size``
+    Tracing buys a small warm-TTFT win here. Needs WH ``trace_region_size``
     ≥ ~68 MB so decode capture still fits after the extra prefill traces.
     """
     if "GEMMA4_CHUNKED_PREFILL_TRACE" in os.environ:
@@ -864,12 +863,8 @@ def warmup_gemma4_batched_prefill_traces(
     # placed at the top of the span -- the runtime chunk's exact shape; running
     # ``span`` real users would re-introduce the B>4 hang ``user_cap`` avoids.
     #
-    # OFF BY DEFAULT. The win is real but config-dependent, and the cost is not
-    # (WH 1x8 / 12B, warmup / TTFT):
-    #
-    #   batch-8   spans [8]         20.8 -> 32.0 s,  2365 -> 419 ms
-    #   batch-32  spans [8]         20.8 -> 31.9 s,  1439 -> 1435 ms
-    #   batch-32  spans [8, 16, 32] 20.8 -> 75.3 s,  1439 -> 1436 ms
+    # OFF BY DEFAULT. The TTFT win is real but config-dependent, while the warmup
+    # cost is paid unconditionally and grows with each extra span.
     #
     # batch-32 pays and replays none of it: its prompt lengths are not uniform
     # enough for ``can_batch_prefill`` to batch at all. And nothing gates output

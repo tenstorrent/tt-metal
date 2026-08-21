@@ -102,8 +102,7 @@ def decode_width_shard_spec(mesh_device, dim):
     Pulled out of ``RMSNorm`` so that PRODUCERS of a decode activation can emit
     exactly this layout and skip the interleaved->sharded reshard the norm would
     otherwise do. ``ccl.ccl_allreduce`` uses it to have its all-gather write
-    width-sharded L1 directly: measured 47.2 -> 43.5 us per all-reduce
-    (-0.45 ms/decode step on 31B), bit-exact.
+    width-sharded L1 directly, bit-exact.
 
     Both sides MUST derive the layout from this one function -- a producer that
     hands the norm a shard spec differing in core count or block width silently
@@ -225,8 +224,8 @@ class RMSNorm(nn.Module):
 
         # Width-sharded fast path (decode AND prefill). The plain (interleaved)
         # rms_norm runs the RMS reduction over the full hidden width on few
-        # cores — e.g. ~90 us for a [1,1,128,hidden] prefill norm on Gemma4-31B
-        # (hidden=5376) landing on only 4 of 64 cores, since the interleaved op
+        # cores — e.g. a [1,1,128,hidden] prefill norm on Gemma4-31B
+        # (hidden=5376) lands on only 4 of 64 cores, since the interleaved op
         # parallelizes over row-tiles, not the hidden width. Width-sharding the
         # activation across a core grid parallelizes the reduction
         # (LayerNormShardedMultiCoreProgramConfig handles the cross-core gather)
@@ -250,8 +249,7 @@ class RMSNorm(nn.Module):
 
         ``already_sharded`` means the producer handed us this exact layout (see
         :func:`width_shard_spec`), so the interleaved->sharded reshard is
-        skipped. The norm itself is unchanged, so the result is bit-identical
-        (17.7 -> 10.8 us for the norm + its reshards).
+        skipped. The norm itself is unchanged, so the result is bit-identical.
 
         ``keep_sharded`` leaves the width-sharded L1 output in place so the next
         consumer (residual add, another norm, gate_up) can stay in the sharded

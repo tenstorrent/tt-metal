@@ -1230,12 +1230,12 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         return maybe_disable_pli_prefill_trace(enable_trace, self.model[0], batch_size=batch_size)
 
     # Element count above which trimming a replicated decode read to shard 0 pays
-    # for the extra ``get_device_tensors`` + separate ``.cpu()``. Measured on 1x8 WH:
-    # the 128 B token read is latency-bound, so the 7 extra shards ride along free
-    # and the trim swings -133%..+79% between repeats -- noise, not a win; the
-    # 16 MB/shard full-vocab read is bandwidth-bound, so dropping 7 of 8 takes
-    # ~45-50% off it. Do NOT lower this to cover the token read. The threshold sits
-    # ~3 orders of magnitude from either case, so its exact value is not load-bearing.
+    # for the extra ``get_device_tensors`` + separate ``.cpu()``. The 128 B token
+    # read is latency-bound, so the 7 extra shards ride along free and the trim is
+    # run-to-run noise, not a win; the 16 MB/shard full-vocab read is
+    # bandwidth-bound, so dropping 7 of 8 is a real saving. Do NOT lower this to
+    # cover the token read. The threshold sits ~3 orders of magnitude from either
+    # case, so its exact value is not load-bearing.
     _DECODE_READ_SHARD_MIN_ELEMS = 32 * 1024
 
     def _decode_read_shard(self, tt, model_id: int = 0):

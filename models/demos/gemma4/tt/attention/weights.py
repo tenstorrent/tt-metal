@@ -44,8 +44,8 @@ class AttentionWeights:
     # (program_config, compute_kernel_config) for the decode (M<=32) fused-QKV
     # matmul, or None to keep ttnn.linear's auto choice. See
     # dram_sharded.decode_1d_matmul_config: the fused QKV is the one narrow-N
-    # decode matmul where auto collapses to a 1x1 output subblock (33% of DRAM
-    # peak on 31B sliding layers).
+    # decode matmul where auto collapses to a 1x1 output subblock, leaving DRAM
+    # far short of peak on 31B sliding layers.
     qkv_decode_config: object = None
 
 
