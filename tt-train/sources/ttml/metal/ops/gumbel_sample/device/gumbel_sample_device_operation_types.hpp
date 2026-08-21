@@ -57,8 +57,11 @@ struct GumbelSampleInputs {
     // Logits, TILE layout, shape [B, 1, tokens, V].
     const ttnn::Tensor& logits;
 
-    // Optional additive padding mask with the same shape as `logits`; subtracted from the scores.
-    std::optional<ttnn::Tensor> logits_padding_mask;
+    // Optional additive mask, subtracted from the scores (after temperature scaling in the sampled
+    // path; from the raw logits in the greedy path). [1, 1, 1, V]
+    // (one row shared by every batch entry) or [B, 1, 1, V] (one row per entry -- per-request logit
+    // bias), always broadcast down token positions. See gumbel_sample.hpp for the unit note.
+    std::optional<ttnn::Tensor> logits_mask;
 
     // OPTIONAL per-batch-entry token position to sample at: [B, 1, 1, 1] UINT32 ROW_MAJOR
     // INTERLEAVED -- byte-for-byte this op's OWN position-mode output spec, so page e of this tensor

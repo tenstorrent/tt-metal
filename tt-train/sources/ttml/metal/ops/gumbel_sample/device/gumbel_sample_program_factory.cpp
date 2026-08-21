@@ -69,8 +69,12 @@ constexpr uint32_t kWriterMergeRoutingArgs = 4U;
 // dimension, which the program hash normalizes away in position mode -- as a compile-time arg it
 // would put every prompt length back on the JIT-miss path.
 constexpr uint32_t kReaderLogicalTokensIdx = 6U;
+// Per-entry mask-page stride: 0 for [1, 1, 1, V], Wt for a [B, 1, 1, V] per-row mask. Runtime so
+// both shapes share one program; re-derived from the mask's shape on every dispatch.
+constexpr uint32_t kReaderMaskStrideIdx = 7U;
 constexpr uint32_t kWriterLogicalTokensIdx = 8U;
 static_assert(kReaderLogicalTokensIdx == kReaderPositionsBufferIdx + 1U);
+static_assert(kReaderMaskStrideIdx == kReaderLogicalTokensIdx + 1U);
 static_assert(kWriterLogicalTokensIdx == kWriterPositionsBufferIdx + kWriterMergeRoutingArgs + 1U);
 
 // Per-entry token positions live in a small device TENSOR, not in runtime args. Each core stages the
@@ -256,7 +260,7 @@ tt::tt_metal::Program build_program(
     tt::tt_metal::Program program{};
 
     const auto& logits = tensor_args.logits;
-    const bool has_mask = tensor_args.logits_padding_mask.has_value();
+    const bool has_mask = tensor_args.logits_mask.has_value();
 
     const tt::DataFormat logits_format = datatype_to_dataformat_converter(logits.dtype());
     const uint32_t logits_tile_bytes = tt::tile_size(logits_format);
@@ -365,7 +369,7 @@ tt::tt_metal::Program build_program(
     // Kernels
     // -------------------------------------------------------------------------
     auto* logits_buffer = logits.buffer();
-    auto* mask_buffer = has_mask ? tensor_args.logits_padding_mask->buffer() : nullptr;
+    auto* mask_buffer = has_mask ? tensor_args.logits_mask->buffer() : nullptr;
     auto* output_buffer = output.buffer();
 
     // Greedy vs noisy is decided by uses_gumbel_noise, NOT a bare `temperature > 0`: a positive
@@ -468,6 +472,7 @@ tt::tt_metal::Program build_program(
     // Zero when absent: the slot exists in BOTH modes so override_runtime_arguments can patch it
     // unconditionally, exactly as it does for Ht.
     const uint32_t positions_address = layout.position_aware ? tensor_args.positions->buffer()->address() : 0U;
+    const uint32_t mask_entry_stride = (has_mask && tensor_args.logits_mask->logical_shape()[0] > 1U) ? layout.Wt : 0U;
 
     shared_vars.core_info.reserve(layout.num_cores);
     for (uint32_t core_index = 0U; core_index < layout.num_cores; ++core_index) {
@@ -482,7 +487,8 @@ tt::tt_metal::Program build_program(
              start_tile,
              layout.Ht,
              positions_address,
-             layout.logical_tokens});
+             layout.logical_tokens,
+             mask_entry_stride});
 
         SetRuntimeArgs(
             program,
@@ -554,7 +560,7 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& logits = tensor_args.logits;
-    const bool has_mask = tensor_args.logits_padding_mask.has_value();
+    const bool has_mask = tensor_args.logits_mask.has_value();
 
     // Deliberately NO compute_layout / core_layout here: the work split and everything derived
     // from it (per-core tile runs, merge routing, RNG stream ids, core-group membership) is a
@@ -568,10 +574,16 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
     const uint32_t logical_tokens = logits.logical_shape()[-2];
 
     const uint32_t logits_address = logits.buffer()->address();
-    const uint32_t mask_address = has_mask ? tensor_args.logits_padding_mask->buffer()->address() : 0U;
+    const uint32_t mask_address = has_mask ? tensor_args.logits_mask->buffer()->address() : 0U;
     const uint32_t output_address = tensor_return_value.buffer()->address();
     const uint32_t positions_address =
         tensor_args.positions.has_value() ? tensor_args.positions->buffer()->address() : 0U;
+    // Wt derived from the logits shape, same as Ht above -- this function deliberately avoids
+    // recomputing the full layout on cache hits.
+    const uint32_t mask_entry_stride =
+        (tensor_args.logits_mask.has_value() && tensor_args.logits_mask->logical_shape()[0] > 1U)
+            ? (logits.padded_shape()[-1] / tt::constants::TILE_WIDTH)
+            : 0U;
 
     // seed and temperature are runtime-only (deliberately excluded from the program hash so that
     // changing either reuses the cached program), so they must be re-applied on every cache hit
@@ -618,6 +630,10 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
                 // this patch would clamp positions against a STALE token count -- either rejecting
                 // valid rows or readmitting the padding band the clamp exists to keep out.
                 core_args[kReaderLogicalTokensIdx] = logical_tokens;
+                // Re-derived per dispatch: the SAME cached program serves both mask shapes, so a
+                // dispatch that switches between a shared and a per-row mask must re-patch the stride
+                // or the reader would walk the wrong mask pages -- in bounds, silently wrong rows.
+                core_args[kReaderMaskStrideIdx] = mask_entry_stride;
             }
             {
                 auto& core_args = writer_args[core.x][core.y];

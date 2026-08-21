@@ -30,6 +30,12 @@ void kernel_main() {
     // mode -- baking it in would make every prompt length a fresh JIT build. Read unconditionally
     // so the runtime-arg layout is identical in both modes.
     const uint32_t logical_tokens = get_arg_val<uint32_t>(rt_idx++);
+    // Per-entry stride into the mask pages: 0 for a [1, 1, 1, V] mask shared by every batch entry,
+    // Wt for a [B, 1, 1, V] per-row mask where entry b owns its own tile row of Wt pages. RUNTIME,
+    // deliberately: both mask shapes then share one program and one kernel binary, and the host
+    // re-derives the stride from the mask's shape on every dispatch. Read unconditionally so the
+    // runtime-arg layout is identical in every mode.
+    const uint32_t mask_entry_stride = get_arg_val<uint32_t>(rt_idx++);
 
     constexpr uint32_t cb_logits_idx = tt::CBIndex::c_0;
     constexpr uint32_t cb_mask_idx = tt::CBIndex::c_1;
@@ -112,13 +118,19 @@ void kernel_main() {
         }
 
         if constexpr (do_logits_mask) {
-            // The mask is [1, 1, 1, V]: one tile row shared by every token row and every batch
-            // entry, so a global tile's mask is selected by its COLUMN position alone.
+            // Mask page: entry * stride + column. With stride 0 (a [1, 1, 1, V] mask) every entry
+            // shares one tile row and the page is the COLUMN alone -- the original behavior. With
+            // stride Wt (a [B, 1, 1, V] per-row mask) each batch entry has its own tile row. Either
+            // way the mask's token dim is 1, so the compute kernel's ROW broadcast is unchanged.
             cb_reserve_back(cb_mask_idx, current);
             uint32_t l1_addr = get_write_ptr(cb_mask_idx);
             for (uint32_t k = 0U; k < current; ++k) {
-                const uint32_t mask_tile = (start_tile + t + k) % Wt;
-                noc_async_read_page(mask_tile, mask_address_generator, l1_addr);
+                const uint32_t global_tile = start_tile + t + k;
+                const uint32_t column = global_tile % Wt;
+                // Which batch entry this tile belongs to: in position mode the tile space is one
+                // virtual row per entry; otherwise each entry owns Ht consecutive tile rows.
+                const uint32_t entry = do_positions ? (global_tile / Wt) : (global_tile / (Ht * Wt));
+                noc_async_read_page(entry * mask_entry_stride + column, mask_address_generator, l1_addr);
                 l1_addr += logits_tile_bytes;
             }
             noc_async_read_barrier();

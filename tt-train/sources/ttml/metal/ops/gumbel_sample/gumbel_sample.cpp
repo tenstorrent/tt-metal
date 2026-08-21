@@ -13,9 +13,9 @@ ttnn::Tensor gumbel_sample(
     float temperature,
     uint32_t seed,
     const std::vector<uint32_t>& seed_axes,
-    const std::optional<ttnn::Tensor>& logits_padding_mask,
+    const std::optional<ttnn::Tensor>& logits_mask,
     const std::optional<ttnn::Tensor>& positions) {
-    return ttnn::prim::ttml_gumbel_sample(logits, temperature, seed, seed_axes, logits_padding_mask, positions);
+    return ttnn::prim::ttml_gumbel_sample(logits, temperature, seed, seed_axes, logits_mask, positions);
 }
 
 }  // namespace ttml::metal

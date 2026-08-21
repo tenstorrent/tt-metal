@@ -39,7 +39,7 @@ ttml::metal::ops::gumbel_sample::device::GumbelSampleDeviceOperation::tensor_ret
     float temperature,
     uint32_t seed,
     const std::vector<uint32_t>& seed_axes = {},
-    const std::optional<ttnn::Tensor>& logits_padding_mask = std::nullopt,
+    const std::optional<ttnn::Tensor>& logits_mask = std::nullopt,
     const std::optional<ttnn::Tensor>& positions = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 

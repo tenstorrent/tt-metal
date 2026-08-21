@@ -34,7 +34,7 @@ ttnn::Tensor sample(
     const ttnn::Tensor& t,
     float temperature,
     uint32_t seed,
-    std::optional<ttnn::Tensor> logits_padding_mask = std::nullopt,
+    std::optional<ttnn::Tensor> logits_mask = std::nullopt,
     std::optional<std::vector<uint32_t>> seed_axes = std::nullopt,
     std::optional<ttnn::Tensor> positions = std::nullopt);
 

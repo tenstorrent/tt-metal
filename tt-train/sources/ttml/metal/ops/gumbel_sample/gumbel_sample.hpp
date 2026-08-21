@@ -32,8 +32,19 @@ namespace ttml::metal {
  * @param seed_axes   Mesh axes that must draw DISTINCT noise per device (the data-parallel axes).
  *                    Axes omitted stay in lockstep across devices. Empty (default) => identical
  *                    noise everywhere.
- * @param logits_padding_mask Optional additive mask, same dtype as `logits` but shape [1, 1, 1, V], subtracted from
- *                    the scores.
+ * @param logits_mask Optional additive mask, same dtype as `logits`, SUBTRACTED from the scores
+ *                    after temperature scaling: score = logits / T + g - mask. Two shapes:
+ *                      [1, 1, 1, V] -- one row shared by every batch entry (vocab-padding masking);
+ *                      [B, 1, 1, V] -- one row PER batch entry (general per-request logit bias:
+ *                                      banned ids, OpenAI-style logit_bias, repetition penalties),
+ *                                      broadcast down token positions. On a mesh, shard it with the
+ *                                      SAME mapper as the batch, exactly like `positions`.
+ *                    Unit note: in the SAMPLED path the mask lands post-scaling
+ *                    (score = logits / T + g - mask), so a finite bias b here shifts the RAW logits
+ *                    by b * T -- pass mask = -bias / T for exact pre-temperature logit_bias
+ *                    semantics. In the GREEDY path (temperature 0, or below the reciprocal-overflow
+ *                    floor) there is no scaling (score = logits - mask), so pass mask = -bias
+ *                    directly. For +-1e4-style masking the distinction is immaterial either way.
  * @param positions   Optional per-batch-entry token position: [B, 1, 1, 1] UINT32 ROW_MAJOR
  *                    INTERLEAVED, i.e. this op's own position-mode output spec. When absent, samples every
  *                    position. When supplied, ONLY row positions[b] of batch entry b is read,
@@ -49,7 +60,7 @@ ttnn::Tensor gumbel_sample(
     float temperature,
     uint32_t seed,
     const std::vector<uint32_t>& seed_axes = {},
-    const std::optional<ttnn::Tensor>& logits_padding_mask = std::nullopt,
+    const std::optional<ttnn::Tensor>& logits_mask = std::nullopt,
     const std::optional<ttnn::Tensor>& positions = std::nullopt);
 
 }  // namespace ttml::metal

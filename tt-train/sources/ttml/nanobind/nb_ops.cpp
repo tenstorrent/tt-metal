@@ -537,7 +537,7 @@ void py_module(nb::module_& m) {
             nb::arg("logits"),
             nb::arg("temperature"),
             nb::arg("seed"),
-            nb::arg("logits_padding_mask") = nb::none(),
+            nb::arg("logits_mask") = nb::none(),
             nb::arg("seed_axes") = nb::none(),
             // `positions` (optional): a [B, 1, 1, 1] UINT32 ROW_MAJOR tensor, one token position per
             // batch row, sharded with the SAME mapper as the batch. Prefill should pass the index of

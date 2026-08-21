@@ -15,14 +15,14 @@ autograd::TensorPtr sample_op(
     const autograd::TensorPtr& logits,
     float temperature,
     uint32_t seed,
-    const autograd::TensorPtr& logits_padding_mask,
+    const autograd::TensorPtr& logits_mask,
     std::optional<std::vector<uint32_t>> seed_axes,
     const autograd::TensorPtr& positions) {
     auto sampled_tensor = ttnn_fixed::sample(
         logits->get_value(),
         temperature,
         seed,
-        logits_padding_mask == nullptr ? std::nullopt : std::optional<ttnn::Tensor>(logits_padding_mask->get_value()),
+        logits_mask == nullptr ? std::nullopt : std::optional<ttnn::Tensor>(logits_mask->get_value()),
         std::move(seed_axes),
         positions == nullptr ? std::nullopt : std::optional<ttnn::Tensor>(positions->get_value()));
 
@@ -33,7 +33,7 @@ autograd::TensorPtr sample_op(
         throw std::runtime_error("Sampling operation backward pass is not implemented.");
     };
 
-    out->set_node(autograd::add_backward_node(std::move(grad), out, logits, logits_padding_mask));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, logits, logits_mask));
 
     return out;
 }

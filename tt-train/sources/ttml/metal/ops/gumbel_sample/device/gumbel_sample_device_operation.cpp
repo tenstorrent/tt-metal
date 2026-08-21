@@ -139,9 +139,9 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
     // LFSR whose only lock-up state is all-ones, and ckernel_sfpu_rand.h already rewrites
     // 0xFFFFFFFF to 0xFFFFFFFE. A zero seed therefore yields an ordinary reproducible stream.
 
-    if (tensor_args.logits_padding_mask.has_value()) {
-        const auto& mask = tensor_args.logits_padding_mask.value();
-        check_tensor(mask, "logits_padding_mask");
+    if (tensor_args.logits_mask.has_value()) {
+        const auto& mask = tensor_args.logits_mask.value();
+        check_tensor(mask, "logits_mask");
         TT_FATAL(
             mask.device() == device,
             "GumbelSample: the mask must be on the same device as the logits (only its buffer address "
@@ -151,11 +151,13 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
             "GumbelSample: mask dtype '{}' must match logits dtype '{}'",
             enchantum::to_string(mask.dtype()),
             enchantum::to_string(logits.dtype()));
-        // The mask spans the vocabulary and is broadcast down the token rows: which columns are
-        // padding is a property of the vocabulary, not of sequence position, so a single row covers
-        // every token. That is what every caller builds (_sample_logits_mask in generate.py,
-        // _build_logits_mask in llama_completer.py). A per-token mask is rejected rather than
-        // silently mis-applied.
+        // The mask spans the vocabulary and is broadcast down the token rows. Two shapes are
+        // accepted: [1, 1, 1, V] (one row shared by every batch entry -- the vocab-padding case
+        // every in-tree builder produces) and [B, 1, 1, V] (one row PER batch entry -- general
+        // per-request logit bias: banned ids, OpenAI-style logit_bias, repetition penalties). A
+        // per-token-position mask stays rejected: nothing samples with position-varying vocab
+        // constraints in one call (logit_bias has no position axis), and supporting it would
+        // reintroduce an O(B*T*V) mask tensor at prefill.
         TT_FATAL(
             mask.logical_shape()[-1] == logits.logical_shape()[-1],
             "GumbelSample: mask width {} must match logits width {}",
@@ -164,21 +166,42 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             mask.logical_shape()[-2] == 1U,
             "GumbelSample: mask token dim must be 1 (it is broadcast across all token rows), got {}. Build the "
-            "mask as [1, 1, 1, V].",
+            "mask as [1, 1, 1, V] or [B, 1, 1, V].",
             mask.logical_shape()[-2]);
-        // ... and independent of the batch for the same reason, one level up: every sequence in the
-        // batch is decoded by the SAME lm_head, so the same columns are padding for all of them. The
-        // reader relies on this -- it addresses mask tiles by column index alone, with no batch or
-        // row stride -- so a mask carrying real per-batch data would have only its batch-0 slice
-        // applied to every entry. Reject that rather than silently using a slice of it.
         TT_FATAL(
-            mask.logical_shape()[-3] == 1U && mask.logical_shape()[-4] == 1U,
-            "GumbelSample: mask batch and channel dims must be 1 (one mask covers every batch entry), got [{}, {}, "
-            "{}, {}]. Build the mask as [1, 1, 1, V].",
-            mask.logical_shape()[-4],
-            mask.logical_shape()[-3],
-            mask.logical_shape()[-2],
-            mask.logical_shape()[-1]);
+            mask.logical_shape()[-3] == 1U,
+            "GumbelSample: mask channel dim must be 1, got {}",
+            mask.logical_shape()[-3]);
+        // Batch dim: 1 (shared) or exactly the logits' LOCAL batch (per-row). Anything else would
+        // leave the reader's entry * stride + column page walk pointing at rows that do not
+        // correspond -- in bounds, no fault, silently the wrong bias per row.
+        const uint32_t mask_batch = mask.logical_shape()[-4];
+        TT_FATAL(
+            mask_batch == 1U || mask_batch == logits.logical_shape()[-4],
+            "GumbelSample: mask batch dim must be 1 (one row shared by every batch entry) or match the logits "
+            "batch {} (one row per entry), got {}",
+            logits.logical_shape()[-4],
+            mask_batch);
+        if (mask_batch > 1U) {
+            // The reader walks mask pages by ENTRY index, and the op's entry space is
+            // NC = dims[-4] * dims[-3] of the logits. A per-row mask can only express dim -4, so it
+            // is defined only for channel-1 logits: with C > 1 the entry index would run past the
+            // mask's B*Wt pages -- wrong bias rows in bounds for c > 0, and past the allocation for
+            // entries >= B, both silent. (A shared [1, 1, 1, V] mask is stride-0 and safe for any
+            // NC, which is why this check lives inside the per-row branch.)
+            TT_FATAL(
+                logits.logical_shape()[-3] == 1U,
+                "GumbelSample: a per-row [B, 1, 1, V] mask requires channel-1 logits ([B, 1, T, V]); these logits "
+                "have channel dim {}. Use a shared [1, 1, 1, V] mask instead.",
+                logits.logical_shape()[-3]);
+            // A per-row mask is per-DEVICE-row data, exactly like positions: page e must be the
+            // bias for the logits' local entry e, which only holds if both tensors split their
+            // batch across the mesh identically. Same check, same reasoning, same failure mode.
+            TT_FATAL(
+                mask.tensor_topology() == logits.tensor_topology(),
+                "GumbelSample: a per-row [B, 1, 1, V] mask must be distributed across the mesh exactly as the "
+                "logits are -- shard it with the SAME mapper the batch was sharded with");
+        }
     }
 
     // [B, 1, 1, 1] UINT32 ROW_MAJOR INTERLEAVED on THIS device -- byte-for-byte this op's own
@@ -327,8 +350,8 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
         // NC) is therefore a function of what IS in the key.
         token_normalized(logits.logical_shape()),
         static_cast<int>(logits.memory_config().buffer_type()),
-        tensor_args.logits_padding_mask.has_value(),
-        placement_of(tensor_args.logits_padding_mask),
+        tensor_args.logits_mask.has_value(),
+        placement_of(tensor_args.logits_mask),
         // The positions SHAPE is not hashed separately: its entry count is NC, which the factory
         // computes from PADDED dims 0 and 1 of the logits. Tile rounding only touches the last two
         // dims (check_tensor enforces exactly that), so padded dims 0 and 1 equal the logical ones
@@ -347,7 +370,7 @@ ttml::metal::ops::gumbel_sample::device::GumbelSampleDeviceOperation::tensor_ret
     float temperature,
     uint32_t seed,
     const std::vector<uint32_t>& seed_axes,
-    const std::optional<ttnn::Tensor>& logits_padding_mask,
+    const std::optional<ttnn::Tensor>& logits_mask,
     const std::optional<ttnn::Tensor>& positions,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     using OperationType = ttml::metal::ops::gumbel_sample::device::GumbelSampleDeviceOperation;
@@ -359,7 +382,7 @@ ttml::metal::ops::gumbel_sample::device::GumbelSampleDeviceOperation::tensor_ret
     };
     auto tensor_args = OperationType::tensor_args_t{
         .logits = logits,
-        .logits_padding_mask = logits_padding_mask,
+        .logits_mask = logits_mask,
         .positions = positions,
         .preallocated_output = preallocated_output,
     };

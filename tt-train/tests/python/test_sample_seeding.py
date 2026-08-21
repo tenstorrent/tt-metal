@@ -353,3 +353,79 @@ def test_sample_positions_topology_mismatch_rejected(seeding_mesh, expect_error)
     with expect_error(RuntimeError, "distributed across the mesh exactly as the logits"):
         ttml.ops.sample.sample_op(logits, 0.0, SEED, None, [0], bad_positions)
     ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def test_sample_per_row_mask_topology_mismatch_rejected(seeding_mesh, expect_error):
+    """A per-row [B, 1, 1, V] logits_mask is per-device-row data exactly like positions: page e must
+    be the bias for the logits' local entry e. A REPLICATED per-row mask against SHARDED logits must
+    be rejected loudly -- on a mesh the topologies genuinely differ, which no single-device test can
+    exercise. (A shared [1, 1, 1, V] mask stays exempt: one row for everyone is distribution-free.)"""
+    shape = seeding_mesh
+    n = math.prod(shape)
+    if n <= 1:
+        pytest.skip("topologies coincide on a single-device mesh; the check is vacuous")
+
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
+    replicate = ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
+
+    B_total, T_pos, V_pos = 4 * n, 64, 64
+    logits_np, _ = _positions_winners(B_total, T_pos, V_pos)
+    logits = ttml.autograd.Tensor.from_numpy(logits_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, dp_mapper)
+
+    # Wrong mapper on purpose: replicated, sized to the LOCAL batch so the shape check passes and
+    # the failure is attributable to the topology check alone.
+    B_local = B_total // n
+    bad_np = np.zeros((B_local, 1, 1, V_pos), dtype=np.float32)
+    bad_mask = ttml.autograd.Tensor.from_numpy(bad_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, replicate)
+
+    with expect_error(RuntimeError, "mask must be distributed across the mesh exactly as the logits"):
+        ttml.ops.sample.sample_op(logits, 0.0, SEED, bad_mask, [0])
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def test_sample_per_row_mask_sharded_applies_each_rows_bias(seeding_mesh):
+    """The ACCEPTANCE path for a per-row mask on a mesh: a [B, 1, 1, V] mask sharded with the SAME
+    mapper as the logits must hand every device its own rows' bias. Greedy (temperature 0) so the
+    result is a pure function of logits and mask. Every global row b has a UNIQUE winner w(b) and
+    its mask row bans exactly w(b): the correct outcome is the shared runner-up (column 0) for every
+    row, while a device that received another device's mask shard leaves its own rows' winners
+    un-banned -- w(b) is injective across the GLOBAL batch, so any shard swap or offset surfaces as
+    a non-zero token. This is the configuration the single-device gtests structurally cannot reach."""
+    shape = seeding_mesh
+    n = math.prod(shape)
+    if n <= 1:
+        pytest.skip("mask sharding needs a multi-device mesh")
+
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
+    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+
+    B_total, T_tok, V_tok = 2 * n, 32, 96  # w(b) = 1 + b must stay injective within the vocab
+    assert B_total + 1 < V_tok
+    logits_np = np.full((B_total, 1, T_tok, V_tok), -1.0, dtype=np.float32)
+    mask_np = np.zeros((B_total, 1, 1, V_tok), dtype=np.float32)
+    for b in range(B_total):
+        logits_np[b, 0, :, 1 + b] = -0.25  # unique winner per global row
+        logits_np[b, 0, :, 0] = -0.5  # shared runner-up
+        mask_np[b, 0, 0, 1 + b] = 1e4  # ban exactly this row's winner
+
+    logits = ttml.autograd.Tensor.from_numpy(logits_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, dp_mapper)
+    mask = ttml.autograd.Tensor.from_numpy(mask_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, dp_mapper)
+
+    # Sanity without the mask: each row's own winner (also proves the winners are distinguishable).
+    unmasked = ttml.ops.sample.sample_op(logits, 0.0, SEED, None, [0])
+    got = ttnn.to_torch(unmasked.get_value(), mesh_composer=composer).flatten().to(torch.int64).cpu().numpy()
+    got = got.reshape(B_total, T_tok)
+    for b in range(B_total):
+        assert np.all(got[b] == 1 + b), f"unmasked winner wrong for row {b}: {got[b][:4]}"
+
+    masked = ttml.ops.sample.sample_op(logits, 0.0, SEED, mask, [0])
+    got = ttnn.to_torch(masked.get_value(), mesh_composer=composer).flatten().to(torch.int64).cpu().numpy()
+    got = got.reshape(B_total, T_tok)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    for b in range(B_total):
+        assert np.all(got[b] == 0), (
+            f"row {b} sampled {got[b][:4]} -- its own winner {1 + b} was not banned, so this device "
+            f"applied another row's mask shard"
+        )

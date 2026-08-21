@@ -90,7 +90,7 @@ ttnn::Tensor sample(
     const ttnn::Tensor& t,
     float temperature,
     uint32_t seed,
-    std::optional<ttnn::Tensor> logits_padding_mask,
+    std::optional<ttnn::Tensor> logits_mask,
     std::optional<std::vector<uint32_t>> seed_axes,
     std::optional<ttnn::Tensor> positions) {
     // `seed_axes` lists the mesh axes whose devices hold DISTINCT data and must therefore draw
@@ -100,7 +100,7 @@ ttnn::Tensor sample(
     // Callers that need per-device sampling (e.g. GRPO, to avoid duplicate completions across data-
     // parallel ranks) MUST pass their sharded axes explicitly.
     return ttml::metal::gumbel_sample(
-        t, temperature, seed, seed_axes.value_or(std::vector<uint32_t>{}), logits_padding_mask, positions);
+        t, temperature, seed, seed_axes.value_or(std::vector<uint32_t>{}), logits_mask, positions);
 }
 
 ttnn::Tensor to_l1_interleaved(const ttnn::Tensor& t) {

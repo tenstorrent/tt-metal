@@ -904,6 +904,101 @@ TEST_F(TrivialTnnFixedTest, TestSamplingWithoutPositionsUnchangedByAccessorChain
     EXPECT_EQ(with_mask, expected) << "an all-zero mask must not change the result";
 }
 
+TEST_F(TrivialTnnFixedTest, TestSamplingPerRowMask) {
+    // A [B, 1, 1, V] mask gives each batch entry its own bias row (per-request logit bias / banned
+    // ids), broadcast down token positions -- served by the same program as the shared [1, 1, 1, V]
+    // mask via a runtime page stride. Each entry bans a DIFFERENT column, so reading another entry's
+    // mask row (the stride bug this test exists to catch: wrong entry -> wrong page, in bounds, no
+    // fault) changes which token wins.
+    constexpr uint32_t kBatch = 3U;
+    constexpr uint32_t kTokens = 70U;  // Ht = 3, so entry != tile_row: the entry derivation is exercised
+    constexpr uint32_t kVocab = 77U;   // Wt = 3, ragged last tile
+
+    xt::xarray<float>::shape_type shape = {kBatch, 1U, kTokens, kVocab};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+    a.fill(-1.0F);
+
+    // Per (entry, token): best column b+1, runner-up 0. Entry e's mask bans column e+1, so with the
+    // mask the winner must flip to 0 for ALL tokens of that entry -- but only that entry's rows.
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        for (uint32_t t = 0; t < kTokens; ++t) {
+            a(b, 0, t, b + 1) = -0.25F;
+            a(b, 0, t, 0) = -0.5F;
+        }
+    }
+    xt::xarray<float> m = xt::zeros<float>(xt::xarray<float>::shape_type{kBatch, 1U, 1U, kVocab});
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        m(b, 0, 0, b + 1) = 1e4F;
+    }
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto tensor_a = ttml::core::from_xtensor(a, device);
+    auto tensor_m = ttml::core::from_xtensor(m, device);
+
+    // Unmasked: entry b picks b+1 everywhere (sanity that the setup is what we think).
+    auto greedy = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 0.0F, 7));
+    ASSERT_EQ(greedy.size(), kBatch * kTokens);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        for (uint32_t t = 0; t < kTokens; ++t) {
+            ASSERT_EQ(greedy[b * kTokens + t], b + 1) << "unmasked winner, entry " << b << " token " << t;
+        }
+    }
+
+    // A SHARED all-zero [1, 1, 1, V] mask first, at the same logits shape. This is not a smoke
+    // call: it seeds the program cache with the mask-present program built at stride 0, so the
+    // per-row call below is a CACHE HIT that only works if override_runtime_arguments re-patches
+    // the stride (0 -> Wt). With a stale stride every entry reads entry 0's mask row, so entries
+    // 1..B-1 keep their unbanned winners -- a deterministic failure.
+    xt::xarray<float> shared = xt::zeros<float>(xt::xarray<float>::shape_type{1U, 1U, 1U, kVocab});
+    auto tensor_shared = ttml::core::from_xtensor(shared, device);
+    auto shared_greedy = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 0.0F, 7, tensor_shared));
+    ASSERT_EQ(shared_greedy.size(), kBatch * kTokens);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        ASSERT_EQ(shared_greedy[b * kTokens], b + 1) << "zero shared mask must not change the winner";
+    }
+
+    // Per-row masked: every entry's own winner is banned, so 0 must win everywhere -- and if entry
+    // e were served entry f's mask row (f != e), e's winner e+1 would survive and this fails.
+    auto masked = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 0.0F, 7, tensor_m));
+    ASSERT_EQ(masked.size(), kBatch * kTokens);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        for (uint32_t t = 0; t < kTokens; ++t) {
+            EXPECT_EQ(masked[b * kTokens + t], 0U) << "per-row mask missed entry " << b << " token " << t;
+        }
+    }
+
+    // Back to the shared mask on the same program: the reverse stride re-patch (Wt -> 0). A stale
+    // Wt stride here sends entries past the shared mask's Wt pages, so the winners it produces are
+    // garbage-dependent rather than deterministic -- the assertion still holds on a correct patch
+    // and the forward (0 -> Wt) direction above is the deterministic guard on the patch line.
+    auto shared_again = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 0.0F, 7, tensor_shared));
+    ASSERT_EQ(shared_again.size(), kBatch * kTokens);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        EXPECT_EQ(shared_again[b * kTokens], b + 1) << "stride must re-patch back to 0 for a shared mask";
+    }
+
+    // The per-row mask must also hold under NOISE (a separate kernel binary): the banned column
+    // carries -1e4 after the subtract, so it can never win whatever the Gumbel draw.
+    auto sampled = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 1.0F, 99, tensor_m));
+    ASSERT_EQ(sampled.size(), kBatch * kTokens);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        for (uint32_t t = 0; t < kTokens; ++t) {
+            EXPECT_NE(sampled[b * kTokens + t], b + 1) << "banned column sampled, entry " << b;
+            EXPECT_LT(sampled[b * kTokens + t], kVocab);
+        }
+    }
+
+    // Same mask through POSITION mode: entry derivation there is virtual_tile / Wt, a different
+    // code path from the tile-row derivation above.
+    const std::vector<uint32_t> positions = {0U, 37U, 69U};
+    auto positioned = ttml::core::to_vector<uint32_t>(
+        ttml::ttnn_fixed::sample(tensor_a, 0.0F, 7, tensor_m, /* seed_axes */ std::nullopt, make_positions(positions)));
+    ASSERT_EQ(positioned.size(), kBatch);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        EXPECT_EQ(positioned[b], 0U) << "per-row mask in position mode, entry " << b;
+    }
+}
+
 TEST_F(TrivialTnnFixedTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
     // The Gumbel-max trick guarantees P(argmax == i) == softmax(logits / temperature)_i. This is the
     // only assertion in the suite that actually pins down the -log(-log(U)) chain: dropping or

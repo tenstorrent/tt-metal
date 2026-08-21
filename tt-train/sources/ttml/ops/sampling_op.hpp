@@ -24,7 +24,7 @@ autograd::TensorPtr sample_op(
     const autograd::TensorPtr& logits,
     float temperature,
     uint32_t seed,
-    const autograd::TensorPtr& logits_padding_mask = nullptr,
+    const autograd::TensorPtr& logits_mask = nullptr,
     std::optional<std::vector<uint32_t>> seed_axes = std::nullopt,
     const autograd::TensorPtr& positions = nullptr);
 
