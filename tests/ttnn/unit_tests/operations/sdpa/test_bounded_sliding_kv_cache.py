@@ -439,6 +439,27 @@ def test_paged_fill_cache_valid_seq_len_tensor_skips_padding_tail(device):
     eq2, msg2 = comp_pcc(ref2, cache_view2, pcc=0.99)
     assert eq2, f"valid_seq_len_tensor refresh mismatch: {msg2}"
 
+    # A CP rank with no real tokens in the final chunk must preserve its prior
+    # circular window instead of treating zero as "cap disabled" and writing padding.
+    before_zero_fill = cache_tt2.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().clone()
+    zero_refresh = ttnn.from_torch(
+        torch.tensor([0], dtype=torch.int32),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+        device=device,
+    )
+    ttnn.copy(zero_refresh, valid_tt)
+    ttnn.experimental.paged_fill_cache(
+        cache_tt2,
+        Kt2,
+        page_table_tt,
+        batch_idx=0,
+        cache_position_modulo=sliding_window,
+        valid_seq_len_tensor=valid_tt,
+    )
+    after_zero_fill = cache_tt2.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    assert torch.equal(after_zero_fill, before_zero_fill), "zero valid length must skip every cache write"
+
 
 @pytest.mark.timeout(30)
 def test_paged_fill_cache_valid_seq_len_tensor_rejects_multi_element(device, expect_error):
