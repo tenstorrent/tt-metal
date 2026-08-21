@@ -78,10 +78,10 @@ void kernel_main() {
     // Compile time args
     constexpr uint32_t Wt = get_arg(args::Wt);
     constexpr bool descending = get_arg(args::descending);
-    constexpr bool stable =
-        get_arg(args::stable);  // TODO: In the future change LLK to have the option or add additional step with
-                                // checking values and indexes after the sorting
-                                // Issue: https://github.com/tenstorrent/tt-metal/issues/20625
+    // Comparator-stable network (issue #33492): on exact value ties the index tiles are
+    // compare-exchanged so equal values keep their original (ascending-index) order, matching
+    // torch.sort(stable=True) in both directions.
+    constexpr bool stable = get_arg(args::stable);
 
     DataflowBuffer input_tensor_dfb(dfb::input_tensor);
     DataflowBuffer index_tensor_dfb(dfb::index_tensor);
@@ -127,6 +127,13 @@ void kernel_main() {
     ckernel::topk_tile_init();
     transpose_init(dfb::input_tensor);
 #endif
+
+    if constexpr (stable) {
+        // Tie-break polarity is a property of the GLOBAL sort order and is programmed exactly
+        // once: it must never follow the per-call sort direction (dir), which alternates below
+        // to build bitonic sequences. Survives the mid-kernel topk_tile_init re-inits.
+        ckernel::topk_set_stable_descending_mode(descending);
+    }
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         const bool ascending = !descending;
@@ -176,7 +183,7 @@ void kernel_main() {
         }
 #endif
 
-        sort_Wt_tiles_row_to_bitonic_sequence(
+        sort_Wt_tiles_row_to_bitonic_sequence<stable>(
             input_tensor_dfb,
             index_tensor_dfb,
             input_tensor_transposed_dfb,
@@ -235,9 +242,9 @@ void kernel_main() {
 
                         if (sub == 1) {
                             // Use sort LLK only the last stage to sort the last pair of tiles - speed up
-                            ckernel::topk_local_sort(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                            ckernel::topk_local_sort<stable>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                         } else {
-                            ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/64);
+                            ckernel::topk_merge</*idir=*/false, stable>(/*idst=*/0, m_iter, /*k=*/64);
 
                             if (dir) {
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
