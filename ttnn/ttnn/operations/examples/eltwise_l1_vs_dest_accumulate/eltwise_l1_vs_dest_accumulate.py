@@ -23,7 +23,7 @@ identical correct result):
   pack_l1_acc: read TWO tiles per step. One BinaryFpu puts X[2k]+X[2k+1] in DEST (caller-managed
                   input so one add reads two distinct tiles of the same CB via per-operand TileOffset),
                   then the PACK engine folds that onto `acc` in place (L1-accumulation). `acc` is only
-                  packed, never unpacked — B/2 steps. Binary init hoisted once (SetupOwner::Caller).
+                  packed, never unpacked — B/2 steps. Binary init hoisted once (InitReconfigOwner::Caller).
 
   dest_acc: keep the running sum in a sticky DEST tile for the whole reduction (DestAccumulation),
                   packing `acc` to L1 exactly once at the end. `acc` never touches L1 mid-reduction.
@@ -72,7 +72,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in, cb_out, cb_out);
     if constexpr (method == 1) {
-        // Hoist the binary add init once (the pairwise chains below run SetupOwner::Caller).
+        // Hoist the binary add init once (the pairwise chains below run InitReconfigOwner::Caller).
         add_tiles_init(cb_in, cb_in);
     } else if constexpr (method == 2) {
         // Same hoist, acc_to_dest=true: the DEST-accumulating add folds each pair into sticky D0.
@@ -89,8 +89,9 @@ void kernel_main() {
             // next block into DEST, adds, and packs back to acc. acc round-trips L1 every step (the
             // per-iteration cb_out push/wait both drives the round-trip and syncs PACK->UNPACK); the
             // chain retains nothing in DEST between steps. cb_out is one page (operand A and output).
-            ckl::copy<cb_in, cb_out>(ckl::EltwiseShape::single());              // acc = X[0]
-            ckl::add<cb_out, cb_in, cb_out>(ckl::EltwiseShape::tiles(B - 1));   // acc += X[1..B-1]
+            ckl::copy<ckl::input(cb_in), ckl::output(cb_out)>(ckl::IterationShape::one_tile());  // acc = X[0]
+            ckl::add<ckl::input(cb_out), ckl::input(cb_in), ckl::output(cb_out)>(
+                ckl::IterationShape::tiles(B - 1));                                              // acc += X[1..B-1]
         } else if constexpr (method == 1) {
             // ---- read two tiles per step: DEST = X[2k] + X[2k+1], then L1-accumulate onto acc ----
             // The input is caller-managed (one wait/pop for the whole resident stream) so each add
@@ -100,26 +101,28 @@ void kernel_main() {
             constexpr uint32_t N = B / 2;
             cb_wait_front(cb_in, B);      // caller-managed input: wait for the resident stream once
             cb_reserve_back(cb_out, 1);   // caller-managed acc: reserve the single accumulator tile
-            using AddPair = ckl::BinaryFpu<
-                cb_in, cb_in, ckl::BinaryFpuOp::Add, ckl::BroadcastDim::None,
-                ckl::InputLifecycle::CallerManaged, ckl::InputLifecycle::CallerManaged,
-                ckl::BinaryDataFormatReconfig::None, ckl::Dst::D0,
-                ckl::OperandKind::Scalar, ckl::OperandKind::Scalar,
-                ckl::TileOffset::Set, ckl::TileOffset::Set>;
+            constexpr auto pair_operand = ckl::input(
+                cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Scalar,
+                ckl::DataFormatReconfig::Disabled, ckl::TileOffset::Set);
+            using AddPair = ckl::BinaryFpu<ckl::BinaryFpuOp::Add, pair_operand, pair_operand, ckl::Dst::D0>;
             // step 0: seed acc = X[0] + X[1] (plain pack, l1-acc off).
-            ckl::eltwise_chain<ckl::SetupOwner::Caller>(
-                ckl::EltwiseShape::single(),
+            ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+                ckl::IterationShape::one_tile(),
                 AddPair{0, 1},
-                ckl::PackTile<cb_out, ckl::OutputLifecycle::CallerManaged, ckl::PackTileReconfig::None,
-                              ckl::Dst::D0>{});
+                ckl::PackTile<
+                    ckl::output(cb_out, ckl::ReservePolicy::None, ckl::PushPolicy::None,
+                                ckl::DataFormatReconfig::Disabled),
+                    ckl::Dst::D0>{});
             // steps 1..N-1: acc += X[2k] + X[2k+1] (packer folds DEST onto acc in place).
             for (uint32_t k = 1; k < N; ++k) {
-                ckl::eltwise_chain<ckl::SetupOwner::Caller>(
-                    ckl::EltwiseShape::single(),
+                ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+                    ckl::IterationShape::one_tile(),
                     AddPair{2 * k, 2 * k + 1},
-                    ckl::PackTile<cb_out, ckl::OutputLifecycle::L1AccumulationCallerManaged,
-                                  ckl::PackTileReconfig::None, ckl::Dst::D0, ckl::TileOffset::Unset,
-                                  ckl::PackTileL1Accumulation::Enabled>{});
+                    ckl::PackTile<
+                        ckl::output(cb_out, ckl::ReservePolicy::None, ckl::PushPolicy::None,
+                                    ckl::DataFormatReconfig::Disabled, ckl::PackRelu::Disabled,
+                                    ckl::L1Accumulation::AddToExisting),
+                        ckl::Dst::D0>{});
             }
             cb_push_back(cb_out, 1);  // publish acc
             cb_pop_front(cb_in, B);   // release the resident input for this pass
@@ -133,16 +136,21 @@ void kernel_main() {
             // manual adjacent-pair loop above. Only valid because DEST is free the whole reduction.
             constexpr uint32_t N = B / 2;
             cb_wait_front(cb_in, B);  // caller-managed input: wait for the resident stream once
-            ckl::eltwise_chain<ckl::SetupOwner::Caller>(
-                ckl::EltwiseShape::tiles(N),
-                ckl::BinaryFpu<cb_in, cb_in, ckl::BinaryFpuOp::Add, ckl::BroadcastDim::None,
-                               ckl::InputLifecycle::CallerManaged, ckl::InputLifecycle::CallerManaged,
-                               ckl::BinaryDataFormatReconfig::None, ckl::Dst::D0,
-                               ckl::OperandKind::Block, ckl::OperandKind::Block,
-                               ckl::TileOffset::Unset, ckl::TileOffset::Set,
-                               ckl::DestAccumulation::Enabled>{0, N},
-                ckl::PackTile<cb_out, ckl::OutputLifecycle::DestAccumulation, ckl::PackTileReconfig::None,
-                              ckl::Dst::D0>{});
+            ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+                ckl::IterationShape::tiles(N),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block,
+                               ckl::DataFormatReconfig::Disabled, ckl::TileOffset::Unset),
+                    ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block,
+                               ckl::DataFormatReconfig::Disabled, ckl::TileOffset::Set),
+                    ckl::Dst::D0,
+                    ckl::DestAccumulation::WholeShape>{0, N},
+                ckl::PackTile<
+                    ckl::output(cb_out, ckl::ReservePolicy::PerOuter, ckl::PushPolicy::PerOuter,
+                                ckl::DataFormatReconfig::Disabled, ckl::PackRelu::Disabled,
+                                ckl::L1Accumulation::Disabled, ckl::DestAccumulation::WholeShape),
+                    ckl::Dst::D0>{});
             cb_pop_front(cb_in, B);   // release the resident input for this pass
         }
         // Drain acc between in-kernel iterations so the next pass starts clean.
