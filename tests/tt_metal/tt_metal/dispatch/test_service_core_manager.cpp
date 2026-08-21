@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -376,6 +377,57 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1BufferOnClaimedCore) {
 
     // Released, it is rejected again -- the exception is the claim, not the coordinate.
     EXPECT_ANY_THROW(tt::tt_metal::CreateBuffer(config));
+}
+
+// The same exception reached through MeshBuffer::create(), which is how every socket path actually
+// builds its config buffer. Without an explicit address the backing buffer is constructed against
+// the MeshDevice itself (mesh_buffer.cpp:149), so this covers the flatten-and-union branch of the
+// validation that the device-local case above cannot reach; initialize_device_buffers() then
+// re-validates the same shard spec per coordinate, against that coordinate's own device.
+//
+// Buffer shape mirrors create_socket_config_buffer() with one core, so what is under test is the
+// claim lookup rather than an incidental layout difference.
+TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1MeshBufferOnClaimedCore) {
+    auto& mesh_device = this->devices_[0];
+    const auto devices = mesh_device->get_devices();
+    auto& svc = MetalContext::instance().get_service_core_manager();
+
+    // One coordinate for the whole mesh: MeshBuffer applies a single shard spec on every device, so
+    // the core has to be claimable -- and claimed -- on all of them.
+    const CoreCoord core = svc.get_claimable_cores(devices[0]).front();
+    for (IDevice* device : devices) {
+        const auto claimable = svc.get_claimable_cores(device);
+        if (std::find(claimable.begin(), claimable.end(), core) == claimable.end()) {
+            GTEST_SKIP() << "service core " << core.str() << " is not claimable on device " << device->id()
+                         << "; a mesh-wide shard spec needs one coordinate valid everywhere";
+        }
+    }
+
+    constexpr uint32_t kPageSize = 1024;
+    const DeviceLocalBufferConfig local_config{
+        .page_size = kPageSize,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(
+            ShardSpecBuffer(CoreRangeSet(CoreRange(core, core)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1}),
+            TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = std::nullopt,
+        .sub_device_id = std::nullopt,
+    };
+    const MeshBufferConfig mesh_config = ReplicatedBufferConfig{.size = kPageSize};
+
+    // Unclaimed, it is just a core the allocator knows nothing about.
+    EXPECT_ANY_THROW(MeshBuffer::create(mesh_config, local_config, mesh_device.get()));
+
+    for (IDevice* device : devices) {
+        svc.claim(device, {core});
+    }
+    EXPECT_NO_THROW(MeshBuffer::create(mesh_config, local_config, mesh_device.get()));
+    for (IDevice* device : devices) {
+        svc.release(device, {core});
+    }
+
+    // Released, it is rejected again -- the exception is the claim, not the coordinate.
+    EXPECT_ANY_THROW(MeshBuffer::create(mesh_config, local_config, mesh_device.get()));
 }
 
 // Actual use case: Launch a persistent service kernel on a claimed FD idle core while simultaneously
