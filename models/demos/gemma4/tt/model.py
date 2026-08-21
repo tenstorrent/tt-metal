@@ -213,6 +213,11 @@ class Gemma4Model:
     # NOTE: This is a runtime capability (depends on mesh shape / per-device vocab).
     # It is set during __init__ after the sampling module is constructed.
     _supports_on_device_sampling = False
+    # ``Generator.prefill_forward_text`` passes ``allow_sharded_prefill_logits``
+    # only to models that declare this. Gemma4's ``ttnn_prefill_forward`` and its
+    # ``prefill_forward_single_user_text`` override read it; the other models'
+    # strict ``ttnn_prefill_forward`` signatures would raise TypeError on it.
+    supports_sharded_prefill_logits = True
 
     def __init__(
         self,
@@ -803,7 +808,7 @@ class Gemma4Model:
         packed=None,
         chunk_start_idx=None,
         chunk_page_table=None,
-        allow_sharded_decode_logits=True,
+        allow_sharded_decode_logits=False,
         allow_sharded_prefill_logits=False,
         layer_probe=None,
     ):
@@ -1102,10 +1107,16 @@ class Gemma4Model:
         # ``last_hidden_state`` used by the assistant candidate generator.
         # lm_head deallocates its input.
         if is_decode and return_hidden:
-            # is_decode=False forces the TP all-gather: spec-decode reads full-vocab
-            # logits to host and never uses the on-device sampling module (whose
-            # presence would otherwise make the decode path skip the gather).
-            logits = self._apply_lm_head(hidden_states, is_decode=False)
+            # ``allow_sharded=False`` forces the TP all-gather. spec-decode reads
+            # full-vocab logits and never uses the on-device sampling module, but
+            # ``_apply_lm_head`` skips the gather whenever that module merely
+            # EXISTS and ``allow_sharded`` is set -- and it defaults to True. Pass
+            # it explicitly; do not rely on ``is_decode=False`` to do it, which is
+            # what the gather was keyed on before ``allow_sharded`` was introduced.
+            # Without this the verify row is one TP shard wide (32768 of 262144 at
+            # tp=8) and every argmax over it -- host (``_logits_to_host``) or
+            # on-device (``_argmax_last``) -- caps committed tokens at the shard.
+            logits = self._apply_lm_head(hidden_states, is_decode=False, allow_sharded=False)
             return logits, post_norm_hidden
 
         # Slice to the last token tile before lm_head when caller only wants
@@ -1169,9 +1180,17 @@ class Gemma4Model:
         shard to ``process_output_decode``. A host argmax over 1/8 of the vocab
         silently substitutes low-id fragments for any token above the shard
         ("creature"->"create", "lapped"->"la"), worst on long-context tasks that
-        need rare tokens. Same trap the spec-decode path avoids by forcing
-        ``allow_sharded=False``. Prefill ``__call__`` defaults
-        ``allow_sharded_prefill_logits=False`` for the same reason.
+        need rare tokens.
+
+        Both ``__call__`` gates therefore default to False and sharded logits are
+        strictly OPT-IN: only ``ttnn_decode_forward`` (on-device sampler) and the
+        prefill sampling path ask for them. That direction matters -- a new decode
+        caller that forgets the kwarg gets a correct full-vocab gather, not a
+        silently truncated argmax. The spec-decode verify forwards
+        (``ttnn_verify_forward`` / ``ttnn_packed_verify_forward``) rely on this:
+        both their host argmax (``spec_decode._logits_to_host``) and their
+        on-device argmax (``_argmax_last`` + ``_id_to_host``) read device 0 only,
+        so a sharded row would cap every committed token at the shard width.
         """
         # Bracket the lm_head matmul + softcap with a Tracy signpost so the
         # op_perf_results.py --signpost gemma4_lm_head filter sums just this

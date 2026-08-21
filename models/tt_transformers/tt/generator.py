@@ -793,7 +793,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
             # Prefill opt-in: skip vocab AllGather when on-device sampling will
             # consume TP-sharded logits (Gemma4). Host full-vocab path keeps False.
-            local_kwargs["allow_sharded_prefill_logits"] = sampling_enabled
+            #
+            # Gated on the model declaring it reads this kwarg. The chunked /
+            # prefix-caching branch of ``prefill_forward_single_user_text``
+            # splats ``**kwargs`` straight into ``ttnn_prefill_forward``, and
+            # every implementation except Gemma4's has a strict signature
+            # (tt_transformers Transformer, gpt_oss, qwen3_vl, llama3_70b_galaxy,
+            # llama_vision) -- an unconditional key raises TypeError there for
+            # any prompt longer than ``max_prefill_chunk_size``, which is exactly
+            # when ``can_enable_trace`` is False and that branch is the only path.
+            if getattr(self.model[model_id], "supports_sharded_prefill_logits", False):
+                local_kwargs["allow_sharded_prefill_logits"] = sampling_enabled
 
             if use_batched_prefill:
                 # Galaxy 70B approach: slot-based placement with shape [padded_batch, prefill_seq_len]
