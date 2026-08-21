@@ -1079,13 +1079,9 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
     if input_tile_shape[0] == output_tile_shape[0]:
         pytest.skip("Input and output tile shapes are the same")
 
-    # bfloat8_b tilize/untilize LLK does not support partial-face tiles (tile height < 16): the
-    # untilize/tilize half of the retile produces garbage (PCC ~0) whenever either the input or
-    # output tile has a partial face. This matches the convention in test_tiny_tile.py ("blocked
-    # dtypes (bfloat8_b/bfloat4_b) are not supported at a tiny tile"). Full-face tiles (16x32,
-    # 32x32) are supported on both the sharded and interleaved retile paths.
-    # if dtype == ttnn.bfloat8_b and (input_tile_shape[0] < 16 or output_tile_shape[0] < 16):
-    #     pytest.skip("bfloat8_b tilize/untilize LLK does not support partial-face tiles (height < 16)")
+    # bfloat8_b is supported at every tile height (1..32): the packer LLK sizes the BFP exponent
+    # section from face_r_dim, so partial-face (tile height < 16) block-float tiles pack with the
+    # same layout the host and unpacker use.
 
     # Build a (possibly sharded) already-tiled input using the source tile shape.
     mem_cfg = None

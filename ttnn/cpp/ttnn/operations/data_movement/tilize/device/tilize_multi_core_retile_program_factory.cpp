@@ -10,6 +10,7 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
 #include <algorithm>
+#include <numeric>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -107,8 +108,15 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     const uint32_t src_cb_tiles = cb_num_pages_per_block * cb_factor;
     const uint32_t out_cb_tiles = cb_num_pages_per_block * cb_factor;
 
-    // One output block occupies `ratio` input tile-rows of RM in the grow case, one otherwise.
-    const uint32_t mid_pages_per_out_block = (shrink ? 1u : ratio) * tiles_per_block;
+    // The compute kernel untilizes the whole per-core assignment into mid, then tilizes it.
+    // Size mid for the busiest core's input tile-rows. Aliased c_1/c_2 page sizes can differ
+    // (e.g. bf16→bfp8 with different tile heights), so the allocation must be a multiple of both.
+    const uint32_t max_blocks = std::max(nblocks_per_core, nblocks_per_core_cliff);
+    const uint32_t max_input_rows_per_core = shrink ? max_blocks : max_blocks * ratio;
+    const uint32_t mid_input_pages = max_input_rows_per_core * tiles_per_block;
+    const uint32_t mid_size_align = std::lcm(mid_input_page_size, mid_output_page_size);
+    const uint32_t mid_total_size =
+        ((mid_input_pages * mid_input_page_size + mid_size_align - 1) / mid_size_align) * mid_size_align;
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     constexpr uint32_t mid_cb_index = tt::CBIndex::c_1;       // input tile geometry (untilize producer)
@@ -134,7 +142,7 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     // program-creation time: c_1 carries the input tile shape for pack_untilize to write into, c_2
     // the output tile shape so llk_unpack_tilize reads the correct number of RM rows.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * mid_pages_per_out_block * mid_input_page_size,
+        .total_size = mid_total_size,
         .core_ranges = all_cores,
         .format_descriptors = {{
             CBFormatDescriptor{

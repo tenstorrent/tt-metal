@@ -170,15 +170,6 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
         tt::constants::TILE_WIDTH,
         tile_width);
 
-    // Blocked (exponent-shared) formats pack a full 32-row tile; a tiny tile height would split a
-    // block across faces incorrectly, so reject that combination.
-    if (tile_height < tt::constants::TILE_HEIGHT) {
-        const DataType out_dt = operation_attributes.output_dtype;
-        TT_FATAL(
-            out_dt != DataType::BFLOAT8_B && out_dt != DataType::BFLOAT4_B,
-            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
-    }
-
     TT_FATAL(
         input_tensor_a.padded_shape()[-1] % tile_width == 0,
         "Input tensor width ({}) must be divisible by tile width ({})",
@@ -192,11 +183,10 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
 
     auto width = input_tensor_a.padded_shape()[-1];
     uint32_t stick_s = width;
-    if (retile) {
-        TT_FATAL(
-            !is_block_float(input_tensor_a.dtype()) || tile_height >= 16,
-            "Retile tilize requires a full-face tile height (16 or greater) for block float inputs");
-    } else {
+    // Retile accepts block-float inputs at any tile height (1..32): the packer LLK sizes the BFP
+    // exponent section from face_r_dim, so partial-face (tile height < 16) block-float tiles pack
+    // with the same layout the host and unpacker use.
+    if (!retile) {
         TT_FATAL(
             input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32 or
                 input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
