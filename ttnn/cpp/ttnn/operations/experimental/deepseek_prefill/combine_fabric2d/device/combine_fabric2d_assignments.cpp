@@ -63,6 +63,64 @@ void validate_coverage(const std::map<StreamId, std::vector<Assignment>>& per_st
 
 }  // namespace
 
+namespace {
+
+// A chunk's (origin, destination) as hop offsets along the stream's own direction, in emission order. The
+// list a chip emits is its own forwarding destinations, furthest first, followed by the arrivals it passes
+// on — which is the same list one hop older with the arrivals for its neighbour removed. That recursion has
+// a fixed point, so the offsets are the same for every chip and need no simulation.
+std::vector<std::pair<int32_t, int32_t>> emitted_offsets(uint32_t m) {
+    std::vector<std::pair<int32_t, int32_t>> emitted;
+    emitted.reserve(relay_chunks_per_stream(2 * m));
+    for (uint32_t hop = 0; hop + 2 <= m; hop++) {
+        for (uint32_t dst = m - hop; dst >= 2; dst--) {
+            emitted.emplace_back(-static_cast<int32_t>(hop), static_cast<int32_t>(dst));
+        }
+    }
+    return emitted;
+}
+
+std::vector<ChunkDescriptor> chunks_at_offsets(
+    const std::vector<std::pair<int32_t, int32_t>>& offsets,
+    StreamId stream,
+    uint32_t my_row,
+    uint32_t extent,
+    uint32_t num_links,
+    int32_t hop_shift) {
+    const bool is_cw = (stream % 2) == 0;
+    const uint32_t link = stream / 2;
+    const uint32_t m = extent / 2;
+    const int32_t travel = is_cw ? 1 : -1;
+
+    std::vector<ChunkDescriptor> chunks;
+    chunks.reserve(offsets.size());
+    for (const auto& [origin_off, dst_off] : offsets) {
+        const int32_t origin = origin_off + hop_shift;
+        const int32_t dst = dst_off + hop_shift;
+        const uint32_t distance = static_cast<uint32_t>(dst - origin);
+        chunks.push_back(ChunkDescriptor{
+            .origin_row = static_cast<uint32_t>(
+                (static_cast<int32_t>(my_row) + travel * origin + static_cast<int32_t>(extent)) % extent),
+            .dst_row = static_cast<uint32_t>(
+                (static_cast<int32_t>(my_row) + travel * dst + static_cast<int32_t>(extent)) % extent),
+            .split_idx = distance == m ? stream : link,
+            .split_count = distance == m ? stream_count(num_links) : num_links});
+    }
+    return chunks;
+}
+
+}  // namespace
+
+std::vector<ChunkDescriptor> incoming_chunks(
+    StreamId stream, uint32_t my_row, uint32_t ring_extent, uint32_t num_links) {
+    return chunks_at_offsets(emitted_offsets(ring_extent / 2), stream, my_row, ring_extent, num_links, -1);
+}
+
+std::vector<ChunkDescriptor> outgoing_chunks(
+    StreamId stream, uint32_t my_row, uint32_t ring_extent, uint32_t num_links) {
+    return chunks_at_offsets(emitted_offsets(ring_extent / 2), stream, my_row, ring_extent, num_links, 0);
+}
+
 std::map<StreamId, std::vector<Assignment>> generate_assignments(
     const std::vector<uint32_t>& ring_chip_ids, uint32_t my_row, uint32_t num_links) {
     const uint32_t extent = static_cast<uint32_t>(ring_chip_ids.size());
