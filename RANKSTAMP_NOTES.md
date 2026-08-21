@@ -166,3 +166,26 @@ UInt32-format CBs corrupt under pack_tile<true>, #53466).
   (W=65536 largest/smallest) after fresh cache clear.
 - Silicon: stable_index_parity 24p (incl. W=65536 wide_u32 both directions through the NEW path);
   full reduce/test_topk.py 235p/8s/80xf; adversarial 30p; data_movement/test_sort.py 128p.
+
+## C4 tests + perf A/B (BH p150a, device kernel duration, Tracy)
+Tests added (tests/ttnn/.../test_topk.py):
+- wide_u32 parity extended: (65536,32),(65536,16),(131072,32) x both directions -> rank-stamped
+- test_topk_stable_wide_tie_saturation (6-level tie-heavy incl. negatives, cut inside tie group)
+- test_topk_stable_wide_signed_zero (bf16 +-0 tie class, 48 zeros scattered, straddles k for smallest)
+- test_topk_stable_wide_k64_keeps_comparator_parity (gate boundary Ktiles=2)
+- test_topk_stable_wide_program_cache (3 distinct entries at the gate boundary + cache-hit rerun
+  correctness on fresh data; unique 64-row shape so session-order-independent)
+All 13 pass on silicon.
+
+Perf A/B (W=65536, k=32, tie-heavy bf16 [8 levels], 32 rows, single-core, 2 warmup + 5 iters x
+2 directions per trial, 3 trials per leg, kernel cache cleared between trials, bench script
+tests/.../reduce/_topk_wide_stable_bench.py under python -m tracy -r -v):
+- comparator-stable (gate forced off, rebuild; JIT cache verified define-free):
+  trial means 19.156 / 19.155 / 19.152 ms; largest ~18.99, smallest ~19.33
+- rank-stamped (this branch): trial means 12.840 / 12.840 / 12.840 ms (A4 post-revert 12.84 ✓);
+  largest ~12.75, smallest ~12.94
+- unstable (stable=False) same cell, context: 11.071 ms
+=> rank-stamped = -33.0% vs comparator (1.49x); = unstable + 16.0% (design predicted +10-15%).
+Cross-trial spread <= 0.03% -> far above noise floor. All TRISCs ~= DK on both legs (pipeline
+saturated; shared transpose/copy DM cost dilutes the comparator penalty relative to the
+network-only 7x instruction ratio).

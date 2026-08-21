@@ -649,12 +649,13 @@ def test_topk_stable_index_parity_float32(W, k, largest, device):
     assert_equal(order, ttnn_torch_indices)
 
 
-@pytest.mark.parametrize("W, k", ((65536, 32),))
+@pytest.mark.parametrize("W, k", ((65536, 32), (65536, 16), (131072, 32)))
 @pytest.mark.parametrize("largest", (True, False))
 def test_topk_stable_index_parity_wide_u32(W, k, largest, device):
     """stable=True at W >= 65536: indices no longer fit 16 bits, so the auto-selected
-    index dtype is UINT32 and the single-core path must run the comparator-stable
-    network in 32-bit dest (INT32 index arms)."""
+    index dtype is UINT32 and the single-core path runs the RANK-STAMPED fast engine
+    (sign-conditioned local-rank tags on the unstable network, true u32 indices riding
+    index tracking) — k <= 32 / bf16 only; larger k and fp32 keep the comparator."""
     torch.manual_seed(3)
     shape = [1, 1, 32, W]
     input = torch.randint(-4, 4, shape).to(torch.bfloat16)
@@ -669,6 +670,119 @@ def test_topk_stable_index_parity_wide_u32(W, k, largest, device):
 
     assert_equal(golden_values, ttnn_torch_values)
     assert_equal(order, ttnn_torch_indices)
+
+
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_wide_tie_saturation(largest, device):
+    """Tie-heavy rank-stamped coverage at W=65536: rows built from six distinct levels
+    (negative and positive), so several exact-tie groups land inside the top-k, one group
+    straddles the k=32 cut in each direction, and every tie must break by ascending
+    original index across the full 2048-tile insertion pipeline (accumulator vs incoming
+    chunk at every step). Strict torch-stable parity on values and indices."""
+    torch.manual_seed(5)
+    W, k = 65536, 32
+    shape = [1, 1, 32, W]
+    levels = torch.tensor([-2.0, -1.0, -0.5, 0.5, 1.0, 2.0], dtype=torch.bfloat16)
+    input = levels[torch.randint(0, 6, shape)]
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+    assert ttnn_indices.dtype == ttnn.uint32
+
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
+
+
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_wide_signed_zero(largest, device):
+    """bf16 +-0.0 tie class at W=65536 on the rank-stamped engine: the local-position
+    stamp folds -0.0 into +0.0 before tagging, so the whole zero group breaks by index
+    like torch (which treats +-0 as one tie class). Zeros straddle the k cut for the
+    smallest direction; normals cover the largest direction."""
+    torch.manual_seed(6)
+    W, k = 65536, 32
+    shape = [1, 1, 32, W]
+    input = torch.randn(shape, dtype=torch.bfloat16).abs() + 0.5  # positive normals
+    # 48 zeros per row, alternating +0.0 / -0.0, scattered across the row (so the zero
+    # tie group spans many insertion chunks and straddles k=32 for smallest).
+    zero_cols = torch.arange(48) * 1291 % W
+    input[..., zero_cols[0::2]] = 0.0
+    input[..., zero_cols[1::2]] = -0.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+
+    # torch.eq treats -0.0 == 0.0, so the values check is sign-insensitive by design
+    # (the device canonicalizes -0.0 to +0.0 inside the compute).
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
+
+
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_wide_k64_keeps_comparator_parity(largest, device):
+    """Gate boundary: k=64 at W=65536 needs two output tiles, where the insertion
+    CASCADE breaks the rank-stamp precondition (a displaced old element can meet a
+    newer accumulator entry), so the factory keeps the comparator-stable engine.
+    Parity must hold there too."""
+    torch.manual_seed(7)
+    W, k = 65536, 64
+    shape = [1, 1, 32, W]
+    input = torch.randint(-4, 4, shape).to(torch.bfloat16)
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
+
+
+def test_topk_stable_wide_program_cache(device):
+    """Program-cache behavior at the rank-stamp gate boundary: W=65536 stable
+    (rank-stamped), W=65536 unstable (plain network) and W=65536 stable k=64
+    (comparator) must be three DISTINCT cache entries — the gate inputs (stable
+    flag, k) are covered by the program hash — and a cache-hit rerun of the
+    rank-stamped program on fresh data must stay torch-stable-correct (guards
+    the classic works-first-time / wrong-on-second-run failure mode)."""
+    torch.manual_seed(8)
+    W = 65536
+    # 64 rows: a shape no other test in this module uses at this width, so the three
+    # programs below are guaranteed fresh entries regardless of what ran earlier in
+    # the same device session.
+    shape = [1, 1, 64, W]
+
+    def run(stable, k, seed):
+        torch.manual_seed(seed)
+        input = torch.randint(-4, 4, shape).to(torch.bfloat16)
+        ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+        v, i = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True, stable=stable)
+        return input, ttnn.to_torch(v), ttnn.to_torch(i, dtype=torch.int32).to(torch.int64)
+
+    base_entries = device.num_program_cache_entries()
+
+    inp, v, i = run(stable=True, k=32, seed=100)  # rank-stamped
+    golden_v, golden_i = _stable_topk_golden(inp, 32, True)
+    assert_equal(golden_v, v)
+    assert_equal(golden_i, i)
+    after_first = device.num_program_cache_entries()
+    assert after_first > base_entries, "first rank-stamped run must MISS the program cache"
+
+    run(stable=False, k=32, seed=101)  # unstable network: different program
+    after_unstable = device.num_program_cache_entries()
+    assert after_unstable > after_first, "stable and unstable topk must not share a cache entry"
+
+    run(stable=True, k=64, seed=102)  # comparator (Ktiles=2): different program
+    after_k64 = device.num_program_cache_entries()
+    assert after_k64 > after_unstable, "rank-stamped (k<=32) and comparator (k=64) must not share a cache entry"
+
+    # Cache-hit rerun of the rank-stamped program on fresh data.
+    inp2, v2, i2 = run(stable=True, k=32, seed=103)
+    assert device.num_program_cache_entries() == after_k64, "rerun must HIT the program cache"
+    golden_v2, golden_i2 = _stable_topk_golden(inp2, 32, True)
+    assert_equal(golden_v2, v2)
+    assert_equal(golden_i2, i2)
 
 
 @pytest.mark.parametrize("largest", (True, False))
