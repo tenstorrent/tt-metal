@@ -10,8 +10,6 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
-using namespace tt::tt_metal;
-
 namespace ttnn::experimental::prim {
 
 AffineExclusiveScanOperation::program_factory_t AffineExclusiveScanOperation::select_program_factory(
@@ -21,24 +19,23 @@ AffineExclusiveScanOperation::program_factory_t AffineExclusiveScanOperation::se
 
 void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    using namespace kda_factory_detail;
     constexpr std::string_view operation_name = "affine_exclusive_scan";
-    constexpr std::array accepted_summary_dtypes = {DataType::FLOAT32, DataType::BFLOAT16};
-    check_allocated_device_tensor(in.a, operation_name, "a");
-    check_layout(in.a, Layout::TILE, operation_name, "a");
-    check_dtype_in(in.a, accepted_summary_dtypes, "FLOAT32 or BFLOAT16", operation_name, "a");
-    check_allocated_device_tensor(in.b, operation_name, "b");
-    check_layout(in.b, Layout::TILE, operation_name, "b");
-    check_dtype_in(in.b, accepted_summary_dtypes, "FLOAT32 or BFLOAT16", operation_name, "b");
-    check_allocated_device_tensor(in.initial_state, operation_name, "initial_state");
-    check_layout(in.initial_state, Layout::TILE, operation_name, "initial_state");
-    check_dtype(in.initial_state, DataType::FLOAT32, operation_name, "initial_state");
-    check_same_device(in.a, in.b, operation_name, "b");
-    check_same_device(in.a, in.initial_state, operation_name, "initial_state");
-    check_matching_dtype(in.a, in.b, operation_name, "a and b");
+    constexpr std::array accepted_summary_dtypes = {tt::tt_metal::DataType::FLOAT32, tt::tt_metal::DataType::BFLOAT16};
+    kda_factory_detail::check_allocated_device_tensor(in.a, operation_name, "a");
+    kda_factory_detail::check_layout(in.a, tt::tt_metal::Layout::TILE, operation_name, "a");
+    kda_factory_detail::check_dtype_in(in.a, accepted_summary_dtypes, "FLOAT32 or BFLOAT16", operation_name, "a");
+    kda_factory_detail::check_allocated_device_tensor(in.b, operation_name, "b");
+    kda_factory_detail::check_layout(in.b, tt::tt_metal::Layout::TILE, operation_name, "b");
+    kda_factory_detail::check_dtype_in(in.b, accepted_summary_dtypes, "FLOAT32 or BFLOAT16", operation_name, "b");
+    kda_factory_detail::check_allocated_device_tensor(in.initial_state, operation_name, "initial_state");
+    kda_factory_detail::check_layout(in.initial_state, tt::tt_metal::Layout::TILE, operation_name, "initial_state");
+    kda_factory_detail::check_dtype(in.initial_state, tt::tt_metal::DataType::FLOAT32, operation_name, "initial_state");
+    kda_factory_detail::check_same_device(in.a, in.b, operation_name, "b");
+    kda_factory_detail::check_same_device(in.a, in.initial_state, operation_name, "initial_state");
+    kda_factory_detail::check_matching_dtype(in.a, in.b, operation_name, "a and b");
     TT_FATAL(attrs.groups_per_head > 0, "affine_exclusive_scan: groups_per_head must be positive");
-    check_output_interleaved(attrs.output_mem_config, operation_name);
-    check_compute_config(attrs.compute_kernel_config, operation_name);
+    kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
+    kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
 
     const auto& a_shape = in.a.logical_shape();
     const auto& b_shape = in.b.logical_shape();
@@ -68,13 +65,16 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
 
 AffineExclusiveScanOperation::spec_return_value_t AffineExclusiveScanOperation::compute_output_specs(
     const operation_attributes_t& a, const tensor_args_t&) {
-    return {TensorSpec(
-        Shape({a.batch_heads * a.groups_per_head, a.key_dim, a.value_dim}),
-        TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), a.output_mem_config))};
+    return {tt::tt_metal::TensorSpec(
+        tt::tt_metal::Shape({a.batch_heads * a.groups_per_head, a.key_dim, a.value_dim}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::FLOAT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            a.output_mem_config))};
 }
 AffineExclusiveScanOperation::tensor_return_value_t AffineExclusiveScanOperation::create_output_tensors(
     const operation_attributes_t& a, const tensor_args_t& in) {
-    return {create_device_tensor(compute_output_specs(a, in)[0], in.a.device())};
+    return {ttnn::create_device_tensor(compute_output_specs(a, in)[0], in.a.device())};
 }
 Tensor affine_exclusive_scan(
     const Tensor& a,
