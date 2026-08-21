@@ -694,6 +694,37 @@ inline void bitonic_topk_inc_x4_dest(std::uint32_t inc, bool cr)
     }
 }
 
+// -0.0 canonicalization for the comparator-stable network in 32-bit DEST. The SFPU
+// compare-exchange orders values in sign-magnitude space, where -0.0 (0x80000000) sorts
+// strictly below +0.0 -- but the stable contract follows torch, which treats them as ONE
+// tie class broken by index. Rewrite -0.0 -> +0.0 in the two freshly loaded value tiles
+// before the network runs: every datum enters the sort through _bitonic_topk_phases_steps
+// exactly once (the multi-core local sort and the single-core insertion loop both
+// local-sort each fresh 2-tile slab), and the fp32 pack/unpack transport is a bit
+// identity, so this single entry sweep canonicalizes the whole sort. The 16-bit-DEST
+// engines need no sweep (their bf16 SrcA datacopy already canonicalizes +-0, silicon-
+// probed), uint16-in-fp32-dest values carry no live sign bit after their own strip, and
+// fused packed keys never take the comparator-stable path.
+// Predicate: (x & 0x7FFFFFFF) == 0 (zero magnitude); action: x &= 0x7FFFFFFF (-> +0.0).
+inline void topk_stable_canonicalize_negzero_value_tiles()
+{
+    sfpi::vConstIntPrgm0 = 0x7FFFFFFF;
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    for (std::uint32_t off = 0; off < 128; off += 2)
+    {
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, off);
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TTI_SFPENCC(3, 0, 0, 10);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, off);
+    }
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false, bool FUSED = false>
 inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
 {
@@ -721,6 +752,12 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
         // body re-establishes it via its trailing SFPENCC, and the intervening loads/stores/
         // transposes/SFPCONFIG writes preserve CC state.
         TTI_SFPENCC(3, 0, 0, 10);
+        if constexpr (is_fp32_dest_acc_en && !TOPK_UINT16_IN_FP32_DEST)
+        {
+            // fp32-family values in 32-bit DEST can carry -0.0: fold it into the +0.0 tie
+            // class before the sign-magnitude network runs (see the sweep's doc comment).
+            topk_stable_canonicalize_negzero_value_tiles();
+        }
     }
 
     // init the replay buffer for local sort if uninitialized
