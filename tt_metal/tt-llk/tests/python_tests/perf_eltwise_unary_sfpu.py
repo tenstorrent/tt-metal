@@ -410,6 +410,11 @@ def test_perf_unary_max_min_fresh_cpp(
         MathOperation.Threshold,
         MathOperation.UnaryGe,
         MathOperation.Acosh,
+        # laneED sem-only audit: NotEqualZero's production float body is the
+        # all-raw-TTI calculate_comp hand kernel; GeluAppx's is the 6-segment
+        # SFPLUTFP32 hand kernel.  impl 1 = the new fresh semantic arms.
+        MathOperation.NotEqualZero,
+        MathOperation.GeluAppx,
     ],
     fresh_cpp_impl=[0, 1],
 )
@@ -424,6 +429,49 @@ def test_perf_causal_lift_fresh_cpp(
         formats,
         mathop,
         ApproximationMode.No,
+        dest_acc,
+        16,
+        32,
+        FastMode.No,
+        StableSort.No,
+        [128, 64],
+        fresh_cpp_impl,
+    ).run(perf_report)
+
+
+# laneED sem-only audit: hand-LUT-variant pairs.  impl 3 = the byte-untouched
+# hand LUT kernel (Tanh: production calculate_tanh<APPROXIMATION_MODE=true>,
+# reached by building the impl-3 leg with approx mode ON — no cpp branch;
+# Sigmoid: the legacy tt-llk 6-segment SFPLUTFP32 _calculate_sigmoid_, wired
+# by the impl-3 selector + init override in eltwise_unary_sfpu_perf.cpp).
+# impl 1 = the fresh semantic body (same bodies the causal-lift family
+# measures; separate node ids so each LUT row owns its cells).
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No],
+    mathop=[
+        MathOperation.Tanh,
+        MathOperation.Sigmoid,
+    ],
+    fresh_cpp_impl=[1, 3],
+)
+def test_perf_lut_variant_fresh_cpp(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    fresh_cpp_impl,
+):
+    approx = (
+        ApproximationMode.Yes
+        if (fresh_cpp_impl == 3 and mathop == MathOperation.Tanh)
+        else ApproximationMode.No
+    )
+    _run(
+        formats,
+        mathop,
+        approx,
         dest_acc,
         16,
         32,
