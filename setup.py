@@ -342,8 +342,16 @@ class CMakeBuild(build_ext):
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
             "ttnn/kernel/*",
-            "ttnn/kernel_lib/*",
+            "ttnn/kernel_lib/**/*.hpp",
+            "ttnn/kernel_lib/**/*.inl",
+            "ttnn/kernel_lib/**/*.cpp",
             "ttnn/operations/normalization/kernel_util/**/*",
+        ]
+        # Ops in the Python tree that keep their kernels in a sibling kernels/ directory resolve
+        # them through Path(__file__).parent, so the sources have to sit next to the installed
+        # module. setup() declares no package_data, so build_py alone ships only the .py files.
+        ttnn_python_kernel_patterns = [
+            "operations/**/kernels/**/*",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",
@@ -381,6 +389,7 @@ class CMakeBuild(build_ext):
             source_dir / "runtime", self.build_lib + "/ttnn/runtime", runtime_patterns, runtime_exclude_files
         )
         copy_tree_with_patterns(source_dir / "ttnn", self.build_lib + "/ttnn", ttnn_patterns)
+        copy_tree_with_patterns(source_dir / "ttnn/ttnn", self.build_lib + "/ttnn", ttnn_python_kernel_patterns)
         copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/ttnn/cpp", ttnn_cpp_patterns)
         copy_tree_with_patterns(source_dir / "tt_metal", self.build_lib + "/ttnn/tt_metal", tt_metal_patterns)
 
