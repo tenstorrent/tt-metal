@@ -166,7 +166,7 @@ def _device_kernel_ns(variant):
 
 
 @pytest.mark.parametrize("case", CASES)
-def test_skip_compute_reduces_device_kernel_time(case):
+def test_skip_compute_reduces_device_kernel_time(case, silicon_arch_name, silicon_arch_wormhole_b0):
     run_ns = _device_kernel_ns(f"{case}-run")
     skip_ns = _device_kernel_ns(f"{case}-skip")
     logger.info(
