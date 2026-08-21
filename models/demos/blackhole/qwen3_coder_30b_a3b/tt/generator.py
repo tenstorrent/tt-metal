@@ -74,6 +74,9 @@ class Qwen3CoderGenerator(Generator):
         self._trace_kv_cache = None
         self._trace_page_table_snapshot: torch.Tensor | None = None
         self._trace_active_batch = None
+        #: Width of the *captured* decode graph. Equal to ``self.batch`` unless
+        #: the caller asked for a narrower one via ``decode_forward(graph_width=)``.
+        self._trace_graph_width = None
         #: Highest rotary position the *next* trace replay will gather at. The
         #: trace advances ``rotary_position`` on device with ``ttnn.plus_one``
         #: and nothing on device clamps it, so this host-side mirror is the only
@@ -159,20 +162,39 @@ class Qwen3CoderGenerator(Generator):
         self._prefill_sampled = self._replicated_device_tensor(
             torch.zeros((1, 1, 1, SAMPLING_SLOTS), dtype=torch.int32), dtype=ttnn.uint32
         )
-        self._decode_trace_input_pool = (
+        self._width_pools = {}
+        self._decode_trace_input_pool = self._decode_input_pool(self.batch)
+
+    def _decode_input_pool(self, width: int) -> tuple:
+        """The four persistent decode inputs, ``width`` rows wide.
+
+        One pool per captured graph width. The **token** tensor is
+        ``[1,1,1,32]`` at every width because that is ``tt_out_tok``'s shape --
+        the sampler always addresses 32 slots and ``embed_decode`` slices the
+        embedding down to ``model.decode_width``. The other three are the only
+        things that bind a request to a row, and they are exactly what
+        compaction permutes.
+        """
+        width = int(width)
+        pool = self._width_pools.get(width)
+        if pool is not None:
+            return pool
+        pool = (
             # token: [1,1,1,32] uint32, the tensor ``tt_out_tok`` writes into
             self._replicated_device_tensor(
                 torch.zeros((1, 1, 1, SAMPLING_SLOTS), dtype=torch.int32), dtype=ttnn.uint32
             ),
-            # current_pos: [batch] int32, consumed by paged_update_cache and SDPA
-            self._replicated_device_tensor(torch.full((self.batch,), -1, dtype=torch.int32), dtype=ttnn.int32),
-            # rotary_position: [1, batch] uint32, the cos/sin gather index
-            self._replicated_device_tensor(torch.zeros((1, self.batch), dtype=torch.int32), dtype=ttnn.uint32),
-            # page_table: [batch, pages_per_user] int32
+            # current_pos: [width] int32, consumed by paged_update_cache and SDPA
+            self._replicated_device_tensor(torch.full((width,), -1, dtype=torch.int32), dtype=ttnn.int32),
+            # rotary_position: [1, width] uint32, the cos/sin gather index
+            self._replicated_device_tensor(torch.zeros((1, width), dtype=torch.int32), dtype=ttnn.uint32),
+            # page_table: [width, pages_per_user] int32
             self._replicated_device_tensor(
-                torch.full((self.batch, self.pages_per_user), -1, dtype=torch.int32), dtype=ttnn.int32
+                torch.full((width, self.pages_per_user), -1, dtype=torch.int32), dtype=ttnn.int32
             ),
         )
+        self._width_pools[width] = pool
+        return pool
 
     def _ensure_kv_cache(self):
         if self._kv_cache is None:
@@ -234,9 +256,15 @@ class Qwen3CoderGenerator(Generator):
         if self._trace_model_id is None or self._trace_inputs is None:
             return None
         token, current_pos, _rotary, _page_table = self._trace_inputs
+        # The live trace may be **narrower** than the configured slot count, so
+        # everything is reported at the graph's width and ``width`` says what
+        # that is. Row *i* here is graph row *i*, not necessarily vLLM slot *i* --
+        # the caller owns the mapping (``Qwen3CoderForCausalLM._compaction``).
+        width = self._trace_graph_width or self.batch
         return {
-            "tokens": _first_device_to_torch(token).reshape(-1)[: self.batch].to(torch.int64),
-            "positions": _first_device_to_torch(current_pos).reshape(-1)[: self.batch].to(torch.int64),
+            "width": width,
+            "tokens": _first_device_to_torch(token).reshape(-1)[:width].to(torch.int64),
+            "positions": _first_device_to_torch(current_pos).reshape(-1)[:width].to(torch.int64),
             "page_table": (
                 None if self._trace_page_table_snapshot is None else self._trace_page_table_snapshot.clone()
             ),
@@ -264,7 +292,15 @@ class Qwen3CoderGenerator(Generator):
             raise ValueError(f"page_table must be rank two, got {tuple(host.shape)}")
         return host
 
-    def _normalise_page_table(self, page_table, active_batch: int) -> torch.Tensor:
+    def _normalise_page_table(self, page_table, active_batch: int, width: int | None = None) -> torch.Tensor:
+        """Trim/pad a caller's block table to ``width`` rows x ``pages_per_user``.
+
+        ``width`` defaults to the configured slot count and is the *graph* width
+        -- the number of rows the captured decode trace has. A narrow graph is
+        handed the first ``width`` rows, which is why the caller must compact its
+        live requests into them first.
+        """
+        width = self.batch if width is None else int(width)
         host = self._page_table_to_torch(page_table)
         if host.shape[0] < active_batch or host.shape[0] > self.batch:
             raise ValueError("page table does not match the configured/active batch")
@@ -272,8 +308,10 @@ class Qwen3CoderGenerator(Generator):
             host = torch.nn.functional.pad(host, (0, self.pages_per_user - host.shape[1]), value=-1)
         elif host.shape[1] > self.pages_per_user:
             host = host[:, : self.pages_per_user]
-        if host.shape[0] < self.batch:
-            host = torch.nn.functional.pad(host, (0, 0, 0, self.batch - host.shape[0]), value=-1)
+        if host.shape[0] < width:
+            host = torch.nn.functional.pad(host, (0, 0, 0, width - host.shape[0]), value=-1)
+        elif host.shape[0] > width:
+            host = host[:width]
         return host.contiguous()
 
     def _sdpa_rounded_page_count(self, token_count: int) -> int:
@@ -793,16 +831,19 @@ class Qwen3CoderGenerator(Generator):
 
     # -- decode trace ---------------------------------------------------------
 
-    def _prepare_decode_host_inputs(self, tokens: torch.Tensor, positions: torch.Tensor, page_table: torch.Tensor):
+    def _prepare_decode_host_inputs(
+        self, tokens: torch.Tensor, positions: torch.Tensor, page_table: torch.Tensor, width: int | None = None
+    ):
+        width = self.batch if width is None else int(width)
         tokens = tokens.reshape(-1).to(torch.int64)
         positions = positions.reshape(-1).to(torch.int64)
-        if tokens.numel() > self.batch or positions.numel() > self.batch:
-            raise ValueError("decode batch exceeds the configured fixed slots")
+        if tokens.numel() > width or positions.numel() > width:
+            raise ValueError("decode batch exceeds the graph width")
         padded_tokens = torch.zeros(SAMPLING_SLOTS, dtype=torch.int32)
         padded_tokens[: tokens.numel()] = tokens.to(torch.int32)
-        padded_positions = torch.full((self.batch,), -1, dtype=torch.int32)
+        padded_positions = torch.full((width,), -1, dtype=torch.int32)
         padded_positions[: positions.numel()] = positions.to(torch.int32)
-        rotary = torch.clamp(padded_positions, min=0).reshape(1, self.batch)
+        rotary = torch.clamp(padded_positions, min=0).reshape(1, width)
         return (
             self._replicated_host_tensor(padded_tokens.reshape(1, 1, 1, SAMPLING_SLOTS), dtype=ttnn.uint32),
             self._replicated_host_tensor(padded_positions, dtype=ttnn.int32),
@@ -826,7 +867,7 @@ class Qwen3CoderGenerator(Generator):
         if include_page_table:
             self.trace_stats["page_table_host_copies"] += 1
 
-    def _decode_graph_key(self, kv_cache, active_batch: int) -> tuple:
+    def _decode_graph_key(self, kv_cache, graph_width: int) -> tuple:
         """Everything that changes which programs the decode graph needs.
 
         ``rope_cache_len`` is part of it because ``_ensure_decode_rope_capacity``
@@ -839,7 +880,7 @@ class Qwen3CoderGenerator(Generator):
         """
         return (
             id(kv_cache),
-            active_batch,
+            graph_width,
             self._sampling_stochastic,
             self._penalty_mode,
             self.model.rope_cache_len,
@@ -852,7 +893,7 @@ class Qwen3CoderGenerator(Generator):
             self.model.active_row_gating,
         )
 
-    def _warm_decode_graphs(self, host_inputs, kv_cache, *, active_batch: int, initial_token_device=None) -> None:
+    def _warm_decode_graphs(self, host_inputs, kv_cache, *, graph_width: int, initial_token_device=None) -> None:
         """Compile every program once eagerly.
 
         Non-negotiable rather than merely tidy: ``_decode_ccl_buffers``
@@ -860,39 +901,42 @@ class Qwen3CoderGenerator(Generator):
         shape, and ``ttnn.from_torch`` inside ``begin_trace_capture`` raises and
         leaves the capture open -- a hung mesh (stage-04 ``work_log.md`` §6).
         """
-        self._trace_inputs = self._decode_trace_input_pool
+        self._trace_inputs = self._decode_input_pool(graph_width)
         self._restore_trace_inputs(host_inputs, include_page_table=True, token_device=initial_token_device)
         token, current_pos, rotary_pos, page_table = self._trace_inputs
         self.model.bind_page_table(kv_cache, page_table)
-        logits = self.model.decode_forward_from_ttnn_inputs(
-            # ``advance_position=True`` here as well as in the capture: every op
-            # the traced graph contains must already be in the program cache,
-            # and that includes the two ``ttnn.plus_one`` calls. The positions
-            # this leaves behind are overwritten by the restore below.
-            token,
-            current_pos,
-            rotary_position=rotary_pos,
-            kv_cache=kv_cache,
-            advance_position=True,
-        )
+        with self.model.decode_width_scope(graph_width):
+            logits = self.model.decode_forward_from_ttnn_inputs(
+                # ``advance_position=True`` here as well as in the capture: every
+                # op the traced graph contains must already be in the program
+                # cache, and that includes the two ``ttnn.plus_one`` calls. The
+                # positions this leaves behind are overwritten by the restore below.
+                token,
+                current_pos,
+                rotary_position=rotary_pos,
+                kv_cache=kv_cache,
+                advance_position=True,
+            )
         self._sample_device(logits, tt_out_tok=token)
         ttnn.deallocate(logits, True)
         self._synchronize()
         self._restore_trace_inputs(host_inputs, include_page_table=True, token_device=initial_token_device)
         self._synchronize()
-        self._decode_warm_key = self._decode_graph_key(kv_cache, active_batch)
+        self._decode_warm_key = self._decode_graph_key(kv_cache, graph_width)
         self._decode_compiled_keys.add(self._decode_warm_key)
         self.trace_stats["decode_warmups"] += 1
 
-    def _capture_decode_traces(self, host_inputs, kv_cache, *, active_batch: int, initial_token_device=None) -> None:
-        self._trace_inputs = self._decode_trace_input_pool
+    def _capture_decode_traces(
+        self, host_inputs, kv_cache, *, graph_width: int, active_batch: int, initial_token_device=None
+    ) -> None:
+        self._trace_inputs = self._decode_input_pool(graph_width)
         model_trace_id = sampling_trace_id = None
         model_open = sampling_open = False
         try:
-            warm_key = self._decode_graph_key(kv_cache, active_batch)
+            warm_key = self._decode_graph_key(kv_cache, graph_width)
             if self._decode_warm_key != warm_key and warm_key not in self._decode_compiled_keys:
                 self._warm_decode_graphs(
-                    host_inputs, kv_cache, active_batch=active_batch, initial_token_device=initial_token_device
+                    host_inputs, kv_cache, graph_width=graph_width, initial_token_device=initial_token_device
                 )
             self._restore_trace_inputs(host_inputs, include_page_table=True, token_device=initial_token_device)
             self._synchronize()
@@ -901,9 +945,10 @@ class Qwen3CoderGenerator(Generator):
 
             model_trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
             model_open = True
-            logits = self.model.decode_forward_from_ttnn_inputs(
-                token, current_pos, rotary_position=rotary_pos, kv_cache=kv_cache, advance_position=True
-            )
+            with self.model.decode_width_scope(graph_width):
+                logits = self.model.decode_forward_from_ttnn_inputs(
+                    token, current_pos, rotary_position=rotary_pos, kv_cache=kv_cache, advance_position=True
+                )
             ttnn.end_trace_capture(self.mesh_device, model_trace_id, cq_id=0)
             model_open = False
             self._synchronize()
@@ -934,23 +979,33 @@ class Qwen3CoderGenerator(Generator):
         self._trace_kv_cache = kv_cache
         self._trace_page_table_snapshot = self._page_table_to_torch(host_inputs[3]).clone()
         self._trace_active_batch = active_batch
+        self._trace_graph_width = graph_width
         self.trace_stats["captures"] += 1
         self._restore_trace_inputs(host_inputs, include_page_table=True, token_device=initial_token_device)
         self._synchronize()
 
-    def _refresh_trace_state(self, host_inputs, kv_cache, *, active_batch: int, initial_token_device=None) -> None:
+    def _refresh_trace_state(
+        self, host_inputs, kv_cache, *, graph_width: int, active_batch: int, initial_token_device=None
+    ) -> None:
         new_page_table = self._page_table_to_torch(host_inputs[3])
         shape_changed = (
             self._trace_page_table_snapshot is not None
             and new_page_table.shape != self._trace_page_table_snapshot.shape
         )
         if self._trace_model_id is not None and (
-            kv_cache is not self._trace_kv_cache or active_batch != self._trace_active_batch or shape_changed
+            kv_cache is not self._trace_kv_cache
+            or graph_width != self._trace_graph_width
+            or active_batch != self._trace_active_batch
+            or shape_changed
         ):
             self._release_decode_traces()
         if self._trace_model_id is None:
             self._capture_decode_traces(
-                host_inputs, kv_cache, active_batch=active_batch, initial_token_device=initial_token_device
+                host_inputs,
+                kv_cache,
+                graph_width=graph_width,
+                active_batch=active_batch,
+                initial_token_device=initial_token_device,
             )
             return
         self._restore_trace_inputs(host_inputs, include_page_table=False, token_device=initial_token_device)
@@ -968,7 +1023,7 @@ class Qwen3CoderGenerator(Generator):
             raise RuntimeError("fixed active slots changed; initialize a new trace")
         if page_table is None:
             return
-        new_page_table = self._normalise_page_table(page_table, active_batch)
+        new_page_table = self._normalise_page_table(page_table, active_batch, width=self._trace_graph_width)
         if torch.equal(new_page_table, self._trace_page_table_snapshot):
             return  # unchanged page table costs zero host copies
         ttnn.copy_host_to_device_tensor(
@@ -1011,6 +1066,7 @@ class Qwen3CoderGenerator(Generator):
         self._trace_kv_cache = None
         self._trace_page_table_snapshot = None
         self._trace_active_batch = None
+        self._trace_graph_width = None
         self._trace_rotary_position = None
         self._decode_warm_key = None
 
@@ -1040,6 +1096,7 @@ class Qwen3CoderGenerator(Generator):
         sampling_mode: str = "host",
         enable_trace: bool = False,
         active_batch: int | None = None,
+        graph_width: int | None = None,
         decode_horizon: int | None = None,
         validate_page_coverage: bool = True,
         **kwargs: Any,
@@ -1075,6 +1132,18 @@ class Qwen3CoderGenerator(Generator):
             raise ValueError("tokens do not match active_batch")
         if start_pos is not None and start_pos.numel() != active_batch:
             raise ValueError("start_pos does not match active_batch")
+        # ``graph_width`` is how many rows the captured decode graph has;
+        # ``active_batch`` is how many of them the caller is filling. They are
+        # the same on the shipped path. A caller that has compacted its live
+        # requests into rows ``0..active_batch-1`` may ask for a narrower graph,
+        # which is the whole point of ``doc/batch_scaling``: expert, router and
+        # SDPA cost is paid per row *configured*, so the only way to stop paying
+        # for 32 rows when one is live is to capture a graph that has fewer.
+        if graph_width is None:
+            graph_width = self._trace_graph_width if start_pos is None and self._trace_graph_width else self.batch
+        graph_width = int(graph_width)
+        if not active_batch <= graph_width <= self.batch:
+            raise ValueError(f"graph_width must be in [{active_batch},{self.batch}], got {graph_width}")
 
         if enable_trace and sampling_mode == "device":
             if start_pos is not None:
@@ -1085,14 +1154,18 @@ class Qwen3CoderGenerator(Generator):
                 if horizon < highest + 1:
                     raise ValueError("decode_horizon is below the requested start_pos")
                 self._ensure_decode_rope_capacity(horizon)
-                page_host = self._normalise_page_table(page_table, active_batch)
+                page_host = self._normalise_page_table(page_table, active_batch, width=graph_width)
                 if validate_page_coverage:
                     self._validate_page_coverage(page_host, start_pos, active_batch)
                 initial_token_device = self._prefill_sampled if tokens is None else None
                 host_tokens = torch.zeros(active_batch, dtype=torch.long) if tokens is None else tokens
-                host_inputs = self._prepare_decode_host_inputs(host_tokens, start_pos, page_host)
+                host_inputs = self._prepare_decode_host_inputs(host_tokens, start_pos, page_host, width=graph_width)
                 self._refresh_trace_state(
-                    host_inputs, caches, active_batch=active_batch, initial_token_device=initial_token_device
+                    host_inputs,
+                    caches,
+                    graph_width=graph_width,
+                    active_batch=active_batch,
+                    initial_token_device=initial_token_device,
                 )
                 # The installing call also replays once, at ``highest``.
                 self._trace_rotary_position = highest
@@ -1253,11 +1326,12 @@ class Qwen3CoderGenerator(Generator):
         self._copy_host(
             torch.zeros((1, 1, 1, SAMPLING_SLOTS), dtype=torch.int32), self._prefill_sampled, dtype=ttnn.uint32
         )
-        token, current_pos, rotary_pos, page_table = self._decode_trace_input_pool
-        self._copy_host(torch.zeros((1, 1, 1, SAMPLING_SLOTS), dtype=torch.int32), token, dtype=ttnn.uint32)
-        self._copy_host(torch.full((self.batch,), -1, dtype=torch.int32), current_pos, dtype=ttnn.int32)
-        self._copy_host(torch.zeros((1, self.batch), dtype=torch.int32), rotary_pos, dtype=ttnn.uint32)
-        self._copy_host(empty, page_table, dtype=ttnn.int32)
+        for width, pool in self._width_pools.items():
+            token, current_pos, rotary_pos, page_table = pool
+            self._copy_host(torch.zeros((1, 1, 1, SAMPLING_SLOTS), dtype=torch.int32), token, dtype=ttnn.uint32)
+            self._copy_host(torch.full((width,), -1, dtype=torch.int32), current_pos, dtype=ttnn.int32)
+            self._copy_host(torch.zeros((1, width), dtype=torch.int32), rotary_pos, dtype=ttnn.uint32)
+            self._copy_host(empty[:width], page_table, dtype=ttnn.int32)
         self._trace_rotary_position = None
         self.trace_stats["resets"] += 1
         self._synchronize()

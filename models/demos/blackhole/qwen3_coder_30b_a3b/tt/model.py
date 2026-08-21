@@ -61,6 +61,7 @@ What the wrapper adds, and where each new boundary lives:
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import json
 import math
@@ -909,6 +910,17 @@ class Qwen3CoderModel:
         #: against for the token-equality leg.
         self.active_row_gating = os.getenv("QWEN3_DECODE_ACTIVE_ROW_GATING", "1") not in ("0", "", "false", "no")
 
+        #: Width of the decode graph currently being built or captured.
+        #: Equal to ``max_batch_size`` everywhere except inside
+        #: ``decode_width_scope``, which the generator opens to capture a
+        #: **narrower** decode graph than the configured slot count -- see
+        #: ``doc/batch_scaling/README.md``. Every decode-path use of the row
+        #: count reads this, not ``max_batch_size``: the embedding slice, the
+        #: rotary gather and shard, and the active-row mask. Prefill and the
+        #: sampler are untouched -- ``decode_terminal`` pads to the 32 fixed
+        #: ``SAMPLING_SLOTS`` regardless, so the sampler never sees the width.
+        self.decode_width = self.max_batch_size
+
         self.ctx: MeshContext = mesh_context(mesh_device)
         self.config = MeshDecoderConfig.from_hf(hf_config)
         self.global_config: DecoderLayerConfig = self.config.global_config
@@ -1112,7 +1124,7 @@ class Qwen3CoderModel:
         user, the same ``_head_shard`` layout ``nlp_create_qkv_heads_decode``
         emits for Q and K.
         """
-        batch = self.max_batch_size
+        batch = self.decode_width
         shard = _head_shard(32, self.head_dim, batch)
         out = []
         for table in (self.cos_table, self.sin_table):
@@ -1136,7 +1148,7 @@ class Qwen3CoderModel:
         cos/sin pair, which is what makes this spelling replayable where the
         layer's default one is not.
         """
-        shard = _head_shard(32, self.head_dim, self.max_batch_size)
+        shard = _head_shard(32, self.head_dim, self.decode_width)
         staged = ttnn.to_memory_config(tensor, shard)
         rotated = ttnn.experimental.rotary_embedding_hf(staged, cos_sharded, sin_sharded, is_decode_mode=True)
         ttnn.deallocate(staged, True)
@@ -1347,13 +1359,49 @@ class Qwen3CoderModel:
         )
         hidden = ttnn.unsqueeze_to_4D(hidden)
         flat = ttnn.reshape(hidden, (1, 1, int(hidden.shape[-2]), self.hidden_size))
-        if int(flat.shape[-2]) == self.max_batch_size:
+        if int(flat.shape[-2]) == self.decode_width:
             return flat
         sliced = ttnn.slice(
-            flat, [0, 0, 0, 0], [1, 1, self.max_batch_size, self.hidden_size], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            flat, [0, 0, 0, 0], [1, 1, self.decode_width, self.hidden_size], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(flat, True)
         return sliced
+
+    @contextlib.contextmanager
+    def decode_width_scope(self, width: int):
+        """Build the decode graph ``width`` rows wide instead of ``max_batch_size``.
+
+        The narrow graph is legal because **nothing in decode binds a user to a
+        slot index except the three per-row inputs** -- ``current_pos``, the
+        rotary position and the page-table row. The KV cache is fully paged:
+        ``paged_update_cache`` and ``paged_scaled_dot_product_attention_decode``
+        both reach the cache only through ``page_table_tensor`` rows and
+        ``cur_pos_tensor`` entries, and neither takes a ``batch_offset``. So a
+        request can be decoded in *any* row provided its page-table row, its
+        position and its token travel with it; no cache page moves.
+
+        What the width actually changes is the amount of work: the expert
+        ``ttnn.sparse_matmul`` visits ``width x local_experts`` slots per layer
+        with ``nnz=None``, the expert tail is dense over the same product, the
+        router runs one ``topk`` per row, and paged SDPA reads one window per
+        row. That cost is paid per row *configured*, not per row live -- see
+        ``doc/optimized_vllm/README.md``'s control curve -- so narrowing the
+        graph is the only lever that removes it.
+
+        Sampling is deliberately outside the scope: ``decode_terminal`` pads to
+        the 32 fixed ``SAMPLING_SLOTS`` whatever the width is, so ``tt_out_tok``
+        keeps its ``[1,1,1,32]`` shape and the sampler's per-slot parameters
+        keep their meaning. Row *i* of a narrow graph is sampling slot *i*.
+        """
+        width = int(width)
+        if not 1 <= width <= self.max_batch_size:
+            raise ValueError(f"decode width must be in [1,{self.max_batch_size}], got {width}")
+        previous = self.decode_width
+        self.decode_width = width
+        try:
+            yield width
+        finally:
+            self.decode_width = previous
 
     def _decode_active_mask(self, current_pos: ttnn.Tensor):
         """``[1, 1, batch, 1]`` of 1.0 for live slots and 0.0 for inactive ones.
@@ -1380,9 +1428,9 @@ class Qwen3CoderModel:
         row to skip: the graph is then byte-for-byte the one stage 08 shipped and
         the single-user headline cannot be perturbed by this change.
         """
-        if self.max_batch_size <= 1 or not self.active_row_gating:
+        if self.decode_width <= 1 or not self.active_row_gating:
             return None
-        row = ttnn.to_layout(ttnn.reshape(current_pos, (1, 1, 1, self.max_batch_size)), ttnn.TILE_LAYOUT)
+        row = ttnn.to_layout(ttnn.reshape(current_pos, (1, 1, 1, self.decode_width)), ttnn.TILE_LAYOUT)
         # bf16 cannot represent every position exactly at 262144, but it
         # represents every position's *sign* exactly, and ``gez`` only reads the
         # sign. -1 -> 0.0, everything >= 0 -> 1.0.
