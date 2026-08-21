@@ -80,7 +80,14 @@ def test_vision_model_inference(
     # pixel_values are produced by Qwen2_5_VLImageProcessor, these come from the above img
     pt_pixel_values = torch.randn([seq_len, 1536]) * 0.8320 + 1.2969  # std and mean from above img
     ref_seq_len = image_grid_thw[0, 1] * image_grid_thw[0, 2]
-    seq_len = ((ref_seq_len // 2048) + 1) * 2048
+    # Pad rows to 128, the tower's real requirement (VisionAttention.forward_prefill asserts
+    # seq_len % 128 == 0), matching DropInVisionTransformer.forward. This used to round up to a
+    # 2048 multiple, which broke two ways: SDPA runs is_causal=False with NO attn_mask, so every
+    # pad row is an unmasked key that each real query sums exp(0) over -- an error that compounds
+    # block over block -- and the row count itself feeds the SDPA/matmul chunk and grid selection
+    # in vision_model_config, which was swept at the 128-aligned count. The `(n // m) + 1` form
+    # also over-padded exact multiples (11008 -> 12288 for nothing).
+    seq_len = -(-ref_seq_len // 128) * 128
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
     if num_layers:

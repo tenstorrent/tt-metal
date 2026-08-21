@@ -56,7 +56,37 @@ class VisionSdpaPlan(NamedTuple):
 
 
 _L1_PER_CORE = 1499136  # MEM_L1_SIZE, wormhole/dev_mem_map.h
-_L1_RESERVE = 32 * 1024  # the l1_small_size the demo opens with, plus slack
+# Per-core L1 that a matmul's own CBs and buffers cannot have. Three things, not one:
+#   - the l1_small_size the demo opens with,
+#   - the L1 UNRESERVED BASE that statically-allocated CBs are placed above (~75 KB on Wormhole:
+#     firmware, kernel config, semaphores). `cb_bytes` below is a byte-exact model of the CB
+#     *sizes*, but the region they occupy is [base, base + cb_bytes) -- so budgeting against
+#     `_L1_PER_CORE - cb_bytes` silently hands out the base as if it were free,
+#   - slack for interleaved-buffer page rounding (a buffer's pages are dealt round-robin over the
+#     banks, so a bank can hold ceil(pages/banks), not the average).
+#
+# 32 KB covers only the first item, over-claiming ~44 KB/core -- 2.7 MB across 64 banks.
+_L1_RESERVE = 32 * 1024
+
+# Per-device override, same keying as `_VISION_MM_TUNING_BY_DEVICE` (`ModelArgs.device_name`).
+#
+# N300: 128 KB. The 32 KB default is invisible at the 11008-row demo grid this table was swept on
+# (mlp_fc2's L1 output wants 387 KiB/core there, against ~1200 available) and fatal at 3x the rows:
+# at 33024 rows the same plan still took L1 for a 1161 KiB/core output, the allocator placed the
+# buffer at 244608, and mlp_fc2's own CB region ends at 301248 --
+#   "Statically allocated circular buffers in program N clash with L1 buffers on core range
+#    [0-0 - 5-6]. L1 buffer allocated at 244608 and static circular buffer region ends at 301248"
+# which is the 300dpi (206x160 patches) cases of test_model.py::test_vision_model_inference. 128 KB
+# restores the invariant with margin and keeps every 11008-row L1 placement the sweep chose --
+# verified on Qwen3.5-9B / N300: mlp_fc2 still takes L1 at 11008 rows and falls back to DRAM at
+# 33024/34816, with no other family's placement changed, and all 6 vision cases pass.
+#
+# NOT applied to the other Wormhole meshes even though the accounting bug is general: the widest
+# image any of them was measured at is this same 11008-row grid, where the bug cannot bite, and
+# T3K's overrides below put FOUR families' outputs in L1 -- derived (not measured) numbers put
+# merger_fc2 only ~4 MiB inside its budget there, too little margin to move blind on hardware this
+# was not verified against. Extend per mesh, with a large-image run to back it up.
+_L1_RESERVE_BY_DEVICE = {"N300": 128 * 1024}
 
 # Per-family matmul tuning, from tests/perf/test_sweep_vision_matmuls.py.
 #
@@ -212,6 +242,8 @@ class VisionModelArgs(ModelArgs):
         # returns the untuned plan instead: ttnn's auto config, DRAM in/out, pre-sweep fidelity.
         # `QWEN36_VISION_MM_TUNING=0` forces that path, so it can be exercised on any arch.
         self.vision_mm_tuned = is_wormhole_b0() and os.environ.get("QWEN36_VISION_MM_TUNING", "1") != "0"
+        # Per-core L1 the plan may not spend (see _L1_RESERVE / _L1_RESERVE_BY_DEVICE).
+        self._l1_reserve = _L1_RESERVE_BY_DEVICE.get(self.device_name, _L1_RESERVE)
         if not self.vision_mm_tuned:
             logger.info(
                 f"vision matmul tuning is Wormhole-only; {self.arch_name} keeps the untuned config "
@@ -379,7 +411,7 @@ class VisionModelArgs(ModelArgs):
             candidates = [k_t]
         in0_block_w = None
         for cand in sorted(candidates, reverse=True):
-            if cb_bytes(cand) <= _L1_PER_CORE - _L1_RESERVE:
+            if cb_bytes(cand) <= _L1_PER_CORE - self._l1_reserve:
                 in0_block_w = cand
                 break
         if in0_block_w is None:
@@ -389,7 +421,7 @@ class VisionModelArgs(ModelArgs):
         # in0 and the output share whatever the CBs leave; claim in0 first (the table only asks for it
         # where it beat the output), then give the output the rest. An L1-interleaved buffer is paged
         # across the grid, so its per-core cost is total/num_cores.
-        free_l1 = (_L1_PER_CORE - _L1_RESERVE - cb_bytes(in0_block_w)) * grid.x * grid.y
+        free_l1 = (_L1_PER_CORE - self._l1_reserve - cb_bytes(in0_block_w)) * grid.x * grid.y
         in0_bytes = rows * k * _TILE_BYTES[in0_dtype] // (tile * tile)
         in0_cfg = dram
         if in0_already_l1:
