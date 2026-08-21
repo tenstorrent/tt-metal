@@ -16,7 +16,7 @@ Usage:
 Examples:
     reverse_text_plot_example.py
     reverse_text_plot_example.py generated/tt-train/grpo_reverse_text_run/*/grpo_metrics.csv
-    reverse_text_plot_example.py --metrics reward eval_similarity --window 5
+    reverse_text_plot_example.py --metrics reward_mean eval_similarity --window 5
 """
 
 import argparse
