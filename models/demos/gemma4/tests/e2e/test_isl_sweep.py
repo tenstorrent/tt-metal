@@ -8,6 +8,8 @@ Each pytest id matches one README Per-ISL table row. Run the full sweep via
 
     MESH_DEVICE=T3K HF_MODEL=google/gemma-4-31B-it pytest \\
         models/demos/gemma4/tests/e2e/test_isl_sweep.py -k "long-context-128k" -s --timeout 1800
+
+``CI=true`` skips every row except ``ci-1`` unless ``GEMMA4_ISL_SWEEP=1``.
 """
 
 import os
@@ -199,7 +201,8 @@ def test_demo_text(
     request,
 ):
     """Gemma4 text generation through the Generator interface, modeled on the Gemma3 demo."""
-    if is_ci_env and not ci_only:
+    _isl_sweep = os.environ.get("GEMMA4_ISL_SWEEP", "").lower() in ("1", "true", "yes")
+    if is_ci_env and not ci_only and not _isl_sweep:
         pytest.skip("CI only runs the CI-only configs")
 
     max_generated_tokens = int(os.environ.get("GEMMA4_MAX_NEW_TOKENS", max_generated_tokens))
