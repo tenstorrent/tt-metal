@@ -526,7 +526,7 @@ template <
     bool STABLE_SORT = false,
     bool FUSED = false,
     bool RANK_STAMPED = false>
-inline void calculate_bitonic_topk_merge(const int m_iter, const int k, const std::uint32_t /*rank_base*/ = 0) {
+inline void calculate_bitonic_topk_merge(const int m_iter, const int k) {
     static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
     static_assert(!FUSED, "Fused-key TopK is not supported by the Quasar bitonic TopK path");
     static_assert(!RANK_STAMPED, "Rank-stamped stable TopK is not ported to the Quasar bitonic TopK path");

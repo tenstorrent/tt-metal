@@ -38,9 +38,8 @@ template <
     bool STABLE_SORT = false,
     bool FUSED = false,
     bool RANK_STAMPED = false>
-inline void calculate_bitonic_topk_merge(std::uint32_t m_iter, std::uint32_t k, std::uint32_t rank_base = 0) {
-    _bitonic_topk_merge<APPROXIMATION_MODE, is_fp32_dest_acc_en, idir, STABLE_SORT, FUSED, RANK_STAMPED>(
-        m_iter, k, rank_base);
+inline void calculate_bitonic_topk_merge(std::uint32_t m_iter, std::uint32_t k) {
+    _bitonic_topk_merge<APPROXIMATION_MODE, is_fp32_dest_acc_en, idir, STABLE_SORT, FUSED, RANK_STAMPED>(m_iter, k);
 }
 
 template <

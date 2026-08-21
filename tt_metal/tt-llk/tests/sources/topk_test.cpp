@@ -415,8 +415,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     dst_index,
                     vector_mode,
                     current_iteration,
-                    TOPK_K,
-                    0u /*rank_base -- single-tile-per-run K here; the wrapper forwarding does not apply default args*/);
+                    TOPK_K);
 
                 // Additional last operation.
                 if (last_iteration)
