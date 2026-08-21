@@ -553,8 +553,9 @@ _EDGE_SWEEP_OPS = sorted(
 #   whose exponent-difference arithmetic (126 - exexp(0) = 254) has no pole guard, and
 #   fixed by adding that guard in place. The kernel is otherwise untouched, so every
 #   non-pole value stays bit-identical -- deliberately, because eight production
-#   normalization kernels select this path by name to match a model baseline. See
-#   FIX_PLAN_52930_reciprocal_compat_pole.md.
+#   normalization kernels select this path by name to match a model baseline. Verified on
+#   Wormhole n300 and Blackhole p100a silicon; see
+#   docs/sfpu_52930_reciprocal_compat_pole.md.
 _EDGE_KNOWN_DIVERGENCES = {
     MathOperation.Sign: (
         (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
