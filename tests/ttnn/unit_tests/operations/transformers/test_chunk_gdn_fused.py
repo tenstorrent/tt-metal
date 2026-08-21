@@ -66,6 +66,8 @@ def _clear_gdn_env(monkeypatch):
     """Neutralize every GDN path/debug knob; each test then sets QWEN_GDN_PATH explicitly (or
     leaves it unset to probe the default dispatch)."""
     monkeypatch.delenv("QWEN_GDN_PATH", raising=False)
+    # F3a producer split (fused prim only; hashed into the program cache via attrs.np).
+    monkeypatch.delenv("QWEN_GDN_NP", raising=False)
     # Legacy selector — superseded by QWEN_GDN_PATH but still honored when PATH is unset.
     monkeypatch.delenv("QWEN_GDN_PHASED", raising=False)
     monkeypatch.delenv("QWEN_GDN_SCAN_SERIAL", raising=False)
@@ -286,6 +288,119 @@ def test_fused_default_dispatch(device, monkeypatch, num_k_heads, num_v_heads, e
     )
     assert torch.equal(o_def, o_exp), f"default dispatch o differs from explicit '{expected_path}' run"
     assert torch.equal(fs_def, fs_exp), f"default dispatch final_state differs from explicit '{expected_path}' run"
+
+
+# ---------------------------------------------------------------------------
+# F3a: NP > 1 producers per head (QWEN_GDN_NP). Producer p owns the round-robin chunks
+# c = p, p+NP, ...; the receiver credits producers in rotation and the writer mcasts each chunk
+# into an explicitly computed hand-off slot (global c % nbuf). Correctness is silent-failure
+# territory (a wrong slot corrupts in-flight data without hanging), so the gate is torch.equal
+# vs phased at NC values that stress the slot/rotation arithmetic: NC < NP (clamp), NC == NP,
+# NC == NP+1 (first wraparound), NC == 2*NP+1 (odd/even slot alternation across producers), and
+# a long-ish NC.
+# ---------------------------------------------------------------------------
+
+NP_BH_KV_HEADS = (4, 12)  # BH=12 (GQA G=3): leaves room for NP up to 8 on a 110-core grid
+
+
+def _skip_unless_fused_np_fits(device, bh, np_req, nc):
+    grid = device.compute_with_storage_grid_size()
+    np_eff = min(np_req, nc)  # the op host clamps NP to NC
+    if bh * (1 + np_eff) > grid.x * grid.y:
+        pytest.skip(f"BH*(1+NP)={bh * (1 + np_eff)} exceeds the {grid.x}x{grid.y} compute grid")
+
+
+@pytest.mark.parametrize(
+    "np_producers, nc",
+    [
+        (2, 1),  # NC < NP: host clamps to NP=1 (degenerate, must still be exact)
+        (2, 2),  # NC == NP: one chunk per producer
+        (2, 3),  # NC == NP+1: first slot wraparound (chunk 2 reuses slot 0)
+        (2, 5),  # NC == 2*NP+1
+        (3, 4),  # NC == NP+1 at odd NP (producer/receiver slot parity diverges — the F2
+        #          lockstep-breaking case the explicit destination addressing exists for)
+        (3, 7),  # NC == 2*NP+1 at odd NP
+        (5, 16),  # long run, NP does not divide NC
+        (8, 16),  # max NP that fits BH=12 on a 110-core grid (12*9=108)
+    ],
+    ids=lambda v: str(v),
+)
+def test_fused_np_bit_exact_vs_phased(device, monkeypatch, np_producers, nc):
+    """F3a primary gate: fused with NP>1 producers == phased, bit for bit, across the NC
+    boundary cases. The compute kernels are untouched by the split (prep is chunk-independent),
+    so as with F1 any difference is a protocol/addressing bug, not numerical noise."""
+    B = 1
+    num_k_heads, num_v_heads = NP_BH_KV_HEADS
+    BH = B * num_v_heads
+    _skip_unless_fused_np_fits(device, BH, np_producers, nc)
+    _clear_gdn_env(monkeypatch)
+
+    _, tensors, s0 = _make_inputs(device, B, nc * CHUNK, num_k_heads, num_v_heads, True, seed=20260823)
+    const_tiles = _const_tiles(device)
+
+    monkeypatch.setenv("QWEN_GDN_PATH", "phased")
+    o_ph, fs_ph = _run_op(device, tensors, const_tiles, s0)
+    o_ph2, fs_ph2 = _run_op(device, tensors, const_tiles, s0)
+    n_phased = device.num_program_cache_entries()
+    assert torch.equal(o_ph, o_ph2) and torch.equal(fs_ph, fs_ph2), "phased path is not deterministic"
+
+    monkeypatch.setenv("QWEN_GDN_PATH", "fused")
+    monkeypatch.setenv("QWEN_GDN_NP", str(np_producers))
+    o_fu, fs_fu = _run_op(device, tensors, const_tiles, s0)
+    n_fused = device.num_program_cache_entries()
+    assert n_fused - n_phased == 1, (
+        f"phased->fused(NP={np_producers}) toggle compiled {n_fused - n_phased} new programs "
+        "(expected exactly 1, the fused prim): 0 => an env was not read per call and the "
+        "comparison below is vacuous"
+    )
+
+    assert torch.equal(o_fu, o_ph), f"fused NP={np_producers} changed o (must be bit-identical to phased)"
+    assert torch.equal(fs_fu, fs_ph), f"fused NP={np_producers} changed final_state (must be bit-identical to phased)"
+
+
+def test_fused_np_cache_identity(device, monkeypatch):
+    """Vacuity canary for the NP knob itself: QWEN_GDN_NP must be read fresh per call AND hashed
+    (attrs.np), so each distinct NP compiles its own fused program, repeats are cache hits, and
+    toggling back recompiles nothing. If the env were read in the factory instead of at attrs
+    construction, the toggle deltas would be 0 and every NP 'A/B' would silently compare one
+    cached program against itself. Deltas are asserted EXACTLY (never >=)."""
+    B = 1
+    num_k_heads, num_v_heads = NP_BH_KV_HEADS
+    BH = B * num_v_heads
+    nc = 16
+    _skip_unless_fused_np_fits(device, BH, 3, nc)
+    _clear_gdn_env(monkeypatch)
+    monkeypatch.setenv("QWEN_GDN_PATH", "fused")
+
+    _, tensors, s0 = _make_inputs(device, B, nc * CHUNK, num_k_heads, num_v_heads, True, seed=20260824)
+    const_tiles = _const_tiles(device)
+
+    o1, fs1 = _run_op(device, tensors, const_tiles, s0)  # NP unset -> np=1
+    n1 = device.num_program_cache_entries()
+
+    monkeypatch.setenv("QWEN_GDN_NP", "2")
+    o2, fs2 = _run_op(device, tensors, const_tiles, s0)
+    n2 = device.num_program_cache_entries()
+    assert n2 - n1 == 1, f"np 1->2 compiled {n2 - n1} programs (expected 1: np must be hashed)"
+
+    monkeypatch.setenv("QWEN_GDN_NP", "3")
+    o3, fs3 = _run_op(device, tensors, const_tiles, s0)
+    n3 = device.num_program_cache_entries()
+    assert n3 - n2 == 1, f"np 2->3 compiled {n3 - n2} programs (expected 1)"
+
+    monkeypatch.setenv("QWEN_GDN_NP", "2")
+    _run_op(device, tensors, const_tiles, s0)
+    n4 = device.num_program_cache_entries()
+    assert n4 - n3 == 0, f"np 3->2 (already compiled) compiled {n4 - n3} programs (expected 0: cache hit)"
+
+    monkeypatch.delenv("QWEN_GDN_NP")
+    _run_op(device, tensors, const_tiles, s0)
+    n5 = device.num_program_cache_entries()
+    assert n5 - n4 == 0, f"np 2->unset (np=1, already compiled) compiled {n5 - n4} programs (expected 0)"
+
+    # All NP variants of the same head must agree bit-for-bit with each other.
+    assert torch.equal(o1, o2) and torch.equal(o1, o3), "o differs across NP values"
+    assert torch.equal(fs1, fs2) and torch.equal(fs1, fs3), "final_state differs across NP values"
 
 
 def test_fused_vs_torch_golden(device, monkeypatch):

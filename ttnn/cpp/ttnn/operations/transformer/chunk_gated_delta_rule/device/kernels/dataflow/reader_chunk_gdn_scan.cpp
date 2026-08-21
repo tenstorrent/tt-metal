@@ -18,6 +18,8 @@
 //                        byte-identical; Option R scan-side recompute is deferred to F2) — arrive
 //                        over the NoC from the producer's writer via the same handshake as
 //                        GDN_MCAST_RECEIVER. NV=1: this core holds the head's full V width.
+//                        F3a generalizes to NP >= 1 producers per head (round-robin over chunks);
+//                        the ready credit rotates to the owner of each chunk — see kernel_main.
 // The handshake follows the production matmul in0 mcast idiom (reader_bmm_tile_layout_in0_
 // sender_padding.cpp / _receiver.cpp): ready counts receivers that RESERVED space (so the sender
 // can never overwrite unconsumed data), the data mcasts and the valid-flag mcast share one NOC /
@@ -93,8 +95,12 @@ void kernel_main() {
     const uint32_t NC = get_arg_val<uint32_t>(2);
 #if defined(GDN_FUSED_RECEIVER)
     const uint32_t s0_addr = get_arg_val<uint32_t>(3);
-    const uint32_t prod_x = get_arg_val<uint32_t>(4);  // virtual worker coords of the producer
-    const uint32_t prod_y = get_arg_val<uint32_t>(5);
+    // F3a: NP producers share this head's prep work round-robin (producer p owns chunks
+    // c = p, p+NP, ...). Their virtual worker coords follow as NP (x, y) pairs from arg 5; the
+    // per-chunk ready credit below rotates to producer (c % NP) — that rotation IS the in-order
+    // delivery mechanism (P1): a producer may only mcast chunk c once this receiver has reserved
+    // chunk c's slots, so at most one hand-off is in flight and VALIDs cannot interleave.
+    const uint32_t NP = get_arg_val<uint32_t>(4);
 #elif defined(GDN_MCAST_RECEIVER)
     const uint32_t vb_addr = get_arg_val<uint32_t>(3);
     const uint32_t s0_addr = get_arg_val<uint32_t>(4);
@@ -314,7 +320,10 @@ void kernel_main() {
         // Reset our valid flag BEFORE signalling ready: a fast producer may mcast VALID
         // immediately after the inc, and a late reset would overwrite it (lost wakeup -> deadlock).
         valid.set(INVALID);
-        ready.up(noc, prod_x, prod_y, 1);
+        // Credit the producer that owns chunk c (rotating target, P1). The coords live in the
+        // runtime-arg array at 5 + 2*(c % NP); reading them per chunk is two L1 loads.
+        const uint32_t pi = c % NP;
+        ready.up(noc, get_arg_val<uint32_t>(5 + 2 * pi), get_arg_val<uint32_t>(6 + 2 * pi), 1);
         valid.wait(VALID);
 
         // The chunk's seven blocks are in our CBs; make them visible to compute.

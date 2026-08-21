@@ -5,7 +5,8 @@
 // per head, a dedicated PRODUCER core runs the unchanged prep reader+compute and a writer that
 // NoC-writes the 7 computed intermediates (v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv)
 // straight into its paired RECEIVER core's CBs via the shipped ready/valid handshake; the
-// receiver runs the unchanged scan compute+writer. NP=1 producer and NV=1 (full V) per head.
+// receiver runs the unchanged scan compute+writer. NP >= 1 producers (QWEN_GDN_NP, default 1)
+// and NV=1 (full V) per head.
 // Takes prep's inputs, returns scan's outputs — the seven fp32 DRAM tensors of the phased
 // hand-off simply never exist. The phased prims (chunk_gdn_phased.hpp) stay in-tree as the
 // bit-exact reference: the DRAM round trip they perform is a byte copy, so fused == phased
@@ -37,6 +38,11 @@ struct ChunkGdnFusedParams {
     uint32_t Hk = 0;
     bool qk_norm = false;
     float scale = 1.0f;
+    // F3a: producers per head (NP). Producer p of a head owns chunks c = p, p+NP, ... and NoC-
+    // writes them into the head's single receiver in order (receiver-driven rotating ready
+    // credits). Read from QWEN_GDN_NP at attrs construction (never in the factory — this field
+    // being hashed is what keeps the program cache honest) and clamped to num_chunks.
+    uint32_t np = 1;
     bool has_initial_state = false;
     bool output_final_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -75,8 +81,9 @@ struct ChunkGdnFusedOperation {
 };
 
 // Returns {o [BH,NC,C,V] fp32, final_state [BH,K,V] fp32} — exactly the scan prim's output specs.
-// Needs 2*BH cores (one producer + one receiver per head); validate FATALs otherwise, so the
-// op-level dispatch must gate on grid size before choosing this path.
+// Needs BH*(1+NP) cores (NP producers + one receiver per head; NP defaults to 1 and is an
+// explicit QWEN_GDN_NP opt-in); validate FATALs otherwise, so the op-level dispatch must gate on
+// grid size before choosing this path.
 std::vector<Tensor> chunk_gdn_fused(
     const Tensor& q,
     const Tensor& k,
