@@ -1203,23 +1203,27 @@ inline void _bitonic_topk_merge(const int m_iter, const int k, const std::uint32
                     }
                     if constexpr (STABLE_SORT)
                     {
-                        // Tie-break polarity follows top_min at compile time. This is only
-                        // correct because every live caller issues the merge in the GLOBAL sort
-                        // direction (the ttnn kernels derive top_min from `largest`; the LLK and
-                        // quasar test kernels bind TOPK_SORT_DIRECTION) -- unlike phases_steps/
-                        // rebuild, which are deliberately called with flipped idir and therefore
-                        // read the runtime topk_stable_descending_mode. A caller that ever issues
-                        // a STABLE merge against the global direction (e.g. a future stable
-                        // ttnn.sort's direction-alternating merge-split, or the generic
-                        // SfpuType::topk_merge test dispatcher, which hardcodes top_min=false)
-                        // must switch this selection to the runtime global as well.
+                        // top_min selects the value operand order (which run receives the
+                        // minima), exactly as in the unstable arm below. The tie-break polarity
+                        // comes from the runtime topk_stable_descending_mode -- the GLOBAL sort
+                        // order phases_steps/rebuild already read. Anchoring the tie routing to
+                        // the operand order (the index minimum rides with the value minimum or
+                        // maximum per the global mode) makes every merge a comparator on ONE
+                        // fixed total order [value, then index], so callers may issue merges
+                        // with per-block alternating directions (ttnn.sort's bitonic merge
+                        // network, which always binds top_min=false and routes the outputs
+                        // afterwards) or in the global direction (the ttnn topk kernels, which
+                        // bind top_min = !largest; the LLK/quasar test kernels, which bind
+                        // TOPK_SORT_DIRECTION). For every global-direction caller this compiles
+                        // to the pre-existing selection, since they program the runtime mode
+                        // from the same flag they derive top_min from.
                         if constexpr (top_min)
                         {
-                            topk_cmp_swap_stable_directional<p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX, true>();
+                            topk_cmp_swap_stable_min_to_vd<p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX>();
                         }
                         else
                         {
-                            topk_cmp_swap_stable_directional<p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX, false>();
+                            topk_cmp_swap_stable_min_to_vd<p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX>();
                         }
                     }
                     else
