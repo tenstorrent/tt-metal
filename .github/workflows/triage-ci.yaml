@@ -35,6 +35,10 @@ on:
         description: "Repository to check workflow run history against"
         type: string
         default: "tenstorrent/tt-metal"
+      dry-run:
+        description: "Draft and analyze candidates without creating issues"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -49,7 +53,7 @@ jobs:
       target-repo: ${{ inputs.target-repo }}
       max-issues: ${{ fromJSON(inputs.max-issues) }}
       llm-backend: ${{ inputs.llm-backend }}
-      dry-run: true
+      dry-run: ${{ fromJSON(inputs.dry-run) }}
       auto-triage-ref: ebanerjee/fix-auto-triage-run-selection
       workflow-filter: ${{ inputs.workflow-filter }}
       consecutive-failures-high-volume: ${{ fromJSON(inputs.consecutive-failures-high-volume) }}
