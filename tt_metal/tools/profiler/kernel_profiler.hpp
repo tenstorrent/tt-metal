@@ -496,11 +496,13 @@ inline __attribute__((always_inline)) void recordFlag() {
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
 // The two point markers, both with a compile-time tag (string literal) and therefore a source
-// location and an ELF-resolvable name: DeviceData carries a payload (runtime values ride there),
-// DeviceFlag carries nothing and is 2 words. (DeviceRuntimeEvent is gone -- it was DeviceData with a
-// hardcoded "RUNTIME-EVENT" tag and a u32 payload, a wire type of its own only in the era when the
-// runtime value rode in the id field itself.)
-#define DeviceData(name, data)                        \
+// location and an ELF-resolvable name: DeviceTimestampedData carries a payload (runtime values ride
+// there), DeviceFlag carries nothing and is 2 words. (DeviceRuntimeEvent is gone -- it was
+// DeviceTimestampedData with a hardcoded "RUNTIME-EVENT" tag and a u32 payload, a wire type of its
+// own only in the era when the runtime value rode in the id field itself. A short-lived "DeviceData"
+// rename is gone too: ~95 in-tree kernels and the other backend all spell it DeviceTimestampedData,
+// and "DeviceData" is already a host-side class name in the dispatch microbenchmarks.)
+#define DeviceTimestampedData(name, data)             \
     {                                                 \
         TT_ZONE_DEFINE_ID(hash, name);                \
         kernel_profiler::timeStampedData<hash>(data); \
@@ -553,7 +555,7 @@ inline __attribute__((always_inline)) void recordFlag() {
 
 #define DeviceZoneSetCounter(counter) (void(sizeof(counter)))
 
-#define DeviceData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
+#define DeviceTimestampedData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
 
 #define DeviceFlag(data_id) (void(sizeof(data_id)))
 
@@ -576,11 +578,5 @@ inline __attribute__((always_inline)) void recordFlag() {
 #define RecordPerfCounters()
 
 #endif
-
-// ---- Back-compat alias ---------------------------------------------------------------------------
-// DeviceData is the renamed DeviceTimestampedData; existing kernels still use the old spelling (and it
-// is the one point-marker spelling the Quasar/DRAM backend also defines, so shared kernels write it).
-// Defined once, outside the enabled/disabled branches, so it holds in every configuration.
-#define DeviceTimestampedData(name, data) DeviceData(name, data)
 
 #endif  // ARCH_QUASAR -- see the arch dispatch at the top of this file
