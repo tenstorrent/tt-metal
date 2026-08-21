@@ -212,7 +212,14 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_d
     }
 
     std::vector<uint32_t> reader_compile_time_args = {
-        total_num_rows, third_dim, tile_height, a.element_size(), unpadded_row_size_bytes, dram_alignment};
+        total_num_rows,
+        third_dim,
+        tile_height,
+        a.element_size(),
+        unpadded_row_size_bytes,
+        dram_alignment,
+        tt::CBIndex::c_0,
+        tt::CBIndex::c_1};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
@@ -249,6 +256,9 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_d
         "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp";
 
     auto make_compute_kernel = [&](const CoreRangeSet& cores, std::vector<uint32_t> compile_args) {
+        // This factory uses one buffer pair for every core, so every instance binds c_0 / c_16.
+        compile_args.push_back(tt::CBIndex::c_0);
+        compile_args.push_back(tt::CBIndex::c_16);
         KernelDescriptor cd;
         cd.kernel_source = compute_kernel_path;
         cd.source_type = KernelDescriptor::SourceType::FILE_PATH;
