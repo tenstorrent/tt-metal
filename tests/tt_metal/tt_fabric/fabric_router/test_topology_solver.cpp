@@ -3487,13 +3487,13 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_SplittingTar
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Minimum-host-cover tests for the SAT host-budget minimization (set_minimize_same_rank_groups_used).
+// Host-group occupancy tests for the declarative same-rank-group objectives:
+//   - set_max_same_rank_groups_used(k): HARD cap -- at most k distinct host groups may be occupied (solver picks which).
+//   - set_minimize_same_rank_groups_used(true): SOFT best-effort minimize toward the capacity lower bound.
 //
-// These mirror the production setup in topology_mapper_utils.cpp: enable the minimize flag and register the physical
-// host partitions as same-rank GLOBAL groups with NO target groups (an inert same-rank constraint that merely exposes
-// per-host membership). The SAT backend then walks an at-most-K host budget up from the capacity lower bound
-// ceil(n_target / host_capacity) and returns the first satisfiable K -- i.e. the true minimum host count. Each test
-// forces the SAT engine and asserts the mapping touches exactly that minimum number of host groups.
+// These mirror the production setup in topology_mapper_utils.cpp: register the physical host partitions as same-rank
+// GLOBAL groups with NO target groups (an inert same-rank constraint that only exposes per-host membership), then apply
+// the objective. SAT honors it via the at-most-K occupancy encoding; DFS honors it via the candidate prune.
 // ---------------------------------------------------------------------------------------------------------------------
 
 // Counts how many distinct host groups (from `global_groups`) the produced mapping lands on.
@@ -3512,107 +3512,89 @@ static size_t count_host_groups_used(
     return used.size();
 }
 
-// Full-packing fast path: 4-node chain onto three capacity-2 hosts. Minimum = ceil(4/2) = 2 hosts, and 4 == 2*2 fills
-// both used hosts exactly, so the all-or-nothing occupancy encoding pins the host count by unit propagation.
-TEST_F(TopologySolverTest, SolveTopologyMapping_MinHostCover_FullPacking_ChainTwoHosts) {
-    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
-    target_adj[1] = {2};
-    target_adj[2] = {1, 3};
-    target_adj[3] = {2, 4};
-    target_adj[4] = {3};
-    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+// N isolated target nodes 1..N (no edges): placement is constrained only by occupancy / the host cap, isolating the
+// objective from connectivity so the assertions are deterministic.
+static AdjacencyGraph<TestTargetNode> make_disconnected_target_graph(size_t n) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap adj;
+    for (size_t i = 1; i <= n; ++i) {
+        adj[static_cast<TestTargetNode>(i)] = {};
+    }
+    return AdjacencyGraph<TestTargetNode>(adj);
+}
 
-    // Path 10-11-12-13-14-15, host groups {10,11}, {12,13}, {14,15}.
-    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
-    global_adj[10] = {11};
-    global_adj[11] = {10, 12};
-    global_adj[12] = {11, 13};
-    global_adj[13] = {12, 14};
-    global_adj[14] = {13, 15};
-    global_adj[15] = {14};
-    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+// N isolated global nodes 100..100+N-1.
+static AdjacencyGraph<TestGlobalNode> make_disconnected_global_graph(size_t n) {
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap adj;
+    for (size_t i = 0; i < n; ++i) {
+        adj[static_cast<TestGlobalNode>(100 + i)] = {};
+    }
+    return AdjacencyGraph<TestGlobalNode>(adj);
+}
 
-    std::vector<std::set<TestGlobalNode>> global_groups{{10, 11}, {12, 13}, {14, 15}};
+// num_groups host partitions of group_size consecutive globals each, starting at 100 (matches the graph above).
+static std::vector<std::set<TestGlobalNode>> make_host_groups(size_t num_groups, size_t group_size) {
+    std::vector<std::set<TestGlobalNode>> groups;
+    TestGlobalNode g = 100;
+    for (size_t i = 0; i < num_groups; ++i) {
+        std::set<TestGlobalNode> grp;
+        for (size_t j = 0; j < group_size; ++j) {
+            grp.insert(g++);
+        }
+        groups.push_back(std::move(grp));
+    }
+    return groups;
+}
+
+// HARD cap: both backends must confine placement to at most k occupied host groups (SAT via the at-most-k occupancy
+// encoding, DFS via the candidate prune in dfs_recursive).
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_HardCapRespected) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4, kCap = 2;
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        ASSERT_TRUE(result.success) << name << ": " << result.error_message;
+        ASSERT_EQ(result.target_to_global.size(), kNumTargets) << name;
+        EXPECT_LE(count_host_groups_used(result, host_groups), kCap)
+            << name << ": set_max_same_rank_groups_used(" << kCap << ") must confine placement to <= " << kCap
+            << " host groups";
+    }
+}
+
+// SOFT minimize: reduces occupancy to the capacity lower bound ceil(n_target / host_capacity).
+TEST_F(TopologySolverTest, SolveTopologyMapping_MinimizeSameRankGroups_ReducesOccupiedGroups) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4;
+    constexpr size_t kMinGroups = (kNumTargets + kGroupSize - 1) / kGroupSize;  // 2
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
     constraints.set_minimize_same_rank_groups_used(true);
-    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(
-        std::vector<std::set<TestTargetNode>>{}, global_groups));
 
     auto result = solve_topology_mapping(
         target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true,
         TopologyMappingSolverEngine::Sat);
     ASSERT_TRUE(result.success) << result.error_message;
-    EXPECT_EQ(count_host_groups_used(result, global_groups), 2u)
-        << "4-node chain must pack onto the minimum ceil(4/2) = 2 host groups";
+    ASSERT_EQ(result.target_to_global.size(), kNumTargets);
+    EXPECT_LE(count_host_groups_used(result, host_groups), kMinGroups)
+        << "minimize must not exceed the capacity lower bound of " << kMinGroups << " host groups";
 }
 
-// Tightest full packing: a 2-node chain fits entirely inside a single capacity-2 host. Minimum = ceil(2/2) = 1.
-TEST_F(TopologySolverTest, SolveTopologyMapping_MinHostCover_FullPacking_SingleHost) {
-    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
-    target_adj[1] = {2};
-    target_adj[2] = {1};
-    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
-
-    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
-    global_adj[10] = {11};
-    global_adj[11] = {10, 12};
-    global_adj[12] = {11, 13};
-    global_adj[13] = {12, 14};
-    global_adj[14] = {13, 15};
-    global_adj[15] = {14};
-    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
-
-    std::vector<std::set<TestGlobalNode>> global_groups{{10, 11}, {12, 13}, {14, 15}};
-    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
-    constraints.set_minimize_same_rank_groups_used(true);
-    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(
-        std::vector<std::set<TestTargetNode>>{}, global_groups));
-
-    auto result = solve_topology_mapping(
-        target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Sat);
-    ASSERT_TRUE(result.success) << result.error_message;
-    EXPECT_EQ(count_host_groups_used(result, global_groups), 1u)
-        << "2-node chain must fit within a single host group";
-}
-
-// Non-full-packing / general at-most-K path: an odd target count (3) does not fill any whole number of capacity-2
-// hosts, so the all-or-nothing fast path does not apply and the general sequential-counter cardinality is used.
-// Minimum is still ceil(3/2) = 2 host groups (one full, one half-used).
-TEST_F(TopologySolverTest, SolveTopologyMapping_MinHostCover_GeneralEncoding_OddCount) {
-    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
-    target_adj[1] = {2};
-    target_adj[2] = {1, 3};
-    target_adj[3] = {2};
-    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
-
-    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
-    global_adj[10] = {11};
-    global_adj[11] = {10, 12};
-    global_adj[12] = {11, 13};
-    global_adj[13] = {12, 14};
-    global_adj[14] = {13, 15};
-    global_adj[15] = {14};
-    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
-
-    std::vector<std::set<TestGlobalNode>> global_groups{{10, 11}, {12, 13}, {14, 15}};
-    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
-    constraints.set_minimize_same_rank_groups_used(true);
-    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(
-        std::vector<std::set<TestTargetNode>>{}, global_groups));
-
-    auto result = solve_topology_mapping(
-        target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Sat);
-    ASSERT_TRUE(result.success) << result.error_message;
-    EXPECT_EQ(count_host_groups_used(result, global_groups), 2u)
-        << "3-node chain must pack onto the minimum ceil(3/2) = 2 host groups";
-}
-
-// Issue #50253 shape: a ring (cycle) that must be embedded using whole hosts. The 4-node target cycle only closes on a
-// 4-cycle formed by hosts {10,11}+{12,13}; the third host is off to the side. Minimum = ceil(4/2) = 2, exercised via
-// the full-packing fast path on a cyclic (not path) embedding -- the case main's weak cardinality counter could miss.
-TEST_F(TopologySolverTest, SolveTopologyMapping_MinHostCover_FullPacking_RingTwoHosts) {
+// Issue #50253 shape: a ring (cycle) embedded using whole hosts. The 4-node target cycle only closes on the 4-cycle
+// formed by hosts {10,11}+{12,13}; the third host hangs off to the side. A HARD cap of k_min = ceil(4/2) = 2 with
+// full packing (4 == 2*2) forces the all-or-nothing occupancy fast path on a cyclic (not path) embedding -- the case
+// main's weak cardinality counter could miss. Mirrors what topology_mapper_utils sets for inter-mesh alignment.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_RingFullPacking) {
     AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
     target_adj[1] = {2, 4};
     target_adj[2] = {1, 3};
@@ -3632,9 +3614,10 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_MinHostCover_FullPacking_RingTwo
 
     std::vector<std::set<TestGlobalNode>> global_groups{{10, 11}, {12, 13}, {14, 15}};
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
-    constraints.set_minimize_same_rank_groups_used(true);
     ASSERT_TRUE(constraints.set_same_rank_groups_constraint(
         std::vector<std::set<TestTargetNode>>{}, global_groups));
+    constraints.set_max_same_rank_groups_used(2);      // HARD cap at k_min
+    constraints.set_minimize_same_rank_groups_used(true);
 
     auto result = solve_topology_mapping(
         target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true,

@@ -2601,20 +2601,36 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
             "Inter-mesh host alignment: failed to set same-rank groups constraint; falling back to preferred globals");
     }
 
-    // Ask the solver to minimize the number of distinct host partitions the mapping uses. The SAT backend turns
-    // this into an at-most-K host budget walked up from the capacity lower bound (finding the true minimum host
-    // count); the DFS backend approximates it via a host-affinity value-ordering bias. Both rely on the host
-    // partitions being registered as same-rank global groups (below).
-    inter_mesh_constraints.set_minimize_same_rank_groups_used(true);
-
     // Register the host partitions as same-rank GLOBAL groups with NO target groups. This imposes no hard
     // grouping (the same-rank constraint is inert when no target is bound to a group), but it exposes per-mesh
-    // host membership to the solver so the SAT host-budget loop / DFS host-affinity term can pack connected
-    // meshes onto the fewest hosts.
+    // host membership to the solver so the occupancy cardinality (SAT) / host-cap prune (DFS) can pack connected
+    // meshes onto the fewest hosts. Must be registered before the cap so the cap has a partition to bind.
     if (!inter_mesh_constraints.set_same_rank_groups_constraint(
             /*target_groups=*/{}, global_mesh_groups)) {
         log_warning(
             tt::LogFabric, "Inter-mesh host alignment: failed to register host partitions as same-rank global groups");
+    } else {
+        std::size_t max_group_capacity = 0;
+        for (const auto& grp : global_mesh_groups) {
+            max_group_capacity = std::max(max_group_capacity, grp.size());
+        }
+        if (max_group_capacity > 0) {
+            // Fewest hosts that can hold all logical meshes = ceil(num_targets / host capacity). Apply it
+            // declaratively as a HARD cap (the solver picks WHICH k_min hosts -- never pinned to a specific,
+            // possibly-unroutable cover), with a SOFT minimize as the fallback if that exact cap is infeasible.
+            // Both backends honor these via MappingConstraints: SAT through the at-most-K occupancy encoding, DFS
+            // through the candidate prune.
+            const std::size_t k_min = (logical_target_set.size() + max_group_capacity - 1) / max_group_capacity;
+            inter_mesh_constraints.set_max_same_rank_groups_used(k_min);  // HARD: fit within k_min hosts (any k_min)
+            inter_mesh_constraints.set_minimize_same_rank_groups_used(true);  // SOFT fallback if the cap is infeasible
+
+            log_debug(
+                tt::LogFabric,
+                "Inter-mesh host alignment: capping host-group usage at k_min={} (targets={}, max host capacity={})",
+                k_min,
+                logical_target_set.size(),
+                max_group_capacity);
+        }
     }
 
     if (!preferred_globals.empty()) {
