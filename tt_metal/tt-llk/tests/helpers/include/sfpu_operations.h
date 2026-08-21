@@ -102,12 +102,12 @@
 #include "llk_sfpu/ckernel_sfpu_tanhshrink.h"
 #include "llk_sfpu/ckernel_sfpu_trigonometry.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
-// abs/clamp/hardtanh/log/silu: production (ttnn -> compute API *_tile) uses the
+// clamp/hardtanh/log/silu: production (ttnn -> compute API *_tile) uses the
 // metal implementations, NOT the same-named legacy tt-llk kernels, so the
-// harness binds the metal headers for them (issue #53912). The tt-llk
-// tanh_derivative header stays: it backs the explicit legacy-variant
-// SfpuType::tanh_derivative_lut row.
-#include "llk_sfpu/ckernel_sfpu_abs.h"
+// harness binds the metal headers for them (issue #53912). abs made the same
+// dispatch switch, but its metal header was already included above -- only its
+// legacy include was dropped. The tt-llk tanh_derivative header stays: it
+// backs the explicit legacy-variant SfpuType::tanh_derivative_lut row.
 #include "llk_sfpu/ckernel_sfpu_clamp.h"
 #include "llk_sfpu/ckernel_sfpu_hardtanh.h"
 #include "llk_sfpu/ckernel_sfpu_log.h"
@@ -746,6 +746,11 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     // calculate_comp_unary_int. Shared with the golden (golden_generators.py:
     // _unary_comp_int_scalar); the two sides must move together.
     constexpr int UNARY_COMP_INT_SCALAR = 5;
+    // Clamp/Hardtanh bounds, fp32-encoded as the metal kernels take them. Shared with
+    // the golden (sfpu_dispatch_constants.py: CLAMP_MIN / CLAMP_MAX); the two sides
+    // must move together.
+    constexpr std::uint32_t CLAMP_MIN_FP32 = 0xBF800000u; // -1.0f
+    constexpr std::uint32_t CLAMP_MAX_FP32 = 0x3F800000u; //  1.0f
 
     if constexpr (OPERATION == SfpuType::abs)
     {
@@ -953,7 +958,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_log,
-            (APPROX_MODE, FAST_MODE, true /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, ITERATIONS),
+            (APPROX_MODE, FAST_MODE, true /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, ITERATIONS, true /* IS_BASE_TWO */),
             dst_index,
             vector_mode,
             0x3FB8AA3Bu /* 1/ln(2) in fp32 -> log2(x) */);
@@ -1216,27 +1221,11 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::clamp)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_clamp,
-            (APPROX_MODE, ITERATIONS),
-            dst_index,
-            vector_mode,
-            0xBF800000u /* min = -1.0f (fp32) */,
-            0x3F800000u /* max =  1.0f (fp32) */);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamp, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, CLAMP_MIN_FP32, CLAMP_MAX_FP32);
     }
     else if constexpr (OPERATION == SfpuType::hardtanh)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_hardtanh,
-            (APPROX_MODE, ITERATIONS),
-            dst_index,
-            vector_mode,
-            0xBF800000u /* min = -1.0f (fp32) */,
-            0x3F800000u /* max =  1.0f (fp32) */);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_hardtanh, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, CLAMP_MIN_FP32, CLAMP_MAX_FP32);
     }
     else if constexpr (
         OPERATION == SfpuType::equal_zero || OPERATION == SfpuType::not_equal_zero || OPERATION == SfpuType::less_than_zero ||

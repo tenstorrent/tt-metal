@@ -607,26 +607,18 @@ def test_exp_with_base_ceiling_is_currently_unreachable():
     )
 
 
-def test_hardtanh_golden_matches_the_hardtanh_kernel_chain():
-    """_hardtanh models a clamp, but its kernel is not one -- pin the agreement.
+def test_hardtanh_golden_matches_the_clamp_golden():
+    """Hardtanh's golden must stay Clamp's golden -- pin the identity.
 
-    `SfpuType::hardtanh` dispatches to `_calculate_hardtanh_`, three adds with two clamps-at-zero
-    and bf16 constants, where Clamp dispatches to `_calculate_clamp_` with fp16 min/max. They
-    agree on the finite range and at every special this op is enrolled for, but by arithmetic
-    rather than by sharing code, so the golden's use of sfpu_clamp is only sound while that holds.
+    The harness binds both ops to metal kernels that are the same max-then-min SFPSWAP
+    composition (`calculate_clamp` chains the unary_max_min bodies; `calculate_hardtanh`
+    is `sfpi::clamp`, i.e. `min(max(val, lower), upper)` over the same SFPSWAP min/max),
+    so one golden -- sfpu_clamp -- models both by construction. This pins the two golden
+    methods to each other: if either is ever remodelled independently (say _hardtanh to
+    IEEE torch semantics), the divergence surfaces here instead of as a silent split
+    between two ops whose kernels still agree.
     """
-    from helpers.golden_generators import UnarySFPUGolden, sfpu_total_order_key
-
-    def kernel_chain(x: float, low: float, high: float) -> float:
-        # val += p0; v_if (val < 0) val = 0; val += p1; v_if (val >= 0) val = 0; val += p2
-        p0, p1, p2 = -low, -(high - low), high
-        val = x + p0
-        if sfpu_total_order_key(val) < 0:
-            val = 0.0
-        val = val + p1
-        if sfpu_total_order_key(val) >= 0:
-            val = 0.0
-        return val + p2
+    from helpers.golden_generators import UnarySFPUGolden
 
     golden = UnarySFPUGolden()
     low, high = -1.0, 1.0
@@ -643,11 +635,12 @@ def test_hardtanh_golden_matches_the_hardtanh_kernel_chain():
         float("nan"),
     ]
     for x in probes:
-        want = kernel_chain(x, low, high)
+        want = float(golden._clamp(x, low, high))
         got = float(golden._hardtanh(x, low, high))
         assert got == want or (got != got and want != want), (
-            f"hardtanh({x}) golden gives {got} but the kernel chain gives {want}. The golden "
-            "models _calculate_clamp_; if the two have stopped agreeing, model the chain."
+            f"hardtanh({x}) golden gives {got} but the clamp golden gives {want}. Both ops "
+            "bind the same SFPU max/min composition, so their goldens must move together; "
+            "if the kernels have genuinely diverged, split the goldens and retire this pin."
         )
 
 
