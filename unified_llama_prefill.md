@@ -1235,13 +1235,13 @@ to (i+1)*S_q keys. Both sides at HiFi2 + approx, which the script enforces.
 
 | model | d | S | sq | ours/head | ttnn/head | ratio |
 |---|---|---|---|---|---|---|
-| Llama 3.2 1B | 64 | 512 | 8 | 189.9 us | 122.6 us | 1.55x |
-| Qwen2.5 0.5B | 64 | 512 | 8 | 189.8 us | 122.6 us | 1.55x |
-| TinyLlama 1.1B | 64 | 512 | 8 | 189.9 us | 122.6 us | 1.55x |
-| Phi-3 mini 3.8B | 96 | 512 | 8 | 213.0 us | 132.1 us | 1.61x |
-| Qwen3 0.6B | 128 | 512 | 4 | 235.4 us | 142.8 us | 1.65x |
-| Llama 3.2 3B | 128 | 512 | 4 | 235.5 us | 142.8 us | 1.65x |
-| Gemma 3 1B | 256 | 512 | 4 | 322.7 us | 200.1 us | 1.61x |
+| Llama 3.2 1B | 64 | 512 | 8 | 178.5 us | 122.5 us | **1.46x** |
+| Qwen2.5 0.5B | 64 | 512 | 8 | 178.5 us | 122.5 us | 1.46x |
+| TinyLlama 1.1B | 64 | 512 | 8 | 178.5 us | 122.5 us | 1.46x |
+| Phi-3 mini 3.8B | 96 | 512 | 8 | 201.5 us | 132.2 us | 1.52x |
+| Qwen3 0.6B | 128 | 512 | 8 | 223.2 us | 142.8 us | 1.56x |
+| Llama 3.2 3B | 128 | 512 | 8 | 223.2 us | 142.8 us | 1.56x |
+| Gemma 3 1B | 256 | 512 | 4 | 313.2 us | 200.1 us | 1.57x |
 
 **Banding the single-shot matmul is what moved these**, from 2.5-3.1x to 1.5-1.65x. An
 output block wider than the 8-tile DST budget is now walked in row bands, which lifts TWO
@@ -1426,6 +1426,48 @@ than an optimisation.
 Not worth revisiting, all measured: eltwise math (done, -22%/-34%), reconfiguration (halved
 by leaf-outer, ~5% left), acquire batching (a regression, twice), dispatch overhead (~1-2%),
 and the mask's DRAM traffic (the reader has 100us of slack).
+
+### Row sum as a matmul, and the mask folded into the product
+
+Both from the list, both implemented, and only one of them was worth anything -- which is
+the useful part.
+
+| | d=64 sq=8 | d=256 sq=4 |
+|---|---|---|
+| before | 189.8 us | 322.7 us |
+| row sum as a matmul | 179.2 (**-5.6%**) | 315.2 (-2.3%) |
+| mask folded in as well | 178.6 (-0.3%) | 313.3 (-0.6%) |
+
+**Row sum as a matmul needed no library change at all.** `matmul(p, col_ones)` with
+`col_ones : Shape<sk, 1>` already produces `Shape<sq, 1>`, exactly what
+`reduce_sum<Cols>` produced, so it is a kernel edit. The ones sit in COLUMN 0 only, which
+reproduces the reduction's contract -- sum in column 0, zeros elsewhere -- where all-ones
+would have put the sum in every column. Nothing downstream reads those columns, but
+`bcast<Cols>` taking column 0 is a contract not worth quietly changing. The operand is
+built on the host rather than by a filler: a column of ones has to land in column 0 of each
+of a tile's four 16x16 faces, and getting that packing wrong by one half-word is a silently
+wrong sum. `reduce_max` stays a reduction; a maximum has no matmul form.
+
+**The mask fold is a wash on time, and the reason corrects an earlier claim in this file.**
+The list said folding it "removes a whole 64-tile pass", which is true, and predicted a win,
+which was wrong. `plus` replaces the add pass's FPU add with a dest-reuse add: the MATH
+thread issues one instruction per output tile either way. What actually disappears is 64
+packs and 128 unpacks -- and pack and unpack have slack, while math is the constraint. So
+**removing L1 round trips does not help while math is the bottleneck**, and the general
+"fewer passes" framing recorded earlier is wrong for this machine. What matters is
+math-thread work, which is why the row sum (fewer tile-ops) paid and the mask fold did not.
+
+It is kept anyway, for L1 rather than time: the scores buffer is gone, 64 pages at sq=8/sk=8,
+and sq is L1-bound. That lifted 128-wide heads from sq=6 to **sq=8** and is most of why
+Qwen3 0.6B and Llama 3.2 3B moved 235.4 -> 223.2us.
+
+`plus` is a genuine addition to the matmul node, distinct from `bias` -- a whole block of the
+output's shape rather than one row broadcast down it -- and applies in both the plain and
+banded paths, before the epilogue chain so `matmul(a,b).plus(m).relu()` is `relu(A@B + m)`.
+Two things it has to do that the trace pins: put `matmul_block_init` back afterwards, since
+the reuse op reprograms the math unit and a later band would otherwise run a matmul against
+eltwise state; and carry `addend_cb` through `bias()`, or `.plus(m).bias(v)` would drop the
+addend and look like a plain biased matmul rather than an error.
 
 ### What to test next
 
