@@ -183,6 +183,9 @@ def save_all(experts: dict[str, ttml.modules.ModuleBase], cfg: Config, suffix: s
 
 
 def load_all(experts: dict[str, ttml.modules.ModuleBase], cfg: Config, suffix: str = "") -> None:
+    """Load adapters back into live experts. Not a training resume: the optimizer moments,
+    step counter and data order are not restored, so this is a warm start, not a continuation.
+    """
     for role, model in experts.items():
         path = _with_suffix(cfg.expert_path(role), suffix)
         n = load_lora_expert(model, path, cfg.MESH_SHAPE)

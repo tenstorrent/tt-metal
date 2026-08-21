@@ -29,7 +29,7 @@ from pipeline_config import SUBFOLDER, Config
 from utils.dataset import LatentEmbedDataset, TextEmbeds, make_collate_fn
 from utils.device_setup import setup_device
 from utils.logger import Logger
-from utils.lora_export import init_lora_A_gaussian, load_all, save_all
+from utils.lora_export import init_lora_A_gaussian, save_all
 from utils.lora_targets import resolve as resolve_lora_targets
 from timing import fmt, phase, record
 
@@ -210,11 +210,8 @@ def validation_loss(experts, val_loader, cfg: Config, ctx, rope_params, patch_si
 
 
 def train(cfg: Config) -> None:
-    if cfg.RESUME_STEP and cfg.RESUME_STEP >= cfg.MAX_STEPS:
-        raise ValueError(f"RESUME_STEP={cfg.RESUME_STEP} leaves nothing to train (MAX_STEPS={cfg.MAX_STEPS})")
-
-    random.seed(cfg.SEED + cfg.RESUME_STEP)
-    rng = np.random.default_rng(cfg.SEED + cfg.RESUME_STEP)
+    random.seed(cfg.SEED)
+    rng = np.random.default_rng(cfg.SEED)
 
     cache = Path(cfg.CACHE_DIR)
     if not (cache / "embeds.npy").exists() or not (cache / "samples").exists():
@@ -247,9 +244,7 @@ def train(cfg: Config) -> None:
         embeds = TextEmbeds(cfg.CACHE_DIR)
         train_ds = LatentEmbedDataset(cfg.CACHE_DIR, train_idx)
         val_ds = LatentEmbedDataset(cfg.CACHE_DIR, val_idx)
-    # Offset by RESUME_STEP like the loader seed, so a resumed run does not replay the
-    # first chunk's caption-drop sequence.
-    train_collate = make_collate_fn(embeds, cfg.TEXT_DROP_PROB, cfg.SEED + cfg.RESUME_STEP)
+    train_collate = make_collate_fn(embeds, cfg.TEXT_DROP_PROB, cfg.SEED)
     val_collate = make_collate_fn(embeds, 0.0, cfg.SEED + 1)
 
     # BATCH is per device; dp rows carry distinct samples. Validation stays replicated and
@@ -261,14 +256,13 @@ def train(cfg: Config) -> None:
         f"accum={cfg.GRAD_ACCUM} -> effective {global_batch * cfg.GRAD_ACCUM}"
     )
 
-    # Offset by RESUME_STEP so a resumed run does not replay the first chunk's shuffle order.
     train_loader = InMemoryDataloader(
         train_ds,
         train_collate,
         batch_size=global_batch,
         shuffle=True,
         drop_last=True,
-        seed=cfg.SEED + cfg.RESUME_STEP,
+        seed=cfg.SEED,
     )
     val_loader = InMemoryDataloader(
         val_ds, val_collate, batch_size=1, shuffle=False, drop_last=False, seed=cfg.SEED + 1
@@ -276,9 +270,6 @@ def train(cfg: Config) -> None:
 
     with phase("load experts + inject LoRA"):
         experts = {role: build_lora_expert(role, cfg) for role in cfg.experts_to_load()}
-    if cfg.RESUME_STEP:
-        with phase(f"resume from step {cfg.RESUME_STEP}"):
-            load_all(experts, cfg, suffix=f"_step{cfg.RESUME_STEP:05d}")
     for m in experts.values():
         m.train()
 
@@ -306,7 +297,7 @@ def train(cfg: Config) -> None:
     run_name = f"wan22_14b_{cfg.STYLE.lower()}_{cfg.TRAIN_EXPERTS}_r{cfg.LORA_RANK}"
     logger = Logger(cfg.WANDB_ENABLED, cfg.WANDB_PROJECT, run_name, cfg.asdict())
 
-    global_step, micro = cfg.RESUME_STEP, 0
+    global_step, micro = 0, 0
     accum_loss, accum_n = 0.0, 0
     ema = None
     step_times: list[float] = []
