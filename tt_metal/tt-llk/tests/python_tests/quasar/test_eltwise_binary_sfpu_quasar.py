@@ -255,12 +255,13 @@ _INT_OPS = [
 
 
 @pytest.mark.quasar
-@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
 @pytest.mark.parametrize(
     "binary_op, mathop, clamp_inputs", _INT_OPS, ids=[op for op, _, _ in _INT_OPS]
 )
-@pytest.mark.parametrize(
-    "data_format, dest_acc", [(DataFormat.Int32, DestAccumulation.Yes)]
+@parametrize(
+    data_format=[DataFormat.Int32],
+    dest_acc=[DestAccumulation.Yes],
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_int_quasar(
     data_format,
@@ -442,8 +443,12 @@ _BF16_ADD_SUB_OPS = [
 @pytest.mark.parametrize(
     "binary_op, mathop", _BF16_ADD_SUB_OPS, ids=[op for op, _ in _BF16_ADD_SUB_OPS]
 )
-@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
+@parametrize(
+    dest_acc=[DestAccumulation.No],
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
+)
 def test_eltwise_binary_sfpu_bf16_rne_quasar(
+    dest_acc,
     tile_indices,
     binary_op,
     mathop,
@@ -463,7 +468,7 @@ def test_eltwise_binary_sfpu_bf16_rne_quasar(
     )
     _run_sfpu_binary_llk_golden(
         formats,
-        DestAccumulation.No,
+        dest_acc,
         ImpliedMathFormat.No,
         tile_indices,
         mathop,

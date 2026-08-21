@@ -523,6 +523,37 @@ def _collapse_runtime_only_variants(config, items):
         items[:] = keep
 
 
+def _elf_affinity_sort_key(item, original_index: int):
+    """Group variants that share an ELF, then order runtime axes inside each group.
+
+    Compile-key identity is the primary key (templates / dest_acc / …). Remaining
+    parametrize values are the secondary key so dest-full tall vs wide and dest
+    index scan the same loaded ELF before the next compile key starts.
+    """
+    from helpers.param_config import RUNTIME_AXES_MARK
+
+    node = item.nodeid.split("[")[0]
+    callspec = getattr(item, "callspec", None)
+    if callspec is None:
+        return (node, "", (), original_index)
+
+    marker = item.get_closest_marker(RUNTIME_AXES_MARK)
+    params = callspec.params
+    if marker is None:
+        return (node, "", (), original_index)
+
+    compile_key = marker.kwargs["compile_key_fn"](params)
+    runtime_key = tuple(sorted((k, repr(v)) for k, v in params.items()))
+    return (node, repr(compile_key), runtime_key, original_index)
+
+
+def _sort_items_for_elf_affinity(items):
+    """Reorder collected items so consecutive variants reuse LAST_LOADED_ELFS."""
+    keyed = [(_elf_affinity_sort_key(item, i), i, item) for i, item in enumerate(items)]
+    keyed.sort()
+    items[:] = [item for _, _, item in keyed]
+
+
 def _item_op_names(item) -> set:
     """Return the op name(s) a test covers, lowercased.
 
@@ -589,6 +620,7 @@ def pytest_collection_modifyitems(config, items):
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:
+        _sort_items_for_elf_affinity(items)
         return
 
     temp_runner_name = config.getoption("--rewind-runner")

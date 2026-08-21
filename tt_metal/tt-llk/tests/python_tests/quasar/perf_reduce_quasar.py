@@ -9,7 +9,7 @@ from helpers.llk_params import (
     ReduceDimension,
     ReducePool,
 )
-from helpers.param_config import parametrize
+from helpers.param_config import parametrize, runtime
 from quasar.test_reduce_quasar import (
     MATH_FIDELITY_MODES,
     REDUCE_FORMATS,
@@ -30,7 +30,9 @@ from quasar.test_reduce_quasar import (
 @pytest.mark.nightly
 @parametrize(
     formats=REDUCE_FORMATS,
-    tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=True),
+    tile_dimensions=runtime(
+        lambda formats: reduce_tile_dimensions(formats, is_perf=True)
+    ),
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=lambda: reduce_pool_type_and_math_fidelity_combinations(

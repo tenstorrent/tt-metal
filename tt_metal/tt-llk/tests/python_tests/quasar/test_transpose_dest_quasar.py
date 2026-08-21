@@ -27,6 +27,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    runtime,
     select_perf_input_dimensions,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -104,36 +105,6 @@ def generate_qsr_transpose_dest_combinations(
             return False
         return True
 
-    # Curated dimensions: some fit in one bank (no switching), some require
-    # multiple blocks (triggering dest bank switches with DstSync.Half).
-    # DstSync.Half capacity: 8 tiles (16-bit dest) / 4 tiles (32-bit dest)
-    # DstSync.Full capacity: 16 tiles (16-bit dest) / 8 tiles (32-bit dest)
-    dimensions_by_mode = {
-        (DestAccumulation.No, DestSync.Half): [
-            [32, 32],  # 1 tile  → 1 block (no switch)
-            [32, 128],  # 4 tiles → 1 block (no switch)
-            [32, 256],  # 8 tiles → 1 block (fills half-dest exactly)
-            [32, 512],  # 16 tiles → 2 blocks (1 bank switch)
-            [64, 384],  # 24 tiles → 3 blocks (2 bank switches)
-        ],
-        (DestAccumulation.No, DestSync.Full): [
-            [32, 32],  # 1 tile  → 1 block
-            [32, 512],  # 16 tiles → 1 block (fills full-dest exactly)
-            [64, 512],  # 32 tiles → 2 blocks
-        ],
-        (DestAccumulation.Yes, DestSync.Half): [
-            [32, 32],  # 1 tile  → 1 block (no switch)
-            [32, 128],  # 4 tiles → 1 block (fills half-dest exactly)
-            [32, 256],  # 8 tiles → 2 blocks (1 bank switch)
-            [64, 192],  # 12 tiles → 3 blocks (2 bank switches)
-        ],
-        (DestAccumulation.Yes, DestSync.Full): [
-            [32, 32],  # 1 tile  → 1 block
-            [32, 256],  # 8 tiles → 1 block (fills full-dest exactly)
-            [32, 512],  # 16 tiles → 2 blocks
-        ],
-    }
-
     dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
     transpose_faces_modes = (Transpose.No, Transpose.Yes)
     combinations = []
@@ -147,43 +118,59 @@ def generate_qsr_transpose_dest_combinations(
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
                 for dest_sync in dest_sync_modes:
                     for math_transpose_faces in transpose_faces_modes:
-                        if is_perf:
-                            mode_dimensions = dimensions_by_mode[(dest_acc, dest_sync)]
-                            perf_dimensions = select_perf_input_dimensions(
-                                mode_dimensions,
-                                use_largest_fallback=False,
-                            )
-                            # Dest-full vs 2-block is selected via PERF_INPUT_DIMENSIONS.
-                            # Keep the 3-block / 2-switch case when the mode defines it.
-                            three_block = [64, 384]
-                            if (
-                                three_block in mode_dimensions
-                                and three_block not in perf_dimensions
-                            ):
-                                perf_dimensions.append(three_block)
-                            for dimensions in perf_dimensions:
-                                combinations.append(
-                                    (
-                                        fmt,
-                                        dest_acc,
-                                        dest_sync,
-                                        math_transpose_faces,
-                                        dimensions,
-                                    )
-                                )
-                            continue
-                        for dimensions in dimensions_by_mode[(dest_acc, dest_sync)]:
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    math_transpose_faces,
-                                    dimensions,
-                                )
-                            )
+                        combinations.append(
+                            (fmt, dest_acc, dest_sync, math_transpose_faces)
+                        )
 
     return combinations
+
+
+# Curated dimensions: some fit in one bank (no switching), some require
+# multiple blocks (triggering dest bank switches with DstSync.Half).
+# DstSync.Half capacity: 8 tiles (16-bit dest) / 4 tiles (32-bit dest)
+# DstSync.Full capacity: 16 tiles (16-bit dest) / 8 tiles (32-bit dest)
+TRANSPOSE_DEST_DIMENSIONS_BY_MODE = {
+    (DestAccumulation.No, DestSync.Half): [
+        [32, 32],  # 1 tile  → 1 block (no switch)
+        [32, 128],  # 4 tiles → 1 block (no switch)
+        [32, 256],  # 8 tiles → 1 block (fills half-dest exactly)
+        [32, 512],  # 16 tiles → 2 blocks (1 bank switch)
+        [64, 384],  # 24 tiles → 3 blocks (2 bank switches)
+    ],
+    (DestAccumulation.No, DestSync.Full): [
+        [32, 32],  # 1 tile  → 1 block
+        [32, 512],  # 16 tiles → 1 block (fills full-dest exactly)
+        [64, 512],  # 32 tiles → 2 blocks
+    ],
+    (DestAccumulation.Yes, DestSync.Half): [
+        [32, 32],  # 1 tile  → 1 block (no switch)
+        [32, 128],  # 4 tiles → 1 block (fills half-dest exactly)
+        [32, 256],  # 8 tiles → 2 blocks (1 bank switch)
+        [64, 192],  # 12 tiles → 3 blocks (2 bank switches)
+    ],
+    (DestAccumulation.Yes, DestSync.Full): [
+        [32, 32],  # 1 tile  → 1 block
+        [32, 256],  # 8 tiles → 1 block (fills full-dest exactly)
+        [32, 512],  # 16 tiles → 2 blocks
+    ],
+}
+
+
+def transpose_dest_input_dimensions(formats_dest_acc_sync_transpose, *, is_perf=False):
+    _, dest_acc, dest_sync, _ = formats_dest_acc_sync_transpose
+    mode_dimensions = TRANSPOSE_DEST_DIMENSIONS_BY_MODE[(dest_acc, dest_sync)]
+    if not is_perf:
+        return mode_dimensions
+    perf_dimensions = select_perf_input_dimensions(
+        mode_dimensions,
+        use_largest_fallback=False,
+    )
+    # Dest-full vs 2-block is selected via PERF_INPUT_DIMENSIONS.
+    # Keep the 3-block / 2-switch case when the mode defines it.
+    three_block = [64, 384]
+    if three_block in mode_dimensions and three_block not in perf_dimensions:
+        perf_dimensions.append(three_block)
+    return perf_dimensions
 
 
 def transpose_dest_implied_math_formats(*, is_perf=False):
@@ -215,24 +202,30 @@ PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
+    formats_dest_acc_sync_transpose=generate_qsr_transpose_dest_combinations(
         TRANSPOSE_DEST_FORMATS
     ),
     implied_math_format=lambda: transpose_dest_implied_math_formats(is_perf=False),
+    input_dimensions=runtime(
+        lambda formats_dest_acc_sync_transpose: transpose_dest_input_dimensions(
+            formats_dest_acc_sync_transpose, is_perf=False
+        )
+    ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_transpose_dest_quasar(
-    formats_dest_acc_sync_transpose_dims,
+    formats_dest_acc_sync_transpose,
     implied_math_format,
+    input_dimensions,
     run_types,
     loop_factor,
     *,
     is_perf=False,
     perf_report=None,
 ):
-    (formats, dest_acc, dest_sync, math_transpose_faces, input_dimensions) = (
-        formats_dest_acc_sync_transpose_dims
+    (formats, dest_acc, dest_sync, math_transpose_faces) = (
+        formats_dest_acc_sync_transpose
     )
 
     data_copy_type = DataCopyType.A2D

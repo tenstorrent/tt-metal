@@ -178,9 +178,10 @@ def test_perf_eltwise_binary_sfpu_quasar(perf_report, family_and_args):
     elif family == PerfCaseFamily.BF16_RNE:
         binary_op, mathop = args
         run_eltwise_binary_sfpu_bf16_rne_quasar(
-            DEFAULT_SFPU_BINARY_TILE_INDICES,
-            binary_op,
-            mathop,
+            dest_acc=DestAccumulation.No,
+            tile_indices=DEFAULT_SFPU_BINARY_TILE_INDICES,
+            binary_op=binary_op,
+            mathop=mathop,
             **perf_kwargs,
         )
     elif family == PerfCaseFamily.MAX_MIN_FLOAT:

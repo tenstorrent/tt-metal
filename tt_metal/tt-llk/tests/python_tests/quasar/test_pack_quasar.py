@@ -38,6 +38,7 @@ from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    INPUT_DIMENSIONS,
     LOOP_FACTOR,
     NUM_FACES,
     NUM_FACES_C_DIM,
@@ -45,6 +46,7 @@ from helpers.test_variant_parameters import (
     RELU_CONFIG,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.tile_constants import (
     MX_SUPPORTED_TILE_SIZES,
@@ -110,13 +112,6 @@ def generate_qsr_pack_combinations(
             return False
         return True
 
-    all_relu_types = [
-        PackerReluType.NoRelu,
-        PackerReluType.ZeroRelu,
-        PackerReluType.MinThresholdRelu,
-        PackerReluType.MaxThresholdRelu,
-    ]
-
     dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
 
     combinations = []
@@ -126,55 +121,54 @@ def generate_qsr_pack_combinations(
         if not is_supported_format_conversion(in_fmt, out_fmt):
             continue
 
-        # Threshold ReLU modes are not supported for integer pack_src formats
-        # (mirroring the pytest.skip guard in the test body).
-        relu_types = (
-            [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
-            if in_fmt.is_integer()
-            else all_relu_types
-        )
         for dest_acc in get_dest_acc_modes(in_fmt):
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-                tile_sizes = (
-                    select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
-                    if is_perf
-                    else SUPPORTED_TILE_SIZES
-                )
                 for dest_sync in dest_sync_modes:
-                    for tile_dims in tile_sizes:
-                        if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
-                            continue
-                        # Unpack-to-dest (required for 32-bit formats) does not support tiny tiles.
-                        if (
-                            in_fmt.is_32_bit()
-                            and dest_acc == DestAccumulation.Yes
-                            and tile_dims not in MX_SUPPORTED_TILE_SIZES
-                        ):
-                            continue
-                        tile_shape = construct_tile_shape(tile_dims)
-                        dimensions_list = (
-                            generate_perf_input_dimensions(
-                                dest_acc, dest_sync, tile_shape
-                            )
-                            if is_perf
-                            else generate_unary_input_dimensions(
-                                dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-                            )
-                        )
-                        for dimensions in dimensions_list:
-                            for relu_type in relu_types:
-                                combinations.append(
-                                    (
-                                        fmt,
-                                        dest_acc,
-                                        dest_sync,
-                                        runtime(dimensions) if is_perf else dimensions,
-                                        runtime(relu_type),
-                                        runtime(tile_dims),
-                                    )
-                                )
+                    combinations.append((fmt, dest_acc, dest_sync))
 
     return combinations
+
+
+def pack_runtime_shapes(formats_dest_acc_sync, *, is_perf=False):
+    fmt, dest_acc, dest_sync = formats_dest_acc_sync
+    in_fmt, out_fmt = fmt.input_format, fmt.output_format
+    relu_types = (
+        [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
+        if in_fmt.is_integer()
+        else [
+            PackerReluType.NoRelu,
+            PackerReluType.ZeroRelu,
+            PackerReluType.MinThresholdRelu,
+            PackerReluType.MaxThresholdRelu,
+        ]
+    )
+    tile_sizes = (
+        select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
+        if is_perf
+        else SUPPORTED_TILE_SIZES
+    )
+    shapes = []
+    for tile_dims in tile_sizes:
+        if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
+            continue
+        if (
+            in_fmt.is_32_bit()
+            and dest_acc == DestAccumulation.Yes
+            and tile_dims not in MX_SUPPORTED_TILE_SIZES
+        ):
+            continue
+        tile_shape = construct_tile_shape(tile_dims)
+        dimensions_list = (
+            generate_perf_input_dimensions(dest_acc, dest_sync, tile_shape)
+            if is_perf
+            else generate_unary_input_dimensions(
+                dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+            )
+        )
+        for dimensions in dimensions_list:
+            for relu_type in relu_types:
+                shapes.append((dimensions, relu_type, tile_dims))
+    return shapes
 
 
 PACK_FORMATS = input_output_formats(
@@ -198,12 +192,18 @@ PERF_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS, is_perf=Tr
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_dims_relu=ALL_PACK_COMBINATIONS,
+    formats_dest_acc_sync=ALL_PACK_COMBINATIONS,
+    dimensions_relu_tile=runtime(
+        lambda formats_dest_acc_sync: pack_runtime_shapes(
+            formats_dest_acc_sync, is_perf=False
+        )
+    ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_pack_quasar(
-    formats_dest_acc_sync_dims_relu,
+    formats_dest_acc_sync,
+    dimensions_relu_tile,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -211,14 +211,8 @@ def test_pack_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (
-        formats,
-        dest_acc,
-        dest_sync_mode,
-        input_dimensions,
-        relu_type,
-        tile_dimensions,
-    ) = formats_dest_acc_sync_dims_relu
+    (formats, dest_acc, dest_sync_mode) = formats_dest_acc_sync
+    input_dimensions, relu_type, tile_dimensions = dimensions_relu_tile
 
     tile_shape = construct_tile_shape(tile_dimensions)
 
@@ -297,6 +291,16 @@ def test_pack_quasar(
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
+    # Dest-fill perf shapes are (max_tiles, 1) and (1, max_tiles): same tile_cnt
+    # and face layout, different matrix orientation. Record tile counts so the
+    # report key distinguishes them (otherwise combine_perf_reports averages
+    # tall vs wide into one row and warns about duplicate sweep keys).
+    input_dim = generate_input_dim(
+        input_dimensions,
+        input_dimensions,
+        tile_dimensions=tile_dimensions,
+    )
+
     test_config_kwargs = {
         "test_name": "sources/quasar/pack_quasar_test.cpp",
         "formats": formats,
@@ -305,6 +309,12 @@ def test_pack_quasar(
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
+            INPUT_DIMENSIONS(
+                input_dim.full_rt_dim,
+                input_dim.full_ct_dim,
+                input_dim.block_ct_dim,
+                input_dim.block_rt_dim,
+            ),
             TEST_FACE_DIMS(tile_shape.face_r_dim),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),

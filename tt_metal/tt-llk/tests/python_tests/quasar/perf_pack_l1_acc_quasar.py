@@ -3,7 +3,7 @@
 
 import pytest
 from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR
-from helpers.param_config import parametrize
+from helpers.param_config import parametrize, runtime
 from quasar.test_pack_l1_acc_quasar import (
     ALL_PACK_L1_ACC_COMBINATIONS,
     INPUT_DIMENSIONS,
@@ -21,7 +21,7 @@ from quasar.test_pack_l1_acc_quasar import test_pack_l1_acc_quasar as run_pack_l
         formats_dest_acc, is_perf=True
     ),
     dest_sync_mode=lambda: pack_l1_acc_dest_sync_modes(is_perf=True),
-    input_dimensions=INPUT_DIMENSIONS,
+    input_dimensions=runtime(INPUT_DIMENSIONS),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],

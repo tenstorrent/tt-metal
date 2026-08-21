@@ -115,52 +115,53 @@ def generate_unpack_unary_operand_combinations(
                 continue
             for dest_sync in dest_sync_modes:
                 for transpose_en in transpose_modes:
-                    # transpose is not supported for tiny-tiles
-                    functional_tile_sizes = (
-                        ((32, 32),)
-                        if transpose_en == Transpose.Yes
-                        else SUPPORTED_TILE_SIZES
-                    )
-                    tile_sizes = (
-                        select_perf_tile_sizes(functional_tile_sizes)
-                        if is_perf
-                        else functional_tile_sizes
-                    )
                     for unpacker_sel in unpacker_engines:
-                        for tile_dims in tile_sizes:
-                            if is_mx_unsupported_tile_dims(
-                                in_fmt, fmt.output_format, tile_dims
-                            ):
-                                continue
-                            if (
-                                unpacker_sel == UnpackerEngine.UnpDest
-                                and tile_dims not in MX_SUPPORTED_TILE_SIZES
-                            ):
-                                continue
-                            tile_shape = construct_tile_shape(tile_dims)
-                            dimensions_list = (
-                                generate_perf_input_dimensions(
-                                    dest_acc, dest_sync, tile_shape
-                                )
-                                if is_perf
-                                else generate_unary_input_dimensions(
-                                    dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-                                )
-                            )
-                            for dimensions in dimensions_list:
-                                combinations.append(
-                                    (
-                                        fmt,
-                                        dest_acc,
-                                        dest_sync,
-                                        transpose_en,
-                                        unpacker_sel,
-                                        dimensions,
-                                        runtime(tile_dims),
-                                    )
-                                )
+                        combinations.append(
+                            (fmt, dest_acc, dest_sync, transpose_en, unpacker_sel)
+                        )
 
     return combinations
+
+
+def unpack_unary_operand_runtime_shapes(
+    formats_dest_acc_sync_transpose_unpack_sel, *, is_perf=False
+):
+    (
+        fmt,
+        dest_acc,
+        dest_sync,
+        transpose_en,
+        unpacker_sel,
+    ) = formats_dest_acc_sync_transpose_unpack_sel
+    in_fmt = fmt.input_format
+    functional_tile_sizes = (
+        ((32, 32),) if transpose_en == Transpose.Yes else SUPPORTED_TILE_SIZES
+    )
+    tile_sizes = (
+        select_perf_tile_sizes(functional_tile_sizes)
+        if is_perf
+        else functional_tile_sizes
+    )
+    shapes = []
+    for tile_dims in tile_sizes:
+        if is_mx_unsupported_tile_dims(in_fmt, fmt.output_format, tile_dims):
+            continue
+        if (
+            unpacker_sel == UnpackerEngine.UnpDest
+            and tile_dims not in MX_SUPPORTED_TILE_SIZES
+        ):
+            continue
+        tile_shape = construct_tile_shape(tile_dims)
+        dimensions_list = (
+            generate_perf_input_dimensions(dest_acc, dest_sync, tile_shape)
+            if is_perf
+            else generate_unary_input_dimensions(
+                dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+            )
+        )
+        for dimensions in dimensions_list:
+            shapes.append((dimensions, tile_dims))
+    return shapes
 
 
 UNPACK_FORMATS = input_output_formats(
@@ -185,12 +186,18 @@ PERF_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinati
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_transpose_unpack_sel_dims=ALL_UNPACK_UNARY_OPERAND_COMBINATIONS,
+    formats_dest_acc_sync_transpose_unpack_sel=ALL_UNPACK_UNARY_OPERAND_COMBINATIONS,
+    dimensions_and_tile=runtime(
+        lambda formats_dest_acc_sync_transpose_unpack_sel: unpack_unary_operand_runtime_shapes(
+            formats_dest_acc_sync_transpose_unpack_sel, is_perf=False
+        )
+    ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_unpack_unary_operand_quasar(
-    formats_dest_acc_sync_transpose_unpack_sel_dims,
+    formats_dest_acc_sync_transpose_unpack_sel,
+    dimensions_and_tile,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -204,9 +211,8 @@ def test_unpack_unary_operand_quasar(
         dest_sync_mode,
         transpose_en,
         unpacker_sel,
-        input_dimensions,
-        tile_dimensions,
-    ) = formats_dest_acc_sync_transpose_unpack_sel_dims
+    ) = formats_dest_acc_sync_transpose_unpack_sel
+    input_dimensions, tile_dimensions = dimensions_and_tile
 
     tile_shape = construct_tile_shape(tile_dimensions)
 

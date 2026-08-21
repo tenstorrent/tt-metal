@@ -118,12 +118,6 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
         """
         return in_fmt in (DataFormat.Int8, DataFormat.UInt8) and in_fmt == out_fmt
 
-    tile_sizes = (
-        select_perf_tile_sizes(UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES)
-        if is_perf
-        else UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES
-    )
-
     combinations = []
 
     for fmt in get_valid_data_format_conversions(formats_list):
@@ -141,37 +135,41 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
             for dest_sync in (
                 (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
             ):
-                for tile_dimensions in tile_sizes:
-                    if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dimensions):
+                for pool_type in (
+                    ReducePool.Max,
+                    ReducePool.Sum,
+                    ReducePool.Average,
+                ):
+                    if pool_type == ReducePool.Average and in_fmt.is_integer():
                         continue
-                    tile_shape = construct_tile_shape(tile_dimensions)
-                    dimensions_list = (
-                        generate_perf_input_dimensions(acc, dest_sync, tile_shape)
-                        if is_perf
-                        else generate_corner_case_input_dimensions(
-                            dest_sync, acc, tile_shape
-                        )
-                    )
-                    for dimensions in dimensions_list:
-                        for pool_type in (
-                            ReducePool.Max,
-                            ReducePool.Sum,
-                            ReducePool.Average,
-                        ):
-                            if pool_type == ReducePool.Average and in_fmt.is_integer():
-                                continue
-                            combinations.append(
-                                (
-                                    fmt,
-                                    acc,
-                                    dest_sync,
-                                    dimensions,
-                                    pool_type,
-                                    runtime(tile_dimensions),
-                                )
-                            )
+                    combinations.append((fmt, acc, dest_sync, pool_type))
 
     return combinations
+
+
+def unpack_reduce_col_tilizeA_strided_runtime_shapes(
+    formats_dest_acc_sync_pool, *, is_perf=False
+):
+    fmt, acc, dest_sync, _pool_type = formats_dest_acc_sync_pool
+    in_fmt, out_fmt = fmt.input_format, fmt.output_format
+    tile_sizes = (
+        select_perf_tile_sizes(UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES)
+        if is_perf
+        else UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES
+    )
+    shapes = []
+    for tile_dimensions in tile_sizes:
+        if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dimensions):
+            continue
+        tile_shape = construct_tile_shape(tile_dimensions)
+        dimensions_list = (
+            generate_perf_input_dimensions(acc, dest_sync, tile_shape)
+            if is_perf
+            else generate_corner_case_input_dimensions(dest_sync, acc, tile_shape)
+        )
+        for dimensions in dimensions_list:
+            shapes.append((dimensions, tile_dimensions))
+    return shapes
 
 
 UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS = input_output_formats(
@@ -211,14 +209,20 @@ def generate_reduce_scaler(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
+    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel=ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
     implied_math_format=unpack_reduce_col_tilizeA_strided_implied_math_formats,
+    dimensions_and_tile=runtime(
+        lambda formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel: unpack_reduce_col_tilizeA_strided_runtime_shapes(
+            formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel, is_perf=False
+        )
+    ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_unpack_reduce_col_tilizeA_strided_quasar(
-    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims,
+    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel,
     implied_math_format,
+    dimensions_and_tile,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -230,10 +234,9 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
         formats,
         dest_acc,
         dest_sync_mode,
-        input_dimensions,
         pool_type,
-        tile_dimensions,
-    ) = formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims
+    ) = formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel
+    input_dimensions, tile_dimensions = dimensions_and_tile
 
     tile_shape = construct_tile_shape(tile_dimensions)
     num_faces = tile_shape.total_num_faces()

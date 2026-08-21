@@ -27,6 +27,7 @@ from helpers.llk_params import (
 from helpers.param_config import (
     input_output_formats,
     parametrize,
+    runtime,
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -146,7 +147,9 @@ def reduce_pool_type_and_math_fidelity_combinations(*, is_perf=False):
 @pytest.mark.quasar
 @parametrize(
     formats=REDUCE_FORMATS,
-    tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=False),
+    tile_dimensions=runtime(
+        lambda formats: reduce_tile_dimensions(formats, is_perf=False)
+    ),
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=False),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=lambda: reduce_pool_type_and_math_fidelity_combinations(

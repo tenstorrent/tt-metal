@@ -33,6 +33,7 @@ from helpers.param_config import (
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -117,9 +118,9 @@ def generate_parallel_matmul_add_combinations(formats_list):
                             dest_acc,
                             dest_sync,
                             implied_math_format,
-                            ADD_INPUT_DIMENSIONS,
-                            MATMUL_A_DIMENSIONS,
-                            MATMUL_B_DIMENSIONS,
+                            runtime(ADD_INPUT_DIMENSIONS),
+                            runtime(MATMUL_A_DIMENSIONS),
+                            runtime(MATMUL_B_DIMENSIONS),
                         )
                     )
     return combinations

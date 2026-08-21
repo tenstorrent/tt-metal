@@ -2,8 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import pytest
+from conftest import (
+    _collapse_runtime_only_variants,
+    _elf_affinity_sort_key,
+    _sort_items_for_elf_affinity,
+)
 from helpers.param_config import (
+    RUNTIME_AXES_MARK,
     CircularDependencyError,
     UnknownDependenciesError,
     _compute_dependency_map,
@@ -401,3 +409,137 @@ def test_params_solve_dependencies_multiple_chain_constraints_shuffled():
 
     assert len(result) == len(expected)
     assert set(result) == set(expected)
+
+
+# ---------------------------------------------------------------------------
+# Collection-time ELF affinity (conftest._sort_items_for_elf_affinity)
+# ---------------------------------------------------------------------------
+
+
+def _op_compile_key(params):
+    return (("op", params["op"]),)
+
+
+class _FakeItem:
+    """Minimal pytest item for collection-hook unit tests."""
+
+    def __init__(self, nodeid, params=None, compile_key_fn=None):
+        self.nodeid = nodeid
+        if params is None:
+            self.callspec = None
+            self._marker = None
+        else:
+            self.callspec = SimpleNamespace(params=dict(params))
+            self._marker = (
+                None
+                if compile_key_fn is None
+                else SimpleNamespace(kwargs={"compile_key_fn": compile_key_fn})
+            )
+
+    def get_closest_marker(self, name):
+        if name == RUNTIME_AXES_MARK:
+            return self._marker
+        return None
+
+
+def _fake_config():
+    return SimpleNamespace(hook=SimpleNamespace(pytest_deselected=lambda items: None))
+
+
+def test_elf_affinity_sort_key_without_callspec():
+    """Items with no callspec fall back to (node, empty compile, empty runtime, index)."""
+    item = _FakeItem("test_pack.py::test_pack")
+    assert _elf_affinity_sort_key(item, 7) == (
+        "test_pack.py::test_pack",
+        "",
+        (),
+        7,
+    )
+
+
+def test_elf_affinity_sort_key_without_runtime_axes_marker():
+    """Parametrized items without runtime_axes are not grouped by compile key."""
+    item = _FakeItem(
+        "test_pack.py::test_pack[Float16]",
+        params={"formats": "Float16"},
+    )
+    assert _elf_affinity_sort_key(item, 3) == (
+        "test_pack.py::test_pack",
+        "",
+        (),
+        3,
+    )
+
+
+def test_elf_affinity_sort_key_groups_shared_compile_key():
+    """Same test + compile key share the primary grouping fields; runtime differs."""
+    tall = _FakeItem(
+        "test_pack.py::test_pack[add-tall]",
+        params={"op": "add", "dim": "tall"},
+        compile_key_fn=_op_compile_key,
+    )
+    wide = _FakeItem(
+        "test_pack.py::test_pack[add-wide]",
+        params={"op": "add", "dim": "wide"},
+        compile_key_fn=_op_compile_key,
+    )
+    tall_key = _elf_affinity_sort_key(tall, 0)
+    wide_key = _elf_affinity_sort_key(wide, 1)
+
+    assert tall_key[0] == wide_key[0] == "test_pack.py::test_pack"
+    assert tall_key[1] == wide_key[1]
+    assert tall_key[2] != wide_key[2]
+
+
+def test_sort_items_for_elf_affinity_clusters_shared_elf():
+    """Interleaved compile keys are clustered so consecutive items reuse LAST_LOADED_ELFS."""
+    ck = _op_compile_key
+    items = [
+        _FakeItem("t.py::test[add-wide]", {"op": "add", "dim": "wide"}, ck),
+        _FakeItem("t.py::test[mul-tall]", {"op": "mul", "dim": "tall"}, ck),
+        _FakeItem("t.py::test[add-tall]", {"op": "add", "dim": "tall"}, ck),
+        _FakeItem("t.py::test[mul-wide]", {"op": "mul", "dim": "wide"}, ck),
+    ]
+    _sort_items_for_elf_affinity(items)
+
+    ops = [item.callspec.params["op"] for item in items]
+    dims = [item.callspec.params["dim"] for item in items]
+    assert ops == ["add", "add", "mul", "mul"]
+    assert dims == ["tall", "wide", "tall", "wide"]
+
+
+def test_sort_items_for_elf_affinity_stable_for_equal_keys():
+    """Unrelated items that share a sort key keep their original relative order."""
+    first = _FakeItem("t.py::test_plain")
+    second = _FakeItem("t.py::test_plain")
+    items = [second, first]
+    _sort_items_for_elf_affinity(items)
+    assert items == [second, first]
+
+
+def test_sort_items_for_elf_affinity_orders_unrelated_by_nodeid():
+    """Items without runtime_axes are ordered by nodeid, then original index."""
+    later = _FakeItem("t.py::test_z")
+    earlier = _FakeItem("t.py::test_a")
+    items = [later, earlier]
+    _sort_items_for_elf_affinity(items)
+    assert items == [earlier, later]
+
+
+def test_collapse_keeps_first_seen_then_elf_affinity_sorts_remainder():
+    """Compile-producer collapse walks original collection order, then ELF sort.
+
+    The retained representative is the first item of each compile key, not the
+    first after ELF affinity would have reordered (dim 'aaa' sorts before 'wide').
+    """
+    ck = _op_compile_key
+    wide = _FakeItem("t.py::test[add-wide]", {"op": "add", "dim": "wide"}, ck)
+    mul = _FakeItem("t.py::test[mul-tall]", {"op": "mul", "dim": "tall"}, ck)
+    aaa = _FakeItem("t.py::test[add-aaa]", {"op": "add", "dim": "aaa"}, ck)
+    items = [wide, mul, aaa]
+
+    _collapse_runtime_only_variants(_fake_config(), items)
+    assert items == [wide, mul]
+
+    _sort_items_for_elf_affinity(items)
+    assert items == [wide, mul]
