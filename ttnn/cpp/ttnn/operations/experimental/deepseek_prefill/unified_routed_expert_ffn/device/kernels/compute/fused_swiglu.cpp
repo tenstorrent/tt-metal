@@ -5,41 +5,40 @@
 // Fused SwiGLU compute kernel — PACKER_L1_ACC variant.
 //
 // Pattern (modelled on bmm_large_block_zm_fused_bias_activation.cpp without
-// FUSE_BIAS):
+// FUSE_BIAS), with one deviation shared by every matmul phase here: the partials
+// CB is reserved ONCE for the whole per-core output block instead of per subblock.
 //   * Each matmul phase has num_blocks K-blocks. dst is acquired/released
-//     once per (sb_m, sb_n) subblock pair within each K-block.
-//   * For K-blocks [0..num_blocks-2]:
-//        - The K-loop accumulates the block's per-output-tile dot products
-//          into a fresh dst (acquire_dst clears via dst_section_done).
-//        - The packer is configured with L1_ACC=0 on block 0 (overwrite) and
-//          L1_ACC=1 on block 1+ (add to existing L1). Each subblock packs
-//          into mm_partials_cb, then the kernel pops what it just pushed so
-//          the CB ring stays bounded. Because the CB is sized exactly to
-//          one full block, the next K-block's packer writes land back in
-//          the SAME L1 slots, accumulating physically into the same region.
-//   * For the LAST K-block:
-//        - L1_ACC stays enabled. The block's dst is added into the partials.
-//        - Subblocks push into mm_partials WITHOUT popping, so after the
-//          K-loop the partials CB has out_block_num_tiles tiles available
-//          holding the final accumulated sum.
-//   * After the K-loop, a second pass copies each subblock from partials_cb
-//     into dst, optionally applies SILU on the pack, and packs into the
-//     final CB (cb_gate_intermed / cb_up_intermed / cb_out).
+//     once per (sb_m, sb_n) subblock pair within each K-block, and the K-loop
+//     accumulates that subblock's per-output-tile dot products into it.
+//   * The packer is configured with L1_ACC=0 on block 0 (overwrite) and L1_ACC=1
+//     on block 1+ (add to existing L1). Each subblock packs to an ABSOLUTE
+//     partials slot (pack_tile<true>); WrPtr does not advance until the single
+//     push_back after the K-loop, so every K-block's packs land in the SAME L1
+//     addresses and accumulate physically in place.
+//   * Reserving once means no cb_push_back/wait_front round trip separates the
+//     K-blocks, so each block ends with an explicit packer drain (see
+//     drain_packer_before_reaccumulate). Without it, block N+1's L1_ACC
+//     read-modify-write can overtake block N's pack of the same slot and
+//     silently drop that contribution.
+//   * After the K-loop the partials CB is pushed once, holding the final
+//     accumulated sum, and a second pass copies each subblock back into dst,
+//     optionally applies SILU, and packs into the final CB (cb_gate_intermed /
+//     cb_out).
 //
 // Cross-K-block accumulation is handled by the packer (PACKER_L1_ACC), not by
 // reloading dst between K-blocks — a dst-reload approach produced Inf outputs.
 //
 // File map:
-//   matmul_phase           (~L56)  — single-matmul phase that accumulates
+//   matmul_phase           (~L100)  — single-matmul phase that accumulates
 //                                     via PACKER_L1_ACC across K-blocks. Used
 //                                     for the down matmul (and gate alone if
 //                                     up isn't fused).
-//   matmul_phase_fused_gu  (~L194) — gate+up fused matmul phase: one K-block
+//   matmul_phase_fused_gu  (~L320) — gate+up fused matmul phase: one K-block
 //                                     read of x feeds two output CBs (gate,
 //                                     up) via two matmul subblocks per pass.
-//   multiply_phase         (~L346) — elementwise silu(gate) * up, producing
+//   multiply_phase         (~L660) — elementwise silu(gate) * up, producing
 //                                     the activated CB.
-//   kernel_main            (~L384) — chunk loop: read counts/idx from scratch
+//   kernel_main            (~L710) — chunk loop: read counts/idx from scratch
 //                                     CBs, decide effective_chunks via the
 //                                     UNPACK→{MATH,PACK} mailbox handshake,
 //                                     then per-chunk dispatch the fused-GU
@@ -102,6 +101,23 @@
 
 namespace {
 
+// Packer-completion barrier for the K-block boundary of a PACKER_L1_ACC phase.
+//
+// Every K-block re-packs the same absolute partials slots, and the accumulate is
+// a packer-side L1 read-modify-write. Pack issue must therefore stop until the
+// packer has drained, or the next block's read can sample a slot the previous
+// block's write has not reached yet — a lost contribution, nondeterministic and
+// worst on small per-core blocks where the same slot recurs a few packs later.
+//
+// Packer-idle is the same condition cb_push_back waits on before publishing
+// tiles_received (llk_push_tiles -> STALLWAIT(STALL_THCON, PACK)), i.e. exactly
+// the guarantee a per-K-block CB drain would buy, minus the drain.
+FORCE_INLINE void drain_packer_before_reaccumulate() {
+#ifdef PACKER_L1_ACC
+    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK));
+#endif
+}
+
 template <
     uint32_t in0_block_w,
     uint32_t in0_num_subblocks,
@@ -117,30 +133,38 @@ template <
     uint32_t out_block_num_tiles,
     bool apply_silu_on_final,
     uint32_t d_per_core_N = 0,
-    // K-tiles to reduce in the LAST block. Defaults to the full width (no-op);
-    // the down phase passes the real count so it skips tail padding tiles.
-    uint32_t last_block_w = in0_block_w>
+    // Real (unpadded) K-tiles of the reduction dim. Defaults to the full padded
+    // extent (reduce everything); the down phase passes the true count so no
+    // padded K position is ever reduced.
+    uint32_t real_k_tiles = num_blocks * in0_block_w>
 FORCE_INLINE void matmul_phase(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
     uint32_t partials_cb_id,
     uint32_t final_cb_id,
     uint32_t m_subblocks,
+    uint32_t n_subblocks,
     uint32_t down_bias_cb_id = 0) {
-    // The DOWN matmul keeps a FULL compile-time-MAX per_core_M ring. Its
-    // PACKER_L1_ACC discipline drains the partials ring every K-block and relies
-    // on push==drain==out_block_num_tiles so the write pointer wraps back to
-    // block 0's slots for cross-K-block accumulation; a runtime-shrunk count
-    // would land block N+1 in the wrong L1 slots and corrupt the accumulation
-    // (a reserve-once / runtime-size variant was proven to do exactly that,
-    // nondeterministic PCC — see the git history). So the adaptive-per_core_M
-    // win is taken in the gate/up + multiply phases (reserve-once, safe to
-    // shrink) while the down matmul packs the full MAX ring and only SKIPS the
-    // MAC for rows >= m_subblocks (= the runtime per_core_M). Those extra rows
-    // pack zeros (cheap; the op is weight-read-bound) and the writer never emits
-    // them (it bounds its drain by the same runtime per_core_M).
-    constexpr uint32_t EFF_M = in0_num_subblocks;
-    constexpr uint32_t EFF_OUT = out_block_num_tiles;
+    // sb_m indexes tile-rows directly, so m_subblocks (a tile-row count) bounds it
+    // only at unit subblock height.
+    static_assert(out_subblock_h == 1, "m_subblocks bounds sb_m only when out_subblock_h == 1");
+    static_assert(
+        in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles == out_block_num_tiles,
+        "subblock grid must tile the output block exactly");
+    static_assert(real_k_tiles <= num_blocks * in0_block_w, "real_k_tiles must not exceed the padded K extent");
+    // Adaptive per_core_M: this core's down output is m_subblocks tile-rows this
+    // chunk. The partials accumulator shrinks with it; the down WEIGHT block stays
+    // full-width (M-independent). Rows past m_subblocks are never written by the
+    // reader's (bounded) activated mcast, so they are simply not computed — no MAC,
+    // no pack, no partials slot.
+    //
+    // n_subblocks bounds the OTHER free dim the same way: subblocks past it are
+    // wholly phantom output columns (col >= N_down_tiles_full) whose weights the
+    // reader never fetched, so MACing them would only multiply stale L1. Unlike the
+    // M bound this does NOT shrink EFF_OUT — the partials ring and the final_cb
+    // push stay full width, since the writer drains a fixed subblock count.
+    const uint32_t EFF_M = m_subblocks;
+    const uint32_t EFF_OUT = m_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     // Reconfig packer for partials format (previous phase's final_cb format
     // would otherwise leak). pack_reconfig_data_format (the reconfig variant)
     // does NOT reset L1_ACC — we do that explicitly below.
@@ -149,81 +173,85 @@ FORCE_INLINE void matmul_phase(
     PACK((llk_pack_reconfig_l1_acc(0)));  // block 0 must overwrite, not accumulate
 #endif
 
-    // Cross-K-block accumulation via PACKER_L1_ACC, using the proven production
-    // matmul packing discipline (see bmm_large_block_zm_fused_bias_activation.cpp):
-    // each subblock is reserved → packed in-order (pack_tile_block) → pushed, and
-    // the full block is drained (wait_front + pop_front) BETWEEN K-blocks.
-    //
-    // The drain is load-bearing for correctness, not just ring hygiene. wait_front
-    // blocks until the packer has committed the tiles it just wrote, so block N+1's
-    // L1_ACC read-modify-write cannot race ahead of block N's write landing in the
-    // same L1 slot; the matching pop_front wraps the CB write pointer back so the
-    // next block accumulates physically into block 0's slots. A previous
-    // whole-block-reserve / out-of-order-pack variant skipped this drain — it
-    // nondeterministically lost a subblock's first-tile (column 0) contribution
-    // when out_subblock_w > 1 (PCC ~0.83-0.98 run-to-run on the small-token
-    // routed-expert test). It "worked" only at out_subblock_w == 1, where the
-    // extra tile_regs barrier per pack incidentally serialised the writes — at the
-    // cost of down-matmul efficiency. The fused gate/up phase escapes the race
-    // because its two interleaved matmuls already separate consecutive same-slot
-    // packs. Keeping the perf-optimal wide subblock here is now safe.
     CircularBuffer in0_cb(in0_cb_id);
     CircularBuffer in1_cb(in1_cb_id);
     CircularBuffer partials_cb(partials_cb_id);
     CircularBuffer final_cb(final_cb_id);
 
+    // Reserve the partials block ONCE. pack_tile with an absolute output_tile_index
+    // writes fixed slots and WrPtr does not advance until the push_back after the
+    // K-loop, so every K-block re-packs the SAME L1 addresses and PACKER_L1_ACC
+    // accumulates physically in place — nothing ties the pushed count to the ring
+    // size. EFF_OUT shrinks only on the final (tail) chunk, and adaptive_chunk keeps
+    // per_core_M a divisor of the compile-time max, so a shrunk block still tiles
+    // the ring evenly. EFF_M == 0 reserves nothing. The K-loop pays for the missing
+    // CB round trip with an explicit packer drain per block.
+    if (EFF_M > 0) {
+        partials_cb.reserve_back(EFF_OUT);
+    }
+
     for (uint32_t block = 0; block < num_blocks; ++block) {
+        // The reader pushes the FULL compile-time-max activated block (filling only
+        // its first per_core_M tile-rows), so this wait/pop stays compile-time sized.
         in0_cb.wait_front(in0_block_num_tiles);
         in1_cb.wait_front(in1_block_num_tiles);
 
-        // Reduce over only the real K-tiles in the last block (skips tail
-        // padding whose activated is zero); full width otherwise. kt_dim passed
-        // to matmul_block stays in0_block_w — it is the in0 row stride (the
-        // block is still physically in0_block_w wide), not the step count.
-        const uint32_t k_steps = (block + 1 == num_blocks) ? last_block_w : in0_block_w;
+        // Reduce only the REAL K-tiles this block covers. Neither operand is
+        // zero-filled past real_k_tiles — the down weights hold stale L1 and the
+        // activated columns hold the gate/up matmul's garbage output on the hidden
+        // padding columns — and a reduction position contaminates EVERY output
+        // column, so a padded position must never enter the MAC. kt_dim passed to
+        // matmul_block stays in0_block_w: it is the in0 row stride (the block is
+        // still physically in0_block_w wide), not the step count.
+        const uint32_t k_done = block * in0_block_w;
+        const uint32_t k_left = k_done < real_k_tiles ? real_k_tiles - k_done : 0;
+        const uint32_t k_steps = k_left < in0_block_w ? k_left : in0_block_w;
 
-        int in0_index_subblock_offset = 0;
-        for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
-            int in1_index_subblock_offset = 0;
-            for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
-                tile_regs_acquire();
-
-                uint32_t dst_index = 0;
-                uint32_t in0_index = in0_index_subblock_offset;
-                uint32_t in1_index = in1_index_subblock_offset;
-                // rows [m_subblocks, EFF_M) of cb_in0_down_full are NOT written by the
-                // reader's (bounded) activated mcast, so skip the whole subblock MAC for
-                // them (checked once here, not per K-inner iteration) rather than feed
-                // the down matmul stale/uninitialized L1. The partials reserve/pack/drain
-                // below stay FULL for L1_ACC ring alignment; the skipped rows pack zeros
-                // and the writer discards them via its row<per_core_M / row<count guards.
-                if (sb_m < m_subblocks) {
-                    for (uint32_t inner_dim = 0; inner_dim < k_steps; ++inner_dim) {
-                        matmul_block(
-                            in0_cb_id,
-                            in1_cb_id,
-                            in0_index,
-                            in1_index,
-                            dst_index,
-                            /*transpose=*/0,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
-                        in0_index += 1;
-                        in1_index += in1_per_core_w;
+        // A block entirely past real_k_tiles contributes nothing: skip its MAC AND
+        // its pack (with L1_ACC on, packing an untouched dst would ADD garbage to
+        // the accumulator). Its CBs are still drained below — the reader and writer
+        // push every padded block unconditionally.
+        if (k_steps > 0) {
+            int in0_index_subblock_offset = 0;
+            uint32_t partials_slot_idx = 0;
+            for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
+                int in1_index_subblock_offset = 0;
+                for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
+                    // Phantom-column subblocks: no MAC, no pack. The slot counters still
+                    // advance so the surviving subblocks keep their absolute partials slots.
+                    if (sb_n < n_subblocks) {
+                        tile_regs_acquire();
+                        {
+                            uint32_t in0_index = in0_index_subblock_offset;
+                            uint32_t in1_index = in1_index_subblock_offset;
+                            for (uint32_t inner_dim = 0; inner_dim < k_steps; ++inner_dim) {
+                                matmul_block(
+                                    in0_cb_id,
+                                    in1_cb_id,
+                                    in0_index,
+                                    in1_index,
+                                    /*dst_index=*/0,
+                                    /*transpose=*/0,
+                                    out_subblock_w,
+                                    out_subblock_h,
+                                    in0_block_w);
+                                in0_index += 1;
+                                in1_index += in1_per_core_w;
+                            }
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                            pack_tile<true>(i, partials_cb_id, partials_slot_idx + i);
+                        }
+                        tile_regs_release();
                     }
+                    partials_slot_idx += out_subblock_num_tiles;
+
+                    in1_index_subblock_offset += out_subblock_w;
                 }
-
-                tile_regs_commit();
-                partials_cb.reserve_back(out_subblock_num_tiles);
-                tile_regs_wait();
-                pack_block(0, partials_cb_id, out_subblock_num_tiles);
-                tile_regs_release();
-                partials_cb.push_back(out_subblock_num_tiles);
-
-                in1_index_subblock_offset += out_subblock_w;
+                in0_index_subblock_offset += in0_subblock_num_tiles;
             }
-            in0_index_subblock_offset += in0_subblock_num_tiles;
         }
 
 #ifdef PACKER_L1_ACC
@@ -232,25 +260,23 @@ FORCE_INLINE void matmul_phase(
             PACK((llk_pack_reconfig_l1_acc(1)));
         }
 #endif
+        // This block's packs must land before the next one accumulates on top of
+        // them. Unlike the fused gate/up phase there is no second matmul between
+        // consecutive same-slot packs here, and a skipped block (k_steps == 0)
+        // removes even the subblock loop that would otherwise sit between them.
+        drain_packer_before_reaccumulate();
 
         in0_cb.pop_front(in0_block_num_tiles);
         in1_cb.pop_front(in1_block_num_tiles);
-
-        // Drain all but the last K-block (see header comment): forces the
-        // packer's writes visible before the next block's L1_ACC RMW and wraps
-        // the write pointer back to block 0's slots. The last block's output is
-        // left pushed for the second-pass copy below.
-        if (block + 1 < num_blocks) {
-            for (uint32_t s = 0; s < EFF_OUT; s += out_subblock_num_tiles) {
-                partials_cb.wait_front(out_subblock_num_tiles);
-                partials_cb.pop_front(out_subblock_num_tiles);
-            }
-        }
+    }
+    // Make the accumulated partials visible to the second-pass copy below.
+    if (EFF_M > 0) {
+        partials_cb.push_back(EFF_OUT);
     }
 
-    // After the K-loop: partials_cb_id has out_block_num_tiles tiles holding
-    // the final accumulated sum. Move them through dst into final_cb_id,
-    // applying silu on the way if requested.
+    // After the K-loop: partials_cb_id has EFF_OUT tiles holding the final
+    // accumulated sum. Move them through dst into final_cb_id, applying silu on
+    // the way if requested.
 #ifdef PACKER_L1_ACC
     PACK((llk_pack_reconfig_l1_acc(0)));  // future packs (to final_cb) must overwrite
 #endif
@@ -277,7 +303,8 @@ FORCE_INLINE void matmul_phase(
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, partials_cb_id);
 #endif
 
-    for (uint32_t sb = 0; sb < (EFF_OUT / out_subblock_num_tiles); ++sb) {
+    const uint32_t eff_subblocks = EFF_OUT / out_subblock_num_tiles;
+    for (uint32_t sb = 0; sb < eff_subblocks; ++sb) {
         tile_regs_acquire();
         partials_cb.wait_front(out_subblock_num_tiles);
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
@@ -305,6 +332,17 @@ FORCE_INLINE void matmul_phase(
         final_cb.push_back(out_subblock_num_tiles);
 
         tile_regs_release();
+    }
+
+    // The writer drains final_cb at the compile-time-MAX subblock count (it cannot
+    // shrink its drain without losing ring balance) and drops the rows past the
+    // runtime per_core_M via its own row guards. Hand it the leftover slots WITHOUT
+    // packing: their L1 holds stale bytes that are never written out, so the
+    // reserve/push pair alone is enough to keep producer and consumer aligned.
+    constexpr uint32_t FULL_SUBBLOCKS = out_block_num_tiles / out_subblock_num_tiles;
+    for (uint32_t sb = eff_subblocks; sb < FULL_SUBBLOCKS; ++sb) {
+        final_cb.reserve_back(out_subblock_num_tiles);
+        final_cb.push_back(out_subblock_num_tiles);
     }
 }
 
@@ -345,7 +383,14 @@ FORCE_INLINE void matmul_phase_fused_gu(
     uint32_t partials_up_cb_id,
     uint32_t gate_intermed_cb_id,
     uint32_t up_intermed_cb_id,
-    uint32_t m_subblocks) {
+    uint32_t m_subblocks,
+    uint32_t n_subblocks) {
+    // No real_k_tiles bound here, unlike the down phase: the host asserts
+    // K_gate_tiles % in0_block_w == 0, so the gate/up K-loop covers the reduction
+    // dim exactly and there is no padded K position to skip. This phase's padding
+    // is all in N (the hidden dim), where a matmul is column-independent — the
+    // unwritten weight columns past N_gate_tiles_full corrupt only their OWN output
+    // columns, which map 1:1 onto the down K positions the down phase excludes.
     // Adaptive per_core_M: this core's gate/up work is bounded by the runtime
     // per_core_M (m_subblocks tile-rows). The x block this core consumes and the
     // partials/intermed single-block CBs shrink with it; the gate/up WEIGHT
@@ -372,7 +417,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
     // with output_tile_index writes to absolute slots; WrPtr doesn't advance
     // until cb_push_back below. Across K-blocks 1..N-1, L1_ACC packs land
     // back in the SAME L1 slots — accumulating physically — which is what
-    // we want. No per-K-block pop+repush needed. Guarded by EFF_M>0 so an
+    // we want, at the price of a packer drain per block. Guarded by EFF_M>0 so an
     // empty row (m_subblocks==0) never issues a 0-count reserve/push.
     if (EFF_M > 0) {
         partials_gu_cb.reserve_back(EFF_OUT);
@@ -419,59 +464,66 @@ FORCE_INLINE void matmul_phase_fused_gu(
         for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
             int in1_index_subblock_offset = 0;
             for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
-                // --- Gate matmul: x * gate -> partials_gu ---
-                tile_regs_acquire();
-                {
-                    uint32_t in0_index = in0_index_subblock_offset;
-                    uint32_t in1_index = in1_index_subblock_offset;
-                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                        matmul_block(
-                            x_cb_id,
-                            gate_cb_id,
-                            in0_index,
-                            in1_index,
-                            /*dst_index=*/0,
-                            /*transpose=*/0,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
-                        in0_index += 1;
-                        in1_index += in1_per_core_w;
+                // Phantom-column subblocks (col >= N_gate_tiles_full): the reader/writer
+                // never fetched those weight tiles, so both matmuls would just multiply
+                // stale L1. Skip the MAC and the pack; the slot counters still advance so
+                // the surviving subblocks keep their absolute partials slots, and the
+                // pushed EFF_OUT stays full width for the activated mcast.
+                if (sb_n < n_subblocks) {
+                    // --- Gate matmul: x * gate -> partials_gu ---
+                    tile_regs_acquire();
+                    {
+                        uint32_t in0_index = in0_index_subblock_offset;
+                        uint32_t in1_index = in1_index_subblock_offset;
+                        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+                            matmul_block(
+                                x_cb_id,
+                                gate_cb_id,
+                                in0_index,
+                                in1_index,
+                                /*dst_index=*/0,
+                                /*transpose=*/0,
+                                out_subblock_w,
+                                out_subblock_h,
+                                in0_block_w);
+                            in0_index += 1;
+                            in1_index += in1_per_core_w;
+                        }
                     }
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                    pack_tile<true>(i, partials_gu_cb_id, partials_slot_idx + i);
-                }
-                tile_regs_release();
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                        pack_tile<true>(i, partials_gu_cb_id, partials_slot_idx + i);
+                    }
+                    tile_regs_release();
 
-                // --- Up matmul: x * up -> partials_up (same x, different in1) ---
-                tile_regs_acquire();
-                {
-                    uint32_t in0_index = in0_index_subblock_offset;
-                    uint32_t in1_index = in1_index_subblock_offset;
-                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                        matmul_block(
-                            x_cb_id,
-                            up_cb_id,
-                            in0_index,
-                            in1_index,
-                            /*dst_index=*/0,
-                            /*transpose=*/0,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
-                        in0_index += 1;
-                        in1_index += in1_per_core_w;
+                    // --- Up matmul: x * up -> partials_up (same x, different in1) ---
+                    tile_regs_acquire();
+                    {
+                        uint32_t in0_index = in0_index_subblock_offset;
+                        uint32_t in1_index = in1_index_subblock_offset;
+                        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+                            matmul_block(
+                                x_cb_id,
+                                up_cb_id,
+                                in0_index,
+                                in1_index,
+                                /*dst_index=*/0,
+                                /*transpose=*/0,
+                                out_subblock_w,
+                                out_subblock_h,
+                                in0_block_w);
+                            in0_index += 1;
+                            in1_index += in1_per_core_w;
+                        }
                     }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                        pack_tile<true>(i, partials_up_cb_id, partials_slot_idx + i);
+                    }
+                    tile_regs_release();
                 }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                    pack_tile<true>(i, partials_up_cb_id, partials_slot_idx + i);
-                }
-                tile_regs_release();
                 partials_slot_idx += out_subblock_num_tiles;
 
                 in1_index_subblock_offset += out_subblock_w;
@@ -484,6 +536,11 @@ FORCE_INLINE void matmul_phase_fused_gu(
             PACK((llk_pack_reconfig_l1_acc(1)));
         }
 #endif
+        // Same reserve-once accumulator, same barrier. The interleaved up matmul
+        // puts a handful of packs between consecutive same-slot packs, but that is
+        // a side effect of the loop shape, not ordering: at one subblock and
+        // out_subblock_w == 1 it is a single pack.
+        drain_packer_before_reaccumulate();
 
         x_cb.pop_front(x_block_tiles);
         gate_cb.pop_front(in1_block_num_tiles);
@@ -727,6 +784,13 @@ FORCE_INLINE void multiply_phase(
 }  // namespace
 
 void kernel_main() {
+    // Per-core valid N-subblock counts. per_core_N is the GRID-ceil'd width, so the
+    // highest-gx cores own phantom output columns whose weights were never fetched;
+    // these bound the MAC to the subblocks holding real columns. Runtime (not
+    // compile-time) because they vary per core and one kernel serves the whole grid.
+    const uint32_t gu_valid_n_subblocks = get_arg_val<uint32_t>(0);
+    const uint32_t d_valid_n_subblocks = get_arg_val<uint32_t>(1);
+
     // Phase 1 (gate)
     constexpr uint32_t g_in0_block_w = get_compile_time_arg_val(0);
     constexpr uint32_t g_in0_num_subblocks = get_compile_time_arg_val(1);
@@ -777,16 +841,12 @@ void kernel_main() {
     // x_is_row_major: tilize cb_x_rm -> cb_in0_x before the gate/up matmul.
     // 0 => x already TILE in cb_in0_x.
     constexpr uint32_t x_is_row_major = get_compile_time_arg_val(33);
-    // Real (unpadded) down-K tiles. Valid K-tiles in the LAST down block =
-    // real_K minus the full leading blocks. When down-K is padded
-    // (K_down_tiles_padded > real), the tail tiles are all-zero activated, so
-    // the down matmul can skip them. Falls back to the full block width when
-    // the padding isn't confined to a single tail block, keeping correctness
-    // for any dims (the reader still zero-fills those tiles).
+    // Real (unpadded) down-K tiles. The down K-loop runs over the GRID-padded
+    // extent (K_down_tiles_padded), and the down phase skips every K position at
+    // or past this count — whole padded blocks and the partial tail alike. That
+    // is what lets the reader and writer leave the padded down weights and the
+    // padded hidden (gate/up N-OOB) columns unwritten: nothing ever reduces them.
     constexpr uint32_t d_K_down_tiles = get_compile_time_arg_val(34);
-    constexpr uint32_t d_last_block_w = (d_K_down_tiles > (d_num_blocks - 1) * d_in0_block_w)
-                                            ? d_K_down_tiles - (d_num_blocks - 1) * d_in0_block_w
-                                            : d_in0_block_w;
 
     // CBs
     constexpr uint32_t cb_in0_x = get_named_compile_time_arg_val("cb_in0_x");
@@ -853,8 +913,9 @@ void kernel_main() {
     // expected-token argument is needed. All three kernels (reader/compute/
     // writer) run the identical picker on the same count, so they agree on the
     // row mapping. per_core_M is uniform across cores and chunks; rows past the
-    // count in the tail chunk are zero-filled by the reader and dropped by the
-    // writer (contiguous mapping, same as the old compile-time per_core_M path).
+    // count in the tail chunk are left stale by the reader's bounded x mcast and
+    // dropped by the writer's row guards — M is a free dim, so garbage there never
+    // reaches a valid output row (contiguous mapping).
     const uint32_t count_tiles = (count_value + 31) / 32;
     const uint32_t effective_chunks_runtime = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
     const uint32_t effective_chunks =
@@ -925,7 +986,8 @@ void kernel_main() {
             cb_partials_up,
             cb_gate_intermed,
             cb_up_intermed,
-            /*m_subblocks=*/re_m_valid);
+            /*m_subblocks=*/re_m_valid,
+            /*n_subblocks=*/gu_valid_n_subblocks);
 
 #ifdef FUSED_BINARY_ACT
         // Phase 3: fused activation on the raw bf16 accumulators -> cb_activated.
@@ -973,7 +1035,13 @@ void kernel_main() {
             d_out_block_num_tiles,
             /*apply_silu_on_final=*/false,
             /*d_per_core_N=*/d_in1_per_core_w,
-            /*last_block_w=*/d_last_block_w>(
-            cb_in0_down_full, cb_in1_down, cb_partials_d, cb_out, /*m_subblocks=*/re_m_valid, cb_down_bias);
+            /*real_k_tiles=*/d_K_down_tiles>(
+            cb_in0_down_full,
+            cb_in1_down,
+            cb_partials_d,
+            cb_out,
+            /*m_subblocks=*/re_m_valid,
+            /*n_subblocks=*/d_valid_n_subblocks,
+            cb_down_bias);
     }  // end chunk loop
 }

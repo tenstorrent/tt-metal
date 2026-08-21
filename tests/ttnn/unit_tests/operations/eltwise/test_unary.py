@@ -434,6 +434,27 @@ def test_log_edge_cases(device):
     assert torch.allclose(ttnn.to_torch(output_tensor), golden_tensor, equal_nan=True)
 
 
+def test_log2_exact_powers_of_two(device):
+    """log2 of an exact power of two must return the exponent exactly.
+
+    The base change used to be applied to the finished natural-log sum, which also
+    scaled the exponent contribution by ln(2) * (1/ln(2)).  That product does not round
+    to exactly 1 in float, so 46 of the 254 representable exponents came back an ULP
+    low, e.g. log2(2**-125) returned -124.99999237.
+    """
+    exponents = list(range(-126, 128))
+    in_data = torch.tensor([2.0**k for k in exponents], dtype=torch.float32)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.to_torch(ttnn.log2(input_tensor)).flatten()[: len(exponents)]
+    expected = torch.tensor(exponents, dtype=torch.float32)
+
+    mismatched = [
+        (exponents[i], float(output_tensor[i])) for i in range(len(exponents)) if output_tensor[i] != expected[i]
+    ]
+    assert not mismatched, f"log2(2**k) != k for {len(mismatched)} exponents, first few: {mismatched[:5]}"
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (

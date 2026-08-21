@@ -119,6 +119,20 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         in1_tile.get_width(),
         b_shape_padded,
         in1_tile);
+    // Quasar cannot take the batch-sparsity-from-reader path (get_batch_from_reader = !nnz.has_value()
+    // in the sparse factory): it needs the DM->TRISC is_batch_valid mailbox handoff, which is not wired on
+    // Quasar. Reject it HERE so API callers get a stable TTNN validation error before output allocation and
+    // kernel compilation, instead of a JIT static_assert failure (the compute kernels keep that static_assert
+    // as a defensive invariant). Supplying nnz takes the supported nnz-loop path. WH/BH are unaffected (the
+    // handoff works there), so this is gated to Quasar.
+    if (input_tensor_a.device()->arch() == tt::ARCH::QUASAR) {
+        TT_FATAL(
+            operation_attributes.nnz.has_value(),
+            "Sparse matmul on Quasar requires nnz to be supplied: the batch-sparsity-from-reader path "
+            "(get_batch_from_reader = !nnz.has_value()) needs the DM->TRISC is_batch_valid mailbox handoff, "
+            "which is not wired on Quasar.");
+    }
+
     TT_FATAL(
         operation_attributes.nnz.value_or(1) > 0, "nnz ({}) must be greater than 0", operation_attributes.nnz.value());
 
