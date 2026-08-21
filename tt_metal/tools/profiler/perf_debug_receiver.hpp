@@ -60,7 +60,7 @@ namespace perf_debug {
 enum class PerfDebugRawRecType : uint32_t {
     ZoneStart = 1,
     ZoneEnd = 2,
-    ZoneTotal = 3,
+    // 3 retired (was ZoneTotal -- the SUM/accumulate zone, feature removed)
     Data = 4,
     Event = 5,
     Ext = 6,

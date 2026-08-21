@@ -17,7 +17,6 @@
 //  - A Data/Event head is followed immediately by one Ext record (data.ext = id<<32 | payload
 //    word count) and then Cont records (one payload uint64 each, hi word first), with no
 //    other records interleaved.
-//  - ZoneTotal carries an accumulated duration sum (data.sum), not a timestamp.
 //  - Every id is the FULL 27-bit structural zone id (hostdevcommon/profiler_zone_id.h) and
 //    resolves to a name from the emitting binary's own ELF via ZoneNameMirror below --
 //    zones, Data and Event alike. (Event used to carry a runtime value here; that value now
@@ -40,12 +39,12 @@
 namespace tt::tt_metal::perf_debug {
 
 enum class PerfDebugRecType : uint32_t {
-    Zone = 1,       // a complete zone: data.zone = {start, duration}
-    ZoneTotal = 2,  // accumulated-duration zone: data.sum
-    Data = 3,       // point marker with payload: data.ts; payload follows via Ext + Cont
-    Event = 4,      // point marker, no payload: data.ts
-    Ext = 5,        // Data/Event continuation header: data.ext = (id << 32) | payload word count
-    Cont = 6,       // one uint64 of Data payload: data.payload
+    Zone = 1,  // a complete zone: data.zone = {start, duration}
+    // 2 retired (was ZoneTotal -- the SUM/accumulate zone, feature removed)
+    Data = 3,   // point marker with payload: data.ts; payload follows via Ext + Cont
+    Event = 4,  // point marker, no payload: data.ts
+    Ext = 5,    // Data/Event continuation header: data.ext = (id << 32) | payload word count
+    Cont = 6,   // one uint64 of Data payload: data.payload
 };
 
 struct PerfDebugRecMeta {
@@ -60,7 +59,6 @@ struct PerfDebugRec {
     // The active member is decided by meta.type -- see the enum above.
     union DataField {
         uint64_t ts;       // Data / Event: head timestamp
-        uint64_t sum;      // ZoneTotal: accumulated duration
         uint64_t ext;      // Ext: (id << 32) | payload word count
         uint64_t payload;  // Cont: one payload uint64 (hi word first on the wire)
         struct {

@@ -111,9 +111,6 @@ void PerfDebugTracyConsumer::operator()(const PerfDebugRecordBatch& batch) {
             continue;
         }
         flush_event(ctx);  // any non-continuation record terminates a truncated predecessor
-        if (type == PerfDebugRecType::ZoneTotal) {
-            continue;
-        }
         if (type == PerfDebugRecType::Data || type == PerfDebugRecType::Event) {
             note_ts(r.meta.dev, r.data.ts);
             pend_ = PendingEvent{};

@@ -111,7 +111,7 @@ inline void spsc_prefetch(const void* p) {
 }
 
 // Decode ONE whole packed BULK_SPAN frame in place. For each marker calls
-//   emit(lane, wire_type, zone_id27, full_ts, prog)  (ZONE_START/END; ZONE_TOTAL with full_ts = the sum)
+//   emit(lane, wire_type, zone_id27, full_ts, prog)  (ZONE_START/END)
 // where zone_id27 is the FULL 27-bit structural zone id (tu_id << TT_ZONE_LOCAL_BITS | local --
 // hostdevcommon/profiler_zone_id.h; it was a 16-bit source-location hash before, and the mask that
 // truncated it here is gone),
@@ -226,13 +226,13 @@ inline uint32_t spsc_decode_frame(
 #endif
                 const uint32_t w0 = ring[(hm + i) & kSpscRingMask];
                 const uint32_t t = pp_type(w0);
-                if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
+                if (t == PP_ZONE_START || t == PP_ZONE_END) {
                     if (i + 2 > run) {
                         st.anomalies++;
                         break;
                     }
                     const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
-                    const uint64_t ts = (t == PP_ZONE_TOTAL) ? w1 : pp_full_ts(th, w1);
+                    const uint64_t ts = pp_full_ts(th, w1);
                     emit(lane, t, pp_low27(w0), ts, pg);  // full 27-bit structural id
                     i += 2;
                 } else if (t == PP_STICKY_TIMER) {
@@ -324,13 +324,13 @@ inline uint32_t spsc_decode_frame(
 #endif
             const uint32_t w0 = p[i];
             const uint32_t t = pp_type(w0);
-            if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
+            if (t == PP_ZONE_START || t == PP_ZONE_END) {
                 if (i + 2 > run) {
                     st.anomalies++;
                     break;
                 }
                 const uint32_t w1 = p[i + 1];
-                const uint64_t ts = (t == PP_ZONE_TOTAL) ? w1 : pp_full_ts(th, w1);
+                const uint64_t ts = pp_full_ts(th, w1);
                 emit(lane, t, pp_low27(w0), ts, pg);  // full 27-bit structural id
                 i += 2;
             } else if (t == PP_STICKY_TIMER) {

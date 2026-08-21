@@ -92,10 +92,8 @@
  * itself. Its id is a compile-time structural id like any other, so an EVENT is named from the ELF too. */
 #define PP_EVENT 12u
 
-/* ZONE_TOTAL: an accumulated-duration zone (DO_SUM / profileScopeAccumulate). 2 words, but word1 is the
- * accumulated SUM, not a timer -- the host must not treat it as a timestamp. Moved off the DRAM path's
- * value 2, which does not name a marker type on this wire. */
-#define PP_ZONE_TOTAL 11u
+/* Type 11 is RETIRED (was PP_ZONE_TOTAL, the accumulated-duration SUM zone -- feature removed with
+ * DeviceZoneScopedSumN*). Do NOT reuse the value: a stale JIT-cached ELF could still emit it. */
 
 /* --- PP_DATA word2 sub-fields (word0 is type|id27, identical to a zone marker) --- */
 #define PP_DATA_SIZE_SHIFT 25u
@@ -180,7 +178,6 @@ static inline int pp_is_event(uint32_t w0) { return pp_type(w0) == PP_EVENT; }
  * from that packet onward and produces plausible garbage. Branch on pp_is_event / pp_is_data separately. */
 static inline uint32_t pp_point_id(uint32_t w0) { return pp_low27(w0); }
 static inline uint32_t pp_data_size(uint32_t w2) { return (w2 >> PP_DATA_SIZE_SHIFT) & PP_DATA_SIZE_MASK; }
-static inline int pp_is_zone_total(uint32_t w0) { return pp_type(w0) == PP_ZONE_TOTAL; }
 
 /* Wire length (32-bit words) of a real-path packet: SRC/TIMER/PROG are 1 word (identity/timer_hi/host-id
  * fit in low27, no payload); zone markers, EVENT, PROG_EXT and META are 2; DATA is 3 + payload, and its length lives in

@@ -247,25 +247,23 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     uint64_t* const last_ts = s.last_zone_ts.data();
 
     auto emit = [&](uint32_t lane, uint32_t type, uint32_t zone_id, uint64_t ts, uint32_t prog) {
-        PerfDebugRawRecType rt = PerfDebugRawRecType::ZoneTotal;
-        if (type != PP_ZONE_TOTAL) {
-            rt = type == PP_ZONE_START ? PerfDebugRawRecType::ZoneStart : PerfDebugRawRecType::ZoneEnd;
-            zone_markers++;
-            // PRODUCER-STALL, matched by ELF-resolved NAME via the id table: a producer RISC blocked on
-            // a FULL ring. STALL_ONLY mode only -- on a normal run this per-marker probe is redundant
-            // (the control plane reads the workers' own L1 stall counters at teardown) and measures ~10%
-            // of the decode wall, so the hot path does not pay for a diagnostic the device already keeps.
-            stall_zones += (count_stalls && type == PP_ZONE_START && is_stall(zone_id)) ? 1 : 0;
-            if (ts < last_ts[lane]) {
-                order_regressions++;
-            } else {
-                last_ts[lane] = ts;
-            }
-            if (min_ts == 0) {
-                min_ts = ts;
-            }
-            max_ts = ts;
+        const PerfDebugRawRecType rt =
+            type == PP_ZONE_START ? PerfDebugRawRecType::ZoneStart : PerfDebugRawRecType::ZoneEnd;
+        zone_markers++;
+        // PRODUCER-STALL, matched by ELF-resolved NAME via the id table: a producer RISC blocked on
+        // a FULL ring. STALL_ONLY mode only -- on a normal run this per-marker probe is redundant
+        // (the control plane reads the workers' own L1 stall counters at teardown) and measures ~10%
+        // of the decode wall, so the hot path does not pay for a diagnostic the device already keeps.
+        stall_zones += (count_stalls && type == PP_ZONE_START && is_stall(zone_id)) ? 1 : 0;
+        if (ts < last_ts[lane]) {
+            order_regressions++;
+        } else {
+            last_ts[lane] = ts;
         }
+        if (min_ts == 0) {
+            min_ts = ts;
+        }
+        max_ts = ts;
         if (sink) {
             w.emit_store(pos++, PerfDebugRawRec{ts, zone_id, {0, lane, dev, rt}, prog});
         }
@@ -604,14 +602,6 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
                     o.id = open.id;
                     o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::Zone};
                     o.prog = open.prog;
-                    break;
-                }
-                case PerfDebugRawRecType::ZoneTotal: {
-                    PerfDebugRec& o = out.emplace_back();
-                    o.data.sum = r.ts;
-                    o.id = r.id;
-                    o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::ZoneTotal};
-                    o.prog = r.prog;
                     break;
                 }
                 default: {  // Data / Event / Ext / Cont: 1:1

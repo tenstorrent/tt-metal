@@ -96,19 +96,9 @@ inline constexpr bool PROFILER_VALIDATES_ZONE = true;
 inline constexpr bool PROFILER_VALIDATES_ZONE = false;
 #endif
 
-extern uint32_t sums[SUM_COUNT];
-extern uint32_t sumIDs[SUM_COUNT];
-
-// TRACE-ONLY mode (PROFILER_OPT_DO_TRACE_ONLY / TRACE_ON_TENSIX) has been REMOVED from this producer.
-// It gated the FW/KERNEL wrapper markers behind a per-replay state machine and forced myRiscID=0; the drainer
-// path does not use it and it only obscured the live code. The parked DRAM producer
-// (kernel_profiler_push.hpp) still has the original implementation if it is ever needed back.
-#if (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
-constexpr bool DO_SUM = true;
-#else
-constexpr bool DO_SUM = false;
-#endif
-
+// TRACE-ONLY mode (PROFILER_OPT_DO_TRACE_ONLY / TRACE_ON_TENSIX) and the SUM/accumulate zones
+// (PROFILER_OPT_DO_SUM / DeviceZoneScopedSumN*) have been REMOVED from this producer; the parked DRAM
+// producer (kernel_profiler_push.hpp) still has the original implementations if ever needed back.
 constexpr int WALL_CLOCK_HIGH_INDEX = 1;
 constexpr int WALL_CLOCK_LOW_INDEX = 0;
 
@@ -131,7 +121,7 @@ static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in 
 // hostdevcommon PacketTypes value and unpacked in zone_w0 -- a 3-bit channel into a 5-bit wire, whose
 // correctness depended on the numeric ordinals of an enum this backend does not own. The id now carries
 // the source-location hash and nothing else; the kind travels as its own argument.
-enum class ZoneKind : uint32_t { Start = 0, End = 1, Total = 2 };
+enum class ZoneKind : uint32_t { Start = 0, End = 1 };
 
 // ---- SPSC ring primitives -------------------------------------------------
 
@@ -176,24 +166,16 @@ struct ppfmt {
     static constexpr uint32_t T_STICKY_TIMER = 9u;      // PP_STICKY_TIMER
     static constexpr uint32_t T_DATA = 10u;             // PP_DATA (compile-time tag, 2 + size words)
     static constexpr uint32_t T_EVENT = 12u;            // PP_EVENT (compile-time flag: 2 words, no payload)
-    static constexpr uint32_t T_ZONE_TOTAL = 11u;       // PP_ZONE_TOTAL (word1 = accumulated sum)
     static constexpr uint32_t DATA_SIZE_SHIFT = 25u;    // PP_DATA_SIZE_SHIFT (word2, not word0)
     static constexpr uint32_t DATA_SIZE_MASK = 0x7Fu;   // PP_DATA_SIZE_MASK [31:25]
     static inline uint32_t w0(uint32_t type, uint32_t low27) {
         return ((type & TYPE_MASK) << TYPE_SHIFT) | (low27 & LOW27_MASK);
     }
-    // Zone marker word0. The kind is passed in, not dug out of the id. Only the three zone kinds can
-    // appear here; data/event go through data_w0/event_w0.
+    // Zone marker word0. The kind is passed in, not dug out of the id; data/event go through
+    // data_w0/event_w0. Full 27 bits: the id shares low27 with nothing, so a zone marker carries the
+    // structural id whole. (This mask used to be a 16-bit one, which is what truncated it.)
     static inline uint32_t zone_w0(uint32_t id, ZoneKind kind) {
-        uint32_t type = T_ZONE_START;
-        if (kind == ZoneKind::End) {
-            type = T_ZONE_END;
-        } else if (kind == ZoneKind::Total) {
-            type = T_ZONE_TOTAL;
-        }
-        // Full 27 bits: the id shares low27 with nothing, so a zone marker carries the structural id
-        // whole. (This mask used to be a 16-bit one, which is what truncated it.)
-        return w0(type, id & LOW27_MASK);
+        return w0(kind == ZoneKind::End ? T_ZONE_END : T_ZONE_START, id & LOW27_MASK);
     }
     // PP_DATA word0 -- IDENTICAL in shape to a zone marker's, type | the full 27-bit structural id. The
     // payload length moved out to its own word2 (below) precisely so a point marker's id is as wide, and
@@ -390,11 +372,6 @@ inline __attribute__((always_inline)) void set_profiler_zone_valid(bool conditio
 
 __attribute__((noinline)) void init_profiler(
     uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0) {
-    for (int i = 0; i < SUM_COUNT; i++) {
-        sumIDs[i] = 0;
-        sums[i] = 0;
-    }
-
 #if defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
     defined(COMPILE_FOR_BRISC)
     // Stamp this core's identity once per FW session. Nothing else to initialise: the rings are
@@ -433,19 +410,8 @@ __attribute__((noinline)) void init_profiler(
 }
 
 // Append accumulated SUM zones (if any) and publish the tail. No DRAM.
-inline __attribute__((always_inline)) void risc_finished_profiling() {
-    for (int i = 0; i < SUM_COUNT; i++) {
-        if (sums[i] > 0) {
-            ring_ensure_room(SPSC_MARKER_WORDS);
-            ring_write_word(
-                ppfmt::zone_w0(sumIDs[i], ZoneKind::Total));  // word0: PP_ZONE_TOTAL | id (masked in zone_w0)
-            ring_write_word(sums[i]);  // word1: accumulated sum (host reads-as-sum by type, not a timer)
-        }
-    }
-    publish_tail();
-}
-
-__attribute__((noinline)) void finish_profiler() { risc_finished_profiling(); }
+// Publish whatever the launch wrote; the final commit point of a kernel's markers. No DRAM.
+__attribute__((noinline)) void finish_profiler() { publish_tail(); }
 
 template <uint32_t timer_id>
 struct profileScope {
@@ -465,24 +431,6 @@ struct profileScope {
 struct profileScopeLifecycle {
     inline __attribute__((always_inline)) profileScopeLifecycle() { init_profiler(); }
     inline __attribute__((always_inline)) ~profileScopeLifecycle() { finish_profiler(); }
-};
-
-template <uint32_t timer_id, uint32_t index>
-struct profileScopeAccumulate {
-    uint64_t start_time = 0;
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-
-    inline __attribute__((always_inline)) profileScopeAccumulate() {
-        if constexpr (kernel_profiler::DO_SUM) {
-            start_time = ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
-        }
-    }
-    inline __attribute__((always_inline)) ~profileScopeAccumulate() {
-        if constexpr (kernel_profiler::DO_SUM) {
-            sumIDs[index] = timer_id;
-            sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
-        }
-    }
 };
 
 // No PacketTypes template parameter: the payload length is self-describing on this wire (PP_DATA
@@ -577,14 +525,6 @@ inline __attribute__((always_inline)) void recordFlag() {
 // gone; it had already cleared the ResNet teardown hang of any connection to KERNEL-zone emission.)
 #define DeviceZoneScopedMainChildN(name) DeviceZoneScopedN(name)
 
-#define DeviceZoneScopedSumN1(name) \
-    TT_ZONE_DEFINE_ID(hash, name);  \
-    kernel_profiler::profileScopeAccumulate<hash, 0> zone = kernel_profiler::profileScopeAccumulate<hash, 0>();
-
-#define DeviceZoneScopedSumN2(name) \
-    TT_ZONE_DEFINE_ID(hash, name);  \
-    kernel_profiler::profileScopeAccumulate<hash, 1> zone = kernel_profiler::profileScopeAccumulate<hash, 1>();
-
 #define DeviceZoneSetCounter(counter) kernel_profiler::set_host_counter(counter);
 
 // Trace hooks: the NAMES must exist because shared firmware calls them unconditionally, and they are
@@ -608,10 +548,6 @@ inline __attribute__((always_inline)) void recordFlag() {
 #define DeviceZoneScopedMainChildN(name) (void(name))
 
 #define DeviceZoneScopedN(name) (void(name))
-
-#define DeviceZoneScopedSumN1(name) (void(name))
-
-#define DeviceZoneScopedSumN2(name) (void(name))
 
 #define DeviceTraceOnlyProfilerInit()
 

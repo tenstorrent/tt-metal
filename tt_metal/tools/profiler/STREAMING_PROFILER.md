@@ -32,12 +32,11 @@ record with a start and a duration.
 
 ```cpp
 enum class PerfDebugRecType : uint32_t {
-    Zone = 1,       // a complete zone: data.zone = {start, duration}
-    ZoneTotal = 2,  // accumulated-duration zone: data.sum
-    Data = 3,       // point marker with payload: data.ts; payload follows via Ext + Cont
-    Event = 4,      // point marker, no payload: data.ts
-    Ext = 5,        // Data/Event continuation header: data.ext = (id << 32) | payload word count
-    Cont = 6,       // one uint64 of Data payload: data.payload
+    Zone = 1,   // a complete zone: data.zone = {start, duration}
+    Data = 3,   // point marker with payload: data.ts; payload follows via Ext + Cont
+    Event = 4,  // point marker, no payload: data.ts
+    Ext = 5,    // Data/Event continuation header: data.ext = (id << 32) | payload word count
+    Cont = 6,   // one uint64 of Data payload: data.payload
 };
 
 struct PerfDebugRecMeta {
@@ -54,7 +53,6 @@ struct PerfDebugRec {
             uint64_t start;     // device timestamp of the zone open
             uint64_t duration;  // device cycles
         } zone;
-        uint64_t sum;      // ZoneTotal
         uint64_t ts;       // Data / Event
         uint64_t ext;      // Ext
         uint64_t payload;  // Cont
