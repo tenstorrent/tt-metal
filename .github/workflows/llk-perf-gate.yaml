@@ -30,6 +30,6 @@ permissions:
 jobs:
   llk-perf-gate:
     name: "LLK perf regression gate"
-    if: github.event.label.name == 'perf-gate'
+    if: github.event.label.name == 'llk-perf-gate'
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     secrets: inherit
