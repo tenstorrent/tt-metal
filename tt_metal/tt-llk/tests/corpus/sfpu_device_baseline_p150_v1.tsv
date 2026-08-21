@@ -78,7 +78,8 @@
 #      UNCHANGED at 25; new flags (list-schedule, lreg-alloc [+dst-layout-32b
 #      harness wiring], pressure-schedule+milp) are Init(0) on-plus knob legs.
 #      First silicon = the pin-15 measurement pass (MEASUREMENT-PLAN-PIN15.md).
-#  16. 547fe7ffa11364a3d554bff051262f1ded223fb7cda0f9b9be7307d9333c2d0b (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — the pin-16
+#  17. ae7342e4fda3d039e3c59a0237dae947c84cfb2bf31dbed2b59f35380bbbedd8 (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 17 = pin-16 union + EQ W_drain=7 EP-F1 fix (51-row re-fire, CRAQ 49/49, 2026-08-21)
+#  16. 547fe7ffa11364a3d554bff051262f1ded223fb7cda0f9b9be7307d9333c2d0b (superseded by 17) — the pin-16
 #      pass-wave-2 union (sfpi-gcc 927bce7e5263c16b5e15f7fbcf6df91d6ccb309c: EB dst-autoincr pricing [58
 #      adjudicated ON-25 rows], EC record-hoist, EH prera, EG delivery-shape, DP
 #      df-notes fix, EJ licensed reassoc, EI round-interleave, EL cc-restore in
