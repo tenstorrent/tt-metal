@@ -50,7 +50,6 @@ class ReductionSmoke : public TTNNFixtureWithSuiteDevice<ReductionSmoke> {};
 
 namespace detail {
 
-using ttnn::test_utils::dram_interleaved;
 using ttnn::test_utils::make_device_tensor;
 
 }  // namespace detail
