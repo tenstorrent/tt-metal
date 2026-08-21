@@ -12,7 +12,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-from models.tt_transformers.tests.decode_test_helpers import decode_step_state
+from models.tt_transformers.tests.decode_test_helpers import decode_step_state, teacher_forced_decode_token
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.common.sampling.tt_sampling import TTSampling
 from models.common.utility_functions import (
@@ -301,6 +301,10 @@ def test_llama_model_inference(
 
     try:
         for i in range(generation_length):
+            # Validate the absolute position before executing the model step.
+            next_position, next_token_index, num_written = decode_step_state(
+                generation_start_pos, i, len(encoded_prompts[0]), model_args.max_seq_len
+            )
             logger.info(f"[Llama3 Model] Generating token {i}")
             decode_input = model_args.prepare_residual_tensor_decode(
                 tt_decode_input,
@@ -340,9 +344,6 @@ def test_llama_model_inference(
                 ref_output = reference_model(pt_decode_input.to(ref_dtype), current_pos[0])
 
             # Increment position
-            next_position, next_token_index, num_written = decode_step_state(
-                generation_start_pos, i, len(encoded_prompts[0]), model_args.max_seq_len
-            )
             current_pos = torch.full((batch,), next_position)
 
             current_pos_sram = torch.full((model_args.sub_core_grids.num_cores(), batch), next_position)
@@ -382,15 +383,24 @@ def test_llama_model_inference(
                     .long()
                 )
 
-                all_outputs.append(tt_out_tok.squeeze(1).tolist()[0])  # Update generated token to list of TT outputs
-                tt_decode_input = embd(tt_out_tok)
+                reference_token = None
+                if run_ref_pt:
+                    reference_token = sample_host(ref_output, None, temperature=0, top_p=0.8)
+
+                # PCC and cache comparisons require both models to follow one
+                # trajectory. Prefer the reference token when it is available;
+                # otherwise continue standalone generation from the TT sample.
+                next_token = teacher_forced_decode_token(
+                    reference_token=reference_token,
+                    device_token=tt_out_tok,
+                )
+                next_token_id = next_token.squeeze(1).tolist()[0]
+                all_outputs.append(next_token_id)
+                tt_decode_input = embd(next_token)
 
                 if run_ref_pt:
-                    pt_out_tok = sample_host(ref_output, None, temperature=0, top_p=0.8)
-                    pt_decode_input = embd(pt_out_tok)
-                    all_outputs_ref.append(
-                        pt_out_tok.squeeze(1).tolist()[0]
-                    )  # Update generated token to list of ref outputs
+                    all_outputs_ref.append(next_token_id)
+                    pt_decode_input = tt_decode_input
             # Measure PCC if also running reference model
             if run_ref_pt:
                 if layers == 1 and i == iterations - 1:  # On last iteration in the quick test, set a tighter PCC
