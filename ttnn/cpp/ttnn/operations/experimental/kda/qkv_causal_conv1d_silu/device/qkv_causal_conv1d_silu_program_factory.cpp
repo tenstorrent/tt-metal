@@ -21,6 +21,9 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
+// Kimi-K3 supplies four learned causal-convolution taps; one channel block of weights is queued per tap.
+constexpr uint32_t tap_count = 4;
+
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::create_program_artifacts(
@@ -83,7 +86,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
         make_dfb(act_rm_dfb_name, 2 * block_ct),
         make_dfb(act_tile_dfb_name, block_ct),
-        make_dfb(weights_dfb_name, 4 * block_ct),
+        make_dfb(weights_dfb_name, tap_count * block_ct),
         make_dfb(partial_dfb_name, 2 * block_ct),
         make_dfb(output_dfb_name, 2 * block_ct),
     };
