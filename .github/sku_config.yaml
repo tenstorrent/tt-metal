@@ -266,3 +266,20 @@ skus:
     runs_on:
       - ubuntu-latest
     ttsim_lib: libttsim_qsr.so
+
+  # _xl variants: same simulator binary as their base SKU, but on a bigger runner for
+  # pipelines whose suite is too large for ubuntu-latest (e.g. the full LLK regression,
+  # tens of thousands of collected tests under xdist + per-test forking — ubuntu-latest
+  # OOMs or fails to fork workers, see llk_ttsim_weekly.yaml).
+  sim_wh_n150_xl:
+    runs_on:
+      - tt-ubuntu-2204-xlarge-stable
+    ttsim_lib: libttsim_wh.so
+  sim_bh_p150_xl:
+    runs_on:
+      - tt-ubuntu-2204-xlarge-stable
+    ttsim_lib: libttsim_bh.so
+  sim_quasar_xl:
+    runs_on:
+      - tt-ubuntu-2204-xlarge-stable
+    ttsim_lib: libttsim_qsr.so

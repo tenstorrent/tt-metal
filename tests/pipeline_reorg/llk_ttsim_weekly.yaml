@@ -13,11 +13,11 @@
 - name: LLK ttsim regression
   cmd: cd tt_metal/tt-llk/tests && ./run_ttsim_regression.sh
   skus:
-    sim_wh_n150:
-      timeout: 180
-    sim_bh_p150:
-      timeout: 180
-    sim_quasar:
+    sim_wh_n150_xl:
+      timeout: 45
+    sim_bh_p150_xl:
+      timeout: 45
+    sim_quasar_xl:
       timeout: 180
   team: llk
   owner_id: U09UC143684 # Nemanja Divnic
