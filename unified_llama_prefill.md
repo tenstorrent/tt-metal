@@ -1370,6 +1370,63 @@ are the right numbers for comparing ops against each other, and the wrong ones f
 attributing time on a critical path that a different thread owns -- which is why removing
 the mask add saved 1.65us where those rates predicted 15.
 
+### Where the remaining 1.5x is, measured at the shape the sweep uses
+
+The old budget (SFPU 56%) is stale twice over: it predates the FPU eltwise dispatch and it
+was taken at sq=4/sk=2. Re-measured with the current library at sq=8/sk=8, 2 chunks, on the
+math TRISC, which is still the constraint (117 of 119us, no stalls; unpack has 29us of
+slack, the reader 100us):
+
+| | math thread | share |
+|---|---|---|
+| matmul (banded) | 33.8 us | ~26% |
+| **reduce** | **33.8 us** | **~26%** |
+| broadcast | 27.9 us | ~21% |
+| FPU eltwise | 16.8 us | ~13% |
+| SFPU tree | 16.6 us | ~13% |
+
+Shares are approximate: the zones were taken in separate runs and each adds two timestamp
+writes per call, so the columns sum to about 110% of the span.
+
+**There is no dominant item left**, which is what 1.5x looks like from the inside. The old
+56% concentration is gone -- the FPU dispatch moved eltwise work off the SFPU, and the
+larger score block moved weight onto reduce and broadcast. Reduce went 8% -> 26%, because
+its cost scales with the INPUT block: 64 score tiles fold to 8, so 64 `reduce_tile` calls,
+twice per chunk (max and sum).
+
+Ranked by measured size and by how much is known rather than hoped:
+
+1. **Row-sum as a matmul, not a reduce (~13% available).** ttnn does this and the evidence
+   is in its kernel: `matmul_reduce<Sq_chunk_t>(cb_col_identity, ...)`, a matmul against a
+   column of ones, with `N = 1  // Result of reduce is 1 column`. A row sum IS a matvec, so
+   `reduce_sum<Cols>` can be `matmul(p, ones)` -- 8 MACs per output tile against 64
+   `reduce_tile` calls. It only works for the SUM; `reduce_max` has no matmul form and stays.
+   That halves the reduce line.
+2. **Fold the mask into the matmul (a whole 64-tile pass).** The packer's L1 accumulate
+   makes `pack_block` add into the destination, so seeding the scores buffer with the mask
+   has the matmul land on top of it and `s + mask` disappears -- no pass, no DST pressure,
+   one fewer L1 round trip for `s`. Note the earlier 1.65us measurement does NOT bound this:
+   that replaced the add with a copy, which is still a pass. This removes the pass.
+3. **Defer `o / l` into the output projection (~8%).** The tail's `recip` is 9.53us at
+   sq=8, SFPU-only with no approximation parameter, so it cannot be made cheaper in place.
+   But `diag(1/l) @ (o @ W_o) == (o/l) @ W_o`, so the normalisation commutes with the
+   output projection and can move there. That takes it out of attention entirely rather than
+   optimising it. Layer-level, so it belongs with phase 11.
+4. **A binary chain on broadcast.** `os = o_prev * bcast(c_old)` then `o = os + pv` is two
+   passes over the output block; as one expression it is one. Same shape of gap as the FPU
+   eltwise chaining, in `BcastFusion`.
+5. **The state copy**, worth ~2%, still blocked on the read-but-not-consumed ownership
+   question.
+
+And the structural one behind all of it: a pass per `store()` means every intermediate is
+packed to L1 and unpacked back. Items 2 and 4 are individual instances; the general fix is
+a way to produce more than one result from one acquire, which is a real API question rather
+than an optimisation.
+
+Not worth revisiting, all measured: eltwise math (done, -22%/-34%), reconfiguration (halved
+by leaf-outer, ~5% left), acquire batching (a regression, twice), dispatch overhead (~1-2%),
+and the mask's DRAM traffic (the reader has 100us of slack).
+
 ### What to test next
 
 Ordered by expected value, with what each result would actually mean. Six candidates are
