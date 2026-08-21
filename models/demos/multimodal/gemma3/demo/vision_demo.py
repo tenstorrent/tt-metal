@@ -106,12 +106,18 @@ def create_multimodal_model(
         n_layers=tt_model_args.n_layers,
         mesh_shape=tuple(tt_model_args.mesh_device.shape),
         components=["text", "vision"],
+        # gemma3 inherits the tt_transformers ModelArgs, so its cache filenames move with the
+        # same knobs (precision config, prefetcher, batch, rope mode). Key the marker on them the
+        # same way create_tt_model does. (#45400 review, finding B2)
+        build_variant=tt_model_args._weight_cache_build_variant(),
     )
     loaded_real_weights = False
     if checkpoint is None:
         if not tt_model_args.dummy_weights and weight_cache_is_complete(cache_dir, **cache_identity):
             logger.info("Warm ttnn weight cache detected -- building hybrid vision state_dict (no HF load).")
-            checkpoint = build_cached_state_dict(cache_dir, args=tt_model_args)
+            checkpoint = build_cached_state_dict(
+                cache_dir, args=tt_model_args, build_variant=cache_identity["build_variant"]
+            )
         else:
             checkpoint = tt_model_args.load_state_dict()
             loaded_real_weights = bool(checkpoint) and not tt_model_args.dummy_weights

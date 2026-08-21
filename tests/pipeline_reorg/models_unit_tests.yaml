@@ -17,6 +17,10 @@
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    # CPU-only (<10s, no device, no weights): guards the warm-weight-cache marker semantics
+    # (variant-qualified markers, fail-closed unverifiable variants, sidecar single-load) that
+    # every tt_transformers e2e leg depends on. See #45400.
+    pytest --timeout 120 models/tt_transformers/tests/test_warm_cache_marker.py
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
     pytest --timeout 300 models/tt_transformers/tests/test_rms_norm.py
     pytest --timeout 600 models/tt_transformers/tests/test_mlp.py

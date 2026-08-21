@@ -133,12 +133,18 @@ def create_tt_model(
         n_layers=tt_model_args.n_layers,
         mesh_shape=tuple(tt_model_args.mesh_device.shape),
         components=["text"],
+        # gemma3 inherits the tt_transformers ModelArgs, so its cache filenames move with the
+        # same knobs (precision config, prefetcher, batch, rope mode). Key the marker on them the
+        # same way create_tt_model does. (#45400 review, finding B2)
+        build_variant=tt_model_args._weight_cache_build_variant(),
     )
     loaded_real_weights = False
     if state_dict is None:
         if not tt_model_args.dummy_weights and weight_cache_is_complete(cache_dir, **cache_identity):
             logger.info("Warm ttnn weight cache detected -- building state_dict from cache (no HF load).")
-            state_dict = build_cached_state_dict(cache_dir, args=tt_model_args)
+            state_dict = build_cached_state_dict(
+                cache_dir, args=tt_model_args, build_variant=cache_identity["build_variant"]
+            )
         else:
             state_dict = tt_model_args.load_state_dict()
             loaded_real_weights = bool(state_dict) and not tt_model_args.dummy_weights
