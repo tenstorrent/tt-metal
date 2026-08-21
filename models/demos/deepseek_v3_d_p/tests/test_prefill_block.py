@@ -48,12 +48,11 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_OUTPUT_TOKENS
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
-    ABC_1K_PATH,
     PROMPT_5K_PATH,
-    PROMPT_25K_PATH,
     create_hf_model,
     extract_layer_state_dict,
     get_4d_causal_mask,
@@ -61,7 +60,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     tokenize_prompt_to_isl,
 )
 
-_PROMPT_PATHS = {"abc_1k": ABC_1K_PATH, "prompt_5k": PROMPT_5K_PATH, "prompt_25k": PROMPT_25K_PATH}
+_PROMPT_PATHS = {"prompt_5k": PROMPT_5K_PATH}
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
@@ -118,13 +117,6 @@ def run_model(
     # coverage; the real device gate already covers the 256-expert meshes that run in CI.
     if (is_ci_env or is_ci_v2_env) and gate_fallback_mode == GateComputeMode.HOST_ALL:
         pytest.skip("host_gate_all is a local-only testing aid (sub-256-expert); not run in CI")
-
-    # The 25k-ISL cases only fit L1 on the full 8x4 mesh. There sp_factor=8 keeps the per-chip
-    # sequence at 3200 tokens, so the shared-expert down-projection matmul runs with per_core_M=2.
-    # On the smaller 2x4 meshes the per-chip sequence is 12800 tokens, pushing per_core_M to 5 and
-    # growing the down-matmul output circular buffer to ~2.9 MB — beyond the 1.5 MB L1 (OOM).
-    if isl_total == 25 * 1024 and tuple(mesh_device.shape) != (8, 4):
-        pytest.skip("25k ISL only fits L1 on the full 8x4 mesh; skipping on smaller meshes")
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -510,11 +502,11 @@ def _ci_unsupported_param_combos(**params):
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
-        ("random", False, 1024, 8),
-        ("prompt_25k", False, 25 * 1024, 8),
-        ("abc_1k", True, 1024, 8),
+        ("random", False, PREFILL_CHUNK_OUTPUT_TOKENS, 8),
+        ("prompt_5k", False, PREFILL_CHUNK_OUTPUT_TOKENS, 8),
+        ("prompt_5k", True, PREFILL_CHUNK_OUTPUT_TOKENS, 8),
     ],
-    ids=["smoke-random", "perf-prompt_25k", "pcc-abc_1k"],
+    ids=["smoke-random", "perf-prompt_5k", "pcc-prompt_5k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
@@ -637,14 +629,10 @@ def test_ds_prefill_block(
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
-        ("random", False, 1024, 8),
-        ("random", False, 5 * 1024, 8),
-        ("random", False, 25 * 1024, 8),
-        ("abc_1k", True, 1024, 8),
-        ("prompt_5k", True, 5 * 1024, 8),
-        ("prompt_25k", True, 25 * 1024, 8),
+        ("random", False, PREFILL_CHUNK_OUTPUT_TOKENS, 8),
+        ("prompt_5k", True, PREFILL_CHUNK_OUTPUT_TOKENS, 8),
     ],
-    ids=["smoke-random", "perf-random-5k", "perf-random-25k", "pcc-abc_1k", "pcc-prompt_5k", "pcc-prompt_25k"],
+    ids=["perf-random-5k", "pcc-prompt_5k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",

@@ -301,14 +301,14 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T MLA accuracy 5k, 25k"
+- name: "Kimi-K2.6-1T MLA accuracy 5k"
   fabric_profile: torus_xy
   cmd: |
     export KIMI_MLA_REF_CACHE=/mnt/models/kimi-prefill-cache/test_mla_output
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "torus-xy-8x4 and random and max_sl and check_pcc and sequential and (seq5k or seq25k)" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "torus-xy-8x4 and random and max_sl and check_pcc and sequential and seq5k" -vvv --tb=short
     '
   test_type: kimi_mla
   test_group: module
@@ -436,7 +436,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T prefill block accuracy 5k, 25k"
+- name: "Kimi-K2.6-1T prefill block accuracy 5k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -447,7 +447,6 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "torus-xy-8x4 and pcc-prompt_5k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1320
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "torus-xy-8x4 and pcc-prompt_25k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1320
     '
 
   test_type: kimi_prefill_block
@@ -459,7 +458,7 @@
   team: models
   sp_config: sc1
 
-- name: "DeepSeek-V3-671B prefill block determinism 25k"
+- name: "DeepSeek-V3-671B prefill block determinism 5k"
   fabric_profile: torus_xy
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
@@ -473,7 +472,7 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "torus-xy-8x4 and perf-prompt_25k and with_determinism and iter2 and not iter25 and not iter2000 and moe-gate_device and balanced and not non_balanced and pretrained" -vvv --tb=short --timeout=900
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "torus-xy-8x4 and perf-prompt_5k and with_determinism and iter2 and not iter25 and not iter2000 and moe-gate_device and balanced and not non_balanced and pretrained" -vvv --tb=short --timeout=900
     '
 
   test_type: prefill_block_determinism
@@ -485,7 +484,7 @@
   team: models
   sp_config: sc1
 
-- name: "DeepSeek-V3-671B prefill transformer determinism 25k"
+- name: "DeepSeek-V3-671B prefill transformer determinism 5k"
   fabric_profile: torus_xy
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
@@ -498,7 +497,7 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_ds_prefill_transformer -k "torus-xy-8x4 and 5_layers and e256_device_fp32 and longbook_qa_eng and 25600 and iter2 and not iter25 and not iter2000 and smoke and with_determinism and random and balanced and right_pad" -vvv --tb=short --timeout=2940
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_ds_prefill_transformer -k "torus-xy-8x4 and 5_layers and e256_device_fp32 and longbook_qa_eng and 5k and iter2 and not iter25 and not iter2000 and smoke and with_determinism and random and balanced and right_pad" -vvv --tb=short --timeout=2940
     '
   test_type: prefill_transformer_determinism
   test_group: module

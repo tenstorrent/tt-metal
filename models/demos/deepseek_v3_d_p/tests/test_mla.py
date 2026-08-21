@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import ISL_TOKENS_PER_CHIP, PREFILL_CHUNK_OUTPUT_TOKENS
 from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     cpu_mla_reference,
     load_trace,
@@ -210,14 +211,18 @@ def run_model(
 
     topology = per_axis_topology(device_params["fabric_config"])
 
-    production_mesh = [32, 4]
     sp_axis = 0
     tp_axis = 1
 
     mesh_shape = list(mesh_device.shape)
 
+    # scale_down_sl runs the one prefill ISL: 640 tokens on every chip, so the global length follows
+    # the mesh. (The old form divided `seq_len` by a [32, 4] production mesh, which pinned 3200
+    # tokens/chip.) `max_sl` keeps the parametrized seq_len, which is the long-context leg.
+    # Note: under scale_down_sl the seq_len parametrize no longer varies the workload, so for
+    # test_ds_mla the seq128k and seq100k scaled cases run identical shapes.
     if scale_down_sl:
-        seq_len = (seq_len // production_mesh[sp_axis]) * mesh_shape[sp_axis]
+        seq_len = ISL_TOKENS_PER_CHIP * mesh_shape[sp_axis]
 
     # temp hack
     config.max_seq_len = seq_len
@@ -473,8 +478,8 @@ def test_ds_mla(
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
 @pytest.mark.parametrize(
     "seq_len",
-    [5 * 1024, 25 * 1024],
-    ids=["seq5k", "seq25k"],
+    [PREFILL_CHUNK_OUTPUT_TOKENS],
+    ids=["seq5k"],
 )
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])

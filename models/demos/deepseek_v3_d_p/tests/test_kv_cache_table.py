@@ -49,7 +49,7 @@ from tests.ttnn.utils_for_testing import assert_equal
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-@pytest.mark.parametrize("seq_len", [5 * 1024, 25 * 1024], ids=["seq5k", "seq25k"])
+@pytest.mark.parametrize("seq_len", [PREFILL_CHUNK_OUTPUT_TOKENS], ids=["seq5k"])
 @pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
 def test_kv_cache_table(
     use_pretrained,

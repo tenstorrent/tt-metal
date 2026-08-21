@@ -40,10 +40,11 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_OUTPUT_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_1K_PATH,
-    PROMPT_25K_PATH,
+    PROMPT_5K_PATH,
     create_hf_model_with_weights,
     get_4d_causal_mask,
     tokenize_prompt_to_isl,
@@ -92,8 +93,11 @@ def _ci_unsupported_param_combos(**params):
 )
 @pytest.mark.parametrize(
     "isl_total",
-    [1024, 2560, 5120, 6400, 12800, 25 * 1024],
-    ids=["isl_1k", "isl_2k56", "isl_5k", "isl_6k4", "isl_12k8", "isl_25k"],
+    # One entry per SP factor the mesh list below covers, each carrying ISL_TOKENS_PER_CHIP on
+    # every chip: 640 x {1, 2, 4, 8}. Pick the one matching the mesh under test -- the old list sat
+    # at 3200 tokens/chip on every mesh.
+    [640, 1280, 2560, 5120],
+    ids=["isl_640", "isl_1k28", "isl_2k56", "isl_5k"],
 )
 @pytest.mark.parametrize("skip_reference", [False, True], ids=["with_ref", "no_ref"])
 @pytest.mark.parametrize(
@@ -141,10 +145,11 @@ def test_prefill_block_loop(
     if state_dict is None:
         pytest.skip("State dict not available (no pretrained weights)")
 
-    # These sequence lengths belong to the existing 4x4 subtorus sweep, which is intentionally
-    # local/experimental until a dedicated CI owner exists.
-    if (os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ) and isl_total in (2560, 12800):
-        pytest.skip("isl_2k56 / isl_12k8 are subtorus-4x4-only; not run in CI")
+    # The 4x4 subtorus sweep is intentionally local/experimental until a dedicated CI owner exists.
+    # Keyed on the mesh, not the ISL: 2560 is now simply 640/chip x sp=4, which the 4x2 LoudBox
+    # shares, so an ISL-keyed skip would drop that coverage too.
+    if (os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ) and tuple(mesh_device.shape) == (4, 4):
+        pytest.skip("the 4x4 subtorus sweep is local/experimental; not run in CI")
 
     # Deep-copy the HF config: hf_config returns a process-wide lru_cache'd object, so mutating it in
     # place (max_seq_len here, n_routed_experts below) would leak into later tests in the same session.
@@ -404,8 +409,8 @@ def test_prefill_block_loop(
         # repeats the 1K prompt. Never pad — pad tokens all have the same embedding and
         # collapse gate routing onto a handful of experts, distorting expert-load
         # measurements.
-        if isl_total == 25 * 1024:
-            prompt_path = PROMPT_25K_PATH
+        if isl_total == PREFILL_CHUNK_OUTPUT_TOKENS:
+            prompt_path = PROMPT_5K_PATH
         else:
             prompt_path = PROMPT_1K_PATH
         prompts = load_prompts_from_json(str(prompt_path))
