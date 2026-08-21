@@ -195,7 +195,12 @@ scaleout:
   unit:
     cpu_medium: 235
     wh_llmbox: 60
-    wh_galaxy: 25
+    wh_galaxy: 75
+    wh_n300_civ2: 15
+    wh_llmbox_civ2: 65
+    bh_loudbox: 195
+    bh_p300: 195
+    bh_quietbox_2: 195
   stress:
     wh_galaxy_perf: 120
   integration:
@@ -205,9 +210,12 @@ scaleout:
     bh_galaxy: 10
   sanity:
     wh_galaxy: 20
+    wh_llmbox_civ2: 30
+    wh_n300_civ2: 15
     bh_quietbox_2: 15
     bh_p300: 15
-    wh_llmbox_civ2: 30
+  perf:
+    wh_llmbox_perf: 140
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
@@ -303,12 +311,6 @@ models:
     wh_n300_civ2: 5
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
-  frequent:
-    wh_n150: 318
-    wh_n300: 300
-    wh_n150_civ2: 30
-    wh_n300_civ2: 30
-    bh_p150b_civ2: 120
   stress:
     wh_galaxy_perf: 500
   e2e:
@@ -336,7 +338,7 @@ models:
   e2e_tier3:
     wh_llmbox_perf: 180
     wh_galaxy_perf: 55
-    wh_n150: 91
+    wh_n150: 105
     wh_n300: 60
     bh_p150: 33
     bh_p300: 8
@@ -365,7 +367,8 @@ models:
     wh_llmbox: 90
     wh_galaxy: 80
     wh_llmbox_perf: 58
-    wh_n150: 51
+    wh_n150: 75
+    wh_n150_civ2: 12
     wh_n300: 33
     bh_p150: 30
     bh_p300: 30

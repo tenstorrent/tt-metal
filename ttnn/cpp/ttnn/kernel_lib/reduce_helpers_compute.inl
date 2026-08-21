@@ -92,8 +92,10 @@ template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_fold_init() {
     if constexpr (pool_type == PoolType::SUM) {
         sfpu_reduce_sum_fold_init<format>();
+#ifndef ARCH_QUASAR  // Quasar's ckernel::PoolType has no MIN (and no SFPU reduce path)
     } else if constexpr (pool_type == PoolType::MIN) {
         sfpu_reduce_min_fold_init<format>();
+#endif
     } else {
         sfpu_reduce_max_fold_init<format>();
     }
@@ -110,8 +112,10 @@ ALWI void sfpu_copy_and_fold(
         copy_tile(input_cb_id, tile_idx, work_dst);
         if constexpr (pool_type == PoolType::SUM) {
             sfpu_reduce_sum_fold_tile<format>(dst_idx, work_dst, dst_idx);
+#ifndef ARCH_QUASAR  // Quasar's ckernel::PoolType has no MIN (and no SFPU reduce path)
         } else if constexpr (pool_type == PoolType::MIN) {
             sfpu_reduce_min_fold_tile<format>(dst_idx, work_dst, dst_idx);
+#endif
         } else {
             sfpu_reduce_max_fold_tile<format>(dst_idx, work_dst, dst_idx);
         }
@@ -305,9 +309,11 @@ ALWI void reduce(
     static_assert(
         reduce_type != PoolType::AVG || reduce_format != DataFormat::Int32,
         "Int32 AVG (mean) is not supported");
+#ifndef ARCH_QUASAR  // Quasar's ckernel::PoolType has no MIN, so this check is vacuous there
     static_assert(
         reduce_type != PoolType::MIN || is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>(),
         "MIN is only valid on the Int32 SFPU reduce path; the FPU path implements MIN as -MAX(-x)");
+#endif
     static_assert(
         is_accumulation_type_v<AccumulateT>,
         "AccumulateT must be a valid accumulation type (NoAccumulation or Accumulate)");

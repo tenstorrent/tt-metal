@@ -10,7 +10,12 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.sampling._utils import is_default_value, is_power_of_2, upper_power_of_2
+from models.common.sampling._utils import (
+    is_default_value,
+    is_power_of_2,
+    topk_would_route_to_large_indices,
+    upper_power_of_2,
+)
 from models.common.sampling.tt_log_probs import LogProbsCalculator
 from models.common.sampling.vocab_padding import (
     build_invalid_vocab_mask,
@@ -840,6 +845,19 @@ class TTSampling(LightweightModule):
             topk_values_list = []
             topk_indices_list = []
 
+            # Drop stable=True ONLY when ttnn.topk would take the Blackhole
+            # topk_large_indices composite for these halves once it is absent
+            # (topk_would_route_to_large_indices mirrors
+            # should_route_to_topk_large_indices in topk.cpp; KEEP IN SYNC).
+            # stable is best-effort/broken anyway (tenstorrent/tt-metal#33492);
+            # _adjust_values_for_tiebreak is what actually guarantees the greedy
+            # pick after the gather, regardless of per-device tie order. Calls
+            # that would not route keep today's arguments bit-for-bit, and a
+            # call the model constrained to a sub-grid is never relaxed.
+            use_routed_topk = self.sub_core_grid_topk is None and topk_would_route_to_large_indices(
+                x_bf16_list[0], self.max_top_k, self.mesh_device
+            )
+
             for i in range(len(x_bf16_list)):
                 # Chunks are not padded to a power of two here: an A/B on this path
                 # (PR #53167) measured no end-to-end decode benefit from steering
@@ -855,7 +873,7 @@ class TTSampling(LightweightModule):
                     # self._topk_stable) -- the stable bitonic network is an open LLK issue
                     # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
                     # guarantees the greedy pick.
-                    stable=self._topk_stable,
+                    stable=False if use_routed_topk else self._topk_stable,
                 )
                 topk_values_list.append(topk_values)
                 topk_indices_list.append(topk_indices)
@@ -881,7 +899,14 @@ class TTSampling(LightweightModule):
                     value=-sys.float_info.max,
                     sub_core_grids=self.sub_core_grids,
                 )
-            # Perform local top-k on each device
+            # Perform local top-k on each device. Drop stable=True ONLY when the
+            # relaxed call would take the Blackhole topk_large_indices composite
+            # (mirror of topk.cpp's predicate; KEEP IN SYNC) -- stable is
+            # best-effort/broken anyway (#33492) and _adjust_values_for_tiebreak
+            # guarantees the greedy pick. Sub-grid-constrained calls never relax.
+            use_routed_topk = self.sub_core_grid_topk is None and topk_would_route_to_large_indices(
+                x_bf16, self.max_top_k, self.mesh_device
+            )
             topk_values, topk_indices = ttnn.topk(
                 x_bf16,
                 k=self.max_top_k,
@@ -893,7 +918,7 @@ class TTSampling(LightweightModule):
                 # self._topk_stable) -- the stable bitonic network is an open LLK issue
                 # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
                 # guarantees the greedy pick.
-                stable=self._topk_stable,
+                stable=False if use_routed_topk else self._topk_stable,
             )
 
             # For 1D meshes use `cluster_axis=None`. For 2D meshes, use the configured gather axis.

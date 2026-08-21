@@ -12,11 +12,12 @@ and the cache scale by SP/8, so smaller boxes run a proportionally shorter seque
 workload mirrors Galaxy rather than a heavier one:
   * Galaxy   (32 chips): SP=8 × TP=4, chunk=5120, cache=50k,   heads=128 (full workload)
   * LoudBox  (8 chips):  SP=2 × TP=4, chunk=1280, cache=12.5k, heads=128 (1/4 sequence length)
-  * QuietBox (4 chips):  SP=1 × TP=4, chunk=640,  cache=6.25k, heads=128 (1/8 sequence length)
+  * QuietBox (4 chips):  SP=1 × TP=4, chunk=640,  cache=6.25k, heads=128 (1/8 sequence length, TorusX)
 
 That keeps the per-chip COMPUTE shapes equal to Galaxy: local query rows/chip (640), MLA heads/chip
 (32), indexer heads/chip (16), the per-chip KVPE depth (cache/SP = 6.25k on every box), AND the number
-of chunks-to-fill in `cold` (11 on every box, not 41 on LoudBox). CAVEAT: the indexer K-cache is
+of chunks-to-fill in `cold` (11 on every box, not 41 on LoudBox). QuietBox's single-axis mesh runs
+Fabric2D TorusX. CAVEAT: the indexer K-cache is
 replicated full-depth (= the box-local cache), so on smaller boxes it holds a proportionally SHORTER
 prefix than Galaxy — only Galaxy exercises the true 50k (or 0.5M) indexer/top-k depth; smaller boxes
 under-represent any op that scales with the replicated key-cache length.
@@ -158,12 +159,6 @@ _CONFIG_BUILDERS = {
     "glm_5_1": glm_hf_config,
     "glm_5_2": glm_5_2_hf_config,
 }
-
-# Fabric transport being profiled — single source for BOTH the device_params and the run manifest, so the
-# recorded provenance can never drift from what actually ran (FABRIC_2D is the production transport;
-# FABRIC_1D exhibited the multi-hop line-broadcast hang). FABRIC_2D + fabric_router_config leaves the
-# fabric-tensix datamover off, so the realtime profiler stays eligible (see PR #49840 CCL benchmarks).
-PERF_FABRIC = ttnn.FabricConfig.FABRIC_2D
 
 # Realtime-profiler record drain ceiling. The receiver thread delivers records asynchronously; the
 # wrapper stops once no new record has landed for its settle window, bounded by this ceiling. A generous
@@ -404,7 +399,7 @@ def _detect_perf_workload(variant_name: str) -> tuple[PerfWorkload, str | None]:
     num_devices = detect_num_devices()
     system = _SYSTEM_BY_DEVICE_COUNT.get(num_devices)
     if system is None:
-        placeholder = PerfWorkload("unsupported", num_devices, (1, 1), CHUNK_TOKENS, 32, 16)
+        placeholder = PerfWorkload("unsupported", num_devices, (2, 2), CHUNK_TOKENS, 32, 16)
         return placeholder, (
             "sparse MLA perf supports Blackhole QuietBox/LoudBox/Galaxy only " f"(detected {num_devices} chips)"
         )
@@ -429,6 +424,37 @@ def _detect_perf_workload(variant_name: str) -> tuple[PerfWorkload, str | None]:
 
 
 PERF_WORKLOAD, PERF_SKIP_REASON = _detect_perf_workload(VARIANT)
+_TORUS_XY_CERTIFIED = os.environ.get("PREFILL_TORUS_XY_CERTIFIED") == "1" and bool(
+    os.environ.get("TT_MESH_GRAPH_DESC_PATH")
+)
+if PERF_WORKLOAD.system_name == "Galaxy" and not _TORUS_XY_CERTIFIED:
+    PERF_SKIP_REASON = "Galaxy sparse MLA perf requires a certified TorusXY graph descriptor"
+PERF_FABRIC_BY_SYSTEM = {
+    "QuietBox": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+    "LoudBox": ttnn.FabricConfig.FABRIC_2D,
+    "Galaxy": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+}
+PERF_FABRIC = PERF_FABRIC_BY_SYSTEM.get(PERF_WORKLOAD.system_name, ttnn.FabricConfig.FABRIC_2D)
+PERF_FABRIC_ID = {
+    ttnn.FabricConfig.FABRIC_2D: "fabric2d",
+    ttnn.FabricConfig.FABRIC_2D_TORUS_X: "torus-x",
+    ttnn.FabricConfig.FABRIC_2D_TORUS_XY: "torus-xy",
+}[PERF_FABRIC]
+PERF_TOPOLOGY_MARK = pytest.mark.requires_mesh_topology(
+    mesh_shape=PERF_WORKLOAD.mesh_shape,
+    topology="ring"
+    if PERF_FABRIC == ttnn.FabricConfig.FABRIC_2D_TORUS_X
+    else f"mesh-{PERF_WORKLOAD.sp}x{PERF_WORKLOAD.tp}",
+)
+PERF_MESH_PARAM = (
+    pytest.param(
+        PERF_WORKLOAD.mesh_shape,
+        marks=(pytest.mark.skip(reason=PERF_SKIP_REASON), PERF_TOPOLOGY_MARK),
+        id="unsupported",
+    )
+    if PERF_SKIP_REASON
+    else pytest.param(PERF_WORKLOAD.mesh_shape, marks=PERF_TOPOLOGY_MARK, id=PERF_WORKLOAD.id)
+)
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -602,7 +628,7 @@ PERF_CASES = [
 ]
 
 
-@pytest.mark.parametrize("mesh_device", [PERF_WORKLOAD.mesh_shape], ids=[PERF_WORKLOAD.id], indirect=True)
+@pytest.mark.parametrize("mesh_device", [PERF_MESH_PARAM], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -613,7 +639,7 @@ PERF_CASES = [
             "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
         }
     ],
-    ids=["fabric2d"],
+    ids=[PERF_FABRIC_ID],
     indirect=True,
 )
 @pytest.mark.parametrize("attn_mode,kv_cache_format", PERF_CASES)
@@ -795,7 +821,11 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             f"{workload.system_name} proxy "
             f"{workload.chunk_tokens}-tok chunk, {span}, SP={workload.sp}×TP={workload.tp}",
             f"Galaxy target: {CHUNK_TOKENS}-tok chunk @ {galaxy_cache}-tok cache, SP={GALAXY_SP}×TP={GALAXY_TP}; "
-            f"local chunk={CHUNK_TOKENS // GALAXY_SP}, local MLA heads={workload.num_attention_heads // GALAXY_TP}",
+            f"local chunk={CHUNK_TOKENS // GALAXY_SP}, "
+            f"Galaxy local MLA/index heads={workload.num_attention_heads // GALAXY_TP}/"
+            f"{workload.index_n_heads // GALAXY_TP}; "
+            f"proxy local MLA/index heads={workload.num_attention_heads // workload.tp}/"
+            f"{workload.index_n_heads // workload.tp}",
             f"critical-path device-kernel time over the {'prefill' if is_cold else 'chunk'} "
             f"(realtime profiler; per-program max across chips): "
             f"{total_ns/1e6:.3f} ms across {int(by_op['count'].sum())} device programs",
