@@ -227,6 +227,76 @@ def test_binary_sfpu_accuracy(device, dtype):
         assert_allclose(torch_output_tensor, output, rtol=0.005, atol=1e-3)  # Ensures > 99.5% accuracy
 
 
+# Regression for issue #52675 (tensor-exponent path): the bf16 binary power ran
+# the same single-cubic log2 as the unary path, so a tensor exponent with large
+# magnitude produced silently wrong results (e.g. 0.99609375 ** 100 was 0.8008
+# instead of 0.6761) and overflow wrapped to NaN instead of +inf. bf16 now routes
+# through the accurate fp32 algorithm; verify large-magnitude tensor exponents
+# stay within a few ULP and overflow saturates to +inf.
+@pytest.mark.parametrize("exponent", [32.0, 100.0, 500.0])
+def test_binary_pow_bf16_large_exponent(device, exponent):
+    torch.manual_seed(1)
+    bases = torch.logspace(-3, 3, 4096, dtype=torch.float32).reshape(64, 64).to(torch.bfloat16)
+    exps = torch.full([64, 64], exponent, dtype=torch.bfloat16)
+    torch_output = torch.pow(bases, exps)
+
+    ttnn_base = ttnn.from_torch(bases, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_exp = ttnn.from_torch(exps, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(ttnn.pow(ttnn_base, ttnn_exp))
+
+    finite = torch_output.isfinite() & (torch_output.abs() >= torch.finfo(torch.bfloat16).tiny)
+    assert finite.any(), f"exponent {exponent}: no finite, non-denormal golden outputs to compare"
+    assert_with_ulp(torch_output[finite], output[finite], 3)
+
+
+@pytest.mark.parametrize(
+    "base,exponent",
+    [
+        (2.0, 128.0),  # 2**128 overflows fp32 (issue repro)
+        (10.0, 39.0),  # 10**39 overflows fp32 (issue repro)
+        (1000.0, 15.0),  # 1000**15 overflows fp32; 10**15 would not
+    ],
+)
+def test_binary_pow_bf16_overflow_to_inf(device, base, exponent):
+    torch.manual_seed(0)
+    base_t = torch.full([1, 1, 32, 32], base, dtype=torch.bfloat16)
+    exp = torch.full([1, 1, 32, 32], exponent, dtype=torch.bfloat16)
+    golden = torch.pow(base_t, exp)
+    assert torch.isinf(
+        golden
+    ).all(), f"base={base} exponent={exponent}: golden does not overflow (got {golden[0,0,0,0]})"
+
+    ttnn_base = ttnn.from_torch(base_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_exp = ttnn.from_torch(exp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.pow(ttnn_base, ttnn_exp))
+
+    assert torch.isinf(result).all(), "overflow wrapped to a finite value instead of +inf"
+    assert (result > 0).all(), "overflow produced -inf/NaN instead of +inf"
+
+
+@pytest.mark.parametrize(
+    "base,exponent,expected_ulp",
+    [
+        (2.0, 15.0, 0),  # exact power of two; pre-fix returned 31744 (-3.1%)
+        (0.99609375, 100.0, 3),  # issue repro: pre-fix 0.832 vs true 0.6761 (+23.1%)
+        (0.99609375, 500.0, 3),  # issue repro: pre-fix 0.3295 vs true 0.1413 (+133%)
+        (2.0, 100.0, 3),  # large exponent, exact base
+        (0.49804688, 100.0, 3),  # small base, large exponent
+    ],
+)
+def test_binary_pow_bf16_issue_regressions(device, base, exponent, expected_ulp):
+    torch.manual_seed(0)
+    base_t = torch.full([1, 1, 32, 32], base, dtype=torch.bfloat16)
+    exp = torch.full([1, 1, 32, 32], exponent, dtype=torch.bfloat16)
+    golden = torch.pow(base_t, exp)
+
+    ttnn_base = ttnn.from_torch(base_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_exp = ttnn.from_torch(exp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.pow(ttnn_base, ttnn_exp))
+
+    assert_with_ulp(golden, result, expected_ulp)
+
+
 def test_special_input_fp32(device):
     a = torch.tensor(
         [[1.0, 0.999, 0.999, 0.999, 0.999, 0.234, 0.985, 1.456, 0.0, -1.0, 1.2, -5.3, 6.7, 9.8, -10.9, 5.999]],
