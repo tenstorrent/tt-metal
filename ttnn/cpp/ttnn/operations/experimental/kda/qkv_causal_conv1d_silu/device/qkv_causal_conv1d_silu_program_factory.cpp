@@ -83,13 +83,14 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     const m2::TensorParamName K{"k"};
     const m2::TensorParamName V{"v"};
 
-    const uint32_t tile_size = tt::tile_size(tt::DataFormat::Float16_b);
-    auto make_dfb = [tile_size](const m2::DFBSpecName& name, uint32_t tiles) {
+    const auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const uint32_t tile_size = tt::tile_size(input_data_format);
+    auto make_dfb = [input_data_format, tile_size](const m2::DFBSpecName& name, uint32_t tiles) {
         return m2::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = tile_size,
             .num_entries = tiles,
-            .data_format_metadata = tt::DataFormat::Float16_b,
+            .data_format_metadata = input_data_format,
         };
     };
 
