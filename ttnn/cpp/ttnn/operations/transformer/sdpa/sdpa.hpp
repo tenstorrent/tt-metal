@@ -111,7 +111,16 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k = std::nullopt,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v = std::nullopt);
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v = std::nullopt,
+    // Trace-safe metadata path, same contract as ring_mla's below: when slot_id and
+    // kv_actual_isl_tensor are both set, the per-chunk scalars are read on-device from these
+    // 1-element uint32 DRAM tensors instead of being patched into runtime args, so one captured
+    // trace replays across chunks. Chunked prefill needs this because kv_actual_isl / logical_n
+    // change every chunk, and a trace freezes whatever was live at capture.
+    const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
+    std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,

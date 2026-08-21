@@ -578,6 +578,18 @@ std::optional<uint32_t> compute_gather_valid_Ht(
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t n_local_q = tensor_args.input_q.padded_shape()[2];  // per-device Q slab (chunk_local)
     const uint32_t chunk_global = n_local_q * ring_size;
+    if (tensor_args.has_metadata()) {
+        // Metadata path: the all-gather reader recomputes this per dispatch from kv_actual_isl
+        // (ring_attention_all_gather_reader.cpp) and CLAMPS against the value baked here, so a
+        // create-time bound derived from host logical_n silently caps every later dispatch at the
+        // creating chunk's prefix. Under a captured trace that is permanent — the host patch that
+        // would otherwise grow it per dispatch never runs on replay — and later chunks attend a
+        // truncated history, which degrades with ring depth instead of failing outright.
+        //
+        // The device value is authoritative here, so bound to the full per-device K extent and let
+        // the on-device recompute do the narrowing.
+        return tensor_args.input_k.padded_shape()[2] / tt::constants::TILE_HEIGHT;
+    }
     const uint32_t valid_slabs = (static_cast<uint32_t>(args.logical_n) + chunk_global - 1) / chunk_global;
     return valid_slabs * (n_local_q / tt::constants::TILE_HEIGHT);
 }
@@ -2850,11 +2862,23 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         TT_FATAL(
             halo_transport_coord.has_value() && halo_destination_coord.has_value(),
             "Sliding attention requires a next-device route");
+        // send_to_next_start_Ht is linear in the chunk index, so on the scalar path the host relocates
+        // the halo page ranges every dispatch (apply_ring_joint_scalar_runtime_args). A captured trace
+        // never replays that, so on the metadata path hand the halo kernels the same kv_actual_isl the
+        // rest of the op reads and let them derive the start themselves; the value above then serves as
+        // the baked origin they shift away from.
         const RingAttentionNeighborHaloConfig neighbor_halo{
             .send_to_next_start_Ht = chunked_sliding_halo_layout.send_tail_start_tile(transport_rank),
             .send_to_next_count_Ht = chunked_sliding_halo_layout.halo_tile_rows,
             .send_backward = linear_wrap_halo,
             .unicast_hops = linear_wrap_halo ? ring_size - 1 : 1,
+            .slot_id = tensor_args.has_metadata() ? &tensor_args.slot_id.value() : nullptr,
+            .kv_actual_isl = tensor_args.has_metadata() ? &tensor_args.kv_actual_isl.value() : nullptr,
+            .kv_cache_num_layers = args.kv_cache_num_layers,
+            .kv_cache_layer_idx = args.kv_cache_layer_idx,
+            .q_local_tile_rows = chunked_sliding_halo_layout.q_local_tile_rows,
+            .halo_tile_rows = chunked_sliding_halo_layout.halo_tile_rows,
+            .source_device = transport_rank,
         };
         log_debug(
             tt::LogOp,

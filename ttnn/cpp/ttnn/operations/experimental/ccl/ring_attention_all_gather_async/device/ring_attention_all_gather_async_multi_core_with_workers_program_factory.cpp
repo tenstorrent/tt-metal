@@ -163,6 +163,9 @@ void ring_attention_neighbor_halo_exchange_helper(
 
     TT_FATAL(!input_tensors.empty() && input_tensors.size() == output_tensors.size(), "Invalid halo tensor list");
     TT_FATAL(!semaphores.empty(), "Neighbor halo requires an incoming-ready semaphore");
+    TT_FATAL(
+        halo.derives_cache_batch_on_device() == halo.derives_start_on_device(),
+        "Neighbor halo slot_id and kv_actual_isl metadata must be supplied together");
 
     auto* mesh_device = input_tensors.front().device();
     const bool wrap_endpoint = ring_index == 0 || ring_index + 1 == ring_size;
@@ -187,6 +190,9 @@ void ring_attention_neighbor_halo_exchange_helper(
     constexpr uint32_t data_cb = tt::CB::c_in2;
     constexpr uint32_t packet_header_cb = tt::CB::c_in1;
     constexpr uint32_t packet_headers = 8;
+    constexpr uint32_t reader_meta_cb = tt::CB::c_in4;
+    constexpr uint32_t writer_meta_cb = tt::CB::c_in5;
+    constexpr uint32_t meta_cb_page_size = 32;
     const uint32_t packet_header_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     desc.cbs.push_back(CBDescriptor{
@@ -203,6 +209,19 @@ void ring_attention_neighbor_halo_exchange_helper(
             .data_format = tt::DataFormat::RawUInt32,
             .page_size = packet_header_bytes}}},
     });
+    if (halo.derives_start_on_device()) {
+        for (const uint32_t meta_cb : {reader_meta_cb, writer_meta_cb}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = meta_cb_page_size,
+                .core_ranges = workers,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(meta_cb),
+                    .data_format = tt::DataFormat::RawUInt32,
+                    .page_size = meta_cb_page_size,
+                }}},
+            });
+        }
+    }
 
     const uint32_t num_inputs = input_tensors.size();
     KernelDescriptor reader_kernel{};
@@ -212,12 +231,19 @@ void ring_attention_neighbor_halo_exchange_helper(
     reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel.core_ranges = workers;
     reader_kernel.config = WriterConfigDescriptor{};
-    reader_kernel.compile_time_args = {ring_index, ring_size, data_cb, pages_per_packet, page_size, num_inputs};
+    reader_kernel.compile_time_args = {
+        ring_index, ring_size, data_cb, pages_per_packet, page_size, num_inputs, reader_meta_cb};
     for (uint32_t input = 0; input < num_inputs; ++input) {
         reader_kernel.compile_time_args.push_back(page_size);
     }
     for (const auto& input : input_tensors) {
         tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_kernel.compile_time_args);
+    }
+    // Trace-safe halo relocation, appended after the per-input accessors so existing indices hold.
+    reader_kernel.compile_time_args.push_back(halo.derives_start_on_device() ? 1u : 0u);
+    if (halo.derives_start_on_device()) {
+        tt::tt_metal::TensorAccessorArgs(halo.slot_id->buffer()).append_to(reader_kernel.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(halo.kv_actual_isl->buffer()).append_to(reader_kernel.compile_time_args);
     }
 
     KernelDescriptor writer_kernel{};
@@ -236,12 +262,17 @@ void ring_attention_neighbor_halo_exchange_helper(
         unicast_forward_args[0],
         unicast_forward_args[1],
         static_cast<uint32_t>(halo.send_backward),
+        writer_meta_cb,
     };
     for (uint32_t input = 0; input < num_inputs; ++input) {
         writer_kernel.compile_time_args.push_back(page_size);
     }
     for (const auto& output : output_tensors) {
         tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_kernel.compile_time_args);
+    }
+    writer_kernel.compile_time_args.push_back(halo.derives_start_on_device() ? 1u : 0u);
+    if (halo.derives_start_on_device()) {
+        tt::tt_metal::TensorAccessorArgs(halo.kv_actual_isl->buffer()).append_to(writer_kernel.compile_time_args);
     }
 
     auto halo_signaler = fused_op_signaler;
@@ -262,17 +293,27 @@ void ring_attention_neighbor_halo_exchange_helper(
     }
     halo_signaler.initialized_all_gather = true;
 
+    // The halo needs a semaphore of its OWN. semaphores[0]/[1] belong to the all-gather's
+    // backward/forward directions, and the halo lands on the same worker core as the
+    // backward direction because both allocate from this same core_grid_offset. Sharing one
+    // counter between two protocols with different arrival counts deadlocks the all-gather:
+    // see docs/superpowers/specs/2026-08-06-ring-trace-replay-deadlock.md. Callers that
+    // supply a third semaphore get the isolated counter; older two-semaphore callers fall
+    // back to the previous behaviour so this stays source-compatible.
+    const auto& halo_semaphore = semaphores.size() > 2 ? semaphores.at(2) : semaphores.front();
     for (uint32_t link = 0; link < num_links; ++link) {
         KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(static_cast<uint32_t>(
-            semaphores.front().address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+        reader_args.push_back(
+            static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
         KernelDescriptor::RTArgList writer_args;
         const CoreCoord worker_physical = mesh_device->worker_core_from_logical_core(worker_cores[link]);
         writer_args.push_back(worker_physical.x);
         writer_args.push_back(worker_physical.y);
-        writer_args.push_back(static_cast<uint32_t>(
-            semaphores.front().address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+        writer_args.push_back(
+            static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
 
+        std::vector<uint32_t> halo_input_Wt;
+        halo_input_Wt.reserve(num_inputs);
         for (uint32_t input = 0; input < num_inputs; ++input) {
             const auto input_shape = input_tensors[input].padded_shape();
             const auto output_shape = output_tensors[input].padded_shape();
@@ -323,8 +364,9 @@ void ring_attention_neighbor_halo_exchange_helper(
                 "input_batch_slice_idx={} out of range for input batch={}",
                 input_batch_slice_idx.value_or(0),
                 input_shape[0]);
-            const uint32_t batch_head_count =
-                input_batch_slice_idx.has_value() ? input_heads : input_shape[0] * input_heads;
+            const uint32_t batch_head_count = input_batch_slice_idx.has_value() || halo.derives_cache_batch_on_device()
+                                                  ? input_heads
+                                                  : input_shape[0] * input_heads;
             const uint32_t input_batch_base = ttnn::ring_attention_all_gather_async_detail::input_batch_base_pages(
                 input_batch_slice_idx.value_or(0), input_heads, input_Ht, input_Wt);
 
@@ -339,6 +381,34 @@ void ring_attention_neighbor_halo_exchange_helper(
             writer_args.push_back(input_tile_start);
             writer_args.push_back(input_tile_end);
             writer_args.push_back(range_start_page);
+            halo_input_Wt.push_back(input_Wt);
+        }
+
+        // Metadata block for the on-device halo relocation. Sits between the per-input descriptors and
+        // the accessor args in BOTH kernels, so the host relocation's field offsets are unaffected.
+        if (halo.derives_start_on_device()) {
+            const auto append_halo_meta =
+                [&](KernelDescriptor::RTArgList& args, bool with_cache_batch, bool with_ring_size) {
+                    if (with_cache_batch) {
+                        args.push_back(halo.slot_id->buffer());
+                        args.push_back(halo.kv_cache_num_layers);
+                        args.push_back(halo.kv_cache_layer_idx);
+                    }
+                    args.push_back(halo.kv_actual_isl->buffer());
+                    args.push_back(halo.q_local_tile_rows);
+                    args.push_back(halo.halo_tile_rows);
+                    args.push_back(halo.source_device);
+                    args.push_back(halo.send_to_next_start_Ht);
+                    if (with_ring_size) {
+                        args.push_back(ring_size);
+                    }
+                    for (const uint32_t wt : halo_input_Wt) {
+                        args.push_back(wt);
+                    }
+                };
+            // The reader has ring_size as a compile-time arg; the writer does not.
+            append_halo_meta(reader_args, /*with_cache_batch=*/true, /*with_ring_size=*/false);
+            append_halo_meta(writer_args, /*with_cache_batch=*/false, /*with_ring_size=*/true);
         }
         for (const auto& input : input_tensors) {
             reader_args.push_back(input.buffer());

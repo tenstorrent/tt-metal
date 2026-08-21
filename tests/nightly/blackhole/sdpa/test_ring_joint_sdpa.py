@@ -590,6 +590,7 @@ def open_ring_joint_sdpa_runtime(
     topology: Topology = None,
     reserve_llk_kernel_config: bool = True,
     full_mesh: bool = False,
+    num_global_semaphores: int = 2,
 ):
     if full_mesh:
         fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
@@ -644,7 +645,9 @@ def open_ring_joint_sdpa_runtime(
             sdpa_compute_grid=(mesh_config.sdpa_cols, mesh_config.grid_rows),
             ccl_column=mesh_config.ccl_column,
             worker_sub_device_id=worker_sub_device_id,
-            ccl_semaphore_handles=create_global_semaphores(mesh_device, ccl_sub_device_crs, 0),
+            ccl_semaphore_handles=create_global_semaphores(
+                mesh_device, ccl_sub_device_crs, 0, count=num_global_semaphores
+            ),
             compute_kernel_config=ttnn.init_device_compute_kernel_config(
                 mesh_device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -761,9 +764,9 @@ def generate_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, Mode
     return configs, config_ids
 
 
-def create_global_semaphores(mesh_device, cores, initial_value):
+def create_global_semaphores(mesh_device, cores, initial_value, *, count=2):
     """Create global semaphore handles for CCL coordination."""
-    return [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+    return [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(count)]
 
 
 def profile_ring_joint_runtime_duration_ns(mesh_device, run_fn):
@@ -828,6 +831,10 @@ def call_sdpa(
     is_cross=False,
     attention_sink=None,
     sliding_window_size=None,
+    slot_id=None,
+    kv_actual_isl_tensor=None,
+    kv_cache_num_layers=None,
+    kv_cache_layer_idx=None,
 ):
     tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
@@ -859,6 +866,10 @@ def call_sdpa(
         kv_actual_isl=kv_actual_isl,
         attention_sink=attention_sink,
         sliding_window_size=sliding_window_size,
+        slot_id=slot_id,
+        kv_actual_isl_tensor=kv_actual_isl_tensor,
+        kv_cache_num_layers=kv_cache_num_layers,
+        kv_cache_layer_idx=kv_cache_layer_idx,
     )
     return tt_out
 
@@ -4510,6 +4521,240 @@ def test_ring_mla_metadata_trace_replay_matches_scalar(num_chunks):
         if trace_id is not None:
             ttnn.release_trace(mesh_device, trace_id)
         close_ring_joint_sdpa_runtime(runtime)
+
+
+RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
+
+
+def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores():
+    """Replay changing prefixes through mixed sliding/dense CCL with an isolated halo semaphore."""
+    mesh_config = gpt_oss_chunked_mesh_config()
+    sp_size = mesh_config.sp_size
+    chunk_local = 256
+    chunk_global = chunk_local * sp_size
+    prefix_groups = (0, 1, 2)
+    stable_groups = max(prefix_groups) + 2
+    stable_kv_seq = sp_size * stable_groups * chunk_local
+
+    local_q_heads, local_kv_heads, head_dim = 8, 1, 64
+    nhq = local_q_heads * mesh_config.tp_size
+    nhk = local_kv_heads * mesh_config.tp_size
+    cache_user_slot, num_layers, layer_idx = 1, 2, 1
+    cache_batch_idx = cache_user_slot * num_layers + layer_idx
+    cache_batch = cache_batch_idx + 1
+
+    torch.manual_seed(CHUNKED_PREFILL_SEED + 701)
+    total_seq = (max(prefix_groups) + 1) * chunk_global
+    q_full = fa_rand(1, nhq, total_seq, head_dim)
+    k_full = fa_rand(1, nhk, total_seq, head_dim)
+    v_full = fa_rand(1, nhk, total_seq, head_dim)
+    chunks = []
+    for prefix_group in prefix_groups:
+        kv_actual_isl = prefix_group * chunk_global
+        logical_n = kv_actual_isl + chunk_global
+        q_host, k_host, v_host, valid_rows, _ = build_kv_pad_rotation_inputs(
+            k_full[:, :, :kv_actual_isl, :],
+            v_full[:, :, :kv_actual_isl, :],
+            q_full[:, :, kv_actual_isl:logical_n, :].contiguous(),
+            k_full[:, :, kv_actual_isl:logical_n, :].contiguous(),
+            v_full[:, :, kv_actual_isl:logical_n, :].contiguous(),
+            kv_actual_isl,
+            sp_size,
+            chunk_local,
+        )
+        # Pad each device slab independently. Padding the already-flattened sequence would move later
+        # devices into an earlier device's stable-capacity tail and invalidate the physical cache layout.
+        stable_seq_per_dev = stable_kv_seq // sp_size
+        active_seq_per_dev = k_host.shape[2] // sp_size
+        k_cache_per_dev = torch.randn(cache_batch, nhk, sp_size, stable_seq_per_dev, head_dim) * 100
+        v_cache_per_dev = torch.randn(cache_batch, nhk, sp_size, stable_seq_per_dev, head_dim) * 100
+        k_cache_per_dev[cache_batch_idx, :, :, :active_seq_per_dev, :].copy_(
+            k_host[0].reshape(nhk, sp_size, active_seq_per_dev, head_dim)
+        )
+        v_cache_per_dev[cache_batch_idx, :, :, :active_seq_per_dev, :].copy_(
+            v_host[0].reshape(nhk, sp_size, active_seq_per_dev, head_dim)
+        )
+        k_cache = k_cache_per_dev.reshape(cache_batch, nhk, stable_kv_seq, head_dim)
+        v_cache = v_cache_per_dev.reshape(cache_batch, nhk, stable_kv_seq, head_dim)
+        chunks.append((kv_actual_isl, logical_n, q_host, k_cache, v_cache, valid_rows))
+
+    runtime = open_ring_joint_sdpa_runtime(
+        mesh_config, trace_region_size=RING_JOINT_TRACE_REGION_SIZE, num_global_semaphores=3
+    )
+    mesh_device = runtime.mesh_device
+    trace_id = None
+    try:
+        mesh_device.enable_program_cache()
+        input_dims = [None, None]
+        input_dims[runtime.sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            input_dims[runtime.tp_axis] = 1
+        persistent_dims = [None, None]
+        if mesh_config.tp_size > 1:
+            persistent_dims[runtime.tp_axis] = 1
+
+        def make_tensor(host, dtype, dims, *, device=None):
+            return ttnn.from_torch(
+                host,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+            )
+
+        def upload(host, dtype, dims):
+            return make_tensor(host, dtype, dims, device=mesh_device)
+
+        tt_q = upload(chunks[0][2], ttnn.bfloat16, input_dims)
+        tt_k = upload(chunks[0][3], ttnn.bfloat8_b, input_dims)
+        tt_v = upload(chunks[0][4], ttnn.bfloat8_b, input_dims)
+        sliding_shape = (1, nhk, 128, head_dim)
+        dense_shape = (1, nhk, stable_kv_seq, head_dim)
+        sliding_k = upload(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims)
+        sliding_v = upload(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims)
+        dense_k = upload(torch.zeros(dense_shape), ttnn.bfloat8_b, persistent_dims)
+        dense_v = upload(torch.zeros(dense_shape), ttnn.bfloat8_b, persistent_dims)
+        zero_buffers = (
+            make_tensor(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims),
+            make_tensor(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims),
+            make_tensor(torch.zeros(dense_shape), ttnn.bfloat8_b, persistent_dims),
+            make_tensor(torch.zeros(dense_shape), ttnn.bfloat8_b, persistent_dims),
+        )
+        device_buffers = (sliding_k, sliding_v, dense_k, dense_v)
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, cache_user_slot, chunks[0][0])
+
+        def stage(chunk_index):
+            kv_actual_isl, _, q_host, k_host, v_host, _ = chunks[chunk_index]
+            ttnn.copy_host_to_device_tensor(make_tensor(q_host, ttnn.bfloat16, input_dims), tt_q)
+            ttnn.copy_host_to_device_tensor(make_tensor(k_host, ttnn.bfloat8_b, input_dims), tt_k)
+            ttnn.copy_host_to_device_tensor(make_tensor(v_host, ttnn.bfloat8_b, input_dims), tt_v)
+            for zero, buffer in zip(zero_buffers, device_buffers):
+                ttnn.copy_host_to_device_tensor(zero, buffer)
+            ttnn.copy_host_to_device_tensor(_ring_mla_host_scalar_tensor(mesh_device, cache_user_slot), tt_slot_id)
+            ttnn.copy_host_to_device_tensor(_ring_mla_host_scalar_tensor(mesh_device, kv_actual_isl), tt_kv_actual_isl)
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=64,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+        composer = ttnn.create_mesh_composer(
+            mesh_device,
+            ttnn.MeshComposerConfig(
+                input_dims[0] if input_dims[0] is not None else -1,
+                input_dims[1] if input_dims[1] is not None else -1,
+            ),
+        )
+
+        def invoke(*, use_metadata, logical_n, kv_actual_isl):
+            common = dict(
+                logical_n=logical_n,
+                is_causal=True,
+                is_balanced=False,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                sp_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                worker_sub_device_id=runtime.worker_sub_device_id,
+                ccl_column=runtime.ccl_column,
+                kv_cache_batch_idx=None if use_metadata else cache_batch_idx,
+                kv_actual_isl=None if use_metadata else kv_actual_isl,
+                slot_id=tt_slot_id if use_metadata else None,
+                kv_actual_isl_tensor=tt_kv_actual_isl if use_metadata else None,
+                kv_cache_num_layers=num_layers if use_metadata else None,
+                kv_cache_layer_idx=layer_idx if use_metadata else None,
+            )
+            sliding = call_sdpa(
+                tt_q,
+                tt_k,
+                tt_v,
+                p_buf_k=sliding_k,
+                p_buf_v=sliding_v,
+                sliding_window_size=128,
+                **common,
+            )
+            dense = call_sdpa(tt_q, tt_k, tt_v, p_buf_k=dense_k, p_buf_v=dense_v, **common)
+            return sliding, dense
+
+        def read_outputs(outputs, chunk_index):
+            rows = chunks[chunk_index][5]
+            return tuple(ttnn.to_torch(out, mesh_composer=composer)[:, :, rows, :] for out in outputs)
+
+        references = []
+        for chunk_index, (kv_actual_isl, logical_n, *_) in enumerate(chunks):
+            stage(chunk_index)
+            outputs = invoke(use_metadata=False, logical_n=logical_n, kv_actual_isl=kv_actual_isl)
+            ttnn.synchronize_device(mesh_device)
+            references.append(read_outputs(outputs, chunk_index))
+            for output in outputs:
+                ttnn.deallocate(output)
+
+        gqa_ratio = local_q_heads // local_kv_heads
+        torch_sliding_ref = torch_chunked_causal_sdpa_reference(
+            q_full[:, :, :chunk_global, :],
+            k_full[:, :, :chunk_global, :].repeat_interleave(gqa_ratio, dim=1),
+            v_full[:, :, :chunk_global, :].repeat_interleave(gqa_ratio, dim=1),
+            0,
+            sliding_window_size=128,
+        )
+        scalar_rmse = torch.sqrt(((torch_sliding_ref - references[0][0]) ** 2).mean()).item()
+        assert scalar_rmse < DEFAULT_RMSE_THRESHOLD, f"scalar sliding reference RMSE={scalar_rmse}"
+
+        # The host value remains fixed at the stable cache capacity. Prefix growth and halo relocation
+        # must therefore come exclusively from the two metadata tensors refreshed by stage().
+        capture_logical_n = stable_kv_seq
+        stage(0)
+        warm = invoke(use_metadata=True, logical_n=capture_logical_n, kv_actual_isl=None)
+        ttnn.synchronize_device(mesh_device)
+        for mode, got, expected in zip(("sliding", "dense"), read_outputs(warm, 0), references[0]):
+            mismatch = got != expected
+            assert not mismatch.any(), (
+                f"eager {mode} metadata differs from scalar path: mismatches={mismatch.sum().item()}, "
+                f"first={mismatch.nonzero()[0].tolist()}, "
+                f"heads={mismatch.any(dim=(0, 2, 3)).nonzero().flatten().tolist()}, "
+                f"rows={mismatch.any(dim=(0, 1, 3)).nonzero().flatten().tolist()}, "
+                f"max abs diff={(got - expected).abs().max().item()}"
+            )
+        for output in warm:
+            ttnn.deallocate(output)
+
+        stage(0)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        traced_outputs = invoke(use_metadata=True, logical_n=capture_logical_n, kv_actual_isl=None)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+        for chunk_index in (0, 1, 2, 1, 0):
+            stage(chunk_index)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            for mode, got, expected in zip(
+                ("sliding", "dense"), read_outputs(traced_outputs, chunk_index), references[chunk_index]
+            ):
+                assert torch.equal(got, expected), (
+                    f"{mode} metadata replay differs from scalar path at prefix group {chunk_index}; "
+                    f"max abs diff={(got - expected).abs().max().item()}"
+                )
+
+        # Avoid intermediate readbacks here: they used to add enough settling to hide the CCL race.
+        for replay in range(32):
+            stage(replay % len(chunks))
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+
+        stage(2)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        for mode, got, expected in zip(("sliding", "dense"), read_outputs(traced_outputs, 2), references[2]):
+            assert torch.equal(got, expected), f"{mode} output changed after the readback-free stress loop"
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(mesh_device, trace_id)
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 
 
 # Generate perf test parameters dynamically based on detected hardware for different models (WAN, MLA, VideGen...)
