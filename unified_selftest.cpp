@@ -411,6 +411,23 @@ namespace unified {
 
 // INPUT + INTERMED + OUTPUT: two DRAM loads, an SFPU add into an intermediate,
 // a second add, then a DRAM store.
+// The two coordinate orderings must actually disagree, or naming them is decoration.
+// Compile-time facts, so static_asserts are the whole test.
+namespace coord_checks {
+static_assert(LogicalCoord::xy(1, 2).x == 1 && LogicalCoord::xy(1, 2).y == 2, "xy takes x first");
+static_assert(LogicalCoord::yx(1, 2).y == 1 && LogicalCoord::yx(1, 2).x == 2, "yx takes y first");
+static_assert(LogicalCoord::xy(1, 2) != LogicalCoord::yx(1, 2), "the orderings differ");
+static_assert(LogicalCoord::xy(1, 2) == LogicalCoord::yx(2, 1), "and mirror each other");
+static_assert(PhysicalCoord::xy(3, 4).x == 3 && PhysicalCoord::yx(3, 4).y == 3, "same for physical");
+
+// Extent carries the same hazard -- h before w here, w before h in metal's grid sizes --
+// so it gets the same treatment and the same check.
+static_assert(Extent::hw(1, 8).h == 1 && Extent::hw(1, 8).w == 8, "hw takes h first");
+static_assert(Extent::wh(1, 8).w == 1 && Extent::wh(1, 8).h == 8, "wh takes w first");
+static_assert(Extent::hw(1, 8) != Extent::wh(1, 8), "the orderings differ");
+static_assert(Extent::hw(1, 8) == Extent::wh(8, 1), "and mirror each other");
+}  // namespace coord_checks
+
 // Shape::dim, both directions. These are compile-time facts, so a static_assert is the
 // whole test -- nothing runs, and a wrong answer never reaches a device.
 namespace shape_checks {
@@ -607,7 +624,7 @@ void example_retained_state() {
 void example_peer_hop() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
-    LogicalCoord peer{0, 0};
+    LogicalCoord peer = LogicalCoord::yx(0, 0);
     using Row2 = Shape<1, 2>;
     Storage<Row2> in_storage(0);
     Storage<Row2> hop_storage(1);

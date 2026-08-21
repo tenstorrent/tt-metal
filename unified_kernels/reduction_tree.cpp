@@ -110,7 +110,7 @@ void kernel_main() {
     const auto this_core = u::LogicalCoord::this_core();
 
     // Row 0 of this core's column does the gathering.
-    const u::LogicalCoord root{0, this_core.x};
+    const u::LogicalCoord root = u::LogicalCoord::yx(0, this_core.x);
 
     // Where this core's partial lands in the gather buffer. In BYTES: the offset
     // goes straight onto a write pointer, and each core owns one slice of
