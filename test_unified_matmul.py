@@ -28,7 +28,8 @@ CB_IN0, CB_IN1, CB_OUT, CB_ACC = 0, 1, 16, 24
 TILE = 32
 
 
-def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0):
+def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0, fidelity=None):
+    """mode: "dst" or "l1" accumulate through a buffer; "single" stores straight out."""
     """relu: None, "epilogue" (finish only), or "per_step"."""
     torch.manual_seed(seed)
     # The k dimension is split into k_blocks blocks of kt tiles each. The reader
@@ -77,10 +78,12 @@ def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0):
         defines=(
             [("MM_RT_DIM", str(rt)), ("MM_CT_DIM", str(ct)), ("MM_KT_DIM", str(kt)), ("MM_K_BLOCKS", str(k_blocks))]
             + ([("MM_ACC_L1", "1")] if mode == "l1" else [])
+            + ([("MM_SINGLE_SHOT", "1")] if mode == "single" else [])
             + ([("MM_RELU_EPILOGUE", "1")] if relu == "epilogue" else [])
             + ([("MM_RELU_PER_STEP", "1")] if relu == "per_step" else [])
             + ([("MM_RELU_BOTH", "1")] if relu == "both" else [])
         ),
+        **(fidelity or {}),
     )
 
     logger.info(f"running unified matmul: rt={rt} ct={ct} kt={kt} k_blocks={k_blocks} mode={mode} relu={relu}")

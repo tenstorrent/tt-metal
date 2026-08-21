@@ -1643,6 +1643,52 @@ per-pass fixed costs (~0.217us x ~10 passes) plus the strategy inits, of which t
 suspects are the four matmul_block_inits a chunk now runs and the per-band init the fused
 mask forces after every addend.
 
+### Matmul swept against ttnn: two holes, and neither is arithmetic
+
+`bench_matmul.py` sweeps output rows and columns in tiles, the inner dimension, the number
+of k-blocks accumulated over, and how the running total is carried -- the axes of ttnn's
+own single-core matmul microbenchmark (`test_moreh_microbenchmark.py` -> `test_compute_mm`).
+Both sides pinned to one core and HiFi2. 160 configs.
+
+It asks the library whether a shape is expressible by TRYING it, and classifies the failure
+from the library's own assert text, rather than re-deriving the rule in Python where it
+would go stale and then lie in the direction that matters.
+
+**Where we are fine.** Every shape that fits takes 1.02x to 1.28x, and the single-shot
+banded path is FASTER than ttnn at several wide ones -- 8x8 at kt=2 is 0.90x, 4x8 is 0.92x,
+2x8 is 0.96x. There is no shape-dependent cliff.
+
+**Hole 1, functional: a large output block cannot be ACCUMULATED.** `rt*ct > 8` is refused
+on both accumulating modes, which is 48 of the 160 cells. Single-shot covers all sixteen
+rt x ct combinations via row banding, so the gap is specific: big output block AND several
+k-blocks together. A real matmul with a long K and a wide output has to split the output
+today.
+
+**Hole 2, rate: each k-block costs about 1.3us, and ttnn's k-steps cost nearly nothing.**
+This is the sharper finding, and it falls out of comparing two ways to spell the same
+arithmetic. K = 8 tiles as ONE block against the same K as FOUR blocks, at 1x1 output:
+
+| | ours | ttnn | ratio |
+|---|---|---|---|
+| kb=1, kt=8 | 3.36 us | 2.96 us | 1.13x |
+| kb=4, kt=2 | 7.32 us | 2.96 us | **2.47x** |
+
+Identical work. ttnn is identical too -- 2.96us either way, as it should be, since the
+blocking is our construct and not its. We pay 3.96us for three extra k-blocks, so ~1.3us
+each, and every rate hole the sweep flagged is a kb=4 kt=2 cell for exactly this reason.
+
+That is the same shape of cost the flash work kept hitting: a fixed price per chunk that is
+setup rather than arithmetic. Here it is isolated to `Accumulator::accumulate`, whose
+per-call work is a `matmul_block_init`, the reload or the L1-accumulate push/pop dance, and
+the reconfigurations around them. Isolating it in a matmul with no softmax around it makes
+it much easier to attack than it was in flash.
+
+Two caveats on the harness. The per-MAC filter flags small shapes at 15x the best per-MAC
+rate, and that is not a hole -- a 1x1 kt=2 matmul is two tile-multiplies against a fixed
+program cost, and no implementation makes that efficient. And a few ttnn references are
+missing (the `-` cells): its one-core matmul declines some shapes, which is recorded rather
+than worked around.
+
 ### What to test next
 
 Ordered by expected value, with what each result would actually mean. Six candidates are
