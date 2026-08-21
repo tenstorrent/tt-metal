@@ -32,11 +32,15 @@ _FAILED = pytest.fail.Exception
 
 @contextmanager
 def quiet_harness():
-    """Mute the harness's own logging for the duration of a variant.
+    """Mute the harness's own logging for the duration of a run.
 
     Variants are *meant* to fail, and the harness answers every mismatch with a
     colour dump of the offending tiles. A hundred of those is the whole console.
-    The baseline pass runs outside this, so a genuinely broken test still says so.
+    The baseline pass is muted on the same grounds: a red baseline is skipped
+    rather than swept, so its dump tells the sweep nothing, and at scale it is
+    the entire log (868 red baselines rendered 245k of one shard's 273k lines).
+    conftest's one-line report still names every failure; run the test without
+    this plugin to get the tiles back.
     """
     logger.disable("helpers")
     try:
