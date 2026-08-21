@@ -159,7 +159,9 @@ struct ChunkGdnScanOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-// Returns {o [BH,NC,C,V] bf16, final_state [BH,K,V] fp32}.
+// Returns {o [BH,NC,C,V] fp32, final_state [BH,K,V] fp32}. o is fp32 — see the scan factory's
+// df_io and ChunkGdnScanOperation::compute_output_specs (a bf16 o degraded full-model quality
+// and was removed).
 std::vector<Tensor> chunk_gdn_scan(
     const Tensor& v_beta,
     const Tensor& kd,
