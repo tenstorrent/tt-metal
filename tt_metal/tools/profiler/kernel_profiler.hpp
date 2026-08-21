@@ -197,21 +197,21 @@ static constexpr uint32_t SPSC_MARKER_WORDS = 2;
 // backend definition file needn't change; constant-folds to a per-RISC .bss word.
 [[maybe_unused]] static uint32_t g_prev_timer_hi = 0xFFFFFFFFu;
 
-// Tear-free 64-bit wall-clock read: HIGH and LOW are separate registers, so a tick between them would
-// pair an old high with a new (wrapped-small) low -> a timestamp ~2^32 too small = a backwards jump. Re-read
-// HIGH after LOW and retry if it moved, so (hi, lo) is always one consistent snapshot.
+// Branchless 64-bit wall-clock read: reading WALL_CLOCK_L latches the high half (counter_high_at),
+// which the WALL_CLOCK_H read then returns -- so L-THEN-H is one consistent snapshot with no retry.
+// The ORDER is the whole protocol; read H first and you are back to torn reads.
 //
-// Do NOT replace this with the branchless latched read (L-then-H, "reading L latches H"): the latch is
-// safe for a SINGLE agent only. The ISA doc (tt-isa-documentation, TensixTile/DebugTimestamper.md)
-// prescribes exactly this read-H/read-L/re-read-H retry for multiple agents reading WALL_CLOCK_L
-// concurrently -- and all five of a profiled core's RISCs do, so another RISC's L read can re-latch
-// counter_high_at between this RISC's L and H reads.
+// DELIBERATE tradeoff (see tt-isa-documentation, TensixTile/DebugTimestamper.md): the latch is only
+// sound for a single agent. Another RISC's L read can re-latch counter_high_at between this RISC's L
+// and H reads, and if the counter crossed a 2^32 boundary in that gap the marker lands +2^32 cycles
+// (~3.2 s) in the FUTURE. That needs two rare events to coincide (~1e-9..1e-8 per read) and is loud
+// on the host when it happens -- one lane's order-regression counter storms for the next 3.2 s of
+// device time -- so we take the risk rather than pay a retry branch plus a third debug-register read
+// on every marker of this hot path.
 inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_t& lo) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    do {
-        hi = p_reg[WALL_CLOCK_HIGH_INDEX];
-        lo = p_reg[WALL_CLOCK_LOW_INDEX];
-    } while (hi != p_reg[WALL_CLOCK_HIGH_INDEX]);
+    lo = p_reg[WALL_CLOCK_LOW_INDEX];   // latches the high half
+    hi = p_reg[WALL_CLOCK_HIGH_INDEX];  // returns the latched value
 }
 
 // ---- The stall reserve ------------------------------------------------------------------------------
