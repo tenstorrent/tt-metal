@@ -27,6 +27,7 @@ from pathlib import Path
 import torch
 import ttnn
 from loguru import logger
+from tests.ttnn.unit_tests.operations.examples.report_gate import report_target
 
 from ttnn.operations.examples.row_reduce_accumulate import (
     create_sharded_memory_config,
@@ -207,6 +208,7 @@ def test_row_reduce_accumulate_fidelity(device):
 
     report = "\n".join(lines) + "\n"
     logger.info("\n" + report)
-    out_path = os.environ.get("RRAF_REPORT", str(Path(__file__).parent / "row_reduce_accumulate_fidelity_report.md"))
-    Path(out_path).write_text(report)
-    logger.info(f"wrote {out_path}")
+    out_path = report_target("RRAF_REPORT", Path(__file__).parent / "row_reduce_accumulate_fidelity_report.md")
+    if out_path:
+        out_path.write_text(report)
+        logger.info(f"wrote {out_path}")

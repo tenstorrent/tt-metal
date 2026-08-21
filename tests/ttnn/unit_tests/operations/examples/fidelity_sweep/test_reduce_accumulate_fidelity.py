@@ -26,6 +26,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
+from tests.ttnn.unit_tests.operations.examples.report_gate import report_target
 
 from ttnn.operations.examples.reduce_accumulate import create_sharded_memory_config, input_shape, run_op
 
@@ -246,6 +247,7 @@ def test_reduce_accumulate_fidelity(device):
 
     report = "\n".join(lines) + "\n"
     logger.info("\n" + report)
-    out_path = os.environ.get("RAF_REPORT", str(Path(__file__).parent / "reduce_accumulate_fidelity_report.md"))
-    Path(out_path).write_text(report)
-    logger.info(f"wrote {out_path}")
+    out_path = report_target("RAF_REPORT", Path(__file__).parent / "reduce_accumulate_fidelity_report.md")
+    if out_path:
+        out_path.write_text(report)
+        logger.info(f"wrote {out_path}")

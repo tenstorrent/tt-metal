@@ -40,6 +40,7 @@ from ttnn.operations.examples.matmul_output_subblock.matmul_output_subblock impo
 
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.examples.report_gate import report_target
 
 TILE = 32
 
@@ -53,9 +54,10 @@ N_WARMUP = 3
 N_PROFILE_ITERS = int(os.environ.get("MOS_TRIALS", "10"))
 _INNER = 5
 VARIANT_LIST = tuple(os.environ.get("MOS_VARIANTS", ",".join(VARIANTS)).split(","))
-REPORT_PATH = os.environ.get(
+# None unless the caller opted in (--write-reports / EXAMPLES_WRITE_REPORTS=1 / MOS_REPORT=<path>).
+REPORT_PATH = report_target(
     "MOS_REPORT",
-    str(Path(__file__).resolve().parents[5] / "ttnn/ttnn/operations/examples/matmul_output_subblock/report.md"),
+    Path(__file__).resolve().parents[5] / "ttnn/ttnn/operations/examples/matmul_output_subblock/report.md",
 )
 PCC = 0.99
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
@@ -189,8 +191,9 @@ def test_matmul_output_subblock_device_perf(device):
         reuse = "none" if (sb_h == 1 and sb_w == 1) else ("B (across A)" if sb_h > sb_w else "A (across B)")
         m, s = ns[variant]
         md.append(f"| {variant} | {sb_h}×{sb_w} | {reuse} | {m:.1f} | {s:.1f} | {base/m:.2f}x |")
-    try:
-        Path(REPORT_PATH).write_text("\n".join(md) + "\n")
-        logger.info(f"[matmul_output_subblock] wrote {REPORT_PATH}")
-    except OSError as e:
-        logger.warning(f"[matmul_output_subblock] could not write report: {e}")
+    if REPORT_PATH:
+        try:
+            REPORT_PATH.write_text("\n".join(md) + "\n")
+            logger.info(f"[matmul_output_subblock] wrote {REPORT_PATH}")
+        except OSError as e:
+            logger.warning(f"[matmul_output_subblock] could not write report: {e}")

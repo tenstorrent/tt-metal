@@ -33,6 +33,7 @@ from ttnn.operations.examples.shared_input_reuse import shared_input_reuse, VARI
 from ttnn.operations.examples.shared_input_reuse.shared_input_reuse import create_program_descriptor
 
 from loguru import logger
+from tests.ttnn.unit_tests.operations.examples.report_gate import report_target
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 TILE = 32
@@ -46,9 +47,10 @@ NUM_CHUNKS = int(os.environ.get("SIR_CHUNKS", "19"))
 N_WARMUP = 3
 N_PROFILE_ITERS = int(os.environ.get("SIR_TRIALS", "10"))
 _INNER = 5
-REPORT_PATH = os.environ.get(
+# None unless the caller opted in (--write-reports / EXAMPLES_WRITE_REPORTS=1 / SIR_REPORT=<path>).
+REPORT_PATH = report_target(
     "SIR_REPORT",
-    str(Path(__file__).resolve().parents[5] / "ttnn/ttnn/operations/examples/shared_input_reuse/report.md"),
+    Path(__file__).resolve().parents[5] / "ttnn/ttnn/operations/examples/shared_input_reuse/report.md",
 )
 PCC = 0.99
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
@@ -217,8 +219,9 @@ def test_shared_input_reuse_device_perf(device):
         f"| per_core_dram | {bm:.1f} | {bs:.1f} | 1.00x |",
         f"| mcast | {mm:.1f} | {msd:.1f} | {ratio:.2f}x |",
     ]
-    try:
-        Path(REPORT_PATH).write_text("\n".join(md) + "\n")
-        logger.info(f"[shared_input_reuse] wrote {REPORT_PATH}")
-    except OSError as e:
-        logger.warning(f"[shared_input_reuse] could not write report: {e}")
+    if REPORT_PATH:
+        try:
+            REPORT_PATH.write_text("\n".join(md) + "\n")
+            logger.info(f"[shared_input_reuse] wrote {REPORT_PATH}")
+        except OSError as e:
+            logger.warning(f"[shared_input_reuse] could not write report: {e}")

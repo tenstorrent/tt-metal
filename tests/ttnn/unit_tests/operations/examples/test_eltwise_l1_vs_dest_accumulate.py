@@ -39,6 +39,7 @@ from ttnn.operations.examples.eltwise_l1_vs_dest_accumulate.eltwise_l1_vs_dest_a
 )
 
 from loguru import logger
+from tests.ttnn.unit_tests.operations.examples.report_gate import report_target
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -52,9 +53,10 @@ N_WARMUP = 3
 N_PROFILE_ITERS = int(os.environ.get("ELDA_TRIALS", "10"))
 _INNER = 5
 VARIANT_LIST = tuple(os.environ.get("ELDA_VARIANTS", ",".join(VARIANTS)).split(","))
-REPORT_PATH = os.environ.get(
+# None unless the caller opted in (--write-reports / EXAMPLES_WRITE_REPORTS=1 / ELDA_REPORT=<path>).
+REPORT_PATH = report_target(
     "ELDA_REPORT",
-    str(Path(__file__).resolve().parents[5] / "ttnn/ttnn/operations/examples/eltwise_l1_vs_dest_accumulate/report.md"),
+    Path(__file__).resolve().parents[5] / "ttnn/ttnn/operations/examples/eltwise_l1_vs_dest_accumulate/report.md",
 )
 PCC = 0.9999
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
@@ -179,8 +181,9 @@ def test_eltwise_l1_vs_dest_accumulate_device_perf(device):
     for variant in VARIANT_LIST:
         m, s = ns[variant]
         md.append(f"| {variant} | {m:.1f} | {s:.1f} | {base/m:.2f}x |")
-    try:
-        Path(REPORT_PATH).write_text("\n".join(md) + "\n")
-        logger.info(f"[eltwise_l1_vs_dest_accumulate] wrote {REPORT_PATH}")
-    except OSError as e:
-        logger.warning(f"[eltwise_l1_vs_dest_accumulate] could not write report: {e}")
+    if REPORT_PATH:
+        try:
+            REPORT_PATH.write_text("\n".join(md) + "\n")
+            logger.info(f"[eltwise_l1_vs_dest_accumulate] wrote {REPORT_PATH}")
+        except OSError as e:
+            logger.warning(f"[eltwise_l1_vs_dest_accumulate] could not write report: {e}")

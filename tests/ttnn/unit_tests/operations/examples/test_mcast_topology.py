@@ -41,6 +41,7 @@ from ttnn.operations.examples.mcast_topology import mcast_topology, VARIANTS
 from ttnn.operations.examples.mcast_topology.mcast_topology import PROBES, core_assignment, layout
 
 from loguru import logger
+from tests.ttnn.unit_tests.operations.examples.report_gate import report_target
 
 TILE = 32
 
@@ -57,9 +58,10 @@ N_WARMUP = 3
 N_PROFILE_ITERS = int(os.environ.get("MCT_TRIALS", "5"))
 _INNER = 5
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
-REPORT_PATH = os.environ.get(
+# None unless the caller opted in (--write-reports / EXAMPLES_WRITE_REPORTS=1 / MCT_REPORT=<path>).
+REPORT_PATH = report_target(
     "MCT_REPORT",
-    str(Path(__file__).resolve().parents[5] / "ttnn/ttnn/operations/examples/mcast_topology/report.md"),
+    Path(__file__).resolve().parents[5] / "ttnn/ttnn/operations/examples/mcast_topology/report.md",
 )
 
 
@@ -185,6 +187,7 @@ def test_mcast_topology_device_perf(device):
         logger.info(line)
         lines.append(line)
 
-    Path(REPORT_PATH).parent.mkdir(parents=True, exist_ok=True)
-    with open(REPORT_PATH, "a") as f:
-        f.write(f"\n## {arch} — {box}\n\n```\n{header}\n" + "\n".join(lines) + "\n```\n")
+    if REPORT_PATH:
+        REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(REPORT_PATH, "a") as f:
+            f.write(f"\n## {arch} — {box}\n\n```\n{header}\n" + "\n".join(lines) + "\n```\n")
