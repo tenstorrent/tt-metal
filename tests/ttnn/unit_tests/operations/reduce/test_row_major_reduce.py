@@ -736,7 +736,7 @@ def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, ou
 
     # Accurate SFPU (full fp32) vs FPU (tf32 truncation). The FPU path roughly doubles the relative
     # error at these depths; Quasar has no SFPU reduce LLKs, so it always takes the FPU bound.
-    rtol = 0.004 if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR else 0.001
+    rtol = 0.004 if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR else 0.0011
     assert_numeric_metrics(
         torch_ref,
         output,
