@@ -70,7 +70,11 @@ def test_mlp_tp(mesh_device, reset_seeds, ensure_gc, request):
 @parametrize_mesh_tp()
 @pytest.mark.parametrize(
     "in_dtype",
-    [pytest.param(ttnn.bfloat16, id="in_bf16"), pytest.param(ttnn.bfloat8_b, id="in_bf8")],
+    [
+        pytest.param(ttnn.bfloat16, id="in_bf16"),
+        pytest.param(ttnn.bfloat8_b, id="in_bf8"),
+        pytest.param(ttnn.bfloat4_b, id="in_bf4"),
+    ],
 )
 def test_mlp_tp_prefill(mesh_device, in_dtype, reset_seeds, ensure_gc, request):
     """Prefill-path (S>32) TP MLP vs torch SwiGLU. Exercises the 2D prefill matmul for w1/w3
@@ -87,6 +91,16 @@ def test_mlp_tp_prefill(mesh_device, in_dtype, reset_seeds, ensure_gc, request):
     MEASURED (T3K, TP=8, 27B, T=2048): bf16 in 0.9989536, bf8 in 0.9989485 -- a 5th-decimal
     difference. The MLP's error budget is dominated by the bfp4 gate/up weights + LoFi either way,
     which is why halving the activation's bytes is close to free here.
+
+    in_bf4 is NOT shipped -- it is the row that rejected it. Narrowing the gather again (bf8 -> bfp4)
+    was tried on 2026-08-20 and dropped: it bought only -13us on the gather (that collective is on a
+    ~680us latency floor, not a bytes floor -- see layer.py _ff_gather_dtype) while costing 130x the
+    bf8 step's accuracy. MEASURED here, same T=2048, vs the same fp32 reference:
+        bf16 0.9989521 | bf8 0.9989442 (-8e-6) | bfp4 0.9979378 (-1.0e-3)
+    Kept as a parametrization because this is the only place that trade is measured against fp32
+    rather than against another device path carrying the same quantisation, and because the number is
+    what makes the rejection checkable rather than a claim. The MLP floors gate/up's output at bf8
+    regardless (mlp.py), so this row prices the ACTIVATION narrowing alone -- which was the claim.
     """
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=4096)
