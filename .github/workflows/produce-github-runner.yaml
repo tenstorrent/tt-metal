@@ -29,7 +29,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Lists all self-hosted runners registered to tt-metal. --paginate
+          # Lists all self-hosted runners registered to the tenstorrent org. --paginate
           # concatenates pages (each page is a {total_count, runners} object);
           # the build step slurps and flattens them below.
           gh api --paginate /orgs/tenstorrent/actions/runners > runners_raw.json
