@@ -675,6 +675,49 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixReduceSpecMatchesLegacy) {
 }
 
 // ============================================================================
+// Reduce (REDUCE_ROW SUM): extends reduce differential coverage to ReduceDim::REDUCE_ROW. id-free (2.0) output
+// must bit-match a minimal legacy ROW kernel on the same inputs (reuses run_binary_add: c_0 data, c_1 scaler ->
+// c_16). The legacy ROW operand-swap lives in the build-off compute-kernel sentinel, so it does not affect
+// device output; with both operands Float16_b the id-free path (no swap) matches.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixReduceRowSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 1;
+    auto data = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto scaler = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/2, /*seed=*/7, /*offset=*/-1.0f);
+
+    auto legacy = run_binary_add(
+        mesh_device, data, scaler, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/reduce_row_legacy.cpp");
+    auto spec = run_binary_add(
+        mesh_device, data, scaler, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/reduce_row_2_0.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Reduce (REDUCE_SCALAR MAX): extends reduce differential coverage to PoolType::MAX. id-free (2.0) output must
+// bit-match a minimal legacy MAX kernel on the same inputs (reuses run_binary_add). The MAX result is scaled by
+// the scaler; both kernels get the identical scaler, so the differential holds regardless of scaler value.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixReduceMaxSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 1;
+    auto data = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto scaler = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/2, /*seed=*/7, /*offset=*/-1.0f);
+
+    auto legacy = run_binary_add(
+        mesh_device, data, scaler, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/reduce_max_legacy.cpp");
+    auto spec = run_binary_add(
+        mesh_device, data, scaler, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/reduce_max_2_0.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
 // Pack-untilize with a block-float (Bfp8_b) INPUT and block_ct_dim = 4 (> 1). This is the block>1 guard for
 // the block-float stride fix. The id-free pack_untilize reads column tile c of the block at
 // in.l1_address + c * tile_stride_words(Bfp8_b, shape) (internal/llk_descriptor.h). tile_stride_words returns the
