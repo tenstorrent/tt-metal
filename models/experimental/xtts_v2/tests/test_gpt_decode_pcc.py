@@ -2,87 +2,125 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-PCC test for the KV-cached decode loop of the TTNN XTTS-v2 GPT core (Block 3).
+"""PCC tests for the traced KV-cached decode step of the XTTS-v2 GPT core (Block 3).
 
-Validation: feed the reference `inputs_embeds` one token at a time through the KV-cached
-decode step; the stacked per-step latents must match the CPU reference's parallel-prefill
-latents (causal attention => decode step t == prefill position t). The reference is
-computed live in-process (see tests/reference_helpers.py); set XTTS_GOLDEN_DIR to use
-stored fixtures instead.
+Everything here drives TTNNGPTTracedDecoder, which is what a request runs: one-shot prefill into
+the cache, then the trace-replayed single-token step.
+
+  * latents     — step through the reference `inputs_embeds` and stack the per-step latents, which
+    must match the CPU reference's one-pass latents. Causal attention makes decode step t the same
+    quantity as position t of a wide pass, so any drift is the cache or the arithmetic.
+  * odd max_seq — BUG-1 regression: an odd-tile cache request used to collapse decode to PCC ~0.63.
+  * head        — the sampling head is host-side, so this feeds the device's latents through it and
+    checks the argmax matches the reference's greedy choice at every step. The only discrete check
+    in the suite; the rest report a continuous PCC.
+
+The reference is computed live in-process (see tests/reference_helpers.py); set XTTS_GOLDEN_DIR to
+use stored fixtures instead.
 
 Run:
     pytest -svv models/experimental/xtts_v2/tests/test_gpt_decode_pcc.py
-  or standalone:
-    python models/experimental/xtts_v2/tests/test_gpt_decode_pcc.py
 """
 
+import pytest
 import torch
 import ttnn
 
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.xtts_v2.tests.reference_helpers import gpt_reference
+from models.experimental.xtts_v2.reference.xtts_gpt_ref import load_gen_head
+from models.experimental.xtts_v2.tests.reference_helpers import gpt_generate_reference, gpt_reference
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import preprocess_gpt_parameters
-from models.experimental.xtts_v2.tt.ttnn_xtts_gpt_decode import TTNNGPTDecoder
+from models.experimental.xtts_v2.tt.ttnn_xtts_gpt_decode import TTNNGPTTracedDecoder
 
 TARGET_PCC = 0.999  # native bf16 decode path
+TRACE_REGION = 50_000_000
 
 
-def _load_golden():
-    ref = gpt_reference()
-    return ref["inputs_embeds"], ref["latents"]
+def _decoder(device, max_seq):
+    return TTNNGPTTracedDecoder(device, preprocess_gpt_parameters(device, dtype=ttnn.bfloat16), max_seq=max_seq)
+
+
+def _step(dec, device, row, pos):
+    """One traced decode step, host [1,1,1024] row in -> host latent out."""
+    emb = ttnn.from_torch(
+        row.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=dec.mesh_mapper
+    )
+    return ttnn.to_torch(dec.step_device(emb, pos)).to(torch.float32)
 
 
 def run_decode_pcc(device, max_seq_request=None):
-    inputs_embeds, golden_latents = _load_golden()
+    """max_seq_request exercises the BUG-1 path (odd tile counts); None sizes tightly to S."""
+    ref = gpt_reference()
+    inputs_embeds, golden = ref["inputs_embeds"], ref["latents"]
     S = inputs_embeds.shape[1]
 
-    # max_seq_request lets the caller exercise the BUG-1 path (odd tile counts). When None,
-    # size tightly to S. The decoder rounds max_seq up to a multiple of 64 internally.
-    req = max_seq_request if max_seq_request is not None else ((S + 31) // 32) * 32
-    params = preprocess_gpt_parameters(device, dtype=ttnn.bfloat16)
-    decoder = TTNNGPTDecoder(device, params, max_seq=req)
+    dec = _decoder(device, max_seq_request or ((S + 31) // 32) * 32)
+    dec.reset_caches()
+    dec.capture()
+    # A shape _decode_matmul_cfg cannot express falls back to ttnn's heuristic, which stays correct
+    # and so passes the gate below while costing throughput. Catch it here.
+    missing = [n for n, c in dec._prg.items() if c is None]
+    assert not missing, f"decode matmuls fell back to the default program config: {missing}"
+    assert dec._prg["c_fc"].fused_activation, "c_fc lost its fused gelu, which costs a second kernel"
 
-    latents = []
-    for t in range(S):
-        xt = ttnn.from_torch(
-            inputs_embeds[:, t : t + 1, :], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
-        lt = decoder.decode_step(xt)
-        latents.append(ttnn.to_torch(lt).to(torch.float32))
-
-    dec = torch.cat(latents, dim=1)  # [1, S, 1024]
-    passed, pcc_msg = comp_pcc(golden_latents, dec, pcc=TARGET_PCC)
-    _, allclose_msg = comp_allclose(golden_latents, dec)
-    print(f"decoded latents: golden={tuple(golden_latents.shape)} ttnn={tuple(dec.shape)} steps={S}")
-    print(f"pcc: {pcc_msg}")
-    print(f"allclose: {allclose_msg}")
+    lat = [_step(dec, device, inputs_embeds[:, t : t + 1, :], t) for t in range(S)]
+    decoded = torch.cat(lat, dim=1)  # [1,S,1024]
+    passed, pcc_msg = comp_pcc(golden, decoded, pcc=TARGET_PCC)
+    _, allclose_msg = comp_allclose(golden, decoded)
+    print(f"  max_seq={dec.max_seq:4d} steps={S}  pcc: {pcc_msg}  {allclose_msg}")
     return passed, pcc_msg
 
 
+def run_head_argmax(device):
+    """Prefill the reference prompt, replay its per-step inputs, then run the host head."""
+    g = gpt_generate_reference()
+    heads = load_gen_head()
+    prompt, step_inputs = g["prompt_embeds"], g["step_inputs"]
+    P, T = prompt.shape[1], step_inputs.shape[1]
+
+    dec = _decoder(device, ((P + T + 31) // 32) * 32)
+    dec.reset_caches()
+    dec.prefill(prompt)  # one-shot, as a request does
+    dec.capture()  # after prefill: it leaves the prompt's K/V intact
+    latents = torch.cat([_step(dec, device, step_inputs[:, m : m + 1, :], P + m) for m in range(T)], dim=1)
+
+    logits = latents @ heads["mel_head_w"].t() + heads["mel_head_b"]
+    lat_ok, lat_msg = comp_pcc(g["ref_latents"], latents, pcc=TARGET_PCC)
+    ref_codes = g["ref_codes"].flatten()
+    agree = (logits.argmax(-1).flatten() == ref_codes).float().mean().item()
+    print(f"  head: latent pcc {lat_msg}, argmax agreement {agree * 100:.1f}% ({len(ref_codes)} steps)")
+    return lat_ok and agree == 1.0, f"latents {lat_msg}, argmax agreement {agree * 100:.1f}%"
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": TRACE_REGION}], indirect=True)
 def test_gpt_decode_pcc(device):
     passed, pcc_msg = run_decode_pcc(device)
-    assert passed, f"GPT decode PCC below {TARGET_PCC}: {pcc_msg}"
+    assert passed, f"traced decode PCC below {TARGET_PCC}: {pcc_msg}"
 
 
+@pytest.mark.parametrize("device_params", [{"trace_region_size": TRACE_REGION}], indirect=True)
 def test_gpt_decode_pcc_large_odd_max_seq(device):
-    """BUG-1 regression: requesting an odd-tile max_seq (736 = 23 tiles) used to collapse
-    decode to PCC ~0.63. The decoder now rounds up to an even tile count (768), so PCC
-    must stay above target."""
+    """BUG-1 regression: an odd-tile max_seq (736 = 23 tiles) used to collapse decode to PCC ~0.63.
+    The decoder rounds up to an even tile count (768), so this must stay above target."""
     passed, pcc_msg = run_decode_pcc(device, max_seq_request=736)
     assert passed, f"BUG-1 regression: odd-tile max_seq decode PCC below {TARGET_PCC}: {pcc_msg}"
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": TRACE_REGION}], indirect=True)
+def test_gpt_head_argmax_agreement(device):
+    passed, msg = run_head_argmax(device)
+    assert passed, f"the head disagreed with the reference's greedy choice: {msg}"
 
 
 if __name__ == "__main__":
     import sys
 
-    dev = ttnn.open_device(device_id=0)
+    dev = ttnn.open_device(device_id=0, trace_region_size=TRACE_REGION)
     try:
         dev.enable_program_cache()
-        ok, msg = run_decode_pcc(dev)
-        ok2, msg2 = run_decode_pcc(dev, max_seq_request=736)
+        results = [run_decode_pcc(dev), run_decode_pcc(dev, max_seq_request=736), run_head_argmax(dev)]
     finally:
         ttnn.close_device(dev)
-    print(("PASSED " if ok else "FAILED ") + str(msg))
-    print(("PASSED " if ok2 else "FAILED ") + " [odd-max_seq regression] " + str(msg2))
-    sys.exit(0 if (ok and ok2) else 1)
+    ok = all(r[0] for r in results)
+    print(("PASSED " if ok else "FAILED ") + "; ".join(str(r[1]) for r in results))
+    sys.exit(0 if ok else 1)
