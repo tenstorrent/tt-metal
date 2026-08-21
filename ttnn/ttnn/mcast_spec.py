@@ -9,13 +9,21 @@ hand. Here the family owns that bookkeeping: ``attach`` writes its semaphores, b
 compile-time args and per-node vararg values into the spec and run args, and ships its own vararg
 base as the ``<prefix>_rt_base`` named arg so the kernel's ``MCAST_ARGS(prefix)`` chains nothing.
 
+    # 1D: independent per-row / per-column mcasts over the grid.
     mc_a = McastFamily(device, grid, "a", shape=ttnn.Mcast1DShape.PerRow, sender_index=0)
     mc_b = McastFamily(device, grid, "b", shape=ttnn.Mcast1DShape.PerColumn, sender_index=0)
     mc_a.attach(spec, run_args, kernels=["reader"])
     mc_b.attach(spec, run_args, kernels=["reader"])
 
-The coord math (logical->virtual, per-NoC rect corner order, sender placement, rotating rounds) is
-ttnn.Mcast1D's, unchanged.
+    # 2D: ONE mcast over a receiver rectangle, from a single sender core that may sit inside the
+    # rectangle or outside it.
+    mc_r = McastFamily(device, rect, "r", sender=ttnn.CoreCoord(0, 0))
+    mc_r.attach(spec, run_args, kernels=["reader"])
+
+Both topologies present the same face to the kernel -- four named CT words and a 4-word (or
+rotating 4 + 2*rounds) vararg block -- so ``MCAST_ARGS(prefix)`` is unchanged and the kernel cannot
+tell which topology it was handed. The coord math (logical->virtual, per-NoC rect corner order,
+sender placement, rotating rounds) is ttnn.Mcast1D's / ttnn.Mcast2D's, unchanged.
 """
 
 import ttnn
@@ -23,6 +31,12 @@ import ttnn
 
 class McastFamily:
     """One mcast family, addressed by name instead of by CT/RT offset.
+
+    Topology is chosen by which sender argument you pass, because a 1D family and a 2D mcast do not
+    name their sender the same way: 1D has a sender *index* per line (plus a placement rule that
+    walks it across lines), 2D has one sender *core*. So ``sender=`` selects
+    ``ttnn.Mcast2D``; ``shape=``/``sender_index=``/``sender_placement=`` (or nothing at all) selects
+    ``ttnn.Mcast1D``. Mixing the two sets is an error rather than a precedence rule.
 
     Both semaphores are always created, even with ``handshake=False``: the ``flags`` word decides
     whether the ack path runs, and always emitting the pair keeps ``sem::<prefix>_consumer_ready``
@@ -36,16 +50,17 @@ class McastFamily:
         prefix: str,
         *,
         shape=None,
-        sender_index: int = 0,
+        sender_index: int = None,
         config=None,
         sender_placement=None,
+        sender=None,
+        num_active: int = None,
+        sender_grid=None,
     ):
         if not prefix.isidentifier():
             raise ValueError(f"mcast prefix {prefix!r} must be a valid C++ identifier")
 
-        shape = ttnn.Mcast1DShape.PerRow if shape is None else shape
         config = ttnn.McastConfig() if config is None else config
-        placement = ttnn.Mcast1DSenderPlacement.Uniform if sender_placement is None else sender_placement
 
         # Semaphore ids come from the spec's SemaphoreBindings, so the helper must not assign any.
         # Adopting placeholders keeps owned_semaphores() empty and next_base_sem_id() unused.
@@ -54,8 +69,71 @@ class McastFamily:
         self.prefix = prefix
         self.grid = grid
         self._config = config
-        self._mcast = ttnn.Mcast1D(device, grid, shape, sender_index, placement, config)
+        self._mcast, self._nodes = self._build_mcast(
+            device,
+            grid,
+            shape=shape,
+            sender_index=sender_index,
+            config=config,
+            sender_placement=sender_placement,
+            sender=sender,
+            num_active=num_active,
+            sender_grid=sender_grid,
+        )
         self._added_semaphores = False
+
+    def _build_mcast(
+        self, device, grid, *, shape, sender_index, config, sender_placement, sender, num_active, sender_grid
+    ):
+        """Return (topology helper, the node set its semaphores and varargs must cover)."""
+        # The node set is the receiver grid plus any core that only ever sends: a 2D sender outside
+        # the rect, or a rotating sender_grid core outside it. Those cores run the same kernel and
+        # wait on the same consumer_ready semaphore, so a semaphore placed on `grid` alone would
+        # leave them without one. Mcast2D computes the same union for its own owned_semaphores(),
+        # which we cannot use here because we adopt sem_ids and it therefore returns nothing.
+        nodes = grid
+        if sender_grid is not None:
+            nodes = nodes.merge(sender_grid)
+
+        if sender is not None:
+            one_d_only = (
+                ("shape", shape),
+                ("sender_index", sender_index),
+                ("sender_placement", sender_placement),
+            )
+            rejected = [name for name, value in one_d_only if value is not None]
+            if rejected:
+                raise ValueError(
+                    f"McastFamily: {rejected} are 1D-only arguments but sender= selects the 2D "
+                    "topology (one mcast over a receiver rectangle from one sender core). Drop them, "
+                    "or drop sender= to get a 1D family."
+                )
+            sender = sender if isinstance(sender, ttnn.CoreCoord) else ttnn.CoreCoord(*sender)
+            mcast = ttnn.Mcast2D(
+                device,
+                grid,
+                sender,
+                config,
+                0 if num_active is None else num_active,
+                sender_grid,
+            )
+            return mcast, nodes.merge(ttnn.CoreRangeSet([ttnn.CoreRange(sender, sender)]))
+
+        if num_active is not None:
+            raise ValueError(
+                "McastFamily: num_active= is a 2D-only argument (the 2D ack wait-count); a 1D family "
+                "derives its ack count per line. Pass sender= to select the 2D topology."
+            )
+        mcast = ttnn.Mcast1D(
+            device,
+            grid,
+            ttnn.Mcast1DShape.PerRow if shape is None else shape,
+            0 if sender_index is None else sender_index,
+            ttnn.Mcast1DSenderPlacement.Uniform if sender_placement is None else sender_placement,
+            config,
+            sender_grid,
+        )
+        return mcast, nodes
 
     @property
     def data_ready_name(self) -> str:
@@ -65,19 +143,27 @@ class McastFamily:
     def consumer_ready_name(self) -> str:
         return f"{self.prefix}_consumer_ready"
 
+    @property
+    def nodes(self) -> "ttnn.CoreRangeSet":
+        """Every core this family touches: the receiver grid plus any send-only core."""
+        return self._nodes
+
     def num_senders(self) -> int:
         return self._mcast.num_senders()
 
     def is_sender(self, core) -> bool:
         return self._mcast.is_sender(core)
 
+    def num_receivers(self, core) -> int:
+        return self._mcast.num_receivers(core)
+
     def num_runtime_varargs(self) -> int:
         return 4 if not self._config.rotating_sender else 4 + 2 * self._mcast.num_senders()
 
     def semaphores(self) -> list:
         return [
-            ttnn.SemaphoreSpec(unique_id=self.data_ready_name, target_nodes=self.grid),
-            ttnn.SemaphoreSpec(unique_id=self.consumer_ready_name, target_nodes=self.grid),
+            ttnn.SemaphoreSpec(unique_id=self.data_ready_name, target_nodes=self._nodes),
+            ttnn.SemaphoreSpec(unique_id=self.consumer_ready_name, target_nodes=self._nodes),
         ]
 
     def semaphore_bindings(self) -> list:
@@ -88,13 +174,14 @@ class McastFamily:
 
     def compile_time_args(self, rt_base: int, *, pre_handshake: bool = None) -> dict:
         """The four named CT words. Semaphore ids are absent: they arrive via sem:: bindings."""
-        # Reuse Mcast1D's flags computation by reading the descriptor-path block: [active,
-        # data_ready, consumer_ready, num_active, flags, rotating_span]. Only the leading five are
-        # read here, and dropping the trailing span is deliberate rather than lossy: on the spec
-        # path the span is a TEMPLATE argument the kernel passes itself via
+        # Reuse the topology helper's flags computation by reading the descriptor-path block:
+        # [active, data_ready, consumer_ready, num_active, flags, rotating_span]. Only the leading
+        # five are read here, and dropping the trailing span is deliberate rather than lossy: on the
+        # spec path the span is a TEMPLATE argument the kernel passes itself via
         # MCAST_ARGS_ROTATING(prefix, span), because McastArgsSpec takes it as a non-type template
-        # param. The descriptor path has no such channel, which is the only reason Mcast1D ships it
-        # as a sixth CT word. Slice rather than unpack-all so a future seventh word cannot break us.
+        # param. The descriptor path has no such channel, which is the only reason the helpers ship
+        # it as a sixth CT word. Slice rather than unpack-all so a future seventh word cannot break
+        # us. Both Mcast1D and Mcast2D emit this same six-word block.
         block = (
             self._mcast.compile_time_args() if pre_handshake is None else self._mcast.compile_time_args(pre_handshake)
         )
@@ -176,5 +263,6 @@ class McastFamily:
         run_args.kernel_run_args = run_list
 
     def _grid_cores(self) -> list:
-        bbox = self.grid.bounding_box()
-        return [ttnn.CoreCoord(x, y) for y in range(bbox.end.y + 1) for x in range(bbox.end.x + 1)]
+        # Enumerate the node set itself, not its bounding box: a 2D family whose sender sits outside
+        # the rect is not rectangular, and a box would hand varargs to cores that never run.
+        return list(ttnn.corerange_to_cores(self._nodes, None, True))
