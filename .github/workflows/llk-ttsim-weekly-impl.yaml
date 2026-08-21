@@ -148,6 +148,17 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}/tests
         run: ./setup_testing_env.sh
 
+      # `${{ github.workspace }}` is resolved by the runner on the *host* before this
+      # containerized job starts, so it evaluates to the host bind-mount source
+      # (/home/runner/work/tt-metal/tt-metal) rather than the path the container actually
+      # sees it at (/__w/tt-metal/tt-metal). Only the $GITHUB_WORKSPACE env var, read at
+      # runtime by a step executing inside the container, gets the translated path — so
+      # capture it here instead of passing the github.workspace expression straight through.
+      - name: Resolve in-container workspace path
+        id: workspace
+        shell: bash
+        run: echo "path=$GITHUB_WORKSPACE" >> "$GITHUB_OUTPUT"
+
       # Installs <root>/sim/libttsim.so + soc_descriptor.yaml and exports TT_METAL_SIMULATOR.
       # run_ttsim_regression.sh trusts a pre-exported TT_METAL_SIMULATOR and skips its own
       # download, so the simulator comes from tt_metal/ttsim-version like every other sim
@@ -157,7 +168,7 @@ jobs:
         timeout-minutes: 5
         with:
           sku: ${{ matrix.test-group.sku }}
-          root: ${{ github.workspace }}
+          root: ${{ steps.workspace.outputs.path }}
 
       # continue-on-error: ttsim is WIP and many tests are expected to fail; the HTML report is
       # the deliverable, not a green check.
