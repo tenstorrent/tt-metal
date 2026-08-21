@@ -884,11 +884,19 @@ def prefill_ccl_tuning():
       over 2-3 runs each), so 4 stays -- it is the smaller departure from the upstream default.
       chunks_per_sync made no measurable difference anywhere and stays at 10.
 
-    QWEN35_PREFILL_CCL="cps,wpl" overrides, for re-sweeping."""
+    QWEN35_PREFILL_CCL="cps,wpl" overrides, for re-sweeping.
+
+    WORMHOLE-ONLY: every measurement above is Wormhole (N300 for the 9B pre-norm gather, T3K for the
+    27B post-norm one) -- there is no Blackhole number here at all. Blackhole keeps upstream's
+    untuned literals (10, 2), same as before this function existed, unless QWEN35_PREFILL_CCL forces
+    an override for re-sweeping there too.
+    """
     _v = os.environ.get("QWEN35_PREFILL_CCL")
     if _v:
         _c, _w = (int(t) for t in _v.split(","))
         return _c, _w
+    if is_blackhole():
+        return 10, 2
     return 10, 4
 
 
