@@ -90,8 +90,12 @@ void kernel_main() {
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(19);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(20);
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
+    // Sparse frame-block attention: when enabled, the writer must drain the normalized output at each
+    // q_chunk's LAST WORK iter (compute normalizes cb_out there), NOT at the geometric last ring iter.
+    // cb_out is a 2-slot row-group ping-pong, so a mismatch strands compute's row drain -> deadlock.
+    constexpr bool sparse_frames_enabled = get_compile_time_arg_val(23) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<23>();
+    constexpr auto out_args = TensorAccessorArgs<24>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     // stats_args follows joint_out_args but is unused by the writer (stats are only
     // needed for multi-Q accumulator save/restore which this kernel doesn't support).
@@ -125,6 +129,16 @@ void kernel_main() {
     ASSERT(global_q_end - global_q_start <= 1);
 
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
+
+    // Per-q_chunk work bitmap (one uint32 per q_chunk; bit `iter` set iff that q_chunk processes any
+    // attended K in ring iter `iter`). Present in the RT stream only when sparse is enabled (the host
+    // gates it identically), read right after the fused-op indexer to match the reader/compute layout.
+    uint32_t writer_q_work_bitmap[num_q_chunks] = {};
+    if constexpr (sparse_frames_enabled) {
+        for (uint32_t q = 0; q < num_q_chunks; ++q) {
+            writer_q_work_bitmap[q] = get_arg_val<uint32_t>(argidx++);
+        }
+    }
 
 #ifdef USE_MUX
 
@@ -308,6 +322,20 @@ void kernel_main() {
                 const auto qi = get_q_chunk_info(
                     q_chunk, nb, nq, ring_id, num_local_q_chunks, Sq_chunk_t, DHt, Lt, local_padded_Nt);
 
+                // When is the normalized output ready to drain? Compute pushes cb_out (row-by-row)
+                // when it finishes this q_chunk's last WORK iter. Dense: that is the geometric last
+                // active iter. Sparse: it is the highest set bit of the q_chunk's work bitmap, which
+                // can be earlier (edge frames whose window doesn't reach the last-processed frame).
+                // The writer MUST read cb_out on exactly that iter or the 2-slot cb_out ping-pong
+                // deadlocks. Gather forwarding below still keys off is_last_ring_iter (geometric).
+                bool write_output_now = is_last_ring_iter;
+                if constexpr (sparse_frames_enabled) {
+                    const uint32_t qb = writer_q_work_bitmap[q_chunk];
+                    // qb != 0: last work iter = highest set bit. qb == 0 (no attended K — only padded
+                    // q frames): compute's normalize falls back to is_last_ring_iter, so match it.
+                    write_output_now = (qb != 0u) ? (ring_iter == (31u - __builtin_clz(qb))) : is_last_ring_iter;
+                }
+
 #ifdef USE_MUX
                 uint32_t KV_chunks_processed_in_iter = 0;
                 constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -463,8 +491,9 @@ void kernel_main() {
                 }
 #endif
 
-                // On last ring iteration, drain normalized output to DRAM.
-                if (is_last_ring_iter) {
+                // Drain normalized output to DRAM on the iter where compute produced it (see
+                // write_output_now above: geometric last for dense, per-q_chunk last work iter for sparse).
+                if (write_output_now) {
                     // Default trid here → pass 0 so per-group flush waits exactly for these writes.
                     write_block_row_grouped_trid(
                         noc,

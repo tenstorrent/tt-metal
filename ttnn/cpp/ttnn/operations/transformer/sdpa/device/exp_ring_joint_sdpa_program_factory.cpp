@@ -644,6 +644,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         joint_l_partial_col,
         static_cast<std::uint32_t>(use_streaming_compute),
         static_cast<std::uint32_t>(out_out_subblock_h),
+        static_cast<std::uint32_t>(args.has_sparse_frames()),  // CT idx 23: gate last-work-iter output drain
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -1734,6 +1735,15 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         writer_args.push_back(static_cast<uint32_t>(args.ring_size));
         writer_args.push_back(device_index);
         writer_args.push_back(direction);
+        // Sparse: append this core's direction-matched per-q_chunk work bitmap so the writer can drain
+        // the output at each q_chunk's last work iter (matching compute). Gated so the dense RT stream
+        // is byte-unchanged. Read right after the fused-op indexer in exp_ring_joint_writer.cpp.
+        if (sparse_frames_enabled) {
+            const std::vector<uint32_t>& writer_bitmap = q_work_bitmap_by_direction[direction];
+            for (uint32_t q = 0; q < num_q_chunks; ++q) {
+                writer_args.push_back(q < writer_bitmap.size() ? writer_bitmap[q] : 0u);
+            }
+        }
 
         if (is_mux_writer) {
             // Direction is determined by row half: top half = backward, bottom half = forward.
