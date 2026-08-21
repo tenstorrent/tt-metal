@@ -32,7 +32,10 @@ void kernel_main() {
 
     if (is_reporter != 0 && get_my_thread_id() == 0u) {
         if (wait_min_total != 0u) {
-            counter.wait_min(wait_min_total);
+            // Bounded wait for the other binder kernels' increments.
+            constexpr uint32_t kSpinCap = 1u << 20;
+            for (uint32_t spin = 0; counter.value() < wait_min_total && spin < kSpinCap; spin++) {
+            }
         }
         volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
         report[0] = static_cast<uint32_t>(sem_scope_of(sem::counter));
