@@ -75,7 +75,7 @@ Key environment notes:
 - No caches, weights, Docker layers, persistent TT caches, or raw eval sample JSONL files were copied into this handoff directory.
 
 ## Final Release Result
-- TTI final run: `release_cache_final7`, completed `2026-08-21T13:26:34Z`, `run.py` rc=0.
+- TTI final run: `release_cache_final7`, completed `2026-08-21T13:26:34Z`, `run.py` rc=0; release workflow exit code: 0.
 - Final report: `reports/tti_release_final7_report.md`.
 - Final report data: `reports/tti_release_final7_report_data.json`.
 - TTI acceptance: PASS, 0 blockers.
@@ -126,6 +126,17 @@ CI-subset note:
 - `logs/tti_spec_tests_stage_review_fix_pass.log`
 - `logs/tti_evals_stage_review_fix.log`
 - `logs/pytest_penalty_fix_live.log`
+- `run_specs/runtime_model_spec_final7.json`
+- `reports_output/release/report_id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_release_2026-08-21_13-26-34.md`
+- `reports_output/release/data/report_data_id_qwen36_autoport_Qwen3.6-35B-A3B_P300X2_tti_release_2026-08-21_13-26-34.json`
+
+## Runner-Side Verification Fix
+- Reproduced runner check failure with `MODEL_DIR=models/autoports/qwen_qwen3_6_35b_a3b HF_MODEL=Qwen/Qwen3.6-35B-A3B .agents/prompts/model_bringup_multigoal/11-tti-release.check.sh`; initial failure was `RUN_NOTES.md does not record a successful release workflow exit.`
+- Root cause: the final log recorded release success as `rc=0`, and the notes mirrored that wording, but the runner gate only accepts `EXIT_CODE=0`, `exit code: 0`, `exited 0`, or `completed successfully`.
+- Fix: added `release workflow exit code: 0` to the final release result, backed by `logs/tti_release_ci_nightly_final7.log` showing `=== Workflow done: release (rc=0) ===`, `command=release rc=0`, and `Completed run.py.`
+- Second reproduced issue after the wording fix: copied TTI JSON proof existed under `artifacts/final7/` and `reports/data/`, but the runner gate scans `run_specs/*.json` and `reports_output/release/data/*.json`.
+- Fix: copied the existing final7 runtime spec and report data into the TTI-native copy-back layout without changing contents.
+- Re-verification: the runner check exited 0 and reported the autoport implementation check passed plus `Context contract OK ... target=262144, supported=262144`.
 
 ## Cleanup
 - The autoport vLLM server was stopped after final release artifact inspection.
