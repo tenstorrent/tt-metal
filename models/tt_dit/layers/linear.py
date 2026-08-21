@@ -422,7 +422,6 @@ class ColParallelLinear(Module):
                 topology=self.ccl_manager.topology,
                 cluster_axis=parallel_config.tensor_parallel.mesh_axis,
                 barrier_semaphore=None,
-                force_transpose=True,
                 num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,
