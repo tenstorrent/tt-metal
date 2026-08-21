@@ -1166,14 +1166,13 @@ void process_go_signal_mcast_cmd() {
     volatile CQDispatchCmd tt_l1_ptr* cmd =
         reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
     uint32_t stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
-    // The location of the go signal embedded in the command does not meet NOC alignment requirements.
-    // cmd_ptr is guaranteed to meet the alignment requirements, since it is written to by prefetcher over NOC.
-    // Copy the go signal from an unaligned location to an aligned (cmd_ptr) location. This overwrites command
-    // fields, so every field must be read into a local below before the first store; do not read cmd ptr cmd-> after
-    // it. NOC source addresses must be raw L1 byte offsets (cached-alias form), so keep aligned_go_signal_storage at
-    // the cached alias for the NOC sources at lines 1065 and 1108. CPU writes go through a separate uncached pointer so
-    // the value lands in L1 SRAM directly; the NOC then reads the same physical location via the cached-form source
-    // address.
+    // The go signal embedded in the command does not meet NOC alignment requirements, but cmd_ptr does
+    // (the prefetcher writes it over the NOC), so the go signal is copied there. storage_offset lands that
+    // copy anywhere in the 16-byte command, so every field must be read into a local before the first
+    // store below, and none may be read from cmd after it.
+    // NOC source addresses must be raw L1 byte offsets, so aligned_go_signal_storage stays at the cached
+    // alias; CPU writes go through the uncached alias so the value lands in L1 SRAM directly, and the NOC
+    // then reads the same physical location via the cached-form source address.
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr);
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached =
         reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
@@ -1219,10 +1218,10 @@ void process_go_signal_mcast_cmd() {
         if (num_unicasts > num_physical_unicast_cores) {
             // If this is the case, cap the number of unicasts to avoid invalid NOC txns
             num_unicasts = num_physical_unicast_cores;
-            // Fake updates from non-existent workers here. The dispatcher expects an ack from
-            // the number of cores specified inside num_unicasts. If this is
-            // greater than the number of cores actually on the chip, we must account for acks
-            // from non-existent cores here.
+            // Fake updates from non-existent workers here. The dispatcher expects an ack from the
+            // number of cores specified in the command's num_unicast_txns. If that is greater than
+            // the number of cores actually on the chip, we must account for acks from non-existent
+            // cores here.
 #ifdef ARCH_QUASAR
             *worker_completion_sem_addr(stream, first_stream_used, completion_counter_offset) +=
                 (num_virtual_unicast_cores - num_physical_unicast_cores);
@@ -1422,18 +1421,16 @@ re_run_command:
             // DPRINT("write offset: {} {} {} host id {}\n", cmd->set_write_offset.offset0,
             // cmd->set_write_offset.offset1,
             //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
-            DeviceTimestampedData(
-                "runtime_host_id_dispatch", load_aligned<uint16_t>(&cmd->set_write_offset.program_host_id));
+            uint16_t program_host_id = load_aligned<uint16_t>(&cmd->set_write_offset.program_host_id);
+            DeviceTimestampedData("runtime_host_id_dispatch", program_host_id);
             if constexpr (telemetry_enabled) {
                 reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
                     dispatch_telemetry_base)
                     ->program_count = ++program_counter;
             }
             if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0 &&
-                load_aligned<uint16_t>(&cmd->set_write_offset.program_host_id) !=
-                    REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
-                while (!program_id_fifo_append(
-                    rt_profiler_msg, load_aligned<uint16_t>(&cmd->set_write_offset.program_host_id))) {
+                program_host_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
+                while (!program_id_fifo_append(rt_profiler_msg, program_host_id)) {
                     invalidate_l1_cache();
                 }
             }

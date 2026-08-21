@@ -784,11 +784,11 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
 // Single wide load of a field in a `packed` struct, which the compiler would otherwise reassemble from
 // byte loads (packed sets struct alignment to 1).
 //
-// Do not change the `void*` parameter to `const volatile T*`: taking the address of a packed member as
-// `T*` fails the build under -Werror=address-of-packed-member.
+// The `void*` parameter is required: taking the address of a packed member as `T*` trips
+// -Waddress-of-packed-member, which this build promotes to an error.
 //
-// T must match the field's width -- a narrower T silently truncates. The field must also be naturally
-// aligned, which for the command structs is what their pad members exist to guarantee
+// Unchecked caller obligations: T must match the field's width (a narrower T silently truncates), and
+// the field must be naturally aligned.
 template <typename T>
 FORCE_INLINE T load_aligned(const volatile void* ptr) {
     return *reinterpret_cast<const volatile T*>(ptr);

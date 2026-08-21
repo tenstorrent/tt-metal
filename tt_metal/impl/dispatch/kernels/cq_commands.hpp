@@ -470,8 +470,12 @@ struct CQDispatchCmdLarge {
 
 //////////////////////////////////////////////////////////////////////////////
 
-static_assert(sizeof(CQPrefetchBaseCmd) == sizeof(uint8_t));  // if this fails, padding above needs to be adjusted
-static_assert(sizeof(CQDispatchBaseCmd) == sizeof(uint8_t));  // if this fails, padding above needs to be adjusted
-static_assert((sizeof(CQPrefetchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
-static_assert((sizeof(CQPrefetchCmdLarge) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
-static_assert((sizeof(CQDispatchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
+// Base cmd size sets where every payload field lands: if this fails, adjust the padding above and
+// every load_aligned() field offset shifts with it.
+static_assert(sizeof(CQPrefetchBaseCmd) == sizeof(uint8_t));
+static_assert(sizeof(CQDispatchBaseCmd) == sizeof(uint8_t));
+// Exact, not a multiple: a union member growing past the largest would silently double every stride.
+static_assert(sizeof(CQPrefetchCmd) == CQ_DISPATCH_CMD_SIZE);
+static_assert(sizeof(CQPrefetchCmdLarge) == 2 * CQ_DISPATCH_CMD_SIZE);
+static_assert(sizeof(CQDispatchCmd) == CQ_DISPATCH_CMD_SIZE);
+static_assert(sizeof(CQDispatchCmdLarge) == 2 * CQ_DISPATCH_CMD_SIZE);

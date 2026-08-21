@@ -364,11 +364,10 @@ void process_go_signal_mcast_cmd() {
     }
     mcasts_sent++;  // Go signal sent -> update counter
 
-    // The location of the go signal embedded in the command does not meet NOC alignment requirements.
-    // cmd_ptr is guaranteed to meet the alignment requirements, since it is written to by prefetcher over NOC.
-    // Copy the go signal from an unaligned location to an aligned (cmd_ptr) location. This is safe as long as we
-    // can guarantee that copying the go signal does not corrupt any other command fields, which is true (see
-    // CQDispatchGoSignalMcastCmd).
+    // The go signal embedded in the command does not meet NOC alignment requirements, but cmd_ptr does
+    // (the prefetcher writes it over the NOC), so the go signal is copied there. storage_offset lands that
+    // copy anywhere in the 16-byte command, so every field must be read into a local before the first
+    // store below, and none may be read from cmd after it.
     // NOC source addresses must be raw L1 byte offsets (cached-alias form), so keep
     // aligned_go_signal_storage at the cached alias for the NOC sources below.
     // CPU writes go through a separate uncached pointer so the value lands in L1 SRAM directly;
