@@ -19,11 +19,8 @@ template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_tiles, MathFi
 inline void sdpa_bcast_col_srca_srcb_reuse_configure_mop(const std::uint32_t num_faces = 4, const std::uint32_t acc_to_dest = 0)
 {
     LLK_ASSERT(num_faces == 2, "num_faces must be 2");
-    constexpr bool high_fidelity     = is_high_fidelity(math_fidelity);
-    constexpr std::uint32_t addr_mod = ADDR_MOD_0;
-    std::uint32_t innerloop          = 16 >> 3; // 8 rows per eltwise op at a time.
-    std::uint32_t outerloop          = num_faces;
-    constexpr auto broadcast_type    = p_elwise::SRCB_BCAST_COL;
+    constexpr bool high_fidelity  = is_high_fidelity(math_fidelity);
+    constexpr auto broadcast_type = p_elwise::SRCB_BCAST_COL;
 
     // Scalar broadcast should not Clear B within a mop.  This is controlled outside of MOP.
     load_replay_buf<NoExec>(
@@ -103,7 +100,6 @@ template <
     std::uint32_t output_granularity>
 inline void _llk_math_sdpa_bcast_col_srca_srcb_reuse_(std::uint32_t dst_index)
 {
-    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     static_assert(output_granularity >= 1, "output_granularity must be >= 1");
     static_assert(num_tiles % output_granularity == 0, "num_tiles must be divisible by output_granularity");
 
@@ -127,7 +123,7 @@ inline void _llk_math_sdpa_bcast_col_srca_srcb_reuse_(std::uint32_t dst_index)
 }
 
 template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity, std::uint32_t FIDELITY_INCREMENT>
-inline void sdpa_bcast_col_srca_srcb_reuse_configure_addrmod(const std::uint32_t num_faces)
+inline void sdpa_bcast_col_srca_srcb_reuse_configure_addrmod([[maybe_unused]] const std::uint32_t num_faces)
 {
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     // Use srcA for data movement

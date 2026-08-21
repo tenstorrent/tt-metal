@@ -14,9 +14,9 @@
 #include "experimental/llk_unpack_A_sdpa_api.h"
 #endif
 
-#if defined(ARCH_BLACKHOLE)
-
 namespace ckernel {
+
+#if defined(ARCH_BLACKHOLE)
 
 // DEST geometry.  A DEST "row" is 16 datums.
 // custom_mm<dense_packing=true> output tile: 2 faces, 16 rows apart.
@@ -45,9 +45,11 @@ ALWI void custom_mm_reuse_dest_srcb_pack_init() {
 }
 
 /**
- * Restores both packer strides to their defaults (face 16 rows, tile 64).  These
- * registers are persistent state that no pack init reprograms, so a later op
- * packing with the default layout would otherwise inherit them.
+ * Restores both packer strides to their defaults (face 16 rows, tile 64).
+ * A full llk_pack_init (skip_packer_strides = false) does reprogram these
+ * fields; the restore matters for follow-on ops that pack without one, e.g.
+ * MOP-only pack_block_contiguous paths, which would otherwise inherit the
+ * dense strides.
  *
  * A chaining core therefore needs only this call, not also
  * custom_mm_block_uninit<dense_packing>().
@@ -92,24 +94,27 @@ ALWI void custom_mm_reuse_dest_srcb_block_init_short(
 // clang-format off
 /**
  * Matmul whose in0 is read out of DEST instead of a CB: computes
- * out[1, nt_dim*32] += in0_from_dest[1, kt_dim*32] @ in1[kt_dim*32, nt_dim*32].
+ * out[in0_tile_r_dim, nt_dim*32] += in0_from_dest[in0_tile_r_dim, kt_dim*32]
+ *     @ in1[kt_dim*32, nt_dim*32].
  *
  * in0 is whatever the preceding custom_mm left at DEST row `isrc`, laid out
- * one tile every `src_tile_stride` rows.  The result accumulates into DEST at
- * row `idst` in the dense 16-rows-per-tile layout.
+ * one tile every `src_tile_stride` rows; the math LLK copies `in0_tile_r_dim`
+ * source rows per tile (1, 2, 4 or 8).  The result accumulates the same
+ * `in0_tile_r_dim` output rows into DEST at row `idst` in the dense
+ * 16-rows-per-tile layout.
  *
  * | Argument         | Description                                                    | Type     | Valid Range                    | Required |
  * |------------------|----------------------------------------------------------------|----------|--------------------------------|----------|
  * | in0_tile_r_dim   | Height of the in0 tile (template)                              | uint32_t | 1, 2, 4, 8                     | True     |
- * | in0_cb_id        | CB describing in0 (used only for the unpack init)              | uint32_t | 0 to 31                        | True     |
+ * | in0_cb_id        | Currently unused: the unpack init reads geometry from in1 only and the math LLK takes no CB id (in0 geometry comes solely from in0_tile_r_dim). Kept for signature stability with the tt-blaze caller | uint32_t | 0 to 31                        | True     |
  * | in1_cb_id        | Weights CB                                                      | uint32_t | 0 to 31                        | True     |
  * | in1_tile_index   | First weight tile to read                                       | uint32_t | < CB size                      | True     |
  * | isrc             | DEST row of the first in0 tile                                  | uint32_t | < half DEST                    | True     |
- * | idst             | DEST row of the first output tile                               | uint32_t | < half DEST                    | True     |
- * | kt_dim           | Inner dimension in tiles                                        | uint32_t | even, 2 to 256                 | True     |
+ * | idst             | DEST row of the first output tile. The caller must zero DEST at idst first: the MVMULs accumulate (+=) and nothing in this call clears DEST | uint32_t | < half DEST                    | True     |
+ * | kt_dim           | Inner dimension in tiles. All kt_dim in0 tiles must be DEST-resident at once: kt_dim * src_tile_stride + nt_dim * 16 <= CUSTOM_MM_MAX_DEST_ROWS, and the producing custom_mm's ct_dim caps it at 16 | uint32_t | even; see bound                | True     |
  * | nt_dim           | Output width in tiles                                           | uint32_t | 1 to 16                        | True     |
  * | in1_k_stride     | Weight tiles between consecutive K rows (nt_dim if contiguous)  | uint32_t | >= nt_dim                      | True     |
- * | src_tile_stride  | DEST rows between consecutive in0 tiles                         | uint32_t | 32 for custom_mm dense_packing | True     |
+ * | src_tile_stride  | DEST rows between consecutive in0 tiles                         | uint32_t | 32 for custom_mm dense_packing, 64 without | True     |
  */
 // clang-format on
 template <std::uint32_t in0_tile_r_dim>
@@ -125,10 +130,10 @@ ALWI void custom_mm_reuse_dest_srcb_block(
     const std::uint32_t src_tile_stride = CUSTOM_MM_DEST_TILE_ROWS) {
     UNPACK((llk_unpack_A_sdpa_set_srcb_dummy_valid()));
     UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
-        in0_cb_id, in1_cb_id, 0, in1_tile_index, kt_dim, nt_dim, in1_k_stride)));
+        in0_cb_id, in1_cb_id, /*tile_index_0=*/0, in1_tile_index, kt_dim, nt_dim, in1_k_stride)));
     MATH((llk_math_custom_mm_reuse_dest_srcb<in0_tile_r_dim>(isrc, idst, kt_dim, nt_dim, src_tile_stride)));
 }
 
-}  // namespace ckernel
-
 #endif  // ARCH_BLACKHOLE
+
+}  // namespace ckernel
