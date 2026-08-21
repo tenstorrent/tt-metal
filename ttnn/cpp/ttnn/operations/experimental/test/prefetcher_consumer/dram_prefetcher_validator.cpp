@@ -58,7 +58,10 @@ ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     // GlobalCircularBuffer / Tensor aren't reflection-hashable here; pick the bits that
     // determine Program shape: scalar attrs, GCB identity, the source tensor's DRAM
-    // address (compile-time arg via TensorAccessorArgs), and its dataformat.
+    // address (compile-time arg via TensorAccessorArgs), its dataformat, and its page config.
+    // create_at reads the real tile off the source tensor to derive k_tiles, total_n_tiles,
+    // tile_bytes and the CB page sizes, so two tensors differing only in tile geometry compile
+    // different programs and must not share a key.
     const auto* tensor_buffer = tensor_args.source_tensor.buffer();
     const tt::DataFormat dataformat = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.source_tensor.dtype());
     return ttsl::hash::hash_objects_with_default_seed(
@@ -69,7 +72,8 @@ ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
         attrs.rotation,
         static_cast<uint64_t>(attrs.global_cb->config_address()),
         static_cast<uint64_t>(tensor_buffer != nullptr ? tensor_buffer->address() : 0),
-        static_cast<uint32_t>(dataformat));
+        static_cast<uint32_t>(dataformat),
+        tensor_args.source_tensor.tensor_spec().page_config());
 }
 
 ttnn::device_operation::CachedProgram<DramPrefetcherValidatorDeviceOperation::ProgramFactory::shared_variables_t>
