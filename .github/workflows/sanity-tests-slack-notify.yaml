@@ -179,73 +179,118 @@ jobs:
         if: steps.claim.outputs.already_notified != 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
-          CURRENT_RUN_NUMBER: ${{ steps.context.outputs.run_number }}
           CURRENT_HEAD_SHA: ${{ steps.context.outputs.head_sha }}
         with:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const currentRunNumber = Number(process.env.CURRENT_RUN_NUMBER);
             const currentHeadSha = process.env.CURRENT_HEAD_SHA;
 
-            const { data: runsResp } = await github.rest.actions.listWorkflowRuns({
-              owner,
-              repo,
-              workflow_id: 'sanity-tests.yaml',
-              branch: 'main',
-              event: 'push',
-              per_page: 100,
-            });
-
-            // Walk backwards (by run_number, not necessarily run_number - 1, since
-            // schedule/dispatch runs of the same workflow interleave and also
-            // consume run_numbers) to find the most recent MEANINGFUL prior state:
-            //  - a still-in-progress run (e.g. mid auto-retry-attempt) makes the
-            //    true completion order ambiguous -- abstain rather than silently
-            //    skip past it and risk misattributing to the wrong set of authors.
-            //  - cancelled/skipped runs carry no real red/green signal -- skip over
-            //    them and keep looking, so they can't permanently swallow a break.
-            //  - success -> this is a fresh green->red transition; use it as baseline.
+            // ==================== BASELINE LOOKUP (edge detection) ====================
+            // Deliberately NOT a scan over "the N most recent runs": that trusts a
+            // recency-sorted listWorkflowRuns page to be a complete, current window,
+            // which is not guaranteed. The API can transiently serve a stale or
+            // misaligned page, silently resolving "the previous push run" to the
+            // wrong page's first entry with no signal that anything went wrong.
+            // That is exactly what happened on 2026-08-21: a page that should have
+            // reached back ~2 days instead bottomed out 9 days early, and the old
+            // walk-back confidently diffed against a 9-day-old baseline, blaming
+            // 250 commits and pinging 89 people in one Slack message.
+            //
+            // Instead, do what a human does (edge detection): walk the git commit
+            // graph one parent at a time (main is linear via merge queue) and fetch
+            // each parent's run by exact head_sha -- an indexed point lookup keyed
+            // by the sha we ask for, not by position in a list. A stale index can
+            // make this MISS (empty result -> hop onward, or abstain loudly at the
+            // hop cap); it can never hand back the wrong commit's run.
+            //
+            // Per parent commit:
+            //  - no push run at all -> a merge-queue batch tip covered it, or brief
+            //    index lag; hop to ITS parent (the commit stays in the blame range).
+            //  - still in progress (e.g. mid auto-retry-attempt) -> the true
+            //    completion order is ambiguous; abstain rather than misattribute.
+            //    A later red commit's own event re-runs this edge detection.
+            //  - cancelled/skipped -> no real red/green signal; hop onward so it
+            //    can't permanently swallow a break.
+            //  - success -> fresh green->red transition; use it as the diff baseline.
             //  - failure (or any other bad terminal conclusion) -> main was already
-            //    red before us; stay silent to avoid re-notifying / re-blaming.
-            const candidates = runsResp.workflow_runs
-              .filter(r => r.run_number < currentRunNumber)
-              .sort((a, b) => b.run_number - a.run_number);
+            //    red before us; stay silent to avoid repeat/duplicate pings.
+            //
+            // MAX_PARENT_HOPS also bounds blast radius by construction: the culprit
+            // diff can never exceed this many commits, so a mass ping like the
+            // 2026-08-21 one is structurally impossible here.
+            const MAX_PARENT_HOPS = 30;
 
-            let prevGood = null;
-            for (const run of candidates) {
+            let sha = currentHeadSha;
+            let baseline = null;
+
+            for (let hop = 0; hop < MAX_PARENT_HOPS; hop++) {
+              const { data: commit } = await github.rest.git.getCommit({ owner, repo, commit_sha: sha });
+              const parentSha = commit.parents[0]?.sha;
+              if (!parentSha) {
+                core.warning(`Reached a root commit walking back from ${currentHeadSha}; no baseline exists. Skipping.`);
+                core.setOutput('should_notify', 'false');
+                return;
+              }
+
+              // head_sha is an exact-match filter (full 40-char sha; partial shas
+              // match nothing). The event/branch filters exclude the merge_group
+              // run of the same sha. At most one push run per sha in practice; if
+              // the same sha were ever pushed twice, [0] is the most recent.
+              const { data: runsResp } = await github.rest.actions.listWorkflowRuns({
+                owner,
+                repo,
+                workflow_id: 'sanity-tests.yaml',
+                head_sha: parentSha,
+                branch: 'main',
+                event: 'push',
+                per_page: 5,
+              });
+              const run = runsResp.workflow_runs[0];
+
+              if (!run) {
+                core.info(`No "Sanity tests" push run for parent ${parentSha} (merge-queue batch or index lag); hopping to its parent.`);
+                sha = parentSha;
+                continue;
+              }
               if (run.status !== 'completed') {
-                core.info(`Push run #${run.run_number} is still in progress; completion order is ambiguous. Abstaining.`);
+                core.info(`Run #${run.run_number} for parent ${parentSha} is still ${run.status}; completion order is ambiguous. Abstaining.`);
                 core.setOutput('should_notify', 'false');
                 return;
               }
               if (run.conclusion === 'cancelled' || run.conclusion === 'skipped') {
-                core.info(`Push run #${run.run_number} was ${run.conclusion} (no real signal); looking further back.`);
+                core.info(`Run #${run.run_number} for parent ${parentSha} was ${run.conclusion} (no real signal); hopping to its parent.`);
+                sha = parentSha;
                 continue;
               }
               if (run.conclusion === 'success') {
-                prevGood = run;
-              } else {
-                core.info(`Push run #${run.run_number} also did not succeed (${run.conclusion}); ` +
-                  `main is still red from an earlier break. Not re-notifying to avoid repeat/duplicate pings.`);
+                // Log the happy path too: the old code assigned its baseline
+                // silently, which made the 2026-08-21 incident needlessly hard to
+                // reconstruct from logs.
+                core.info(`Baseline: run #${run.run_number} (${parentSha}), ${hop + 1} commit(s) back from ${currentHeadSha}.`);
+                baseline = run;
+                break;
               }
-              break;
+              core.info(`Run #${run.run_number} for parent ${parentSha} also did not succeed (${run.conclusion}); ` +
+                `main is still red from an earlier break. Not re-notifying to avoid repeat/duplicate pings.`);
+              core.setOutput('should_notify', 'false');
+              return;
             }
 
-            if (!prevGood) {
-              core.warning('No usable previous "Sanity tests" push run found on main (either none within the last 100 runs, or main is still red from an earlier break); skipping.');
+            if (!baseline) {
+              core.warning(`No completed "Sanity tests" baseline within ${MAX_PARENT_HOPS} commits back from ${currentHeadSha}; skipping (needs a human look).`);
               core.setOutput('should_notify', 'false');
               return;
             }
 
             core.setOutput('should_notify', 'true');
-            core.setOutput('prev_run_url', prevGood.html_url);
-            core.setOutput('prev_run_number', String(prevGood.run_number));
+            core.setOutput('prev_run_url', baseline.html_url);
+            core.setOutput('prev_run_number', String(baseline.run_number));
 
             const { data: cmp } = await github.rest.repos.compareCommits({
               owner,
               repo,
-              base: prevGood.head_sha,
+              base: baseline.head_sha,
               head: currentHeadSha,
             });
 
@@ -291,7 +336,7 @@ jobs:
               }
             }
 
-            core.info(`Found ${entries.length} culprit entr${entries.length === 1 ? 'y' : 'ies'} between #${prevGood.run_number} and #${currentRunNumber}`);
+            core.info(`Found ${entries.length} culprit entr${entries.length === 1 ? 'y' : 'ies'} between baseline run #${baseline.run_number} (${baseline.head_sha}) and ${currentHeadSha}`);
             core.setOutput('entries', JSON.stringify(entries));
             core.setOutput('logins_json',
               JSON.stringify([...new Set(entries.map(e => e.authorLogin).filter(l => l !== null))].sort()));
