@@ -1497,7 +1497,7 @@
   model_family: TT-Transformers
   skus:
     wh_llmbox:
-      timeout: 23
+      timeout: 24
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
@@ -1552,7 +1552,7 @@
   model_family: TT-Transformers
   skus:
     wh_llmbox:
-      timeout: 7
+      timeout: 8
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
