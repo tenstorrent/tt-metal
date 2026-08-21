@@ -200,6 +200,12 @@ static constexpr uint32_t SPSC_MARKER_WORDS = 2;
 // Tear-free 64-bit wall-clock read: HIGH and LOW are separate registers, so a tick between them would
 // pair an old high with a new (wrapped-small) low -> a timestamp ~2^32 too small = a backwards jump. Re-read
 // HIGH after LOW and retry if it moved, so (hi, lo) is always one consistent snapshot.
+//
+// Do NOT replace this with the branchless latched read (L-then-H, "reading L latches H"): the latch is
+// safe for a SINGLE agent only. The ISA doc (tt-isa-documentation, TensixTile/DebugTimestamper.md)
+// prescribes exactly this read-H/read-L/re-read-H retry for multiple agents reading WALL_CLOCK_L
+// concurrently -- and all five of a profiled core's RISCs do, so another RISC's L read can re-latch
+// counter_high_at between this RISC's L and H reads.
 inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_t& lo) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     do {
