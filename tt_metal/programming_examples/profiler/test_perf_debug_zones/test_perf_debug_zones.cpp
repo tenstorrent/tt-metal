@@ -264,7 +264,9 @@ int main(int argc, char** argv) {
     uint32_t gx = 2, gy = 2, n_iters = 50, zone_cyc = 0;  // small grid + modest iters keep the run quick
     bool knee_mode = false;                               // set by --delay, including --delay 0
     bool clkprobe = false;                                // --clkprobe 1: read wall clocks and exit, no workload
-    bool empty_mode = false;  // --empty 1: unrolled EMPTY zones + stats consumer -> profiler self-overhead
+    uint32_t empty_mode = 0;  // --empty 1: unrolled EMPTY zones + stats consumer -> profiler self-overhead
+                              // --empty 2: same, plus ONE extra wall-clock read pair per zone BODY -- the
+                              //            duration delta vs --empty 1 prices read_wall_clock itself
     for (int i = 1; i + 1 < argc; i += 2) {
         std::string a = argv[i];
         uint32_t v = (uint32_t)std::strtoul(argv[i + 1], nullptr, 10);
@@ -280,7 +282,7 @@ int main(int argc, char** argv) {
             zone_cyc = v;
             knee_mode = true;  // NOT `zone_cyc != 0`: --delay 0 is a real knee point (max rate)
         } else if (a == "--empty") {
-            empty_mode = v != 0;
+            empty_mode = v;
         }
     }
 
@@ -288,7 +290,7 @@ int main(int argc, char** argv) {
     // it at capture start (registration is process-wide and time-independent, but earliest is safest).
     auto empty_stats = std::make_shared<EmptyZoneStats>();
     perf_debug::PerfDebugConsumerHandle empty_handle = 0;
-    if (empty_mode) {
+    if (empty_mode != 0) {
         empty_handle = perf_debug::register_consumer(
             "empty-zone-overhead", [empty_stats](const perf_debug::PerfDebugRecordBatch& b) { (*empty_stats)(b); });
     }
@@ -328,7 +330,7 @@ int main(int argc, char** argv) {
     CoreRange cores(CoreCoord{0, 0}, CoreCoord{gx - 1, gy - 1});
     std::map<std::string, std::string> defs{
         {"N_ITERS", std::to_string(n_iters) + "u"},
-        {"ZONE_MODE", empty_mode ? "2" : (knee_mode ? "1" : "0")},
+        {"ZONE_MODE", empty_mode >= 2 ? "3" : (empty_mode != 0 ? "2" : (knee_mode ? "1" : "0"))},
         {"ZONE_CYC", std::to_string(zone_cyc) + "u"}};
     const std::string kdir = "tt_metal/programming_examples/profiler/test_perf_debug_zones/kernels/";
 

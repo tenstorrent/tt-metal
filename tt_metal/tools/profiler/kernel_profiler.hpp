@@ -137,6 +137,12 @@ static constexpr uint32_t SPSC_MARKER_WORDS = 2;
 // Last high half emitted in a STICKY_TIMER; ~0 forces a fresh sticky on a launch's first marker.
 [[maybe_unused]] static uint32_t g_prev_timer_hi = 0xFFFFFFFFu;
 
+// Producer-cached drainer head. The head only ADVANCES, so a stale copy is conservative: the room
+// fast path compares against this local word and touches L1 only when the cached room is exhausted
+// -- once per drained batch instead of once per packet (the per-packet L1 head load was measured as
+// the bulk of the in-zone overhead). 0 is the safe floor: head <= tail = wIndex's seed.
+[[maybe_unused]] static uint32_t g_head_cache = 0;
+
 // Branchless latched read: reading L latches the high half, H returns it -- the ORDER is the protocol.
 // Known tradeoff (tt-isa-documentation, TensixTile/DebugTimestamper.md): the latch is single-agent; a
 // concurrent RISC's L read re-latching in our L->H gap across a 2^32 boundary lands a marker +2^32
@@ -146,6 +152,33 @@ inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     lo = p_reg[WALL_CLOCK_LOW_INDEX];   // latches the high half
     hi = p_reg[WALL_CLOCK_HIGH_INDEX];  // returns the latched value
+}
+
+inline __attribute__((always_inline)) void publish_tail() {
+    // zoneValid can only be false on validator RISCs; everyone else compiles to fence + store, no
+    // load and no branch.
+    if constexpr (PROFILER_VALIDATES_ZONE) {
+        if (!zoneValid) {
+            return;
+        }
+    }
+    // Fence so the marker stores land before the tail: the drainer reads TAIL then the slots over
+    // the NoC, and the stores can otherwise reach L1 SRAM out of order.
+    asm volatile("fence" ::: "memory");
+    profiler_control_buffer[TAIL_INDEX] = wIndex;
+}
+
+// Batched publish for the marker hot paths: the FENCE is what pays the posted ring stores' latency,
+// so paying it once per 64-word batch instead of per packet is most of the close-side saving. The
+// trigger is wIndex crossing a 64-word boundary -- no counter state, just shifts on values already in
+// registers. Visibility lags by at most 64 words WITHIN a launch; every launch still ends fully
+// published (finish_profiler), launch boundaries publish (set_host_counter / set_profiler_zone_valid),
+// and the stall path publishes before it waits. Losslessness is untouched -- blocking is
+// head-vs-wIndex, and the room reserve never depends on the published tail.
+inline __attribute__((always_inline)) void publish_tail_batched(uint32_t words_written) {
+    if (__builtin_expect((wIndex >> 6) != ((wIndex - words_written) >> 6), 0)) {
+        publish_tail();
+    }
 }
 
 // The stall reserve: a naive stall scope would emit ZONE_START into the very ring whose fullness
@@ -182,20 +215,27 @@ __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
         profiler_control_buffer[SPSC_STALL_COUNT_0 + myRiscID]++;
     }
     profileScopeStall stall;
+    // Publish everything written so far (the stall START included): with the batched publish the
+    // drainer can only free words up to the published tail -- waiting unpublished would deadlock.
+    publish_tail();
     while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_USABLE - nwords - STALL_ZONE_HALF_WORDS)) {
         invalidate_l1_cache();  // re-read the drainer-updated head (and the terminate flag)
         if (profiler_control_buffer[PROFILER_TERMINATE]) {
             return;  // teardown: stop waiting on a dead ring; the destructor still closes the zone
         }
     }
+    g_head_cache = profiler_control_buffer[HEAD_INDEX];
 }
 
-// Fast path: one compare, against RING_USABLE (never RING_CAPACITY -- the difference is the reserve).
+// Fast path: one LOCAL compare against the cached head, bound RING_USABLE (never RING_CAPACITY --
+// the difference is the reserve). L1 is touched only to refresh the cache when it runs dry.
 inline __attribute__((always_inline)) void ring_ensure_room(uint32_t nwords) {
-    if ((wIndex - profiler_control_buffer[HEAD_INDEX]) <= (RING_USABLE - nwords)) {
-        return;
+    if (__builtin_expect((wIndex - g_head_cache) > (RING_USABLE - nwords), 0)) {
+        g_head_cache = profiler_control_buffer[HEAD_INDEX];
+        if ((wIndex - g_head_cache) > (RING_USABLE - nwords)) {
+            ring_ensure_room_slow(nwords);
+        }
     }
-    ring_ensure_room_slow(nwords);
 }
 
 inline __attribute__((always_inline)) void ring_write_word(uint32_t v) {
@@ -214,20 +254,6 @@ inline __attribute__((always_inline)) void ring_write_sticky_timer(uint32_t hi) 
         wIndex++;
         g_prev_timer_hi = hi;
     }
-}
-
-inline __attribute__((always_inline)) void publish_tail() {
-    // zoneValid can only be false on validator RISCs; everyone else compiles to fence + store, no
-    // load and no branch.
-    if constexpr (PROFILER_VALIDATES_ZONE) {
-        if (!zoneValid) {
-            return;
-        }
-    }
-    // Fence so the marker stores land before the tail: the drainer reads TAIL then the slots over
-    // the NoC, and the stores can otherwise reach L1 SRAM out of order.
-    asm volatile("fence" ::: "memory");
-    profiler_control_buffer[TAIL_INDEX] = wIndex;
 }
 
 // ZONE_ATOMIC packet size: word0 (type|id) + end timer_low + 32-bit duration.
@@ -270,7 +296,7 @@ inline __attribute__((always_inline)) void mark_zone_close(uint32_t timer_id, ui
     ring_write_word(ppfmt::zone_atomic_w0(timer_id));
     ring_write_word(lo);
     ring_write_word(lo_d);
-    publish_tail();
+    publish_tail_batched(SPSC_ATOMIC_ZONE_WORDS + 1);
 }
 
 // DeviceZoneSetCounter hook: emit the runtime host-id (ttnn's per-program runtime_id) in-band as a
@@ -373,7 +399,7 @@ inline __attribute__((always_inline)) void time_stamped_data(uint64_t data, Args
     ring_write_word(data >> 32);
     ring_write_word((data << 32) >> 32);
     ((ring_write_word(trailers >> 32), ring_write_word((trailers << 32) >> 32)), ...);
-    publish_tail();
+    publish_tail_batched(1 + 3 + 2 * total_data_count);
 }
 
 // PP_EVENT point marker: compile-time flag, 2 words, no payload.
@@ -385,7 +411,7 @@ inline __attribute__((always_inline)) void record_flag() {
     ring_write_sticky_timer(hi);
     ring_write_word(ppfmt::event_w0(data_id));
     ring_write_word(lo);
-    publish_tail();
+    publish_tail_batched(SPSC_MARKER_WORDS + 1);
 }
 
 // Stack canary: the production-run (watcher-off) net for the one real overflow tail -- a globals-heavy

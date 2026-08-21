@@ -82,7 +82,22 @@ static constexpr int kWallClockLowIdx = 0;
 
 // GRADUATED (ZONE_MODE == 0) keeps the wall-clock spin (ZONE_WALL above): its point is durations calibrated in
 // microseconds for a representative capture, which a nop-iteration count cannot express.
-#if ZONE_MODE == 2
+
+// PRICE-CLOCK body (ZONE_MODE == 3): the EMPTY zone plus ONE extra latched wall-clock read pair in
+// the body. duration(mode 3) - duration(mode 2) = the cost of one read_wall_clock on this RISC.
+#define ZONE_PRICE_CLOCK(NAME)                                                             \
+    {                                                                                      \
+        DeviceZoneScopedN(NAME);                                                           \
+        volatile tt_reg_ptr uint32_t* _pwc =                                               \
+            reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); \
+        uint32_t _plo = _pwc[0];                                                           \
+        uint32_t _phi = _pwc[1];                                                           \
+        asm volatile("" ::"r"(_plo), "r"(_phi));                                           \
+    }
+
+#if ZONE_MODE == 3
+#define ZONE(NAME, GRADUATED) ZONE_PRICE_CLOCK(NAME)
+#elif ZONE_MODE == 2
 #define ZONE(NAME, GRADUATED) ZONE_EMPTY(NAME)
 #elif ZONE_MODE
 #define ZONE(NAME, GRADUATED) ZONE_NOPS(NAME, ZONE_CYC)
