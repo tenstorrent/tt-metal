@@ -52,7 +52,7 @@ def _real_numels(n):
 
     if not hf_cache_dir(_MID):
         pytest.skip("voxtral not in the local HF cache")
-    return [numel for numel, _sec in list(_checkpoint_tensor_sections(_MID))[:n]]
+    return [numel for numel, _sec, _nm in list(_checkpoint_tensor_sections(_MID))[:n]]
 
 
 def test_a_cache_the_name_list_missed_is_excluded_by_the_checkpoint(monkeypatch):

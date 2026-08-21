@@ -1909,12 +1909,35 @@ def _model_block_facts(model_root, model_id: str = "", cfg: dict | None = None) 
         try:
             from agent.weight_census import _checkpoint_tensor_sections
 
+            # TWO COUNTS PER TOWER, because two consumers ask different questions of it.
+            #
+            # `params` is the tower's SIZE -- what it holds -- and the memory floor divides by it.
+            # `matmul_params` is what a matmul MULTIPLIES, which excludes a lookup table: an
+            # embedding is read by INDEX, one row per token, never multiplied. The compute floor is
+            # 2 x params x tokens, so handing it the size charges work that never happens -- on
+            # voxtral prefill, 2 x 0.403B x 4096 = 3.30 TFLOP, 18.8 ms of a 222.61 ms floor.
+            #
+            # The rule is model_bytes._LOOKUP_ONLY, which total_params has always applied; blocks[]
+            # arrived later for multi-tower models and recorded only the size. Same regex, so the
+            # two definitions cannot drift.
+            try:
+                from agent.model_bytes import _LOOKUP_ONLY as _LO
+            except Exception:  # noqa: BLE001
+                _LO = None
             _pp: dict = {}
-            for _numel, _sec in _checkpoint_tensor_sections(snap or model_root):
+            _lk: dict = {}
+            for _t in _checkpoint_tensor_sections(snap or model_root):
+                _numel, _sec = _t[0], _t[1]
                 _pp[str(_sec)] = _pp.get(str(_sec), 0) + int(_numel)
+                _nm = str(_t[2]) if len(_t) > 2 else ""
+                if _LO is not None and _nm and _LO.search(_nm):
+                    _lk[str(_sec)] = _lk.get(str(_sec), 0) + int(_numel)
             for _root, _geo in out.items():
                 if _pp.get(_root):
                     _geo["params"] = int(_pp[_root])
+                    if _lk.get(_root):
+                        _geo["lookup_params"] = int(_lk[_root])
+                        _geo["matmul_params"] = max(0, int(_pp[_root]) - int(_lk[_root]))
         except Exception:  # noqa: BLE001 -- geometry without params still prices the memory term
             pass
         return out

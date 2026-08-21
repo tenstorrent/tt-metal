@@ -226,7 +226,7 @@ def checkpoint_section_numels(model_id_or_dir) -> dict:
     which the caller can see and weigh, rather than in whichever section came first in the file.
     """
     seen: dict = {}
-    for numel, section in _checkpoint_tensor_sections(model_id_or_dir):
+    for numel, section, _name in _checkpoint_tensor_sections(model_id_or_dir):
         prev = seen.get(numel)
         if prev is None:
             seen[numel] = section
@@ -265,7 +265,10 @@ def _checkpoint_tensor_sections(model_id_or_dir):
                 for d in shape:
                     numel *= int(d)
                 if numel > 0 and "." in str(name):
-                    yield numel, str(name).split(".", 1)[0]
+                    # THE FULL NAME TOO. A consumer that must tell a lookup table from a weight
+                    # matches on the name (model_bytes._LOOKUP_ONLY), and the section alone cannot
+                    # say which tensors inside a tower are multiplied.
+                    yield numel, str(name).split(".", 1)[0], str(name)
     except Exception as exc:  # noqa: BLE001
         _FAILED_CHECKPOINT.append("%s: %s" % (type(exc).__name__, str(exc)[:100]))
         return

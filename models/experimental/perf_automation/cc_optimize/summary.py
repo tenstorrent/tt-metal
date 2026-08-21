@@ -1402,7 +1402,29 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # measurement in the tens of milliseconds. A single-block model has root geometry equal to
         # its one block's, so nothing changes there.
         _blk = _stage_block(name) or {}
-        _params = int(_blk.get("params") or 0) or int(params or 0)
+        # THE PARAMS THAT ARE MULTIPLIED, NOT THE PARAMS THAT EXIST.
+        #
+        # `2 x params x tokens` counts a multiply-accumulate for every parameter, once per token --
+        # which is right for a WEIGHT in a matmul and wrong for a lookup table. An embedding is read
+        # by INDEX: one row per token, no multiply. blocks[root]["params"] is the tower's SIZE, so it
+        # includes the table, and feeding it to this formula charges work that never happens.
+        #
+        # Voxtral prefill: 4.014B (language_model) instead of 3.611B, so 2 x 0.403B x 4096 = 3.30
+        # TFLOP of phantom matmul -- 18.8 ms of a 222.61 ms floor, 9.2% too slow, making the stage
+        # look closer to its ceiling than it is. Encode is unaffected: an audio tower has no token
+        # embedding, which is why only the text stages drifted.
+        #
+        # The rule already exists -- model_bytes._LOOKUP_ONLY, and total_params is built with it --
+        # but blocks[] records a tower's size and never inherited it. Prefer the block's own
+        # matmul_params when the producer supplies it; fall back to subtracting the declared
+        # lookup-only bytes; and only then to the raw size, so a model whose producer predates this
+        # behaves exactly as before.
+        _blk = dict(_blk)
+        _mm = int(_blk.get("matmul_params") or 0)
+        if not _mm:
+            _lo = int(_blk.get("lookup_params") or 0)
+            _mm = max(0, int(_blk.get("params") or 0) - _lo) if _lo else 0
+        _params = _mm or int(_blk.get("params") or 0) or int(params or 0)
         _L = int(_blk.get("layers") or (mf or {}).get("layers") or 0)
         _H = int(_blk.get("hidden_size") or (mf or {}).get("hidden_size") or 0)
         # 2 x params x tokens counts every WEIGHT matmul -- each parameter is multiplied once per
