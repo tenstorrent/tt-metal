@@ -1474,21 +1474,12 @@ assert _BINARY_EDGE_OPS, (
 #
 #   The finite poles agreed all along (div(-2, ±1/64) = ∓128, every ±inf lines up).
 #
-# CLOSED — 0**0 returned 0 where C, torch and the golden give 1, and 0**-0.0 returned inf.
-#   Both were the same composition artifact: pow evaluates exp(b·ln a), so base == 0 formed
-#   0 * -inf = NaN, exp(NaN) collapsed to +0, and the kernel's v_if(val < 0) then ran on a
-#   NaN -- undefined per VectorUnit's SFPSETCC contract, which is why the two inputs
-#   disagreed. calculate_sfpu_binary_power now ends in an IEEE pow(x, 0) == 1 guard, so
-#   SfpuElwpow no longer appears in the tables below. The -0.0 exponent is a committed
-#   Operand.B edge in sfpu_domains._OP_OPERAND_EDGE_POINTS, cartesian-producted with
-#   ±2 on A, so both_zero now asserts 0**-0.0 as well as 0**0 and ordinary asserts
-#   (±2)**-0.0 -- the coverage that would go green-but-wrong if setsgn were dropped.
-#
-# Those groups are the classes the probe partitions into: documented is
-# _EDGE_CLASS_NEGATIVE_ZERO; open are _EDGE_CLASS_BOTH_ZERO (indeterminate forms)
-# and _EDGE_CLASS_NAN (x % 0). _EDGE_CLASS_ORDINARY holds everything that agreed -- ±inf
-# poles, finite quotients, exact remainders -- asserted rather than tolerated, which is only
-# possible now it does not share a tensor with the others.
+# Those groups are the classes the probe partitions into, and _EDGE_CLASS_NEGATIVE_ZERO -- the
+# documented one -- is now the only class with an entry left below. _EDGE_CLASS_BOTH_ZERO
+# (indeterminate forms, 0**0) and _EDGE_CLASS_NAN (x % 0) were emptied by the retraction above
+# and by the pow fix, so they are asserted rather than tolerated. _EDGE_CLASS_ORDINARY holds
+# everything that agreed -- ±inf poles, finite quotients, exact remainders -- likewise
+# asserted, which is only possible now it does not share a tensor with the others.
 #
 # Non-strict xfails per Phase 0's approximate-exp precedent, so a case still executes and reports
 # XPASS if behaviour changes; enumerated per (input, output, dest_acc) rather than by predicate so
@@ -1553,6 +1544,13 @@ _BINARY_EDGE_REASON = {
 # six recorded "returns inf where IEEE says nan", which the retraction above shows to be the pack
 # substitution rather than the arithmetic. They are not replaced by xfails on the narrowing cells
 # either -- generated_nan_sign_is_asserted() gates those off on Wormhole.
+#
+# Also deleted: the _EDGE_CLASS_BOTH_ZERO entry for SfpuElwpow, which recorded 0**0 returning 0
+# against a golden 1 -- Wormhole's reading; Blackhole returned +inf for it.
+# calculate_sfpu_binary_power now ends in an IEEE pow(x, 0) == 1 guard (see the kernel comment for
+# the NaN-predicate root cause), so both_zero asserts 0**0 and 0**-0.0 instead. The -0.0 exponent
+# is a committed Operand.B edge in sfpu_domains._OP_OPERAND_EDGE_POINTS; without it this class
+# would pass against a kernel that dropped setsgn.
 
 # No op may claim a divergence without a combination list to apply it to, and none may
 # list combinations with nothing to apply them to.
