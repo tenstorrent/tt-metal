@@ -2685,6 +2685,7 @@ def test_page_table_layout_replacement_is_immutable_and_bounded(expect_error):
     assert runtime.config is not original
     assert runtime.config.page_table_layout is smaller
     assert original.page_table_layout.raw_capacity_width == 256
+    assert runtime.config.page_table_layout_ceiling is original.page_table_layout
     with expect_error(ValueError, "block_size"):
         runtime.configure_page_table_layout(PageTableLayout(16, 128, 136, 128))
     with expect_error(ValueError, "capacity ceiling"):

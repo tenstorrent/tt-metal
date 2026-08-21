@@ -22,7 +22,8 @@ class PrefillRuntimeConfig:
     model: Any
     mesh_device: Any
     output_reader: OutputReader
-    page_table_layout: PageTableLayout
+    page_table_layout: PageTableLayout  # Current geometry; may be replaced once before execution.
+    page_table_layout_ceiling: PageTableLayout  # Construction-time upper bound retained across replacement.
     max_batch_size: int
     max_prefill_chunk_size: int
     supports_batched_prefill: bool | None
@@ -35,9 +36,6 @@ class PrefillRuntimeConfig:
     allow_force_argmax: bool
     sampling_batch_size: int
     static_q128_topk_supported: bool
-    max_page_table_capacity_width: int
-    max_prefill_page_table_width: int
-    max_decode_page_table_width: int
 
     @classmethod
     def resolve(
@@ -120,9 +118,7 @@ class PrefillRuntimeConfig:
             allow_force_argmax=allow_force_argmax,
             sampling_batch_size=sampling_batch_size,
             static_q128_topk_supported=static_q128_topk_supported,
-            max_page_table_capacity_width=page_table_layout.raw_capacity_width,
-            max_prefill_page_table_width=page_table_layout.prefill_width,
-            max_decode_page_table_width=page_table_layout.decode_width,
+            page_table_layout_ceiling=page_table_layout,
         )
 
     def __post_init__(self) -> None:
@@ -150,19 +146,17 @@ class PrefillRuntimeConfig:
             raise TypeError("allow_force_argmax must be bool")
         if not isinstance(self.static_q128_topk_supported, bool):
             raise TypeError("static_q128_topk_supported must be bool")
-        width_ceilings = (
-            ("max_page_table_capacity_width", self.max_page_table_capacity_width),
-            ("max_prefill_page_table_width", self.max_prefill_page_table_width),
-            ("max_decode_page_table_width", self.max_decode_page_table_width),
-        )
-        for name, value in width_ceilings:
-            _require_positive_int(name, value)
-        if self.page_table_layout.raw_capacity_width > self.max_page_table_capacity_width:
-            raise ValueError("max_page_table_capacity_width must cover page_table_layout")
-        if self.page_table_layout.prefill_width > self.max_prefill_page_table_width:
-            raise ValueError("max_prefill_page_table_width must cover page_table_layout")
-        if self.page_table_layout.decode_width > self.max_decode_page_table_width:
-            raise ValueError("max_decode_page_table_width must cover page_table_layout")
+        if not isinstance(self.page_table_layout_ceiling, PageTableLayout):
+            raise TypeError("page_table_layout_ceiling must be a PageTableLayout")
+        if self.page_table_layout.block_size != self.page_table_layout_ceiling.block_size:
+            raise ValueError("page_table_layout_ceiling cannot change block_size")
+        if self.page_table_layout.raw_capacity_width > self.page_table_layout_ceiling.raw_capacity_width:
+            raise ValueError("page_table_layout_ceiling must cover page_table_layout capacity")
+        if (
+            self.page_table_layout.prefill_width > self.page_table_layout_ceiling.prefill_width
+            or self.page_table_layout.decode_width > self.page_table_layout_ceiling.decode_width
+        ):
+            raise ValueError("page_table_layout_ceiling must cover canonical page-table geometry")
         if not callable(self.can_enable_trace):
             raise TypeError("can_enable_trace must be callable")
         if self.mesh_device is None:
@@ -202,11 +196,11 @@ class PrefillRuntimeConfig:
             raise TypeError("layout must be a PageTableLayout")
         if layout.block_size != self.page_table_layout.block_size:
             raise ValueError("page-table layout replacement cannot change block_size")
-        if layout.raw_capacity_width > self.max_page_table_capacity_width:
+        if layout.raw_capacity_width > self.page_table_layout_ceiling.raw_capacity_width:
             raise ValueError("page-table layout replacement cannot exceed the construction-time capacity ceiling")
         if (
-            layout.prefill_width > self.max_prefill_page_table_width
-            or layout.decode_width > self.max_decode_page_table_width
+            layout.prefill_width > self.page_table_layout_ceiling.prefill_width
+            or layout.decode_width > self.page_table_layout_ceiling.decode_width
         ):
             raise ValueError("page-table layout replacement cannot expand canonical geometry")
         return replace(self, page_table_layout=layout)

@@ -434,8 +434,8 @@ def test_direct_config_construction_rejects_inconsistent_derived_plan(expect_err
         ("lane", "share one lane capacity"),
         ("sampling", "share device-sampling policy"),
         ("argmax", "share force-argmax capability"),
-        ("raw_ceiling", "original capacity ceiling"),
-        ("decode_ceiling", "original decode-width ceiling"),
+        ("raw_ceiling", "share one page-table layout ceiling"),
+        ("decode_ceiling", "share one page-table layout ceiling"),
     ],
 )
 def test_resolution_rejects_inconsistent_runtime_configs(mismatch, message, expect_error):
@@ -470,9 +470,21 @@ def test_resolution_rejects_inconsistent_runtime_configs(mismatch, message, expe
             device_sampling_enabled=True,
         )
     elif mismatch == "raw_ceiling":
-        prefill = replace(prefill, max_page_table_capacity_width=prefill.max_page_table_capacity_width + 1)
+        ceiling = prefill.page_table_layout_ceiling
+        prefill = replace(
+            prefill,
+            page_table_layout_ceiling=replace(
+                ceiling,
+                raw_capacity_width=ceiling.raw_capacity_width + 1,
+                decode_width=ceiling.decode_width + 8,
+            ),
+        )
     else:
-        prefill = replace(prefill, max_decode_page_table_width=prefill.max_decode_page_table_width + 8)
+        ceiling = prefill.page_table_layout_ceiling
+        prefill = replace(
+            prefill,
+            page_table_layout_ceiling=replace(ceiling, decode_width=ceiling.decode_width + 8),
+        )
 
     with expect_error(ValueError, message):
         WarmupCoordinatorConfig.resolve(
@@ -529,6 +541,7 @@ def test_layout_replacement_is_immutable_bounded_and_rebuilds_coverage(expect_er
     coordinator.configure_page_table_layout(replacement)
 
     assert coordinator.config is not original
+    assert coordinator.config.page_table_layout_ceiling is original.page_table_layout
     assert original.page_table_layout.raw_capacity_width == 128
     assert not any(case.cached_tokens for case in coordinator.config.eager_plan.prefill)
     with expect_error(ValueError, "cannot change block_size"):
