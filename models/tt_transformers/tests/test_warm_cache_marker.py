@@ -37,6 +37,9 @@ class _FakeArgs:
     WEIGHT_CACHE_MARKER = ModelArgs.WEIGHT_CACHE_MARKER
     WEIGHT_CACHE_FORMAT_VERSION = ModelArgs.WEIGHT_CACHE_FORMAT_VERSION
     _weight_cache_identity = ModelArgs._weight_cache_identity
+    # Bound too: _weight_cache_identity calls it on self, so leaving it out made every gate call
+    # raise AttributeError -- and nothing ran this file to notice. (#45400 review, finding B1)
+    _weight_cache_build_variant = ModelArgs._weight_cache_build_variant
     weight_cache_is_complete = ModelArgs.weight_cache_is_complete
     mark_weight_cache_complete = ModelArgs.mark_weight_cache_complete
     placeholder_state_dict = ModelArgs.placeholder_state_dict
@@ -48,6 +51,14 @@ class _FakeArgs:
         self.dummy_weights = False
         self.is_mixture_of_experts = False
         self.mesh_device = SimpleNamespace(shape=mesh_shape)
+        # Everything _weight_cache_build_variant reads:
+        self.prefetcher = None
+        self.max_batch_size = 1
+        self.use_fused_all_gather_matmul = False
+        self.use_hf_rope = False
+
+    def get_tensor_dtype(self, decoder_id, tensor, prefetcher=False):
+        return "DataType.BFLOAT8_B"
 
     def weight_cache_path(self, dtype):
         return self._cache_dir
@@ -74,7 +85,7 @@ def test_mark_then_complete_roundtrip(tmp_path):
     assert args.weight_cache_is_complete(DTYPE) is True
 
     # Marker payload includes the shape/dtype manifest.
-    meta = json.loads((tmp_path / ModelArgs.WEIGHT_CACHE_MARKER).read_text())
+    meta = json.loads(marker_path(tmp_path, args._weight_cache_build_variant()).read_text())
     assert meta["model_name"] == "Test-Model-8B"
     assert meta["n_layers"] == 32
     assert meta["mesh_shape"] == "(1, 8)"
@@ -120,7 +131,7 @@ def test_stale_marker_rejected(tmp_path, mutate):
     args = _FakeArgs(tmp_path)
     _touch_tensorbin(tmp_path)
     args.mark_weight_cache_complete(DTYPE, SAMPLE_SD)
-    marker = tmp_path / ModelArgs.WEIGHT_CACHE_MARKER
+    marker = marker_path(tmp_path, args._weight_cache_build_variant())
     meta = json.loads(marker.read_text())
     meta.update(mutate)
     marker.write_text(json.dumps(meta))
@@ -130,7 +141,7 @@ def test_stale_marker_rejected(tmp_path, mutate):
 def test_corrupt_marker_is_incomplete(tmp_path):
     args = _FakeArgs(tmp_path)
     _touch_tensorbin(tmp_path)
-    (tmp_path / ModelArgs.WEIGHT_CACHE_MARKER).write_text("{ not json")
+    marker_path(tmp_path, args._weight_cache_build_variant()).write_text("{ not json")
     assert args.weight_cache_is_complete(DTYPE) is False
 
 
@@ -164,6 +175,7 @@ from models.common.weight_cache import (  # noqa: E402
     CachedStateDict,
     build_cached_state_dict,
     mark_weight_cache_complete,
+    marker_path,
     normalize_mesh_shape,
     weight_cache_is_complete,
 )
@@ -305,3 +317,99 @@ def test_build_variant_must_match_exactly(tmp_path):
     )
     # a caller that records no variant must not be satisfied by one that did
     assert weight_cache_is_complete(tmp_path, **SHARED_ID) is False
+
+
+# ---------------------------------------------------------------------------
+# Review-fix coverage (#45400 findings B3 / R1 / R3).
+# ---------------------------------------------------------------------------
+
+import models.common.weight_cache as _wc  # noqa: E402
+
+
+def test_variant_markers_coexist(tmp_path):
+    """One marker file PER build variant: two variants sharing a cache dir must not evict each
+    other's marker. The live case is the Llama CI job running eval-32 with and without the DRAM
+    prefetcher against one instruct cache -- a single exactly-matched marker made each leg's seed
+    clobber the other's, so both cold-loaded forever with nothing going red. (finding B3)"""
+    no_pf = {"prefetcher": False, "precision": "aaaaaaaaaaaa"}
+    with_pf = {"prefetcher": True, "precision": "aaaaaaaaaaaa"}
+    _touch_tensorbin(tmp_path)
+    mark_weight_cache_complete(tmp_path, SAMPLE_SD, build_variant=no_pf, **SHARED_ID)
+    mark_weight_cache_complete(tmp_path, SAMPLE_SD, build_variant=with_pf, **SHARED_ID)
+
+    # Both warm at once -- the second seed did not evict the first.
+    assert weight_cache_is_complete(tmp_path, build_variant=no_pf, **SHARED_ID) is True
+    assert weight_cache_is_complete(tmp_path, build_variant=with_pf, **SHARED_ID) is True
+    assert marker_path(tmp_path, no_pf) != marker_path(tmp_path, with_pf)
+    # A variant nobody seeded stays cold.
+    assert (
+        weight_cache_is_complete(tmp_path, build_variant={"prefetcher": False, "precision": "b"}, **SHARED_ID) is False
+    )
+    # And each variant's builder reads its own manifest.
+    sd = build_cached_state_dict(tmp_path, build_variant=with_pf)
+    assert set(sd.keys()) == set(SAMPLE_SD.keys())
+
+
+def test_unverifiable_variant_fails_closed(tmp_path):
+    """A build variant that could not be computed must never certify or match a cache: the gate
+    returns False and mark refuses to write, so the run cold-loads instead of risking a
+    placeholder persist under an unchecked filename set. (finding R3)"""
+    bad = {"unverifiable": True, "error": "RuntimeError: boom"}
+    _touch_tensorbin(tmp_path)
+    mark_weight_cache_complete(tmp_path, SAMPLE_SD, build_variant=bad, **SHARED_ID)
+    assert not list(tmp_path.glob(f"{WEIGHT_CACHE_MARKER}*")), "unverifiable variant must not write a marker"
+    # Even with a marker forged at the matching path, the gate rejects the request side.
+    mark_weight_cache_complete(tmp_path, SAMPLE_SD, **SHARED_ID)  # legit .none marker
+    assert weight_cache_is_complete(tmp_path, build_variant=bad, **SHARED_ID) is False
+
+
+def test_modelargs_variant_error_disables_skip(tmp_path):
+    """ModelArgs path: if computing the precision signature raises, the sentinel flows through
+    identity -> gate -> False (cold load), and marking is refused -- instead of the old behaviour
+    of collapsing to a match-anything 'unknown'. (finding R3)"""
+    args = _FakeArgs(tmp_path)
+    _touch_tensorbin(tmp_path)
+
+    def _boom(decoder_id, tensor, prefetcher=False):
+        raise RuntimeError("precision config unavailable")
+
+    args.get_tensor_dtype = _boom
+    variant = args._weight_cache_build_variant()
+    assert variant.get("unverifiable") is True
+    args.mark_weight_cache_complete(DTYPE, SAMPLE_SD)
+    assert not list(Path(tmp_path).glob(f"{WEIGHT_CACHE_MARKER}*"))
+    assert args.weight_cache_is_complete(DTYPE) is False
+
+
+def test_hf_rope_is_part_of_the_variant(tmp_path):
+    """load_state_dict permutes QKV differently per rope mode under the SAME cache filenames, so a
+    marker seeded in one mode must not certify the other. (finding R2)"""
+    args = _FakeArgs(tmp_path)
+    _touch_tensorbin(tmp_path)
+    args.mark_weight_cache_complete(DTYPE, SAMPLE_SD)
+    assert args.weight_cache_is_complete(DTYPE) is True
+    args.use_hf_rope = True
+    assert args.weight_cache_is_complete(DTYPE) is False
+
+
+def test_sidecar_loaded_once_per_warm_run(tmp_path, monkeypatch):
+    """The completeness gate's validation load must be reused by build_cached_state_dict, not
+    repeated -- the sidecar can be multi-GB on NAS. The builder consumes the memoized entry so the
+    tensors are not pinned afterwards. (finding R1)"""
+    _seed(tmp_path, is_host_weight=lambda k: k == "tok_embeddings.weight")
+
+    real_load = torch.load
+    calls = []
+
+    def counting_load(*a, **k):
+        calls.append(a[0] if a else k.get("f"))
+        return real_load(*a, **k)
+
+    monkeypatch.setattr(torch, "load", counting_load)
+    _wc._SIDECAR_CACHE.clear()
+
+    assert weight_cache_is_complete(tmp_path, **SHARED_ID) is True
+    sd = build_cached_state_dict(tmp_path)
+    assert torch.equal(sd["tok_embeddings.weight"], SAMPLE_SD["tok_embeddings.weight"])
+    assert len(calls) == 1, f"sidecar torch.load'ed {len(calls)}x per warm run, expected 1"
+    assert not _wc._SIDECAR_CACHE, "builder must consume the memoized sidecar entry"

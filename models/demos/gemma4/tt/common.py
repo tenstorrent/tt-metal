@@ -99,16 +99,28 @@ def create_tt_model(
     # host-consumed weights (token embedding, per-layer scalars/PLI) are served real from the
     # sidecar, the rest as dataless placeholders. Generalizes PR #50550 to gemma4 (#45400).
     cache_dir = model_args.weight_cache_path(dtype)
+    # Resolved early so it can key the cache identity: gemma4 embeds each module's dtype in its
+    # tensorbin FILENAME (attention/experts/shared_mlp/router *_{dtype} suffixes), so an edit to
+    # precision_overrides.json changes which files a build needs. Without the precision in the
+    # variant, a marker seeded under the old overrides would certify a warm build whose files do
+    # not exist -- and as_tensor would persist placeholders for them. (#45400 review, finding B2)
+    _worker_mesh = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh)
     cache_identity = dict(
         model_name=os.path.basename(str(model_path).rstrip("/")) or "gemma4",
         n_layers=model_args.num_hidden_layers,
-        mesh_shape=tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1),
+        mesh_shape=_worker_mesh,
+        build_variant={
+            "precision": {k: str(v) for k, v in sorted(_precision_for_variant._overrides.items())},
+        },
     )
     loaded_real_weights = False
     if state_dict is None:
         if num_layers is None and weight_cache_is_complete(cache_dir, **cache_identity):
             logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load (gemma4 hybrid).")
-            state_dict = build_cached_state_dict(cache_dir, args=model_args)
+            state_dict = build_cached_state_dict(
+                cache_dir, args=model_args, build_variant=cache_identity["build_variant"]
+            )
         else:
             state_dict = Gemma4ModelArgs.load_state_dict(model_path, dummy_weights=False)
             loaded_real_weights = bool(state_dict)
@@ -118,8 +130,7 @@ def create_tt_model(
     # Resolve per-module dtype overrides from precision_overrides.json. The
     # mesh shape is the worker grid (rows x cols); a 1x1 mesh on a multi-device
     # system still gets the 1x1 entry.
-    mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
-    precision = Gemma4Precision.load(model_path, mesh_shape)
+    precision = _precision_for_variant
 
     model = Gemma4Model(
         mesh_device=mesh_device,

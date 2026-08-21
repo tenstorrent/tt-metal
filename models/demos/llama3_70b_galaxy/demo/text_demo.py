@@ -219,6 +219,14 @@ def create_tt_model(
         model_name=tt_model_args.model_name,
         n_layers=tt_model_args.n_layers,
         mesh_shape=tuple(mesh_device.shape),
+        # The galaxy loader picks prefetcher-vs-DRAM cache FILENAMES off use_prefetcher
+        # (llama_attention.py wqkv_sharded_2d_prefetcher / _dram), and the optimizations level
+        # sets per-tensor dtypes that are baked into filenames. Key the marker on both so a cache
+        # seeded under one configuration is not certified for another. (#45400 review, finding B2)
+        build_variant={
+            "use_prefetcher": bool(getattr(tt_model_args, "use_prefetcher", False)),
+            "optimizations": repr(getattr(tt_model_args, "optimizations", None)),
+        },
     )
     loaded_real_weights = False
     if (
@@ -227,7 +235,7 @@ def create_tt_model(
         and weight_cache_is_complete(cache_dir, **cache_identity)
     ):
         logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
-        state_dict = build_cached_state_dict(cache_dir)
+        state_dict = build_cached_state_dict(cache_dir, build_variant=cache_identity["build_variant"])
     else:
         state_dict = tt_model_args.load_state_dict()
         loaded_real_weights = bool(state_dict) and not getattr(tt_model_args, "dummy_weights", False)

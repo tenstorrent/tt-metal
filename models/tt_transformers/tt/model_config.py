@@ -20,6 +20,7 @@ from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is
 from models.common.weight_cache import WEIGHT_CACHE_FORMAT_VERSION as _WC_FORMAT_VERSION
 from models.common.weight_cache import WEIGHT_CACHE_MARKER as _WC_MARKER
 from models.common.weight_cache import mark_weight_cache_complete as _mark_weight_cache_complete
+from models.common.weight_cache import marker_path as _wc_marker_path
 from models.common.weight_cache import weight_cache_is_complete as _weight_cache_is_complete
 from models.tt_transformers.tt.common import (
     Mode,
@@ -1344,11 +1345,13 @@ class ModelArgs:
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(seq_len),
-                per_core_N=math.ceil(
-                    (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
-                )
-                if not self.is_galaxy
-                else None,
+                per_core_N=(
+                    math.ceil(
+                        (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
+                    )
+                    if not self.is_galaxy
+                    else None
+                ),
             )
 
     @lru_cache(maxsize=None)
@@ -1404,9 +1407,11 @@ class ModelArgs:
                     k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                     n=self.dim,
                     grid_size=self.mlp2_grid(seq_len),
-                    per_core_N=math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
-                    if not self.is_galaxy
-                    else None,
+                    per_core_N=(
+                        math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
+                        if not self.is_galaxy
+                        else None
+                    ),
                 )
         else:
             raise ValueError(f"Invalid mode: {mode}")
@@ -1566,21 +1571,29 @@ class ModelArgs:
         q_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
-            if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else min(256, chunk_start_idx & -chunk_start_idx)
-            if seq_len >= 2048
-            else min(64, chunk_start_idx & -chunk_start_idx)
+            else (
+                64
+                if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else (
+                    min(256, chunk_start_idx & -chunk_start_idx)
+                    if seq_len >= 2048
+                    else min(64, chunk_start_idx & -chunk_start_idx)
+                )
+            )
         )
         # Workaround for https://github.com/tenstorrent/tt-metal/issues/35225:
         k_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
-            if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else min(256, chunk_start_idx & -chunk_start_idx)
-            if seq_len >= 2048
-            else min(64, chunk_start_idx & -chunk_start_idx)
+            else (
+                64
+                if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else (
+                    min(256, chunk_start_idx & -chunk_start_idx)
+                    if seq_len >= 2048
+                    else min(64, chunk_start_idx & -chunk_start_idx)
+                )
+            )
         )
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
@@ -2040,9 +2053,9 @@ class ModelArgs:
                 grid_size=self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
-                per_core_N=math.ceil(n_dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
-                if dram_sharded_wo
-                else None,
+                per_core_N=(
+                    math.ceil(n_dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width)) if dram_sharded_wo else None
+                ),
             )
         else:
             raise ValueError(f"Invalid mode: {mode}")
@@ -3159,8 +3172,14 @@ class ModelArgs:
                 for group in TensorGroup
             ]
             precision = hashlib.sha1("|".join(dtypes).encode()).hexdigest()[:12]
-        except Exception:  # never let the signature itself break a build
-            precision = "unknown"
+        except Exception as e:
+            # A variant we cannot compute is a variant we cannot verify. Do NOT collapse to a
+            # match-anything constant (that silently reopened the placeholder-persistence hole for
+            # every precision variant); return an unverifiable sentinel that the completeness gate
+            # rejects and mark_weight_cache_complete refuses to write, so the build cold-loads --
+            # slow but correct -- and the log says why. (#45400 review, finding R3)
+            logger.warning(f"Could not compute the weight-cache build variant ({e!r}); warm-cache skip disabled.")
+            return {"unverifiable": True, "error": f"{type(e).__name__}: {e}"}
         return {
             "prefetcher": bool(self.prefetcher),
             "precision": precision,
@@ -3168,6 +3187,11 @@ class ModelArgs:
             "batch": int(getattr(self, "max_batch_size", 0) or 0),
             # attention.py picks cache_name("wo_width_sharded_2d") vs cache_name("wo") off this.
             "fused_ag": bool(getattr(self, "use_fused_all_gather_matmul", False)),
+            # load_state_dict permutes QKV differently per rope mode, so the SAME cache filename
+            # carries different content across modes. The Llama CI job runs both modes against one
+            # cache dir; keeping the mode in the variant stops a marker seeded under one mode from
+            # certifying the other. (#45400 review, finding R2)
+            "hf_rope": bool(getattr(self, "use_hf_rope", False)),
         }
 
     def _weight_cache_identity(self, components=None):
@@ -3228,7 +3252,7 @@ class ModelArgs:
         modules that index it during construction still work."""
         import collections.abc
 
-        marker = self.weight_cache_path(dtype) / self.WEIGHT_CACHE_MARKER
+        marker = _wc_marker_path(self.weight_cache_path(dtype), self._weight_cache_build_variant())
         meta = json.loads(marker.read_text())
         manifest = meta["weights"]
         self.is_mixture_of_experts = bool(meta.get("is_moe", False))
@@ -3338,7 +3362,7 @@ class ModelArgs:
                 self.CKPT_DIR,
                 torch_dtype="auto",
                 trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=os.getenv("CI") == "true"
+                local_files_only=os.getenv("CI") == "true",
                 # Note that the default setting is torch.dtype.float32, but model weights are
                 # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                 # unnecessary cast.
