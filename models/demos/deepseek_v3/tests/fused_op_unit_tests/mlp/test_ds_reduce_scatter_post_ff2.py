@@ -116,6 +116,60 @@ def _build_reduce_scatter_post_ff2_reference_shards(torch_input: torch.Tensor, m
     return ref_shards
 
 
+def _pair_output_shards_with_references(
+    output_tensors: list,
+    mesh_coords: list,
+    ref_outputs: list[torch.Tensor],
+    mesh_width: int,
+    is_local=None,
+) -> list[tuple[object, object, torch.Tensor]]:
+    """Pair rank-local output tensors with references using their global mesh coordinates."""
+    local_coords = mesh_coords if is_local is None else [coord for coord in mesh_coords if is_local(coord)]
+    assert len(output_tensors) == len(local_coords), (
+        f"Expected {len(local_coords)} local output shards from {len(mesh_coords)} mesh coordinates, "
+        f"got {len(output_tensors)}"
+    )
+
+    output_shards = []
+    for coord, output_tensor in zip(local_coords, output_tensors):
+        row_idx, col_idx = tuple(coord)
+        ref_idx = row_idx * mesh_width + col_idx
+        assert ref_idx < len(ref_outputs), (
+            f"Reference shard index {ref_idx} for mesh coordinate ({row_idx}, {col_idx}) "
+            f"exceeds {len(ref_outputs)} available shards"
+        )
+        output_shards.append((coord, output_tensor, ref_outputs[ref_idx]))
+
+    return output_shards
+
+
+def test_pair_output_shards_with_references_uses_global_coordinates_for_rank_local_outputs():
+    mesh_width = 4
+    mesh_coords = [ttnn.MeshCoordinate(row, col) for row in range(4) for col in range(mesh_width)]
+    ref_outputs = [torch.tensor(row * mesh_width + col) for row in range(4) for col in range(mesh_width)]
+    local_coords = {(2, 1), (2, 2), (3, 1), (3, 2)}
+    output_tensors = []
+    for coord in mesh_coords:
+        row, col = tuple(coord)
+        if (row, col) in local_coords:
+            output_tensors.append(f"output-{row}-{col}")
+
+    output_shards = _pair_output_shards_with_references(
+        output_tensors,
+        mesh_coords,
+        ref_outputs,
+        mesh_width,
+        is_local=lambda coord: tuple(coord) in local_coords,
+    )
+
+    assert [(tuple(coord), output, reference.item()) for coord, output, reference in output_shards] == [
+        ((2, 1), "output-2-1", 9),
+        ((2, 2), "output-2-2", 10),
+        ((3, 1), "output-3-1", 13),
+        ((3, 2), "output-3-2", 14),
+    ]
+
+
 def ds_reduce_scatter_post_ff2_ttnn(
     x: ttnn.Tensor,
     cfg: dict,
@@ -206,13 +260,17 @@ def _run_ds_reduce_scatter_post_ff2_test(
     pcc_value = 1.0
     max_abs_error = 0.0
     output_tensors = ttnn.get_device_tensors(tt_output)
-    assert len(output_tensors) == len(ref_outputs), (
-        f"Expected {len(ref_outputs)} output shards for mesh shape {mesh_device.shape}, " f"got {len(output_tensors)}"
+    mesh_coords = list(tt_output.tensor_topology().mesh_coords())
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
+    output_shards = _pair_output_shards_with_references(
+        output_tensors,
+        mesh_coords,
+        ref_outputs,
+        mesh_device.shape[1],
+        is_local=view.is_local if view is not None else None,
     )
-    mesh_width = mesh_device.shape[1]
-    for device_idx, (output_tensor, ref_output) in enumerate(zip(output_tensors, ref_outputs)):
-        row_idx = device_idx // mesh_width
-        col_idx = device_idx % mesh_width
+    for mesh_coord, output_tensor, ref_output in output_shards:
+        row_idx, col_idx = tuple(mesh_coord)
         tt_output_torch = ttnn.to_torch(output_tensor)
 
         try:
