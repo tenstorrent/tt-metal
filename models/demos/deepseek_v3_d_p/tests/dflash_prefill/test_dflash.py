@@ -19,6 +19,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
+from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_dflash_kv_cache
@@ -43,6 +44,17 @@ def _unrotate_blockcyclic(rotated: torch.Tensor, sp: int, chunk_global: int) -> 
     natural = torch.zeros_like(rotated)
     natural[:, :, p, :] = rotated
     return natural
+
+
+def _reshuffle_k_to_interleaved_layout(rk: torch.Tensor, cfg) -> torch.Tensor:
+    """Reindex the HALF-SPLIT HF reference K (``rk``) to the drafter's persisted-K convention before the PCC
+    compare. ``hf_context_kv`` ropes K half-split; the meta-rope drafter persists K interleaved (the same K
+    with its head_dim ``src``-permuted, ``interleaved[j] == halfsplit[src[j]]``), so under ``"interleaved"``
+    reindex the reference by ``src`` to compare like with like. V never touches rope, so it is untouched."""
+    if cfg.rope_convention == "interleaved":
+        src = torch.argsort(interleaved_to_halfsplit_perm(cfg.head_dim))
+        return rk[..., src]
+    return rk
 
 
 def _read_cache_natural(cache, mesh_device, mesh_shape, sp: int, chunk_global: int, num_layers: int, out_len: int):
@@ -119,6 +131,7 @@ def test_dflash_pcc(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         max_seq_len=ctx_len,
+        chunk_size=chunk_global,
         num_links=num_links,
         topology=topology,
     )
@@ -156,6 +169,7 @@ def test_dflash_pcc(
 
     for i in range(cfg.num_hidden_layers):
         rk, rv = real[i]
+        rk = _reshuffle_k_to_interleaved_layout(rk, cfg)  # HF ref is half-split; device persists interleaved K
         ok_k, pcc_k = comp_pcc(rk, dk[i], PCC_THRESHOLD)
         ok_v, pcc_v = comp_pcc(rv, dv[i], PCC_THRESHOLD)
         logger.info(f"layer {i}: K pcc={pcc_k} (ok={ok_k})  V pcc={pcc_v} (ok={ok_v})")
@@ -245,6 +259,7 @@ def test_dflash_multiturn_pcc(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         max_seq_len=cache_seq,
+        chunk_size=chunk_global,
         num_links=num_links,
         topology=topology,
     )
@@ -299,6 +314,7 @@ def test_dflash_multiturn_pcc(
 
     for i in range(cfg.num_hidden_layers):
         rk, rv = real[i]
+        rk = _reshuffle_k_to_interleaved_layout(rk, cfg)  # HF ref is half-split; device persists interleaved K
         ok_k, pcc_k = comp_pcc(rk, dk[i], PCC_THRESHOLD)
         ok_v, pcc_v = comp_pcc(rv, dv[i], PCC_THRESHOLD)
         logger.info(f"layer {i}: K pcc={pcc_k} (ok={ok_k})  V pcc={pcc_v} (ok={ok_v})")
