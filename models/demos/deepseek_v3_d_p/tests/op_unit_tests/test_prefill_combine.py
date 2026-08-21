@@ -422,9 +422,11 @@ def _cross_product_conflated_cmb_test_dimensions():
             device_params = fabric_to_device_params(fabric_cfg)
             topo_marker = _topo_marker(target_mesh, fabric_cfg)
             mesh_requirements_marker = pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=topo_marker)
-            base_marks = [mesh_requirements_marker]
-            if is_extended_model:
-                base_marks.append(pytest.mark.extended_model)
+            marks = (
+                (pytest.mark.extended_model, mesh_requirements_marker)
+                if is_extended_model
+                else (mesh_requirements_marker)
+            )
             test_scenarios = [
                 ("pcc", 128, 4, True),
                 ("perf_no_pcc", 640, 8, False),
@@ -448,7 +450,7 @@ def _cross_product_conflated_cmb_test_dimensions():
                         topk,
                         dispatch_buffer_capacity_factor,
                         run_pcc,
-                        marks=tuple(base_marks),
+                        marks=marks,
                         id=f"{model_name}-{_mesh_id(target_mesh, fabric_cfg)}-{test_scenario_id}",
                     )
                 )
@@ -480,38 +482,6 @@ def _cross_product_conflated_cmb_test_dimensions():
 #    Or fp8 test doesn't run PCC. Or fabric 1d doesn't support both x and y rings. Such combination are either prevented during necesarry
 #    test-code cross product calculation, or are skipped in the body of the test, depending on where it was less cumbersome to implement it.
 #
-def _ci_unsupported_param_combos(**params):
-    mesh_device = params["mesh_device"]
-    run_pcc_check = params["run_pcc_check"]
-    use_predictable_data = params["use_predictable_data"]
-    use_fp8_output = params["use_fp8_output"]
-    dispatched_buffer_layout = params["dispatched_buffer_layout"]
-    on_ci = params["on_ci"]
-    is_bh = params["is_bh"]
-
-    num_devices = mesh_device[0] * mesh_device[1]
-    if num_devices >= 8 and not run_pcc_check and use_predictable_data:
-        return True
-
-    if use_fp8_output and use_predictable_data:
-        return True
-
-    if use_fp8_output and not run_pcc_check:
-        return True
-
-    if use_fp8_output and dispatched_buffer_layout != ttnn.TILE_LAYOUT:
-        return True
-
-    if use_fp8_output and not is_bh:
-        return True
-
-    if on_ci and not run_pcc_check:
-        return True
-
-    return False
-
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "mesh_device, device_params, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     _cross_product_conflated_cmb_test_dimensions(),
