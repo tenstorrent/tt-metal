@@ -32,46 +32,129 @@ target_sources(
 
 # Include helper functions and generate headers from protobuf schemas
 include(protobuf)
-set(PROTO_SCHEMAS
+
+# Descriptor protos consumed by the runtime-free topology lib vs. fabric-runtime protos. All generate into the
+# same protobuf/ dir so consumers resolve headers via ${CMAKE_CURRENT_BINARY_DIR}.
+set(TOPOLOGY_PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_system_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_grouping_descriptor.proto
+)
+set(FABRIC_PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/router_port_directions.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/port_descriptor_table.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/intermesh_connection_table.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_grouping_descriptor.proto
 )
 
-# Collect all generated protobuf files
-set(GENERATED_PROTO_SRCS)
-foreach(PROTO_FILE ${PROTO_SCHEMAS})
+set(TOPOLOGY_GENERATED_PROTO_SRCS)
+foreach(PROTO_FILE ${TOPOLOGY_PROTO_SCHEMAS})
     GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
-    list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
+    list(APPEND TOPOLOGY_GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
 
-# Expose a custom target for the generated protobuf files so that external consumers
-# can depend on them directly without going through the fabric OBJECT library.
-add_custom_target(fabric_generated_protos DEPENDS ${GENERATED_PROTO_SRCS})
-add_dependencies(fabric fabric_generated_protos)
-if(TARGET all_generated_files)
-    add_dependencies(all_generated_files fabric_generated_protos)
-endif()
+set(FABRIC_GENERATED_PROTO_SRCS)
+foreach(PROTO_FILE ${FABRIC_PROTO_SCHEMAS})
+    GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
+    list(APPEND FABRIC_GENERATED_PROTO_SRCS ${PROTO_SRCS})
+endforeach()
 
-# Exclude protobuf generated files from unity builds (they have conflicting static symbols)
+# ---------------------------------------------------------------------------
+# TT::ScaleoutTopology — the topology sources grouped into their own library: MGD + PSD + PGD (proto + class),
+# the topology solver, the topology mapper UTILS, and the offline FSD->PSD builder. mesh_graph + the runtime
+# TopologyMapper class stay in fabric. fabric links this lib so its objects land in libtt_metal.so and its
+# symbols are exported from there (default visibility) exactly as before the split — in-tree consumers keep
+# reaching these symbols via tt_metal, unchanged. Linking this lib standalone (Fabric Manager without the metal
+# runtime) is a follow-up once it is fully runtime-free; see TOPOLOGY_LIB_PLAN.md.
+# ---------------------------------------------------------------------------
+add_library(
+    scaleout_topology
+    STATIC
+    ${TOPOLOGY_SOURCES}
+    ${TOPOLOGY_GENERATED_PROTO_SRCS}
+)
+add_library(TT::ScaleoutTopology ALIAS scaleout_topology)
 set_source_files_properties(
-    ${GENERATED_PROTO_SRCS}
+    ${TOPOLOGY_GENERATED_PROTO_SRCS}
     PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION
             TRUE
 )
 
-# Add the generated protobuf files to your target
-target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
+add_custom_target(topology_generated_protos DEPENDS ${TOPOLOGY_GENERATED_PROTO_SRCS})
+add_dependencies(
+    scaleout_topology
+    topology_generated_protos
+    scaleout_generated_protos
+)
+if(TARGET all_generated_files)
+    add_dependencies(all_generated_files topology_generated_protos)
+endif()
+
+target_include_directories(
+    scaleout_topology
+    PRIVATE
+        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>" # tt-metalium public headers (incl physical_descriptor_builder.hpp)
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scaleout # board/board.hpp
+    SYSTEM
+    PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR} # this lib's generated proto headers
+        ${Metalium_BINARY_DIR}/tools/scaleout # scaleout-generated FSD proto header (for physical_descriptor_builder)
+)
+target_link_libraries(
+    scaleout_topology
+    PUBLIC
+        TT::STL
+        umd::tt-umd
+    PRIVATE
+        TT::ScaleoutTools
+        TT::Metalium::HostDevCommon
+        enchantum::enchantum
+        fmt::fmt-header-only
+        tt-logger::tt-logger
+        yaml-cpp::yaml-cpp
+        protobuf::libprotobuf
+        cadical::cadical
+)
+target_compile_features(scaleout_topology PUBLIC cxx_std_20)
+# Repo build accelerators (match fabric / scaleout_tools): unity build + shared PCH. Generated proto sources are
+# already excluded from unity above via SKIP_UNITY_BUILD_INCLUSION.
+TT_ENABLE_UNITY_BUILD(scaleout_topology)
+tt_reuse_precompile_headers(scaleout_topology TT::CommonPCH)
+# Default visibility (NOT hidden): fabric links this lib into libtt_metal.so, so its symbols are exported from
+# the .so exactly as they were before the topology sources were split out of fabric. In-tree consumers keep
+# resolving MGD/PSD/PGD/solver symbols through libtt_metal.so (linking tt_metal) and must NOT also link this
+# archive directly, or the descriptor protos would register twice ("File already exists in database"). Linking
+# the archive standalone (e.g. Fabric Manager without libtt_metal) is a follow-up once the lib is fully
+# runtime-free (see TOPOLOGY_LIB_PLAN.md); until then it is consumed only via libtt_metal.so.
+
+# --- fabric: remaining runtime protos + link the topology lib -------
+add_custom_target(fabric_generated_protos DEPENDS ${FABRIC_GENERATED_PROTO_SRCS})
+add_dependencies(
+    fabric
+    fabric_generated_protos
+    scaleout_topology
+)
+if(TARGET all_generated_files)
+    add_dependencies(all_generated_files fabric_generated_protos)
+endif()
+
+set_source_files_properties(
+    ${FABRIC_GENERATED_PROTO_SRCS}
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            TRUE
+)
+
+target_sources(fabric PRIVATE ${FABRIC_GENERATED_PROTO_SRCS})
 
 target_include_directories(fabric PRIVATE .)
 target_include_directories(fabric SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(
     fabric
+    PUBLIC
+        TT::ScaleoutTopology
     PRIVATE
         TT::ScaleoutTools
         Metalium::Metal::LLRT

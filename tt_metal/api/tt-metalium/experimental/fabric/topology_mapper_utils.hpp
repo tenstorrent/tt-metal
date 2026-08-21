@@ -190,19 +190,6 @@ TopologyMappingResult map_mesh_to_physical(
     const TopologyMappingConfig& config = {});
 
 /**
- * @brief Build logical adjacency maps from mesh graph connectivity
- *
- * Creates adjacency maps for each mesh based on the logical connectivity defined in the mesh graph.
- * For each fabric node in a mesh, this function identifies its logical neighbors by examining
- * the intra-mesh connectivity from the mesh graph and creates a mapping of FabricNodeId to
- * its vector of adjacent FabricNodeIds.
- *
- * @param mesh_graph Reference to the mesh graph object containing fabric topology
- * @return std::map<MeshId, LogicalAdjacencyMap> Map from mesh ID to logical adjacency map
- */
-std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt_fabric::MeshGraph& mesh_graph);
-
-/**
  * @brief Build physical adjacency maps from system descriptor connectivity
  *
  * Creates adjacency maps for each mesh based on the physical connectivity defined in the physical system
@@ -338,6 +325,13 @@ struct LogicalMultiMeshGraph {
  * @return LogicalMultiMeshGraph containing mesh-level graph, internal mesh graphs, and optional exit node graphs
  */
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph);
+
+// "parts" overload: assemble the multi-mesh graph from already-built per-mesh adjacency graphs + requested
+// intermesh connections/ports.
+LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
+    const std::map<MeshId, ::tt::tt_fabric::AdjacencyGraph<::tt::tt_fabric::FabricNodeId>>& mesh_adjacency_graphs,
+    const ::tt::tt_fabric::RequestedIntermeshConnections& requested_intermesh_connections,
+    const ::tt::tt_fabric::RequestedIntermeshPorts& requested_intermesh_ports);
 
 /**
  * @brief Build logical multi-mesh adjacency graph from MeshGraphDescriptor

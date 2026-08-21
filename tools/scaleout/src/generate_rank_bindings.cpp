@@ -694,7 +694,7 @@ int main(int argc, char** argv) {
             if (!std::filesystem::exists(mgd_path) || !std::filesystem::is_regular_file(mgd_path)) {
                 throw std::runtime_error("Mesh Graph Descriptor file does not exist: " + mgd_path.string());
             }
-            mgds.emplace_back(MeshGraphDescriptor(mgd_path));
+            mgds.emplace_back(MeshGraphDescriptor(mgd_path, /*backwards_compatible=*/false, subctx_id));
             mgd_paths_in_order.push_back(mgd_path);
         }
 

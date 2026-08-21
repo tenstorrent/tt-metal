@@ -31,8 +31,6 @@
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
-#include "tt_metal/impl/context/metal_context.hpp"
-#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal::experimental::tt_fabric {
 
@@ -268,22 +266,6 @@ TopologyMappingResult map_mesh_to_physical(
         }
     }
 
-    return result;
-}
-
-std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt_fabric::MeshGraph& mesh_graph) {
-    // Build adjacency graphs using topology solver
-    auto adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
-
-    // Convert from AdjacencyGraph format to map format
-    std::map<MeshId, LogicalAdjacencyMap> result;
-    for (const auto& [mesh_id, graph] : adjacency_graphs) {
-        LogicalAdjacencyMap logical_map;
-        for (const auto& node : graph.get_nodes()) {
-            logical_map[node] = graph.get_neighbors(node);
-        }
-        result[mesh_id] = logical_map;
-    }
     return result;
 }
 
@@ -717,13 +699,10 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
         mesh_adjacency_graphs, requested_intermesh_connections, requested_intermesh_ports);
 }
 
-LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph) {
-    // This function handles both strict mode (requested_intermesh_ports) and relaxed mode
-    // (requested_intermesh_connections) intermesh connections - see build_logical_multi_mesh_adjacency_graph_impl.
-    auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
-    const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
-    const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
-
+LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
+    const std::map<MeshId, ::tt::tt_fabric::AdjacencyGraph<::tt::tt_fabric::FabricNodeId>>& mesh_adjacency_graphs,
+    const ::tt::tt_fabric::RequestedIntermeshConnections& requested_intermesh_connections,
+    const ::tt::tt_fabric::RequestedIntermeshPorts& requested_intermesh_ports) {
     return build_logical_multi_mesh_adjacency_graph_impl(
         mesh_adjacency_graphs, requested_intermesh_connections, requested_intermesh_ports);
 }

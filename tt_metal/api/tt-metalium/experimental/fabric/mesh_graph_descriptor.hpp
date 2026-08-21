@@ -14,9 +14,11 @@
 #include <unordered_map>
 #include <variant>
 #include <atomic>
+#include <optional>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/device_types.hpp>  // ChipId
 
 // Forward declaration
 namespace tt::tt_fabric {
@@ -116,8 +118,17 @@ struct AsicPinningGroup {
 class MeshGraphDescriptor {
 public:
     // backwards_compatible will enable all checks related to MGD 1.0. This will limit the functionality of MGD 2.0
-    explicit MeshGraphDescriptor(const std::string& text_proto, bool backwards_compatible = false);
-    explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, bool backwards_compatible = false);
+    //
+    // name_uniquify_id: when set, instance names are prefixed with "mgd{id}_" (caller-supplied so this stays
+    // runtime-free; the live path passes a DistributedContext sub-context id, offline consumers leave it unset).
+    explicit MeshGraphDescriptor(
+        const std::string& text_proto,
+        bool backwards_compatible = false,
+        std::optional<int> name_uniquify_id = std::nullopt);
+    explicit MeshGraphDescriptor(
+        const std::filesystem::path& text_proto_file_path,
+        bool backwards_compatible = false,
+        std::optional<int> name_uniquify_id = std::nullopt);
 
     ~MeshGraphDescriptor();
 
@@ -221,6 +232,11 @@ public:
     // Example: [8, 2] = 8 × 2 = 16 chips
     uint32_t get_switch_chip_count(GlobalNodeId switch_instance_id) const;
     uint32_t get_switch_chip_count(const InstanceData& switch_instance) const;
+
+    // Host rank owning a chip in a mesh, from device_topology vs host_topology dims (host ranks tile the grid
+    // row-major). `mesh_id` is the mesh's local id; `chip_id` is the row-major device index. nullopt if the mesh
+    // is unknown or the chip index is out of range.
+    std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const;
 
     // Count instances by type
     // Returns a map from type name to count of instances with that type

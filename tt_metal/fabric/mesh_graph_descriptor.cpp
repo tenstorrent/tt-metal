@@ -18,7 +18,6 @@
 #include <tt_stl/assert.hpp>
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
-#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -34,22 +33,6 @@ using namespace tt::tt_metal::distributed;
 namespace tt::tt_fabric {
 
 namespace {
-
-// When DistributedContext is initialized (MPI / tt-run split layout), prefix instance names with mgd{id}_ using
-// subcontext_id() so split-job ranks load disjoint logical names.
-std::optional<int> subcontext_id_for_instance_name_uniquify() {
-    using tt::tt_metal::distributed::multihost::DistributedContext;
-    if (DistributedContext::is_initialized()) {
-        const auto& world = DistributedContext::get_current_world();
-        if (world != nullptr) {
-            const auto sc = world->subcontext_id();
-            if (sc.has_value()) {
-                return *sc.value();
-            }
-        }
-    }
-    return std::nullopt;
-}
 
 std::string read_file_to_string(const std::filesystem::path& file_path) {
     std::ifstream input(file_path);
@@ -163,7 +146,8 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
 
 }  // namespace
 
-MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
+MeshGraphDescriptor::MeshGraphDescriptor(
+    const std::string& text_proto, const bool backwards_compatible, std::optional<int> name_uniquify_id) :
     top_level_id_(static_cast<GlobalNodeId>(-1)) {
     proto::MeshGraphDescriptor temp_proto;
     google::protobuf::TextFormat::Parser parser;
@@ -185,9 +169,10 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
 
     populate();
 
-    // Prefix mgd{id}_ when DistributedContext reports a split-job sub-context id (MPI / tt-run).
-    if (const auto sid = subcontext_id_for_instance_name_uniquify(); sid.has_value()) {
-        const std::string prefix = "mgd" + std::to_string(*sid) + "_";
+    // Prefix mgd{id}_ when the caller supplies a split-job sub-context id (MPI / tt-run). The id is passed in
+    // rather than queried from DistributedContext here, keeping this descriptor runtime-free.
+    if (name_uniquify_id.has_value()) {
+        const std::string prefix = "mgd" + std::to_string(*name_uniquify_id) + "_";
         instances_by_name_.clear();
         for (auto& [_, inst] : instances_) {
             inst.name = prefix + inst.name;
@@ -199,8 +184,10 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
 }
 
 MeshGraphDescriptor::MeshGraphDescriptor(
-    const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
-    MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {}
+    const std::filesystem::path& text_proto_file_path,
+    const bool backwards_compatible,
+    std::optional<int> name_uniquify_id) :
+    MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible, name_uniquify_id) {}
 
 MeshGraphDescriptor::~MeshGraphDescriptor() = default;
 
@@ -260,6 +247,63 @@ uint32_t MeshGraphDescriptor::get_switch_chip_count(const InstanceData& switch_i
     }
 
     return chip_count;
+}
+
+std::optional<MeshHostRankId> MeshGraphDescriptor::get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const {
+    // Locate the mesh instance whose local id matches mesh_id (MeshId{instance.local_id}).
+    const InstanceData* mesh_instance = nullptr;
+    for (const auto& global_id : mesh_instances_) {
+        const auto& instance = get_instance(global_id);
+        if (instance.local_id == static_cast<LocalNodeId>(*mesh_id)) {
+            mesh_instance = &instance;
+            break;
+        }
+    }
+    if (mesh_instance == nullptr) {
+        return std::nullopt;
+    }
+
+    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance->desc);
+    TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null for instance {}", mesh_instance->global_id);
+
+    const auto& device_dims = mesh_desc->device_topology().dims();
+    const auto& host_dims = mesh_desc->host_topology().dims();
+    // static_validate guarantees these are equal-length and that each device dim is a positive multiple of the
+    // corresponding host dim, but guard defensively so a malformed descriptor can't index out of range.
+    if (device_dims.size() != host_dims.size() || device_dims.empty()) {
+        return std::nullopt;
+    }
+
+    // Reject out-of-range chip indices (chip_id is the row-major device index within the mesh).
+    uint32_t chip_count = 1;
+    for (const auto& dim : device_dims) {
+        chip_count *= static_cast<uint32_t>(dim);
+    }
+    if (chip_id < 0 || static_cast<uint32_t>(chip_id) >= chip_count) {
+        return std::nullopt;
+    }
+
+    // Decode chip_id into per-dimension coordinates (row-major: last dim varies fastest), then map each device
+    // coordinate to its owning host-grid coordinate. Host ranks tile the device grid row-major, so the rank is
+    // the row-major fold of the host coordinates over host_dims — equivalent to MeshGraph's enumeration.
+    auto remaining = static_cast<uint32_t>(chip_id);
+    uint32_t host_rank = 0;
+    const int num_dims = device_dims.size();
+    std::vector<uint32_t> device_coord(num_dims);
+    for (int i = num_dims - 1; i >= 0; --i) {
+        const auto device_dim = static_cast<uint32_t>(device_dims[i]);
+        device_coord[i] = remaining % device_dim;
+        remaining /= device_dim;
+    }
+    for (int i = 0; i < num_dims; ++i) {
+        const auto device_dim = static_cast<uint32_t>(device_dims[i]);
+        const auto host_dim = static_cast<uint32_t>(host_dims[i]);
+        const uint32_t board_size = device_dim / host_dim;  // > 0 per static_validate
+        const uint32_t host_coord = device_coord[i] / board_size;
+        host_rank = host_rank * host_dim + host_coord;
+    }
+
+    return MeshHostRankId{host_rank};
 }
 
 std::unordered_map<std::string, uint32_t> MeshGraphDescriptor::count_instances_by_type(

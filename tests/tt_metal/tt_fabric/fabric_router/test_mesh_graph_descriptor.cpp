@@ -205,6 +205,58 @@ TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateDimensions) {
     EXPECT_EQ(MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc), FabricType::TORUS_XY);
 }
 
+TEST(MeshGraphDescriptorTests, GetHostRankForChipMultiHostMesh) {
+    // 4x4 device grid tiled by a 2x2 host grid => board_size 2x2, four host ranks (row-major).
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 4, 4 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 2, 2 ] }
+        }
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+    const MeshId mesh_id{0};
+
+    // chip_id is the row-major device index; rank = row-major fold of (device_coord / board_size) over host dims.
+    EXPECT_EQ(desc.get_host_rank_for_chip(mesh_id, 0), MeshHostRankId{0});   // (0,0) -> host (0,0)
+    EXPECT_EQ(desc.get_host_rank_for_chip(mesh_id, 3), MeshHostRankId{1});   // (0,3) -> host (0,1)
+    EXPECT_EQ(desc.get_host_rank_for_chip(mesh_id, 5), MeshHostRankId{0});   // (1,1) -> host (0,0)
+    EXPECT_EQ(desc.get_host_rank_for_chip(mesh_id, 6), MeshHostRankId{1});   // (1,2) -> host (0,1)
+    EXPECT_EQ(desc.get_host_rank_for_chip(mesh_id, 8), MeshHostRankId{2});   // (2,0) -> host (1,0)
+    EXPECT_EQ(desc.get_host_rank_for_chip(mesh_id, 12), MeshHostRankId{2});  // (3,0) -> host (1,0)
+    EXPECT_EQ(desc.get_host_rank_for_chip(mesh_id, 15), MeshHostRankId{3});  // (3,3) -> host (1,1)
+
+    // Out-of-range chip index and unknown mesh both yield nullopt.
+    EXPECT_EQ(desc.get_host_rank_for_chip(mesh_id, 16), std::nullopt);
+    EXPECT_EQ(desc.get_host_rank_for_chip(mesh_id, -1), std::nullopt);
+    EXPECT_EQ(desc.get_host_rank_for_chip(MeshId{99}, 0), std::nullopt);
+}
+
+TEST(MeshGraphDescriptorTests, GetHostRankForChipSingleHostMesh) {
+    // Single host (host_topology 1x1) => every chip belongs to rank 0.
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+    const MeshId mesh_id{0};
+    for (int chip_id = 0; chip_id < 8; ++chip_id) {
+        EXPECT_EQ(desc.get_host_rank_for_chip(mesh_id, chip_id), MeshHostRankId{0});
+    }
+    EXPECT_EQ(desc.get_host_rank_for_chip(mesh_id, 8), std::nullopt);
+}
+
 TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateSwitchDimensions) {
     const std::string text_proto = R"proto(
         switch_descriptors: {

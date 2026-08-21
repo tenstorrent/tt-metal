@@ -18,11 +18,31 @@ set(FABRIC_JIT_API_HEADERS
     fabric_edm_packet_header.hpp
 )
 
-set(FABRIC_SOURCES
-    control_plane.cpp
+# Runtime-free topology sources — compiled into the lean TT::ScaleoutTopology static library
+# (see tt_metal/fabric/CMakeLists.txt). NOTE: mesh_graph.cpp and topology_mapper.cpp stay in FABRIC_SOURCES
+# below (MeshGraph + the runtime TopologyMapper class stay in fabric).
+set(TOPOLOGY_SOURCES
     mesh_graph_descriptor.cpp
     routing_table_generator.cpp
+    physical_system_descriptor.cpp
+    serialization/physical_system_descriptor_serialization.cpp
+    topology_mapper_utils.cpp
+    topology_solver.cpp
+    topology_solver_sat.cpp
+    topology_solver_sat_solver.cpp
+    physical_grouping_descriptor_core.cpp
+    physical_grouping_descriptor_graph_building.cpp
+    physical_grouping_descriptor_matching.cpp
+    physical_descriptor_builder.cpp
+)
+
+set(FABRIC_SOURCES
+    control_plane.cpp
     mesh_graph.cpp
+    # fabric_types.cpp stays in fabric (NOT the topology lib): it defines formatters/hashes/operators for
+    # ubiquitous strong types (FabricNodeId, MeshId, AsicID, ...) that must be exported from libtt_metal.so for
+    # downstream consumers. It carries no protobuf symbols, so it does not need the topology lib's hidden visibility.
+    fabric_types.cpp
     erisc_datamover_builder.cpp
     fabric_router_channel_mapping.cpp
     fabric_router_builder.cpp
@@ -53,23 +73,13 @@ set(FABRIC_SOURCES
     fabric_mux_v2_config.cpp
     fabric_tensix_builder.cpp
     fabric_tensix_builder_impl.cpp
-    fabric_types.cpp
     compressed_direction_table.cpp
     compressed_routing_path.cpp
     serialization/router_port_directions.cpp
-    serialization/physical_system_descriptor_serialization.cpp
     serialization/intermesh_connections_serialization.cpp
     serialization/port_descriptor_serialization.cpp
     ccl/ccl_common.cpp
     physical_system_discovery.cpp
-    physical_system_descriptor.cpp
     topology_mapper.cpp
-    topology_mapper_utils.cpp
-    topology_solver.cpp
-    topology_solver_sat.cpp
-    topology_solver_sat_solver.cpp
     pipeline_builder.cpp
-    physical_grouping_descriptor_core.cpp
-    physical_grouping_descriptor_graph_building.cpp
-    physical_grouping_descriptor_matching.cpp
 )

@@ -1847,4 +1847,52 @@ void TopologyMapper::verify_topology_mapping(const Cluster& cluster) const {
     log_debug(tt::LogFabric, "TopologyMapper: Verification completed successfully for all mapped entries");
 }
 
+// MeshGraph-based logical-adjacency builders (the MGD-based and "parts" overloads they call live in the topology
+// library).
+std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraph& mesh_graph) {
+    std::map<MeshId, AdjacencyGraph<FabricNodeId>> adjacency_map;
+
+    auto get_local_adjacents = [&](FabricNodeId fabric_node_id, MeshId mesh_id) {
+        auto adjacent_map = mesh_graph.get_intra_mesh_connectivity()[*mesh_id][fabric_node_id.chip_id];
+
+        std::vector<FabricNodeId> adjacents;
+        for (const auto& [neighbor_chip_id, edge] : adjacent_map) {
+            // Skip self-connections
+            if (neighbor_chip_id == fabric_node_id.chip_id) {
+                continue;
+            }
+            for (size_t i = 0; i < edge.connected_chip_ids.size(); ++i) {
+                adjacents.push_back(FabricNodeId(mesh_id, neighbor_chip_id));
+            }
+        }
+        return adjacents;
+    };
+
+    // Iterate over all mesh IDs from the mesh graph (including switches)
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        AdjacencyGraph<FabricNodeId>::AdjacencyMap logical_adjacency_map;
+        for (const auto& [_, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
+            auto fabric_node_id = FabricNodeId(mesh_id, chip_id);
+            logical_adjacency_map[fabric_node_id] = get_local_adjacents(fabric_node_id, mesh_id);
+        }
+        adjacency_map[mesh_id] = AdjacencyGraph<FabricNodeId>(logical_adjacency_map);
+    }
+
+    return adjacency_map;
+}
+
 }  // namespace tt::tt_fabric
+
+namespace tt::tt_metal::experimental::tt_fabric {
+
+// MeshGraph overload of build_logical_multi_mesh_adjacency_graph — forwards to the "parts" overload that lives in
+// the topology library (topology_mapper_utils.cpp).
+LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph) {
+    auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
+    const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
+    const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
+    return build_logical_multi_mesh_adjacency_graph(
+        mesh_adjacency_graphs, requested_intermesh_connections, requested_intermesh_ports);
+}
+
+}  // namespace tt::tt_metal::experimental::tt_fabric

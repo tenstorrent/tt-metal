@@ -7,7 +7,6 @@
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 
@@ -86,38 +85,6 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(con
         result[mesh_id] = AdjacencyGraph<FabricNodeId>(adj_map);
     }
     return result;
-}
-
-std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraph& mesh_graph) {
-    std::map<MeshId, AdjacencyGraph<FabricNodeId>> adjacency_map;
-
-    auto get_local_adjacents = [&](FabricNodeId fabric_node_id, MeshId mesh_id) {
-        auto adjacent_map = mesh_graph.get_intra_mesh_connectivity()[*mesh_id][fabric_node_id.chip_id];
-
-        std::vector<FabricNodeId> adjacents;
-        for (const auto& [neighbor_chip_id, edge] : adjacent_map) {
-            // Skip self-connections
-            if (neighbor_chip_id == fabric_node_id.chip_id) {
-                continue;
-            }
-            for (size_t i = 0; i < edge.connected_chip_ids.size(); ++i) {
-                adjacents.push_back(FabricNodeId(mesh_id, neighbor_chip_id));
-            }
-        }
-        return adjacents;
-    };
-
-    // Iterate over all mesh IDs from the mesh graph (including switches)
-    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
-        AdjacencyGraph<FabricNodeId>::AdjacencyMap logical_adjacency_map;
-        for (const auto& [_, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
-            auto fabric_node_id = FabricNodeId(mesh_id, chip_id);
-            logical_adjacency_map[fabric_node_id] = get_local_adjacents(fabric_node_id, mesh_id);
-        }
-        adjacency_map[mesh_id] = AdjacencyGraph<FabricNodeId>(logical_adjacency_map);
-    }
-
-    return adjacency_map;
 }
 
 std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_graph_physical(
