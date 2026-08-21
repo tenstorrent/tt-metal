@@ -191,13 +191,28 @@ inline __attribute__((always_inline)) void ring_write_word(uint32_t v) {
     wIndex++;
 }
 
+// Branchless sticky-timer emit: ALWAYS store the sticky word at the cursor, then advance the cursor
+// only if the high half moved. On the (overwhelming) unchanged path the very next store overwrites
+// the slot -- nothing past the published tail is ever read, and every caller's room reservation
+// already covers the sticky. One unconditional L1 store instead of a branch.
+inline __attribute__((always_inline)) void ring_write_sticky_timer(uint32_t hi) {
+    profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] = ppfmt::w0(ppfmt::T_STICKY_TIMER, hi);
+    wIndex += (hi != g_prev_timer_hi);
+    g_prev_timer_hi = hi;
+}
+
 inline __attribute__((always_inline)) void publish_tail() {
-    if (zoneValid) {
-        // Fence so the marker stores land before the tail: the drainer reads TAIL then the slots over
-        // the NoC, and the stores can otherwise reach L1 SRAM out of order.
-        asm volatile("fence" ::: "memory");
-        profiler_control_buffer[TAIL_INDEX] = wIndex;
+    // zoneValid can only be false on validator RISCs; everyone else compiles to fence + store, no
+    // load and no branch.
+    if constexpr (PROFILER_VALIDATES_ZONE) {
+        if (!zoneValid) {
+            return;
+        }
     }
+    // Fence so the marker stores land before the tail: the drainer reads TAIL then the slots over
+    // the NoC, and the stores can otherwise reach L1 SRAM out of order.
+    asm volatile("fence" ::: "memory");
+    profiler_control_buffer[TAIL_INDEX] = wIndex;
 }
 
 // Zone marker emit. Reserve room BEFORE reading the clock: a stall must elongate the marker's
@@ -207,10 +222,7 @@ inline __attribute__((always_inline)) void mark_time(uint32_t timer_id, ZoneKind
     ring_ensure_room(SPSC_MARKER_WORDS + 1);
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
-    if (hi != g_prev_timer_hi) {
-        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));
-        g_prev_timer_hi = hi;
-    }
+    ring_write_sticky_timer(hi);
     ring_write_word(ppfmt::zone_w0(timer_id, kind));
     ring_write_word(lo);
     publish_tail();
@@ -300,10 +312,7 @@ inline __attribute__((always_inline)) void time_stamped_data(uint64_t data, Args
     ring_ensure_room(1 + 3 + 2 * total_data_count);
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
-    if (hi != g_prev_timer_hi) {
-        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));
-        g_prev_timer_hi = hi;
-    }
+    ring_write_sticky_timer(hi);
     ring_write_word(ppfmt::data_w0(data_id));
     ring_write_word(lo);
     ring_write_word(ppfmt::data_w2(2 * total_data_count));
@@ -319,10 +328,7 @@ inline __attribute__((always_inline)) void record_flag() {
     ring_ensure_room(SPSC_MARKER_WORDS + 1);
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
-    if (hi != g_prev_timer_hi) {
-        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));
-        g_prev_timer_hi = hi;
-    }
+    ring_write_sticky_timer(hi);
     ring_write_word(ppfmt::event_w0(data_id));
     ring_write_word(lo);
     publish_tail();
