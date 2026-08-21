@@ -71,7 +71,10 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    auto intermediate_dtype = is_block_float(a.dtype()) ? tt::tt_metal::DataType::BFLOAT16 : output.dtype();
+    // The intermediate is row-major, so it cannot be a block-float format. If the input is
+    // already block-float, unpack it to bfloat16; otherwise keep the input dtype. Conversion
+    // to the output dtype happens on the final pack (see retile.cpp).
+    auto intermediate_dtype = is_block_float(a.dtype()) ? tt::tt_metal::DataType::BFLOAT16 : a.dtype();
     tt::DataFormat mid_cb_data_format = datatype_to_dataformat_converter(intermediate_dtype);
     const uint32_t input_single_tile_size = input_tile.get_tile_size(input_cb_data_format);
     const uint32_t output_single_tile_size = output_tile.get_tile_size(output_cb_data_format);
