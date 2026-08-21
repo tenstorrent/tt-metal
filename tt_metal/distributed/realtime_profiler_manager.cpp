@@ -383,10 +383,11 @@ experimental::ProgramRealtimeProfilerCollectionResult RealtimeProfilerManager::m
         const auto device_it = std::ranges::find_if(
             devices_, [&](const DeviceState& device) { return device.chip_id == collection_device.chip_id; });
         const bool device_complete = collection_device.observed_stream_mask == collection_device.expected_stream_mask;
-        const uint64_t received = device_complete
-                                      ? collection_device.observed_record_count
-                                      : (device_it == devices_.end() ? collection_device.baseline_record_count
-                                                                     : device_it->received_record_count);
+        uint64_t received = collection_device.observed_record_count;
+        if (!device_complete) {
+            received = device_it == devices_.end() ? collection_device.baseline_record_count
+                                                   : device_it->received_record_count;
+        }
         experimental::ProgramRealtimeProfilerDeviceCollection device_result{
             .chip_id = collection_device.chip_id,
             .expected_stream_mask = collection_device.expected_stream_mask,

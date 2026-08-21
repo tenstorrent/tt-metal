@@ -5,7 +5,6 @@
 #include "topk_large_indices_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
-#include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "topk_large_indices.hpp"
@@ -45,14 +44,23 @@ void bind_topk_large_indices(nb::module_& mod) {
             * restricts the search to the first ``valid_length`` columns of each row;
             * the remaining columns are ignored -- neither read nor ranked -- so an
               over-allocated row whose tail is stale can be searched without slicing it;
-            * must be in [k, last dimension]; defaults to the full last dimension;
+            * must be in (0, last dimension]; defaults to the full last dimension. A
+              prefix shorter than k is allowed: the lanes past its capacity emit the
+              sentinel index 0xFFFFFFFF;
             * applied at runtime (no recompile), so a loop growing valid_length reuses one program.
 
         Core selection:
             * ``subdevice_id`` selects a TENSIX subdevice from the active manager;
             * ``sub_core_grids`` optionally restricts work to a fully contained CoreRangeSet;
             * the resolved grid is structural and participates in the program-cache key;
-            * kernels and circular buffers are created only on the resolved grid.
+            * kernels and circular buffers are created only on the resolved grid;
+            * when the resolved grid is a single dense rectangle (any origin), the op
+              may run its column-parallel tree and hybrid engines inside it; any other
+              set runs the row-parallel engine over the enumerated cores.
+        stable (optional, default False):
+            * sequential tie-breaking: equal values return their indices in
+              ascending global-index order (the stable=True contract of
+              ttnn.topk); False keeps the faster non-sequential tie order.
 
         Args:
             input_tensor: device tensor with ROW_MAJOR layout and BFLOAT16 dtype.
@@ -60,6 +68,7 @@ void bind_topk_large_indices(nb::module_& mod) {
             valid_length: optional number of leading columns to search (default: full width).
             subdevice_id: optional active subdevice containing the top-k workers.
             sub_core_grids: optional core restriction within ``subdevice_id``.
+            stable: optional sequential (lowest-index-first) tie-breaking (default: False).
         )doc",
         &ttnn::experimental::topk_large_indices,
         nb::arg("input_tensor"),
@@ -67,7 +76,8 @@ void bind_topk_large_indices(nb::module_& mod) {
         nb::arg("k"),
         nb::arg("valid_length") = std::nullopt,
         nb::arg("subdevice_id") = nb::none(),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("stable") = false);
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::detail
