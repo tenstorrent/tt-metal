@@ -12,6 +12,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/unordered_set.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn/common/queue_id.hpp"
@@ -141,7 +142,7 @@ void py_module(nb::module_& mod) {
         nb::arg("mesh_device"),
         nb::arg("buffer_unique_id"));
     mod.def("drain_pending_traceback_ids", []() { return ttnn::operations::trace::drain_pending_traceback_ids(); });
-    mod.def("drain_retired_traceback_ids", []() { return ttnn::operations::trace::drain_retired_traceback_ids(); });
+    mod.def("get_all_unsafe_tracked_ids", []() { return ttnn::operations::trace::get_all_unsafe_tracked_ids(); });
     mod.def(
         "push_corruptible_allocation_scope",
         [](MeshDevice* device) { ttnn::operations::trace::push_corruptible_allocation_scope(device); },

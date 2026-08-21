@@ -252,7 +252,20 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
 
             assert temporary_id not in UnsafeAllocationTracker._tracebacks
 
+            # Exercise retirement before the pending ID is drained: bypass the
+            # registered-operation wrapper, retire the raw allocation, and let
+            # the next wrapped operation reconcile the pending ID.
+            raw_temporary = ttnn._ttnn.operations.core.allocate_tensor_on_device(
+                ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device
+            )
+            raw_temporary_id = raw_temporary.buffer_unique_id()
+            del raw_temporary
+            gc.collect()
+            assert raw_temporary_id not in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+
         unsafe_b = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        if TRACE_ALLOC_DIAGNOSTICS:
+            assert raw_temporary_id not in UnsafeAllocationTracker._tracebacks
         with expect_error(RuntimeError, "Found 2 device buffer") as error:
             ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
         assert f"Buffer {unsafe_a.buffer_unique_id()}" in str(error.value)
