@@ -76,14 +76,14 @@ constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGrid
 // The tail per_core_M is still returned as a DIVISOR of per_core_M_max, so the
 // runtime rows always tile evenly inside the constant block.
 
-// Clamp a DEVICE-PROVIDED token-tile count to the capacity this program was
-// built for: `num_chunks_max` chunks of at most `max_chunk` tile-rows each.
+// Clamp a DEVICE-PROVIDED token-tile count to what this expert can actually
+// hold: its region (`m_tiles_full` tile-rows), and — as a backstop — the chunk
+// loop the program was built for (`num_chunks_max` chunks of `max_chunk`).
 //
 // counts[] is produced on device (dispatch) and is never host-validated, so an
 // over-capacity entry must not be allowed to drive the chunk loop past
-// num_chunks_max: the CBs, the num_chunks compile-time arg and the output
-// buffer are all sized to that bound, and running past it reads/writes outside
-// this expert's region. ASSERT is a no-op unless watcher / lightweight kernel
+// num_chunks_max: the CBs and the num_chunks compile-time arg are sized to that
+// bound. ASSERT is a no-op unless watcher / lightweight kernel
 // asserts are enabled, so the bound has to be enforced by arithmetic to hold in
 // Release builds — the kernels ASSERT on top of it to still fail loudly in
 // debug builds.
@@ -93,9 +93,22 @@ constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGrid
 // and their row-validity guards from this same value, so they agree on the row
 // mapping and the excess rows are uniformly dropped rather than emitted at the
 // wrong offsets.
-inline uint32_t clamp_count_tiles(uint32_t count_tiles, uint32_t max_chunk, uint32_t num_chunks_max) {
-    const uint32_t capacity_tiles = num_chunks_max * max_chunk;
-    return (count_tiles < capacity_tiles) ? count_tiles : capacity_tiles;
+inline uint32_t clamp_count_tiles(
+    uint32_t count_tiles, uint32_t max_chunk, uint32_t num_chunks_max, uint32_t m_tiles_full) {
+    // Two independent caps; the tighter one wins.
+    //   * m_tiles_full  - this expert's region is only this many tile-rows, so a
+    //     larger count is bogus. Rows past it are dropped downstream anyway (the
+    //     reader zero-fills past M_bound, the writer guards row < M_tiles_full), so
+    //     without this cap an over-capacity count only bought wasted chunks.
+    //   * num_chunks_max * max_chunk - the chunk-loop bound the CBs and the
+    //     num_chunks compile-time arg were sized for.
+    // m_tiles_full is normally much the tighter of the two: num_chunks_max is
+    // ceil(m_tiles_full / min_chunk) with min_chunk <= max_chunk, so the loop cap
+    // sits at roughly (max_chunk / min_chunk) * m_tiles_full. Both are kept so
+    // neither bound can be violated if that host-side derivation ever changes.
+    const uint32_t loop_cap = num_chunks_max * max_chunk;
+    const uint32_t cap = (m_tiles_full < loop_cap) ? m_tiles_full : loop_cap;
+    return (count_tiles < cap) ? count_tiles : cap;
 }
 
 // Number of chunks for `count_tiles`: full chunks of max_chunk + one tail chunk.

@@ -333,7 +333,8 @@ void kernel_main() {
         // identically, so all three keep the same row mapping (see
         // adaptive_chunk::clamp_count_tiles).
         const uint32_t count_tiles_raw = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
-        const uint32_t count_tiles = adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max);
+        const uint32_t count_tiles =
+            adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max, M_tiles_full);
         ASSERT(count_tiles == count_tiles_raw);
         // Runtime chunk layout from THIS expert's actual token count (identical
         // math in the compute and writer kernels, so all three agree on the row

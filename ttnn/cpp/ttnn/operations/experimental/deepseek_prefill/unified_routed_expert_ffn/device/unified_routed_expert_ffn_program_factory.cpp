@@ -819,6 +819,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // bounds its chunk loop by effective_chunks = ceil(count/chunk_M_tiles).
         {"cb_counts_scratch", CB_COUNTS_SCRATCH},
         {"cb_idx_scratch", CB_IDX_SCRATCH},
+        // Region size in tile-rows: caps the device-provided per-expert count
+        // (adaptive_chunk::clamp_count_tiles). Reader and writer take it as a
+        // positional CT arg; compute has no free positional slot, so it is named.
+        {"m_tiles_full", M_tiles_full},
     };
     if (fuse_bias) {
         compute_named_args["cb_gate_bias"] = CB_GATE_BIAS;

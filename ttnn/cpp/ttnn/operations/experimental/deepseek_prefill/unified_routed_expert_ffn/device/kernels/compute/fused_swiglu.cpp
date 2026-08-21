@@ -923,6 +923,8 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_counts_scratch = get_named_compile_time_arg_val("cb_counts_scratch");
     constexpr uint32_t cb_idx_scratch = get_named_compile_time_arg_val("cb_idx_scratch");
+    // This expert's region size in tile-rows; caps the device-provided count.
+    constexpr uint32_t m_tiles_full = get_named_compile_time_arg_val("m_tiles_full");
     // Row-major bf16 x staging (x_is_row_major only); tilize input CB. Unused
     // when x is TILE.
     constexpr uint32_t cb_x_rm = get_named_compile_time_arg_val("cb_x_rm");
@@ -1002,7 +1004,8 @@ void kernel_main() {
         // the identical clamp, keeping the three row mappings in lockstep (see
         // adaptive_chunk::clamp_count_tiles).
         const uint32_t count_tiles_raw = (count_value + 31) / 32;
-        const uint32_t count_tiles = adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max);
+        const uint32_t count_tiles =
+            adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max, m_tiles_full);
         ASSERT(count_tiles == count_tiles_raw);
         const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
 

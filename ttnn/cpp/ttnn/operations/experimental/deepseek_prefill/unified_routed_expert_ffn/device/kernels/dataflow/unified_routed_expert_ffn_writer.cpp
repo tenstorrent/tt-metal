@@ -172,7 +172,8 @@ void kernel_main() {
         // count (see adaptive_chunk::clamp_count_tiles): arithmetic, so it bounds
         // the chunk loop in Release too, where ASSERT is a no-op.
         const uint32_t count_tiles_raw = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
-        const uint32_t count_tiles = adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max);
+        const uint32_t count_tiles =
+            adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max, M_tiles_full);
         ASSERT(count_tiles == count_tiles_raw);
         // Runtime chunk layout from THIS expert's count — the same math the reader
         // and compute kernels run, so all three agree on the row mapping (a
