@@ -82,7 +82,7 @@ class TtJanusProVisionAligner(LightweightModule):
             w, b = load_linear(f"hidden_layers.{i}")
             self.hidden_layers.append((w, b))
 
-    def _linear(self, x, weight, bias, program_config=None):
+    def _linear(self, x, weight, bias, program_config=None, dtype=ttnn.bfloat16):
         # HiFi2 costs nothing on the weight and half the math cycles: ttnn.linear puts the weight in
         # SrcA (llk_unpack_AB_matmul.h:43-44), whose mantissa HiFi2 already consumes, while HiFi4's
         # extra passes read SrcB -- the activation -- at 64 cycles per tile against 32
@@ -94,7 +94,7 @@ class TtJanusProVisionAligner(LightweightModule):
             bias=bias,
             program_config=program_config,
             compute_kernel_config=self.args.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -113,7 +113,15 @@ class TtJanusProVisionAligner(LightweightModule):
             program_config = self.args.vision_aligner_program_config(
                 batch_size, seq_len, k, n, fused_activation=None if last else self.fused_act
             )
-            x = self._linear(x, weight, bias, program_config=program_config)
+            # An intermediate projection is read once, by the projection after it, so it carries no
+            # more than that read needs. The last one feeds the language model and stays bfloat16.
+            x = self._linear(
+                x,
+                weight,
+                bias,
+                program_config=program_config,
+                dtype=ttnn.bfloat16 if last else ttnn.bfloat8_b,
+            )
             if not last and program_config is None:
                 x = self.act_fn(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x
