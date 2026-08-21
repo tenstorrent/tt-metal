@@ -26,14 +26,37 @@ def _trace_or_skip(variant_name):
     return resolve_trace_dir(trace)
 
 
-@pytest.mark.parametrize("variant_name", ["deepseek_v3_d_p", "kimi_k2_6"])
+@pytest.mark.parametrize("variant_name", ["deepseek_v3_d_p", "kimi_k2_7"])
 def test_resolve_trace_dir_has_metadata(variant_name):
-    """resolve_trace_dir lands on a dir with metadata.json (descending the vllm hash subdir for Kimi)."""
+    """resolve_trace_dir lands on a dir with metadata.json. Both registered goldens are flat today, so
+    the run-hash descent is covered hermetically by test_resolve_trace_dir_descends_run_hash_subdir."""
     trace = _trace_or_skip(variant_name)
     assert (trace / "metadata.json").exists(), trace
 
 
-@pytest.mark.parametrize("variant_name", ["deepseek_v3_d_p", "kimi_k2_6"])
+def test_resolve_trace_dir_descends_run_hash_subdir(tmp_path):
+    """The vllm serving layout nests metadata.json one level down under a run-hash dir. No registered
+    prefill_trace_default has that shape since Kimi moved to K2.7's flat golden, so the branch is
+    exercised on a fabricated tree instead of a staged /mnt trace."""
+    trace = tmp_path / "vllm-kimi-run"
+    (trace / "vllm-kimi-k27-b783c42e-56321tok").mkdir(parents=True)
+    (trace / "vllm-kimi-k27-b783c42e-56321tok" / "metadata.json").write_text("{}")
+    (trace / "tensor_mapping.json").write_text("{}")  # sibling file, not a candidate dir
+    assert resolve_trace_dir(trace) == trace / "vllm-kimi-k27-b783c42e-56321tok"
+
+
+def test_resolve_trace_dir_rejects_ambiguous_tree(tmp_path, expect_error):
+    """Two candidate subdirs must raise rather than silently picking one — a half-staged trace dir is a
+    setup error, and picking either would PCC against the wrong run."""
+    trace = tmp_path / "two-runs"
+    for run in ("run-a", "run-b"):
+        (trace / run).mkdir(parents=True)
+        (trace / run / "metadata.json").write_text("{}")
+    with expect_error(FileNotFoundError, "found 2 candidates"):
+        resolve_trace_dir(trace)
+
+
+@pytest.mark.parametrize("variant_name", ["deepseek_v3_d_p", "kimi_k2_7"])
 def test_load_trace_token_ids(variant_name):
     """token_ids load, truncate to the requested length, and span >= one production chunk."""
     trace = _trace_or_skip(variant_name)
@@ -41,7 +64,7 @@ def test_load_trace_token_ids(variant_name):
     assert len(load_trace_token_ids(trace)) >= 5120
 
 
-@pytest.mark.parametrize("variant_name", ["deepseek_v3_d_p", "kimi_k2_6"])
+@pytest.mark.parametrize("variant_name", ["deepseek_v3_d_p", "kimi_k2_7"])
 @pytest.mark.parametrize("layer", [0, 60])
 def test_golden_kv_post_shape(variant_name, layer):
     """Both formats reassemble to [total_len, 576], finite — DS single-file and Kimi row-shards alike."""
@@ -60,7 +83,7 @@ def test_golden_row_shard_concat_is_contiguous():
     extends the shorter one row-for-row."""
     import torch
 
-    trace = _trace_or_skip("kimi_k2_6")
+    trace = _trace_or_skip("kimi_k2_7")
     short = _load_golden_kv_post(trace, 0, 4096)
     long = _load_golden_kv_post(trace, 0, 8192)
     assert torch.equal(short, long[:4096])

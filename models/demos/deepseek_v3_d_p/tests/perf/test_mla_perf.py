@@ -16,14 +16,14 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla"
 _CMD_2X4 = f"pytest {_TEST_PATH} -k 'balanced-skip_check-seq100k-scaled_sl-random-line-2x4'"
 _CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced-skip_check-seq100k-scaled_sl-random-line-8x4'"
 
-# Kimi K2.6 chunked prefill: 50k KV-cache prefix + one fresh 5k chunk (chunk_size_global=5120). On
+# Kimi K2.7 chunked prefill: 50k KV-cache prefix + one fresh 5k chunk (chunk_size_global=5120). On
 # the 8x4 Galaxy (sp=8) this lands chunk_local=640 per chip, exercising the num_heads=64 chunked-only
 # 640 matmul/SDPA configs. Functional reference (no PCC) keeps the measured region to the single
 # forward (the 50k prefix is preloaded host->device before the MLA_START signpost, so it is not timed).
 _CHUNKED_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill"
 _CMD_CHUNKED_8X4 = f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and kimi and func and 8x4 and fabric2d'"
 
-# Kimi K3 (NoPE + output gate, 96 heads): same scenario/mesh as the K2.6 command above. 'k3' not
+# Kimi K3 (NoPE + output gate, 96 heads): same scenario/mesh as the K2.7 command above. 'k3' not
 # 'kimi' in the -k -- the ids are disjoint so the two selectors cannot cross-match.
 #
 # 'scalar' is load-bearing, not cosmetic: run_device_perf profiles the whole -k selection into one
@@ -75,7 +75,7 @@ def test_deepseek_v3_mla_perf_galaxy():
 
 @pytest.mark.timeout(0)
 def test_kimi_mla_chunked_perf_galaxy():
-    """Kimi K2.6 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k chunk
+    """Kimi K2.7 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k chunk
     (640 tokens/chip). Functional (no reference), so the single timed forward exercises the chunked
     640 matmul/SDPA configs end to end. Ground-truth 8x4 measurement (no 2x4 approximation)."""
     if not _is_galaxy_env():

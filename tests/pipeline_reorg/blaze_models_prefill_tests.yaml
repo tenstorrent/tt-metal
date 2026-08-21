@@ -19,8 +19,8 @@
 #                  -> "ring MLA chunked 55k@5k perf, accuracy, determinism"  (one shape, three tags)
 #             "&"  two models. At three or more the unit leads and the models move to a trailing
 #                  "(...)" list, so the unit under test is not buried behind the model list
-#                  -> "DeepSeek-V3-671B & Kimi-K2.6-1T MLA chunked accuracy 10k@5k"
-#                  -> "KV cache table accuracy (DeepSeek-V3-671B, Kimi-K2.6-1T, GLM-5.2-744B)"
+#                  -> "DeepSeek-V3-671B & Kimi-K2.7-1T MLA chunked accuracy 10k@5k"
+#                  -> "KV cache table accuracy (DeepSeek-V3-671B, Kimi-K2.7-1T, GLM-5.2-744B)"
 #             "/"  components of one pipeline, not a list of gated things
 #                  -> "disaggregated prefill runner/producer"
 #           Never leave a shape whose binding is ambiguous: "MoE accuracy + perf 25k" cannot say
@@ -81,7 +81,7 @@
   team: models
   sp_config: sc1
 
-- name: "DeepSeek-V3-671B & Kimi-K2.6-1T MLA chunked accuracy 10k@5k"
+- name: "DeepSeek-V3-671B & Kimi-K2.7-1T MLA chunked accuracy 10k@5k"
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -182,7 +182,7 @@
   team: models
   sp_config: sc1
 
-- name: "KV cache table accuracy (DeepSeek-V3-671B, Kimi-K2.6-1T, GLM-5.2-744B)"
+- name: "KV cache table accuracy (DeepSeek-V3-671B, Kimi-K2.7-1T, GLM-5.2-744B)"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -230,13 +230,13 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T chunked prefill padded accuracy 15k@5k (no trace)"
+- name: "Kimi-K2.7-1T chunked prefill padded accuracy 15k@5k (no trace)"
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi and fabric2d-mesh-8x4 and L61 and mid15k and notrace" -vvv --tb=short
@@ -257,13 +257,13 @@
 # that the padded forward is captured once as a ttnn trace and replayed per chunk. Run as its own
 # entry (not a second -k term) so a trace-only regression is attributed on the CI dashboard instead
 # of being hidden inside a two-case job.
-- name: "Kimi-K2.6-1T chunked prefill padded accuracy 15k@5k (trace)"
+- name: "Kimi-K2.7-1T chunked prefill padded accuracy 15k@5k (trace)"
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi and fabric2d-mesh-8x4 and L61 and mid15k and traced" -vvv --tb=short
@@ -279,7 +279,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T MLA accuracy 5k, 25k"
+- name: "Kimi-K2.7-1T MLA accuracy 5k, 25k"
   cmd: |
     export KIMI_MLA_REF_CACHE=/mnt/models/kimi-prefill-cache/test_mla_output
 
@@ -359,7 +359,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T MoE accuracy 5k + perf 25k"
+- name: "Kimi-K2.7-1T MoE accuracy 5k + perf 25k"
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -407,11 +407,11 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T prefill block accuracy 5k, 25k"
+- name: "Kimi-K2.7-1T prefill block accuracy 5k, 25k"
   cmd: |
     export MESH_DEVICE=TG
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2.6-Cache/CI
+    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
@@ -523,22 +523,22 @@
   team: ttnn
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T chunked prefill perf code_debug 55k@5k (no trace)"
+- name: "Kimi-K2.7-1T chunked prefill perf code_debug 55k@5k (no trace)"
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
   # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
   #
   # Paths:
-  #   KIMI_K2_6_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
-  #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_6_bh_32dev/8x4); required —
+  #   KIMI_K2_7_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
+  #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_7_bh_32dev/8x4); required —
   #     without it, conftest falls back under model_path and CI may invent HF hub downloads
   #   PREFILL_TRACE_DIR          -> code_debug (56320) golden trace; metadata.json token_ids feed the prefill
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
@@ -557,22 +557,22 @@
 # Trace twin of the entry above: same 61 layers / 11 chunks / 10 iterations, but the chunk forward
 # is captured once and replayed. Separate entry so the two per-chunk timing tables are attributed
 # independently -- a traced-vs-untraced perf delta is the number this pair exists to surface.
-- name: "Kimi-K2.6-1T chunked prefill perf code_debug 55k@5k (trace)"
+- name: "Kimi-K2.7-1T chunked prefill perf code_debug 55k@5k (trace)"
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
   # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
   #
   # Paths:
-  #   KIMI_K2_6_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
-  #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_6_bh_32dev/8x4); required —
+  #   KIMI_K2_7_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
+  #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_7_bh_32dev/8x4); required —
   #     without it, conftest falls back under model_path and CI may invent HF hub downloads
   #   PREFILL_TRACE_DIR          -> code_debug (56320) golden trace; metadata.json token_ids feed the prefill
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
@@ -628,10 +628,10 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T DFlash drafter accuracy"
+- name: "Kimi-K2.7-1T DFlash drafter accuracy"
   cmd: |
     export MESH_DEVICE=TG
-    export DFLASH_HF_MODEL=/mnt/models/Kimi-K2.6-DFlash
+    export DFLASH_HF_MODEL=/mnt/models/blaze/closed_do_not_share/Kimi-K2.7-Code-DFlash-0717
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
@@ -647,13 +647,13 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T prefill runner accuracy code_debug 55k@5k"
+- name: "Kimi-K2.7-1T prefill runner accuracy code_debug 55k@5k"
   cmd: |
     export MESH_DEVICE=TG
-    export PREFILL_MODEL=kimi_k2_6
-    export PREFILL_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
-    export PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+    export PREFILL_MODEL=kimi_k2_7
+    export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
+    export PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     export PREFILL_NUM_LAYERS=61
     export PREFILL_CI_PRODUCER_TIMEOUT_S=1800
     export PREFILL_CI_RUNNER_READY_TIMEOUT_S=1800

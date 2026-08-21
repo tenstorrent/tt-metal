@@ -37,7 +37,7 @@ def _resolve_model_path(variant) -> Path:
     from the exact weights the device run validates against.
 
     The runner reads only the config from this dir and pulls weights from the TTNN cache, so its
-    ``hf_model_default`` may be a config-only in-tree dir (kimi_k2_6, deepseek_v3). The golden runs
+    ``hf_model_default`` may be a config-only in-tree dir (kimi_k2_6, kimi_k2_7, deepseek_v3). The golden
     the torch/HF reference forward and needs real weights — require safetensors here and point the
     user at PREFILL_HF_MODEL instead of failing deep in the weight load.
     """
