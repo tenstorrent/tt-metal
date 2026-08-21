@@ -134,8 +134,11 @@ def test_gpt_oss_experts_reference_preserves_decode_shape():
         reference_experts,
     )
 
-    assert output.shape == hidden_states.shape
-    assert torch.isfinite(output).all()
+    assert output.shape == hidden_states.shape, (
+        f"Reference experts output shape {tuple(output.shape)} does not match "
+        f"hidden-states shape {tuple(hidden_states.shape)}"
+    )
+    assert torch.isfinite(output).all(), "Reference experts output contains non-finite values"
 
 
 def gpt_oss_experts_ttnn(
