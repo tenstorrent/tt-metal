@@ -227,16 +227,12 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     ////////////////////////////////////////////////////////////////
 
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-    const auto& input_shape = input_tensor.padded_shape();
+    const auto arch = input_tensor.device()->arch();
 
     // --- Copy mode ---
     // The kernel always reads whole *aligned* input pages into L1 (required by the input's NoC
-    // read alignment, DRAM or L1) but writes at output *content* (unaligned) granularity, so
-    // chunk sizing differs by mode:
-    //   matched (in == out): 1 chunk per input page, output_chunks_per_page = 1.
-    //   concat  (out > in) : 1 chunk per input page, output_chunks_per_page > 1; each chunk
-    //                        lands at a byte offset within a shared output page.
-    //   split   (in > out) : split_factor chunks per input page, output_chunks_per_page = 1.
+    // read alignment, DRAM or L1) but writes at output *content* (unaligned) granularity -- which is
+    // why chunk sizing differs by the three modes above.
     const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
     const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
     // matched/concat write a whole aligned input page (== L1 read stride) into an output slot;
@@ -257,38 +253,15 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         num_input_pages,
         split_factor);
 
-    ::ttnn::ccl::validate_packet_size(input_tensor.device()->arch(), packet_size, output_chunk_size);
-
-    // --- CB sizing ---
-    // A CB entry holds a whole number of packet loads, and of input pages (split) or output pages
-    // (concat), so the entry boundary never cuts a page; one of those two counts is always 1. A packet
-    // can still end early: broken contiguity can fill its scatter chunks before its payload.
-    const uint32_t chunks_per_group = std::max(split_factor, output_chunks_per_page);
-    uint32_t chunks_per_packet = std::max(1u, packet_size / output_chunk_size);
-    chunks_per_packet = std::max(chunks_per_group, (chunks_per_packet / chunks_per_group) * chunks_per_group);
-    uint32_t cb_page_size = chunks_per_packet * output_chunk_size;
-    uint32_t cb_depth = 3;
-
-    // Perf hack: pack multiple packets into a single CB page to reduce CB sync frequency between reader and
-    // writer. Note this increases effective CB depth. An integer multiplier preserves the whole-packet and
-    // whole-page properties above.
-    // Empirically determined heuristic, works well for all tensor sizes
-    const uint32_t ideal_multiplier = (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) ? 4 : 3;
-    const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
-    const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, ideal_multiplier);
-    if (multiplier < ideal_multiplier) {
-        log_warning(
-            tt::LogOp,
-            "CircularBuffer depth reduced due to L1 pressure (only {} B available), performance may regress.",
-            max_l1_space);
-    }
-    cb_page_size *= multiplier;
+    ::ttnn::ccl::validate_packet_size(arch, packet_size, output_chunk_size);
 
     // --- Stripe geometry ---
     // input_pages_per_stripe = num input pages along [gather dim .. last dim] this
     // device contributes per stripe. For a last-dim RM gather this is the *page* count,
     // which handles sharded RM input (> 1 input page per row).
-    auto tile_spec = input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    const auto& input_shape = input_tensor.padded_shape();
+    const auto tile_spec =
+        input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
     uint32_t input_pages_per_stripe = 1;
     for (int32_t i = operation_attributes.dim_from_end; i < 0; i++) {
         uint32_t extent;
@@ -316,6 +289,35 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     ////////////////////////////////////////////////////////////////
     // Circular Buffer and Kernel creation
     ////////////////////////////////////////////////////////////////
+
+    // --- CB sizing ---
+    // A CB entry holds a whole number of packet loads, and of input pages (split) or output pages
+    // (concat), so the entry boundary never cuts a page; one of those two counts is always 1. A packet
+    // can still end early: broken contiguity can fill its scatter chunks before its payload.
+    const uint32_t chunks_per_group = std::max(split_factor, output_chunks_per_page);
+    uint32_t chunks_per_packet = std::max(1u, packet_size / output_chunk_size);
+    chunks_per_packet = std::max(chunks_per_group, (chunks_per_packet / chunks_per_group) * chunks_per_group);
+    uint32_t cb_page_size = chunks_per_packet * output_chunk_size;
+    // Two entries: one filling while the other is sent, and two is the floor -- the reader runs one entry
+    // ahead of the sender, so a single entry deadlocks. Depth is also the reader's in-flight trid count,
+    // but deeper is perf-neutral on Wormhole, so keep the L1 instead.
+    const uint32_t cb_depth = (arch == tt::ARCH::BLACKHOLE) ? 3 : 2;
+
+    // Packets per CB entry. Packing several amortises the reader/sender CB handshake, which is what the
+    // store-and-forward writer wants -- but here the reader sends the packets itself, off transaction ids
+    // and with no per-entry flush to stall on, so a one-packet entry just pipelines finer and wins on a
+    // line and on small row-major pages. An integer multiplier preserves the whole-packet and whole-page
+    // properties above. Wormhole takes 1, so the packing below (and its warning) is Blackhole-only.
+    const uint32_t ideal_multiplier = (arch == tt::ARCH::BLACKHOLE) ? 4 : 1;
+    const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
+    const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, ideal_multiplier);
+    if (multiplier < ideal_multiplier) {
+        log_warning(
+            tt::LogOp,
+            "CircularBuffer depth reduced due to L1 pressure (only {} B available), performance may regress.",
+            max_l1_space);
+    }
+    cb_page_size *= multiplier;
 
     // Input CB
     uint32_t cb0_id = tt::CB::c_in0;
