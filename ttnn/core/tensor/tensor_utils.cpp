@@ -17,9 +17,16 @@ using tt::tt_metal::CBFormatDescriptor;
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::datatype_to_dataformat_converter;
+using tt::tt_metal::FaceGeometry;
+using tt::tt_metal::Layout;
 using tt::tt_metal::MeshTensor;
 using tt::tt_metal::NOC;
+using tt::tt_metal::Tile;
 using tt::tt_metal::TileDescriptor;
+using tt::tt_metal::experimental::DataflowBufferSpec;
+using tt::tt_metal::experimental::DFBAdvancedOptions;
+using tt::tt_metal::experimental::DFBSpecName;
+using tt::tt_metal::experimental::TensorParamName;
 
 bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
 
@@ -58,6 +65,112 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
         .buffer = tensor.buffer(),
         .address_offset = address_offset,
         .global_circular_buffer = nullptr};
+}
+
+DataflowBufferSpec dfb_spec_from_sharded_tensor(
+    DFBSpecName unique_id,
+    const Tensor& tensor,
+    uint32_t num_entries,
+    const std::optional<TensorParamName>& borrowed_from,
+    bool page_as_tile,
+    const std::optional<FaceGeometry>& unpack_face_geometry,
+    DFBAdvancedOptions advanced_options) {
+    TT_FATAL(
+        tensor.is_sharded(),
+        "DFB '{}': tensor must be sharded to derive a DataflowBufferSpec from it. An interleaved tensor has no "
+        "per-node resident shard for a DFB to describe or borrow.",
+        unique_id);
+    TT_FATAL(
+        tensor.is_allocated(),
+        "DFB '{}': tensor must be allocated on device; the shard's page stride and per-bank size come from its "
+        "Buffer.",
+        unique_id);
+    if (borrowed_from.has_value()) {
+        // The ProgramSpec validator re-checks this against the TensorSpec, and AttachBorrowedDFBBuffers
+        // re-checks it against the Buffer. Checking here too names the offending tensor at build time.
+        TT_FATAL(
+            tensor.memory_config().is_l1(),
+            "DFB '{}' would borrow memory from TensorParameter '{}', but the tensor is not L1-resident. Only L1 "
+            "memory can back a DFB.",
+            unique_id,
+            *borrowed_from);
+    }
+
+    const auto& spec = tensor.tensor_spec();
+    const auto data_format = datatype_to_dataformat_converter(spec.data_type());
+    const Tile tile = spec.tile();
+
+    const tt::tt_metal::Buffer* buffer = tensor.buffer();
+    // The shard's L1 footprint, and the stride between consecutive pages inside it. For a TILE
+    // tensor a page is a tile; for a ROW_MAJOR one it is a stick. aligned_size_per_bank() is always
+    // an exact multiple of aligned_page_size() (see detail::calculate_bank_size_spread).
+    const uint32_t shard_bytes = static_cast<uint32_t>(buffer->aligned_size_per_bank());
+    const uint32_t page_bytes = static_cast<uint32_t>(buffer->aligned_page_size());
+    TT_FATAL(page_bytes > 0, "DFB '{}': tensor's buffer has a zero page size.", unique_id);
+
+    uint32_t entry_size = 0;
+    uint32_t derived_entries = 0;
+    std::optional<Tile> tile_format = std::nullopt;
+
+    if (spec.layout() == Layout::TILE) {
+        // Already tile-paged: one entry per tile. page_as_tile is redundant here, and accepted so a
+        // caller can pass it uniformly across a tiled weight and a row-major activation.
+        entry_size = page_bytes;
+        derived_entries = shard_bytes / page_bytes;
+        tile_format = tile;
+    } else if (!page_as_tile) {
+        // Row-major: the natural entry is a stick, and the DFB is a data-movement conduit. No tile
+        // format is claimed - a stick is not a tile. Do not bind such a DFB to a compute kernel;
+        // pass page_as_tile to get a tile-paged view of the same shard instead.
+        entry_size = page_bytes;
+        derived_entries = shard_bytes / page_bytes;
+    } else {
+        // Row-major memory read as tiles. Mirrors set_cb_page_size_for_tile() in the deepseek gate
+        // ProgramDescriptor builders, including its sub-tile fallback: when the shard does not hold a
+        // whole number of tiles it becomes a single partial-tile entry, which the compute engine can
+        // only unpack correctly with a matching unpack_face_geometry.
+        const uint32_t tile_bytes = tile.get_tile_size(data_format);
+        TT_FATAL(tile_bytes > 0, "DFB '{}': the tensor's tile has a zero size.", unique_id);
+        if (shard_bytes % tile_bytes == 0) {
+            entry_size = tile_bytes;
+            derived_entries = shard_bytes / tile_bytes;
+        } else {
+            entry_size = shard_bytes;
+            derived_entries = 1;
+        }
+        tile_format = tile;
+    }
+
+    const uint32_t effective_entries = (num_entries != 0) ? num_entries : derived_entries;
+    TT_FATAL(
+        effective_entries > 0,
+        "DFB '{}': derived num_entries is 0. The tensor's shard ({} B) is smaller than one entry ({} B).",
+        unique_id,
+        shard_bytes,
+        entry_size);
+    if (borrowed_from.has_value()) {
+        const uint64_t dfb_bytes = static_cast<uint64_t>(entry_size) * static_cast<uint64_t>(effective_entries);
+        TT_FATAL(
+            dfb_bytes <= shard_bytes,
+            "DFB '{}' (entry_size {} * num_entries {} = {} B) does not fit in the shard it borrows from "
+            "TensorParameter '{}' ({} B per bank).",
+            unique_id,
+            entry_size,
+            effective_entries,
+            dfb_bytes,
+            *borrowed_from,
+            shard_bytes);
+    }
+
+    return DataflowBufferSpec{
+        .unique_id = std::move(unique_id),
+        .entry_size = entry_size,
+        .num_entries = effective_entries,
+        .data_format_metadata = data_format,
+        .tile_format_metadata = tile_format,
+        .unpack_face_geometry_metadata = unpack_face_geometry,
+        .borrowed_from = borrowed_from,
+        .advanced_options = std::move(advanced_options)};
 }
 
 std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor& tensor, NOC noc) {
