@@ -96,16 +96,15 @@ jobs:
           set -euo pipefail
           # Map architecture input to the SKUs listed in llk_ttnop_tests.yaml.
           case "$ARCHITECTURE" in
-            # TEMP restore:
-            # all)
-            #   ENABLED_SKUS="ALL_SKUS_IN_TESTS"
-            #   ;;
+            all)
+              ENABLED_SKUS="ALL_SKUS_IN_TESTS"
+              ;;
             wormhole)
               ENABLED_SKUS="wh_n150_civ2"
               ;;
-            # blackhole)
-            #   ENABLED_SKUS="bh_p150b_civ2"
-            #   ;;
+            blackhole)
+              ENABLED_SKUS="bh_p150b_civ2"
+              ;;
             *)
               echo "::error::Unsupported architecture '$ARCHITECTURE'"
               exit 1
@@ -123,7 +122,6 @@ jobs:
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
-      max-parallel: 5 # TEMP: 5 BH machines. Restore: delete this line.
       matrix:
         test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
