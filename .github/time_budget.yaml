@@ -314,11 +314,9 @@ llk:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
   # ttnop: verify_time_budget sums shard timeouts (15 × 1440 = 21600 per SKU).
-  # TEMP: WH groups 1-5 only (5 × 1440 = 7200); BH parked.
   ttnop:
-    # wh_n150_civ2: 21600 # TEMP restore
-    # bh_p150b_civ2: 21600 # TEMP restore
-    wh_n150_civ2: 7200 # TEMP
+    wh_n150_civ2: 21600
+    bh_p150b_civ2: 21600
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70
