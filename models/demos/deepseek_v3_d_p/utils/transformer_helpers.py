@@ -224,9 +224,12 @@ def reference_rope(hf_model, hidden_states, position_ids):
     """
     rotary = getattr(hf_model, "rotary_emb", None)
     assert rotary is not None, f"{type(hf_model).__name__} exposes no rotary_emb to build rope from"
-    try:
-        rotary_f32 = type(rotary)(config=hf_model.config).float()
-    except Exception:  # a rotary that does not take `config=`; the bf16 buffer is then unavoidable
+    # Check the signature rather than catching: a bare `except` would also swallow a genuine
+    # construction failure and silently fall back to the bf16 buffer this function exists to avoid.
+    rotary_cls = type(rotary)
+    if "config" in inspect.signature(rotary_cls.__init__).parameters:
+        rotary_f32 = rotary_cls(config=hf_model.config).float()
+    else:  # a rotary that predates `config=`; the bf16 buffer is then unavoidable
         rotary_f32 = deepcopy(rotary).float()
     # `forward` reads this tensor only for device and dtype (transformers 5.12), so pass a view --
     # a full fp32 copy of the hidden states is ~251 MB at seq 15360.
@@ -350,6 +353,15 @@ def derive_mla_kvpe(hf_layer, hidden_states, position_embeddings, config):
     return kvpe
 
 
+def mla_kvpe_width(config) -> int | None:
+    """Width of the row the device caches per token: kv_lora_rank + qk_rope_head_dim.
+
+    None when the config is not MLA, so callers can skip a layout check that does not apply.
+    """
+    kv, rope = getattr(config, "kv_lora_rank", None), getattr(config, "qk_rope_head_dim", None)
+    return None if kv is None or rope is None else kv + rope
+
+
 def reference_kvpe_for_layer(hf_layer, layer_idx, layer_input, layer_kwargs, ref_cache, config):
     """This layer's reference KVPE in the layout the DEVICE stores: [b, 1, seq, kv_lora_rank + pe].
 
@@ -360,104 +372,19 @@ def reference_kvpe_for_layer(hf_layer, layer_idx, layer_input, layer_kwargs, ref
     clamps to 128, and what reaches comp_pcc is a shape error rather than a number. Derive the
     latent from the layer's own modules in that case.
     """
-    expected_last = getattr(config, "kv_lora_rank", None)
-    rope_dim = getattr(config, "qk_rope_head_dim", None)
+    width = mla_kvpe_width(config)
     cached = hf_cache_layer_kv(ref_cache, layer_idx)[0]
-    if expected_last is None or rope_dim is None:
+    if width is None:
         return cached  # not an MLA config; nothing to derive
-    if cached is not None and cached.shape[-1] == expected_last + rope_dim:
+    if cached is not None and cached.shape[-1] == width:
         return cached
     if layer_idx == 0:
         logger.info(
             f"Reference caches expanded KV (last dim "
-            f"{None if cached is None else cached.shape[-1]} != {expected_last + rope_dim}); "
+            f"{None if cached is None else cached.shape[-1]} != {width}); "
             "deriving the compressed MLA KVPE line from each layer instead"
         )
     return derive_mla_kvpe(hf_layer, layer_input, layer_kwargs.get("position_embeddings"), config)
-
-
-def _extract_routed_experts_flat(layer_sd, n_routed):
-    """Per-expert {gate_proj, up_proj, down_proj} from a single layer's dequantized state_dict.
-
-    Same two layouts as `_extract_routed_experts`, but keyed without a layer prefix (this is what the
-    layer-by-layer pretrained loader produces). See that function for why the gate/up split is
-    contiguous-halves-gate-first.
-    """
-    stacked_gate_up = layer_sd.get("mlp.experts.gate_up_proj")
-    if stacked_gate_up is None:
-        return [
-            {
-                "gate_proj": layer_sd[f"mlp.experts.{j}.gate_proj.weight"],
-                "up_proj": layer_sd[f"mlp.experts.{j}.up_proj.weight"],
-                "down_proj": layer_sd[f"mlp.experts.{j}.down_proj.weight"],
-            }
-            for j in range(n_routed)
-        ]
-
-    stacked_down = layer_sd["mlp.experts.down_proj"]
-    num_experts, two_i, _hidden = stacked_gate_up.shape
-    assert num_experts == n_routed, f"stacked experts {num_experts} != n_routed_experts {n_routed}"
-    assert two_i % 2 == 0, f"fused gate_up out-dim {two_i} is not even"
-    inter = two_i // 2
-    assert (
-        stacked_down.shape[2] == inter
-    ), f"down_proj in-dim {stacked_down.shape[2]} != moe_intermediate {inter} implied by gate_up"
-    return [
-        {
-            "gate_proj": stacked_gate_up[j, :inter, :],
-            "up_proj": stacked_gate_up[j, inter:, :],
-            "down_proj": stacked_down[j],
-        }
-        for j in range(num_experts)
-    ]
-
-
-def _extract_routed_experts(full_sd, prefix, hf_layer):
-    """Per-expert {gate_proj, up_proj, down_proj} for one layer, from either expert weight layout.
-
-    Two layouts exist in the wild and the TT side wants the same thing from both:
-
-    * **per-expert** (DeepSeek-V3 / Kimi / GLM) -- ``mlp.experts.{j}.{gate,up,down}_proj.weight``,
-      each a 2-D ``[out, in]`` tensor.
-    * **stacked + fused** (Mistral Small 4, GPT-OSS family) -- one 3-D tensor per projection, with
-      gate and up concatenated along the output dim:
-      ``mlp.experts.gate_up_proj`` ``[E, 2*moe_intermediate, hidden]`` and
-      ``mlp.experts.down_proj``    ``[E, hidden, moe_intermediate]``.
-
-    The split is contiguous halves, gate first -- ``Mistral4NaiveMoe.forward`` does
-    ``linear(x, gate_up_proj[e]).chunk(2, dim=-1)`` and uses the first result as the gate. Read off
-    the modeling code rather than inferred, because getting it backwards swaps SwiGLU's branches and
-    produces plausible output with bad PCC.
-    """
-    stacked_gate_up = full_sd.get(f"{prefix}mlp.experts.gate_up_proj")
-    if stacked_gate_up is None:
-        return [
-            {
-                "gate_proj": full_sd[f"{prefix}mlp.experts.{j}.gate_proj.weight"],
-                "up_proj": full_sd[f"{prefix}mlp.experts.{j}.up_proj.weight"],
-                "down_proj": full_sd[f"{prefix}mlp.experts.{j}.down_proj.weight"],
-            }
-            for j in range(len(hf_layer.mlp.experts))
-        ]
-
-    stacked_down = full_sd[f"{prefix}mlp.experts.down_proj"]
-    num_experts, two_i, _hidden = stacked_gate_up.shape
-    assert two_i % 2 == 0, f"fused gate_up out-dim {two_i} is not even"
-    inter = two_i // 2
-    assert (
-        stacked_down.shape[0] == num_experts
-    ), f"expert-count mismatch: gate_up {num_experts} vs down {stacked_down.shape[0]}"
-    assert (
-        stacked_down.shape[2] == inter
-    ), f"down_proj in-dim {stacked_down.shape[2]} != moe_intermediate {inter} implied by gate_up"
-    return [
-        {
-            "gate_proj": stacked_gate_up[j, :inter, :],
-            "up_proj": stacked_gate_up[j, inter:, :],
-            "down_proj": stacked_down[j],
-        }
-        for j in range(num_experts)
-    ]
 
 
 def extract_layer_state_dict(variant, full_sd, layer_idx, hf_layer):

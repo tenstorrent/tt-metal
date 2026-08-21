@@ -110,6 +110,22 @@ def test_tuned_matmul_cfg_kept_when_there_is_nothing_to_check_against():
     assert ttMLA._cfg_fits_weight(SimpleNamespace(), {"program_config": SimpleNamespace(in0_block_w=14)}, "q_a_proj")
 
 
+class _OldStyleLayer(torch.nn.Module):
+    """A vendored DeepSeek/Kimi/GLM-shaped layer: singular cache kwarg, rope computed internally."""
+
+    def forward(self, hidden_states, attention_mask=None, position_ids=None, past_key_value=None, use_cache=True):
+        raise AssertionError("not called")
+
+
+class _NewStyleLayer(torch.nn.Module):
+    """A transformers-5.x layer: plural cache kwarg, and rope must be handed in."""
+
+    def forward(
+        self, hidden_states, attention_mask=None, position_ids=None, past_key_values=None, position_embeddings=None
+    ):
+        raise AssertionError("not called")
+
+
 def test_a_layer_that_computes_rope_internally_needs_no_rotary_emb(expect_error):
     """Guards the DeepSeek regression: an unconditional rope build breaks references that never
     wanted one.
@@ -120,16 +136,6 @@ def test_a_layer_that_computes_rope_internally_needs_no_rotary_emb(expect_error)
     "DeepseekV3Model exposes no rotary_emb to build rope from" on precisely the models that did not
     need it, so the predicate must come from the layer's SIGNATURE, not from the model's attributes.
     """
-
-    class _OldStyleLayer(torch.nn.Module):
-        def forward(self, hidden_states, attention_mask=None, position_ids=None, past_key_value=None, use_cache=True):
-            raise AssertionError("not called")
-
-    class _NewStyleLayer(torch.nn.Module):
-        def forward(
-            self, hidden_states, attention_mask=None, position_ids=None, past_key_values=None, position_embeddings=None
-        ):
-            raise AssertionError("not called")
 
     old_layer, new_layer = _OldStyleLayer(), _NewStyleLayer()
     assert layer_wants_position_embeddings(old_layer) is False
@@ -160,3 +166,26 @@ def test_a_layer_that_computes_rope_internally_needs_no_rotary_emb(expect_error)
     model.layers = [new_layer]
     with expect_error(AssertionError, "exposes no rotary_emb"):
         reference_position_embeddings(model, torch.zeros(1, 4, 8), torch.arange(4).unsqueeze(0), 1)
+
+
+def test_old_style_layer_kwargs_match_the_explicit_call_they_replaced():
+    """`decoder_layer_kwargs` now binds the reference call in test_prefill_block for EVERY model, so
+    on a vendored layer it must still reproduce the explicit call it replaced -- a silent drift here
+    moves the reference those models' PCC rows are judged against.
+    """
+    cache = object()
+    mask = torch.zeros(1, 1, 4, 4)
+    pos = torch.arange(4).unsqueeze(0)
+    kwargs = decoder_layer_kwargs(_OldStyleLayer(), None, torch.zeros(1, 4, 8), mask, pos, cache)
+
+    assert set(kwargs) == {"attention_mask", "position_ids", "past_key_value", "use_cache"}
+    assert kwargs["past_key_value"] is cache, "the vendored layers take the SINGULAR cache kwarg"
+    assert kwargs["use_cache"] is True
+    assert kwargs["attention_mask"] is mask and kwargs["position_ids"] is pos
+
+    # The plural branch, which nothing else covers: a transformers-5.x layer must get the cache under
+    # `past_key_values`, or the KV lands in **kwargs and is silently never captured.
+    plural = decoder_layer_kwargs(
+        _NewStyleLayer(), None, torch.zeros(1, 4, 8), mask, pos, cache, position_embeddings=(mask, mask)
+    )
+    assert "past_key_values" in plural and plural["past_key_values"] is cache
