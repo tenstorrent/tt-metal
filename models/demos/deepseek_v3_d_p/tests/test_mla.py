@@ -409,7 +409,7 @@ def _ci_unsupported_param_combos(**params):
 
     if not (is_ci_env or is_ci_v2_env):
         return False
-    if fabric_config != ttnn.FabricConfig.FABRIC_1D:
+    if fabric_config != ttnn.FabricConfig.FABRIC_2D:
         return True
     if not is_balanced:
         return True
