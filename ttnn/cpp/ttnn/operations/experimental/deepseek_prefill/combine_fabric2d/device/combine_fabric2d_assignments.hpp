@@ -36,6 +36,24 @@ struct Assignment {
 std::map<StreamId, std::vector<Assignment>> generate_assignments(
     const std::vector<uint32_t>& ring_chip_ids, uint32_t my_row, uint32_t num_links);
 
+// One chunk of a stream's forwarding region: whose tokens it carries, for which destination, and the share
+// of each run those two chips agreed on. Enough to compute the chunk's token count from expert_offsets, and
+// so its page range once every chunk before it in the region has been counted too.
+struct ChunkDescriptor {
+    uint32_t origin_row = 0;
+    uint32_t dst_row = 0;
+    uint32_t split_idx = 0;
+    uint32_t split_count = 1;
+};
+
+// Chunks a stream receives in its own region, in the order the upstream chip emits them.
+std::vector<ChunkDescriptor> incoming_chunks(
+    StreamId stream, uint32_t my_row, uint32_t ring_extent, uint32_t num_links);
+
+// Chunks a stream emits into the downstream chip's region, in the order it emits them.
+std::vector<ChunkDescriptor> outgoing_chunks(
+    StreamId stream, uint32_t my_row, uint32_t ring_extent, uint32_t num_links);
+
 // Relay chunks a stream receives, which is also how many its upstream neighbour emits into this stream's
 // share of the forwarding buffer. Equals (own forwarding) + (re-forwarded), so upstream writer and
 // downstream reader agree on the chunk count without exchanging anything.
