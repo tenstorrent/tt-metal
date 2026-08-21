@@ -246,7 +246,3 @@ def test_generic_ops_w_scalar_part1(device, op, scalar, correction, dim, shape, 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_generic_ops_w_scalar_part2(device, op, scalar, correction, dim, shape, dtype):
     _run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
-
-
-# Test that generic reduction ops produce correct results, preserve dtype, and emit the
-# layout documented in nanobind across all supported dtype/layout combinations.
