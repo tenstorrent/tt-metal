@@ -138,5 +138,5 @@ CI-subset note:
 ## Stage Review And Commits
 - Stage-review status: clean-pass from subagent `01a02492-8da3-7253-979d-b4f620ff6f2d`.
 - Prior stage-review finding from `01a02486-d71a-7002-bbed-7f28fd7228ba` was fixed by refreshing the GPQA waiver evidence and regenerating final7 report artifacts from final7 raw section data.
-- `tt-metal` release handoff commit: pending.
+- `tt-metal` release handoff commit: `ad942abab481ff48eb4e87628bad5eaae65d90eb`.
 - `tt-inference-server` release wiring commit: `4d91237b85a40bc45396cc2b5b2fe8d097277dde`.
