@@ -176,6 +176,7 @@ set(TT_METAL_SOURCES
     tools/profiler/perf_debug_consumer.cpp
     tools/profiler/perf_debug_ops_csv.cpp
     tools/profiler/perf_debug_receiver.cpp
+    tools/profiler/perf_debug_stall_csv.cpp
     tools/profiler/perf_debug_tracy_consumer.cpp
 )
 
