@@ -1944,16 +1944,53 @@ That is a chip limit: two operands of 512 tiles are 2MB against 1.5MB of L1. Acr
 cells with a ttnn reference the ratio runs 0.90x to 1.40x with a median of 1.14x, and 20
 cells are faster than ttnn.
 
-**What is left.** `bias()` still static_asserts that the output fits one acquire. The
-accumulating path could now band a bias -- `bias_finish` does -- but the SINGLE-SHOT path
-has no two-pass form to put a bias in, and the presence of a bias is a runtime field rather
-than part of the node's type, so the builder cannot tell which path a given expression will
-take and refuses the shape for both. The way out is not a second pass at all: a bias is one
-row broadcast down the block, and `AddOp::fpu_reuse_apply` adds a named CB tile into a named
-DST slot, so tile `t` of a subblock at (r0, c0) wants bias tile `c0 + t % cols` -- the same
-tile re-read once per row. That would fold the bias into the subblock loop exactly as the
-addend already is, delete the whole `bias_finish` pass, and lift the limit for both paths at
-once. It is also the same mechanism the deferred "merge bias into add" note wanted.
+**The bias limit is lifted too**, by folding the bias into the subblock loop with
+`fpu_reuse_apply` -- and the measurement says fold in one mode and not the other.
+
+`AddOp::fpu_reuse_apply` adds a named CB tile into a named DST slot, so tile `t` of a
+subblock at (r0, c0) takes bias tile `c0 + t % cols`, the same tile re-read once per row.
+The catch is that a dest-reuse add is ELEMENTWISE. The two-pass form used
+`add_tiles_bcast_rows`, which broadcasts row 0 in hardware; an elementwise add reads all 32
+rows, so the bias operand's row has to be replicated down each tile. That costs nothing at
+runtime -- the bias is ct tiles either way, so DRAM, L1 and the NOC transfer are identical
+and only rows 1..31 differ -- and it is correct for the broadcast form too, which still
+finds the right value in row 0. Which is what made the two directly comparable.
+
+**Measured, and it split by mode:**
+
+| 2x4, kt=2 | folded | two-pass |
+|---|---|---|
+| Dst | **5.76 us** | 6.36 us |
+| L1 | 6.59 us | **6.31 us** |
+
+Dst wins by folding because it would otherwise pack the total to `acc_cb` purely to give the
+bias pass something to read back. L1 LOSES by folding, because it has to copy the total out
+of `acc_cb` regardless and the two-pass form rides along inside that copy for free -- which
+is exactly what the original comment claimed ("L1 mode pays nothing for that: this replaces
+the copy-out it already did"). So Dst and single-shot fold, L1 keeps the second pass. The
+split held at every shape from 1x1 to 4x2 kt=8 kb=4: Dst 0.09-0.61us faster, L1 within
+0.05us either way.
+
+I also checked the condition is the mode and not the subblock count, since the fold pays per
+subblock (an init and a reuse pass each) while the two-pass form pays once per block. In Dst
+mode at 1, 2, 4 and 8 subblocks the fold still wins by 0.60, 0.12, 0.31 and 0.42us. It does
+not decay.
+
+Folding also gives the single-shot path a bias for the first time -- it has no accumulation
+buffer and so no second pass available -- which is what finally lets `bias()` drop its
+output-size assert. A bias no longer constrains the block shape on any path: 4x4, 4x8, 8x4
+and 8x8 all verified with a bias, on Dst, L1 and single-shot, with a relu epilogue on top.
+That also closes the gap flagged above -- `bias_finish`'s multi-subblock banding is now
+exercised, by L1 at 8x8.
+
+**The cost is a real footgun.** A caller that leaves rows 1..31 zeroed gets the bias applied
+to one output row in 32, and because L1 still uses the broadcast form it gets the RIGHT
+answer there and the wrong one in Dst and single-shot. That is not hypothetical: the fold
+broke `test_unified_matmul_transpose` immediately, at 0.37 relative error, because that file
+built its bias the old way. Two call sites in my own repo and I updated one. The test caught
+it, both harnesses now replicate, and `bias()` documents the requirement -- but nothing on
+device can check it, so it is worth knowing about before a third caller appears.
+
 
 ### What to test next
 
