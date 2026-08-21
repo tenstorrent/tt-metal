@@ -63,6 +63,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "fresh_cpp/binarybitwise.h"
 #include "fresh_cpp/binarycomp.h"
 #include "fresh_cpp/binaryfmod.h"
+#include "fresh_cpp/binarypow.h"
 #include "fresh_cpp/binaryremainder.h"
 
 #ifndef FRESH_CPP_IMPL
@@ -92,6 +93,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, unpack_to_dest>();
 
         test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>();
+
+        // Lane EU coverage expansion: impl 3 = the byte-untouched
+        // calculate_sfpu_binary_pow kernel (metal ckernel_sfpu_binary_pow.h,
+        // corpus id metal__ckernel_sfpu_binary_pow — zero standalone nodes
+        // before this selector: the production POW dispatch above routes
+        // through calculate_sfpu_binary instead).  Its own init frame programs
+        // the 1/ln2 / -127 Prgm constants the kernel core expects.
+        if constexpr (FRESH_CPP_IMPL == 3 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::POW)
+        {
+            ckernel::sfpu::sfpu_binary_pow_init<APPROX_MODE>();
+        }
 
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; tile += 2)
         {
@@ -209,6 +221,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // Test-only fresh typed-C++ leg for the Int32 floor-division
                 // production path (metal ckernel_sfpu_div_int32_floor.h).
                 call_div_int32_floor_fresh_cpp<DstSync::SyncHalf, is_fp32_dest_acc_en, 8>(tile, tile + 1, tile, VectorMode::RC);
+            }
+            // Lane EU coverage expansion (binarypow-fresh row): fresh semantic
+            // pow vs the byte-untouched calculate_sfpu_binary_pow hand kernel.
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::POW)
+            {
+                call_binary_pow_fresh_cpp<DstSync::SyncHalf, is_fp32_dest_acc_en, 8>(tile, tile + 1, tile, VectorMode::RC);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 3 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::POW)
+            {
+                SFPU_BINARY_CALL(
+                    DstSync::SyncHalf,
+                    is_fp32_dest_acc_en,
+                    calculate_sfpu_binary_pow,
+                    (APPROX_MODE, 8, is_fp32_dest_acc_en),
+                    tile,
+                    tile + 1,
+                    tile,
+                    VectorMode::RC);
             }
             else
             {

@@ -298,6 +298,35 @@ class SFPU_UNARY_SCALAR(TemplateParameter):
 
 
 @dataclass
+class COVERAGE_OP(TemplateParameter):
+    """Select the raced kernel pair in ``sfpu_coverage_{test,perf}.cpp``.
+
+    Lane EU LLK-coverage-expansion vehicle: integer ids mirror the table at
+    the top of ``sources/sfpu_coverage_test.cpp`` (1 rotate90, 2 unarybitwise,
+    3 addrsqrt, 4 smoothstep, 5 tiledprod, 6 zeropad, 7 sparsekfilter,
+    8 customadd, 9 copydest, 10 intsum).
+    """
+
+    value: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"#define COVERAGE_OP {self.value}"
+
+
+@dataclass
+class COVERAGE_SUBOP(TemplateParameter):
+    """Sub-op axis for coverage ops that carry one (see COVERAGE_OP).
+
+    unarybitwise: 0 AND / 1 OR / 2 XOR;  intsum: 0 COL / 1 ROW.
+    """
+
+    value: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"#define COVERAGE_SUBOP {self.value}"
+
+
+@dataclass
 class DISABLE_SRC_ZERO_FLAG(TemplateParameter):
     disable_src_zero_flag: bool
 
