@@ -186,6 +186,7 @@ enum class EnvVarID {
     TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
     TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS,           // Capture tensor specs on op dispatch (default: off)
     TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES,            // Log runtime entries to YAML (expensive, off by default)
+    TT_METAL_INSPECTOR_LOG_MESH_BUFFERS,               // Log mesh buffer lifecycle to YAML (expensive, off by default)
 
     // ========================================
     // DEBUG PRINTING (DPRINT)
@@ -1436,6 +1437,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->inspector_settings.log_runtime_entries = false;
             if (strcmp(value, "1") == 0) {
                 this->inspector_settings.log_runtime_entries = true;
+            }
+            break;
+
+        // TT_METAL_INSPECTOR_LOG_MESH_BUFFERS
+        // Enables logging of every MeshBuffer construction and destruction to YAML.
+        // WARNING: This is expensive. Buffers churn orders of magnitude faster than programs, so the log
+        // grows very quickly and each event costs a flushed write.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_INSPECTOR_LOG_MESH_BUFFERS=1
+        case EnvVarID::TT_METAL_INSPECTOR_LOG_MESH_BUFFERS:
+            this->inspector_settings.log_mesh_buffers = false;
+            if (strcmp(value, "1") == 0) {
+                this->inspector_settings.log_mesh_buffers = true;
             }
             break;
 

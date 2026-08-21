@@ -236,10 +236,10 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
     // apply_relu / num_groups / block_size pick the compile-time kernel path, so they MUST be hashed (else
     // DSA vs MSA, or pooled vs unpooled, would collide). Hash via the SP/TP accessors so the key is identical
     // to the pre-consolidation (cluster_axis, seq_subshard_axis) form.
-    // The fused descriptor embeds the AG semaphore addresses in worker runtime arguments, while num_links,
-    // topology, and sub-device selection shape worker allocation/routing. The fused override only rebuilds
-    // consumer kernels, so all of that state must participate in the cache key to prevent a stale AG program.
-    std::vector<uint32_t> fused_semaphore_addresses;
+    // The fused descriptor embeds the AG semaphore addresses in worker runtime arguments, but the cache-hit
+    // override re-applies them to all four AG worker kernels. Semaphore identity therefore does not shape the
+    // program and is deliberately excluded from the cache key (matching ExpRingJointSDPA). num_links,
+    // topology, and sub-device selection still shape worker allocation/routing and must remain hashed.
     uint32_t fused_num_links = 0;
     ttnn::ccl::Topology fused_topology = ttnn::ccl::Topology::Linear;
     bool fused_has_sub_device = false;
@@ -250,10 +250,6 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_topology = fused.topology;
         fused_has_sub_device = fused.ag_sub_device_id.has_value();
         fused_sub_device = fused_has_sub_device ? static_cast<uint32_t>(**fused.ag_sub_device_id) : 0u;
-        fused_semaphore_addresses.reserve(fused.ag_semaphore.size());
-        for (const auto& semaphore : fused.ag_semaphore) {
-            fused_semaphore_addresses.push_back(static_cast<uint32_t>(semaphore.address()));
-        }
     }
 
     return tt::tt_metal::operation::hash_operation<IndexerScoreDeviceOperation>(
@@ -282,7 +278,6 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_topology,
         fused_has_sub_device,
         fused_sub_device,
-        fused_semaphore_addresses,
         tensor_args);
 }
 

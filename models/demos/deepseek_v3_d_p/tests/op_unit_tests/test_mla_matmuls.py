@@ -12,6 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 
 PCC_REQUIRED = 0.99
 
@@ -188,11 +189,8 @@ SEQ_LEN_25K = 6400
 )
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
+    [torus_xy_device_params()],
+    ids=["torus-xy"],
     indirect=True,
 )
 @pytest.mark.parametrize(

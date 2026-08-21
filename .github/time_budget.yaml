@@ -126,12 +126,11 @@ ttnn:
     bh_p100: 30
     bh_p150b_civ2_viommu: 30
   profiler:
-    wh_llmbox: 90
-    wh_galaxy: 50
-    wh_n150_civ2: 60
-    wh_n300_civ2: 60
-    bh_p100a_civ2_viommu: 60
-    bh_p150b_civ2_viommu: 60
+    wh_llmbox: 30
+    wh_n150_civ2: 8
+    wh_n300_civ2: 8
+    bh_p100a_civ2_viommu: 8
+    bh_p150b_civ2_viommu: 8
   demo:
     bh_sc1_high_power: 10
   sweep:
@@ -186,7 +185,7 @@ shield:
     wh_n150: 100
     bh_p150: 60
   demo:
-    bh_sc4: 15
+    bh_sc4: 35
 
 scaleout:
   merge_gate:
@@ -265,6 +264,13 @@ runtime:
     bh_loudbox: 25
     wh_galaxy: 15
     bh_galaxy: 15
+  profiler:
+    wh_llmbox: 60
+    wh_galaxy: 50
+    wh_n150_civ2: 52
+    wh_n300_civ2: 52
+    bh_p100a_civ2_viommu: 52
+    bh_p150b_civ2_viommu: 52
   perf:
     wh_n300_civ2: 65
     bh_p150_perf: 50
@@ -311,12 +317,6 @@ models:
     wh_n300_civ2: 5
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
-  frequent:
-    wh_n150: 318
-    wh_n300: 300
-    wh_n150_civ2: 30
-    wh_n300_civ2: 30
-    bh_p150b_civ2: 120
   stress:
     wh_galaxy_perf: 500
   e2e:
@@ -344,13 +344,13 @@ models:
   e2e_tier3:
     wh_llmbox_perf: 180
     wh_galaxy_perf: 55
-    wh_n150: 91
+    wh_n150: 105
     wh_n300: 60
     bh_p150: 33
     bh_p300: 8
     bh_quietbox_2: 42
   unit:
-    wh_llmbox: 80
+    wh_llmbox: 70
     wh_galaxy_perf: 10
   unit_tier1:
     wh_llmbox: 61
@@ -373,7 +373,8 @@ models:
     wh_llmbox: 90
     wh_galaxy: 80
     wh_llmbox_perf: 58
-    wh_n150: 51
+    wh_n150: 75
+    wh_n150_civ2: 12
     wh_n300: 33
     bh_p150: 30
     bh_p300: 30
