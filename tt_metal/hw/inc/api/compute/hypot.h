@@ -16,8 +16,8 @@ namespace ckernel {
 /**
  * Performs an elementwise numerically-stable hypot on two inputs:
  *   y = hypot(x0, x1) = sqrt(x0^2 + x1^2),
- * evaluated via the rescaled form m * sqrt(1 + (n/m)^2) to avoid overflow
- * and underflow in the intermediate squares. Output overwrites odst in DST.
+ * evaluated after scaling the pair by a power of two so that neither square
+ * can overflow or leave the normal range. Output overwrites odst in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
  * on the compute engine.

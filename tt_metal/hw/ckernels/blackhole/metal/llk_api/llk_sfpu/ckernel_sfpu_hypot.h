@@ -12,36 +12,47 @@
 namespace ckernel {
 namespace sfpu {
 
+// hypot(a, b) = sqrt(a^2 + b^2), evaluated after scaling the pair by a power of
+// two so that neither square can leave the format. The scale is exact, so the
+// answer is the one the plain formula would give in a wider format.
+//
+// The plain formula needs |x| < 2^64 to keep x^2 finite and |x| > 2^-63 to keep
+// x^2 normal. Everything outside that band is brought into it by one multiply,
+// which keeps the single square root the plain formula already had.
+//
+// inf and NaN are settled before the arithmetic rather than repaired after it:
+// hypot(inf, NaN) is +inf, so the inf is promoted into the maximum and every
+// other special case then falls out of the square root itself. Nothing but the
+// undo scale stays live across the square root, which is what keeps the SFPU
+// from spilling.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_hypot_(sfpi::vFloat a, sfpi::vFloat b) {
+    // setsgn preserves the NaN payload while zeroing the sign, so a NaN stays
+    // distinguishable from +inf by its bits below.
     auto [n, m] = sfpi::min_max(sfpi::setsgn(a, 0), sfpi::setsgn(b, 0));
 
-    sfpi::vFloat s;
-    {
-        sfpi::vFloat rsqrt_m = _calculate_sqrt_body_<APPROXIMATION_MODE, /*RECIPROCAL=*/true, /*FAST_APPROX=*/true>(m);
-        sfpi::vFloat r = n * (rsqrt_m * rsqrt_m);
-        s = 1.0f + r * r;
-    }
-
-    sfpi::vFloat sqrt_s = _calculate_sqrt_body_<APPROXIMATION_MODE, /*RECIPROCAL=*/false, /*FAST_APPROX=*/true>(s);
-
-    sfpi::vFloat result = m * sqrt_s;
-
-    v_if(m == 0.0f) { result = 0.0f; }
-    v_endif;
-
     sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
-    sfpi::vInt inf_bits = sfpi::as<sfpi::vInt>(infinity);
 
-    v_if(sfpi::as<sfpi::vInt>(m) > inf_bits) {
-        v_if(sfpi::as<sfpi::vInt>(n) == inf_bits) { result = infinity; }
-        v_else { result = std::numeric_limits<float>::quiet_NaN(); }
-        v_endif;
+    // IEEE 754 hypot(inf, NaN) = +inf. n == +inf can only happen when the other
+    // operand is +inf or NaN, so promoting m here settles both.
+    v_if(sfpi::as<sfpi::vInt>(n) == sfpi::as<sfpi::vInt>(infinity)) { m = infinity; }
+    v_endif;
+
+    sfpi::vFloat undo = 1.0f;
+    v_if(m > 0x1p63f) {
+        m = m * 0x1p-100f;
+        n = n * 0x1p-100f;
+        undo = 0x1p100f;
+    }
+    v_elseif(m < 0x1p-63f) {
+        m = m * 0x1p100f;
+        n = n * 0x1p100f;
+        undo = 0x1p-100f;
     }
     v_endif;
 
-    v_if(sfpi::as<sfpi::vInt>(m) == inf_bits) { result = infinity; }
-    v_endif;
+    sfpi::vFloat result =
+        _calculate_sqrt_body_<APPROXIMATION_MODE, /*RECIPROCAL=*/false, /*FAST_APPROX=*/true>(m * m + n * n) * undo;
 
     if constexpr (!is_fp32_dest_acc_en) {
         result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);

@@ -2,101 +2,107 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Regression tests for ttnn.hypot at operand magnitudes where the naive sqrt(a^2 + b^2)
-composition overflows or underflows even though hypot itself is a finite normal value.
+"""ttnn.hypot at the magnitudes where a^2 leaves the format.
 
-The naive composite returns inf for |a| >= 2^64 and 0 for 0 < |a| < 2^-63 in bfloat16
-(same magnitude bounds apply to float32; only the representable set differs). torch.hypot
-returns a finite value across both bands (see issue #51861).
-
-Also exercises the ±inf edge cases that follow from the rescaled formulation: hypot(inf, inf)
-must be inf (the raw m * sqrt(1 + (n/m)²) yields NaN via inf/inf without the override).
+hypot(a, b) is a finite normal for every pair a plain sqrt(a^2 + b^2) cannot
+reach: the square overflows for |x| >= 2^64 and stops being normal for
+0 < |x| < 2^-63, while hypot itself is still representable. These tests pin the
+two bands, the special values, and an exhaustive bfloat16 sweep.
 """
 
 import math
 
 import pytest
 import torch
+
 import ttnn
 
+# Everything a bfloat16 can hold, as one 64-tile input.
+ALL_BF16 = torch.arange(0, 65536, dtype=torch.int64).to(torch.int32).to(torch.int16).view(torch.bfloat16)
 
-def _one_pair(a, b, device, dtype):
-    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
-    padded_a = torch.zeros((1, 1, 32, 32), dtype=torch_dtype)
-    padded_b = torch.zeros((1, 1, 32, 32), dtype=torch_dtype)
-    padded_a.view(-1)[0] = float(a)
-    padded_b.view(-1)[0] = float(b)
-    ta = ttnn.from_torch(padded_a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tb = ttnn.from_torch(padded_b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    return ta, tb, padded_a, padded_b
+TORCH_DTYPE = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
 
 
-def _rel_ulp(got, ref, mantissa_bits):
-    """|got - ref| in units of 1 ULP of |ref| at the target precision."""
-    if not math.isfinite(ref) or ref == 0:
+def _hypot(device, a, b, dtype):
+    ta = ttnn.from_torch(a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    return ttnn.to_torch(ttnn.hypot(ta, tb))
+
+
+def _pair(a, b, dtype):
+    t = TORCH_DTYPE[dtype]
+    ta = torch.full((1, 1, 32, 32), float(a), dtype=t)
+    tb = torch.full((1, 1, 32, 32), float(b), dtype=t)
+    return ta, tb
+
+
+def _ulps(got, ref, mantissa_bits):
+    """|got - ref| in units of one ULP of ref."""
+    if not math.isfinite(ref) or ref == 0.0:
         return 0.0 if got == ref else float("inf")
-    ulp = 2.0 ** (math.floor(math.log2(abs(ref))) - mantissa_bits)
-    return abs(got - ref) / ulp
+    return abs(got - ref) / 2.0 ** (math.floor(math.log2(abs(ref))) - mantissa_bits)
 
 
+@pytest.mark.parametrize("other", [0.0, 1.0, 1e-30, 1e30, -3.0])
+@pytest.mark.parametrize("swap", [False, True])
+def test_hypot_bf16_exhaustive(device, other, swap):
+    """Every bfloat16 bit pattern against one fixed operand, both orders."""
+    swept = ALL_BF16.reshape(1, 1, 256, 256)
+    fixed = torch.full((1, 1, 256, 256), other, dtype=torch.bfloat16)
+    a, b = (fixed, swept) if swap else (swept, fixed)
+
+    got = _hypot(device, a, b, ttnn.bfloat16).flatten()
+    ref = torch.hypot(a.to(torch.float64), b.to(torch.float64)).to(torch.bfloat16).flatten()
+
+    # A bfloat16 DST cannot carry a NaN, and subnormal operands are flushed
+    # before the kernel sees them; both are true of the composite this replaces.
+    interesting = ~ALL_BF16.isnan() & ~((ALL_BF16 != 0) & (ALL_BF16.abs().to(torch.float32) < 2**-126))
+
+    # The square root is a polynomial, not a correctly rounded operation, so the
+    # last bit is allowed to move; nothing beyond it is.
+    g, r = got.to(torch.float64), ref.to(torch.float64)
+    within = (g == r) | ((r != 0) & torch.isfinite(r) & ((g - r).abs() <= r.abs() * 2**-7))
+    wrong = ~within & interesting
+    assert not wrong.any(), (
+        f"{int(wrong.sum())} of {int(interesting.sum())} patterns off by more than one ULP, "
+        f"first at 0x{int(ALL_BF16.view(torch.int16)[wrong.nonzero()[0, 0]].item()) & 0xffff:04x}: "
+        f"got {got[wrong][0].item()}, expected {ref[wrong][0].item()}"
+    )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize(
     "a, b",
     [
+        # a^2 overflows, hypot does not
         (1e25, 0.0),
         (3e38, 0.0),
-        (1e-20, 0.0),
         (1e25, 1e25),
         (1e30, 1e30),
-        (1e20, 1e20),
-        (1e-20, 1e-20),
-        (3.0, 4.0),
-    ],
-)
-def test_hypot_extremes_bf16(device, a, b):
-    ta, tb, torch_a, torch_b = _one_pair(a, b, device, ttnn.bfloat16)
-    got = ttnn.to_torch(ttnn.hypot(ta, tb)).float().view(-1)[0].item()
-    ref = torch.hypot(torch_a.float(), torch_b.float()).view(-1)[0].item()
-    assert math.isfinite(got), f"hypot({a}, {b}) = {got}, expected finite {ref}"
-    if ref == 0.0:
-        assert got == 0.0
-    else:
-        u = _rel_ulp(got, ref, mantissa_bits=7)
-        assert u <= 4.0, f"hypot({a}, {b}) = {got}, ref {ref}, {u:.2f} bf16 ULP"
-
-
-@pytest.mark.parametrize(
-    "a, b",
-    [
-        # Overflow band, |x| > 2^64 ~= 1.84e19
-        (1e25, 0.0),
-        (3e38, 0.0),
-        (2e30, 0.0),
-        (1e25, 1e25),
-        (1e30, 1e30),
-        # Underflow band, |x| < 2^-63 ~= 1.08e-19
+        (1.9e19, 1.0),
+        # a^2 stops being normal, hypot does not
         (1e-20, 0.0),
         (1e-30, 0.0),
-        (1e-35, 0.0),
+        (1e-35, 1e-35),
         (1e-20, 1e-20),
-        (1e-30, 1e-30),
-        # Ordinary controls
+        (1.0e-19, 1.0e-19),
+        # in band
         (3.0, 4.0),
         (1.0, 0.0),
         (100.0, 100.0),
     ],
 )
-def test_hypot_extremes_fp32(device, a, b):
-    ta, tb, torch_a, torch_b = _one_pair(a, b, device, ttnn.float32)
-    got = ttnn.to_torch(ttnn.hypot(ta, tb)).view(-1)[0].item()
-    ref = torch.hypot(torch_a.double(), torch_b.double()).view(-1)[0].item()
-    # The rewrite adds no rounding beyond an fp32 sqrt/mul/div chain; ~4 fp32 ULP covers
-    # the natural error of the formulation.
-    assert math.isfinite(got), f"hypot({a}, {b}) = {got}, expected finite {ref}"
-    u = _rel_ulp(got, ref, mantissa_bits=23)
-    assert u <= 16.0, f"hypot({a}, {b}) = {got}, ref {ref}, {u:.2f} fp32 ULP"
+def test_hypot_bands(device, dtype, a, b):
+    ta, tb = _pair(a, b, dtype)
+    got = _hypot(device, ta, tb, dtype).float().view(-1)[0].item()
+    ref = torch.hypot(ta.double(), tb.double()).view(-1)[0].item()
+    bits = 7 if dtype == ttnn.bfloat16 else 23
+    ref = float(torch.tensor(ref, dtype=TORCH_DTYPE[dtype]))
+    assert math.isfinite(got), f"hypot({a}, {b}) = {got}, expected {ref}"
+    u = _ulps(got, ref, bits)
+    assert u <= 1.0, f"hypot({a}, {b}) = {got}, expected {ref}, off by {u:.2f} ULP"
 
 
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize(
     "a, b, expected",
     [
@@ -106,18 +112,18 @@ def test_hypot_extremes_fp32(device, a, b):
         (float("inf"), float("inf"), float("inf")),
         (float("-inf"), float("inf"), float("inf")),
         (float("-inf"), float("-inf"), float("inf")),
+        # IEEE 754: an inf operand wins over a NaN one.
+        (float("inf"), float("nan"), float("inf")),
+        (float("nan"), float("inf"), float("inf")),
+        (float("nan"), 1.0, float("nan")),
+        (float("nan"), float("nan"), float("nan")),
+        (0.0, 0.0, 0.0),
     ],
 )
-def test_hypot_inf(device, dtype, a, b, expected):
-    """torch.hypot with any ±inf operand returns +inf. The rescaled formula's inf/inf
-    resolves to NaN without the override; verify the override handles it."""
-    ta, tb, _, _ = _one_pair(a, b, device, dtype)
-    got = ttnn.to_torch(ttnn.hypot(ta, tb)).float().view(-1)[0].item()
-    assert math.isinf(got) and got > 0, f"hypot({a}, {b}, dtype={dtype}) = {got}, expected +inf"
-
-
-def test_hypot_zero_zero(device):
-    """hypot(0, 0) = 0; the rescaled form must handle max == 0 without NaN."""
-    ta, tb, _, _ = _one_pair(0.0, 0.0, device, ttnn.bfloat16)
-    got = ttnn.to_torch(ttnn.hypot(ta, tb)).float().view(-1)[0].item()
-    assert got == 0.0, f"hypot(0, 0) = {got}, expected 0.0"
+def test_hypot_specials_fp32(device, a, b, expected):
+    ta, tb = _pair(a, b, ttnn.float32)
+    got = _hypot(device, ta, tb, ttnn.float32).view(-1)[0].item()
+    if math.isnan(expected):
+        assert math.isnan(got), f"hypot({a}, {b}) = {got}, expected NaN"
+    else:
+        assert got == expected, f"hypot({a}, {b}) = {got}, expected {expected}"
