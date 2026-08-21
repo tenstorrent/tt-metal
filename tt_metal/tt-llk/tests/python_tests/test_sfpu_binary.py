@@ -775,6 +775,31 @@ def test_fresh_cpp_binary_eq(formats, dest_acc, mathop, fresh_cpp_impl):
 
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b], same=True),
+    mathop=[MathOperation.SfpuElwpow],
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[3, 1],
+)
+def test_fresh_cpp_binary_pow(formats, dest_acc, mathop, fresh_cpp_impl):
+    """A/B the fresh semantic binary pow (2^(b*log2 a) on the registered
+    positive-base pow domain) against the byte-untouched
+    calculate_sfpu_binary_pow hand kernel (lane EU coverage expansion).
+
+    impl 3 selects that kernel explicitly — the production POW dispatch
+    (impl 0) routes through calculate_sfpu_binary instead, so the
+    metal__ckernel_sfpu_binary_pow entry had zero standalone nodes before
+    this selector.  Identical stimuli (registry pow domain), golden
+    (torch.pow) and registered tolerance for both arms."""
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        broadcast_type=LlkBroadcastType.None_,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
     mathop=[MathOperation.SfpuBinaryFmod, MathOperation.SfpuBinaryRemainder],
     dest_acc=[DestAccumulation.No],
     fresh_cpp_impl=[0, 1],

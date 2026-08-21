@@ -120,6 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "fresh_cpp/binarybitwise.h"
 #include "fresh_cpp/binarycomp.h"
 #include "fresh_cpp/binaryfmod.h"
+#include "fresh_cpp/binarypow.h"
 #include "fresh_cpp/binaryremainder.h"
 
 #ifndef FRESH_CPP_IMPL
@@ -242,6 +243,19 @@ inline void run_selected_binary_sfpu(
         // path (metal ckernel_sfpu_div_int32_floor.h).
         call_div_int32_floor_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
     }
+    // Lane EU coverage expansion (binarypow-fresh row): fresh semantic pow
+    // (impl 1) vs the byte-untouched calculate_sfpu_binary_pow hand kernel
+    // (impl 3; the production POW dispatch routes through
+    // calculate_sfpu_binary instead, so this kernel had zero nodes).
+    else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::POW)
+    {
+        call_binary_pow_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
+    }
+    else if constexpr (FRESH_CPP_IMPL == 3 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::POW)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sfpu_binary_pow, (APPROX_MODE, 8, is_fp32_dest_acc_en), dst_in0, dst_in1, dst_out, VectorMode::RC);
+    }
     else
     {
         test_utils::call_binary_sfpu_operation<
@@ -277,6 +291,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
         test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, ITERATIONS>();
+        // Lane EU coverage expansion: the impl-3 hand kernel's own init frame
+        // (calculate_sfpu_binary_pow expects its 1/ln2 / -127 Prgm constants).
+        if constexpr (FRESH_CPP_IMPL == 3 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::POW)
+        {
+            ckernel::sfpu::sfpu_binary_pow_init<APPROX_MODE>();
+        }
         PROFILER_SYNC();
     }
     {
