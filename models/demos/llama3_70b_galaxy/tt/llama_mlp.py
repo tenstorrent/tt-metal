@@ -49,6 +49,10 @@ class TtLlamaMLP(LightweightModule):
         self.model_config = model_config
         # Single source of truth for the prefetcher gate (Wormhole/TG True, Blackhole bring-up False).
         self.use_prefetcher = args.use_prefetcher
+        # BH prefetcher bring-up: keep the prefetcher-fed ring matmuls but unfuse the reduce_scatter
+        # (the fused llama_rs_matmul / llama_reduce_scatter 1D-multicast writers no-op on the BH
+        # 2D-torus fabric). Gated identically to the attention/model unfused-CCL flag.
+        self.use_unfused_ccl = getattr(args, "use_unfused_ccl", False)
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
@@ -163,6 +167,53 @@ class TtLlamaMLP(LightweightModule):
                 sub_device_id=None,
             )
             ttnn.deallocate(x)
+            w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w1_out,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                use_noc1_only=False,
+            )
+            ttnn.deallocate(w1_out)
+        elif self.use_prefetcher and self.use_unfused_ccl:
+            # BH prefetcher + unfused CCL: run the FF1/FF3 ring matmuls separately so they still consume
+            # the prefetched global-CB weights (self.w1/self.w3) on the worker sub-device, but replace the
+            # fused reduce_scatter with the stable worker-pinned ttnn.reduce_scatter (via line_reduce_scatter,
+            # which now honors use_unfused_ccl). The fused double_matmul_line_reduce_scatter's 1D-multicast
+            # RS writer no-ops on the BH 2D-torus fabric and deadlocks.
+            w1_out = ttnn.linear(
+                x,
+                self.w1,
+                program_config=pc_1_3,
+                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                compute_kernel_config=self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat8_b,
+                global_cb=self.prefetcher_setup.global_circular_buffer,
+                sub_device_id=self.prefetcher_setup.worker_sub_device_id,
+            )
+            w3_out = ttnn.linear(
+                x,
+                self.w3,
+                program_config=pc_1_3,
+                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                compute_kernel_config=self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat8_b,
+                global_cb=self.prefetcher_setup.global_circular_buffer,
+                sub_device_id=self.prefetcher_setup.worker_sub_device_id,
+            )
+            ttnn.deallocate(x)
+            # The stable ttnn.reduce_scatter places its ring_reduction kernel on the input's shard grid.
+            # The ring-matmul output lives on the ring cores (columns 1-3), some of which are dispatch
+            # cores -> "Illegal kernel placement ... dispatch cores". Bring both outputs to DRAM
+            # interleaved first (like the no-prefetch path) so reduce_scatter instead picks its worker
+            # grid from subdevice_id (which excludes dispatch/prefetcher cores). The reshard reads from
+            # the worker shard cores, so it stays clear of the resident prefetcher senders.
+            w1_out = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
+            w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
             w1_out_reduced = self.tt_ccl.line_reduce_scatter(
                 w1_out,
                 cluster_axis=1,

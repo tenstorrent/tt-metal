@@ -11,6 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     create_gate_weights,
@@ -42,9 +43,9 @@ def cleanup_cache():
     [
         pytest.param(
             (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="linear"),
-            id="linear-2x2",
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-2x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -138,7 +139,6 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         emb_dim=emb_dim,
         hidden_dim=hidden_dim,
         num_links=1,
-        topology=ttnn.Topology.Linear,
         routed_expert_weights=routed_expert_weights,
         shared_expert_weights=shared_expert_weights,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
@@ -206,7 +206,6 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         emb_dim=emb_dim,
         hidden_dim=hidden_dim,
         num_links=1,
-        topology=ttnn.Topology.Linear,
         routed_expert_weights=None,
         shared_expert_weights=None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
@@ -247,7 +246,6 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         emb_dim=emb_dim,
         hidden_dim=hidden_dim,
         num_links=1,
-        topology=ttnn.Topology.Linear,
         routed_expert_weights=None,
         shared_expert_weights=None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
