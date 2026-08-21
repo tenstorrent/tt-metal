@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+#include <map>
 #include <numeric>
 #include <set>
 #include <string>
@@ -534,6 +535,151 @@ inline void topology_sat_add_at_most_one_sequential(TopologySatSolver& solver, c
     solver.add(-r[n - 2]);
     solver.add(-lits[n - 1]);
     solver.add(0);
+}
+
+// ── Hard host cap: "at most k same-rank host groups occupied" with a full-packing fast path ────
+//
+// The minimal-host objective is a cardinality constraint over per-host-group OCCUPANCY: "at most k of the same-rank
+// global groups (host partitions) are occupied", with the solver free to choose WHICH k. The general encoding uses a
+// sequential-counter over the occupancy literals, whose propagation is weak. When a minimal-host packing fills each
+// used host COMPLETELY (n_target is a multiple of a uniform group capacity -- e.g. a 16-host ring where every host is
+// fully used), an all-or-nothing per-host encoding forces the count with strong unit propagation alone, no counter --
+// this is the fast path that lets the solver actually find such packings (see issue #50253: SC16 ring on SC24).
+
+// Build one "occupied" indicator per non-empty host group: occ_g <=> (some target maps into a global of group g).
+// When all_or_nothing is true, additionally force occ_g => every (reachable) global of g is used. This is valid ONLY
+// when a minimal-host packing fills each used host completely; it eliminates partially-used hosts, which massively
+// prunes the at-most-k search. Returns the occupancy indicators (one per non-empty group).
+inline void topology_sat_build_group_occupancy(
+    TopologySatSolver& solver,
+    const TopologySatConstraintView& constraint_data,
+    const TopologySatHardEncoding& enc,
+    bool all_or_nothing,
+    std::vector<int>& occ_out) {
+    occ_out.clear();
+    const auto& global_to_host = constraint_data.global_to_same_rank_group;
+    const size_t num_groups = constraint_data.same_rank_groups.size();
+    if (global_to_host.empty() || num_groups == 0) {
+        return;
+    }
+
+    // Per group, gather the assign literals landing a target on each global mesh of that group.
+    std::vector<std::map<size_t, std::vector<int>>> group_mesh_lits(num_groups);
+    const size_t nt = enc.assign_lit.size();
+    for (size_t t = 0; t < nt; ++t) {
+        const auto& globs = enc.allowed_global_idx[t];
+        const auto& lits = enc.assign_lit[t];
+        for (size_t k = 0; k < globs.size(); ++k) {
+            const size_t g = globs[k];
+            if (g >= global_to_host.size()) {
+                continue;
+            }
+            const int label = global_to_host[g];
+            if (label < 0 || static_cast<size_t>(label) >= num_groups) {
+                continue;
+            }
+            group_mesh_lits[static_cast<size_t>(label)][g].push_back(lits[k]);
+        }
+    }
+
+    for (size_t p = 0; p < num_groups; ++p) {
+        auto& mesh_lits = group_mesh_lits[p];
+        if (mesh_lits.empty()) {
+            continue;
+        }
+        // Per-mesh "used" indicator: used_m <=> OR(assign lits that land a target on mesh m).
+        std::vector<int> used_m;
+        used_m.reserve(mesh_lits.size());
+        for (auto& [gidx, lits] : mesh_lits) {
+            const int um = solver.declare_one_more_variable();
+            solver.add(-um);  // um => OR(lits)
+            for (int l : lits) {
+                solver.add(l);
+            }
+            solver.add(0);
+            for (int l : lits) {  // each lit => um
+                solver.add(-l);
+                solver.add(um);
+                solver.add(0);
+            }
+            used_m.push_back(um);
+        }
+        // occ_g <=> OR(used_m).
+        const int occ = solver.declare_one_more_variable();
+        solver.add(-occ);
+        for (int um : used_m) {
+            solver.add(um);
+        }
+        solver.add(0);
+        for (int um : used_m) {
+            solver.add(-um);
+            solver.add(occ);
+            solver.add(0);
+        }
+        if (all_or_nothing) {
+            for (int um : used_m) {  // occ => every reachable mesh of the group is used
+                solver.add(-occ);
+                solver.add(um);
+                solver.add(0);
+            }
+        }
+        occ_out.push_back(occ);
+    }
+}
+
+// Capacity feasibility: can k same-rank global groups hold n_target placements at all? The k LARGEST groups must sum
+// to >= n_target (generalizes ceil(n_target / max_group_size) to non-uniform group sizes).
+inline bool topology_sat_max_groups_cap_capacity_feasible(
+    const TopologySatConstraintView& constraint_data, size_t n_target, size_t k) {
+    if (k == 0 || n_target == 0) {
+        return true;
+    }
+    std::vector<size_t> capacities;
+    capacities.reserve(constraint_data.same_rank_groups.size());
+    for (const auto& g : constraint_data.same_rank_groups) {
+        if (!g.empty()) {
+            capacities.push_back(g.size());
+        }
+    }
+    if (capacities.empty()) {
+        return true;  // no partition registered; cap is non-binding
+    }
+    std::sort(capacities.begin(), capacities.end(), std::greater<size_t>());
+    size_t reachable_capacity = 0;
+    for (size_t i = 0; i < k && i < capacities.size(); ++i) {
+        reachable_capacity += capacities[i];
+    }
+    return reachable_capacity >= n_target;
+}
+
+// HARD: at most k_hosts same-rank global groups occupied. Returns true if encoded (or non-binding); false only if the
+// underlying cardinality is trivially impossible. `full_packing` == true means a used host must be completely filled
+// and n_target == k_hosts * capacity -- then the all-or-nothing clauses ALONE force the count (exactly k_hosts hosts
+// occupied), so the sequential-counter is skipped entirely (the fast path).
+inline bool topology_sat_encode_at_most_k_groups(
+    TopologySatSolver& solver,
+    const TopologySatConstraintView& constraint_data,
+    const TopologySatHardEncoding& enc,
+    size_t k_hosts,
+    bool full_packing) {
+    std::vector<int> occ;
+    topology_sat_build_group_occupancy(solver, constraint_data, enc, /*all_or_nothing=*/full_packing, occ);
+    if (full_packing) {
+        return true;  // all-or-nothing already forces exactly k_hosts occupied; no counter needed
+    }
+    const size_t num_present = occ.size();
+    if (num_present == 0 || k_hosts >= num_present) {
+        return true;  // not binding
+    }
+    // General case: explicit "at most k occupied" == "at least (num_present - k) of the negated occupancy literals".
+    std::vector<int> neg;
+    neg.reserve(num_present);
+    for (int o : occ) {
+        neg.push_back(-o);
+    }
+    static constexpr size_t kGroupBudgetCombClauses = 500000;
+    std::string reason;
+    return topology_sat_add_at_least_k_literals(solver, neg, num_present - k_hosts, kGroupBudgetCombClauses, &reason);
 }
 
 // ── Host-Usage Budget (minimize distinct same-rank global groups used) ────────
@@ -1486,12 +1632,19 @@ bool topology_sat_search(
     if (constraint_data.minimize_same_rank_groups_used) {
         size_t num_host_groups = 0;
         size_t max_group_capacity = 0;
+        size_t min_group_capacity = SIZE_MAX;
         for (const auto& grp : constraint_data.same_rank_groups) {
             if (!grp.empty()) {
                 ++num_host_groups;
                 max_group_capacity = std::max(max_group_capacity, grp.size());
+                min_group_capacity = std::min(min_group_capacity, grp.size());
             }
         }
+        // Uniform capacity (all host groups the same size) enables the full-packing fast path: at a budget k where
+        // n_target == k * capacity, each used host is filled completely, so the all-or-nothing occupancy encoding
+        // forces the host count by unit propagation alone (no weak sequential counter). This is what makes tight
+        // packings like a 16-host ring on a 24-host cluster tractable (issue #50253).
+        const bool uniform_capacity = (num_host_groups > 0 && min_group_capacity == max_group_capacity);
         if (num_host_groups >= 2 && max_group_capacity > 0) {
             const size_t k_min = (graph_data.n_target + max_group_capacity - 1) / max_group_capacity;
             // Each tight host-budget solve is conflict-capped. Proving the minimum host count for a ring/chain
@@ -1502,12 +1655,18 @@ bool topology_sat_search(
             // the identical model they would unbounded, so existing golden mappings are unchanged.
             static constexpr int kHostMinimizeConflictBudget = 300'000;
             for (size_t k = std::max<size_t>(k_min, 1); k < num_host_groups; ++k) {
+                // Skip budgets that cannot hold n_target at all (the k largest groups must sum to >= n_target).
+                if (!topology_sat_max_groups_cap_capacity_feasible(constraint_data, graph_data.n_target, k)) {
+                    continue;
+                }
+                // Full packing: uniform capacity and n_target exactly fills k hosts -> use the all-or-nothing fast path.
+                const bool full_packing = uniform_capacity && (graph_data.n_target == k * max_group_capacity);
                 TopologySatSolver solver;
                 TopologySatHardEncoding enc;
                 if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
                     break;  // hard constraints alone are UNSAT; defer to the normal path for error messaging
                 }
-                if (!topology_sat_encode_host_group_budget(solver, constraint_data, enc, k)) {
+                if (!topology_sat_encode_at_most_k_groups(solver, constraint_data, enc, k, full_packing)) {
                     continue;  // this budget is trivially unencodable; try a larger one
                 }
                 if (solver.solve_limited(kHostMinimizeConflictBudget) == TopologySatSolver::kSat &&
