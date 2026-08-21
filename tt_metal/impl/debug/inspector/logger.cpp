@@ -7,6 +7,8 @@
 #include "impl/debug/inspector/types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include <enchantum/enchantum.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <iomanip>
 #include <chrono>
 
@@ -96,7 +98,57 @@ Logger::Logger(const std::filesystem::path& logging_path, std::optional<int> ran
             additional_text);
     }
 
+    if (MetalContext::instance().rtoptions().get_inspector_log_mesh_buffers()) {
+        mesh_buffers_ostream.open(this->logging_path / "mesh_buffers_log.yaml", std::ios::trunc);
+        if (!mesh_buffers_ostream.is_open()) {
+            TT_INSPECTOR_THROW(
+                "Failed to create inspector file: {}\n{}",
+                (this->logging_path / "mesh_buffers_log.yaml").string(),
+                additional_text);
+        }
+    }
+
     initialized = true;
+}
+
+void Logger::log_mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
+    if (!initialized || !mesh_buffers_ostream.is_open()) {
+        return;
+    }
+    try {
+        // The pointer is the identity: MeshBuffer has no id of its own, and it is what the registry and the
+        // socket map are both keyed by, so this is what correlates a log entry with everything else.
+        mesh_buffers_ostream << "- mesh_buffer_allocated:\n";
+        mesh_buffers_ostream << "    id: " << reinterpret_cast<uintptr_t>(mesh_buffer) << "\n";
+        mesh_buffers_ostream << "    address: " << mesh_buffer->address() << "\n";
+        mesh_buffers_ostream << "    size: " << mesh_buffer->size() << "\n";
+        mesh_buffers_ostream << "    device_local_size: " << mesh_buffer->device_local_size() << "\n";
+        mesh_buffers_ostream << "    buffer_type: "
+                             << enchantum::to_string(mesh_buffer->device_local_config().buffer_type) << "\n";
+        mesh_buffers_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
+                             << "\n";
+        mesh_buffers_ostream.flush();
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh buffer allocated: {}", e.what());
+    }
+}
+
+void Logger::log_mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
+    if (!initialized || !mesh_buffers_ostream.is_open()) {
+        return;
+    }
+    try {
+        // Address is repeated so a reader can pair events without holding every create in memory. device()
+        // is deliberately not touched: it throws once the MeshDevice is gone, which is common at teardown.
+        mesh_buffers_ostream << "- mesh_buffer_deallocated:\n";
+        mesh_buffers_ostream << "    id: " << reinterpret_cast<uintptr_t>(mesh_buffer) << "\n";
+        mesh_buffers_ostream << "    address: " << mesh_buffer->address() << "\n";
+        mesh_buffers_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
+                             << "\n";
+        mesh_buffers_ostream.flush();
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh buffer deallocated: {}", e.what());
+    }
 }
 
 void Logger::log_program_created(const ProgramData& program_data) noexcept {
