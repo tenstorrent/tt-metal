@@ -210,6 +210,49 @@ def test_reduce_h_width_sharded_mixed_l1_dram(device, op_name, dram_side):
     )
 
 
+# ttnn.min lowers to -max(-x), so an H-reduce off a WIDTH_SHARDED L1 tensor runs the fused-negate
+# compute kernel on the H factory's width-sharded fast path. The number of tile columns a core owns
+# is what separates these two cases.
+@pytest.mark.parametrize(
+    "tiles_per_core",
+    [
+        1,
+        pytest.param(
+            4,
+            marks=pytest.mark.skip(
+                reason="fused-negate width-sharded H-reduce spins forever with >1 tile column per core"
+            ),
+        ),
+    ],
+)
+def test_reduce_h_min_l1_width_sharded_tile_columns(device, tiles_per_core):
+    torch.manual_seed(0)
+    num_cores = 8
+    shard_width = 32 * tiles_per_core
+    tensor_shape = (1, 1, 512, shard_width * num_cores)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    l1_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (tensor_shape[2], shard_width), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    interleaved_input = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.interleaved_to_sharded(interleaved_input, l1_config)
+
+    output_tensor = ttnn.min(input_tensor, dim=-2, keepdim=True, memory_config=l1_config)
+
+    assert_numeric_metrics(
+        torch.amin(torch_input_tensor, dim=-2, keepdim=True),
+        ttnn.to_torch(output_tensor),
+        pcc_threshold=0.999,
+        rtol=0.05,
+        atol=0.05,
+        frobenius_threshold=0.01,
+    )
+
+
 @pytest.mark.parametrize("op_name", list(REDUCE_OPS.keys()))
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
 def test_reduce_dram_sharded_dtypes(device, op_name, dtype):
