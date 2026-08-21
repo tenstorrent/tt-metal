@@ -36,6 +36,15 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="torus-x-1x4",
         ),
+        # TP=1. Regression row: ttnn.all_gather TT_FATALs when the cluster axis has length 1 rather
+        # than degenerating to a copy, so this module died on any single-column mesh. Nothing
+        # exercised that before, which is why it went unnoticed. One device, so it is nearly free.
+        pytest.param(
+            (1, 1),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="linear"),
+            id="tp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
