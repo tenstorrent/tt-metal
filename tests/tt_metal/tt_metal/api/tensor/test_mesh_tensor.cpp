@@ -49,6 +49,7 @@
 #include <tt_stl/aligned_allocator.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tt_metal/tt_metal/common/device_fixture.hpp"
 
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "impl/context/metal_context.hpp"
@@ -124,6 +125,24 @@ TEST_F(MeshTensorDeviceTest, ConstructionWithMeshBuffer) {
     EXPECT_EQ(tensor.dtype(), DataType::BFLOAT16);
     EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);
     EXPECT_EQ(tensor.logical_shape(), Shape({1, 32}));
+}
+
+TEST_F(MeshDeviceSingleCardFixture, AllocateFp8E4m3OnDevice) {
+    auto& mesh_device = *devices_[0];
+    const auto arch = mesh_device.arch();
+    // FP8_E4M3 requires ROW_MAJOR layout (enforced by TensorSpec).
+    auto tensor_layout = TensorLayout(
+        DataType::FP8_E4M3,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
+    auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
+
+    if (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) {
+        MeshTensor tensor = MeshTensor::allocate_on_device(mesh_device, spec);
+        EXPECT_EQ(tensor.dtype(), DataType::FP8_E4M3);
+    } else {
+        EXPECT_ANY_THROW({ [[maybe_unused]] auto tensor = MeshTensor::allocate_on_device(mesh_device, spec); });
+    }
 }
 
 TEST_F(MeshTensorDeviceTest, MoveConstructionTransfersOwnership) {
