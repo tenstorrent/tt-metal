@@ -215,6 +215,22 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             !(input_tensor_dtype == DataType::FLOAT32 && indices_tensor_dtype == DataType::UINT16),
             "Optional indices tensor must be UINT32 when input tensor is FLOAT32, got UINT16");
+        // The reader streams the caller-supplied indices tensor into the index CBs, whose width comes
+        // from resolve_index_dtype() (which does not consult this tensor). A width mismatch makes the
+        // reader page 32-bit DRAM tiles as 16-bit ones (or vice versa) and silently produces garbage
+        // indices -- with stable=true that garbage even rides into the fused sort keys -- so reject it.
+        const auto resolved_index_dtype = resolve_index_dtype(args, tensor_args);
+        const bool indices_tensor_is_32bit =
+            indices_tensor_dtype == DataType::UINT32 || indices_tensor_dtype == DataType::INT32;
+        const bool resolved_index_is_32bit =
+            resolved_index_dtype == DataType::UINT32 || resolved_index_dtype == DataType::INT32;
+        TT_FATAL(
+            indices_tensor_is_32bit == resolved_index_is_32bit,
+            "Optional indices tensor dtype {} does not match the {} index width this topk configuration "
+            "resolves to ({}): the index stream would be paged at the wrong width and produce garbage indices",
+            indices_tensor_dtype,
+            resolved_index_is_32bit ? "32-bit" : "16-bit",
+            resolved_index_dtype);
         // The reader kernels page a caller-supplied indices tensor with the input's page index
         // (page_id = i * Wt + j), so the two must describe the same tile grid: same padded width
         // and same total number of tiles. A narrower indices tensor is read past the end of its
