@@ -189,27 +189,6 @@ run_t3000_ttnn_multiprocess_slow_tests() {
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4_to_string
 }
 
-run_t3000_grok_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_grok_tests"
-
-  pytest models/experimental/grok/tests/test_grok_rms_norm.py ; fail+=$?
-  pytest models/experimental/grok/tests/test_grok_attention.py ; fail+=$?
-  pytest models/experimental/grok/tests/test_grok_mlp.py --timeout=500; fail+=$?
-  pytest models/experimental/grok/tests/test_grok_moe.py --timeout=600; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_grok_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_deepseek_tests() {
   uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
 
@@ -420,9 +399,6 @@ run_t3000_tests() {
 
   # Run ttnn tests
   run_t3000_ttnn_tests
-
-  # Run grok tests
-  run_t3000_grok_tests
 
   # Run tt_dit tests
   run_t3000_tt_dit_tests

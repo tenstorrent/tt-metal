@@ -8,7 +8,12 @@ import torch
 import ttnn
 import math
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
+from tests.ttnn.utils_for_testing import (
+    assert_equal,
+    assert_allclose,
+    make_disjoint_dram_core_range_set,
+    make_full_dram_core_range_set,
+)
 
 pytestmark = pytest.mark.use_module_device
 
@@ -372,19 +377,14 @@ def test_to_memory_config_rm_interleaved_to_nd_sharded(
             [1, 1, 32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ),
-        # 4-D tensor → 6 shards on disjoint DRAM banks (banks 0-1 and 4-7)
+        # 4-D tensor → 6 shards on disjoint DRAM banks
         (
             [4, 3, 16, 32],
             [2, 1, 16, 32],
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0)),
-                }
-            ),
+            make_disjoint_dram_core_range_set,
         ),
-        # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards (8 banks)
-        ([5, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})),
+        # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards
+        ([5, 32, 64], [2, 32, 64], make_full_dram_core_range_set),
     ],
 )
 @pytest.mark.parametrize(
@@ -393,6 +393,9 @@ def test_to_memory_config_rm_interleaved_to_nd_sharded(
 )
 def test_to_memory_config_rm_interleaved_to_nd_sharded_dram(device, tensor_shape, shard_shape, grid, shard_orientation):
     torch.manual_seed(0)
+
+    if callable(grid):
+        grid = grid(device)
 
     num_dram_banks = device.dram_grid_size().x
     num_cores_in_grid = grid.num_cores()
@@ -1120,21 +1123,16 @@ def test_to_memory_config_tilized_interleaved_to_nd_sharded_dtype_conversion(
             [1, 1, 32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ),
-        # 4-D tensor → 6 shards on disjoint DRAM banks (banks 0-1 and 4-7)
+        # 4-D tensor → 6 shards on disjoint DRAM banks
         (
             [4, 3, 32, 64],
             [2, 1, 32, 64],
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0)),
-                }
-            ),
+            make_disjoint_dram_core_range_set,
         ),
-        # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards (8 banks)
-        ([5, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})),
-        # 3-D tensor sharded across all dims → 8 shards on 8 DRAM banks
-        ([4, 64, 64], [2, 32, 32], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})),
+        # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards
+        ([5, 32, 64], [2, 32, 64], make_full_dram_core_range_set),
+        # 3-D tensor sharded across all dims → 8 shards on the full DRAM bank grid
+        ([4, 64, 64], [2, 32, 32], make_full_dram_core_range_set),
     ],
 )
 @pytest.mark.parametrize(
@@ -1145,6 +1143,9 @@ def test_to_memory_config_tilized_interleaved_to_nd_sharded_dram(
     device, tensor_shape, shard_shape, grid, shard_orientation
 ):
     torch.manual_seed(0)
+
+    if callable(grid):
+        grid = grid(device)
 
     num_dram_banks = device.dram_grid_size().x
     num_cores_in_grid = grid.num_cores()
@@ -1183,18 +1184,13 @@ def test_to_memory_config_tilized_interleaved_to_nd_sharded_dram(
             [1, 1, 32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ),
-        # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards (8 banks)
-        ([5, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})),
+        # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards
+        ([5, 32, 64], [2, 32, 64], make_full_dram_core_range_set),
         # 3-D tensor sharded across all dims → disjoint DRAM banks
         (
             [3, 160, 160],
             [2, 64, 64],
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0)),
-                }
-            ),
+            make_disjoint_dram_core_range_set,
         ),
     ],
 )
@@ -1215,6 +1211,9 @@ def test_to_memory_config_tilized_interleaved_to_nd_sharded_dram_dtype_conversio
     device, tensor_shape, shard_shape, grid, input_dtype, output_dtype, pcc, shard_orientation
 ):
     torch.manual_seed(0)
+
+    if callable(grid):
+        grid = grid(device)
 
     num_dram_banks = device.dram_grid_size().x
     num_cores_in_grid = grid.num_cores()
@@ -2605,12 +2604,13 @@ def test_to_memory_config_tilized_override_runtime_arguments(
 
 def test_to_memory_config_tile_interleaved_to_width_sharded_bf8(device):
     torch.manual_seed(0)
-    shape = [1, 1, 8192, 2048]
+    num_dram_banks = device.dram_grid_size().x
+    shape = [1, 1, 8192, 256 * num_dram_banks]
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    shard_grid = make_full_dram_core_range_set(device)
     shard_shape = (8192, 256)
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
