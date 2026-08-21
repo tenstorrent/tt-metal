@@ -59,6 +59,10 @@ const github = {
       getCommit: async ({ owner, repo, commit_sha }) =>
         ({ data: await api(`/repos/${owner}/${repo}/git/commits/${commit_sha}`) }),
     },
+    repos: {
+      listPullRequestsAssociatedWithCommit: async ({ owner, repo, commit_sha }) =>
+        ({ data: await api(`/repos/${owner}/${repo}/commits/${commit_sha}/pulls`) }),
+    },
     actions: {
       listWorkflowRuns: async ({ owner, repo, workflow_id, ...params }) =>
         ({ data: await api(`/repos/${owner}/${repo}/actions/workflows/${workflow_id}/runs`, params) }),
@@ -137,23 +141,20 @@ async function main() {
     });
 
     let key = result.decision === 'notify' ? 'notify' : `abstain:${result.reason}`;
-    // With maxWaitMs: 0, 'timeout' collapses two distinct situations; split
-    // them, since for settled history they mean very different things:
-    //  - parent has NO push run at all (in production this would poll the
-    //    full budget and abstain). Check whether that is a [skip ci] commit.
-    //  - parent has a run that never settled (should be impossible for
-    //    closed history -- e.g. a failure@1 whose auto-retry never fired).
-    let skipCi = '';
+    // 'parent-skip-ci' is now detected upfront by findBaseline itself (the
+    // accepted-gap short-circuit; in production it abstains instantly with
+    // no polling). With maxWaitMs: 0, any remaining 'timeout' collapses two
+    // distinct situations; split them, since for settled history they mean
+    // very different things:
+    //  - parent has NO push run and is NOT [skip ci] (in production this
+    //    would poll the full budget and abstain) -- unexpected, flag it.
+    //  - parent has a run that never settled (e.g. a failure@1 whose
+    //    auto-retry never fired) -- in production this also polls the full
+    //    budget; evidence the retry workflow itself can fail.
     if (result.reason === 'timeout') {
-      if (result.parentRuns.length === 0) {
-        const { data: parentCommit } = await github.rest.git.getCommit({
-          owner: OWNER, repo: REPO, commit_sha: result.parentSha,
-        });
-        skipCi = /\[skip ci\]|\[ci skip\]/i.test(parentCommit.message) ? ' (parent is [skip ci])' : '';
-        key = 'abstain:parent-has-no-push-run';
-      } else {
-        key = 'abstain:parent-never-settled';
-      }
+      key = result.parentRuns.length === 0
+        ? 'abstain:parent-has-no-push-run'
+        : 'abstain:parent-never-settled';
     }
     tally[key] = (tally[key] ?? 0) + 1;
 
@@ -164,13 +165,16 @@ async function main() {
       created: redRun.created_at,
       conclusion: `${redRun.conclusion}@${redRun.run_attempt}`,
       sha: sha.slice(0, 9),
-      decision: key + skipCi,
+      decision: key,
       baseline: result.baselineRun ? `#${result.baselineRun.run_number}` : '-',
       timeOrderExpected: expected,
       agree,
     };
     rows.push(row);
-    if (agree === 'NO' || key.startsWith('abstain:parent-') || key === 'abstain:no-parent') flagged.push(row);
+    // parent-skip-ci is a known, accepted category (see BACKTEST.md) -- it
+    // is tallied but not flagged.
+    if (agree === 'NO' || key === 'abstain:parent-has-no-push-run' ||
+        key === 'abstain:parent-never-settled' || key === 'abstain:no-parent') flagged.push(row);
     console.log(`${row.run} ${row.created} ${row.conclusion} sha=${row.sha} -> ${row.decision}` +
       `${result.baselineRun ? ` (baseline ${row.baseline})` : ''}  [time-order expects: ${expected}${agree === 'NO' ? ' <-- MISMATCH' : ''}]`);
   }

@@ -32,14 +32,29 @@ const run = (n, conclusion, attempt, status = 'completed') => ({
 
 // Builds a harness around findBaseline: fake clock, scripted sequence of
 // listWorkflowRuns responses (last one repeats), captured logs/outputs.
-function harness({ parents = [{ sha: 'PARENT' }], responses, ...overrides } = {}) {
+// parentMessage/parentPulls feed the [skip ci] short-circuit check.
+function harness({
+  parents = [{ sha: 'PARENT' }],
+  parentMessage = 'ordinary commit subject\n\nbody',
+  parentPulls = [],
+  responses,
+  ...overrides
+} = {}) {
   let fakeNow = 0;
   let lookups = 0;
   const logs = [];
   const github = {
     rest: {
       git: {
-        getCommit: async () => ({ data: { parents } }),
+        getCommit: async ({ commit_sha }) => commit_sha === 'CURRENT'
+          ? { data: { parents, message: 'current commit subject' } }
+          : { data: { parents: [{ sha: 'GRANDPARENT' }], message: parentMessage } },
+      },
+      repos: {
+        listPullRequestsAssociatedWithCommit: async ({ commit_sha }) => {
+          assert.equal(commit_sha, 'PARENT'); // skip-ci check inspects the parent only
+          return { data: parentPulls };
+        },
       },
       actions: {
         listWorkflowRuns: async (params) => {
@@ -190,6 +205,51 @@ test('root commit (no parent): abstains without any run lookup', async () => {
   assert.equal(result.decision, 'abstain');
   assert.equal(result.reason, 'no-parent');
   assert.equal(h.lookups(), 0);
+});
+
+// ----------------- [skip ci] parent short-circuit (accepted gap) -----------------
+
+test('[skip ci] in the parent commit message: abstains immediately, no run lookup, no sleep', async () => {
+  for (const msg of ['[skip ci] docs tweak', 'prefix [SKIP CI] suffix', '[ci skip] chore']) {
+    const h = harness({
+      parentMessage: msg,
+      responses: [[run(100, 'success', 1)]],
+      sleep: async () => { throw new Error('sleep must not be called'); },
+    });
+    const result = await h.call();
+    assert.equal(result.decision, 'abstain', msg);
+    assert.equal(result.reason, 'parent-skip-ci', msg);
+    assert.equal(h.lookups(), 0, msg); // never even queried the parent's runs
+    assert.match(h.logs.at(-1), /abstaining immediately without polling/);
+  }
+});
+
+test('[skip ci] only in an associated PR title of the parent: same immediate abstain', async () => {
+  const h = harness({
+    parentMessage: 'ordinary subject with no marker',
+    parentPulls: [
+      { number: 1, title: 'normal PR' },
+      { number: 2, title: '[skip ci] Update README' },
+    ],
+    responses: [[run(100, 'success', 1)]],
+    sleep: async () => { throw new Error('sleep must not be called'); },
+  });
+  const result = await h.call();
+  assert.equal(result.decision, 'abstain');
+  assert.equal(result.reason, 'parent-skip-ci');
+  assert.equal(h.lookups(), 0);
+});
+
+test('no run found and parent is NOT [skip ci]: still falls through to poll-then-timeout', async () => {
+  const h = harness({
+    parentMessage: 'a real change whose retry workflow silently died',
+    parentPulls: [{ number: 3, title: 'a real PR title' }],
+    responses: [[]],
+  });
+  const result = await h.call();
+  assert.equal(result.decision, 'abstain');
+  assert.equal(result.reason, 'timeout'); // NOT parent-skip-ci; the stuck-retry category is unaffected
+  assert.equal(h.elapsed(), Math.floor(DEFAULT_MAX_WAIT_MS / DEFAULT_POLL_INTERVAL_MS) * DEFAULT_POLL_INTERVAL_MS);
 });
 
 // ------------------------- buildCulpritEntries -------------------------

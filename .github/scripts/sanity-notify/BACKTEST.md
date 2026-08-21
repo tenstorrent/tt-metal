@@ -14,19 +14,25 @@ GITHUB_TOKEN=$(gh auth token) node .github/scripts/sanity-notify/backtest.js --d
 - Window: **2026-07-22 .. 2026-08-21** (30 days).
 - **1088** push-to-main "Sanity tests" runs fetched (chunked queries; the
   list API silently caps any single filtered query at 1000 results).
-- **416** gate-passing final-red events (unique broken head_sha) examined.
+- **417** gate-passing final-red events (unique broken head_sha) examined.
   Each was fed through the real `findBaseline()` against the live API with
   `maxWaitMs: 0` (closed history is final; the poll path must not be needed,
   and `sleep` throws if reached -- it never was).
 
-## Results
+## Results (after the [skip ci] short-circuit)
 
-| decision                        | count | share |
-|---------------------------------|------:|------:|
-| notify (parent green)           |    17 |  4.1% |
-| abstain: conclusively red       |   361 | 86.8% |
-| abstain: parent has no push run |    34 |  8.2% |
-| abstain: parent never settled   |     4 |  1.0% |
+| decision                      | count | share | before the short-circuit |
+|-------------------------------|------:|------:|--------------------------|
+| notify (parent green)         |    17 |  4.1% | 17 (byte-identical set)  |
+| abstain: conclusively red     |   361 | 86.6% | 361                      |
+| abstain: parent is [skip ci]  |    35 |  8.4% | 34 as full-budget timeouts + 1 as conclusively-red (nuance below) |
+| abstain: parent never settled |     4 |  1.0% | 4 (unchanged; distinct category, still full-budget timeouts) |
+
+The short-circuit is a latency fix, not a decision change: every event
+abstains or notifies exactly as before, but the [skip ci] cases now
+abstain instantly instead of burning the full 270-minute poll budget
+first. One extra event vs. the first pass (#13812) simply landed on main
+between the two runs.
 
 - **notify (17)**: every baseline was the parent's own run, and all 17 agreed
   with the naive time-ordered reading of the run list. Spot-checked by hand:
@@ -47,28 +53,40 @@ GITHUB_TOKEN=$(gh auth token) node .github/scripts/sanity-notify/backtest.js --d
   interleaving means list order is not commit order. A human reading the flat
   list would have pinged someone whose parent state was in fact red.
 
-## Findings that need a human decision
+## [skip ci] parents: known, ACCEPTED gap (maintainer decision, 2026-08-21)
 
-1. **`[skip ci]` parents blind the one-commit-back rule: 34/416 (8.2%).**
-   All 34 "parent has no push run" cases are commits whose parent's message
-   contains `[skip ci]` / `[ci skip]` -- those commits never get a Sanity
-   tests push run, so the parent's greenness is unknowable by this rule. The
-   logic abstains (safe: never misattributes), but in production each such
-   event polls the full 270-minute budget before giving up, and a genuine
-   break lands silently. Options if this matters: hop past parents whose
-   commit message matches a skip-ci marker (bounded by consecutive skip-ci
-   depth), or short-circuit the wait when the parent commit is already old.
-2. **`_auto-retry-post-commit.yaml` is not 100% reliable: 4/416 (1.0%).**
-   Four parents are frozen at `failure@1, completed` -- the auto-retry never
-   fired, so by the finality rule they are permanently "not settled" and the
-   notify event polls the full budget before abstaining. Example: red run
-   #12159's parent run #12119. Worth a look at the retry workflow's own
-   failure modes; a time-based finality escape hatch (a failure@<3 older than
-   N hours is final -- no retry is coming that late) would also close this.
+**8.4% (35/417)** of red events sit on top of a `[skip ci]` / `[ci skip]`
+parent. Such a parent (usually) never gets a push run, so its greenness is
+unknowable under the one-commit-back rule and the break above it goes
+un-notified. The maintainer decision is to accept that missed notification
+rather than complicate the rule -- but not to spend the poll budget
+discovering it: `findBaseline` checks the parent's commit message and its
+associated PR titles upfront and abstains immediately
+(`reason: 'parent-skip-ci'`) with a distinct log line, entering no poll
+loop at all.
 
-Both cases fail toward silence, never toward wrong blame. Combined they are
-~9% of red events; each costs a full-budget polling job and a missed
-notification.
+Nuance surfaced by the re-run: one event (#12597) has a parent whose
+message says `[skip CI]` yet a push run exists anyway (#12596, red) -- the
+marker does not always suppress CI. The short-circuit preempts that run's
+verdict, which changed the abstain *reason* (conclusively-red ->
+parent-skip-ci) but not the abstain itself. In principle this arm could
+also preempt a *green* marked parent (suppressing a legitimate notify);
+zero such cases in this window, and it falls inside the accepted
+[skip ci] trade-off.
+
+## Finding that still needs a human decision
+
+**`_auto-retry-post-commit.yaml` is not 100% reliable: 4/417 (1.0%).**
+Four parents are frozen at `failure@1, completed` -- the auto-retry never
+fired, so by the finality rule they are permanently "not settled" and the
+notify event polls the full budget before abstaining. Example: red run
+#12159's parent run #12119. These are NOT [skip ci] commits and are
+deliberately untouched by the short-circuit. Worth a look at the retry
+workflow's own failure modes; a time-based finality escape hatch (a
+failure@<3 older than N hours is final -- no retry is coming that late)
+would also close this.
+
+All abstain categories fail toward silence, never toward wrong blame.
 
 ## Method notes
 
@@ -78,4 +96,6 @@ notification.
 - The naive time-order expectation (previous distinct-sha, non-cancelled run
   in the window was green => expect notify) approximates a human reading the
   run list; it is a cross-check, not ground truth -- see #13609 above.
-- API cost: 883 calls for the full backtest, well within core rate limits.
+- API cost: 1615 calls for the full backtest (the skip-ci check adds a
+  commit lookup per event and a PR lookup for unmarked parents), well
+  within core rate limits.

@@ -59,6 +59,8 @@ function describeRuns(runs) {
 //    yet, or some run not yet final) -> sleep and re-poll until maxWaitMs
 //                                       -> { decision: 'abstain', reason: 'timeout' }.
 // A commit with no parent aborts with { decision: 'abstain', reason: 'no-parent' }.
+// A [skip ci] parent aborts upfront with { decision: 'abstain', reason: 'parent-skip-ci' }
+// (see the comment at that check).
 async function findBaseline({
   github,
   owner,
@@ -78,6 +80,29 @@ async function findBaseline({
   if (!parentSha) {
     warn(`${headSha} has no parent commit; skipping.`);
     return { decision: 'abstain', reason: 'no-parent', parentSha: null, parentRuns: [] };
+  }
+
+  // Known, ACCEPTED gap (maintainer decision, 2026-08-21): a [skip ci]
+  // parent never gets a push run, so its greenness is unknowable under the
+  // one-commit-back rule, and the break on top of it deliberately goes
+  // un-notified. Detect that upfront -- from the parent's commit message or
+  // an associated PR title -- and abstain immediately instead of
+  // discovering it by exhausting the poll budget (~8% of red events have a
+  // [skip ci] parent per the backtest; see BACKTEST.md).
+  const SKIP_CI_RE = /\[(skip ci|ci skip)\]/i;
+  const { data: parentCommit } = await github.rest.git.getCommit({ owner, repo, commit_sha: parentSha });
+  let skipCiSource = SKIP_CI_RE.test(parentCommit.message) ? 'commit message' : null;
+  if (!skipCiSource) {
+    const { data: parentPulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+      owner,
+      repo,
+      commit_sha: parentSha,
+    });
+    if (parentPulls.some((pr) => SKIP_CI_RE.test(pr.title))) skipCiSource = 'associated PR title';
+  }
+  if (skipCiSource) {
+    log(`Parent ${parentSha} is [skip ci] (${skipCiSource}) -- no push run will ever exist for it; abstaining immediately without polling.`);
+    return { decision: 'abstain', reason: 'parent-skip-ci', parentSha, parentRuns: [] };
   }
 
   // head_sha is an exact-match filter (requires the full 40-char sha); the
