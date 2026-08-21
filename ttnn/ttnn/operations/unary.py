@@ -250,7 +250,18 @@ def _golden_function_tanh(input_tensor, *args, **kwargs):
     return torch.tanh(input_tensor)
 
 
-def _golden_function_sinh(input_tensor, *args, **kwargs):
+def _preprocess_hyperbolic_golden_inputs(function_args, function_kwargs):
+    input_tensor = function_args[0] if function_args else function_kwargs["input_tensor"]
+    golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
+        function_args, function_kwargs
+    )
+    # Default preprocessing exposes BFLOAT8_B values as float32, which otherwise selects the FP32 ULP contract.
+    # Retain the source dtype so block-float outputs continue to use their established PCC comparison.
+    golden_kwargs["_ttnn_input_is_bfloat8_b"] = input_tensor.dtype == ttnn.bfloat8_b
+    return golden_args, golden_kwargs
+
+
+def _golden_function_sinh(input_tensor, *args, _ttnn_input_is_bfloat8_b=False, **kwargs):
     import torch
 
     if input_tensor.dtype != torch.float32:
@@ -260,11 +271,12 @@ def _golden_function_sinh(input_tensor, *args, **kwargs):
     # Flush float32 subnormal outputs to the zero produced by the SFPU FTZ path.
     result = torch.sinh(input_tensor.to(torch.float64)).to(torch.float32)
     result = torch.where(torch.abs(result) < torch.finfo(torch.float32).tiny, torch.zeros_like(result), result)
-    ttnn.decorators.set_golden_comparison_config(result, method="ulp", scope="all", ulp_threshold=3)
+    if not _ttnn_input_is_bfloat8_b:
+        ttnn.decorators.set_golden_comparison_config(result, method="ulp", scope="all", ulp_threshold=3)
     return result
 
 
-def _golden_function_cosh(input_tensor, *args, **kwargs):
+def _golden_function_cosh(input_tensor, *args, _ttnn_input_is_bfloat8_b=False, **kwargs):
     import torch
 
     if input_tensor.dtype != torch.float32:
@@ -274,13 +286,22 @@ def _golden_function_cosh(input_tensor, *args, **kwargs):
     # Flush any subnormal result before comparison to mirror the SFPU FTZ path.
     result = torch.cosh(input_tensor.to(torch.float64)).to(torch.float32)
     result = torch.where(torch.abs(result) < torch.finfo(torch.float32).tiny, torch.zeros_like(result), result)
-    ttnn.decorators.set_golden_comparison_config(result, method="ulp", scope="all", ulp_threshold=1)
+    if not _ttnn_input_is_bfloat8_b:
+        ttnn.decorators.set_golden_comparison_config(result, method="ulp", scope="all", ulp_threshold=1)
     return result
 
 
 ttnn.attach_golden_function(ttnn.tanh, golden_function=_golden_function_tanh)
-ttnn.attach_golden_function(ttnn.sinh, golden_function=_golden_function_sinh)
-ttnn.attach_golden_function(ttnn.cosh, golden_function=_golden_function_cosh)
+ttnn.attach_golden_function(
+    ttnn.sinh,
+    golden_function=_golden_function_sinh,
+    preprocess_golden_function_inputs=_preprocess_hyperbolic_golden_inputs,
+)
+ttnn.attach_golden_function(
+    ttnn.cosh,
+    golden_function=_golden_function_cosh,
+    preprocess_golden_function_inputs=_preprocess_hyperbolic_golden_inputs,
+)
 
 
 def _preprocess_gelu_golden_inputs(function_args, function_kwargs):
@@ -346,12 +367,11 @@ def _golden_function_asin(input_tensor_a, *args, _ttnn_input_is_bfloat8_b=False,
     # Returning no local golden lets that operation-specific check observe the device output.
     if _ttnn_input_is_bfloat8_b and bool(torch.any(torch.abs(input_tensor_a) > 1)):
         return None
-    # SFPU and Torch both define out-of-domain asin as non-finite; retain Torch's NaNs.
-    # Rewriting them to +Inf makes equivalent non-finite results compare as different values.
     result = torch.asin(input_tensor_a)
     if input_tensor_a.dtype == torch.bfloat16 and bool(torch.any(torch.abs(input_tensor_a) > 1)):
-        # BF16 hardware may encode an out-of-domain result as NaN or infinity at the same position.
-        # Compare that mask equivalently while retaining the two-ULP contract for finite elements.
+        # BF16 packing represents the SFPU's out-of-domain NaN as positive infinity.
+        # Mirror that representation for direct ULP callers and compare finite lanes to two ULP.
+        result = result.masked_fill(torch.abs(input_tensor_a) > 1, float("inf"))
         ttnn.decorators.set_golden_comparison_config(
             result, method="ulp", scope="all", ulp_threshold=2, nonfinite="mask"
         )
@@ -372,12 +392,11 @@ def _golden_function_acos(input_tensor_a, *args, _ttnn_input_is_bfloat8_b=False,
     # Returning no local golden lets that operation-specific check observe the device output.
     if _ttnn_input_is_bfloat8_b and bool(torch.any(torch.abs(input_tensor_a) > 1)):
         return None
-    # SFPU and Torch both define out-of-domain acos as non-finite; retain Torch's NaNs.
-    # Rewriting them to +Inf makes equivalent non-finite results compare as different values.
     result = torch.acos(input_tensor_a)
     if input_tensor_a.dtype == torch.bfloat16 and bool(torch.any(torch.abs(input_tensor_a) > 1)):
-        # BF16 hardware may encode an out-of-domain result as NaN or infinity at the same position.
-        # Compare that mask equivalently while retaining the two-ULP contract for finite elements.
+        # BF16 packing represents the SFPU's out-of-domain NaN as positive infinity.
+        # Mirror that representation for direct ULP callers and compare finite lanes to two ULP.
+        result = result.masked_fill(torch.abs(input_tensor_a) > 1, float("inf"))
         ttnn.decorators.set_golden_comparison_config(
             result, method="ulp", scope="all", ulp_threshold=2, nonfinite="mask"
         )

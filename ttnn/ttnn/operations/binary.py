@@ -442,6 +442,11 @@ def _golden_function_divide(
 ):
     import torch
 
+    if args and rounding_mode is None:
+        # Direct golden callers may pass rounding_mode as the third positional argument.
+        # Normalize it here so their reference follows the same trunc/floor path as the device call.
+        rounding_mode = args[0]
+
     if input_tensor_a.dtype == torch.int32 and rounding_mode in ("trunc", "floor"):
         # Widen integer division so the golden does not take the float32 quotient path.
         wide_input_b = input_tensor_b.to(torch.int64) if torch.is_tensor(input_tensor_b) else input_tensor_b
