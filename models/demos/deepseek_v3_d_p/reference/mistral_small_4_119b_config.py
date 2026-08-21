@@ -29,7 +29,9 @@ that Mistral does use. The checkpoint's literal values are preserved on the cons
 
 KNOWN GAP (not expressible in config): Mistral also scales queries by a position-dependent
 ``get_llama_4_attn_scale`` = 1 + 0.1*ln(1 + floor(pos / 8192)), for which ttMLA has no equivalent. It
-is exactly 1.0 below 8192, reaching ~1.07 at 16k and ~1.19 at 56k tokens.
+is exactly 1.0 for every position below 8192, then steps at each 8192-token boundary: 1.0693 at
+position 8192, 1.1099 at 16384, 1.2197 at 65536. ``reference/mistral_small_4/block.py`` implements it
+behind an explicit, default-OFF ``apply_llama4_attn_scale`` flag so the gap can be demonstrated.
 """
 
 import types

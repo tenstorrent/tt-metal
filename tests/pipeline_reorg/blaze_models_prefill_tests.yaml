@@ -954,3 +954,109 @@
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
   sp_config: sc1
+
+# ---------------------------------------------------------------------------------------------
+# Mistral-Small-4-119B prefill (dense MLA + MoE-every-layer, SP=8 / TP=4 on a 32-chip Blackhole
+# galaxy). Bring-up branch: ssalice/mistral4-119b-prefill.
+#
+# STAGING REQUIRED before these can go green on CI. Nothing for this model exists under
+# /mnt/models yet (verified). Two mounts are needed:
+#   MISTRAL4_HF_MODEL              -> the fp8 checkpoint (per-tensor scheme, scalar
+#                                     weight_scale_inv -- NOT the [128,128] block scheme)
+#   TT_MISTRAL4_PREFILL_TTNN_CACHE -> a WRITABLE tilized weight-cache dir. The adapter's
+#                                     ttnn_cache_default is "" (mistral_small_4_119b.py:39), so
+#                                     without this every run re-converts weights from fp8.
+# The paths below follow the house convention; adjust to wherever the weights actually land.
+# Locally these tests were validated against /data/kmabee/models/Mistral-Small-4-119B-2603.
+#
+# owner_id below is the models-team default -- reassign to the Mistral-4 owner before enabling.
+# ---------------------------------------------------------------------------------------------
+
+- name: "Blaze - Mistral4 MLA"
+  cmd: |
+    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603/
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/Mistral-Small-4-119B-Cache/prefill_ttnn
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla -k "8x4" -vvv --tb=short
+    '
+  test_type: mistral4_mla
+  test_group: module
+  skus:
+    bh_sc1:
+      # 4 cases (random/pretrained x seq5k/seq25k); 91 s locally with a warm cache.
+      timeout: 20
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
+- name: "Blaze - Mistral4 KV Cache Table"
+  cmd: |
+    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603/
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/Mistral-Small-4-119B-Cache/prefill_ttnn
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_mistral4_kv_cache_table -vvv --tb=short
+    '
+  test_type: mistral4_kv_cache_table
+  test_group: module
+  skus:
+    bh_sc1:
+      # Single case; 38 s locally. The kvpe latent is 320 wide (256 + 64), not DeepSeek's 576.
+      timeout: 12
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
+# Only the three scenarios whose every position stays under 8192 are selected. Past
+# original_max_position_embeddings the real model applies a position-dependent query scale
+# (get_llama_4_attn_scale, beta 0.1) that ttMLA does not implement, so a longer-sequence PCC
+# number is a bookkeeping check, not a fidelity statement. Widen this -k once that lands.
+- name: "Mistral4 MLA Chunked"
+  cmd: |
+    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603/
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/Mistral-Small-4-119B-Cache/prefill_ttnn
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "mistral4 and 8x4 and scalar and no_determinism and cpu and (plain-5k or rot-aligned_min or rot-midchip_straddle)" -vvv --tb=short
+    '
+  test_type: mistral4_mla_chunked
+  test_group: module
+  skus:
+    bh_sc1:
+      # 3 cases; 117 s locally.
+      timeout: 20
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
+# MoE dispatch/combine op coverage. Only the "// 4" expert-scaledown params are selectable on a
+# 32-chip mesh: the "-pcc" params divide 128 experts by 16, giving 8 experts over 32 chips = 0
+# experts/chip and a ZeroDivisionError in tt/moe/init_helpers.py:245. That is pre-existing and
+# model-independent (the dsv3 baseline fails identically), and the <=8-chip meshes those params
+# want cannot be opened on a Blackhole galaxy at all.
+- name: "Mistral4 MoE Dispatch/Combine Ops"
+  cmd: |
+    rc=0
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ttnn_dispatch_combine.py -k "mistral4-640-avg" -vvv --tb=short
+    ' || rc=1
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_dispatch.py -k "mistral4-perf_no_pcc and 8x4" -vvv --tb=short
+    ' || rc=1
+    exit $rc
+  test_type: mistral4_moe_ops
+  test_group: module
+  skus:
+    bh_sc1:
+      # 44 + 16 cases (upstream's fp8_scaled_in / fp8_out axes doubled both); the
+      # requires_mesh_topology marks deselect everything but the 8x4 rows on a galaxy.
+      timeout: 20
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1

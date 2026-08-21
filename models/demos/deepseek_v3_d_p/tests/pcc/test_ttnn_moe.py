@@ -27,6 +27,8 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4 import mistral4_moe_reference
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_119b_config import Mistral4Small119BConfig
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -116,8 +118,9 @@ def run_model(
     final_output_pcc=0.982,
     routed_activation=ttnn.RoutedExpertActivation.Silu,
     measure=None,
+    reference_fn=None,
 ):
-    """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
+    """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe` / `test_mistral4_moe`.
 
     The gate's grouping (n_group, topk_group) and route_scale are read from
     the variant's HF config. DSv3 values are a no-op; Kimi values switch the
@@ -139,6 +142,10 @@ def run_model(
     it to run the forward inside a real-time-profiler window (see
     ``tests/perf/test_kimi_k3_moe_perf.py``) so the measured region is the forward alone --
     the constructor's one-time weight tilize/typecast stays outside it.
+
+    ``reference_fn`` replaces the variant-driven upstream cross-check for models whose reference is
+    not reachable through ``variant.reference_moe_cls`` (mistral4 — see ``_mistral4_reference_moe``).
+    Default None keeps ``run_reference_moe``, i.e. no change for DSv3 / Kimi.
     """
     if routed_activation not in _TORCH_ROUTED_ACTIVATION or routed_activation not in _UPSTREAM_ACT:
         raise ValueError(f"no torch reference for {routed_activation}; supported: {list(_TORCH_ROUTED_ACTIVATION)}")
@@ -649,18 +656,28 @@ def run_model(
 
     # Upstream MoE reference cross-check. Returns None when the variant has no reference bundled.
     profiler.start("reference")
-    ref_out = run_reference_moe(
-        variant,
-        config=config,
-        gate_weights=gate_weights,
-        routed_expert_weights=all_routed_weights,
-        shared_expert_weights=shared_expert_weights,
-        latent_weights=latent_weights,
-        x=x,
-        # Same routed/shared split the device runs; see run_reference_moe.
-        hidden_act=upstream_activation,
-        shared_hidden_act="silu" if upstream_activation is not None else None,
-    )
+    if reference_fn is not None:
+        ref_out = reference_fn(
+            config=config,
+            gate_weights=gate_weights,
+            routed_expert_weights=all_routed_weights,
+            shared_expert_weights=shared_expert_weights,
+            x=x,
+            num_experts_per_tok=num_experts_per_tok,
+        )
+    else:
+        ref_out = run_reference_moe(
+            variant,
+            config=config,
+            gate_weights=gate_weights,
+            routed_expert_weights=all_routed_weights,
+            shared_expert_weights=shared_expert_weights,
+            latent_weights=latent_weights,
+            x=x,
+            # Same routed/shared split the device runs; see run_reference_moe.
+            hidden_act=upstream_activation,
+            shared_hidden_act="silu" if upstream_activation is not None else None,
+        )
     if ref_out is not None and tt_output is not None:
         logger.info("Running upstream MoE reference")
         tt_final_host = ttnn.to_torch(tt_output, mesh_composer=get_tp_mesh_composer(mesh_device), dtype=torch.bfloat16)
@@ -971,4 +988,146 @@ def test_kimi_k3_moe(
         rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
         final_output_pcc=0.965,
         routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
+    )
+
+
+def _mistral4_reference_moe(
+    *,
+    config,
+    gate_weights,
+    routed_expert_weights,
+    shared_expert_weights,
+    x,
+    num_experts_per_tok,
+):
+    """Mistral-Small-4 MoE reference: HF's own softmax router + TorchExpert FFNs.
+
+    `run_reference_moe` cannot reach this model: the adapter leaves `reference_moe_cls` unset because
+    `Mistral4NaiveMoe.__init__` reads `config.num_local_experts` (exists only via
+    `Mistral4Config.attribute_map`, never off a SimpleNamespace), its experts are stacked into one
+    `[128, 4096, 4096]` `gate_up_proj`, and its router has no `e_score_correction_bias` — so
+    `_pack_reference_moe_state_dict`'s strict load could not succeed. See
+    `tt/runners/adapters/mistral_small_4_119b.py`. The composed reference is therefore called here.
+
+    Dims come off the generated weight shapes, for the same reason `run_reference_moe` patches its
+    config from them: a test row may shrink the expert count / hidden size. `num_experts_per_tok` is
+    the parametrized value rather than `config.num_experts_per_tok`, so a row that overrides top-k
+    cannot silently be scored against the config default.
+    """
+    return mistral4_moe_reference(
+        x.to(torch.bfloat16),
+        gate_weights=gate_weights,
+        routed_expert_weights=routed_expert_weights,
+        shared_expert_weights=shared_expert_weights,
+        emb_dim=gate_weights["weight"].shape[1],
+        num_experts_per_tok=num_experts_per_tok,
+        n_group=config.n_group,
+        topk_group=config.topk_group,
+        norm_topk_prob=config.norm_topk_prob,
+        routed_scaling_factor=config.routed_scaling_factor,
+    )
+
+
+# Mistral-Small-4-119B MoE. Own test function (not a `pytest.param` row on `test_ds_moe`, the way GLM
+# rides the deepseek variant) because the *reference* differs, not just the dims: mistral4's upstream
+# router is softmax, so it needs `reference_fn=_mistral4_reference_moe`.
+#
+# 640 x dgs 8 = 5120 tokens, matching the rest of the mistral4 suite and staying under the model's
+# 8192 original_max_position_embeddings, where Mistral's position-dependent query scale
+# (get_llama_4_attn_scale, no ttMLA equivalent) is exactly 1.0 — irrelevant to MoE itself, but it
+# keeps nothing else confounded. 128 routed experts > 64 also exercises the unfused
+# extract -> FFN -> insert routed-expert path, here at top-4 (DSv3/Kimi/GLM all cover it at top-8).
+# dispatch_buffer_capacity_factor 5 is above the theoretical worst case for top-4 (every pick of every
+# token landing on one chip => 4), so the buffer cannot under-run; the file's ceil(N/2) convention
+# would allow 2 if the DRAM matters. Random weights only: the checkpoint stacks the routed experts
+# (`packed_expert_checkpoint = True`), so the pretrained fixture loads attention only and leaves
+# `routed_expert_weights = None` — a `pretrained` row cannot work until that tensor is split.
+#
+# The `[reference_output]` check sits AT its threshold by construction, and neither verdict validates
+# the routing rule. Two divergences are baked in before any device numerics:
+#   * the real router scores with `router_logits.softmax(-1)` (`modeling_mistral4.py:226`, which
+#     `mistral4_moe_reference` calls unbound), while the device op knows only sigmoid and
+#     sqrtsoftplus (`moe_grouped_topk.cpp:23` TT_THROWs on anything else) and
+#     `Mistral4Small119BConfig` declares no SCORE_FUNC, so `TtMoEGateConfig.score_func` takes its
+#     "sigmoid" default (`tt_moe_gate_prefill.py:118`). Selection is unaffected (both activations are
+#     monotonic in the logit) but the top-k *weights* differ unconditionally: sigmoid(l)/Σsigmoid is
+#     far flatter than softmax renormalized over the picks. Measured on this fixture's own gate tensors
+#     (128 experts, logits ~ N(0,1)): mean top-4 weights [.259 .252 .247 .243] on the device vs
+#     [.358 .252 .208 .182] in the reference, Σ(Δw)² = 0.023 against Σw² = 0.277.
+#   * the harness adds a second, larger divergence that is a *fixture artifact*, not a device bug:
+#     `create_gate_weights` emits an `e_score_correction_bias` (σ = 0.01) and the device's noaux_tc
+#     selection consumes it (`moe_grouped_topk(logits, self.bias, ...)`), whereas Mistral's router has
+#     none, so ~40% of tokens pick a different 4th expert.
+# Together Σ(Δw)² = 0.059, i.e. a routing-only ceiling of ~0.977 against `moe_pcc_threshold = 0.971`.
+# Device numerics (bfp4 expert weights, bfp8 activations) come off that, so a FAIL around 0.96 is the
+# expected outcome — but it is a few thousandths of PCC away from passing, and the sign of that margin
+# says nothing about the routing rule. The device-vs-TorchMoe checks in the same run (`final_output`
+# @ 0.982) share the sigmoid noaux_tc rule and should PASS, which localizes the miss to routing.
+#
+# So read the verdict as uninformative either way, and do NOT lower `moe_pcc_threshold`, switch the
+# reference to sigmoid, or xfail this — that is exactly the trap
+# `reference/mistral_small_4_119b_config.py:21-28` documents for the YaRN mscale: matching both sides
+# to a rule the model does not use keeps PCC green while the model is wrong. The fix is a softmax
+# `score_func` in `moe_grouped_topk` plus `SCORE_FUNC = "softmax"` on `Mistral4Small119BConfig` (and,
+# for a clean comparison, a fixture whose gate carries no correction bias); only then does this
+# test's PCC number mean what it appears to mean.
+@pytest.mark.parametrize(
+    (
+        "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
+    ),
+    [
+        # fmt: off
+        pytest.param( 640, Mistral4Small119BConfig.EMB_SIZE, Mistral4Small119BConfig.MOE_INTERMEDIATE_SIZE, Mistral4Small119BConfig.NUM_ROUTED_EXPERTS, Mistral4Small119BConfig.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-pcc"),
+        # fmt: on
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=Mistral4Small119BConfig.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["mistral_small_4_119b"], indirect=True, ids=["mistral4"])
+def test_mistral4_moe(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    num_links,
+    gate_fallback_mode,
+    request,
+):
+    topology = per_axis_topology(device_params["fabric_config"])
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        num_links,
+        topology,
+        gate_fallback_mode,
+        request,
+        reference_fn=_mistral4_reference_moe,
     )

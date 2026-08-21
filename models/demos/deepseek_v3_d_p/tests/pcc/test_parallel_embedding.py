@@ -17,6 +17,7 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_119b_config import Mistral4Small119BConfig
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_tp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
@@ -27,8 +28,12 @@ from tests.ttnn.utils_for_testing import comp_pcc
     "isl_per_chip, vocab_size, emb_dim",
     [
         (3200, DeepSeekV3Config.VOCAB_SIZE, DeepSeekV3Config.EMB_SIZE),
+        # Mistral-Small-4-119B at the same 100K total ISL. Its vocab (131072) and hidden (4096) are
+        # both powers of two, so the vocab-parallel shard divides evenly where DeepSeek's 129280
+        # does not.
+        (3200, Mistral4Small119BConfig.VOCAB_SIZE, Mistral4Small119BConfig.EMB_SIZE),
     ],
-    ids=["deepseek_prefill_100K"],
+    ids=["deepseek_prefill_100K", "mistral4"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
