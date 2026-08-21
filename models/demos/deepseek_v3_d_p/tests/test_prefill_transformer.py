@@ -43,6 +43,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -1261,12 +1262,10 @@ def test_glm_prefill_transformer(
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
+            # Upstream retired FABRIC_1D for the 8x4 prefill rows; it now reports "unfeasible on the
+            # given hardware" and SKIPS. The Nx1 probes below keep FABRIC_1D -- torus_xy is the 8x4
+            # ring/ring profile and does not apply to them.
+            torus_xy_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE),
             2,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
