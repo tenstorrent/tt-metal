@@ -13,6 +13,7 @@
 #include "hw/inc/internal/tt-2xx/quasar/dev_mem_map.h"
 #include "impl/context/metal_context.hpp"
 #include "llrt/rtoptions.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -28,8 +29,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
-    auto mesh_device = devices_[0];
-    if (mesh_device->compute_with_storage_grid_size().x < 2) {
+    if (this->device().compute_with_storage_grid_size().x < 2) {
         GTEST_SKIP() << "This test requires at least 2 worker nodes.";
     }
     if (!MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
@@ -39,12 +39,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
             "Movement kernels.");
         log_error(tt::LogTest, "For example, export TT_METAL_DPRINT_CORES=(0,0),(1,0)");
     }
-
-    IDevice* dev = mesh_device->get_devices()[0];
-
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     const experimental::KernelSpecName KERNEL_0{"kernel_0"};
     const experimental::KernelSpecName KERNEL_1{"kernel_1"};
@@ -92,7 +86,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         .kernels = {k0, k1, k2, k3},
         .work_units = {wu_core0, wu_core1},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -117,16 +111,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     };
     experimental::SetProgramRunArgs(program, params);
 
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
+    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_core_0(3, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        dev, CoreCoord(0, 0), result_base, sizeof(uint32_t) * 3, result_core_0);
+    slow_dispatch::ReadFromL1(this->device(), CoreCoord(0, 0), result_base, sizeof(uint32_t) * 3, result_core_0);
 
     std::vector<uint32_t> result_core_1(3, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        dev, CoreCoord(1, 0), result_base, sizeof(uint32_t) * 3, result_core_1);
+    slow_dispatch::ReadFromL1(this->device(), CoreCoord(1, 0), result_base, sizeof(uint32_t) * 3, result_core_1);
 
     ASSERT_EQ(result_core_0, (std::vector<uint32_t>{3, 7, 11}));
     ASSERT_EQ(result_core_1, (std::vector<uint32_t>{3, 7, 15}));

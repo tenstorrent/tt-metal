@@ -11,6 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "hal.hpp"
 #include "llrt/rtoptions.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -27,15 +28,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    auto mesh_device = devices_[0];
-
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     const experimental::NodeCoord node{0, 0};
-    // Command queue lets us submit work (execute programs and read/write buffers) to the device.
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    // Prepare a workload and a device coordinate range that spans the mesh.
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     constexpr uint32_t num_elements = 10;
     const uint32_t buf_a_addr = MetalContext::instance().hal().get_dev_addr(
@@ -48,7 +42,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     for (uint32_t i = 0; i < num_elements; i++) {
         initial_data[i] = i;
     }
-    tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_src_addr, initial_data);
+    slow_dispatch::WriteToDRAMChannel(this->device(), 0, dram_src_addr, initial_data);
 
     const experimental::KernelSpecName DM_READER{"dm_reader"};
     const experimental::KernelSpecName DM_TRANSFORM{"dm_transform"};
@@ -126,7 +120,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
         .semaphores = {sem0_spec, sem1_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -152,12 +146,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     };
     experimental::SetProgramRunArgs(program, params);
 
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
+    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> actual_data(num_elements, 0);
-    tt_metal::detail::ReadFromDeviceDRAMChannel(
-        mesh_device->get_devices()[0], 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
+    slow_dispatch::ReadFromDRAMChannel(this->device(), 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
 
     const std::vector<uint32_t> expected_data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
 
@@ -172,19 +164,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    auto mesh_device = devices_[0];
-
-    if (mesh_device->compute_with_storage_grid_size().x < 2) {
+    if (this->device().compute_with_storage_grid_size().x < 2) {
         GTEST_SKIP() << "This test requires at least 2 worker nodes.";
     }
 
     const experimental::NodeCoord node_0{0, 0};
     const experimental::NodeCoord node_1{1, 0};
-
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     constexpr uint32_t num_elements = 10;
     const uint32_t buf_a_addr = MetalContext::instance().hal().get_dev_addr(
@@ -197,9 +182,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
     for (uint32_t i = 0; i < num_elements; i++) {
         initial_data[i] = i;
     }
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node_0, buf_a_addr, initial_data);
+    slow_dispatch::WriteToL1(this->device(), node_0, buf_a_addr, initial_data);
 
-    const CoreCoord core_1_virtual = mesh_device->worker_core_from_logical_core(node_1);
+    const CoreCoord core_1_virtual = this->device().worker_core_from_logical_core(node_1);
 
     experimental::SemaphoreSpec sem_core_0_spec{
         .unique_id = experimental::SemaphoreSpecName{"sem_core_0"},
@@ -334,7 +319,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         .semaphores = {sem_core_0_spec, sem_cross_spec, sem0_core_1_spec, sem1_core_1_spec},
         .work_units = {wu_core_0, wu_core_1},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -372,12 +357,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
     };
     experimental::SetProgramRunArgs(program, params);
 
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
+    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> actual_data(num_elements, 0);
-    tt_metal::detail::ReadFromDeviceDRAMChannel(
-        mesh_device->get_devices()[0], 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
+    slow_dispatch::ReadFromDRAMChannel(this->device(), 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
 
     const std::vector<uint32_t> expected_data = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 
