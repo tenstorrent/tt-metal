@@ -282,7 +282,8 @@ runtime:
     bh_p150_perf: 50
   perf_profiler:
     wh_n300_civ2: 5
-    bh_p150_perf: 5
+    wh_n300_perf: 20
+    bh_p150_perf: 25
 
 triage:
   merge_gate:
