@@ -771,7 +771,9 @@ ALWI void topk_merge(std::uint32_t idst, int m_iter, int k) {
         idst,
         VectorMode::RC_custom,
         m_iter,
-        k));
+        k,
+        0u /* rank_base: unused outside rank-stamped mode; passed explicitly because the
+              SFPU wrapper forwards through a callable, where default arguments do not apply */));
 }
 
 // topK rebuild
