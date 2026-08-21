@@ -203,14 +203,17 @@ inline __attribute__((always_inline)) void ring_write_word(uint32_t v) {
     wIndex++;
 }
 
-// Branchless sticky-timer emit: ALWAYS store the sticky word at the cursor, then advance the cursor
-// only if the high half moved. On the (overwhelming) unchanged path the very next store overwrites
-// the slot -- nothing past the published tail is ever read, and every caller's room reservation
-// already covers the sticky. One unconditional L1 store instead of a branch.
+// Sticky-timer emit: the high half moves ~once per 3.2 s, so CHECK FIRST and skip the L1 store
+// entirely on the (overwhelming) unchanged path -- L1 stores are costly and this sits right next to
+// the packet's own stores, so an unconditional slot write is pure L1-port traffic. The compare reads
+// g_prev_timer_hi from local RAM (needed either way) and the common case is a not-taken branch.
+// Every caller's room reservation already covers the sticky word.
 inline __attribute__((always_inline)) void ring_write_sticky_timer(uint32_t hi) {
-    profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] = ppfmt::w0(ppfmt::T_STICKY_TIMER, hi);
-    wIndex += (hi != g_prev_timer_hi);
-    g_prev_timer_hi = hi;
+    if (__builtin_expect(hi != g_prev_timer_hi, 0)) {
+        profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] = ppfmt::w0(ppfmt::T_STICKY_TIMER, hi);
+        wIndex++;
+        g_prev_timer_hi = hi;
+    }
 }
 
 inline __attribute__((always_inline)) void publish_tail() {
