@@ -65,10 +65,14 @@ void kernel_main() {
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
 
-    // LLK setup - one compute_kernel_hw_startup at the start, then full inits.
+    // LLK setup. The IS_ROW_MAJOR path re-inits for the transposed CB, so it issues a
+    // second compute_kernel_hw_startup; each preserves the pre-cleanup binary_op_init_common
+    // re-init (compute_kernel_hw_startup is documented call-once, but the pre-existing
+    // mid-kernel re-init pattern is preserved as-is by the init-cleanup rename).
 #ifdef IS_ROW_MAJOR
     compute_kernel_hw_startup(dfb::rm_input, dfb::index_tensor, dfb::input_tensor);
-    binary_op_init_common(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);
 #else
     compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor);
 #endif
@@ -169,6 +173,8 @@ void kernel_main() {
                                     tile_index_high = index_dest_start;
                                 }
                             }
+                            // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).
+                            prepare_uint16_fp32_dest_value_tiles_for_pack(tile_input_low, tile_input_high);
                             tile_regs_commit();
                             tile_regs_wait();
 
@@ -197,7 +203,12 @@ void kernel_main() {
                             index_tensor_intermediate_dfb.push_back(one_tile);
 
                             copy_tile_between_cbs(
-                                global_old_cb, input_tensor_transposed_dfb, tile_id, value_tensor_intermediate_dfb);
+                                global_old_cb,
+                                input_tensor_transposed_dfb,
+                                tile_id,
+                                value_tensor_intermediate_dfb,
+                                0,
+                                /*prepare_uint16_value_for_pack=*/true);
                             value_tensor_intermediate_dfb.push_back(one_tile);
 
                             value_tensor_intermediate_dfb.reserve_back(one_tile);
@@ -208,7 +219,12 @@ void kernel_main() {
                             index_tensor_intermediate_dfb.push_back(one_tile);
 
                             copy_tile_between_cbs(
-                                global_old_cb, input_tensor_transposed_dfb, tile_id + 1, value_tensor_intermediate_dfb);
+                                global_old_cb,
+                                input_tensor_transposed_dfb,
+                                tile_id + 1,
+                                value_tensor_intermediate_dfb,
+                                0,
+                                /*prepare_uint16_value_for_pack=*/true);
                             value_tensor_intermediate_dfb.push_back(one_tile);
                             sync_packer_unpacker(packer_unpacker_sync_dfb);
                         }
@@ -254,6 +270,9 @@ void kernel_main() {
                             index_output_tile = index_dest_end;
                         }
 
+                        // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).
+                        prepare_uint16_fp32_dest_value_tile_for_pack(value_output_tile);
+
                         tile_regs_commit();
                         tile_regs_wait();
 
@@ -281,7 +300,11 @@ void kernel_main() {
         index_tensor_transposed_dfb.push_back(number_of_tiles_per_core);
 
 #ifndef IS_ROW_MAJOR
-        transpose_and_pack(input_tensor_transposed_dfb, value_tensor_dfb, number_of_tiles_per_core);
+        transpose_and_pack(
+            input_tensor_transposed_dfb,
+            value_tensor_dfb,
+            number_of_tiles_per_core,
+            /*prepare_uint16_value_for_pack=*/true);
         transpose_and_pack(index_tensor_transposed_dfb, index_tensor_output_dfb, number_of_tiles_per_core);
 #else
         {
@@ -307,12 +330,17 @@ void kernel_main() {
                 number_of_tiles_per_core % SUB_BLOCK_DIM == 0,
                 "number_of_tiles_per_core must be divisible by SUB_BLOCK_DIM");
 
-            transpose_and_pack(input_tensor_transposed_dfb, input_tensor_dfb, number_of_tiles_per_core);
+            transpose_and_pack(
+                input_tensor_transposed_dfb,
+                input_tensor_dfb,
+                number_of_tiles_per_core,
+                /*prepare_uint16_value_for_pack=*/true);
 
             transpose_and_pack(index_tensor_transposed_dfb, rm_post_sort_index_dfb, number_of_tiles_per_core);
 
             // Untilize values: number_of_tiles_per_core tiles → TILE_H RM pages.
-            binary_op_init_common(dfb::input_tensor, dfb::index_tensor, dfb::rm_value_output);
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::rm_value_output);
             pack_untilize_init<SUB_BLOCK_DIM, number_of_tiles_per_core>(dfb::input_tensor, dfb::rm_value_output);
             input_tensor_dfb.wait_front(number_of_tiles_per_core);
             rm_value_output_dfb.reserve_back(TILE_H);
@@ -325,7 +353,8 @@ void kernel_main() {
             pack_untilize_uninit(dfb::rm_value_output);
 
             // Untilize indices: number_of_tiles_per_core tiles → TILE_H RM pages.
-            binary_op_init_common(dfb::rm_post_sort_index, dfb::input_tensor, dfb::rm_index_output);
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(dfb::rm_post_sort_index, dfb::input_tensor, dfb::rm_index_output);
             pack_untilize_init<SUB_BLOCK_DIM, number_of_tiles_per_core>(dfb::rm_post_sort_index, dfb::rm_index_output);
             rm_post_sort_index_dfb.wait_front(number_of_tiles_per_core);
             rm_index_output_dfb.reserve_back(TILE_H);

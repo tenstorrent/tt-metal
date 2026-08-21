@@ -58,6 +58,7 @@ void kernel_main() {
     constexpr uint32_t logWt = get_compile_time_arg_val(11);
     constexpr uint32_t largest = get_compile_time_arg_val(12);
     constexpr uint32_t sorted = get_compile_time_arg_val(13);
+    constexpr bool stable_sort = get_compile_time_arg_val(14) == 1;  // Ties keep the lowest index
 
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
@@ -88,6 +89,14 @@ void kernel_main() {
         // The reader kernel manages input_cb_index/index_cb_index, while compute
         // operations require separate staging buffers for in-place bitonic operations.
 
+        // Re-establish datacopy unpack state for the values gather. At ht==0
+        // init_sfpu covers this, but at ht>=1 the state left by the previous
+        // iteration's transpose_and_pack(index_transposed...) is TRANSPOSE
+        // mode with the INDEX (UInt16/UInt32) SRCA format; the bare copy_tile
+        // below would unpack the bf16 gathered values as garbage (silicon:
+        // fabricated ~1e38 values in every ht>=1 row).
+        reconfig_data_format_srca(input_dfb_index);
+        copy_tile_to_dst_init_short_with_dt(index_transposed_dfb_index, input_dfb_index);
         pack_reconfig_data_format(input_transposed_dfb_index);
         // Copy all received value tiles from local cores to transposed staging buffer
         for (uint32_t wt = 0; wt < Wt; wt++) {
@@ -136,7 +145,7 @@ void kernel_main() {
         // - Iteration 1: Merge (0,2), (4,6), (8,10), ... across core boundaries
         // - Final iteration: Global TopK across all cores' contributions
         for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
-            process_iteration(
+            process_iteration<stable_sort>(
                 m_iter,                      // Current merge iteration
                 K,                           // TopK value
                 Wt,                          // Total width tiles (from all cores)

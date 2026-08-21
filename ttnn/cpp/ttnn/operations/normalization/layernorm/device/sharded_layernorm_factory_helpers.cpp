@@ -123,6 +123,8 @@ GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord
         offset = bbox.start_coord;
     }
     uint32_t nb = get_num_blocks(mcast, rw, gs, spec);
+    bool rectangular = spec.grid.num_cores() == gs.x * gs.y;
+    bool two_stage = rectangular && should_use_two_stage_reduce(mcast, rw, gs, compute_with_storage_grid_size);
     return GridParams{
         .shard_spec = spec,
         .grid_size = gs,
@@ -131,7 +133,8 @@ GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord
         .row_wise = rw,
         .num_blocks = nb,
         .use_mcast = nb > 1,
-        .use_two_stage_reduce = should_use_two_stage_reduce(mcast, rw, gs, compute_with_storage_grid_size)};
+        .use_two_stage_reduce = two_stage,
+        .grid_is_rectangular = rectangular};
 }
 
 WorkerDistribution WorkerDistribution::compute(const GridParams& grid, uint32_t block_ht) {
@@ -402,6 +405,11 @@ CoreRanges CoreRanges::compute(const GridParams& grid, const WorkerDistribution&
         cr.not_all_to_all_workers = apply_grid_offset(cr.not_all_to_all_workers, offset);
     }
 
+    const CoreRange bbox = grid.shard_spec.grid.bounding_box();
+    cr.mcast_dest_cores = CoreRangeSet(bbox);
+    cr.inactive_cores = cr.mcast_dest_cores.subtract(cr.all_cores);
+    cr.num_mcast_dests = (grid.mcast_1d ? bbox.size() : grid.num_blocks) - 1;
+
     return cr;
 }
 
@@ -631,7 +639,8 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         workers.num_blocks_second_stage,
         ctx.reduce_second_stage_semaphore_id,
         (uint32_t)ctx.rms_norm,
-        (uint32_t)ctx.use_welford};
+        (uint32_t)ctx.use_welford,
+        core_ranges.num_mcast_dests};
 
     // Reader receiver all-to-all compile time args
     args.reader_receiver_all_to_all = {
@@ -824,6 +833,65 @@ void bind_writer_gamma_beta(KernelDescriptor& desc, Buffer* gamma_buffer, Buffer
     }
 }
 
+void add_idle_core_kernel_descriptors(
+    ProgramDescriptor& program_descriptor,
+    const CoreRanges& core_ranges,
+    const KernelConfig& kernel_config,
+    const KernelDescriptor::NamedCompileTimeArgs& reader_cb_named_args,
+    const KernelDescriptor::NamedCompileTimeArgs& writer_cb_named_args,
+    const KernelDescriptor::NamedCompileTimeArgs& compute_cb_named_args) {
+    if (core_ranges.inactive_cores.empty()) {
+        return;
+    }
+
+    auto with_idle_define = [](KernelDescriptor::Defines defines) {
+        defines.emplace_back("IDLE_CORE", "1");
+        return defines;
+    };
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = kernel_config.reader_receiver_path;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_ranges.inactive_cores;
+    reader_desc.compile_time_args = kernel_config.reader_receiver_ct_args;
+    reader_desc.named_compile_time_args = reader_cb_named_args;
+    reader_desc.defines = with_idle_define(kernel_config.reader_receiver_defines);
+    reader_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = kernel_config.reader_noc,
+        .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+    program_descriptor.kernels.push_back(std::move(reader_desc));
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = kernel_config.writer_path;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_ranges.inactive_cores;
+    writer_desc.compile_time_args = kernel_config.writer_receiver_ct_args;
+    auto writer_named_args = writer_cb_named_args;
+    writer_named_args.push_back({"is_all_to_all_worker", 0});
+    writer_desc.named_compile_time_args = std::move(writer_named_args);
+    writer_desc.defines = with_idle_define(kernel_config.writer_defines);
+    writer_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_1,
+        .noc = kernel_config.writer_noc,
+        .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+    program_descriptor.kernels.push_back(std::move(writer_desc));
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = kernel_config.compute_path;
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_ranges.inactive_cores;
+    compute_desc.compile_time_args = kernel_config.compute_not_all_to_all_ct_args;
+    compute_desc.named_compile_time_args = compute_cb_named_args;
+    compute_desc.defines = with_idle_define(kernel_config.compute_defines);
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = kernel_config.math_fidelity,
+        .fp32_dest_acc_en = kernel_config.fp32_dest_acc_en,
+        .dst_full_sync_en = kernel_config.dst_full_sync_en,
+        .math_approx_mode = kernel_config.math_approx_mode};
+    program_descriptor.kernels.push_back(std::move(compute_desc));
+}
+
 }  // namespace
 
 void add_kernel_descriptors(
@@ -893,6 +961,14 @@ void add_kernel_descriptors(
         {"cb_mask_scratch", tt::CBIndex::c_14},
         {"cb_col_mask_packed", tt::CBIndex::c_19},
     };
+
+    add_idle_core_kernel_descriptors(
+        program_descriptor,
+        core_ranges,
+        kernel_config,
+        reader_cb_named_args,
+        writer_cb_named_args,
+        compute_cb_named_args);
 
     // Reader sender kernel
     KernelDescriptor reader_sender_kernel_desc;
@@ -1329,6 +1405,14 @@ void add_cb_descriptors(
             cb_config.out_data_format,
             cb_config.out_single_tile_size,
             cb_config.output_reshard_buffer));
+    }
+
+    if (!core_ranges.inactive_cores.empty()) {
+        for (auto& cb_desc : program_descriptor.cbs) {
+            if (cb_desc.buffer == nullptr && cb_desc.core_ranges == core_ranges.all_cores) {
+                cb_desc.core_ranges = core_ranges.mcast_dest_cores;
+            }
+        }
     }
 }
 

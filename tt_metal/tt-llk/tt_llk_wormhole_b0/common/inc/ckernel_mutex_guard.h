@@ -11,17 +11,31 @@
 namespace ckernel
 {
 
+/**
+ * @brief Scope guard holding a Tensix thread mutex for the lifetime of the object.
+ *
+ * @tparam enable: When false the guard compiles away and the enclosed instructions issue unguarded.
+ * @note A wait placed ahead of an acquire must also block p_stall::STALL_SYNC: otherwise the ATGETM
+ *       slips past the unmet wait and the thread stalls with the mutex already held.
+ */
+template <bool enable = true>
 class [[nodiscard]] T6MutexLockGuard final
 {
 public:
     explicit T6MutexLockGuard(const std::uint8_t index) noexcept : mutex_index(index)
     {
-        t6_mutex_acquire(mutex_index);
+        if constexpr (enable)
+        {
+            t6_mutex_acquire(mutex_index);
+        }
     }
 
     ~T6MutexLockGuard()
     {
-        t6_mutex_release(mutex_index);
+        if constexpr (enable)
+        {
+            t6_mutex_release(mutex_index);
+        }
     }
 
     // Non-copyable

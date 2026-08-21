@@ -7,10 +7,9 @@ Ported from ``minimax_m3/tt/attention/dense_sp.py``. The cache-read path uses
 ``ttnn.transformer.ring_joint_scaled_dot_product_attention`` (the ring reads/gathers the KV across the
 SP axis *internally* via online-softmax — no explicit AllGather):
 
-  * :func:`dense_sp_attention` — cache-read (``cached_len > 0``, multi-chunk): ring_joint over the
-    accumulated prefix in the block-cyclic SP KV cache. This is the path that unlocks CHUNKED prefill.
-    Chunk 0 (``cached_len == 0``) keeps the AllGather-Q + single-chip SDPA stand-in (equal Q/cache
-    shapes, so the ring op's is_chunked requirement does not apply).
+  * :func:`dense_sp_attention` — cache-backed ring_joint over the block-cyclic SP KV cache for
+    every chunk, including chunk 0. The fixed/growing cache makes Q shorter than K/V even for
+    the first complete Q group, allowing one ring program across the entire prefill.
 
 GPT-OSS vs M3: gpt-oss attention has **attention sinks** and **per-layer sliding-window** masking, so
 both paths thread ``attention_sink`` + ``sliding_window_size`` into the op (M3 has neither). These are
@@ -59,7 +58,6 @@ def dense_sp_attention(
     cluster_axis,
     attention_sink=None,
     sliding_window_size=None,
-    k_chunk_size=128,  # must match program_config.k_chunk_size (sizes the compact sliding halo buffer)
     slot_idx=0,
     layer_idx=0,
     num_layers=1,
@@ -102,7 +100,7 @@ def dense_sp_attention(
         )
 
     # Ring gather-buffer seq: full cache for full-attn layers; compact halo for sliding layers.
-    _bufseq = _gather_seq_len(sliding_window_size, k_chunk_size, cache_global)
+    _bufseq = _gather_seq_len(sliding_window_size, program_config.k_chunk_size, cache_global)
     # Full-attn layers pass sliding_window_size=None -> non-sliding full-causal ring path (sinks now
     # allowed after the device-op assert relax). Sliding layers pass 128. Buffer handles None (full).
     out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(

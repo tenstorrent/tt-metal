@@ -61,13 +61,22 @@ on:
         type: string
         default: "1000"
         description: "perf sample frequency in Hz"
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+    outputs:
+      matrix:
+        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
+        value: ${{ jobs.load-test-matrix.outputs.matrix }}
 
 jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
-      has-sim: ${{ steps.detect-sim.outputs.has-sim }}
+      sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
       skip-args-wormhole_b0: ${{ steps.skip-list.outputs.skip-args-wormhole_b0 }}
       skip-args-blackhole: ${{ steps.skip-list.outputs.skip-args-blackhole }}
     env:
@@ -105,13 +114,6 @@ jobs:
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
 
-      - name: Detect sim SKUs in matrix
-        id: detect-sim
-        run: |
-          matrix='${{ steps.build-matrix.outputs.matrix }}'
-          has_sim=$(echo "$matrix" | jq -r 'any(.[]; .sku | startswith("sim_"))')
-          echo "has-sim=$has_sim" >> "$GITHUB_OUTPUT"
-
       # Load the TTSim skip list ONCE for the whole matrix and expose per-arch --deselect
       # args. The ttnn job applies these (via PYTEST_ADDOPTS) on every sim_* entry so the
       # simulator runs the same cmd as hardware minus the tests that don't yet work on ttsim.
@@ -131,44 +133,41 @@ jobs:
   # the resolved matrix contains sim_* SKUs. Consumed by setup-ttsim below.
   fetch-ttsim:
     needs: load-test-matrix
-    if: ${{ needs.load-test-matrix.outputs.has-sim == 'true' }}
-    runs-on: ubuntu-latest
+    if: ${{ needs.load-test-matrix.outputs.sim-libs != '[]' }}
+    runs-on: ubuntu-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: ${{ fromJson(needs.load-test-matrix.outputs.sim-libs) }}
+    concurrency:
+      group: ttsim-lib-${{ github.run_id }}-${{ matrix.lib }}
+      cancel-in-progress: false
+      queue: max
+    # The probe and upload talk to the artifact service with the runtime token, not
+    # GITHUB_TOKEN, so no actions: scope is needed — and requesting one fails for callers that
+    # run with the default actions: none (a nested job cannot exceed its caller's grant).
+    permissions:
+      contents: read
     steps:
-      - name: Checkout ttsim version
+      - name: Checkout fetch-ttsim action and pinned ttsim version
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: tt_metal/ttsim-version
+          sparse-checkout: |
+            .github/actions/fetch-ttsim
+            tt_metal/ttsim-version
           sparse-checkout-cone-mode: false
-      - name: Read ttsim version
-        id: ttsim-version
-        run: echo "version=$(cat tt_metal/ttsim-version)" >> "$GITHUB_OUTPUT"
-      - name: Download wormhole_b0 ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+          ref: ${{ inputs.ref || github.sha }}
+      - name: ⬇️  Fetch ttsim
+        uses: ./.github/actions/fetch-ttsim
+        timeout-minutes: 10
         with:
-          repository: tenstorrent/ttsim
-          tag: ${{ steps.ttsim-version.outputs.version }}
-          fileName: libttsim_wh.so
-          out-file-path: /tmp/ttsim
-      - name: Download blackhole ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
-        with:
-          repository: tenstorrent/ttsim
-          tag: ${{ steps.ttsim-version.outputs.version }}
-          fileName: libttsim_bh.so
-          out-file-path: /tmp/ttsim
-      - name: Upload ttsim binaries artifact
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: ttsim-binaries
-          path: /tmp/ttsim/
-          if-no-files-found: error
-          retention-days: 1
+          lib: ${{ matrix.lib }}
 
   ttnn:
     needs: [load-test-matrix, fetch-ttsim]
     # fetch-ttsim is skipped when the matrix has no sim_* SKUs; allow that.
-    if: ${{ !cancelled() && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped') }}
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' && !cancelled() && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -182,6 +181,7 @@ jobs:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         TT_LOGGER_LEVEL: warn
+        TTNN_CONFIG_OVERRIDES: '{"validate_program_args": true}'
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -227,7 +227,7 @@ jobs:
       # header before kernels are JIT-compiled. Wormhole sim only; this patches the runner's
       # /opt/venv (so it must run here, not in load-test-matrix). Remove once LLK ships a fix.
       - name: Apply ttsim wormhole workaround patches
-        if: ${{ matrix.test-group.sku == 'sim_wormhole_b0' }}
+        if: ${{ startsWith(matrix.test-group.sku, 'sim_wh') }}
         run: |
           HEADER=$(find /opt/venv -name "cunpack_common.h" -path "*wormhole_b0*" 2>/dev/null | head -1)
           echo "Patching: $HEADER"
@@ -241,7 +241,7 @@ jobs:
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
-          echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
+          echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false, \"validate_program_args\": true}" >> $GITHUB_ENV
 
       - name: Set up coverage profiling
         if: ${{ inputs.collect-coverage }}
@@ -255,14 +255,18 @@ jobs:
       # exist). All are no-ops (skipped) when the experiment is disabled, so there is zero
       # overhead on the default path.
       #
-      # SECURITY: user-controlled inputs (perf-target-group, perf-install-package) are never
-      # interpolated into a shell body via ${{ ... }}; they are passed through `env:` and only
-      # expanded as quoted "$VAR" at runtime so they cannot inject shell.
+      # SECURITY: user-controlled inputs (perf-target-group, perf-install-package,
+      # perf-sample-frequency) are never interpolated into a shell body via ${{ ... }}; they are
+      # passed through `env:` and only expanded as quoted "$VAR" at runtime so they cannot inject
+      # shell. run-with-log is a composite action and does not see step-level `env:`, so a value
+      # its body needs goes through $GITHUB_ENV instead.
       - name: Validate perf profiling target (host profiling)
         if: ${{ inputs.enable-perf-host-profiling && !startsWith(matrix.test-group.sku, 'sim_') }}
         env:
           PERF_TARGET_GROUP: ${{ inputs.perf-target-group }}
+          PERF_SAMPLE_FREQUENCY: ${{ inputs.perf-sample-frequency }}
         run: |
+          echo "PERF_SAMPLE_FREQUENCY=$PERF_SAMPLE_FREQUENCY" >> "$GITHUB_ENV"
           if [ -z "$PERF_TARGET_GROUP" ]; then
             echo "::error::enable-perf-host-profiling is true but perf-target-group is empty."
             echo "::error::You must supply the exact matrix test-group name to profile (e.g. 'ttnn eltwise group 1')."
@@ -315,50 +319,59 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         if: ${{ !startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
-        env:
-          # Whether THIS matrix leg should be profiled: experiment on + this is the chosen HW group.
-          # (Never true on sim legs — this step's `if` already excludes sim_* SKUs.)
-          PERF_PROFILE_THIS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
-          # Whether the probe confirmed perf can actually record. Empty when the probe step was
-          # skipped (experiment off / not the target group); treated as "not ready".
-          PERF_READY: ${{ steps.perf-probe.outputs.perf_ready }}
-          PERF_SAMPLE_FREQUENCY: ${{ inputs.perf-sample-frequency }}
-          PERF_TARGET_GROUP: ${{ inputs.perf-target-group }}
-          TEST_GROUP_NAME: ${{ matrix.test-group.name }}
-          TEST_GROUP_CMD: ${{ matrix.test-group.cmd }}
-        run: |
-          # Build the inner command passed to the power sidecar's `bash -c`. Use a shell variable
-          # for the pytest command (from $TEST_GROUP_CMD) to avoid YAML/shell quoting hell.
-          #
-          # Non-profiled path (default): byte-for-byte the original behaviour — run the group cmd
-          # directly under the power sidecar.
-          # Profiled path (experiment): wrap the group cmd in `perf record -g -F <freq> -o <out>`,
-          # writing perf.data to /work so the host mount at ${{ github.workspace }}/docker-job can
-          # upload it. Only wrap when the recording-capability probe (perf-probe step) succeeded;
-          # otherwise fall back to running the cmd unwrapped so the group still tests.
-          #
-          # The whole group cmd is wrapped in `perf record ... -- bash -c '<cmd>'` so that a group
-          # command with chained commands (e.g. `pytest ... && pytest ...`) is captured in full,
-          # not just the first simple command. $TEST_GROUP_CMD is passed as a positional arg to the
-          # inner `bash -c` (see the sidecar invocation below), never spliced into a string, so its
-          # &&/quotes survive intact and it can't inject into the perf command line.
-          if [ "$PERF_PROFILE_THIS" = "true" ] && [ "$PERF_READY" = "true" ]; then
-            # Sanitize the group name for use in a filename: spaces and any non [A-Za-z0-9._-] -> '_'.
-            SANITIZED=$(printf '%s' "$TEST_GROUP_NAME" | sed -E 's/[^A-Za-z0-9._-]+/_/g')
-            PERF_OUTPUT="/work/perf_${SANITIZED}.data"
-            echo "perf host profiling ENABLED for '$TEST_GROUP_NAME' -> $PERF_OUTPUT (freq ${PERF_SAMPLE_FREQUENCY}Hz)"
-            RUNNER=(perf record -g -F "${PERF_SAMPLE_FREQUENCY}" -o "${PERF_OUTPUT}" -- bash -c "$TEST_GROUP_CMD")
-          else
-            if [ "$PERF_PROFILE_THIS" = "true" ]; then
-              echo "::warning::perf recording not available; running '$TEST_GROUP_NAME' without profiling."
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            # Step-level env does not reach a composite action's script (see
+            # .github/actions/run-with-log/README.md), so every value this body
+            # needs is set here. TEST_GROUP_CMD arrives via a quoted heredoc, so
+            # the shell running this body never expands it — the delimiter must
+            # not appear in any test-group cmd.
+            # Cap PyTorch/ATen host-side OpenMP threads and wait passively. A brief
+            # host reference-tensor op spins up the OpenMP/MKL pool, whose workers
+            # then busy-wait for the rest of the job — including while the device
+            # does the much longer real work. That is most of the CPU burn.
+            export OMP_NUM_THREADS=2
+            export MKL_NUM_THREADS=2
+            export OMP_WAIT_POLICY=passive
+            # Whether THIS matrix leg should be profiled: experiment on + this is the chosen HW group.
+            # (Never true on sim legs — this step's `if` already excludes sim_* SKUs.)
+            PERF_PROFILE_THIS="${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}"
+            # Whether the probe confirmed perf can actually record. Empty when the probe step was
+            # skipped (experiment off / not the target group); treated as "not ready".
+            PERF_READY="${{ steps.perf-probe.outputs.perf_ready }}"
+            TEST_GROUP_NAME="${{ matrix.test-group.name }}"
+            TEST_GROUP_CMD=$(cat <<'TEST_CMD_EOF'
+            ${{ matrix.test-group.cmd }}
+            TEST_CMD_EOF
+            )
+            # Non-profiled path (default): run the group cmd directly under the power sidecar.
+            # Profiled path (experiment): wrap the group cmd in `perf record -g -F <freq> -o <out>`,
+            # writing perf.data to /work so the host mount at ${{ github.workspace }}/docker-job can
+            # upload it. Only wrap when the recording-capability probe (perf-probe step) succeeded;
+            # otherwise fall back to running the cmd unwrapped so the group still tests.
+            #
+            # The whole group cmd is wrapped in `bash -c "$TEST_GROUP_CMD"` so that a group command
+            # with chained commands (e.g. `pytest ... && pytest ...`) is captured in full, not just
+            # the first simple command.
+            if [ "$PERF_PROFILE_THIS" = "true" ] && [ "$PERF_READY" = "true" ]; then
+              # Sanitize the group name for use in a filename: spaces and any non [A-Za-z0-9._-] -> '_'.
+              SANITIZED=$(printf '%s' "$TEST_GROUP_NAME" | sed -E 's/[^A-Za-z0-9._-]+/_/g')
+              PERF_OUTPUT="/work/perf_${SANITIZED}.data"
+              echo "perf host profiling ENABLED for '$TEST_GROUP_NAME' -> $PERF_OUTPUT (freq ${PERF_SAMPLE_FREQUENCY}Hz)"
+              RUNNER=(perf record -g -F "${PERF_SAMPLE_FREQUENCY}" -o "${PERF_OUTPUT}" -- bash -c "$TEST_GROUP_CMD")
+            else
+              if [ "$PERF_PROFILE_THIS" = "true" ]; then
+                echo "::warning::perf recording not available; running '$TEST_GROUP_NAME' without profiling."
+              fi
+              RUNNER=(bash -c "$TEST_GROUP_CMD")
             fi
-            RUNNER=(bash -c "$TEST_GROUP_CMD")
-          fi
 
-          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
-            --backend sysfs \
-            --out /work/power_report.json \
-            -- "${RUNNER[@]}"
+            python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+              --backend sysfs \
+              --out /work/power_report.json \
+              -- "${RUNNER[@]}"
 
       # Simulator runs have no hardware power telemetry, so swap the HW power sidecar for the
       # host-load sidecar — it reports host CPU/memory/disk/network usage (a "mem report", not
@@ -367,34 +380,46 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests (simulator)
         if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
-        env:
-          PYTEST_ADDOPTS: "-p no:timeout -n 4 ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
-        run: |
-          # Strip the per-test `pytest --timeout N` from the cmd: the simulator is ~10-50x slower than
-          # HW, so that per-op limit kills slow-but-correct ops (the job timeout-minutes is the backstop;
-          # PYTEST_ADDOPTS also sets -p no:timeout). Run that cmd with xdist; if a worker crashes (xdist
-          # only reports "worker crashed"), re-run serially (drop -n 4 via the PYTEST_ADDOPTS override)
-          # with --lf for actionable diagnostics.
-          export cmd=$(printf '%s' '${{ matrix.test-group.cmd }}' | sed -E 's/[[:space:]]+--timeout[[:space:]]+[0-9]+//g')
-          # PYTEST_ADDOPTS for the serial fallback re-run (drops -n 4); applied only on retry.
-          export SERIAL_ADDOPTS="-p no:timeout ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
-          # Wrap the whole sim run in the host-load sidecar so its usage report covers both
-          # the parallel run and any serial re-run. Written to /work/mem_report.json (even
-          # on failure — emitted before the sidecar exits) so the Upload mem report step
-          # picks it up. The sidecar is the final command, so it propagates the run's exit code.
-          .github/scripts/utils/host-load-sidecar.sh \
-            --interval 1 \
-            --label "${{ matrix.test-group.name }} (simulator)" \
-            --output /work/mem_report.json \
-            -- bash -c '
-              if eval "$cmd"; then
-                exit 0
-              fi
-              echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
-              export PYTEST_ADDOPTS="$SERIAL_ADDOPTS"
-              eval "$cmd --lf --lfnf=all --tb=long -v" || true
-              exit 1
-            '
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            # Step-level env does not reach a composite action's script (see
+            # .github/actions/run-with-log/README.md), so every value this body
+            # needs is set here.
+            # Cap PyTorch/ATen host-side OpenMP threads and wait passively. A brief
+            # host reference-tensor op spins up the OpenMP/MKL pool, whose workers
+            # then busy-wait for the rest of the job — including while the device
+            # does the much longer real work. That is most of the CPU burn.
+            export OMP_NUM_THREADS=2
+            export MKL_NUM_THREADS=2
+            export OMP_WAIT_POLICY=passive
+            export PYTEST_ADDOPTS="-p no:timeout -n 4 ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+            # Strip the per-test `pytest --timeout N` from the cmd: the simulator is ~10-50x slower than
+            # HW, so that per-op limit kills slow-but-correct ops (the job timeout-minutes is the backstop;
+            # PYTEST_ADDOPTS also sets -p no:timeout). Run that cmd with xdist; if a worker crashes (xdist
+            # only reports "worker crashed"), re-run serially (drop -n 4 via the PYTEST_ADDOPTS override)
+            # with --lf for actionable diagnostics.
+            export cmd=$(printf '%s' '${{ matrix.test-group.cmd }}' | sed -E 's/[[:space:]]+--timeout[[:space:]]+[0-9]+//g')
+            # PYTEST_ADDOPTS for the serial fallback re-run (drops -n 4); applied only on retry.
+            export SERIAL_ADDOPTS="-p no:timeout ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+            # Wrap the whole sim run in the host-load sidecar so its usage report covers both
+            # the parallel run and any serial re-run. Written to /work/mem_report.json (even
+            # on failure — emitted before the sidecar exits) so the Upload mem report step
+            # picks it up. The sidecar is the final command, so it propagates the run's exit code.
+            .github/scripts/utils/host-load-sidecar.sh \
+              --interval 1 \
+              --label "${{ matrix.test-group.name }} (simulator)" \
+              --output /work/mem_report.json \
+              -- bash -c '
+                if eval "$cmd"; then
+                  exit 0
+                fi
+                echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
+                export PYTEST_ADDOPTS="$SERIAL_ADDOPTS"
+                eval "$cmd --lf --lfnf=all --tb=long -v" || true
+                exit 1
+              '
 
       - name: Upload power report
         if: ${{ !cancelled() && !startsWith(matrix.test-group.sku, 'sim_') }}
@@ -521,18 +546,24 @@ jobs:
       - name: 📊 CCache Report
         if: ${{ !cancelled() }}
         run: |
-          echo '## CCache Summary (kernel)' >> $GITHUB_STEP_SUMMARY
+          echo '<details><summary>CCache Summary (kernel)</summary>' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '</details>' >> $GITHUB_STEP_SUMMARY
 
           # Surface remote storage stats and errors from the ccache log.
           # Uses a filter script to avoid overflowing the 1024k step summary limit.
           if [ -f /tmp/ccache.log ]; then
-            echo '## CCache Remote Storage (kernel)' >> $GITHUB_STEP_SUMMARY
+            echo '<details><summary>CCache Remote Storage (kernel)</summary>' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             .github/scripts/ccache_log_filter.sh /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '</details>' >> $GITHUB_STEP_SUMMARY
           fi
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
@@ -540,6 +571,23 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+
+      - name: 🤖 AI job summary
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries",
+              "scope": "${{ inputs.summary-scope }}"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

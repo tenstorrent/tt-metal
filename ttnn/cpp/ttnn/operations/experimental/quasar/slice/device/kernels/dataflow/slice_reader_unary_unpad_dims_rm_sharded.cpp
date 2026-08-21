@@ -18,8 +18,15 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t stick_size_padded = get_arg(args::stick_size_padded);
     constexpr uint32_t stick_size_unpadded = get_arg(args::stick_size_unpadded);
+    // Buffer's aligned row stride (>= payload when W·E is not 16-aligned); begins_bytes = slice_start[-1] * E.
+    constexpr uint32_t src_stride_bytes = get_arg(args::src_stride_bytes);
+    constexpr uint32_t dst_stride_bytes = get_arg(args::dst_stride_bytes);
+    constexpr uint32_t begins_bytes = get_arg(args::begins_bytes);
+
+    // One coalesced read only when every row is contiguous on both sides and starts at column 0.
+    constexpr bool can_coalesce =
+        (begins_bytes == 0) && (src_stride_bytes == stick_size_unpadded) && (dst_stride_bytes == stick_size_unpadded);
 
     // Per-core packed work description (runtime vararg), positional layout:
     //   [0]                              num_cores_read
@@ -55,17 +62,31 @@ void kernel_main() {
             const uint32_t curr_num_sticks = get_vararg(chunk_pair_idx + 1);
             chunk_pair_idx += 2;
 
-            uint32_t l1_read_offset = curr_start_id * stick_size_unpadded;
-            uint32_t read_data_size_bytes = curr_num_sticks * stick_size_unpadded;
-
-            CoreLocalMem<uint32_t> dst(l1_write_addr);
-            noc.async_read(
-                UnicastEndpoint{},
-                dst,
-                read_data_size_bytes,
-                {.noc_x = src_noc_x, .noc_y = src_noc_y, .addr = l1_read_addr + l1_read_offset},
-                {.offset_bytes = 0});
-            l1_write_addr += read_data_size_bytes;
+            if constexpr (can_coalesce) {
+                uint32_t src_off = curr_start_id * src_stride_bytes;
+                uint32_t bytes = curr_num_sticks * stick_size_unpadded;
+                CoreLocalMem<uint32_t> dst(l1_write_addr);
+                noc.async_read(
+                    UnicastEndpoint{},
+                    dst,
+                    bytes,
+                    {.noc_x = src_noc_x, .noc_y = src_noc_y, .addr = l1_read_addr + src_off},
+                    {.offset_bytes = 0});
+                l1_write_addr += curr_num_sticks * dst_stride_bytes;
+            } else {
+                uint32_t src_off = curr_start_id * src_stride_bytes + begins_bytes;
+                for (uint32_t s = 0; s < curr_num_sticks; ++s) {
+                    CoreLocalMem<uint32_t> dst(l1_write_addr);
+                    noc.async_read(
+                        UnicastEndpoint{},
+                        dst,
+                        stick_size_unpadded,
+                        {.noc_x = src_noc_x, .noc_y = src_noc_y, .addr = l1_read_addr + src_off},
+                        {.offset_bytes = 0});
+                    src_off += src_stride_bytes;
+                    l1_write_addr += dst_stride_bytes;
+                }
+            }
         }
     }
 

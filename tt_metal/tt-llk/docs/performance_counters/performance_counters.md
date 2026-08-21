@@ -6,7 +6,7 @@
 - Profiler zone macros: [tests/helpers/include/profiler.h](../../tests/helpers/include/profiler.h)
 - Host-side counter readback: [tests/python_tests/helpers/counters.py](../../tests/python_tests/helpers/counters.py)
 - Host-side derived metrics: [tests/python_tests/helpers/metrics.py](../../tests/python_tests/helpers/metrics.py)
-- Test driver: [tests/python_tests/helpers/perf.py](../../tests/python_tests/helpers/perf.py)
+- Test driver: [tests/python_tests/helpers/perf/core.py](../../tests/python_tests/helpers/perf/core.py)
 - Test sources: [tests/sources/](../../tests/sources/) (files ending in `_perf.cpp`)
 - Pytest CLI registration: [tests/python_tests/conftest.py](../../tests/python_tests/conftest.py)
 - Upstream tech report (metal-level): [tech_reports/PerfCounters/perf-counters.md](../../../../tech_reports/PerfCounters/perf-counters.md)

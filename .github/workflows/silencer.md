@@ -96,7 +96,7 @@ safe-outputs:
     labels: [automation, silencer]
     # Scope patches to source-like files only: a mistaken or manipulated agent response
     # cannot touch unrelated files outside Silencer's noise-fix scope.
-    allowed-files: ["**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.h", "**/*.hpp", "**/*.py", "**/*.pyi", "**/*.cmake", "**/CMakeLists.txt"]
+    allowed-files: ["**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.h", "**/*.hpp", "**/*.inl", "**/*.py", "**/*.pyi", "**/*.cmake", "**/CMakeLists.txt"]
     # One target per run (see *Scan procedure* step 5): Silencer fixes a single noise
     # source per turn, so it opens at most one PR. Also gh-aw's default, but stated
     # explicitly here because it is a deliberate scope decision, not an accident.
@@ -114,8 +114,8 @@ safe-outputs:
     # must be able to name ANY workflow Silencer scans, not just pr-gate/merge-gate: a
     # fix sourced from e.g. galaxy-e2e-tests logs is validated by re-running
     # galaxy-e2e-tests on the fix branch, not a generic gate — the gates cover only
-    # categories 1-2/4 (see *Scan procedure* step 2), so restricting this list to just
-    # the two gates would leave categories 3/5/6 fixes unvalidated for every
+    # categories 1/4 (see *Scan procedure* step 2), so restricting this list to just
+    # the two gates would leave categories 2/3/5/6 fixes unvalidated for every
     # non-gate workflow.
     # The per-call `ref` override this relies on landed in github/gh-aw#49408.
     #
@@ -123,13 +123,11 @@ safe-outputs:
     # single hardcoded list of workflows Silencer tracks — *Scan procedure* step 2 scans
     # exactly this same list, so there is only one place to update when a tracked
     # workflow is added or removed. Entries are bare filename stems, no extension
-    # (`pr-gate` resolves `.github/workflows/pr-gate.yaml`). All 42 are confirmed to
+    # (`pr-gate` resolves `.github/workflows/pr-gate.yaml`). All 39 are confirmed to
     # declare a `workflow_dispatch` trigger, which this safe-output requires.
     workflows:
       - sanity-tests
-      - blackhole-sanity-tests
       - blackhole-e2e-tests
-      - blackhole-demo-tests
       - galaxy-profiler-tests
       - galaxy-multi-user-isolation-tests
       - galaxy-deepseek-tests
@@ -141,13 +139,11 @@ safe-outputs:
       - galaxy-e2e-tests
       - galaxy-sanity
       - galaxy-health
-      - t3000-perf-tests
       - t3000-e2e-tests
       - t3000-integration-tests
       - t3000-profiler-tests
       - single-card-profiler-tests
       - pipeline-select-profiler
-      - t3000-demo-tests
       - t3000-unit-tests
 
       - models-t1-e2e-tests
@@ -158,9 +154,6 @@ safe-outputs:
       - models-t3-unit-tests
 
       - perf-device-models
-      - perf-models
-      - single-card-ttnn-models-frequent-tests
-      - single-card-demo-tests
       - tt-metal-l2-nightly
       - vllm-model-tests
       - sanity-tests-debug
@@ -727,7 +720,7 @@ bookkeeping and validation that attach to the one target, or to phase A's report
    anchored at the start of the comment), and everything after it is read as author notes, so
    the rest of the report reads exactly as it would without the command:
    ```json
-   { "type": "add_comment", "item_number": 52111, "body": "/codeowners ping\n\n**Test status** — dispatched `pr-gate` run <https://github.com/tenstorrent/tt-metal/actions/runs/30612345678>: `completed` / `success`.\n\nA green conclusion alone confirms nothing about this warning: that run's **own logs** must still be re-grepped for `-Wunused-but-set-variable` in the **build/compile step's** logs (categories 1–2/4 — for a runtime or log-spam fix, the **test-execution step's** logs, categories 3/5/6)." }
+   { "type": "add_comment", "item_number": 52111, "body": "/codeowners ping\n\n**Test status** — dispatched `pr-gate` run <https://github.com/tenstorrent/tt-metal/actions/runs/30612345678>: `completed` / `success`.\n\nA green conclusion alone confirms nothing about this warning: that run's **own logs** must still be re-grepped for `-Wunused-but-set-variable` in the **build/compile step's** logs (categories 1/4 — for a JIT / device-kernel, runtime or log-spam fix, the **test-execution step's** logs, categories 2/3/5/6). For a category-2 fix that step's logs must **also carry the affected kernel's JIT-compile line** — no such line means no test in the run exercised the kernel, so the result is **inconclusive**, not verified." }
    ```
    - `item_number` is the PR number you just resolved — PRs are issues to this API, so
      `add-comment`'s `target: "*"` reaches them.
@@ -741,7 +734,8 @@ bookkeeping and validation that attach to the one target, or to phase A's report
      terminal state — see the memory bullet below.
    - Always restate **what to grep and where**, naming the step per category exactly as
      *Validating changes via CI* does. The conclusion is never the proof; the pattern's absence
-     from that run's own logs is.
+     from that run's own logs is — and for category 2, only alongside a JIT-compile line proving
+     the run built the kernel at all.
    - This fires **at most twice** per PR, however many runs the validation spans: once when the
      PR first comes out of draft (which may be on a nonterminal state), and once with the
      terminal outcome. The two flags in *CI validations in flight* are what bound it —
@@ -807,19 +801,24 @@ bookkeeping and validation that attach to the one target, or to phase A's report
    perf/profiler/stress suites across **Blackhole, Galaxy, T3000, and single-card**, the
    `models-t1/t2/t3` suites, `tt-metal-l2-nightly`, `vllm-model-tests`, the `runtime-*`
    suites, and the `pr-gate` / `merge-gate` gates (which invoke `build-artifact.yaml`, so
-   **host compile / JIT / deprecated-declaration warnings are covered transitively** through
-   the gate logs — you do not need a separate build-only list). For each tracked workflow,
+   **host compile and deprecated-declaration warnings are covered transitively** through
+   the gate logs — you do not need a separate build-only list). JIT / device-kernel warnings
+   are **not** covered there: `build-artifact.yaml` excludes device-kernel sources from the
+   host build, so they surface only in test-execution logs (below). For each tracked workflow,
    enumerate runs with the `github` MCP tool (**not**
    `gh run list`, which has no credentials here): `actions_list` with
    `method: "list_workflow_runs"`, `resource_id: "<workflow-file>"`, and
    `workflow_runs_filter: {status: "completed", branch: "main"}`, then `actions_list` with
    `method: "list_workflow_jobs"` on each chosen run ID to get the job IDs that `get_job_logs`
    needs. See *Token discipline* step 1 for the full argument list.
-   - Keep in mind *which categories live where*: compile / JIT / `-Wdeprecated-declarations`
-     warnings (categories 1–2, 4) surface in the **gate/build** logs; runtime warnings and
+   - Keep in mind *which categories live where*: host compile / `-Wdeprecated-declarations`
+     warnings (categories 1, 4) surface in the **gate/build** logs; JIT / device-kernel
+     warnings (category 2) surface in the **test / model / perf** logs, emitted by the kernel
+     compiler (`riscv32-tt-elf-g++` / `riscv-tt-elf-g++`) when a test actually runs an op that
+     uses the kernel — never in the host build; runtime warnings and
      log spam (categories 3, 5, 6 — e.g. the matmul `allowed_worker_cores` spam, the
      pipe-delimited `| warning |` lines the *Token discipline* grep is tuned for) surface in
-     the **test / model / perf** logs. Scanning the full tracked list reaches all of them.
+     the **test / model / perf** logs too. Scanning the full tracked list reaches all of them.
    - **Rotate** which tracked workflows you sample each run (record the last-sampled set in
      memory) so over successive runs you cover the whole surface instead of re-scanning one.
    - Frequency counts differ in kind: gate/build logs report a warning **per compile**, test
@@ -923,15 +922,29 @@ nothing about *your specific warning*. The proof is always the same act: once th
 **re-grep that run's own logs for the specific pattern** and confirm it is absent. What differs
 by category is only **where in that run's logs the evidence lives**:
 
-- **Categories 1–2 and 4** (host compile, JIT / device-kernel, `-Wdeprecated-declarations`) — in
-  the **build/compile step's** logs of whichever workflow you dispatched. Gate-type or not is
-  irrelevant: what matters is that the dispatched workflow exercises the compile path, which the
-  tracked workflows always do (they pull in `build-artifact.yaml` — see *Scan procedure* step 2).
-  So dispatching the **workflow whose logs sourced the fix** and then reading that run's own
-  compile logs is the **complete, direct** proof — a non-gate target like `t3000-demo-tests`,
-  which recompiles the very kernels that emitted the warning, is not weaker evidence than a gate.
+- **Categories 1 and 4** (host compile, `-Wdeprecated-declarations`) — in the **build/compile
+  step's** logs of whichever workflow you dispatched. Gate-type or not is irrelevant: what
+  matters is that the dispatched workflow exercises the host compile path, which the tracked
+  workflows always do (they pull in `build-artifact.yaml` — see *Scan procedure* step 2).
+- **Category 2** (JIT / device-kernel) — in the **test-execution step's** logs of that same run,
+  **not** the `build-artifact` job. Device-kernel sources are excluded from the host CMake build;
+  they are packaged as source and JIT-compiled at runtime by `riscv32-tt-elf-g++` /
+  `riscv-tt-elf-g++` when a `Program` first runs the op on device. The evidence is therefore the
+  **kernel JIT-compile invocation lines** in the test-execution logs. Grepping the
+  `build-artifact / Build Release` logs proves **nothing** here: that job never invokes the kernel
+  compiler for these files, so the pattern reads as absent whether or not the fix is correct — a
+  false-negative proof, which is exactly what went wrong on tenstorrent/tt-metal#52111. A non-gate
+  target like `t3000-unit-tests` is **not** weaker evidence than a gate for this category: it
+  recompiles the affected kernels through its **own test-execution steps** triggering JIT, which
+  has nothing to do with `build-artifact.yaml`.
 - **Categories 3, 5 and 6** (runtime warnings, log spam, over-verbose messages) — in the
-  **test-execution step's** logs of that same run.
+  **test-execution step's** logs of that same run, the same place as category 2.
+
+Category 2 carries one further caveat: a kernel is JIT-compiled **only if the dispatched run's
+tests actually exercise it** — i.e. call an op that uses it. If no test in that workflow invokes
+the affected kernel, there is **no JIT-compile line to grep at all**; that is **inconclusive**
+validation, not silent success, and must be reported as such rather than as absence-of-warning.
+So prefer dispatching a tracked workflow whose suites are likely to exercise the modified kernel.
 
 Either way, **you cannot do that grep in this turn.** Exactly as with the PR itself — gh-aw
 performs the dispatch in the `safe_outputs` job *after* your agent turn ends — the run does not
@@ -944,8 +957,9 @@ Therefore:
   the run/job IDs whose logs motivated the fix. The **next** scheduled run resolves the outcome
   (`search_pull_requests`, then `pull_request_read` with `method: "get_check_runs"` — see *Scan
   procedure* step 1) and, **once that outcome is terminal**, can then re-grep the dispatched
-  run's own logs — the build/compile step for categories 1–2/4, the test-execution step for
-  categories 3/5/6 — to confirm the pattern is genuinely absent. It must then **post what it
+  run's own logs — the build/compile step for categories 1/4, the test-execution step for
+  categories 2/3/5/6 — to confirm the pattern is genuinely absent, and for category 2 that the
+  kernel's JIT-compile line is present at all (per the caveat above). It must then **post what it
   found back onto the PR** with the `add-comment` safe-output; an outcome resolved but never
   reported is worth nothing (*Scan procedure* step 1 has the exact call). A run that is still
   `queued` / `in_progress` gets an interim comment and **remains in flight** — there are no
@@ -991,8 +1005,10 @@ Therefore:
     makes it proof: **a green conclusion on its own confirms nothing about this warning —
     that run's own logs must be re-grepped for the exact pattern once it completes.** Quote
     the pattern to grep for and name **where** it lives in that run: the **build/compile
-    step's** logs for a compile / JIT / deprecated-declaration fix (categories 1–2/4), the
-    **test-execution step's** logs for a runtime or log-spam fix (categories 3/5/6). A
+    step's** logs for a host-compile or deprecated-declaration fix (categories 1/4), the
+    **test-execution step's** logs for a JIT / device-kernel, runtime or log-spam fix
+    (categories 2/3/5/6) — for category 2, the kernel JIT-compile invocation lines, since the
+    `build-artifact` job never compiles device kernels. A
     maintainer should come away knowing exactly what to look for and where, not just "check
     whether it went green".
     If the workflow was **not** in the `dispatch-workflow` allowlist and no dispatch could
@@ -1105,12 +1121,17 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
   repo memory, and stop. Never back-fill a "fix" from old issues or a source grep instead.
 - **Validate via CI, never locally.** Always dispatch the source tracked workflow onto your PR
   branch in the same turn you open/amend it (see *Validating changes via CI*). Never claim a fix
-  is verified without a build run, and never claim a runtime/log-spam pattern (categories 3/5/6)
-  is confirmed gone from a compile-only build run — the proof is its absence from the dispatched
-  run's own logs, which you cannot read until a later run. On that later run, **comment the
-  resolved outcome back onto the PR** with `add-comment` and **mark the PR ready for review**
-  with `mark-pull-request-as-ready-for-review` (*Scan procedure* step 1); an outcome you
-  resolve but never report is no better than one you never checked, and a report nobody can see
+  is verified without a CI run, and never claim a JIT/device-kernel (category 2) or
+  runtime/log-spam (categories 3/5/6) pattern is confirmed gone from a host build log — the
+  `build-artifact` job runs no tests, so no runtime output exists there to prove 3/5/6, and it
+  excludes device-kernel sources, so it never invokes the kernel compiler either. The proof is the
+  pattern's absence from the **test-execution** logs of the dispatched run, which you cannot read
+  until a later run — and for category 2 that absence proves nothing on its own: those logs must
+  also **show the affected kernel's JIT-compile line**, or the validation is **inconclusive**
+  rather than verified (see the caveat in *Validating changes via CI*). On that later run,
+  **comment the resolved outcome back onto the PR** with `add-comment` and **mark the PR ready
+  for review** with `mark-pull-request-as-ready-for-review` (*Scan procedure* step 1); an outcome
+  you resolve but never report is no better than one you never checked, and a report nobody can see
   — a comment on a draft PR — is no better than no report.
 - **Coordinate with `deprecations.json` / `deprecation-reaper.yml`** for deprecated-API work;
   migrate call sites, leave shim deletion to the reaper's schedule.

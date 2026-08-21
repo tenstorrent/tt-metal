@@ -9,34 +9,30 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/kernel/dataflow/cb_fill_helpers.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
-    const auto momentum = get_arg_val<uint32_t>(0);
-    uint32_t src_addr = get_arg_val<uint32_t>(1);  // input tensor
-    uint32_t start_tile_id = get_arg_val<uint32_t>(2);
-    uint32_t num_tiles = get_arg_val<uint32_t>(3);
-    uint32_t HtWt = get_arg_val<uint32_t>(4);
-    uint32_t n_stride = get_arg_val<uint32_t>(5);
-    uint32_t c_stride = get_arg_val<uint32_t>(6);
-    uint32_t N = get_arg_val<uint32_t>(7);
-    uint32_t C = get_arg_val<uint32_t>(8);
+    const auto momentum = get_arg(args::momentum);
+    uint32_t start_tile_id = get_arg(args::start_tile_id);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t HtWt = get_arg(args::HtWt);
+    uint32_t n_stride = get_arg(args::n_stride);
+    uint32_t c_stride = get_arg(args::c_stride);
+    uint32_t N = get_arg(args::N);
+    uint32_t C = get_arg(args::C);
 
-    constexpr auto dfb_id_src = get_compile_time_arg_val(0);
-    constexpr auto dfb_id_momentum = get_compile_time_arg_val(1);
-    constexpr auto dfb_id_one = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
-    constexpr bool fill_momentum_fp32 = get_compile_time_arg_val(src_args.next_compile_time_args_offset()) == 1;
+    constexpr bool fill_momentum_fp32 = get_arg(args::fill_momentum_fp32) == 1;
     constexpr uint32_t onetile = 1;
     constexpr uint32_t k_tile_face_elems = 1024;
 
     Noc noc;
-    DataflowBuffer dfb_src(dfb_id_src);
-    DataflowBuffer dfb_momentum(dfb_id_momentum);
+    DataflowBuffer dfb_src(dfb::src);            // batch_mean tiles, streamed on to the compute kernel
+    DataflowBuffer dfb_momentum(dfb::momentum);  // a single tile of momentum, held for the whole kernel
 
     const uint32_t src_tile_bytes = dfb_src.get_entry_size();
-    const auto src = TensorAccessor(src_args, src_addr);
+    const auto src = TensorAccessor(tensor::batch_mean);
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;
@@ -53,7 +49,9 @@ void kernel_main() {
     uint32_t one_u = 0;
     const float one_f = 1.0f;
     std::memcpy(&one_u, &one_f, sizeof(uint32_t));  // Alternative for std::bit_cast
-    fill_cb_with_value(dfb_id_one, one_u);
+    // A single tile of 1.0, for the (1 - momentum) term. The helper takes a raw buffer id; the
+    // DFB handle converts to one implicitly.
+    fill_cb_with_value(dfb::one, one_u);
 
     // momentum
     dfb_momentum.reserve_back(onetile);

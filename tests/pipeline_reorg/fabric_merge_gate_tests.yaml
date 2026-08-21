@@ -1,8 +1,22 @@
 # Fabric N300 merge-gate matrix.
 #
-# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, arch, owner_id.
+# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
+# `arch` is derived from the SKU inline in the impl workflow's ARCH_NAME
+# expression (bh_* -> blackhole, wh_* -> wormhole_b0), not authored per entry.
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> merge_gate).
 # Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
+#
+# tests/scripts/run_cpp_fabric_tests.sh, which exercises:
+#   * fabric_unit_tests --gtest_filter="MeshGraphValidation*"           (host-side control-plane topology)
+#   * fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"             (2D fabric fast dispatch)
+#   * fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"             (1D fabric fast dispatch)
+#   * fabric_unit_tests --gtest_filter="*FabricMuxV2Smoke*Fixture.*"    (mux v2 smoke)
+#   * fabric_unit_tests --gtest_filter="FabricTrafficGeneratorKernelIntegrationTest.*"
+#   * test_tt_fabric --test_config test_fabric_sanity_common.yaml       (YAML-driven fabric sanity)
+# This is the correct minimum smoke bar for merge-gate: it catches regressions
+# in the host control-plane, both fabric axes, mux v2, traffic-gen kernels, and
+# the YAML-driven sanity harness in <10 min on N300. Heavier / long-running
+# suites run under tm-fabric-tests.
 
 - name: scaleout unit tests
   cmd: ./tests/scripts/run_cpp_fabric_tests.sh
@@ -10,5 +24,4 @@
     wh_n300_civ2:
       timeout: 10
   team: scaleout
-  arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song

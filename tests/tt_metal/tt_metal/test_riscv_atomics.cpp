@@ -19,16 +19,17 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "common/device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
-#include "common/mesh_dispatch_fixture.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
 // These Tests verify built in gcc atomics on Tensix RISCV processors
 // https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html
 
-class RISCVAtomicsFixture : public MeshDispatchFixture {
+class RISCVAtomicsFixture : public UnitMeshAnyDispatchFixture {
 protected:
     static constexpr experimental::NodeCoord core = {0, 0};
     static constexpr uint32_t SENTINEL{0xABABABAB};
@@ -36,22 +37,18 @@ protected:
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/riscv_atomics.cpp";
     uint32_t l1_unreserved_base{0};
     bool is_quasar{false};
-    std::shared_ptr<distributed::MeshDevice> mesh_device_;
-    IDevice* device_{nullptr};
     uint32_t num_dms_{0};
     std::vector<uint32_t> result;
     uint32_t word_count_32b{0};
 
     void SetUp() override {
-        MeshDispatchFixture::SetUp();
+        UnitMeshAnyDispatchFixture::SetUp();
         // No atomics support on WH
         if (arch_ == tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "RISCV Atomics not supported on Wormhole";
         }
-        mesh_device_ = devices_[0];
-        device_ = mesh_device_->get_devices()[0];
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
-        l1_unreserved_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+        l1_unreserved_base = this->device().allocator()->get_base_allocator_addr(HalMemType::L1);
         is_quasar = arch_ == tt::ARCH::QUASAR;
         if (is_quasar) {
             // Metal 2.0 reserves DM0/DM1 for runtime; user kernels get at most 6 threads
@@ -126,11 +123,11 @@ protected:
             .kernels = kernel_specs,
             .work_units = {main_wu},
         };
-        program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+        program = experimental::MakeProgramFromSpec(this->device(), spec);
         experimental::SetProgramRunArgs(program, params);
 
         workload.add_program(device_range, std::move(program));
-        RunProgram(mesh_device_, workload);
+        RunProgram(devices_.front(), workload);
     }
 };
 
@@ -147,7 +144,7 @@ TEST_F(RISCVAtomicsFixture, TestAtomicLoadStoreRISCV) {
 
     // Zero-Init the L1 atomics scratch space
     std::vector<uint32_t> initial_l1_words(l1_slot_count * word_count_32b, 0);
-    tt::tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base, initial_l1_words);
+    slow_dispatch::WriteToL1(this->device(), core, l1_unreserved_base, initial_l1_words);
 
     // Run the test
     run_riscv_atomics_test(dm_defines);
@@ -158,7 +155,7 @@ TEST_F(RISCVAtomicsFixture, TestAtomicLoadStoreRISCV) {
     // Read back words written by all DMs to verify atomic load/store went through properly
     const uint32_t read_size_bytes = sizeof(uint32_t) * (num_dms_ - 1) * word_count_32b;
 
-    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, read_addr, read_size_bytes, result);
+    slow_dispatch::ReadFromL1(this->device(), core, read_addr, read_size_bytes, result);
     ASSERT_EQ(result.size(), (num_dms_ - 1) * word_count_32b);
 
     // Quasar publishes a 64-bit result, while BH reads back a 32-bit result
@@ -182,7 +179,7 @@ TEST_F(RISCVAtomicsFixture, TestAtomicAddFetchRISCV) {
 
     // Zero-Init the L1 atomics scratch space
     std::vector<uint32_t> initial_l1_words(word_count_32b, 0);
-    tt::tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base, initial_l1_words);
+    slow_dispatch::WriteToL1(this->device(), core, l1_unreserved_base, initial_l1_words);
 
     const uint32_t expected_result = num_dms_ * iterations;
     const uint32_t read_size_bytes = sizeof(uint32_t) * word_count_32b;
@@ -190,7 +187,7 @@ TEST_F(RISCVAtomicsFixture, TestAtomicAddFetchRISCV) {
     // Run the test
     run_riscv_atomics_test(dm_defines);
 
-    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, l1_unreserved_base, read_size_bytes, result);
+    slow_dispatch::ReadFromL1(this->device(), core, l1_unreserved_base, read_size_bytes, result);
     ASSERT_EQ(result.size(), word_count_32b);
 
     // Quasar publishes a 64-bit result, while BH reads back a 32-bit result
@@ -216,7 +213,7 @@ TEST_F(RISCVAtomicsFixture, TestAtomicCASRISCV) {
 
     // Zero-Init the L1 atomics scratch space
     std::vector<uint32_t> initial_l1_words(word_count_32b, 0);
-    tt::tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base, initial_l1_words);
+    slow_dispatch::WriteToL1(this->device(), core, l1_unreserved_base, initial_l1_words);
 
     const uint64_t expected_result = num_dms_ * iterations;
     const uint32_t read_size_bytes = sizeof(uint32_t) * word_count_32b;
@@ -224,7 +221,7 @@ TEST_F(RISCVAtomicsFixture, TestAtomicCASRISCV) {
     // Run the test
     run_riscv_atomics_test(dm_defines);
 
-    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, l1_unreserved_base, read_size_bytes, result);
+    slow_dispatch::ReadFromL1(this->device(), core, l1_unreserved_base, read_size_bytes, result);
     ASSERT_EQ(result.size(), word_count_32b);
 
     // Quasar publishes a 64-bit result

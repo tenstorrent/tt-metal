@@ -4,18 +4,13 @@
 """KV-cache PCC validation for the DeepSeek / Kimi (MLA) prefill model.
 
 The single home for the block-cyclic KV-cache PCC check and its golden-trace
-loaders, plus the slot->slot and multi-pair migration validators. There is ONE
-PCC entrypoint, ``kv_cache_pcc_check``, used by both paths:
+loaders. There is ONE PCC entrypoint, ``kv_cache_pcc_check`` (reached via
+``TtPrefillRuntime.kv_cache_pcc_check``, which forwards here) — golden ``.pt`` or
+trace dir + ``real_len``.
 
-  * the runner's standalone bring-up loop, via ``TtPrefillRuntime.kv_cache_pcc_check``
-    (the runtime forwards here) — golden trace dir + per-rank ``first_layer_idx``;
-  * the migration validators here (``validate_after_prefill`` and friends) — golden
-    ``.pt`` or trace dir + ``real_len``.
-
-``validate_after_prefill`` / ``validate_migration_kv`` / ``validate_migrations_pairwise``
-have NO in-repo caller: they are driven by tt-llm-engine (the prefill scheduler /
-migration driver) after it issues migrations. Keep their signatures in sync with that
-caller. Everything prefixed ``_`` is internal.
+It has NO in-repo caller: the prefill runner never PCCs, so the callers are
+out-of-tree (tt-llm-engine) and bring-up scripts. Keep the signature in sync with
+them. Everything prefixed ``_`` is internal.
 """
 
 from __future__ import annotations
@@ -49,8 +44,8 @@ def _load_kv_pt_trace(pt_path: str) -> dict:
     here. `mmap=True` keeps it lazy on first touch; subsequent layers are zero-copy
     slices into the same backing storage.
 
-    Both `validate_migration_kv` PCC calls (BEFORE/AFTER) reuse one load via the
-    module-level cache; the cache lives for the runner's lifetime.
+    Repeated PCC calls against the same `.pt` reuse one load via the module-level
+    cache; the cache lives for the process's lifetime.
     """
     import torch
 
@@ -144,13 +139,13 @@ def kv_cache_pcc_check(
     Returns the min per-layer PCC and asserts (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1) when
     any layer is below threshold.
 
-    The single PCC entrypoint for both callers. Golden source, in priority order:
+    The single PCC entrypoint; its callers are out-of-tree (tt-llm-engine) or bring-up scripts.
+    Golden source, in priority order:
       1. `pt_path_override` / DEEPSEEK_PREFILL_TRACE_PT — a save_reference_cache .pt carrying
          ref_kvpe_list[layer] ([1, 1, seq, kv_lora + qk_rope_head_dim], already Meta-interleaved).
-         Used by the migration validators.
-      2. `trace_dir` (caller-resolved) — the runner's standalone loop passes the resolved
-         PREFILL_TRACE_DIR golden here; descended via resolve_trace_dir.
-      3. DEEPSEEK_PREFILL_TRACE_DIR env (default: the longbook_qa 56320 trace) — migration fallback.
+      2. `trace_dir` (caller-resolved) — the resolved PREFILL_TRACE_DIR golden, descended via
+         resolve_trace_dir.
+      3. DEEPSEEK_PREFILL_TRACE_DIR env (default: the longbook_qa 56320 trace) — last-resort fallback.
     A trace dir holds kv_cache/layer_*.safetensors (or a Kimi row-sharded dir) keyed by
     kv_post_transform_layer_<global_layer>.
 
@@ -195,7 +190,7 @@ def kv_cache_pcc_check(
             )
         resolved_dir = None
     elif trace_dir is not None:
-        # Standalone path: caller passes the PREFILL_TRACE_DIR golden; descend to the dir holding it.
+        # Caller passes the PREFILL_TRACE_DIR golden; descend to the dir holding it.
         resolved_dir = resolve_trace_dir(trace_dir)
         kv_pt = None
     else:

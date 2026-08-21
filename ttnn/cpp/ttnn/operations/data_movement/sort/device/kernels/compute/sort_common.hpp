@@ -7,6 +7,22 @@
 #include "api/dataflow/dataflow_buffer.h"
 
 /**
+ * @brief Before packing UInt16 value tiles from 32-bit DEST, move values into the packer-visible high half.
+ * No-op unless TOPK_UINT16_FP32_DEST is defined (UInt16 values + UINT32 indices / fp32_dest_acc_en).
+ * Must be called on MATH while DEST is still acquired, before tile_regs_commit.
+ */
+FORCE_INLINE
+void prepare_uint16_fp32_dest_value_tile_for_pack(uint32_t dst_tile_index) {
+    topk_uint16_prepare_value_tile_for_pack(dst_tile_index);
+}
+
+FORCE_INLINE
+void prepare_uint16_fp32_dest_value_tiles_for_pack(uint32_t dst_tile_a, uint32_t dst_tile_b) {
+    prepare_uint16_fp32_dest_value_tile_for_pack(dst_tile_a);
+    prepare_uint16_fp32_dest_value_tile_for_pack(dst_tile_b);
+}
+
+/**
  * @brief Sorts Wt tiles from row-major order into a bitonic sequence using local sorting and transposition.
  *
  * This function processes tiles in pairs, transposes them for column-wise sorting,
@@ -61,6 +77,9 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
         // llk_topk_sort -> inplace
         ckernel::topk_local_sort(0, (int)ascending_local, end_phase);
 
+        // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).
+        prepare_uint16_fp32_dest_value_tiles_for_pack(0, 1);
+
         tile_regs_commit();
         tile_regs_wait();
 
@@ -107,7 +126,8 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
  * @param Wt Number of tiles to process (width in tiles).
  */
 FORCE_INLINE
-void transpose_and_pack(DataflowBuffer& transposed_dfb, DataflowBuffer& dest_dfb, uint32_t Wt) {
+void transpose_and_pack(
+    DataflowBuffer& transposed_dfb, DataflowBuffer& dest_dfb, uint32_t Wt, bool prepare_uint16_value_for_pack = false) {
     constexpr uint32_t one_tile = 1;
 
     // Transpose from sorting by column to right structure
@@ -122,6 +142,11 @@ void transpose_and_pack(DataflowBuffer& transposed_dfb, DataflowBuffer& dest_dfb
 
         dest_dfb.reserve_back(one_tile);
         transpose_tile(transposed_dfb.get_id(), i, 0);
+
+        // UInt16-in-32b-DEST: transpose re-unpacks into low 16; fix up before pack (#50215).
+        if (prepare_uint16_value_for_pack) {
+            prepare_uint16_fp32_dest_value_tile_for_pack(0);
+        }
 
         tile_regs_commit();
         tile_regs_wait();
@@ -232,7 +257,8 @@ void copy_tile_between_cbs(
     DataflowBuffer& src_dfb,
     uint32_t src_tile_id,
     DataflowBuffer& dst_dfb,
-    uint32_t dst_tile_id = 0) {
+    uint32_t dst_tile_id = 0,
+    bool prepare_uint16_value_for_pack = false) {
     // Constants
     constexpr uint32_t dest_idx = 0;
     constexpr uint32_t one_tile = 1;
@@ -243,6 +269,10 @@ void copy_tile_between_cbs(
     // Copy tile to DST register
     copy_tile_to_dst_init_with_cb_update(src_dfb.get_id(), last_used_cb_index);
     copy_tile(src_dfb.get_id(), src_tile_id, dest_idx);
+
+    if (prepare_uint16_value_for_pack) {
+        prepare_uint16_fp32_dest_value_tile_for_pack(dest_idx);
+    }
 
     tile_regs_commit();
     tile_regs_wait();

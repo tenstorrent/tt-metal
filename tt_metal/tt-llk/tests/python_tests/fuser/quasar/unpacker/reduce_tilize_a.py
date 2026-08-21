@@ -5,17 +5,20 @@
 from typing import List, Tuple
 
 import torch
+from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_loop import FusedLoop, LoopTileByTile
-from fuser.fused_operation import FusedOperation
-from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
-from helpers.tilize_untilize import tilize_block
+from fuser.l1_operation import L1Operation
+from fuser.tile_loop import LoopTileByTile, TileLoop
 
 
 class UnpackReduceTilize(Unpacker):
-    loop: FusedLoop = LoopTileByTile()
+    loop: TileLoop = LoopTileByTile()
+
+    def __init__(self, reduce_dim, reduce_pool):
+        self.reduce_dim = reduce_dim
+        self.reduce_pool = reduce_pool
 
     def get_headers(self) -> List[str]:
         return [
@@ -27,27 +30,18 @@ class UnpackReduceTilize(Unpacker):
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        tilized_a = tilize_block(
-            tensor_a,
-            compute_unit.src_a.dimensions,
-            compute_unit.src_a.data_format,
-            compute_unit.src_a.tile_shape.total_num_faces(),
-            tile_dimensions=[
-                compute_unit.src_a.tile_shape.total_row_dim(),
-                compute_unit.src_a.tile_shape.total_col_dim(),
-            ],
-            face_r_dim=compute_unit.src_a.tile_shape.face_r_dim,
+        return (
+            self.tilize_golden(tensor_a, config, operation, compute_unit),
+            tensor_b,
         )
-
-        return tilized_a, tensor_b
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -57,18 +51,19 @@ class UnpackReduceTilize(Unpacker):
         desc_a = compute_unit.src_a.cpp_desc_name
         full_ct_dim = compute_unit.src_a.tile_count_x
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        reduce_pool = self.reduce_pool.cpp_enum_value
 
         return (
-            f"{desc_a}.buf_desc.f.y_dim = 1;\n"
-            f"{desc_a}.buf_desc.f.z_dim = 1;\n"
-            f"ckernel::trisc::_configure_buf_desc_table_({buf_desc_id_a}, {desc_a}.buf_desc);\n"
-            f"_llk_unpack_reduce_col_tilizeA_strided_init_"
+            f"{desc_a}.f.y_dim = 1;\n"
+            f"{desc_a}.f.z_dim = 1;\n"
+            f"ckernel::trisc::_configure_buf_desc_table_({buf_desc_id_a}, {desc_a});\n"
+            f"_llk_unpack_reduce_col_tilizeA_strided_init_<{reduce_pool}>"
             f"({buf_desc_id_a}, {buf_desc_id_b}, {full_ct_dim}, {tensor_shape});\n"
         )
 
     def unpack(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -89,7 +84,7 @@ class UnpackReduceTilize(Unpacker):
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,

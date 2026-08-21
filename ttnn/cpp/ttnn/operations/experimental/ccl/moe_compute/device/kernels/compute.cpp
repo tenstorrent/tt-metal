@@ -288,13 +288,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w2c_md_read_ptr[0]);
 
-    // Precompute NUM_CHUNKS_PER_EXPERT
-    uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
-    for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
-        NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
-    }
-
     // Value we wait on that indicates the next chunk of tiles have arrived from the tilize cores
     uint32_t matmul_chunk_ready_semaphore_wait_value = 1;
     uint32_t matmul_chunk_ready_semaphore_addr = cb_w2c_md_read_ptr[1];
@@ -309,7 +302,8 @@ void kernel_main() {
     // This decides which half of the buffer will have the valid data sent by tilize cores
     bool use_second_half_buffer = false;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
+        const uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
+        const uint32_t num_expert_chunks = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // GELU re-inits its SFPU LUT inside pack_compute_activation on every iteration (the
             // trailing MUL there clobbers it), so it's its own initializer — skip the per-chunk
@@ -367,6 +361,12 @@ void kernel_main() {
                                 continue;  // skip padding K slots after bias
                             }
                         }
+                        if constexpr (!has_bias) {
+                            if (k_tracker >= num_w0_w1_tiles_h) {
+                                k_tracker++;
+                                continue;  // skip padding K slots
+                            }
+                        }
                         matmul_block(
                             cb_s2c_in_id,
                             cb_r2c_w0_w1_id,
@@ -377,9 +377,7 @@ void kernel_main() {
                             /*ct_dim=*/4,
                             /*rt_dim=*/1,
                             /*kt_dim=*/1);
-                        if constexpr (has_bias) {
-                            k_tracker++;
-                        }
+                        k_tracker++;
                     }
                     cb_r2c_w0_w1.pop_front(w0_w1_tiles_per_block);
                 }

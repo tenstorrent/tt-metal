@@ -119,9 +119,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat scaler_cb_data_format =
-        in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const bool fp32_dest_acc_en = operation_attributes.compute_kernel_config.fp32_dest_acc_en;
+    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat scaler_cb_data_format = cb_data_format;
+    // Float32 + fp32_dest_acc_en + !fast_and_approximate_mode -> SFPU Accurate; else FPU.
+    // Quasar has no SFPU Accurate reduce; fall back to FPU.
+    const bool unpack_fp32_active =
+        (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en &&
+         !operation_attributes.fast_and_approximate_mode && device->arch() != tt::ARCH::QUASAR);
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
     uint32_t inb_single_tile_size = 0;
     if (fuse_pre_add) {
@@ -271,7 +276,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
                 m2::DFBBinding{
                     .dfb_spec_name = PRE1D_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
             },
-        .compile_time_args = {{"Wt", Wt}, {"blk", block_size}},
+        .compile_time_args =
+            {{"Wt", Wt}, {"blk", block_size}, {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
         .hw_config = compute_hw,
     };
@@ -289,12 +295,27 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     // sums), and the FPU reads its operands out of SrcA/SrcB, so SrcA/B is the mode for all of them.
     // The intermediates are Float16_b whatever the Dest width, so only the inputs can qualify.
     if (compute_gen1.enable_32_bit_dest) {
+        auto unpack_operand = [&](const m2::DFBSpecName& dfb) {
+            if (unpack_fp32_active) {
+                unpack_via_dest(compute_gen1, dfb);
+            } else {
+                unpack_via_src(compute_gen1, dfb);
+            }
+        };
         if (in_data_format == tt::DataFormat::Float32) {
-            unpack_via_src(compute_gen1, PRE1D_INPUT);
-            unpack_via_src(compute_gen1, PRE1D_REDUCE);  // the scaler tile mirrors the input's dtype
+            unpack_operand(PRE1D_INPUT);
+        }
+        if (scaler_cb_data_format == tt::DataFormat::Float32) {
+            unpack_via_src(compute_gen1, PRE1D_REDUCE);
+        }
+        if (cb_data_format == tt::DataFormat::Float32) {
+            unpack_operand(PRE1D_X2);
+            if (fuse_pre_add) {
+                unpack_operand(PRE1D_FUSED);
+            }
         }
         if (fuse_pre_add && inb_data_format == tt::DataFormat::Float32) {
-            unpack_via_src(compute_gen1, PRE1D_RESIDUAL);
+            unpack_operand(PRE1D_RESIDUAL);
         }
     }
 
@@ -401,9 +422,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat scaler_cb_data_format =
-        in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const bool fp32_dest_acc_en = operation_attributes.compute_kernel_config.fp32_dest_acc_en;
+    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat scaler_cb_data_format = cb_data_format;
+    // Float32 + fp32_dest_acc_en + !fast_and_approximate_mode -> SFPU Accurate; else FPU.
+    // Quasar has no SFPU Accurate reduce; fall back to FPU.
+    const bool unpack_fp32_active =
+        (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en &&
+         !operation_attributes.fast_and_approximate_mode && device->arch() != tt::ARCH::QUASAR);
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
     uint32_t inb_single_tile_size = 0;
     if (fuse_pre_add) {
@@ -600,7 +626,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                         .endpoint_type = m2::DFBEndpointType::PRODUCER},
                 },
             .compile_time_args =
-                {{"NCHt", tiles_per_core_x}, {"Wt", tiles_per_core_y}, {"blk", block_size}, {"num_cores_y", cores_y}},
+                {{"NCHt", tiles_per_core_x},
+                 {"Wt", tiles_per_core_y},
+                 {"blk", block_size},
+                 {"num_cores_y", cores_y},
+                 {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
             .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
         };
         bind_self_loop(compute, PRE2D_X2, "x2");
@@ -618,18 +648,34 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                 .endpoint_type = m2::DFBEndpointType::PRODUCER});
         }
         auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
-        // With the 32-bit Dest register enabled, every Float32 buffer the compute kernel consumes needs
-        // an explicit unpack mode. Here each one feeds an FPU op (mul_tiles for x**2, the row reduce for
-        // the sums, add_tiles for the cross-core merge), and the FPU reads its operands out of
-        // SrcA/SrcB, so SrcA/B is the mode for all of them. The intermediates and the merge buffers are
-        // Float16_b whatever the Dest width, so only the inputs can qualify.
+        // Float32 operands use UnpackToDest on the accurate SFPU path and SrcA/SrcB on the FPU path.
+        // The reduce scaler and the FPU merge's zero tile are always consumed through SrcA/SrcB.
         if (compute_gen1.enable_32_bit_dest) {
+            auto unpack_operand = [&](const m2::DFBSpecName& dfb) {
+                if (unpack_fp32_active) {
+                    unpack_via_dest(compute_gen1, dfb);
+                } else {
+                    unpack_via_src(compute_gen1, dfb);
+                }
+            };
             if (in_data_format == tt::DataFormat::Float32) {
-                unpack_via_src(compute_gen1, PRE2D_INPUT);
-                unpack_via_src(compute_gen1, PRE2D_REDUCE);  // the scaler tile mirrors the input's dtype
+                unpack_operand(PRE2D_INPUT);
+            }
+            if (scaler_cb_data_format == tt::DataFormat::Float32) {
+                unpack_via_src(compute_gen1, PRE2D_REDUCE);
+            }
+            if (cb_data_format == tt::DataFormat::Float32) {
+                unpack_operand(PRE2D_X2);
+                if (fuse_pre_add) {
+                    unpack_operand(PRE2D_FUSED);
+                }
+                // The merge sums the column's partials on the SFPU when accurate, add_tiles
+                // otherwise; dfb::zero is only the FPU path's operand.
+                unpack_operand(PRE2D_X2_MERGE);
+                unpack_via_src(compute_gen1, PRE2D_ZERO);
             }
             if (fuse_pre_add && inb_data_format == tt::DataFormat::Float32) {
-                unpack_via_src(compute_gen1, PRE2D_RESIDUAL);
+                unpack_operand(PRE2D_RESIDUAL);
             }
         }
         return compute;

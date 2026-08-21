@@ -19,12 +19,16 @@
  *
  * This function initializes packer0 to pack a single tile from the destination register to the output
  * DataFlow Buffer.
+ *
+ * Allocates a BFD id from the pack partition and programs its table entry from the output DFB's
+ * info (shape, L1 base, formats); the DFB id never doubles as the BFD id.
  */
 inline void llk_pack_init(const std::uint32_t pack_output) {
     const std::uint8_t output_id = static_cast<std::uint8_t>(get_output_id(pack_output));
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
-    _llk_pack_init_(output_id, tensor_shape);
+    llk_pack_program_bfd(output_id);
+    _llk_pack_init_(ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
 
     // 32-bit unpack-to-dest path: PACR addresses dest via SEC{TRISC_ID}_Offset (pack thread).
     // Initialize the section base to bank 0 for SyncHalf so the first PACR reads bank 0.
@@ -86,6 +90,7 @@ inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t
 template <bool out_of_order_output = false>
 inline void llk_pack(
     const std::uint32_t tile_index, const std::uint32_t pack_output, const std::uint32_t output_tile_index = 0) {
+    LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
     const std::uint8_t output_id = get_output_id(pack_output);
     const std::uint32_t l1_tile_index = get_output_tile_index<out_of_order_output, false>(output_id, output_tile_index);
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
@@ -105,6 +110,7 @@ inline void llk_pack(
  */
 // TODO: AM; Optimize block calls by using ntiles per pack, issue #40798
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_output, std::uint32_t ntiles) {
+    LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
     std::uint8_t output_id = get_output_id(pack_output);
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 

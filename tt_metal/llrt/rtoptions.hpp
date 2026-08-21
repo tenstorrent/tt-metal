@@ -119,6 +119,7 @@ struct InspectorSettings {
     bool serialize_on_dispatch_timeout = true;
     bool capture_tensor_specs = true;
     bool log_runtime_entries = false;
+    bool log_mesh_buffers = false;
 };
 
 template <typename T>
@@ -165,6 +166,10 @@ struct SanitizerSettings {
     // llk developer special mode.
     std::optional<bool> internal = std::nullopt;
 };
+
+// Not a limit: the value TT_METAL_TDP_LIMIT_WATTS carries to ask for the board default back rather
+// than a specific limit. Firmware only accepts limits in [50, 500] W, so zero is free to mean this.
+inline constexpr uint32_t TDP_LIMIT_RESTORE_DEFAULT_SENTINEL = 0;
 
 class RunTimeOptions {
     std::string root_dir;
@@ -238,6 +243,9 @@ class RunTimeOptions {
     bool clear_dram = false;
 
     size_t pinned_memory_cache_limit_bytes = 4ULL * 1024 * 1024 * 1024;
+
+    // Firmware throttler TDP limit [W] to apply when the cluster opens, or the restore sentinel.
+    std::optional<uint32_t> tdp_limit_watts;
 
     bool skip_loading_fw = false;
 
@@ -398,6 +406,13 @@ class RunTimeOptions {
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
 
+    // Process-start trace allocation tracker settings. These are static because
+    // environment variables are process-wide and the hot-path accessors do not
+    // belong to a particular MetalContext.
+    inline static bool trace_allocation_tracking_enabled_ = false;
+    inline static bool trace_allocation_diagnostics_enabled_ = false;
+    inline static bool trace_allocation_skip_program_cache_enabled_ = false;
+
     // Disable shared memory tracking for tt-smi
     bool shm_tracking_disabled = false;
     bool shm_verbose = false;
@@ -494,6 +509,12 @@ public:
 
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
 
+    static bool get_trace_allocation_tracking_enabled() { return trace_allocation_tracking_enabled_; }
+    static bool get_trace_allocation_diagnostics_enabled() { return trace_allocation_diagnostics_enabled_; }
+    static bool get_trace_allocation_skip_program_cache_enabled() {
+        return trace_allocation_skip_program_cache_enabled_;
+    }
+
     bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
     bool get_shm_verbose() const { return shm_verbose; }
 
@@ -513,6 +534,8 @@ public:
     void set_inspector_capture_tensor_specs(bool enabled) { inspector_settings.capture_tensor_specs = enabled; }
     bool get_inspector_log_runtime_entries() const { return inspector_settings.log_runtime_entries; }
     void set_inspector_log_runtime_entries(bool enabled) { inspector_settings.log_runtime_entries = enabled; }
+    bool get_inspector_log_mesh_buffers() const { return inspector_settings.log_mesh_buffers; }
+    void set_inspector_log_mesh_buffers(bool enabled) { inspector_settings.log_mesh_buffers = enabled; }
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
@@ -670,6 +693,9 @@ public:
 
     size_t get_pinned_memory_cache_limit_bytes() const { return pinned_memory_cache_limit_bytes; }
     void set_pinned_memory_cache_limit_bytes(size_t limit_bytes) { pinned_memory_cache_limit_bytes = limit_bytes; }
+
+    std::optional<uint32_t> get_tdp_limit_watts() const { return tdp_limit_watts; }
+    void set_tdp_limit_watts(std::optional<uint32_t> limit_watts) { tdp_limit_watts = limit_watts; }
 
     std::string get_visible_devices() const { return visible_devices; }
     std::string get_arch_name() const { return arch_name; }

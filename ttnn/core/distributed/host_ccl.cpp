@@ -16,7 +16,7 @@
 
 #include "tt_stl/span.hpp"
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
 
 namespace ttnn::distributed::host_ccl {
 

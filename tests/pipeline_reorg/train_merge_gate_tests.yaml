@@ -21,7 +21,7 @@
     mkdir -p generated/test_reports
     build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
   skus:
-    wh_n150_civ2:
+    bh_p150b_civ2:
       timeout: 15
   owner_id: U07K00A281X # Kevin Wu
   team: train
@@ -33,7 +33,7 @@
     mkdir -p generated/test_reports
     build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
   skus:
-    wh_n150_civ2:
+    bh_p150b_civ2:
       timeout: 15
   owner_id: U07K00A281X # Kevin Wu
   team: train
