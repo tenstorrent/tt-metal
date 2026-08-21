@@ -10,6 +10,7 @@ from .github_client import PRInfo, diff_file_paths, diff_line_numbers, post_pr_c
 from .llm import Finding, LLMSession
 from .logger import logger
 from .output import (
+    RERUN_FOOTER,
     format_pr_comment,
     format_summary_comment,
     print_failure,
@@ -48,7 +49,7 @@ def run_bug_check(
         if post_comments:
             post_pr_comment(
                 pr_number=pr_info.number,
-                body="## Bug Checker\nNo rules matched the files in this PR — nothing to check.",
+                body="## Bug Checker\nNo rules matched the files in this PR — nothing to check." + RERUN_FOOTER,
             )
         return []
 
@@ -204,7 +205,7 @@ def check_rule_command(
         if post_comments:
             post_pr_comment(
                 pr_number=pr_info.number,
-                body=f"## Bug Checker\n{msg}",
+                body=f"## Bug Checker\n{msg}" + RERUN_FOOTER,
             )
         return []
 
@@ -227,7 +228,7 @@ def check_rule_command(
         msg = f"Rule `{rule.id}` has no matching diff sections in this PR."
         logger.info(msg)
         if post_comments:
-            post_pr_comment(pr_number=pr_info.number, body=f"## Bug Checker\n{msg}")
+            post_pr_comment(pr_number=pr_info.number, body=f"## Bug Checker\n{msg}" + RERUN_FOOTER)
         return []
 
     try:

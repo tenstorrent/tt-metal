@@ -67,7 +67,9 @@ ALWI void topk_xl_local_sort(std::uint32_t idst, bool ascending) {
  * The default (full-sort) instantiation runs the same network as
  * topk_xl_local_sort and does issue it.
  *
- * early_exit_K64 requires K >= 1024; K = 512 is rejected by static_assert.
+ * early_exit_K64 requires K >= 1024, and the full sort K = 512 or K = 1024: the
+ * generic network does not converge at K = 2048, so that size has to go through
+ * topk_xl_local_sort and its fast path. Both are enforced by static_assert.
  */
 template <std::uint32_t K, bool early_exit_K64 = false>
 ALWI void topk_xl_local_sort_generic(std::uint32_t idst, bool ascending) {
