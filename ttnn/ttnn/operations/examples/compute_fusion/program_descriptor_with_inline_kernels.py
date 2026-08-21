@@ -125,34 +125,34 @@ void kernel_main() {
             // FUSED: sqrt(x) in D0, y in D1, SFPU add -> D0, exp -> D0, pack once.
             CF_PHASE("CF_FUSED");
             eltwise_chain(
-                EltwiseShape::tiles(n, blk),
-                CopyTile<cb_x, Dst::D0, InputLifecycle::HeldBulk, CopyTileReconfig::Input, OperandKind::Block>{},
+                IterationShape::tiles(n).block_size(blk),
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D0>{},
                 Sqrt<>{},
-                CopyTile<cb_y, Dst::D1, InputLifecycle::HeldBulk, CopyTileReconfig::Input, OperandKind::Block>{},
+                CopyTile<input(cb_y, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D1>{},
                 AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
                 Exp<>{},
-                PackTile<cb_out, OutputLifecycle::Bulk, PackTileReconfig::Output>{});
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
         } else {
             // UNFUSED: three chains, each packing to / reading from L1.
             { CF_PHASE("CF_SQRT");  // s1 = sqrt(x)
               eltwise_chain(
-                EltwiseShape::tiles(n, blk),
-                CopyTile<cb_x, Dst::D0, InputLifecycle::HeldBulk, CopyTileReconfig::Input, OperandKind::Block>{},
+                IterationShape::tiles(n).block_size(blk),
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D0>{},
                 Sqrt<>{},
-                PackTile<cb_s1, OutputLifecycle::Bulk, PackTileReconfig::Output>{}); }
+                PackTile<output(cb_s1, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
             { CF_PHASE("CF_ADD");  // s2 = s1 + y
               eltwise_chain(
-                EltwiseShape::tiles(n, blk),
-                CopyTile<cb_s1, Dst::D0, InputLifecycle::Bulk, CopyTileReconfig::Input, OperandKind::Block>{},
-                CopyTile<cb_y, Dst::D1, InputLifecycle::HeldBulk, CopyTileReconfig::Input, OperandKind::Block>{},
+                IterationShape::tiles(n).block_size(blk),
+                CopyTile<input(cb_s1, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block), Dst::D0>{},
+                CopyTile<input(cb_y, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D1>{},
                 AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                PackTile<cb_s2, OutputLifecycle::Bulk, PackTileReconfig::Output>{}); }
+                PackTile<output(cb_s2, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
             { CF_PHASE("CF_EXP");  // out = exp(s2)
               eltwise_chain(
-                EltwiseShape::tiles(n, blk),
-                CopyTile<cb_s2, Dst::D0, InputLifecycle::Bulk, CopyTileReconfig::Input, OperandKind::Block>{},
+                IterationShape::tiles(n).block_size(blk),
+                CopyTile<input(cb_s2, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block), Dst::D0>{},
                 Exp<>{},
-                PackTile<cb_out, OutputLifecycle::Bulk, PackTileReconfig::Output>{}); }
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
         }
         if (iter + 1 < kernel_iters) { cb_wait_front(cb_out, n); cb_pop_front(cb_out, n); }
     }
@@ -196,36 +196,36 @@ void kernel_main() {
         if constexpr (method == 0) {
             CF_PHASE("CF_FUSED");
             eltwise_chain(
-                EltwiseShape::tiles(n, blk),
-                CopyTile<cb_x, Dst::D0, InputLifecycle::HeldBulk, CopyTileReconfig::Input, OperandKind::Block>{},
+                IterationShape::tiles(n).block_size(blk),
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D0>{},
                 Sqrt<>{},
-                DestReuseBinary<cb_b, BinaryFpuOp::Mul, DestReuseType::DEST_TO_SRCA,
-                                InputLifecycle::HeldBulk, DestReuseReconfig::Input, Dst::D0, Dst::D0,
-                                OperandKind::Block>{},
-                PackTile<cb_out, OutputLifecycle::Bulk, PackTileReconfig::Output>{});
+                DestReuseBinary<input(cb_b, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block),
+                                BinaryFpuOp::Mul, DestReuseType::DEST_TO_SRCA, Dst::D0>{},
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
         } else if constexpr (method == 1) {
             CF_PHASE("CF_FUSED");
             eltwise_chain(
-                EltwiseShape::tiles(n, blk),
-                CopyTile<cb_x, Dst::D0, InputLifecycle::HeldBulk, CopyTileReconfig::Input, OperandKind::Block>{},
+                IterationShape::tiles(n).block_size(blk),
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D0>{},
                 Sqrt<>{},
-                CopyTile<cb_b, Dst::D1, InputLifecycle::HeldBulk, CopyTileReconfig::Input, OperandKind::Block>{},
+                CopyTile<input(cb_b, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D1>{},
                 MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                PackTile<cb_out, OutputLifecycle::Bulk, PackTileReconfig::Output>{});
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
         } else {
             { CF_PHASE("CF_SQRT");  // s1 = sqrt(x)
               eltwise_chain(
-                EltwiseShape::tiles(n, blk),
-                CopyTile<cb_x, Dst::D0, InputLifecycle::HeldBulk, CopyTileReconfig::Input, OperandKind::Block>{},
+                IterationShape::tiles(n).block_size(blk),
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D0>{},
                 Sqrt<>{},
-                PackTile<cb_s1, OutputLifecycle::Bulk, PackTileReconfig::Output>{}); }
+                PackTile<output(cb_s1, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
             { CF_PHASE("CF_MUL");  // out = s1 * b (FPU)
               eltwise_chain(
-                EltwiseShape::tiles(n, blk),
-                BinaryFpu<cb_s1, cb_b, BinaryFpuOp::Mul, BroadcastDim::None,
-                          InputLifecycle::Bulk, InputLifecycle::HeldBulk, BinaryDataFormatReconfig::Input,
-                          Dst::D0, OperandKind::Block, OperandKind::Block>{},
-                PackTile<cb_out, OutputLifecycle::Bulk, PackTileReconfig::Output>{}); }
+                IterationShape::tiles(n).block_size(blk),
+                BinaryFpu<BinaryFpuOp::Mul,
+                          input(cb_s1, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
+                          input(cb_b, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block),
+                          Dst::D0>{},
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
         }
         if (iter + 1 < kernel_iters) { cb_wait_front(cb_out, n); cb_pop_front(cb_out, n); }
     }
@@ -280,10 +280,10 @@ void kernel_main() {
                      ReduceInputPolicy::WaitUpfrontNoPop>(shape); }
             { CF_PHASE("CF_RECIP");
               eltwise_chain(
-                EltwiseShape::tiles(1),
-                CopyTile<cb_s1, Dst::D0, InputLifecycle::Bulk>{},
+                IterationShape::tiles(1),
+                CopyTile<input(cb_s1, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D0>{},
                 Recip<>{},
-                PackTile<cb_out, OutputLifecycle::Bulk, PackTileReconfig::Output>{}); }
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
         }
         if (iter + 1 < kernel_iters) { cb_wait_front(cb_out, 1); cb_pop_front(cb_out, 1); }
     }
