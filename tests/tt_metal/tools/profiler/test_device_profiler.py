@@ -65,6 +65,8 @@ def set_env_vars(**kwargs):
         "doDeviceTrace": "TT_METAL_TRACE_PROFILER=1 ",
         "do_mid_run_dump": "TT_METAL_PROFILER_MID_RUN_DUMP=1 ",
         "do_cpp_post_process": "TT_METAL_PROFILER_CPP_POST_PROCESS=1 ",
+        "accumulate_profiler": "TT_METAL_PROFILER_ACCUMULATE=1 ",
+        "kernel_zones_only": "TT_METAL_PROFILER_KERNEL_ZONES_ONLY=1 ",
         "set_program_support_count": "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=",
     }
     envVarsStr = " "
@@ -122,6 +124,8 @@ def run_device_profiler_test(
     doSync=False,
     enable_noc_tracing=False,
     doDispatchCores=False,
+    accumulate_profiler=False,
+    kernel_zones_only=False,
     setOpSupportCount=PROFILER_DEFAULT_OP_SUPPORT_COUNT,
 ):
     name = inspect.stack()[1].function
@@ -135,6 +139,8 @@ def run_device_profiler_test(
         doSync=doSync,
         enable_noc_tracing=enable_noc_tracing,
         doDispatchCores=doDispatchCores,
+        accumulate_profiler=accumulate_profiler,
+        kernel_zones_only=kernel_zones_only,
         set_program_support_count=setOpSupportCount,
     )
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testCommand}"
@@ -241,6 +247,12 @@ EXPECTED_KERNEL_RISCS = {
     "quasar": [f"QUASAR_DM{i}" for i in range(2, 8)] + [f"QUASAR_NEO{n}_TRISC{t}" for n in range(4) for t in range(4)],
 }
 
+EXPECTED_MAIN_ZONE_NAMES = {
+    "wormhole_b0": {"BRISC-KERNEL", "NCRISC-KERNEL", "TRISC-KERNEL", "ERISC-KERNEL"},
+    "blackhole": {"BRISC-KERNEL", "NCRISC-KERNEL", "TRISC-KERNEL", "ERISC-KERNEL"},
+    "quasar": {"DM-KERNEL", "TRISC-KERNEL"},
+}
+
 
 def _assert_kernel_cycle_counts(devicesData, ref_min, ref_max):
     arch = devicesData["data"]["deviceInfo"]["arch"]
@@ -340,6 +352,57 @@ def test_full_buffer():
         assert stats[statNameEth]["stats"]["Count"] % (OP_COUNT * ZONE_COUNT) == 0, "Wrong Eth Marker Repeat count"
     else:
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+
+
+def test_kernel_zones_only():
+    build_dir = os.environ.get("TT_METAL_BUILD_DIR", "build")
+    test_binary = {
+        "wormhole_b0": f"{build_dir}/test/tt_metal/tools/profiler/test_full_buffer",
+        "blackhole": f"{build_dir}/test/tt_metal/tools/profiler/test_full_buffer",
+        "quasar": f"{build_dir}/programming_examples/profiler/test_full_buffer",
+    }
+    arch = os.getenv("ARCH_NAME")
+    assert arch in test_binary
+
+    devices_data = run_device_profiler_test(
+        testName=test_binary[arch],
+        kernel_zones_only=True,
+    )
+
+    observed_zone_names = set()
+    for device_data in devices_data["data"]["devices"].values():
+        for core_name, core_data in device_data["cores"].items():
+            if core_name == "DEVICE":
+                continue
+            for risc_data in core_data.get("riscs", {}).values():
+                for entry in risc_data["timeseries"]:
+                    timer_id = ast.literal_eval(entry)[0] if isinstance(entry, str) else entry[0]
+                    zone_name = timer_id.get("zone_name")
+                    if zone_name is not None:
+                        observed_zone_names.add(zone_name)
+
+    assert EXPECTED_MAIN_ZONE_NAMES[arch] <= observed_zone_names
+    assert not any(zone_name.endswith("-FW") for zone_name in observed_zone_names)
+    assert "TEST-FULL" not in observed_zone_names
+
+
+def test_kernel_zones_only_accumulate_without_full_buffer():
+    build_dir = os.environ.get("TT_METAL_BUILD_DIR", "build")
+    test_binary = {
+        "wormhole_b0": f"{build_dir}/test/tt_metal/tools/profiler/test_timestamped_events",
+        "blackhole": f"{build_dir}/test/tt_metal/tools/profiler/test_timestamped_events",
+        "quasar": f"{build_dir}/programming_examples/profiler/test_timestamped_events",
+    }
+    arch = os.getenv("ARCH_NAME")
+    assert arch in test_binary
+
+    devices_data = run_device_profiler_test(
+        testName=test_binary[arch],
+        accumulate_profiler=True,
+        kernel_zones_only=True,
+    )
+
+    assert devices_data["data"]["devices"]
 
 
 def wildcard_match(pattern, words):

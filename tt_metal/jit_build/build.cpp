@@ -218,6 +218,9 @@ void JitBuildEnv::init(
         if (rtoptions.get_profiler_accumulate()) {
             profiler_options |= PROFILER_OPT_DO_ACCUMULATE;
         }
+        if (rtoptions.get_profiler_kernel_zones_only()) {
+            profiler_options |= PROFILER_OPT_DO_KERNEL_ZONES_ONLY;
+        }
         this->defines_ += "-DPROFILE_KERNEL=" + std::to_string(profiler_options) + " ";
 
         this->defines_ += "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" +

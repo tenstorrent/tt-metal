@@ -141,10 +141,12 @@ __attribute__((noinline)) void init_profiler(
     wIndex = CUSTOM_MARKERS;
     stackSize = 0;
 
+#if !(PROFILE_KERNEL & PROFILER_OPT_DO_KERNEL_ZONES_ONLY)
     for (int i = 0; i < SUM_COUNT; i++) {
         sumIDs[i] = 0;
         sums[i] = 0;
     }
+#endif
 
 #if defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_DM)
@@ -160,15 +162,17 @@ __attribute__((noinline)) void init_profiler(
         profiler_control_buffer[DROPPED_ZONES] = 0;
     }
     if (runCounter == 0) {
+        uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
         for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
             for (uint32_t i = ID_HH; i < GUARANTEED_MARKER_1_H; i++) {
                 profiler_data_buffer[riscID].data[i] = 0;
             }
 #if !defined(COMPILE_FOR_IDLE_ERISC)
-            // Update every risc's trace ID
+            // Residual L1 collection validates identity even when accumulation never fills enough to flush to DRAM.
             profiler_data_buffer[riscID].data[ID_LH] =
                 ((traceCount & PROFILER_ID_TRACE_MASK) << PROFILER_ID_TRACE_SHIFT) |
-                (profiler_data_buffer[riscID].data[ID_LH] & PROFILER_ID_RISC_FLAT_FIELD_MASK);
+                (((core_flat_id & PROFILER_ID_FLAT_MASK) << PROFILER_ID_FLAT_SHIFT) |
+                 (riscID & PROFILER_ID_RISC_MASK));
 #endif
         }
         profiler_control_buffer[NOC_X] = my_x[0];
@@ -291,6 +295,7 @@ inline __attribute__((always_inline)) bool get_profiler_zone_invalid() {
 }
 
 inline __attribute__((always_inline)) void risc_finished_profiling() {
+#if !(PROFILE_KERNEL & PROFILER_OPT_DO_KERNEL_ZONES_ONLY)
     for (int i = 0; i < SUM_COUNT; i++) {
         if (sums[i] > 0) {
             if (wIndex < PROFILER_L1_VECTOR_SIZE) {
@@ -302,6 +307,7 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
             }
         }
     }
+#endif
 
     for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
         mark_padding();
@@ -374,6 +380,8 @@ __attribute__((noinline)) void signal_host_buffer_full(uint32_t control_buffer_i
 // do_accumulate is runtime (not template) so dispatch cores (false=classic finish) and workers (true) share one fn,
 // keeping BRISC text small.
 __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULATE) {
+#if !((PROFILE_KERNEL & PROFILER_OPT_DO_KERNEL_ZONES_ONLY) && \
+      !(PROFILE_KERNEL & PROFILER_OPT_DO_ACCUMULATE))
     if (do_accumulate) {
         // Accumulate: don't reset wIndex/push each iteration. Each RISC publishes its fill level; aggregating RISC
         // flushes ALL only when one is full, then zeros end indices as restart sentinels.
@@ -498,6 +506,12 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
 #endif
         return;
     }
+#else
+    // Kernel-only profiling without accumulation cannot execute the accumulate flush protocol. Excluding that
+    // unreachable branch keeps large fused programs within the kernel configuration buffer without changing the
+    // classic profiler lifecycle below.
+    (void)do_accumulate;
+#endif
     // All workers get a GO regardless of whether they run a kernel. Skip if a worker does not run a kernel,
     // otherwise this risc's end index is published while the ID stamping below is skipped, leaving markers
     // with no identity for the consumer to attribute to the wrong core.
@@ -792,6 +806,35 @@ struct profileScopeGuaranteed {
             if constexpr (index == 0) {
                 finish_profiler();
             }
+        }
+    }
+};
+
+// Kernel-envelope profiling still needs the outer scope to own initialization, trace-state transitions, and flushing.
+// Omitting only its markers retains valid child records without paying for a second timed interval on every RISC.
+struct profileScopeKernelOwner {
+    inline __attribute__((always_inline)) profileScopeKernelOwner() {
+        if constexpr (TRACE_ON_TENSIX) {
+#if !defined(COMPILE_FOR_TRISC)
+            if (profiler_control_buffer[TRACE_REPLAY_STATUS] & TRACE_MARK_FW_START) {
+                profiler_control_buffer[TRACE_REPLAY_STATUS] = TRACE_MARK_KERNEL_START;
+            }
+#endif
+        } else {
+            init_profiler();
+        }
+    }
+
+    inline __attribute__((always_inline)) ~profileScopeKernelOwner() {
+        if constexpr (TRACE_ON_TENSIX) {
+            if (profiler_control_buffer[TRACE_REPLAY_STATUS] == TRACE_MARK_ALL_ENDS) {
+#if defined(COMPILE_FOR_BRISC)
+                profiler_data_buffer[myRiscID].data[ID_HH] = 0x0;
+#endif
+            }
+            profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER] = wIndex;
+        } else {
+            finish_profiler();
         }
     }
 };
@@ -1091,6 +1134,23 @@ __attribute__((noinline)) void trace_only_init() {
 #define DeviceZoneSetCounter(counter) (void(sizeof(counter)))
 #undef DeviceValidateProfiler
 #define DeviceValidateProfiler(condition) (void(sizeof(condition)))
+#endif
+
+// Kernel-only mode preserves the envelope used by duration analyses while removing firmware-outer and
+// optional instrumentation whose code size can prevent large programs from fitting in the kernel config buffer.
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_KERNEL_ZONES_ONLY)
+#undef DeviceZoneScopedMainN
+#define DeviceZoneScopedMainN(name) kernel_profiler::profileScopeKernelOwner kernel_owner = {};
+#undef DeviceZoneScopedN
+#define DeviceZoneScopedN(name) (void(sizeof(name)))
+#undef DeviceZoneScopedSumN1
+#define DeviceZoneScopedSumN1(name) (void(sizeof(name)))
+#undef DeviceZoneScopedSumN2
+#define DeviceZoneScopedSumN2(name) (void(sizeof(name)))
+#undef DeviceTimestampedData
+#define DeviceTimestampedData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
+#undef DeviceRecordEvent
+#define DeviceRecordEvent(event_id) (void(sizeof(event_id)))
 #endif
 
 #else

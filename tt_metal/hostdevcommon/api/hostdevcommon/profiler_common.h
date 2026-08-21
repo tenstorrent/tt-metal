@@ -12,6 +12,8 @@
 // Accumulate many invocations in L1 (main zones use growing wIndex, not fixed slots), flushing to DRAM only when nearly
 // full; residual read via DRAM_AND_L1.
 #define PROFILER_OPT_DO_ACCUMULATE (1 << 4)
+// Retain kernel-envelope zones while omitting firmware-outer and optional internal instrumentation.
+#define PROFILER_OPT_DO_KERNEL_ZONES_ONLY (1 << 5)
 
 namespace kernel_profiler {
 
