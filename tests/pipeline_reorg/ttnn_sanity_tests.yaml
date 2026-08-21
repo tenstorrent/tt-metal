@@ -337,3 +337,16 @@
   team: ttnn
   budget_type: sanity
   owner_id: U091SNDA4TS # Tomasz Cheda
+- name: "llk helper library tests"
+  cmd: >-
+    pytest --timeout 1800 -xv
+    tests/ttnn/unit_tests/operations/examples
+    tests/ttnn/unit_tests/kernel_lib
+  skus:
+    wh_n300_civ2:
+      timeout: 35
+    bh_p150b_civ2:
+      timeout: 35
+  team: ttnn
+  budget_type: sanity
+  owner_id: U04S2UV6L8N # Sofija Jovic
