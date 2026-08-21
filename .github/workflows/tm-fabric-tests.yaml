@@ -27,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       run-fabric-cpu-only-unit-tests:
-        description: "Run fabric CPU-only unit tests (no hardware needed)"
+        description: "Run on CPU"
         required: false
         default: true
         type: boolean
@@ -35,46 +35,45 @@ on:
       # All default true. If every HW SKU box is unchecked, the HW matrix is skipped
       # (CPU-only tests still respect their own toggle above).
       run-wh_n300_civ2:
-        description: "Run on wh_n300_civ2."
+        description: "Run on wh_n300_civ2"
         required: false
         default: true
         type: boolean
       run-wh_llmbox_civ2:
-        description: "Run on wh_llmbox_civ2."
+        description: "Run on wh_llmbox_civ2"
         required: false
         default: true
         type: boolean
       run-wh_galaxy:
-        description: "Run on wh_galaxy."
+        description: "Run on wh_galaxy"
         required: false
         default: true
         type: boolean
       run-bh_loudbox:
-        description: "Run on bh_loudbox."
+        description: "Run on bh_loudbox"
         required: false
         default: true
         type: boolean
       run-bh_p300:
-        description: "Run on bh_p300."
+        description: "Run on bh_p300"
         required: false
         default: true
         type: boolean
       run-bh_quietbox_2:
-        description: "Run on bh_quietbox_2."
+        description: "Run on bh_quietbox_2"
         required: false
         default: true
         type: boolean
       # Keep the "Available names" list below in sync with tests/pipeline_reorg/fabric_tests.yaml.
       hw-test-names:
         description: >
-          Comma-separated entry names from tests/pipeline_reorg/fabric_tests.yaml
-          (advanced; composes on top of the per-SKU checkboxes above). Available names:
-          WH N300 scaleout unit tests | t3k fabric tests | t3k UDM tests |
-          6U fabric quick | 6U multi-process |
-          BH fabric 1D unit tests | BH fabric 2D fixture unit tests |
-          BH fabric mux v2 unit tests | BH fabric UDM mode unit tests |
-          BH ttnn UDM unit tests | BH fabric system health tests |
-          BH fabric stability nightly tests | BH ccl nightly tests |
+          Filter by test name. Composes on top of the per-SKU checkboxes above.
+          WH N300 scaleout unit tests , t3k fabric tests , t3k UDM tests ,
+          6U fabric quick , 6U multi-process ,
+          BH fabric 1D unit tests , BH fabric 2D fixture unit tests ,
+          BH fabric mux v2 unit tests , BH fabric UDM mode unit tests ,
+          BH ttnn UDM unit tests , BH fabric system health tests ,
+          BH fabric stability nightly tests , BH ccl nightly tests ,
           BH fabric infra unit tests
         required: false
         default: ""
@@ -92,10 +91,9 @@ on:
       # Keep the "Available names" list below in sync with tests/pipeline_reorg/fabric_perf_tests.yaml.
       perf-test-names:
         description: >
-          Comma-separated entry names from tests/pipeline_reorg/fabric_perf_tests.yaml
-          (advanced). Available names:
-          T3K ubench - Fabric BW && Latency |
-          T3K ubench - Fabric Mux BW |
+          Filter by test name.
+          T3K ubench - Fabric BW && Latency ,
+          T3K ubench - Fabric Mux BW ,
           T3K ubench - Fabric Mux V2 Throughput
         required: false
         default: ""
