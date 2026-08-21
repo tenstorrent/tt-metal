@@ -205,6 +205,10 @@ questions:
   reason: ...
 ```
 
+Use an exact runnable selector in `test`, without alternatives or prose. When
+the issue explicitly requires performance evidence, list the exact `perf_*.py`
+module separately; hypothesis confidence or later refutation does not waive it.
+
 ## Self-Log
 
 Before returning, write `${LOG_DIR}/agent_issue_analyzer.md` with searches,

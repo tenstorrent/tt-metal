@@ -70,17 +70,31 @@ codegen_worktree_dirs() {
 resolve_worktree_base() {
   local requested="${CODEGEN_BASE_COMMIT:-}"
   if [[ -z "$requested" ]]; then
-    echo "origin/main"
-    return
+    if [[ -n "${CODEGEN_ATTEMPT_ID+x}" || -n "${CODEGEN_CAMPAIGN_ID+x}" \
+        || -n "${CODEGEN_RUNNER_POOL+x}" ]]; then
+      echo "[worktree] queued launch requires an exact CODEGEN_BASE_COMMIT" >&2
+      return 1
+    fi
+    git -C "$REPO_ROOT" rev-parse --verify "origin/main^{commit}" 2>/dev/null || {
+      echo "[worktree] origin/main is not available locally for admission pinning" >&2
+      return 1
+    }
+    return 0
   fi
-  if [[ ! "$requested" =~ ^[0-9a-fA-F]{40}$ ]]; then
-    echo "[worktree] CODEGEN_BASE_COMMIT must be a full 40-character commit SHA" >&2
+  if [[ ! "$requested" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "[worktree] CODEGEN_BASE_COMMIT must be a lowercase 40-character commit SHA" >&2
     return 1
   fi
-  git -C "$REPO_ROOT" rev-parse --verify "${requested}^{commit}" 2>/dev/null || {
+  local resolved
+  resolved="$(git -C "$REPO_ROOT" rev-parse --verify "${requested}^{commit}" 2>/dev/null)" || {
     echo "[worktree] CODEGEN_BASE_COMMIT is not available locally: $requested" >&2
     return 1
   }
+  if [[ "$resolved" != "$requested" ]]; then
+    echo "[worktree] CODEGEN_BASE_COMMIT did not resolve to itself: expected $requested, got $resolved" >&2
+    return 1
+  fi
+  echo "$resolved"
 }
 
 # ── Main functions ───────────────────────────────────────────────────────
@@ -91,14 +105,104 @@ resolve_worktree_base() {
 setup_worktree() {
   local -; set -euo pipefail
   local task_id="$1"
+  local queue_launch=false
+  if [[ -n "${CODEGEN_ATTEMPT_ID+x}" || -n "${CODEGEN_CAMPAIGN_ID+x}" \
+      || -n "${CODEGEN_RUNNER_POOL+x}" ]]; then
+    queue_launch=true
+  fi
 
   mkdir -p "$CODEGEN_WORKTREE_ROOT"
   cd "$REPO_ROOT"
   if [[ -z "${CODEGEN_BASE_COMMIT:-}" ]]; then
     git fetch origin main --quiet 2>/dev/null || true
   fi
-  local base_ref
+  local base_ref base_was_pinned
+  base_was_pinned=false
+  [[ -n "${CODEGEN_BASE_COMMIT:-}" ]] && base_was_pinned=true
   base_ref="$(resolve_worktree_base)"
+
+  # A resume is an explicit import from one immutable, reconciled checkpoint.
+  # Revalidate the dashboard contract before creating any branch or worktree.
+  local resume_requested=false resume_env_present resume_name
+  local -a resume_names=(
+    CODEGEN_RESUME_RUN_DIR CODEGEN_RESUME_RUN_ID CODEGEN_RESUME_ATTEMPT_ID
+    CODEGEN_RESUME_CHECKPOINT_DIGEST CODEGEN_RESUME_PATCH_SHA256
+    CODEGEN_RESUME_VERIFICATION_REUSE CODEGEN_RESUME_INVALIDATION_REASON
+    CODEGEN_ATTEMPT_ID
+  )
+  resume_env_present="${CODEGEN_RESUME_RUN_DIR:-}${CODEGEN_RESUME_RUN_ID:-}${CODEGEN_RESUME_ATTEMPT_ID:-}${CODEGEN_RESUME_CHECKPOINT_DIGEST:-}${CODEGEN_RESUME_PATCH_SHA256:-}${CODEGEN_RESUME_VERIFICATION_REUSE:-}${CODEGEN_RESUME_INVALIDATION_REASON:-}"
+  if [[ -n "$resume_env_present" ]]; then
+    for resume_name in "${resume_names[@]}"; do
+      if [[ -z "${!resume_name:-}" ]]; then
+        echo "[worktree] incomplete resume contract: $resume_name is missing" >&2
+        return 1
+      fi
+    done
+    python - "$base_ref" "$task_id" <<'PY'
+import hashlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+expected_base = sys.argv[1]
+task_id = sys.argv[2]
+source_dir = Path(os.environ["CODEGEN_RESUME_RUN_DIR"])
+try:
+    source = json.loads((source_dir / "run.json").read_text())
+except (OSError, ValueError) as exc:
+    raise SystemExit(f"[worktree] resume source run is unavailable: {exc}")
+checkpoint = source.get("last_checkpoint")
+if not isinstance(checkpoint, dict):
+    raise SystemExit("[worktree] resume source has no supervisor checkpoint")
+material = dict(checkpoint)
+recorded_digest = str(material.pop("checkpoint_digest", ""))
+actual_digest = hashlib.sha256(json.dumps(
+    material, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    allow_nan=False,
+).encode()).hexdigest()
+if recorded_digest != actual_digest or os.environ["CODEGEN_RESUME_CHECKPOINT_DIGEST"] != actual_digest:
+    raise SystemExit("[worktree] resume checkpoint digest mismatch")
+
+source_run_id = os.environ["CODEGEN_RESUME_RUN_ID"]
+source_attempt = os.environ["CODEGEN_RESUME_ATTEMPT_ID"]
+task_match = re.fullmatch(r"issue-([0-9]+)", task_id)
+source_issue = (source.get("issue") or {}).get("number")
+if not task_match or str(source_issue) != task_match.group(1):
+    raise SystemExit("[worktree] resume source issue identity mismatch")
+if source.get("run_id") != source_run_id or checkpoint.get("run_id") != source_run_id:
+    raise SystemExit("[worktree] resume source run identity mismatch")
+if (checkpoint.get("attempt_id") or source.get("attempt_id")) != source_attempt:
+    raise SystemExit("[worktree] resume source attempt identity mismatch")
+if source_attempt == os.environ["CODEGEN_ATTEMPT_ID"]:
+    raise SystemExit("[worktree] resume requires a distinct new attempt identity")
+if (source.get("status") != "failed" or not source.get("end_time")
+        or source.get("timeout_classification") not in {"outer_timeout", "supervisor_lost"}):
+    raise SystemExit("[worktree] resume source was not terminally reconciled")
+
+source_base = checkpoint.get("base_commit") or source.get("base_commit")
+if source_base != expected_base or not re.fullmatch(r"[0-9a-f]{40}", str(source_base or "")):
+    raise SystemExit("[worktree] resume source base mismatch")
+patch_digest = str(checkpoint.get("patch_sha256") or "")
+patch_path = source_dir / "generated.patch"
+if checkpoint.get("artifact_patch") != "generated.patch" or not re.fullmatch(r"[0-9a-f]{64}", patch_digest):
+    raise SystemExit("[worktree] resume checkpoint patch identity is missing")
+try:
+    actual_patch_digest = hashlib.sha256(patch_path.read_bytes()).hexdigest()
+except OSError as exc:
+    raise SystemExit(f"[worktree] resume checkpoint patch is unavailable: {exc}")
+if actual_patch_digest != patch_digest or os.environ["CODEGEN_RESUME_PATCH_SHA256"] != patch_digest:
+    raise SystemExit("[worktree] resume checkpoint patch digest mismatch")
+
+expected_reuse = "invalidated" if checkpoint.get("completed_results") else "not_available"
+expected_reason = "attempt_identity_changed" if checkpoint.get("completed_results") else "no_completed_results"
+if (os.environ["CODEGEN_RESUME_VERIFICATION_REUSE"] != expected_reuse
+        or os.environ["CODEGEN_RESUME_INVALIDATION_REASON"] != expected_reason):
+    raise SystemExit("[worktree] resume verification disposition mismatch")
+PY
+    resume_requested=true
+  fi
 
   # Reserve a unique branch + dir under a lock (concurrency-safe).
   local lock_fd
@@ -125,6 +229,17 @@ setup_worktree() {
   echo "[worktree] Creating worktree at $WORKTREE_DIR"
   git worktree add "$WORKTREE_DIR" "$WORKTREE_BRANCH"
 
+  local actual_base
+  actual_base="$(git -C "$WORKTREE_DIR" rev-parse HEAD)"
+  if [[ "$actual_base" != "$base_ref" ]]; then
+    echo "[worktree] base drift after creation: expected $base_ref, got $actual_base" >&2
+    git -C "$REPO_ROOT" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
+    git -C "$REPO_ROOT" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+    flock -u "$lock_fd"
+    exec {lock_fd}>&-
+    return 1
+  fi
+
   flock -u "$lock_fd"
   exec {lock_fd}>&-
 
@@ -149,24 +264,42 @@ setup_worktree() {
   # Writable: artifacts dir is per-worktree (no cross-contamination)
   mkdir -p "${wt_llk}/codegen/artifacts"
 
-  # run_test.sh lives outside codegen/ but is codegen infra: symlink it to the
-  # source copy so every worktree runs the current test harness, not the base
-  # commit's. Marked --skip-worktree below so git ignores the override.
+  # Test wrappers live outside codegen/ but are codegen infra: symlink them to
+  # the source copy so every worktree runs the current harness, not the base
+  # commit's. Mark tracked overrides --skip-worktree below.
   mkdir -p "${wt_llk}/.claude/scripts"
   ln -sf "${LLK_ROOT}/.claude/scripts/run_test.sh"  "${wt_llk}/.claude/scripts/run_test.sh"
+  ln -sf "${LLK_ROOT}/.claude/scripts/run_qsr_metal_test.sh" "${wt_llk}/.claude/scripts/run_qsr_metal_test.sh"
   ln -sf "${LLK_ROOT}/.claude/scripts/llk_triage.py" "${wt_llk}/.claude/scripts/llk_triage.py"
 
-  # Share the source checkout's Python venv across worktrees instead of rebuilding
-  # it every run — apt + pip install of requirements.txt is the slow part, and the
-  # deps are arch-independent. Symlink it like the other codegen infra; the venv's
-  # activate hardcodes its real path, so activation through the symlink (run_test.sh
-  # sources tests/.venv/bin/activate) resolves to the real venv.
-  # The tt-metal Docker image has no venv (deps are system-wide) — skip the link there.
-  if [[ -d "${LLK_ROOT}/tests/.venv" ]]; then
-    echo "[worktree] Linking shared test venv from ${LLK_ROOT}/tests/.venv"
-    ln -snf "${LLK_ROOT}/tests/.venv" "${wt_llk}/tests/.venv"
+  # Share the source checkout's Python venv only when the pinned requirements
+  # match. Historical worktrees may require older tt-exalens/tt-umd APIs, so a
+  # latest-source venv is not safe for them. Provision those worktrees from their
+  # own requirements instead; the existing .venv ignore keeps the checkout clean.
+  local source_venv="${LLK_ROOT}/tests/.venv"
+  local source_requirements="${LLK_ROOT}/tests/requirements.txt"
+  local worktree_requirements="${wt_llk}/tests/requirements.txt"
+  if [[ -d "$source_venv" ]] \
+      && { [[ ! -f "$source_requirements" || ! -f "$worktree_requirements" ]] \
+           || cmp -s "$source_requirements" "$worktree_requirements"; }; then
+    echo "[worktree] Linking matching shared test venv from $source_venv"
+    ln -snf "$source_venv" "${wt_llk}/tests/.venv"
+  elif [[ -f "$worktree_requirements" ]]; then
+    local uv_bin=""
+    if command -v uv >/dev/null 2>&1; then
+      uv_bin="$(command -v uv)"
+    elif [[ -x "${source_venv}/bin/uv" ]]; then
+      uv_bin="${source_venv}/bin/uv"
+    else
+      echo "[worktree] ERROR: uv is required to provision the pinned test environment" >&2
+      return 1
+    fi
+    echo "[worktree] Provisioning test venv from pinned worktree requirements"
+    "$uv_bin" venv --python "$(command -v python3)" "${wt_llk}/tests/.venv"
+    "$uv_bin" pip install --python "${wt_llk}/tests/.venv/bin/python" \
+      --index-strategy unsafe-best-match -r "$worktree_requirements"
   else
-    echo "[worktree] No shared venv at ${LLK_ROOT}/tests/.venv — using ambient python (Docker image)"
+    echo "[worktree] No test requirements found — using ambient python"
   fi
 
   # Fetch only the arch-specific SFPI toolchain per worktree (setup_testing_env.sh
@@ -191,20 +324,80 @@ codegen/
 .claude/
 CLAUDE.md
 .mcp.json
+.codegen_run_state.json
+.codegen_run_state.json.lock
 # Shared test venv: **/.venv/** ignores its contents but not the symlink itself
 tests/.venv
+# Per-worktree SFPI toolchain installed by setup_testing_env.sh
+tests/sfpi
 GITIGNORE
 
   # .gitignore doesn't hide files already tracked on the base commit (e.g. .mcp.json):
   # the symlink shows up as a typechange. Mark such tracked paths
   # --skip-worktree so git ignores the worktree symlink. (.gitignore is included so
   # its own appended lines stay hidden too.)
-  for rel in CLAUDE.md .mcp.json .gitignore .claude/scripts/run_test.sh; do
+  for rel in CLAUDE.md .mcp.json .gitignore .claude/scripts/run_test.sh .claude/scripts/run_qsr_metal_test.sh .claude/scripts/llk_triage.py; do
     p="${LLK_REL}/${rel}"
     if git -C "$WORKTREE_DIR" ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
       git -C "$WORKTREE_DIR" update-index --skip-worktree -- "$p" 2>/dev/null || true
     fi
   done
+
+  # Keep the admission identity in the existing worktree state store so a later
+  # shell cannot change or unset CODEGEN_BASE_COMMIT and silently select a new
+  # base. Input validation compares these independent setup records to HEAD.
+  python - "$base_ref" "$actual_base" "$base_was_pinned" "$queue_launch" \
+      "${CODEGEN_ATTEMPT_ID:-}" <<'PY' \
+    | python "${LLK_ROOT}/codegen/scripts/state.py" \
+        --worktree-dir "$WORKTREE_DIR" set-many
+import json
+import sys
+
+expected, actual, pinned, queued, attempt = sys.argv[1:]
+print(json.dumps({
+    "EXPECTED_BASE_COMMIT": expected,
+    "SETUP_BASE_COMMIT": actual,
+    "BASE_COMMIT_WAS_PINNED": pinned == "true",
+    "QUEUE_LAUNCH": queued == "true",
+    "QUEUE_ATTEMPT_ID": attempt,
+}))
+PY
+
+  if [[ "$resume_requested" == "true" ]]; then
+    local resume_patch="${CODEGEN_RESUME_RUN_DIR}/generated.patch"
+    local resume_error="" candidate_digest=""
+    if ! git -C "$WORKTREE_DIR" apply --check "$resume_patch"; then
+      resume_error="retained checkpoint patch does not apply to the exact base"
+    elif ! git -C "$WORKTREE_DIR" apply "$resume_patch"; then
+      resume_error="retained checkpoint patch could not be imported"
+    elif ! candidate_digest="$(python "${LLK_ROOT}/codegen/scripts/run_json_writer.py" \
+        candidate-patch-digest --worktree "$WORKTREE_DIR" \
+        --expected-base-sha "$base_ref")"; then
+      resume_error="imported candidate digest could not be computed"
+    elif [[ "$candidate_digest" != "$CODEGEN_RESUME_PATCH_SHA256" ]]; then
+      resume_error="imported candidate differs from the retained checkpoint patch"
+    fi
+    if [[ -n "$resume_error" ]]; then
+      echo "[worktree] resume rejected: $resume_error" >&2
+      git -C "$REPO_ROOT" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
+      git -C "$REPO_ROOT" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+      return 1
+    fi
+    python - <<'PY' | python "${LLK_ROOT}/codegen/scripts/state.py" \
+        --worktree-dir "$WORKTREE_DIR" set-many
+import json
+import os
+print(json.dumps({
+    "QUEUE_ATTEMPT_ID": os.environ["CODEGEN_ATTEMPT_ID"],
+    "RESUMED_FROM_RUN_ID": os.environ["CODEGEN_RESUME_RUN_ID"],
+    "RESUMED_FROM_ATTEMPT_ID": os.environ["CODEGEN_RESUME_ATTEMPT_ID"],
+    "RESUME_CHECKPOINT_DIGEST": os.environ["CODEGEN_RESUME_CHECKPOINT_DIGEST"],
+    "RESUME_PATCH_SHA256": os.environ["CODEGEN_RESUME_PATCH_SHA256"],
+    "RESUME_VERIFICATION_REUSE": os.environ["CODEGEN_RESUME_VERIFICATION_REUSE"],
+    "RESUME_INVALIDATION_REASON": os.environ["CODEGEN_RESUME_INVALIDATION_REASON"],
+}))
+PY
+  fi
 
   echo "[worktree] Ready: $WORKTREE_DIR"
   echo "[worktree] Branch: $WORKTREE_BRANCH"

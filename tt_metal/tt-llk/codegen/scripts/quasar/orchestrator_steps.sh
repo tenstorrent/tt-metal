@@ -120,20 +120,22 @@ execute_step_validate_input() {
     [ -n "$wt" ] && [ -d "$wt" ] || { echo "REJECT: WORKTREE_DIR missing or not a directory: '$wt'"; return 1; }
     cd "$wt/tt_metal/tt-llk" || { echo "REJECT: cannot cd into $wt/tt_metal/tt-llk"; return 1; }
 
-    local S="$_ORCH_SCRIPTS" kn ta sm wb ldb ok=1
+    local S="$_ORCH_SCRIPTS" kn ta sm qsb wb ldb ok=1
     kn="$(python "$S/state.py" --worktree-dir "$wt" get KERNEL_NAME)"
     ta="$(python "$S/state.py" --worktree-dir "$wt" get TARGET_ARCH)"
     sm="$(python "$S/state.py" --worktree-dir "$wt" get SFPI_MODE)"
+    qsb="$(python "$S/state.py" --worktree-dir "$wt" get QSR_SIM_BACKEND)"
     wb="$(python "$S/state.py" --worktree-dir "$wt" get WORKTREE_BRANCH)"
     ldb="$(python "$S/state.py" --worktree-dir "$wt" get LOG_DIR_BASE)"
 
     [ -n "$kn" ] || { echo "REJECT: KERNEL_NAME is empty"; ok=0; }
     [ "$ta" = "quasar" ] || { echo "REJECT: TARGET_ARCH must be 'quasar' (got '$ta')"; ok=0; }
     { [ "$sm" = "true" ] || [ "$sm" = "false" ]; } || { echo "REJECT: SFPI_MODE must be exactly true/false (got '$sm')"; ok=0; }
+    { [ "$qsb" = "emu" ] || [ "$qsb" = "vcs" ]; } || { echo "REJECT: QSR_SIM_BACKEND must be emu/vcs (got '$qsb')"; ok=0; }
     [ -n "$wb" ] || { echo "REJECT: WORKTREE_BRANCH is empty"; ok=0; }
     [ "$ldb" = "/proj_sw/user_dev/llk_code_gen" ] || { echo "REJECT: LOG_DIR_BASE must be /proj_sw/user_dev/llk_code_gen (got '$ldb')"; ok=0; }
     [ "$ok" = 1 ] || return 1
-    echo "OK: KERNEL_NAME=$kn TARGET_ARCH=$ta SFPI_MODE=$sm WORKTREE_BRANCH=$wb LOG_DIR_BASE=$ldb"
+    echo "OK: KERNEL_NAME=$kn TARGET_ARCH=$ta SFPI_MODE=$sm QSR_SIM_BACKEND=$qsb WORKTREE_BRANCH=$wb LOG_DIR_BASE=$ldb"
 }
 
 # ===========================================================================
@@ -154,7 +156,13 @@ execute_step_validate_env() {
 # ===========================================================================
 execute_step_begin_setup() {
     local kernel="$1" arch="$2" log_dir_base="$3"
-    local START_TIME RUN_ID LOG_DIR BATCH_ID MODEL RUN_TYPE CODEGEN_VERSION
+    local START_TIME RUN_ID LOG_DIR BATCH_ID MODEL RUN_TYPE CODEGEN_VERSION PROMPT QSR_BACKEND QUEUE_ITEM_ID
+    QSR_BACKEND="${QSR_SIM_BACKEND:-emu}"
+    [ "$QSR_BACKEND" = emulator ] && QSR_BACKEND=emu
+    { [ "$QSR_BACKEND" = emu ] || [ "$QSR_BACKEND" = vcs ]; } || {
+        echo "REJECT: QSR_SIM_BACKEND must be emu or vcs (got '$QSR_BACKEND')" >&2
+        return 1
+    }
     START_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     RUN_ID="$(date +%Y-%m-%d)_${kernel}_${arch}_$(head -c 4 /dev/urandom | xxd -p)"
     LOG_DIR="$log_dir_base/quasar/$RUN_ID"
@@ -162,6 +170,8 @@ execute_step_begin_setup() {
     MODEL="${CODEGEN_MODEL:-$(python "$_ORCH_SCRIPTS/session_cost.py" --print-model 2>/dev/null)}"; MODEL="${MODEL:-sonnet}"
     RUN_TYPE="$([ -n "$BATCH_ID" ] && echo ci || echo manual)"
     CODEGEN_VERSION="$(cat "$_ORCH_SCRIPTS/../agents/quasar/VERSION" 2>/dev/null | tr -d '[:space:]' || echo "")"
+    PROMPT="${CODEGEN_USER_PROMPT:-Generate ${kernel} for ${arch}}"
+    QUEUE_ITEM_ID="${CODEGEN_QUEUE_ITEM_ID:-}"
     _disk_guard mkdir -p "$LOG_DIR/instructions" || return $?
 
     local _L="$LOG_DIR"
@@ -171,6 +181,8 @@ execute_step_begin_setup() {
     ss START_TIME  "$START_TIME"
     ss KERNEL_NAME "$kernel"
     ss TARGET_ARCH "$arch"
+    ss QSR_SIM_BACKEND "$QSR_BACKEND"
+    ss QUEUE_ITEM_ID "$QUEUE_ITEM_ID"
 
     rj init \
         --run-id "$RUN_ID" \
@@ -179,14 +191,25 @@ execute_step_begin_setup() {
         --start-time "$START_TIME" \
         --first-step "setup" \
         --first-message "Creating worktree + building test venv/SFPI for ${kernel}" \
-        --prompt "Generate ${kernel} for ${arch}" \
+        --prompt "$PROMPT" \
         --batch-id "$BATCH_ID" \
         --model "$MODEL" \
         --run-type "$RUN_TYPE" \
         --version "$CODEGEN_VERSION" \
         --phases-total 1 \
         --pipeline-steps "$_PIPELINE_STEPS_JSON" || return $?
-    echo "LOG_DIR=$LOG_DIR RUN_ID=$RUN_ID START_TIME=$START_TIME"
+    local bootstrap_patch
+    bootstrap_patch="$(python - "$QSR_BACKEND" "$QUEUE_ITEM_ID" <<'PY'
+import json, sys
+backend, queue_item_id = sys.argv[1:3]
+patch = {"quasar_backend": backend}
+if queue_item_id:
+    patch["queue_item_id"] = queue_item_id
+print(json.dumps(patch))
+PY
+)"
+    rj metric --patch-json "$bootstrap_patch" || return $?
+    echo "LOG_DIR=$LOG_DIR RUN_ID=$RUN_ID START_TIME=$START_TIME QSR_SIM_BACKEND=$QSR_BACKEND"
 }
 
 # ===========================================================================
@@ -206,13 +229,21 @@ execute_step_setup_run() {
     local S="$_ORCH_SCRIPTS" wt
     wt="$(_wt)"
 
-    local START_TIME KERNEL_NAME TARGET_ARCH WORKTREE_BRANCH SFPI_MODE LOCK_TESTS REMOVE_TESTS HIDE_EXISTING_KERNEL LOG_DIR_BASE
+    local START_TIME KERNEL_NAME TARGET_ARCH WORKTREE_BRANCH SFPI_MODE QSR_BACKEND QUEUE_ITEM_ID LOCK_TESTS REMOVE_TESTS HIDE_EXISTING_KERNEL LOG_DIR_BASE
     local RUN_ID LOG_DIR GIT_COMMIT CODEGEN_VERSION PROMPT BATCH_ID MODEL RUN_TYPE
     START_TIME="$(python "$S/state.py" --worktree-dir "$wt" get START_TIME)"; START_TIME="${START_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
     KERNEL_NAME="$(python "$S/state.py" --worktree-dir "$wt" get KERNEL_NAME)"
     TARGET_ARCH="$(python "$S/state.py" --worktree-dir "$wt" get TARGET_ARCH)"
     WORKTREE_BRANCH="$(python "$S/state.py" --worktree-dir "$wt" get WORKTREE_BRANCH)"
     SFPI_MODE="$(python "$S/state.py" --worktree-dir "$wt" get SFPI_MODE)"
+    QSR_BACKEND="$(python "$S/state.py" --worktree-dir "$wt" get QSR_SIM_BACKEND)"
+    QSR_BACKEND="${QSR_BACKEND:-${QSR_SIM_BACKEND:-emu}}"
+    [ "$QSR_BACKEND" = emulator ] && QSR_BACKEND=emu
+    { [ "$QSR_BACKEND" = emu ] || [ "$QSR_BACKEND" = vcs ]; } || {
+        echo "REJECT: QSR_SIM_BACKEND must be emu or vcs (got '$QSR_BACKEND')" >&2
+        return 1
+    }
+    QUEUE_ITEM_ID="${CODEGEN_QUEUE_ITEM_ID:-}"
     LOCK_TESTS="$(python "$S/state.py" --worktree-dir "$wt" get LOCK_TESTS)"; LOCK_TESTS="${LOCK_TESTS:-false}"
     REMOVE_TESTS="$(python "$S/state.py" --worktree-dir "$wt" get REMOVE_TESTS)"; REMOVE_TESTS="${REMOVE_TESTS:-false}"
     HIDE_EXISTING_KERNEL="$(python "$S/state.py" --worktree-dir "$wt" get HIDE_EXISTING_KERNEL)"; HIDE_EXISTING_KERNEL="${HIDE_EXISTING_KERNEL:-false}"
@@ -227,7 +258,7 @@ execute_step_setup_run() {
     fi
     GIT_COMMIT="$(git -C "$wt" rev-parse HEAD 2>/dev/null || echo unknown)"
     CODEGEN_VERSION="$(cat "$S/../agents/quasar/VERSION" 2>/dev/null | tr -d '[:space:]' || echo "")"
-    PROMPT="Generate ${KERNEL_NAME} for ${TARGET_ARCH}"   # the original user prompt, verbatim
+    PROMPT="${CODEGEN_USER_PROMPT:-Generate ${KERNEL_NAME} for ${TARGET_ARCH}}"
     BATCH_ID="${CODEGEN_BATCH_ID:-}"                       # empty string if not a batch run
     MODEL="${CODEGEN_MODEL:-$(python "$S/session_cost.py" --print-model 2>/dev/null)}"
     MODEL="${MODEL:-sonnet}"
@@ -245,6 +276,8 @@ execute_step_setup_run() {
     ss TARGET_ARCH     "$TARGET_ARCH"
     ss WORKTREE_BRANCH "$WORKTREE_BRANCH"
     ss SFPI_MODE       "$SFPI_MODE" --json
+    ss QSR_SIM_BACKEND "$QSR_BACKEND"
+    ss QUEUE_ITEM_ID   "$QUEUE_ITEM_ID"
     ss LOCK_TESTS     "$LOCK_TESTS" --json
     ss REMOVE_TESTS   "$REMOVE_TESTS" --json
     ss HIDE_EXISTING_KERNEL "$HIDE_EXISTING_KERNEL" --json
@@ -502,7 +535,7 @@ execute_step_write_initial_run_json() {
     local S="$_ORCH_SCRIPTS" wt; wt="$(_wt)"
 
     local RUN_ID START_TIME GIT_COMMIT CODEGEN_VERSION PROMPT BATCH_ID MODEL RUN_TYPE
-    local KERNEL_NAME KERNEL_TYPE TARGET_ARCH REF_ARCH KERNEL_PATH GENERATED_KERNEL
+    local KERNEL_NAME KERNEL_TYPE TARGET_ARCH QSR_BACKEND QUEUE_ITEM_ID REF_ARCH KERNEL_PATH GENERATED_KERNEL
     RUN_ID="$(sg RUN_ID)"
     START_TIME="$(sg START_TIME)"
     GIT_COMMIT="$(sg GIT_COMMIT)"
@@ -514,6 +547,8 @@ execute_step_write_initial_run_json() {
     KERNEL_NAME="$(sg KERNEL_NAME)"
     KERNEL_TYPE="$(sg KERNEL_TYPE)"
     TARGET_ARCH="$(sg TARGET_ARCH)"
+    QSR_BACKEND="$(sg QSR_SIM_BACKEND)"
+    QUEUE_ITEM_ID="$(sg QUEUE_ITEM_ID)"
     REF_ARCH="$(sg REF_ARCH)"
     KERNEL_PATH="$(sg KERNEL_PATH)"
     GENERATED_KERNEL="$(sg GENERATED_KERNEL)"
@@ -523,11 +558,14 @@ execute_step_write_initial_run_json() {
         # identity now known, then advance setup → analyzer (setup stays in the
         # history as a completed stage).
         local patch
-        patch="$(python - "$KERNEL_TYPE" "$REF_ARCH" "$KERNEL_PATH" "$GENERATED_KERNEL" "$GIT_COMMIT" <<'PY'
+        patch="$(python - "$KERNEL_TYPE" "$REF_ARCH" "$KERNEL_PATH" "$GENERATED_KERNEL" "$GIT_COMMIT" "$QSR_BACKEND" "$QUEUE_ITEM_ID" <<'PY'
 import json, sys
-kt, ra, rf, gf, gc = sys.argv[1:6]
-print(json.dumps({"kernel_type": kt, "reference_arch": ra, "reference_file": rf,
-                  "generated_file": gf, "git_commit": gc}))
+kt, ra, rf, gf, gc, qsb, queue_item_id = sys.argv[1:8]
+patch = {"kernel_type": kt, "reference_arch": ra, "reference_file": rf,
+         "generated_file": gf, "git_commit": gc, "quasar_backend": qsb}
+if queue_item_id:
+    patch["queue_item_id"] = queue_item_id
+print(json.dumps(patch))
 PY
 )"
         rj metric --patch-json "$patch" || return $?
@@ -557,6 +595,17 @@ PY
             --version "$CODEGEN_VERSION" \
             --phases-total 1 \
             --pipeline-steps "$_PIPELINE_STEPS_JSON" || return $?
+        local initial_patch
+        initial_patch="$(python - "$QSR_BACKEND" "$QUEUE_ITEM_ID" <<'PY'
+import json, sys
+backend, queue_item_id = sys.argv[1:3]
+patch = {"quasar_backend": backend}
+if queue_item_id:
+    patch["queue_item_id"] = queue_item_id
+print(json.dumps(patch))
+PY
+)"
+        rj metric --patch-json "$initial_patch" || return $?
     fi
 
     local _SESSION_PAIR SESSION_ID PROJECT_CWD

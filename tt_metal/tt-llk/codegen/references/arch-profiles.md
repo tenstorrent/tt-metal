@@ -14,11 +14,11 @@ The issue-solver orchestrators use this table to resolve arch-specific values fr
 | `SIM_PORT` | *(n/a — hardware only)* | `5556` | *(n/a — hardware only)* |
 | `REF_ARCH` | `wormhole` | `blackhole` | *(none — wormhole is oldest)* |
 | `REF_LLK_DIR` | `tt_llk_wormhole_b0` | `tt_llk_blackhole` | *(none)* |
-| `LOGS_BASE` | `${CODEGEN_LOGS_ROOT}/blackhole_issue_solver` | `${CODEGEN_LOGS_ROOT}/quasar_issue_solver` | `${CODEGEN_LOGS_ROOT}/wormhole_issue_solver` |
+| `LOGS_BASE` | `${CODEGEN_LOGS_ROOT}/issue_solver` | `${CODEGEN_LOGS_ROOT}/issue_solver` | `${CODEGEN_LOGS_ROOT}/issue_solver` |
 | `MULTI_LOGS_BASE` | `${CODEGEN_LOGS_ROOT}/issue_solver` | `${CODEGEN_LOGS_ROOT}/issue_solver` | `${CODEGEN_LOGS_ROOT}/issue_solver` |
 | `CONFLUENCE_ROOT_PAGE` | `48300268` | `48300268` | `48300268` |
 | `CONFLUENCE_SFPU_SPEC` | *(no dedicated page)* | `1256423592` | *(no dedicated page)* |
-| `DASHBOARD_PROJECT_ID` | `blackhole_issue_solver` | `quasar_issue_solver` | `wormhole_issue_solver` |
+| `DASHBOARD_PROJECT_ID` | `issue_solver` | `issue_solver` | `issue_solver` |
 | `MULTI_DASHBOARD_PROJECT_ID` | `issue_solver` | `issue_solver` | `issue_solver` |
 
 `CODEGEN_LOGS_ROOT` is the log root the orchestrators resolve in Step 0, by
@@ -28,10 +28,17 @@ shared dashboard tree `/proj_sw/user_dev/llk_code_gen` **if that path exists**
 (3) else an **in-repo, gitignored** folder in the main checkout —
 `<main_repo>/tt_metal/tt-llk/codegen/logs` (resolved via `git rev-parse
 --git-common-dir` so it lands in the main repo, not the removed worktree). The
-`*_issue_solver` / `issue_solver` suffixes above are always appended, so the
-dashboard folder shape is preserved in every case.
+The `issue_solver` suffix is always appended. Architecture remains in
+`run.json` (`arch` / `target_arches`) rather than selecting a storage root.
 
-`SIM_PORT` is only populated for Quasar (the lone sim carve-out). Blackhole and Wormhole run on the locally-attached card — no simulator, no `--run-simulator`. Hosts without a matching BH/WH card finalize the run as `failed` with `ENV_ERROR`. Quasar has no silicon, so it always runs on `emu-quasar-1x3` with port 5556. On every arch, `.claude/scripts/run_test.sh` serialises the consumer step internally via the single global lock `/tmp/tt-llk-test.lock` — agents never flock manually.
+`SIM_PORT` is only populated for Quasar (the lone Aether carve-out).
+Blackhole and Wormhole use their silicon queue when the dashboard supplies
+`HW_TEST_DISPATCH_CMD`; without it they require a locally attached card.
+Quasar has no silicon and executes on the compute runner through
+`run_test.sh`, using `QSR_SIM_BACKEND=emu|vcs` and the corresponding configured
+UMD path. Port 5556 is node-local. Quasar consumer execution across compute
+hosts is serialized by `QSR_AETHER_LOCK` on the shared filesystem; other local
+device runs retain `/tmp/tt-llk-test.lock`.
 
 
 ## How the orchestrators consume this

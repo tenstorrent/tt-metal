@@ -46,6 +46,17 @@ a single `TARGET_ARCH`. Read `TEST_BACKEND`, `PERF_GOAL`, `ISSUE_NUMBER`,
 `GIT_COMMIT`, `WORKTREE_DIR`, and `LOG_DIR` with `sg`. `GIT_COMMIT` is the
 branch base captured before the worker changed the tree.
 
+Read `REQUIRED_VERIFICATION_MANIFEST` and
+`REQUIRED_VERIFICATION_ATTEMPT_ID` as well. When it contains a `suite=perf`
+leaf for `TARGET_ARCH`, require exactly one and take `PERF_TEST`, its optional
+`-k` filter, minimum execution count, and required measurements from that leaf.
+Export its run, attempt, and requirement IDs as `CODEGEN_RUN_ID`,
+`CODEGEN_ATTEMPT_ID`, and `CODEGEN_REQUIREMENT_ID` for every local or queued
+invocation. With no perf leaf, retain the existing applicability check and do
+not invent a measurement requirement. Never drop a leaf because a hypothesis
+was refuted; a refuted run remains failed until the orchestrator reducer handles
+the unexecuted requirement.
+
 Optional environment:
 
 - `HW_TEST_DISPATCH_CMD`: submit silicon runs to the shared queue. The command
@@ -70,9 +81,26 @@ Every result includes:
   "test": "perf_<module>.py or null",
   "filter": "pytest -k expression or null",
   "base_commit": "<sha>",
+  "run_id": "<sealed run id>",
+  "attempt_id": "<sealed attempt id>",
+  "requirement_id": "<sealed perf requirement id>",
+  "patch_sha256": "<current structured result patch digest>",
+  "measurements": {
+    "cycle_comparison": {"measured": true},
+    "repeatability": {"measured": true, "executions": 3}
+  },
   "reason": "concise reason or null"
 }
 ```
+
+Use `null` for the four sealed identity/patch fields when no perf leaf exists.
+
+Include only measurements actually performed. A sealed `repeatability`
+requirement means rerunning the fixed-tree selector for at least the leaf's
+`minimum_executed` count; one current/baseline comparison cannot satisfy it.
+After the fixed-tree run writes its structured result, copy the four identity
+and patch fields above from that result/manifest exactly; do not derive or
+invent a second patch identity for the measurement document.
 
 Successful comparisons also retain the evaluator's metric, deltas, worst
 variant, thread breakdown, baseline/current artifact paths, and queue job IDs
@@ -151,12 +179,16 @@ Require `BASE_COMMIT` to resolve as a commit. A missing or invalid base is
 For direct silicon, define the runner once and use it for both trees:
 
 ```bash
-run_perf_local() {  # $1=tt-llk root, $2=log directory
-  local tree="$1" run_log="$2"
+run_perf_local() {  # $1=tt-llk root, $2=log directory, $3=current|baseline
+  local tree="$1" run_log="$2" role="$3"
   local args=(run --worktree "$tree" --arch "$TARGET_ARCH" \
-    --test "$PERF_TEST" --stall 1800 --maxfail 0 --log-dir "$run_log")
+    --test "$PERF_TEST" --maxfail 0 --log-dir "$run_log")
   [ -n "$PERF_K" ] && args+=(--k "$PERF_K")
-  bash "$RUNNER" "${args[@]}"
+  if [ "$role" = current ] && [ -n "${CODEGEN_REQUIREMENT_ID:-}" ]; then
+    mkdir -p "$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}"
+    args+=(--result-json-out "$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}/${CODEGEN_REQUIREMENT_ID}.json")
+  fi
+  CODEGEN_VERIFICATION_SUITE=perf bash "$RUNNER" "${args[@]}"
 }
 ```
 
@@ -171,6 +203,12 @@ run_perf_queued() {  # $1=tt-metal tree, $2=destination CSV, $3=log, $4=current|
     --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}-perf-${TARGET_ARCH}-${role}" \
     --timeout 1800 --artifact-out "$destination")
   [ -n "$PERF_K" ] && args+=(--k "$PERF_K")
+  if [ "$role" = current ] &&
+     [ "${CODEGEN_RUNNER_POOL:-prod}" = audit ] &&
+     [ -n "${CODEGEN_REQUIREMENT_ID:-}" ]; then
+    mkdir -p "$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}"
+    args+=(--result-json-out "$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}/${CODEGEN_REQUIREMENT_ID}.json")
+  fi
   $HW_TEST_DISPATCH_CMD "${args[@]}" 2>&1 | tee -a "$run_log"
   local rc=${PIPESTATUS[0]}
   return "$rc"
@@ -180,8 +218,13 @@ run_perf_queued() {  # $1=tt-metal tree, $2=destination CSV, $3=log, $4=current|
 The queue selector is intentionally separate from `PERF_OP`: `--k` narrows
 pytest while `PERF_OP` narrows CSV comparison. Require exactly one
 `HW_TEST_RESULT arch=${TARGET_ARCH}` marker in each queue log and retain its job
-ID in the result and self-log. Current and baseline use distinct session labels
-so the queue's warm workspaces cannot overwrite one another.
+ID in the result and self-log. For an audit run's current candidate, also
+require the exact protocol-v2 result at the sealed requirement path and leave
+it unchanged for the strict reducer; a missing, malformed, foreign, or
+non-success result is not valid performance evidence. Production and the
+baseline comparison retain the legacy marker path and do not request a strict
+result copy. Current and baseline use distinct session labels so the queue's
+warm workspaces cannot overwrite one another.
 
 Runner exits for the fixed tree:
 
@@ -211,7 +254,7 @@ mkdir -p "$CURRENT_LOG_DIR"
 rm -f -- "$CURRENT_SOURCE"
 
 set +e
-run_perf_local "$LLK_ROOT" "$CURRENT_LOG_DIR"
+run_perf_local "$LLK_ROOT" "$CURRENT_LOG_DIR" current
 CURRENT_EXIT=$?
 set -e
 ```
@@ -274,7 +317,7 @@ else
     ln -s "$LLK_ROOT/tests/sfpi" "$BASE_LLK/tests/sfpi"
   BASELINE_SOURCE="$BASE_LLK/perf_data/${PERF_MODULE}/${PERF_MODULE}.post.csv"
   set +e
-  run_perf_local "$BASE_LLK" "$BASELINE_LOG_DIR"
+  run_perf_local "$BASE_LLK" "$BASELINE_LOG_DIR" baseline
   BASELINE_EXIT=$?
   set -e
 fi

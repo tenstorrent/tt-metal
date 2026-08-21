@@ -2,32 +2,33 @@
 # run_test.sh — synchronous LLK test runner for codegen agents and humans.
 #
 # Invoke it like pytest: one blocking call, wait for the verdict. There is no
-# timeout to set and no resume loop. The only wait is on the global lock (first
-# come, first served, unbounded); once a run starts, a watcher bounds it — a hang
-# is detected from a log stall and killed gracefully, so the call always returns
-# on its own.
+# timeout to set and no resume loop. Build entry and device locks are first come,
+# first served and unbounded; once a run starts, a watcher bounds it — a hang is
+# detected from a log stall and killed gracefully, so the call always returns.
 #
 # Two device paths:
-#   quasar              emulator — pytest --run-simulator --port; tt-exalens boots,
-#                       runs, tears down. HANG = post-ready log stall.
+#   quasar              Aether VCS/emulator — pytest --run-simulator --port;
+#                       tt-exalens boots, runs, tears down. HANG = post-ready
+#                       log stall. QSR_SIM_BACKEND selects vcs|emu.
 #   blackhole/wormhole  real silicon (/dev/tenstorrent). HANG = TENSIX TIMED OUT
 #                       or log stall; recovered with llk_triage.py + tt-smi -r.
 #
-# ONE global lock (/tmp/tt-llk-test.lock) serialises every invocation on the host,
-# so while a run holds it no peer can wipe the shared build cache.
+# ONE global device lock (/tmp/tt-llk-test.lock) serialises execution. Build
+# artifacts are isolated by run/worktree + full build-input digest, with a
+# per-entry build lock, so independent producers never wipe each other's files.
 #
-# BUILD STAMP (why simulate can rebuild): the shared build cache is wiped+rebuilt
-# by any producer. `compile` is lock-free and stamps the cache with a fingerprint
-# of THIS run's source. `simulate`/`run` take the lock and, if the stamp is not
-# ours (a peer recompiled), rebuild under the lock before running — so the ELFs
-# executed are always built from our own source.
+# BUILD STAMP (why simulate can rebuild): `compile` and `simulate` are separate
+# script invocations but derive the same attempt-owned artifact directory and
+# stamp. If source/compiler/selection changes, `simulate` derives a new digest
+# and rebuilds before execution.
 #
 # Usage:
 #   run_test.sh <COMMAND> --worktree DIR --arch ARCH --test FILE [OPTIONS]
 #
 # Commands:
-#   count     Count test variants (collection-only; prints an integer). Lock-free.
-#   compile   Compile-producer step (parallel, -x). Lock-free. Stamps the build.
+#   count     Count test variants (collection-only; prints an integer). Uses its
+#             own artifact entry, separate from compiled outputs.
+#   compile   Compile-producer step (parallel, -x). Locks only its artifact entry.
 #   simulate  Run the pre-built variants. Takes the lock; rebuilds under it when
 #             the build stamp is not ours; then runs on the device/emulator.
 #   run       compile + run in one held-lock session (always rebuilds).
@@ -51,6 +52,7 @@
 #   --lock     FILE   Global lock file (default /tmp/tt-llk-test.lock).
 #   --log-dir  DIR    Append the run's output to <DIR>/run.log (compile output to
 #                     <DIR>/compile.log).
+#   --result-json-out FILE  Write the exact structured verification result here.
 #   --stall    SECS   Log-stall seconds that mark a hang (default 180 emulator,
 #                     300 silicon). Also settable via HANG_STALL.
 #   --verbose         Print step headers to stderr.
@@ -70,6 +72,7 @@ WORKTREE="" ARCH="" TEST_FILE=""
 MAXFAIL="10" K_FILTER="" TEST_ID=""
 PORT="5556" JOBS="15"
 LOCKFILE="" SIM_PATH="" LOG_DIR=""
+RESULT_JSON_OUT=""
 NO_SPLIT="false" VERBOSE="false"
 STALL=""
 
@@ -81,9 +84,10 @@ GRACE_SECS="${GRACE_SECS:-30}"          # wait after SIGINT before SIGKILL
 # "tt-exalens ready (PID …)" to the pytest stream; match that (keep [4B MODE] as
 # a fallback for 4B-mode configs that surface it).
 READY_RE='tt-exalens ready|\[4B MODE\]'
-EMU_HOST="${EMU_HOST:-${SSH_MACHINE_NAME:-soc-l-12}}"
+QSR_SIM_BACKEND="${QSR_SIM_BACKEND:-emu}"
+EMU_HOST="${EMU_HOST:-${QSR_AETHER_HOST:-${SSH_MACHINE_NAME:-soc-l-12}}}"
 NNG_LOCAL_BASE="5555"                   # local NNG bind (infra-forwarded; fixed)
-DBD_BASE="54910"                        # NNG_SOCKET_ADDR debuda port (fixed)
+DBD_BASE="54910"                        # non-Docker legacy debuda port
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -98,6 +102,7 @@ while [[ $# -gt 0 ]]; do
     --lock)      LOCKFILE="$2";  shift 2 ;;
     --sim-path)  SIM_PATH="$2";  shift 2 ;;
     --log-dir)   LOG_DIR="$2";   shift 2 ;;
+    --result-json-out) RESULT_JSON_OUT="$2"; shift 2 ;;
     --stall)     STALL="$2";     shift 2 ;;
     --no-split)  NO_SPLIT="true"; shift ;;
     --verbose|-v) VERBOSE="true"; shift ;;
@@ -112,6 +117,36 @@ done
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 _vlog() { [[ "$VERBOSE" == "true" ]] && echo "[run_test] $*" >&2; return 0; }
+
+_resolve_nng_channel() {
+  local callback_host dbd_port
+
+  NNG_LOCAL="${NNG_SOCKET_LOCAL_PORT:-$NNG_LOCAL_BASE}"
+  if [[ -n "${NNG_SOCKET_ADDR:-}" ]]; then
+    NNG_ADDR="$NNG_SOCKET_ADDR"
+    return 0
+  fi
+
+  if [[ -f /.dockerenv ]]; then
+    dbd_port="${P_USER_DBD_PORT:-}"
+    if [[ -z "$dbd_port" ]]; then
+      dbd_port="$(bash -lc 'printf "%s" "${P_USER_DBD_PORT:-}"' 2>/dev/null)"
+    fi
+    if [[ ! "$dbd_port" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: NNG_SOCKET_ADDR is unset and IRD did not provide a valid P_USER_DBD_PORT" >&2
+      return 3
+    fi
+
+    callback_host="$(hostname)"
+    callback_host="${callback_host%%-special-*}"
+    NNG_ADDR="tcp://${callback_host}:${dbd_port}"
+    return 0
+  fi
+
+  # Non-container legacy flow: the host is directly reachable, so retain the
+  # historical fixed debuda port unless the caller supplied an explicit address.
+  NNG_ADDR="tcp://$(hostname):${DBD_BASE}"
+}
 
 # Activate the venv only if it exists (external setup); else use the ambient
 # python (tt-metal Docker image, deps installed system-wide).
@@ -135,14 +170,42 @@ _validate() {
   [[ -d "$TEST_DIR" ]] || { echo "ERROR: test directory not found: ${TEST_DIR}" >&2; exit 3; }
   [[ -f "${TEST_DIR}/${TEST_FILE}" ]] || { echo "ERROR: test file not found: ${TEST_DIR}/${TEST_FILE}" >&2; exit 3; }
 
-  [[ -z "$SIM_PATH" ]] && SIM_PATH="/proj_sw/user_dev/${USER}/tt-umd-simulators/build/emu-${ARCH}-1x3"
-  # One global lock for every invocation on this host, regardless of arch.
-  [[ -z "$LOCKFILE" ]] && LOCKFILE="/tmp/tt-llk-test.lock"
-
   case "$ARCH" in
     blackhole|wormhole) MODE="hardware"  ;;
     *)                  MODE="simulator" ;;
   esac
+
+  if [[ -z "$SIM_PATH" ]]; then
+    if [[ "$ARCH" == "quasar" ]]; then
+      case "$QSR_SIM_BACKEND" in
+        emu|emulator)
+          QSR_SIM_BACKEND="emu"
+          SIM_PATH="${QSR_EMU_SIM_PATH:-/proj_sw/user_dev/${USER}/tt-umd-simulators/build/emu-quasar-1x3}"
+          ;;
+        vcs)
+          SIM_PATH="${QSR_VCS_SIM_PATH:-/proj_sw/user_dev/${USER}/tt-umd-simulators/build/vcs-quasar-1x3}"
+          ;;
+        *)
+          echo "ERROR: QSR_SIM_BACKEND must be emu or vcs, got '$QSR_SIM_BACKEND'" >&2
+          exit 3
+          ;;
+      esac
+    else
+      SIM_PATH="/proj_sw/user_dev/${USER}/tt-umd-simulators/build/emu-${ARCH}-1x3"
+    fi
+  fi
+
+  # Quasar's Aether resource is remote and shared by both compute runners. Use
+  # QSR_AETHER_LOCK (a shared-filesystem path) when configured so tensix-l-04
+  # and tensix-l-05 cannot start or reap each other's runs. Other paths retain
+  # the historical node-local lock.
+  if [[ -z "$LOCKFILE" ]]; then
+    if [[ "$ARCH" == "quasar" && -n "${QSR_AETHER_LOCK:-}" ]]; then
+      LOCKFILE="$QSR_AETHER_LOCK"
+    else
+      LOCKFILE="/tmp/tt-llk-test.lock"
+    fi
+  fi
 
   # Hang threshold: emulator gets the post-ready stall; silicon keeps the larger
   # default. Explicit --stall / HANG_STALL wins.
@@ -157,33 +220,15 @@ _validate() {
   # running, so strip that prefix or pytest collects 0 items.
   [[ -n "$TEST_ID" ]] && TEST_ID="${TEST_ID#${ARCH}/}"
 
-  # Build-stamp identity. SRC_ID fingerprints THIS run's source (worktree + LLK
-  # arch tree + test file). ARTKEY is worktree-independent (peers building the
-  # same target share it) so their differing SRC_IDs compare. STAMP_DIR lives
-  # outside the wiped build cache so a stamp survives a peer's wipe.
-  local _llk_dir
-  case "$ARCH" in
-    quasar)    _llk_dir="tt_llk_quasar" ;;
-    blackhole) _llk_dir="tt_llk_blackhole" ;;
-    wormhole)  _llk_dir="tt_llk_wormhole_b0" ;;
-    *)         _llk_dir="tt_llk_${ARCH}" ;;
-  esac
-  SRC_ID=$( { printf '%s\n' "$WORKTREE"; find "${WORKTREE}/${_llk_dir}" "${TEST_DIR}/${TEST_FILE}" -type f -printf '%P %s %T@\n' 2>/dev/null | sort; } | sha256sum | cut -c1-16 )
-  ARTKEY=$( printf '%s' "${ARCH}|${TEST_FILE}|${TEST_ID}|${K_FILTER}|${NO_SPLIT}|${MAXFAIL}" | sha256sum | cut -c1-16 )
-  STAMP_DIR="/tmp/tt-llk-build-stamps-${ARCH}"
-  STAMP="${STAMP_DIR}/${ARTKEY}"
-
   # Codegen infra (symlinked into each worktree).
   REAP="${WORKTREE}/codegen/scripts/reap_stale_emu.sh"
   TRIAGE="${WORKTREE}/.claude/scripts/llk_triage.py"
   RUN_TAG="ttllk_${ARCH}_$$"
 
-  # NNG_SOCKET_ADDR (debuda) is the single infra-forwarded channel — keep the
-  # shell value if set, else derive from the host in the shell's addr or hostname.
-  local host
-  if [[ "${NNG_SOCKET_ADDR:-}" =~ ^tcp://([^:]+): ]]; then host="${BASH_REMATCH[1]}"; else host="$(hostname)"; fi
-  NNG_ADDR="${NNG_SOCKET_ADDR:-tcp://${host}:${DBD_BASE}}"
-  NNG_LOCAL="${NNG_SOCKET_LOCAL_PORT:-$NNG_LOCAL_BASE}"
+  if [[ "$MODE" == "simulator" ]]; then
+    _resolve_nng_channel || exit $?
+    _vlog "NNG callback ${NNG_ADDR} -> local port ${NNG_LOCAL}"
+  fi
 }
 
 # SFPI (the RISC-V toolchain) is mandatory to compile. Fetch it if absent.
@@ -195,12 +240,357 @@ _ensure_sfpi() {
   return 0
 }
 
+# Hash every tracked or candidate-created, nonignored tt-llk file by content.
+# Paths, kinds, executable bits, sizes, and hashes are framed with NUL bytes so
+# names cannot alias one another. This deliberately matches the dashboard's
+# source policy instead of relying on size/mtime fingerprints.
+_source_tree_sha256() {
+  local -a files=()
+  local relative path kind executable size digest target
+  git -C "$WORKTREE" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "ERROR: worktree is not a git checkout: ${WORKTREE}" >&2
+    return 3
+  }
+  mapfile -d '' files < <(
+    git -C "$WORKTREE" ls-files -z --cached --others --exclude-standard -- .
+  )
+  [[ ${#files[@]} -gt 0 ]] || {
+    echo "ERROR: worktree contains no tracked or candidate-created files: ${WORKTREE}" >&2
+    return 3
+  }
+  (
+    set -o pipefail
+    {
+      printf '%s\0' "tt-llk-git-files-v1"
+      for relative in "${files[@]}"; do
+        path="${WORKTREE}/${relative}"
+        if [[ -L "$path" ]]; then
+          kind="symlink"
+          executable="false"
+          target="$(readlink "$path")"
+          size="$(printf '%s' "$target" | wc -c)"
+          digest="$(printf '%s' "$target" | sha256sum | cut -d' ' -f1)"
+        elif [[ -f "$path" ]]; then
+          kind="file"
+          [[ -x "$path" ]] && executable="true" || executable="false"
+          size="$(stat -c %s "$path")"
+          digest="$(sha256sum "$path" | cut -d' ' -f1)"
+        else
+          echo "ERROR: unsupported source-tree entry: ${relative}" >&2
+          return 3
+        fi
+        printf '%s\0%s\0%s\0%s\0%s\0' \
+          "$relative" "$kind" "$executable" "$size" "$digest"
+      done
+    } | sha256sum | cut -d' ' -f1
+  )
+}
+
+# Use the run writer's canonical temporary-index algorithm so collection,
+# execution, reduction, resume, and final packaging bind to identical bytes.
+_patch_sha256() {
+  local writer="${WORKTREE}/codegen/scripts/run_json_writer.py"
+  [[ -f "$writer" ]] || {
+    echo "ERROR: candidate patch writer is missing: ${writer}" >&2
+    return 3
+  }
+  python3 "$writer" candidate-patch-digest \
+    --worktree "$WORKTREE" --expected-base-sha "$EXPECTED_BASE_SHA"
+}
+
+# Derive the artifact path only after SFPI setup, so the selected compiler's
+# bytes are part of the identity. `count` uses a separate purpose namespace and
+# therefore cannot clear a compiled entry while collection initializes pytest.
+_prepare_artifact_identity() {
+  local purpose="${1:-build}"
+  local compiler owner_scope selector required_manifest required_output verification_suite
+  local manifest_base manifest_run manifest_attempt manifest_requirement
+  compiler="${WORKTREE}/tests/sfpi/compiler/bin/riscv-tt-elf-g++"
+  SOURCE_TREE_SHA256="$(_source_tree_sha256)" || return $?
+  verification_suite="${CODEGEN_VERIFICATION_SUITE:-llk}"
+  required_manifest="${CODEGEN_REQUIRED_VERIFICATION_MANIFEST:-}"
+  if [[ -z "$required_manifest" && -n "$LOG_DIR" && -f "$LOG_DIR/state.json" ]]; then
+    required_manifest="$(python3 - "$LOG_DIR/state.json" <<'PY'
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("REQUIRED_VERIFICATION_MANIFEST") or "")
+except (OSError, ValueError):
+    print("")
+PY
+)"
+  fi
+  if [[ -n "$required_manifest" ]]; then
+    [[ -f "$required_manifest" ]] || {
+      echo "ERROR: required-verification manifest is missing: ${required_manifest}" >&2
+      return 3
+    }
+    required_output="$(python3 - "$required_manifest" "$ARCH" "$TEST_FILE" "$TEST_ID" "$K_FILTER" "$verification_suite" <<'PY'
+import hashlib, json, sys
+path, arch, test, test_id, k, suite = sys.argv[1:7]
+d = json.load(open(path))
+payload = json.dumps({key: value for key, value in d.items() if key != "manifest_id"},
+                     sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                     allow_nan=False).encode()
+if (d.get("schema") != "tt.issue-solver.required-verification" or
+    d.get("version") != 1 or
+    d.get("manifest_id") != hashlib.sha256(payload).hexdigest() or
+    d.get("waivers") != []):
+    raise SystemExit("invalid required-verification manifest")
+selector = {"test": test, "test_id": test_id or None, "k": k or None}
+matches = [r for r in d.get("requirements", [])
+           if r.get("architecture") == arch and r.get("suite") == suite
+           and r.get("selector") == selector]
+if len(matches) != 1:
+    raise SystemExit(
+        f"selector must match exactly one sealed {suite} requirement (matched {len(matches)})"
+    )
+print(d["expected_base_sha"], d["run_id"], d["attempt_id"],
+      matches[0]["requirement_id"], sep="\t")
+PY
+)" || {
+      echo "ERROR: verification selector is not authorized by ${required_manifest}" >&2
+      return 3
+    }
+    IFS=$'\t' read -r manifest_base manifest_run manifest_attempt manifest_requirement <<<"$required_output"
+    [[ -z "${CODEGEN_RUN_ID:-}" || "$CODEGEN_RUN_ID" == "$manifest_run" ]] || {
+      echo "ERROR: CODEGEN_RUN_ID does not match the required-verification manifest" >&2
+      return 3
+    }
+    [[ -z "${CODEGEN_ATTEMPT_ID:-}" || "$CODEGEN_ATTEMPT_ID" == "$manifest_attempt" ]] || {
+      echo "ERROR: CODEGEN_ATTEMPT_ID does not match the required-verification manifest" >&2
+      return 3
+    }
+    [[ -z "${CODEGEN_REQUIREMENT_ID:-}" || "$CODEGEN_REQUIREMENT_ID" == "$manifest_requirement" ]] || {
+      echo "ERROR: CODEGEN_REQUIREMENT_ID does not match the required-verification manifest" >&2
+      return 3
+    }
+  fi
+  ACTUAL_BASE_SHA="$(git -C "$WORKTREE" rev-parse HEAD 2>/dev/null)" || return 3
+  EXPECTED_BASE_SHA="${CODEGEN_BASE_COMMIT:-${manifest_base:-$ACTUAL_BASE_SHA}}"
+  [[ "$ACTUAL_BASE_SHA" =~ ^[0-9a-f]{40}$ && "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "ERROR: local verification requires exact base SHAs" >&2
+    return 3
+  }
+  [[ "$ACTUAL_BASE_SHA" == "$EXPECTED_BASE_SHA" ]] || {
+    echo "ERROR: checked-out base ${ACTUAL_BASE_SHA} does not match expected ${EXPECTED_BASE_SHA}" >&2
+    return 3
+  }
+  if [[ "${CODEGEN_PATCH_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]; then
+    PATCH_SHA256="$CODEGEN_PATCH_SHA256"
+  else
+    PATCH_SHA256="$(_patch_sha256)" || return $?
+  fi
+  if [[ -f "$compiler" ]]; then
+    COMPILER_SHA256="$(sha256sum "$compiler" | cut -d' ' -f1)"
+  elif [[ "$purpose" == "count" ]]; then
+    COMPILER_SHA256="unavailable-for-collection"
+  else
+    echo "ERROR: compiler is unavailable after SFPI setup: ${compiler}" >&2
+    return 3
+  fi
+
+  selector="${ARCH}|${TEST_FILE}|${TEST_ID}|${K_FILTER}|${NO_SPLIT}"
+  ARTKEY="$(printf '%s' "$selector" | sha256sum | cut -d' ' -f1)"
+  BUILD_INPUT_DIGEST="$({
+    printf '%s\0' "tt-llk-local-build-input-v2"
+    printf '%s\0' "$purpose" "$SOURCE_TREE_SHA256" "$COMPILER_SHA256"
+    printf '%s\0' "$ARCH" "$TEST_FILE" "$TEST_ID" "$K_FILTER" "$NO_SPLIT"
+  } | sha256sum | cut -d' ' -f1)"
+
+  RUN_IDENTITY="${manifest_run:-${CODEGEN_RUN_ID:-${RUN_ID:-manual}}}"
+  ATTEMPT_IDENTITY="${manifest_attempt:-${CODEGEN_ATTEMPT_ID:-manual}}"
+  REQUIREMENT_IDENTITY="${manifest_requirement:-${CODEGEN_REQUIREMENT_ID:-${ARCH}:llk:1}}"
+  owner_scope="${RUN_IDENTITY}|${ATTEMPT_IDENTITY}|${LOG_DIR:-no-log}|$(realpath -m "$WORKTREE")"
+  ARTIFACT_OWNER="$(printf '%s' "$owner_scope" | sha256sum | cut -d' ' -f1)"
+  MANAGED_ARTIFACT_ROOT="$(realpath -m "${TT_LLK_LOCAL_ARTIFACT_ROOT:-/tmp/tt-llk-build-v2}")"
+  local worktree_root
+  worktree_root="$(realpath -m "$WORKTREE")"
+  case "$MANAGED_ARTIFACT_ROOT" in
+    /|"$HOME"|"$worktree_root"|"$worktree_root"/*)
+      echo "ERROR: unsafe managed artifact root: ${MANAGED_ARTIFACT_ROOT}" >&2
+      return 3
+      ;;
+  esac
+  ARTIFACT_DIR="${MANAGED_ARTIFACT_ROOT}/v2/${ARTIFACT_OWNER}/${BUILD_INPUT_DIGEST}"
+  ARTIFACT_LOCK="${MANAGED_ARTIFACT_ROOT}/locks/${ARTIFACT_OWNER}-${BUILD_INPUT_DIGEST}.lock"
+  STAMP_DIR="${MANAGED_ARTIFACT_ROOT}/stamps/${ARTIFACT_OWNER}"
+  STAMP="${STAMP_DIR}/${ARTKEY}"
+  mkdir -p "$(dirname "$ARTIFACT_DIR")" "$(dirname "$ARTIFACT_LOCK")" "$STAMP_DIR" || {
+    echo "ERROR: cannot create managed artifact namespace: ${MANAGED_ARTIFACT_ROOT}" >&2
+    return 3
+  }
+  EVIDENCE_DIR="${MANAGED_ARTIFACT_ROOT}/evidence/${ARTIFACT_OWNER}/${BUILD_INPUT_DIGEST}/${CMD}-$$"
+  COLLECTION_JSON="${EVIDENCE_DIR}/collection.json"
+  PRODUCER_JUNIT="${EVIDENCE_DIR}/producer.junit.xml"
+  CONSUMER_JUNIT="${EVIDENCE_DIR}/consumer.junit.xml"
+  CONSUMER_LOG="${EVIDENCE_DIR}/consumer.log"
+  ARTIFACT_MANIFEST="${EVIDENCE_DIR}/artifact-manifest.json"
+  mkdir -p "$EVIDENCE_DIR" || {
+    echo "ERROR: cannot create evidence directory: ${EVIDENCE_DIR}" >&2
+    return 3
+  }
+  if [[ -z "$RESULT_JSON_OUT" ]]; then
+    if [[ -n "$LOG_DIR" ]]; then
+      RESULT_JSON_OUT="${LOG_DIR}/verification-results/${CMD}-${ARCH}-${BUILD_INPUT_DIGEST:0:16}-$$.json"
+    else
+      RESULT_JSON_OUT="${EVIDENCE_DIR}/verification-result.json"
+    fi
+  fi
+  [[ "$RUN_IDENTITY" != "manual" ]] || RUN_IDENTITY="manual-${ARTIFACT_OWNER:0:16}"
+  JOB_IDENTITY="${CODEGEN_JOB_ID:-local-${ARTIFACT_OWNER:0:12}-$$}"
+  RUN_JSON_WRITER="${WORKTREE}/codegen/scripts/run_json_writer.py"
+  [[ -f "$RUN_JSON_WRITER" ]] || {
+    echo "ERROR: result writer is missing: ${RUN_JSON_WRITER}" >&2
+    return 3
+  }
+  if grep -Fq -- 'TT_LLK_ARTEFACTS_DIR' \
+      "${WORKTREE}/tests/python_tests/helpers/test_config.py"; then
+    export TT_LLK_ARTEFACTS_DIR="$ARTIFACT_DIR"
+  else
+    # Historical test_config.py only honors RUNNER_TEMP and appends its fixed
+    # tt-llk-build basename. Point it at the same attempt-owned namespace and
+    # seal the directory it actually creates.
+    export RUNNER_TEMP="$ARTIFACT_DIR"
+    ARTIFACT_DIR="${RUNNER_TEMP}/tt-llk-build"
+    export TT_LLK_ARTEFACTS_DIR="$ARTIFACT_DIR"
+  fi
+  SRC_ID="${SOURCE_TREE_SHA256:0:16}"
+  _vlog "artifact owner=${ARTIFACT_OWNER} build=${BUILD_INPUT_DIGEST} root=${ARTIFACT_DIR}"
+}
+
+_lock_artifact_entry() {
+  exec 8>>"$ARTIFACT_LOCK" || {
+    echo "ERROR: cannot open artifact lock ${ARTIFACT_LOCK}" >&2
+    return 3
+  }
+  _vlog "waiting for artifact lock ${ARTIFACT_LOCK}"
+  flock 8 || {
+    echo "ERROR: cannot acquire artifact lock ${ARTIFACT_LOCK}" >&2
+    return 3
+  }
+}
+
 # The pytest target selector (file, -k filter, or a single parametrize id).
 _build_target() {
   TARGET=()
   if   [[ -n "$TEST_ID"  ]]; then TARGET=("$TEST_ID")
   elif [[ -n "$K_FILTER" ]]; then TARGET=(-k "$K_FILTER" "$TEST_FILE")
   else                            TARGET=("$TEST_FILE"); fi
+}
+
+# Perform a pure collection pass. conftest explicitly skips device/runtime
+# initialization when pytest is collecting only and atomically writes the
+# selected, pre-filter collected, error, and process-exit counts.
+_collect_tests() {
+  local collection_log="${EVIDENCE_DIR}/collection.log"
+  rm -f "$COLLECTION_JSON" "$collection_log"
+  local rc
+  if grep -Fq -- '"--codegen-collection-json"' \
+      "${WORKTREE}/tests/python_tests/conftest.py"; then
+    ( CHIP_ARCH="$ARCH" pytest --collect-only -q \
+        --codegen-collection-json "$COLLECTION_JSON" "${TARGET[@]}" ) \
+        >"$collection_log" 2>&1
+    rc=$?
+  else
+    # Historical bases predate the structured collection option. Keep their
+    # existing producer-mode collection path (which skips device setup), then
+    # normalize its exact node IDs into the same strict result schema.
+    ( CHIP_ARCH="$ARCH" pytest --collect-only -q --compile-producer \
+        "${TARGET[@]}" ) >"$collection_log" 2>&1
+    rc=$?
+    python3 - "$COLLECTION_JSON" "$collection_log" "$rc" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+destination = Path(sys.argv[1])
+lines = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace").splitlines()
+returncode = int(sys.argv[3])
+selected = sum(
+    1
+    for line in lines
+    if "::" in line and not line.lstrip().startswith(("=", "WARNING"))
+)
+record = {
+    "schema": "tt.issue-solver.pytest-collection",
+    "version": 1,
+    "selected": selected,
+    "collected": selected,
+    "errors": int(returncode in (1, 2, 3, 4)),
+    "returncode": returncode,
+}
+destination.parent.mkdir(parents=True, exist_ok=True)
+temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
+temporary.write_text(
+    json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+os.replace(temporary, destination)
+PY
+  fi
+  cat "$collection_log" >&2
+  [[ -f "$COLLECTION_JSON" ]] || {
+    echo "ERROR: pytest collection produced no structured result" >&2
+    return 3
+  }
+  return "$rc"
+}
+
+_seal_artifacts() {
+  python3 "$RUN_JSON_WRITER" artifact-manifest \
+    --output "$ARTIFACT_MANIFEST" \
+    --artifact-root "$ARTIFACT_DIR" \
+    --owner-id "$ARTIFACT_OWNER" \
+    --build-input-digest "$BUILD_INPUT_DIGEST" \
+    --source-tree-sha256 "$SOURCE_TREE_SHA256" \
+    --compiler-sha256 "$COMPILER_SHA256" >&2
+}
+
+_emit_structured_result() {
+  local backend="${CODEGEN_VERIFICATION_BACKEND:-}"
+  if [[ -z "$backend" ]]; then
+    if [[ "$SIM_PATH" == *.so ]]; then backend="ttsim"
+    elif [[ "$ARCH" == "quasar" ]]; then backend="quasar"
+    elif [[ "$MODE" == "hardware" ]]; then backend="silicon"
+    else backend="local"; fi
+  fi
+  local -a args=(
+    verification-result
+    --output "$RESULT_JSON_OUT"
+    --collection-json "$COLLECTION_JSON"
+    --junit "$CONSUMER_JUNIT"
+    --output-log "$CONSUMER_LOG"
+    --artifact-manifest "$ARTIFACT_MANIFEST"
+    --artifact-root "$ARTIFACT_DIR"
+    --requirement-id "$REQUIREMENT_IDENTITY"
+    --run-id "$RUN_IDENTITY"
+    --attempt-id "$ATTEMPT_IDENTITY"
+    --job-id "$JOB_IDENTITY"
+    --architecture "$ARCH"
+    --suite "${CODEGEN_VERIFICATION_SUITE:-llk}"
+    --backend "$backend"
+    --test "$TEST_FILE"
+    --expected-base-sha "$EXPECTED_BASE_SHA"
+    --actual-base-sha "$ACTUAL_BASE_SHA"
+    --patch-sha256 "$PATCH_SHA256"
+    --returncode "${CONSUMER_RETURN_CODE:-$_rc}"
+  )
+  [[ -n "$TEST_ID" ]] && args+=(--test-id "$TEST_ID")
+  [[ -n "$K_FILTER" ]] && args+=(--k "$K_FILTER")
+  [[ "${CONSUMER_TIMED_OUT:-false}" == "true" ]] && args+=(--timed-out)
+  [[ -n "${CONSUMER_SIGNAL:-}" ]] && args+=(--signal "$CONSUMER_SIGNAL")
+  [[ -n "${CONSUMER_INFRA_CODE:-}" ]] && args+=(--infrastructure-code "$CONSUMER_INFRA_CODE")
+  [[ "$NO_SPLIT" == "true" ]] && args+=(--infrastructure-code artifact_not_presealed)
+
+  local writer_rc=0
+  python3 "$RUN_JSON_WRITER" "${args[@]}" >&2 || writer_rc=$?
+  if [[ ! -s "$RESULT_JSON_OUT" ]]; then
+    echo "ERROR: structured verification result was not written: ${RESULT_JSON_OUT}" >&2
+    return 3
+  fi
+  _vlog "structured result ${RESULT_JSON_OUT}"
+  return "$writer_rc"
 }
 
 _emit_verdict() {
@@ -214,8 +604,8 @@ _emit_verdict() {
 # ── Producer (compile) ─────────────────────────────────────────────────────────
 
 # Parallel compile with the transient parallel-build-setup retry. The producer's
-# xdist workers each rmtree+recreate the shared build dir at startup, which under
-# load can race into a FileNotFoundError INTERNALERROR — not a real compile error.
+# xdist workers share only this attempt-owned entry; the entry flock prevents a
+# second producer from clearing it concurrently.
 # Retry on that signature; treat anything else as a genuine compile failure.
 # Returns pytest's exit code.
 _producer() {
@@ -223,7 +613,8 @@ _producer() {
   local prc=1 attempt
   for attempt in 1 2 3; do
     : > "$plog"
-    ( CHIP_ARCH="$ARCH" pytest --compile-producer -n "$JOBS" -x "${TARGET[@]}" ) >"$plog" 2>&1
+    ( CHIP_ARCH="$ARCH" pytest --compile-producer -n "$JOBS" -x \
+        --junitxml "$PRODUCER_JUNIT" "${TARGET[@]}" ) >"$plog" 2>&1
     prc=$?
     [[ -n "$LOG_DIR" ]] && { mkdir -p "$LOG_DIR"; cat "$plog" >> "${LOG_DIR}/compile.log"; }
     cat "$plog" >&2
@@ -259,16 +650,21 @@ _hw_hang_cleanup() {
 # remote emulator), escalating to SIGKILL if pytest ignores it. Sets/clears the
 # global CONSUMER_PID (the EXIT trap uses it). Returns the classified exit code.
 _run_consumer() {
-  local log; log="$(mktemp "${TMPDIR:-/tmp}/tt-llk-run.XXXXXX")"
+  local log="$CONSUMER_LOG"
   local hangflag="${log}.hang"
+  rm -f "$log" "$hangflag" "$CONSUMER_JUNIT"
+  : > "$log"
+  CONSUMER_RETURN_CODE="" CONSUMER_TIMED_OUT="false"
+  CONSUMER_SIGNAL="" CONSUMER_INFRA_CODE=""
 
-  local -a flags=(-rN "--maxfail=${MAXFAIL}")
+  local -a flags=(-rN "--maxfail=${MAXFAIL}" --junitxml "$CONSUMER_JUNIT")
   [[ "$MODE" == "simulator" ]] && flags+=(--run-simulator "--port=${PORT}")
   [[ "$NO_SPLIT" == "false" ]] && flags+=(--compile-consumer)
 
   if [[ "$MODE" == "simulator" ]]; then
     export NNG_SOCKET_ADDR="$NNG_ADDR" NNG_SOCKET_LOCAL_PORT="$NNG_LOCAL" NNG_SOCKET_NAME="$RUN_TAG"
     export TT_UMD_SIMULATOR_PATH="$SIM_PATH"
+    export SSH_MACHINE_NAME="$EMU_HOST"
     # Free this run's port before booting tt-exalens.
     local stale; stale="$(lsof -ti :"$PORT" 2>/dev/null || true)"
     [[ -n "$stale" ]] && echo "$stale" | xargs -r kill -9 2>/dev/null || true
@@ -309,6 +705,10 @@ _run_consumer() {
   local watch_pid=$!
 
   wait "$CONSUMER_PID"; local rc=$?
+  CONSUMER_RETURN_CODE="$rc"
+  if [[ $rc -ge 128 && $rc -le 255 ]]; then
+    CONSUMER_SIGNAL="$((rc - 128))"
+  fi
   kill "$watch_pid" 2>/dev/null; wait "$watch_pid" 2>/dev/null
 
   [[ -n "$LOG_DIR" ]] && { mkdir -p "$LOG_DIR"; cat "$log" >> "${LOG_DIR}/run.log" 2>/dev/null; }
@@ -321,26 +721,31 @@ _run_consumer() {
     # Stalled before tt-exalens ever reported ready → a boot wedge, not a kernel
     # hang. Transient (emulator congestion) → ENV so the caller may retry.
     echo "[run_test] ENV: stalled before tt-exalens became ready (boot wedge)" >&2
-    [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --force >&2 2>&1 || true
+    [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
+    CONSUMER_TIMED_OUT="true" CONSUMER_INFRA_CODE="emulator_boot_stalled"
     code=3
   elif [[ -f "$hangflag" ]]; then
     echo "[run_test] HANG: no output for ${STALL}s" >&2
     if [[ "$MODE" == "simulator" ]]; then
-      [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --force >&2 2>&1 || true
+      [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
     else
       _hw_hang_cleanup
     fi
+    CONSUMER_TIMED_OUT="true" CONSUMER_INFRA_CODE="execution_stalled"
     code=5
   elif [[ "$MODE" == "simulator" && $rc -ne 0 ]] && ! grep -qE "$READY_RE" "$log" 2>/dev/null; then
     echo "[run_test] ENV: tt-exalens never became ready" >&2
-    [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --force >&2 2>&1 || true
+    [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
+    CONSUMER_INFRA_CODE="emulator_not_ready"
     code=3
   elif [[ "$MODE" == "hardware" && $rc -ne 0 ]] && grep -qF "TENSIX TIMED OUT" "$log" 2>/dev/null; then
     echo "[run_test] HANG: TENSIX TIMED OUT" >&2
     _hw_hang_cleanup
+    CONSUMER_TIMED_OUT="true" CONSUMER_INFRA_CODE="tensix_timed_out"
     code=5
   elif [[ $rc -ne 0 ]] && grep -qiE "No Tenstorrent devices? (were|was)? ?detected|No Tenstorrent devices" "$log" 2>/dev/null; then
     echo "[run_test] ENV: no Tenstorrent device detected (CHIP_ARCH / device access)" >&2
+    CONSUMER_INFRA_CODE="no_device_available"
     code=3
   elif [[ $rc -eq 0 ]]; then
     code=0
@@ -349,31 +754,41 @@ _run_consumer() {
   fi
 
   CONSUMER_PID=""
-  rm -f "$log" "$hangflag" 2>/dev/null
+  rm -f "$hangflag" 2>/dev/null
   return "$code"
 }
 
-# ── count / compile (lock-free) ────────────────────────────────────────────────
+# ── count / compile (per-entry artifact lock) ─────────────────────────────────
 
 _do_count() {
-  _validate; _activate_venv; cd "$TEST_DIR" || { echo "0"; return 3; }
-  local out rc=0
-  if [[ -n "$K_FILTER" ]]; then
-    out="$(CHIP_ARCH="$ARCH" pytest --compile-producer --co -q -k "$K_FILTER" "$TEST_FILE" 2>&1)" || rc=$?
-  else
-    out="$(CHIP_ARCH="$ARCH" pytest --compile-producer --co -q "$TEST_FILE" 2>&1)" || rc=$?
-  fi
-  printf '%s\n' "$out" >&2
+  _validate; _activate_venv
+  _prepare_artifact_identity count || { echo "0"; return 3; }
+  _lock_artifact_entry || { echo "0"; return 3; }
+  _build_target
+  cd "$TEST_DIR" || { echo "0"; return 3; }
+  local rc=0
+  _collect_tests || rc=$?
   [[ $rc -ne 0 ]] && { echo "0"; return "$rc"; }
-  printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -1 | grep -oE '^[0-9]+' || echo "0"
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["selected"])' \
+    "$COLLECTION_JSON" || { echo "0"; return 3; }
 }
 
 _do_compile() {
   _validate; _activate_venv; _ensure_sfpi || return 3
+  _prepare_artifact_identity build || return 3
+  _lock_artifact_entry || return 3
   _build_target; cd "$TEST_DIR" || return 3
+  local collection_rc=0
+  _collect_tests || collection_rc=$?
+  [[ $collection_rc -eq 4 ]] && return 4
+  [[ $collection_rc -ne 0 ]] && return 2
   _vlog "compile ${TEST_FILE} (arch=${ARCH}, -n ${JOBS})"
   _producer; local rc=$?
-  [[ $rc -eq 0 ]] && { mkdir -p "$STAMP_DIR" 2>/dev/null; printf '%s' "$SRC_ID" > "$STAMP"; return 0; }
+  if [[ $rc -eq 0 ]]; then
+    _seal_artifacts || return 3
+    printf '%s' "$BUILD_INPUT_DIGEST" > "$STAMP"
+    return 0
+  fi
   return 2
 }
 
@@ -385,34 +800,49 @@ _do_compile() {
 _run_under_lock() {
   local force="$1"
   _validate; _activate_venv; _ensure_sfpi || return 3
+  _prepare_artifact_identity build || return 3
   _build_target; cd "$TEST_DIR" || return 3
 
+  mkdir -p "$(dirname "$LOCKFILE")" 2>/dev/null ||
+    { echo "ERROR: cannot create lock directory for ${LOCKFILE}" >&2; return 3; }
   exec 9>>"$LOCKFILE" || { echo "ERROR: cannot open lock ${LOCKFILE}" >&2; return 3; }
   _vlog "waiting for global lock ${LOCKFILE}"
   flock 9                       # unbounded — wait in line
   _vlog "acquired lock"
+  _lock_artifact_entry || return 3
 
   # Pre-flight reap under the lock: any live emu job now is an orphan from a run
   # whose peer died non-gracefully. Clear it before booting ours.
   if [[ "$MODE" == "simulator" && -x "$REAP" ]]; then
-    bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --force >&2 2>&1 || true
+    bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
   fi
+
+  local collection_rc=0
+  _collect_tests || collection_rc=$?
+  [[ $collection_rc -eq 4 ]] && return 4
+  [[ $collection_rc -ne 0 ]] && return 2
 
   # Build under the lock if forced or the stamp is not ours (a peer recompiled).
   # --no-split compiles inside the consumer, so it is skipped here.
   if [[ "$NO_SPLIT" == "false" ]]; then
     local need="$force"
-    [[ "$(cat "$STAMP" 2>/dev/null)" != "$SRC_ID" ]] && need=1
+    [[ "$(cat "$STAMP" 2>/dev/null)" != "$BUILD_INPUT_DIGEST" ]] && need=1
     if [[ "$need" == "1" ]]; then
-      _vlog "building under lock (have=$(cat "$STAMP" 2>/dev/null) want=${SRC_ID} force=${force})"
+      _vlog "building under lock (have=$(cat "$STAMP" 2>/dev/null) want=${BUILD_INPUT_DIGEST} force=${force})"
       _producer || return 2
-      mkdir -p "$STAMP_DIR" 2>/dev/null; printf '%s' "$SRC_ID" > "$STAMP"
+      printf '%s' "$BUILD_INPUT_DIGEST" > "$STAMP"
     else
       _vlog "reusing build (stamp matches ${SRC_ID})"
     fi
+    _seal_artifacts || return 3
   fi
 
-  _run_consumer; return $?
+  local execution_rc=0
+  _run_consumer || execution_rc=$?
+  if [[ "$NO_SPLIT" == "true" ]]; then
+    _seal_artifacts || return 3
+  fi
+  return "$execution_rc"
   # The lock (fd 9) is released when the script exits.
 }
 
@@ -430,7 +860,7 @@ _cleanup() {
     while kill -0 "$CONSUMER_PID" 2>/dev/null && [[ $waited -lt $GRACE_SECS ]]; do sleep 1; waited=$((waited + 1)); done
     kill -9 "$CONSUMER_PID" 2>/dev/null
     if [[ "${MODE:-}" == "simulator" && -x "${REAP:-}" ]]; then
-      bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --force >/dev/null 2>&1 || true
+      bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >/dev/null 2>&1 || true
     fi
   fi
 }
@@ -450,6 +880,14 @@ case "$CMD" in
   "") echo "ERROR: no command. Use: count | compile | simulate | run" >&2; exit 4 ;;
   *)  echo "ERROR: unknown command '${CMD}'. Use: count | compile | simulate | run" >&2; exit 4 ;;
 esac
+
+# Once a consumer ran, the structured classification is authoritative. This can
+# tighten an exit-0 process to coverage/infra failure but never turn a failing
+# process into success.
+if [[ "$CMD" == "simulate" || "$CMD" == "run" ]] && [[ -n "${CONSUMER_RETURN_CODE:-}" ]]; then
+  _emit_structured_result
+  _rc=$?
+fi
 
 # count's stdout contract is "just the integer" — no verdict line.
 case "$CMD" in compile|simulate|run) _emit_verdict "$_rc" "$CMD" ;; esac

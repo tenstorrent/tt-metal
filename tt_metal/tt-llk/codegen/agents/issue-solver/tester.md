@@ -52,8 +52,13 @@ The router leaves simulator paths in bootstrap state. For ttsim, read
 Optional environment:
 
 - `HW_TEST_DISPATCH_CMD`: shared silicon-queue client. It applies only to the
-  local backend.
+  local backend and only to Blackhole/Wormhole. Quasar always executes on the
+  compute runner through Aether.
 - `HW_TEST_SESSION`: queue session name.
+- `QSR_SIM_BACKEND`: Quasar Aether backend, `emu` (default) or `vcs`.
+- `QSR_EMU_SIM_PATH` / `QSR_VCS_SIM_PATH`: runner-local UMD build directories.
+- `QSR_AETHER_LOCK`: shared-filesystem lock used by every compute runner.
+- `QSR_AETHER_HOST`: remote Aether host (default `soc-l-12`).
 
 ## Pre-Flight
 
@@ -68,6 +73,16 @@ Read:
 2. the analysis artifact's `arch_scope`, `verification_required`, and
    `llk_coverage`
 3. the fix plan's `## Test Strategy`
+4. `REQUIRED_VERIFICATION_MANIFEST` from run state
+
+The manifest must exist and its `attempt_id` must equal
+`REQUIRED_VERIFICATION_ATTEMPT_ID`. Select only its `suite=llk` leaves. The
+runner reads the same manifest from `${LOG_DIR}/state.json`, rejects an
+unsealed selector before compilation, and binds each structured result to the
+leaf's run, attempt, and requirement IDs. Run every selected leaf separately;
+before each invocation export that leaf's manifest `run_id`, `attempt_id`, and
+`requirement_id` as `CODEGEN_RUN_ID`, `CODEGEN_ATTEMPT_ID`, and
+`CODEGEN_REQUIREMENT_ID`. Do not substitute a broader test.
 
 Parse `TARGET_ARCHES_JSON` as JSON for multi-arch runs; otherwise use
 `TARGET_ARCH`. Run only architectures marked `in_scope`. Preserve the
@@ -83,7 +98,7 @@ Normalize selectors relative to the pytest directory:
 
 ## Test Selection
 
-Use the plan's test strategy:
+Use the manifest-normalized form of the plan's test strategy:
 
 | Plan item | Action |
 |---|---|
@@ -187,10 +202,19 @@ For a compile-only plan, use `subcommand=compile` and return
 
 For a functional test:
 
-- with `HW_TEST_DISPATCH_CMD`, run `subcommand=compile` as the local gate and
-  then follow **Queued Silicon**;
+- for Quasar, run `subcommand=compile` as the local gate and then follow
+  **Local Quasar Aether**. Never submit Quasar to the silicon queue;
+- for Blackhole/Wormhole with `HW_TEST_DISPATCH_CMD`, run
+  `subcommand=compile` as the local gate and then follow **Queued Silicon**;
 - without it, use `subcommand=run` so the wrapper compiles and runs on the
   local device.
+
+Create one result path per sealed leaf before either local or queued execution:
+
+```bash
+mkdir -p "$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}"
+RESULT_JSON_OUT="$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}/${CODEGEN_REQUIREMENT_ID}.json"
+```
 
 ```bash
 bash .claude/scripts/run_test.sh "$subcommand" \
@@ -198,6 +222,7 @@ bash .claude/scripts/run_test.sh "$subcommand" \
   --arch "$arch" \
   --test "$TEST_FILE" \
   --log-dir "$LOG_DIR" \
+  --result-json-out "$RESULT_JSON_OUT" \
   --verbose
 ```
 
@@ -225,12 +250,46 @@ the wrapper reports an environment-style exit.
 
 Do not submit a queue job after a local compile failure.
 
+## Local Quasar Aether
+
+Use this route for `arch=quasar` with `TEST_BACKEND=local`, whether or not
+`HW_TEST_DISPATCH_CMD` is set. The compute runner owns the patched worktree and
+the compile artifacts, so Quasar VCS/emulator execution stays on that same
+machine. Blackhole/Wormhole remain queue-backed.
+
+After the local `compile` gate passes, run:
+
+```bash
+set +e
+bash .claude/scripts/run_test.sh simulate \
+  --worktree "$WORKTREE_DIR/tt_metal/tt-llk" \
+  --arch quasar \
+  --test "$TEST_FILE" \
+  --log-dir "$LOG_DIR" \
+  --result-json-out "$RESULT_JSON_OUT" \
+  --verbose
+qsr_exit=$?
+set -e
+```
+
+Add the plan's `--k "$K_FILTER"` or `--test-id "$TEST_ID"` selector. The
+wrapper resolves `QSR_SIM_BACKEND=emu|vcs` to the corresponding configured UMD
+path and uses `QSR_AETHER_LOCK`, which must be a shared-filesystem path so the
+two compute hosts cannot start or reap each other's Aether jobs.
+
+If the test requires `--no-split`, skip the separate compile/simulate pair and
+use `run --no-split` once with the same arguments. It compiles and executes
+while holding the shared Aether lock.
+
+Classify the final `RUN_LLK_TESTS_VERDICT` with the local exit-code table above.
+Record the selected `QSR_SIM_BACKEND` and no queue job ID.
+
 ## Queued Silicon
 
-Use this route only for `TEST_BACKEND=local` with
-`HW_TEST_DISPATCH_CMD`, after the corresponding local compile passes. The
-queue owns card scheduling and silicon execution; do not call the wrapper's
-`run` or `simulate` subcommands.
+Use this route only for Blackhole/Wormhole with `TEST_BACKEND=local` and
+`HW_TEST_DISPATCH_CMD`, after the corresponding local compile passes. The queue
+owns card scheduling and silicon execution; do not call the wrapper's `run` or
+`simulate` subcommands. Quasar is never valid on this route.
 
 The current queue accepts a worktree and pytest selector rather than the
 locally produced artifact. Its runner repeats the producer step because
@@ -239,10 +298,9 @@ files. Check `git status --short`; if an untracked path belongs to the fix,
 return `ENV_ERROR` without dispatching. These are queue transport limitations;
 the issue-solver's local compile remains the gate.
 
-The queue accepts a pytest node selector, but not a separate `-k` expression.
-Require `TEST_ID` or an unfiltered `TEST_FILE`; if the plan has only
-`K_FILTER`, return `ENV_ERROR` rather than silently running a broader test.
-The queue also always uses split producer/consumer execution, so reject a test
+The queue accepts the same exact pytest node or `-k` selector sealed in the
+manifest. Pass `--k "$K_FILTER"` when present; never silently run a broader
+test. The queue always uses split producer/consumer execution, so reject a test
 that specifically requires `--no-split`.
 
 Construct the selector relative to `tests/python_tests`, which differs from
@@ -251,20 +309,45 @@ the wrapper's arch-relative selector:
 ```bash
 QUEUE_TEST="${TEST_ID:-$TEST_FILE}"
 [ "$arch" = quasar ] && QUEUE_TEST="quasar/$QUEUE_TEST"
+selector_args=()
+[ -n "$K_FILTER" ] && selector_args+=(--k "$K_FILTER")
+result_args=()
+if [ "${CODEGEN_RUNNER_POOL:-prod}" = audit ]; then
+  result_args+=(--result-json-out "$RESULT_JSON_OUT")
+fi
 
 set +e
 $HW_TEST_DISPATCH_CMD --kind llk --arch "$arch" \
   --test "$QUEUE_TEST" \
+  "${selector_args[@]}" \
   --worktree "$WORKTREE_DIR" \
   --base "$(sg GIT_COMMIT)" \
   --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}" \
+  "${result_args[@]}" \
   --timeout "${TIMEOUT:-1800}" 2>&1 | tee -a "$LOG_DIR/run.log"
 dispatch_exit=${PIPESTATUS[0]}
 set -e
 ```
 
 Require one final `HW_TEST_RESULT arch=<arch>` marker and record its `job`
-value:
+value. For an audit run, also require `RESULT_JSON_OUT` to contain the exact
+protocol-v2 result copied by dispatch. Validate its schema, run, attempt,
+requirement, architecture, backend, and selector against the sealed manifest;
+then derive the compatibility suite summary from its structured evidence:
+
+- `classification=success` -> `SUCCESS`;
+- `candidate_failure|coverage_error` -> `TESTS_FAILED`;
+- `infra_error|timed_out`, a missing/invalid result, or an identity mismatch ->
+  `ENV_ERROR`.
+
+Set `tests_total=collection.selected` and
+`tests_passed=execution.passed`. Preserve skipped, xfailed, and xpassed counts
+in the self-log; do not convert them into passes. The strict reducer rereads
+the same result file and is authoritative for an audit verdict. The marker and
+dispatch exit are correlation/supporting evidence only.
+
+For production compatibility, no protocol-v2 result copy is requested and the
+legacy marker remains authoritative:
 
 | Marker | Verdict |
 |---|---|
@@ -272,8 +355,7 @@ value:
 | `ok=false ran=true` | `TESTS_FAILED` |
 | missing, malformed, or `ran=false` | `ENV_ERROR` |
 
-The marker is authoritative; the command exit is supporting evidence. Current
-LLK queue results do not provide test counts. Record zero counts with an
+Legacy queue markers do not provide exact counts. Record zero counts with an
 explicit obstacle instead of inventing them, and always retain the job ID so
 the detailed queue result can be inspected.
 

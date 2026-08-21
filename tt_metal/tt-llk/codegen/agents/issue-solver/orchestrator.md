@@ -135,8 +135,14 @@ execute_step_advance_writer
 Spawn `issue-worker.md` in initial-fix mode.
 
 - `FIX_APPLIED`: continue.
-- `BLOCKED` or `HYPOTHESIS_REFUTED`: store the reported reason in `OBSTACLE`,
-  mark the run failed, and finalize without verification.
+- `BLOCKED`: store the reported reason in `OBSTACLE`, mark the run failed, and
+  finalize without verification.
+- `HYPOTHESIS_REFUTED`: first call
+  `execute_step_route_verification hypothesis_refuted` so any
+  explicitly planned performance requirement is sealed and remains auditable.
+  Then store the reported reason in `OBSTACLE`, mark the run failed, and
+  finalize without claiming that the requirement passed. A refutation is not a
+  waiver and must not delete an explicit performance leaf.
 - Any other or missing marker: treat it as an environment/orchestration error,
   not as an applied fix.
 
@@ -147,6 +153,11 @@ source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_route_verification
 execute_step_record_changed_files
 ```
+
+`execute_step_route_verification` must complete before either tester is
+advanced or spawned. It seals the checksummed manifest and writes its current
+manifest/attempt IDs to run state. `VERIFY_ROUTE=missing` means normalization
+rejected coverage, a path, or a selector; do not execute a test command.
 
 If there is no fix-related diff, stop as blocked rather than reporting a
 successful empty fix.
@@ -193,9 +204,13 @@ execute_step_combine_verification_results
 execute_step_aggregate_results
 ```
 
-The combiner writes the compatibility verdict and counters at
-`arch_results.<arch>` while preserving each tester's result under
-`suite_results`. For `both`, the combined functional outcome is:
+For production runs, the combiner writes the compatibility verdict and counters
+at `arch_results.<arch>` while preserving each tester's result under
+`suite_results`. Audit runs instead ignore agent-authored summaries and reduce
+the current manifest's structured leaves from
+`${LOG_DIR}/verification-results/<attempt>/`. A missing, duplicate, malformed,
+foreign, zero-count, identity-mismatched, artifact-mismatched, or incomplete
+leaf cannot become `SUCCESS`. For `both`, the combined functional outcome is:
 
 - failing if either suite fails;
 - `SUCCESS` if at least one suite passes and the other is non-failing;
@@ -306,6 +321,12 @@ execute_step_write_generated_patch
 execute_step_finalize_run
 execute_step_copy_artifacts
 ```
+
+On the audit lane, `execute_step_finalize_run` first performs the `all`-scope
+reduction. It changes a requested success to failed when any sealed functional
+or performance leaf is not successful. The final writer then requires the
+reducer's success token and independently hashes the packaged worktree diff
+against the verified patch digest. Do not create or patch that token manually.
 
 If `OBSTACLE` is already nonempty, preserve it across
 `execute_step_deferred_message`; that helper may clear an obstacle when

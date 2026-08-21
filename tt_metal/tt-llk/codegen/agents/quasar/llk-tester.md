@@ -35,8 +35,10 @@ CYCLE="$($ST            --log-dir "$LOG_DIR" get CYCLE)"
 SKIP_WRITER="$($ST      --log-dir "$LOG_DIR" get SKIP_WRITER)"
 LOCK_TESTS="$($ST      --log-dir "$LOG_DIR" get LOCK_TESTS)"
 REMOVE_TESTS="$($ST    --log-dir "$LOG_DIR" get REMOVE_TESTS)"
+QSR_SIM_BACKEND="$($ST --log-dir "$LOG_DIR" get QSR_SIM_BACKEND)"
+export QSR_SIM_BACKEND
 
-for v in LOG_DIR KERNEL_NAME KERNEL_TYPE TARGET_ARCH GENERATED_KERNEL CYCLE LOCK_TESTS REMOVE_TESTS; do
+for v in LOG_DIR KERNEL_NAME KERNEL_TYPE TARGET_ARCH GENERATED_KERNEL CYCLE LOCK_TESTS REMOVE_TESTS QSR_SIM_BACKEND; do
     echo "$v=${!v:-<empty>}"
 done
 ```
@@ -44,6 +46,10 @@ done
 - The kernel under test is at `$WORKTREE_DIR/$GENERATED_KERNEL` (repo-root-relative). Quasar SFPU kernels live under `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/`; math/pack/unpack live under `tt_llk_quasar/llk_lib/`.
 - The analyzer's spec is `codegen/artifacts/{KERNEL_NAME}_analysis.md`. Read its **SFPU Category**, **Format Applicability** (recommended test formats), and any golden reference from it. The analyzer always writes these sections, including on the verbatim-copy path.
 - Run all file I/O from `$WORKTREE_DIR/tt_metal/tt-llk`. Throughout, `{...}` is the value echoed above (`{arch}` == `TARGET_ARCH`).
+- `QSR_SIM_BACKEND` is the caller-selected Aether implementation (`emu` or
+  `vcs`). Never replace it with the default or ask the user which one to use.
+  `run_test.sh` resolves the matching `QSR_EMU_SIM_PATH` / `QSR_VCS_SIM_PATH`
+  and serializes both backends through `QSR_AETHER_LOCK`.
 
 ---
 
@@ -235,7 +241,7 @@ Run to completion — no `-x`, no `--maxfail`; `-n 15` parallelizes so the full 
 
 ### 2.3 — Simulator consumer (flock-wrapped, no xdist)
 
-**Use `run_test.sh simulate` — never call `pytest --run-simulator` directly.** The script handles the single global lock (`/tmp/tt-llk-test.lock`), stale-process cleanup, temp-file lifecycle, and graceful hang teardown.
+**Use `run_test.sh simulate` — never call `pytest --run-simulator` directly.** The script honors the exported `QSR_SIM_BACKEND`, resolves its pinned UMD path, uses the configured cross-host `QSR_AETHER_LOCK`, and handles stale-process cleanup, temp-file lifecycle, and graceful hang teardown.
 
 ```bash
 bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" simulate \
@@ -485,6 +491,7 @@ State the kernel and test paths literally so downstream steps / humans can inspe
 ## Inputs received
 - Kernel / kernel_type / target arch / kernel path ($WORKTREE_DIR/$GENERATED_KERNEL) / analysis path
 - WORKTREE_DIR / LOG_DIR
+- QSR_SIM_BACKEND (`emu` or `vcs`)
 
 ## Assumptions made
 One bullet per assumption not derivable from the analysis or repo:

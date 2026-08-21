@@ -26,6 +26,8 @@ and returning non-zero. **If it rejects, report the reason and stop.**
 - `KERNEL_NAME` — non-empty string
 - `TARGET_ARCH` — must be `quasar` (this orchestrator is quasar-only)
 - `SFPI_MODE` — must be exactly `true` or `false`
+- `QSR_SIM_BACKEND` — must be `emu` or `vcs`; it is selected by the caller and
+  must be preserved for every tester, optimizer, and prettifier invocation
 - `WORKTREE_BRANCH` — non-empty string
 - `LOG_DIR_BASE` — must be exactly `/proj_sw/user_dev/llk_code_gen`
 

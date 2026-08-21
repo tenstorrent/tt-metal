@@ -156,6 +156,9 @@ execute_step_validate_input() {
     cd "$wt/tt_metal/tt-llk" || { echo "REJECT: cannot cd into $wt/tt_metal/tt-llk"; return 1; }
 
     local S="$_ORCH_SCRIPTS" mode num title wb tb clb cpr arches arch dirty ok=1
+    local expected_base setup_base actual_base base_was_pinned env_base
+    local resumed_from_run resumed_from_attempt resume_checkpoint resume_patch
+    local resume_reuse resume_reason queue_attempt candidate_digest env_resume_present
     mode="$(python "$S/state.py" --worktree-dir "$wt" get RUN_MODE)"
     num="$(python "$S/state.py" --worktree-dir "$wt" get ISSUE_NUMBER)"
     title="$(python "$S/state.py" --worktree-dir "$wt" get ISSUE_TITLE)"
@@ -165,6 +168,21 @@ execute_step_validate_input() {
     cpr="$(python "$S/state.py" --worktree-dir "$wt" get CREATE_PR)"
     arch="$(python "$S/state.py" --worktree-dir "$wt" get TARGET_ARCH)"
     arches="$(python "$S/state.py" --worktree-dir "$wt" get TARGET_ARCHES)"
+    expected_base="$(python "$S/state.py" --worktree-dir "$wt" get EXPECTED_BASE_COMMIT)"
+    setup_base="$(python "$S/state.py" --worktree-dir "$wt" get SETUP_BASE_COMMIT)"
+    base_was_pinned="$(python "$S/state.py" --worktree-dir "$wt" get BASE_COMMIT_WAS_PINNED)"
+    local queue_launch
+    queue_launch="$(python "$S/state.py" --worktree-dir "$wt" get QUEUE_LAUNCH)"
+    actual_base="$(git -C "$wt" rev-parse HEAD 2>/dev/null || true)"
+    env_base="${CODEGEN_BASE_COMMIT:-}"
+    resumed_from_run="$(python "$S/state.py" --worktree-dir "$wt" get RESUMED_FROM_RUN_ID)"
+    resumed_from_attempt="$(python "$S/state.py" --worktree-dir "$wt" get RESUMED_FROM_ATTEMPT_ID)"
+    resume_checkpoint="$(python "$S/state.py" --worktree-dir "$wt" get RESUME_CHECKPOINT_DIGEST)"
+    resume_patch="$(python "$S/state.py" --worktree-dir "$wt" get RESUME_PATCH_SHA256)"
+    resume_reuse="$(python "$S/state.py" --worktree-dir "$wt" get RESUME_VERIFICATION_REUSE)"
+    resume_reason="$(python "$S/state.py" --worktree-dir "$wt" get RESUME_INVALIDATION_REASON)"
+    queue_attempt="$(python "$S/state.py" --worktree-dir "$wt" get QUEUE_ATTEMPT_ID)"
+    env_resume_present="${CODEGEN_RESUME_RUN_ID:-}${CODEGEN_RESUME_ATTEMPT_ID:-}${CODEGEN_RESUME_CHECKPOINT_DIGEST:-}${CODEGEN_RESUME_PATCH_SHA256:-}${CODEGEN_RESUME_VERIFICATION_REUSE:-}${CODEGEN_RESUME_INVALIDATION_REASON:-}"
 
     { [ "$mode" = "single" ] || [ "$mode" = "multi" ]; } || { echo "REJECT: RUN_MODE must be single|multi (got '$mode')"; ok=0; }
     printf '%s' "$num" | grep -qE '^[0-9]+$' || { echo "REJECT: ISSUE_NUMBER must be numeric (got '$num')"; ok=0; }
@@ -178,16 +196,74 @@ execute_step_validate_input() {
     else
         [ -n "$arches" ] || { echo "REJECT: TARGET_ARCHES is empty (multi-arch run)"; ok=0; }
     fi
+    printf '%s' "$expected_base" | grep -qE '^[0-9a-f]{40}$' \
+        || { echo "REJECT: EXPECTED_BASE_COMMIT is missing or invalid (got '$expected_base')"; ok=0; }
+    [ "$setup_base" = "$expected_base" ] \
+        || { echo "REJECT: setup base mismatch: expected $expected_base, setup recorded ${setup_base:-missing}"; ok=0; }
+    [ "$actual_base" = "$expected_base" ] \
+        || { echo "REJECT: base drift before agent execution: expected $expected_base, worktree HEAD is ${actual_base:-unknown}"; ok=0; }
+    if [ "$queue_launch" = "true" ] && [ "$base_was_pinned" != "true" ]; then
+        echo "REJECT: queued launch was not created from an exact pinned base"
+        ok=0
+    elif [ "$queue_launch" = "true" ] && [ -z "$env_base" ]; then
+        echo "REJECT: queued launch lost CODEGEN_BASE_COMMIT after setup"
+        ok=0
+    elif [ "$base_was_pinned" = "true" ] && [ -z "$env_base" ]; then
+        echo "REJECT: CODEGEN_BASE_COMMIT was unset after pinned worktree setup"
+        ok=0
+    elif [ -n "$env_base" ] && [ "$env_base" != "$expected_base" ]; then
+        echo "REJECT: CODEGEN_BASE_COMMIT changed after setup: expected $expected_base, got $env_base"
+        ok=0
+    fi
+    if [ -n "$resumed_from_run" ]; then
+        [ -n "$resumed_from_attempt" ] && [ -n "$queue_attempt" ] \
+            || { echo "REJECT: resume attempt lineage is incomplete"; ok=0; }
+        printf '%s' "$resume_checkpoint" | grep -qE '^[0-9a-f]{64}$' \
+            || { echo "REJECT: resume checkpoint digest is invalid"; ok=0; }
+        printf '%s' "$resume_patch" | grep -qE '^[0-9a-f]{64}$' \
+            || { echo "REJECT: resume patch digest is invalid"; ok=0; }
+        { [ "$resume_reuse" = "invalidated" ] && [ "$resume_reason" = "attempt_identity_changed" ]; } \
+            || { [ "$resume_reuse" = "not_available" ] && [ "$resume_reason" = "no_completed_results" ]; } \
+            || { echo "REJECT: resume verification disposition is invalid"; ok=0; }
+        [ "$resumed_from_attempt" != "$queue_attempt" ] \
+            || { echo "REJECT: resume requires a distinct new attempt identity"; ok=0; }
+        [ "${CODEGEN_RESUME_RUN_ID:-}" = "$resumed_from_run" ] \
+            || { echo "REJECT: resume source run changed after setup"; ok=0; }
+        [ "${CODEGEN_RESUME_ATTEMPT_ID:-}" = "$resumed_from_attempt" ] \
+            || { echo "REJECT: resume source attempt changed after setup"; ok=0; }
+        [ "${CODEGEN_RESUME_CHECKPOINT_DIGEST:-}" = "$resume_checkpoint" ] \
+            || { echo "REJECT: resume checkpoint digest changed after setup"; ok=0; }
+        [ "${CODEGEN_RESUME_PATCH_SHA256:-}" = "$resume_patch" ] \
+            || { echo "REJECT: resume patch digest changed after setup"; ok=0; }
+        [ "${CODEGEN_RESUME_VERIFICATION_REUSE:-}" = "$resume_reuse" ] \
+            || { echo "REJECT: resume verification disposition changed after setup"; ok=0; }
+        [ "${CODEGEN_RESUME_INVALIDATION_REASON:-}" = "$resume_reason" ] \
+            || { echo "REJECT: resume invalidation reason changed after setup"; ok=0; }
+        [ "${CODEGEN_ATTEMPT_ID:-}" = "$queue_attempt" ] \
+            || { echo "REJECT: queue attempt identity changed after resume setup"; ok=0; }
+        if ! candidate_digest="$(python "$S/run_json_writer.py" \
+                candidate-patch-digest --worktree "$wt" \
+                --expected-base-sha "$expected_base")"; then
+            echo "REJECT: cannot compute resumed candidate patch digest"
+            ok=0
+        elif [ "$candidate_digest" != "$resume_patch" ]; then
+            echo "REJECT: resumed candidate patch changed after setup"
+            ok=0
+        fi
+    elif [ -n "$env_resume_present" ]; then
+        echo "REJECT: resume environment is present without validated setup state"
+        ok=0
+    fi
     if ! dirty="$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null)"; then
         echo "REJECT: cannot inspect worktree status"
         ok=0
-    elif [ -n "$dirty" ]; then
+    elif [ -n "$dirty" ] && [ -z "$resumed_from_run" ]; then
         echo "REJECT: issue-solver worktree must start clean; unexpected paths:"
         printf '%s\n' "$dirty"
         ok=0
     fi
     [ "$ok" = 1 ] || return 1
-    echo "OK: RUN_MODE=$mode ISSUE=#$num arch=${arch:-$arches} TEST_BACKEND=$tb"
+    echo "OK: RUN_MODE=$mode ISSUE=#$num arch=${arch:-$arches} TEST_BACKEND=$tb BASE=$expected_base"
 }
 
 # ===========================================================================
@@ -436,15 +512,15 @@ execute_step_setup_run() {
     CREATE_LOCAL_BRANCH="$(python "$S/state.py" --worktree-dir "$wt" get CREATE_LOCAL_BRANCH)"
     CREATE_PR="$(python "$S/state.py" --worktree-dir "$wt" get CREATE_PR)"
 
-    # --- arch profile + dashboard project id --------------------------------
-    # DASHBOARD_PROJECT_ID: single → <arch>_issue_solver, multi → issue_solver.
+    # --- arch profile + canonical dashboard project id -----------------------
+    # Architecture is run metadata. Single- and multi-arch runs share the same
+    # archive, matching Quasar's one-project/one-root dashboard layout.
     local DASHBOARD_PROJECT_ID TARGET_ARCH TARGET_ARCHES_JSON ARCH_COUNT ARCH_PROFILES_JSON
+    DASHBOARD_PROJECT_ID="issue_solver"
     if [ "$MODE" = "single" ]; then
         TARGET_ARCH="$(python "$S/state.py" --worktree-dir "$wt" get TARGET_ARCH)"
-        DASHBOARD_PROJECT_ID="${TARGET_ARCH}_issue_solver"
         TARGET_ARCHES_JSON="$(python -c "import json,sys; print(json.dumps([sys.argv[1]]))" "$TARGET_ARCH")"
     else
-        DASHBOARD_PROJECT_ID="issue_solver"
         TARGET_ARCHES_JSON="$(python - "$(python "$S/state.py" --worktree-dir "$wt" get TARGET_ARCHES)" <<'PY'
 import json, sys
 raw = sys.argv[1]
@@ -481,8 +557,10 @@ PY
 )"
 
     # --- log + knowledge roots (resolved against the MAIN checkout) ---------
-    local CODEGEN_LOGS_ROOT LOGS_BASE PR_REVIEW_KNOWLEDGE_DIR MAIN_REPO_ROOT
-    CODEGEN_LOGS_ROOT="${CODEGEN_LOGS_ROOT:-}"
+    # Capture the exported override before declaring the function-local value;
+    # `local CODEGEN_LOGS_ROOT` by itself would shadow and discard it.
+    local configured_logs_root="${CODEGEN_LOGS_ROOT:-}"
+    local CODEGEN_LOGS_ROOT="$configured_logs_root" LOGS_BASE PR_REVIEW_KNOWLEDGE_DIR MAIN_REPO_ROOT
     if [ -z "$CODEGEN_LOGS_ROOT" ]; then
         if [ -d /proj_sw/user_dev/llk_code_gen ]; then
             CODEGEN_LOGS_ROOT="/proj_sw/user_dev/llk_code_gen"
@@ -548,9 +626,10 @@ PY
     cp .claude/CLAUDE.md "$LOG_DIR/instructions/tt-llk-CLAUDE.md" 2>/dev/null || true
     cp -R .claude/skills "$LOG_DIR/instructions/claude-skills" 2>/dev/null || true
 
-    # LOG_DIR is the bootstrap key — write it to the worktree file so every later
-    # step (and refresh_cost) recovers it with no env vars.
+    # LOG_DIR and RUN_ID are bootstrap identity — write them to the worktree file
+    # so later steps and queue dispatch recover them with no persistent shell env.
     _disk_guard python "$S/state.py" --worktree-dir "$wt" set LOG_DIR "$LOG_DIR" || return $?
+    _disk_guard python "$S/state.py" --worktree-dir "$wt" set RUN_ID "$RUN_ID" || return $?
 
     # --- everything else lives in the run-state file ($LOG_DIR/state.json) --
     local _L="$LOG_DIR"
@@ -581,6 +660,13 @@ PY
     ss ARCH_COUNT            "$ARCH_COUNT" --json
     ss ARCH_PROFILES_JSON    "$ARCH_PROFILES_JSON" --json
     [ "$MODE" = "single" ] && ss TARGET_ARCH "$TARGET_ARCH"
+    local resume_key resume_value
+    for resume_key in QUEUE_ATTEMPT_ID RESUMED_FROM_RUN_ID \
+        RESUMED_FROM_ATTEMPT_ID RESUME_CHECKPOINT_DIGEST RESUME_PATCH_SHA256 \
+        RESUME_VERIFICATION_REUSE RESUME_INVALIDATION_REASON; do
+        resume_value="$(python "$S/state.py" --worktree-dir "$wt" get "$resume_key")"
+        [ -z "$resume_value" ] || ss "$resume_key" "$resume_value"
+    done
     # Counters + limits.
     ss COMPILATION_ATTEMPTS  0 --json
     ss DEBUG_CYCLES          0 --json
@@ -679,6 +765,7 @@ PY
         rj "${common[@]}" --arch "$(sg TARGET_ARCH)" \
             --first-message "$first_msg" || return $?
     fi
+    ss SUPERVISOR_PHASE active_compute
     # The PR being updated + the solve this descends from, for the dashboard.
     if [ "$kind" = "review" ]; then
         rj metric --patch-json "$(python - "$(sg PR_NUMBER)" \
@@ -710,16 +797,20 @@ execute_step_refine_perf_goal() {
 }
 
 # ===========================================================================
-# Step 1.5 — route verification by fix layer and required coverage. Parses the
-# analysis artifact and sets VERIFY_ROUTE (llk|metal|both|missing|none) plus the
-# coverage states and metal target/filter/dispatch. Required coverage must be
-# existing or added after the worker returns; a missing test fails closed.
+# Step 1.5 — normalize and seal required verification, then route from that
+# immutable contract. The Markdown parser lives in run_json_writer.py; this
+# shell step retains only the compatibility state consumed by existing agents.
+# Required coverage, paths and selectors fail closed before a tester can start.
 # ===========================================================================
 execute_step_route_verification() {
     local _L; _L="$(_LOG)"
-    local num A; num="$(sg ISSUE_NUMBER)"; A="codegen/artifacts/issue_${num}_analysis.md"
+    local route_mode="${1:-normal}"
+    local num A P M; num="$(sg ISSUE_NUMBER)"
+    A="codegen/artifacts/issue_${num}_analysis.md"
+    P="codegen/artifacts/issue_${num}_fix_plan.md"
+    M="$_L/required_verification_manifest.json"
     local FIX_LAYER VERIFY_REQUIRED VERIFIABLE LLK_COVERAGE
-    local METAL_TARGET METAL_COVERAGE METAL_FILTER METAL_DISPATCH ROUTE
+    local METAL_TARGET METAL_COVERAGE METAL_FILTER METAL_DISPATCH ROUTE out
     gval() {
         grep -ioE "$1:[[:space:]]*[A-Za-z_]+" "$A" 2>/dev/null |
             head -1 | sed -E "s/.*:[[:space:]]*//" || true
@@ -741,46 +832,80 @@ execute_step_route_verification() {
             head -1 | sed -E "s/^[[:space:]]*gtest_filter:[[:space:]]*//; s/^['\"]//; s/['\"]$//" || true
     )"
     METAL_DISPATCH="$(mval 'dispatch')"
-    if [ "$VERIFY_REQUIRED" = no ]; then
-        ROUTE=none
-    else
-        case "$VERIFIABLE" in
-            yes)     ROUTE=llk ;;
-            partial) ROUTE=both ;;
-            no)      if [ -z "$METAL_TARGET" ] || [ "$METAL_TARGET" = none ]; then ROUTE=none; else ROUTE=metal; fi ;;
-            *)       ROUTE=missing ;;
-        esac
-    fi
-
-    case "$ROUTE" in
-        llk)
-            case "$LLK_COVERAGE" in existing|added) ;; *) ROUTE=missing ;; esac
-            ;;
-        metal)
-            case "$METAL_COVERAGE" in existing|added) ;; *) ROUTE=missing ;; esac
-            [ "$METAL_TARGET" = unit_tests_llk ] && [ -n "$METAL_FILTER" ] || ROUTE=missing
-            ;;
-        both)
-            case "$LLK_COVERAGE" in existing|added) ;; *) ROUTE=missing ;; esac
-            case "$METAL_COVERAGE" in existing|added) ;; *) ROUTE=missing ;; esac
-            [ "$METAL_TARGET" = unit_tests_llk ] && [ -n "$METAL_FILTER" ] || ROUTE=missing
-            ;;
-        none)
-            [ "$VERIFY_REQUIRED" = no ] || ROUTE=missing
-            ;;
-    esac
 
     ss FIX_LAYER      "$FIX_LAYER"
-    ss VERIFY_REQUIRED "$VERIFY_REQUIRED"
     ss VERIFIABLE_IN_LLK "$VERIFIABLE"
     ss LLK_COVERAGE   "$LLK_COVERAGE"
     ss METAL_TARGET   "$METAL_TARGET"
     ss METAL_COVERAGE "$METAL_COVERAGE"
     ss METAL_FILTER   "$METAL_FILTER"
     ss METAL_DISPATCH "$METAL_DISPATCH"
+
+    local -a manifest_args=(
+        required-verification
+        --output "$M"
+        --analysis "$A"
+        --plan "$P"
+        --worktree "$(_wt)"
+        --run-id "$(sg RUN_ID)"
+        --expected-base-sha "$(sg GIT_COMMIT)"
+        --architectures-json "$(sg TARGET_ARCHES_JSON)"
+        --backend "$(sg TEST_BACKEND)"
+    )
+    if [ "$route_mode" = "hypothesis_refuted" ]; then
+        manifest_args+=(--performance-only)
+    elif [ "$route_mode" != "normal" ]; then
+        echo "unsupported route verification mode: $route_mode" >&2
+        return 1
+    fi
+    if [ -n "${CODEGEN_VERIFICATION_WAIVER_POLICY:-}" ]; then
+        manifest_args+=(--waiver-policy "$CODEGEN_VERIFICATION_WAIVER_POLICY")
+    fi
+    if [ -f "$M" ]; then
+        manifest_args+=(--supersedes-reason \
+            "verification plan resealed after retry; debug=$(sg DEBUG_CYCLES), review=$(sg REVIEW_RETRIES), perf=$(sg PERF_RETRIES)")
+    fi
+    if ! out="$(rj "${manifest_args[@]}")"; then
+        ROUTE=missing
+        [ -n "$VERIFY_REQUIRED" ] || VERIFY_REQUIRED=yes
+        ss VERIFY_REQUIRED "$VERIFY_REQUIRED"
+        ss VERIFY_ROUTE "$ROUTE"
+        ss REQUIRED_VERIFICATION_MANIFEST ""
+        ss REQUIRED_VERIFICATION_MANIFEST_ID ""
+        ss REQUIRED_VERIFICATION_ATTEMPT_ID ""
+        rj message --message "Verify route rejected before execution: ${out:-required-verification manifest invalid}"
+        printf '%s\n' "$out" >&2
+        echo "VERIFY_ROUTE=missing REQUIRED_VERIFICATION=invalid"
+        return 0
+    fi
+
+    local normalized
+    normalized="$(python - "$M" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+suites = {r["suite"] for r in d["requirements"]}
+functional = suites & {"llk", "metal"}
+route = "both" if functional == {"llk", "metal"} else next(iter(functional), "none")
+print(route, d["attempt_id"], d["manifest_id"], len(d["requirements"]))
+PY
+)"
+    read -r ROUTE manifest_attempt manifest_id manifest_count <<<"$normalized"
+    [ -n "$VERIFY_REQUIRED" ] || {
+        if [ "$ROUTE" = none ]; then VERIFY_REQUIRED=no; else VERIFY_REQUIRED=yes; fi
+    }
+    if [ -z "$LLK_COVERAGE" ] && { [ "$ROUTE" = llk ] || [ "$ROUTE" = both ]; }; then
+        LLK_COVERAGE=existing
+        ss LLK_COVERAGE "$LLK_COVERAGE"
+    fi
+    ss VERIFY_REQUIRED "$VERIFY_REQUIRED"
     ss VERIFY_ROUTE   "$ROUTE"
-    rj message --message "Verify route: ${ROUTE} (fix_layer=${FIX_LAYER:-?}; llk_coverage=${LLK_COVERAGE:-missing}; metal_coverage=${METAL_COVERAGE:-missing})"
-    echo "VERIFY_ROUTE=$ROUTE FIX_LAYER=${FIX_LAYER:-?} LLK_COVERAGE=${LLK_COVERAGE:-missing} METAL_TARGET=${METAL_TARGET:-none} METAL_COVERAGE=${METAL_COVERAGE:-missing}"
+    ss REQUIRED_VERIFICATION_MANIFEST "$M"
+    ss REQUIRED_VERIFICATION_MANIFEST_ID "$manifest_id"
+    ss REQUIRED_VERIFICATION_ATTEMPT_ID "$manifest_attempt"
+    rj metric --patch-json "{\"required_verification\":{\"manifest_id\":\"${manifest_id}\",\"attempt_id\":\"${manifest_attempt}\",\"requirements\":${manifest_count}}}"
+    rj message --message "Verify route: ${ROUTE}; sealed ${manifest_count} requirement(s) as ${manifest_id}"
+    echo "$out"
+    echo "VERIFY_ROUTE=$ROUTE MANIFEST_ID=$manifest_id ATTEMPT_ID=$manifest_attempt REQUIREMENTS=$manifest_count"
 }
 
 # ===========================================================================
@@ -880,10 +1005,31 @@ execute_step_advance_metal_test() {
 # ===========================================================================
 execute_step_combine_verification_results() {
     local _L; _L="$(_LOG)"
-    local route arches patch
+    local route arches patch pool manifest
     route="$(sg VERIFY_ROUTE)"
     arches="$(sg TARGET_ARCHES_JSON)"
     case "$route" in llk|metal|both) ;; *) echo "cannot combine VERIFY_ROUTE=$route" >&2; return 1 ;; esac
+
+    pool="$(python - "$_L/run.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1])).get("runner_pool") or "prod")
+PY
+)" || return 1
+    if [ "$pool" = audit ]; then
+        manifest="$(sg REQUIRED_VERIFICATION_MANIFEST)"
+        [ -f "$manifest" ] || {
+            echo "audit verification manifest is missing: ${manifest:-unset}" >&2
+            return 1
+        }
+        rj reduce-verification \
+            --manifest "$manifest" \
+            --results-dir "$_L/verification-results" \
+            --scope functional \
+            --worktree "$(_wt)" \
+            --perf-result "$_L/perf_result.json" \
+            --output "$_L/verification_reduction.json"
+        return $?
+    fi
 
     patch="$(python - "$_L/run.json" "$arches" "$route" <<'PY'
 import json
@@ -895,24 +1041,26 @@ with open(run_path) as f:
 
 arches = json.loads(arches_json)
 required = {"llk": ("llk",), "metal": ("metal",), "both": ("llk", "metal")}[route]
-failure_priority = ("COMPILE_FAILED", "TESTS_FAILED", "ENV_ERROR", "SIM_ISA_GAP")
-non_failing = {"SUCCESS", "COMPILED_ONLY", "UNVERIFIABLE_IN_LLK_SUITE"}
+failure_priority = ("ENV_ERROR", "COMPILE_FAILED", "TESTS_FAILED", "SIM_ISA_GAP")
 existing = run.get("arch_results") or {}
 updates = {}
 tests_total = 0
 tests_passed = 0
 
-def count(value):
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
+def strict_count(value, field):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field} must be a nonnegative integer")
+    return value
 
 for arch in arches:
     current = existing.get(arch) or {}
     if current.get("verdict") == "SKIPPED":
-        tests_total += count(current.get("tests_total"))
-        tests_passed += count(current.get("tests_passed"))
+        tests_total += strict_count(
+            current.get("tests_total"), f"{arch}.tests_total"
+        )
+        tests_passed += strict_count(
+            current.get("tests_passed"), f"{arch}.tests_passed"
+        )
         continue
 
     suite_results = current.get("suite_results") or {}
@@ -923,28 +1071,53 @@ for arch in arches:
     for suite_name in required:
         suite = suite_results.get(suite_name) or {}
         verdict = suite.get("verdict")
+        suite_reasons = []
+        if suite.get("status") != "done":
+            suite_reasons.append("RESULT_NOT_TERMINAL: status must be done")
+        try:
+            suite_total = strict_count(
+                suite.get("tests_total"), f"{suite_name}.tests_total"
+            )
+            suite_passed = strict_count(
+                suite.get("tests_passed"), f"{suite_name}.tests_passed"
+            )
+            if suite_passed > suite_total:
+                raise ValueError(f"{suite_name}.tests_passed exceeds tests_total")
+        except ValueError as exc:
+            suite_total = 0
+            suite_passed = 0
+            suite_reasons.append(f"COUNT_INVALID: {exc}")
+
         if not verdict:
             verdict = "ENV_ERROR"
-            reasons.append(f"{suite_name}: missing required suite result")
-        elif verdict not in non_failing and verdict not in failure_priority:
-            reasons.append(f"{suite_name}: unknown verdict {verdict}")
+            suite_reasons.append("RESULT_MISSING: missing required suite verdict")
+        elif verdict == "SUCCESS":
+            if suite_total < 1:
+                suite_reasons.append("ZERO_SELECTED: success requires tests_total > 0")
+            if suite_passed != suite_total:
+                suite_reasons.append(
+                    "COUNT_MISMATCH: success requires tests_passed == tests_total"
+                )
+        elif verdict not in failure_priority:
+            suite_reasons.append(f"VERDICT_UNKNOWN: {verdict}")
             verdict = "ENV_ERROR"
+        if suite_reasons:
+            verdict = "ENV_ERROR"
+            reasons.extend(f"{suite_name}: {reason}" for reason in suite_reasons)
         elif verdict in failure_priority:
             reasons.append(f"{suite_name}: {suite.get('obstacle') or verdict}")
         elif suite.get("obstacle"):
             reasons.append(f"{suite_name}: {suite['obstacle']}")
         verdicts.append(verdict)
-        arch_total += count(suite.get("tests_total"))
-        arch_passed += count(suite.get("tests_passed"))
+        arch_total += suite_total
+        arch_passed += suite_passed
 
-    combined = next((value for value in failure_priority if value in verdicts), None)
-    if combined is None:
-        if "SUCCESS" in verdicts:
-            combined = "SUCCESS"
-        elif "COMPILED_ONLY" in verdicts:
-            combined = "COMPILED_ONLY"
-        else:
-            combined = "UNVERIFIABLE_IN_LLK_SUITE"
+    if verdicts and all(verdict == "SUCCESS" for verdict in verdicts):
+        combined = "SUCCESS"
+    else:
+        combined = next(
+            (value for value in failure_priority if value in verdicts), "ENV_ERROR"
+        )
 
     updates[arch] = {
         "status": "done",
@@ -1290,20 +1463,18 @@ execute_step_deferred_message() {
 # ===========================================================================
 execute_step_write_generated_patch() {
     local _L; _L="$(_LOG)"
+    ss SUPERVISOR_PHASE finalization
+    rj metric --patch-json '{"supervisor_phase":"finalization"}' || return $?
     local wt num title; wt="$(_wt)"; num="$(sg ISSUE_NUMBER)"; title="$(sg ISSUE_TITLE)"
     local mode; mode="$(sg RUN_MODE)"
     local cf cfj base fix packaged tmp_patch
-    # Input validation requires a clean dedicated worktree, so every non-ignored
-    # change now belongs to this run. Stage the whole worktree and exclude only
-    # generated test infrastructure.
+    # Input validation requires either a clean dedicated worktree or the exact
+    # content-addressed resumed candidate, so every non-ignored change belongs to
+    # this run. Stage the whole worktree and exclude generated test infrastructure.
     local -a pathspec=(
         .
         ':(exclude,glob)**/perf_data/**'
         ':(exclude,glob)**/__pycache__/**'
-        ':(exclude)tt_metal/tt-llk/tests/.venv'
-        ':(exclude,glob)tt_metal/tt-llk/tests/.venv/**'
-        ':(exclude)tt_metal/tt-llk/tests/sfpi'
-        ':(exclude,glob)tt_metal/tt-llk/tests/sfpi/**'
     )
 
     base="$(sg GIT_COMMIT)"
@@ -1387,8 +1558,44 @@ execute_step_write_generated_patch() {
 # ===========================================================================
 execute_step_finalize_run() {
     local _L; _L="$(_LOG)"
-    local S="$_ORCH_SCRIPTS" mode num status fr ss_state end
+    local S="$_ORCH_SCRIPTS" mode num status fr ss_state end pool manifest reduction_class
     mode="$(sg RUN_MODE)"; num="$(sg ISSUE_NUMBER)"
+
+    pool="$(python - "$_L/run.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1])).get("runner_pool") or "prod")
+PY
+)" || return 1
+    if [ "$pool" = audit ]; then
+        manifest="$(sg REQUIRED_VERIFICATION_MANIFEST)"
+        if [ ! -f "$manifest" ]; then
+            ss OBSTACLE "audit verification manifest is missing"
+            ss FINAL_MESSAGE "audit failed: required-verification manifest is missing"
+            execute_step_mark_status failed test_failure
+        elif ! rj reduce-verification \
+                --manifest "$manifest" \
+                --results-dir "$_L/verification-results" \
+                --scope all \
+                --worktree "$(_wt)" \
+                --perf-result "$_L/perf_result.json" \
+                --output "$_L/verification_reduction.json"; then
+            ss OBSTACLE "verification reduction could not validate its inputs"
+            ss FINAL_MESSAGE "audit failed: verification reduction inputs are invalid"
+            execute_step_mark_status failed test_failure
+        else
+            reduction_class="$(python - "$_L/verification_reduction.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1])).get("classification") or "invalid")
+PY
+)" || reduction_class=invalid
+            if [ "$(sg STATUS)" = success ] && [ "$reduction_class" != success ]; then
+                ss OBSTACLE "verification reduction rejected success: ${reduction_class}"
+                ss FINAL_MESSAGE "audit failed: verification reduction is ${reduction_class}"
+                execute_step_mark_status failed test_failure
+            fi
+        fi
+    fi
+
     status="$(sg STATUS)"; fr="$(sg FINAL_RESULT)"; ss_state="$(sg SOLVER_STATE)"
     end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     local fmsg; fmsg="$(sg FINAL_MESSAGE)"
@@ -1455,6 +1662,7 @@ PY
 )"
 
     rj finalize --end-time "$end" --status "$status" --final-result "$fr" \
+        --worktree "$(_wt)" \
         --solver-state "$ss_state" --final-message "$fmsg" --patch-json "$patch" || return $?
     refresh_cost
     echo "finalized: status=$status final_result=$fr"

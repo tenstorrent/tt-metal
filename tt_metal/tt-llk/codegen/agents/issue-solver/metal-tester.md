@@ -51,8 +51,13 @@ Optional environment:
 - `METAL_VERIFY_BUILD_DIR`: warm build directory. Fall back to
   `CODEGEN_METAL_VERIFY_BUILD_DIR`, then `<METAL_VERIFY_HOME>/build`.
 - `HW_TEST_DISPATCH_CMD`: submit silicon execution to the shared hardware-test
-  queue after the local build passes.
+  queue after the local build passes. Applies to Blackhole/Wormhole only;
+  Quasar executes on the compute runner through Aether.
 - `HW_TEST_SESSION`: dispatch session name.
+- `QSR_SIM_BACKEND`: Quasar Aether backend, `emu` (default) or `vcs`.
+- `QSR_EMU_SIM_PATH` / `QSR_VCS_SIM_PATH`: runner-local UMD build directories.
+- `QSR_AETHER_LOCK`: shared-filesystem lock used by every compute runner.
+- `QSR_AETHER_HOST`: remote Aether host (default `soc-l-12`).
 - `TT_METAL_LLK_ASSERTS=1`: enable device assertions and
   `TT_METAL_WATCHER=1` for local execution. The current queue request does not
   transport these optional variables.
@@ -70,12 +75,19 @@ mkdir -p "$LOG_DIR"
    missing, return `TESTS_FAILED` with
    `MISSING_TEST_COVERAGE: <specific evidence>`. `METAL_TARGET=none` is valid
    only when verification is not required and must not reach this agent.
+   Also require the checksummed `REQUIRED_VERIFICATION_MANIFEST` from run state
+   to contain exactly one `suite=metal` leaf for each in-scope architecture,
+   with `selector.test` exactly equal to `METAL_FILTER`. Export its `run_id`,
+   `attempt_id`, and leaf `requirement_id` as `CODEGEN_RUN_ID`,
+   `CODEGEN_ATTEMPT_ID`, and `CODEGEN_REQUIREMENT_ID` for local or queued
+   execution. A missing or ambiguous leaf is an environment error; do not run.
 2. Normalize the ordered architecture list from `TARGET_ARCHES_JSON` or
    `TARGET_ARCH`.
 3. Build locally. A failed build returns `COMPILE_FAILED` without submitting
    silicon work.
 4. Choose the execution route:
-   - local with `HW_TEST_DISPATCH_CMD`: shared silicon queue
+   - local Blackhole/Wormhole with `HW_TEST_DISPATCH_CMD`: shared silicon queue
+   - local Quasar: compute-runner Aether VCS/emulator
    - otherwise: local silicon or ttsim
 5. Resolve the verification home and build directory using the fallback order
    above. Set `BIN=<build-dir>/test/tt_metal/unit_tests_llk`.
@@ -186,10 +198,10 @@ fi
 
 ## Step B — Execute on queued silicon
 
-Use this route only for `TEST_BACKEND=local` with
+Use this route only for Blackhole/Wormhole with `TEST_BACKEND=local` and
 `HW_TEST_DISPATCH_CMD`. Compilation remains local; the queue owns card
-scheduling and the silicon execution. Do not run the local binary on the
-issue-solver machine.
+scheduling and silicon execution. Quasar is excluded even when the dispatch
+command is present.
 
 The current dispatch service accepts a worktree rather than a built-artifact
 reference, so it reconstructs the executable on its runner. It also omits
@@ -199,20 +211,40 @@ These are queue transport limitations, not replacements for the mandatory
 local build gate above.
 
 ```bash
-ARCHES_CSV="$(IFS=,; echo "${ARCHES[*]}")"
-set +e
-$HW_TEST_DISPATCH_CMD --kind metal --arch "$ARCHES_CSV" \
-  --test "$METAL_FILTER" --dispatch "${METAL_DISPATCH:-fast}" \
-  --worktree "$WORKTREE_DIR" \
-  --base "$(sg GIT_COMMIT)" \
-  --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}" \
-  --timeout "${TIMEOUT:-1800}" 2>&1 | tee -a "$LOG_DIR/metal_run.log"
-dispatch_exit=${PIPESTATUS[0]}
-set -e
+for arch in "${ARCHES[@]}"; do
+  [ "$arch" = quasar ] && continue
+  # Resolve this architecture's one sealed metal leaf before dispatch and set
+  # CODEGEN_RUN_ID/CODEGEN_ATTEMPT_ID/CODEGEN_REQUIREMENT_ID from it.
+  mkdir -p "$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}"
+  RESULT_JSON_OUT="$LOG_DIR/verification-results/${CODEGEN_ATTEMPT_ID}/${CODEGEN_REQUIREMENT_ID}.json"
+  result_args=()
+  if [ "${CODEGEN_RUNNER_POOL:-prod}" = audit ]; then
+    result_args+=(--result-json-out "$RESULT_JSON_OUT")
+  fi
+  set +e
+  $HW_TEST_DISPATCH_CMD --kind metal --arch "$arch" \
+    --test "$METAL_FILTER" --dispatch "${METAL_DISPATCH:-fast}" \
+    --worktree "$WORKTREE_DIR" \
+    --base "$(sg GIT_COMMIT)" \
+    --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}-${arch}" \
+    "${result_args[@]}" \
+    --timeout "${TIMEOUT:-1800}" 2>&1 | tee -a "$LOG_DIR/metal_run.log"
+  dispatch_exit=${PIPESTATUS[0]}
+  set -e
+  # Record this architecture's marker/result before dispatching the next leaf.
+done
 ```
 
-Require exactly one final `HW_TEST_RESULT arch=<arch>` marker for each
-requested architecture and record its `job` value:
+Require exactly one final `HW_TEST_RESULT arch=<arch>` marker for each queued
+Blackhole/Wormhole invocation and record its `job` value. For an audit run,
+also require the exact protocol-v2 result at `RESULT_JSON_OUT`, validate its
+sealed identity, and derive the suite verdict and counts from its
+`classification`, `collection`, and `execution` records exactly as in
+`tester.md`. The strict reducer is authoritative; the marker and dispatch exit
+are supporting evidence only.
+
+For production compatibility, do not request a protocol-v2 result copy and use
+the legacy marker:
 
 | Marker | Verdict |
 |---|---|
@@ -220,22 +252,26 @@ requested architecture and record its `job` value:
 | `ok=false ran=true` | `TESTS_FAILED` |
 | missing, malformed, or `ran=false` | `ENV_ERROR` |
 
-Use the marker summary for counts when present. If counts are absent, use
-zero and state that the queue did not report them; never infer a passing count.
-The overall dispatch exit is supporting evidence only because one failed
-architecture makes a multi-arch call non-zero.
+If legacy counts are absent, use zero and state that the queue did not report
+them; never infer a passing count. The overall dispatch exit is supporting
+evidence only because one failed architecture makes a multi-arch call
+non-zero.
 
 Do not set `TT_METAL_SIMULATOR`, `TT_METAL_CACHE`,
 `TT_METAL_SLOW_DISPATCH_MODE`, or card locks on this route. Return after
-recording all architecture results.
+recording the queued architecture results unless `ARCHES` also contains
+Quasar; for a mixed solve, continue to Step C for Quasar only.
 
-## Step C — Execute locally on ttsim or silicon
+## Step C — Execute locally on ttsim, silicon, or Quasar Aether
 
-Use this route for ttsim, or for local silicon when
-`HW_TEST_DISPATCH_CMD` is unset.
+Use this route for:
 
-Use the same gtest command for both backends. Ttsim additionally requires
-`TT_METAL_SIMULATOR` and slow dispatch.
+- every architecture on ttsim;
+- local silicon when `HW_TEST_DISPATCH_CMD` is unset;
+- Quasar on `TEST_BACKEND=local`, even when the dispatch command is set.
+
+Use the same gtest binary for every backend. Ttsim uses its `.so`; local Quasar
+uses the selected UMD simulator directory and slow dispatch.
 
 Set `TT_METAL_HOME` to the tree containing the fix and use a fresh
 `TT_METAL_CACHE`. For ttsim, use the arch library through
@@ -245,6 +281,14 @@ set `TT_METAL_DISABLE_SFPLOADMACRO=1`; that instruction is unavailable on
 ttsim.
 
 ```bash
+for arch in "${ARCHES[@]}"; do
+  # In a mixed local solve, Step B already handled every card architecture.
+  if [ "$TEST_BACKEND" = local ] &&
+     [ -n "${HW_TEST_DISPATCH_CMD:-}" ] &&
+     [ "$arch" != quasar ]; then
+    continue
+  fi
+
 if [ "${VERIFY_STRATEGY:-worktree}" = warm ]; then
   HOME_TREE="$METAL_VERIFY_HOME"
   BIN="${METAL_VERIFY_BUILD_DIR:-$METAL_VERIFY_HOME/build}/test/tt_metal/unit_tests_llk"
@@ -254,6 +298,7 @@ else
 fi
 FRESH_CACHE="$(mktemp -d "$LOG_DIR/ttcache_${arch}.XXXXXX")"
 env_args=( TT_METAL_HOME="$HOME_TREE" TT_METAL_CACHE="$FRESH_CACHE" )
+qsr_executed=0
 # Opt-in: verify with device-side LLK asserts + Watcher so a firing assert prints a readable
 # message to the run log instead of ebreak-hanging the kernel until the gtest timeout.
 [ "${TT_METAL_LLK_ASSERTS:-0}" = 1 ] && env_args+=( TT_METAL_LLK_ASSERTS=1 TT_METAL_WATCHER=1 )
@@ -276,17 +321,36 @@ PY
     { echo "ENV_ERROR: missing ttsim .so for $arch"; exit 3; }
   [ -f "$(dirname "$SIM_SO")/soc_descriptor.yaml" ] || { echo "ENV_ERROR: no soc_descriptor.yaml beside $SIM_SO"; exit 3; }
   env_args+=( TT_METAL_SIMULATOR="$SIM_SO" TT_METAL_SLOW_DISPATCH_MODE=1 )
+elif [ "$arch" = quasar ]; then
+  # Quasar has no local card. The wrapper resolves QSR_SIM_BACKEND=emu|vcs,
+  # serializes both compute hosts on QSR_AETHER_LOCK, and reaps orphaned remote
+  # Aether work before starting.
+  set +e
+  bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_qsr_metal_test.sh" \
+    --bin "$BIN" \
+    --gtest-filter "$METAL_FILTER" \
+    --tt-metal-home "$HOME_TREE" \
+    --cache "$FRESH_CACHE" \
+    --log-dir "$LOG_DIR" \
+    --timeout "${TIMEOUT:-1200}"
+  gtest_exit=$?
+  set -e
+  qsr_executed=1
 else
   [ "$METAL_DISPATCH" = slow ] &&
     env_args+=( TT_METAL_SLOW_DISPATCH_MODE=1 )
 fi
-# Local silicon reaches this point only when the queue command is unset.
+# Local Blackhole/Wormhole silicon reaches this point only when the queue
+# command is unset.
 
 set +e
-env "${env_args[@]}" timeout "${TIMEOUT:-1200}" \
-  "$BIN" --gtest_filter="$METAL_FILTER" 2>&1 | tee -a "$LOG_DIR/metal_run_${arch}.log"
-gtest_exit=${PIPESTATUS[0]}
+if [ "${qsr_executed:-0}" != 1 ]; then
+  env "${env_args[@]}" timeout "${TIMEOUT:-1200}" \
+    "$BIN" --gtest_filter="$METAL_FILTER" 2>&1 | tee -a "$LOG_DIR/metal_run_${arch}.log"
+  gtest_exit=${PIPESTATUS[0]}
+fi
 set -e
+done
 ```
 
 Use a new cache path that does not already exist; do not reuse or delete an
