@@ -170,11 +170,11 @@ void kernel_main() {
         u::ComputeBlock v = u::noc_load<1>(v_storage, v_acc, j).wait();
         u::ComputeBlock mask = u::noc_load<1>(mask_storage, mask_acc, j).wait();
 
-        // The mask rides along in the matmul: `plus` adds it to the product while that is
+        // The mask rides along in the matmul: `add` puts it into the product while that is
         // still in DST, so what used to be a separate 8x8-tile pass over the scores -- read
         // s, read mask, add, write sm -- is now one FPU instruction per output tile with no
         // L1 round trip. The scores buffer is gone with it.
-        u::ComputeBlock sm = masked_storage.store(u::matmul<u::TransposeB::Yes>(q, k).plus(mask));
+        u::ComputeBlock sm = masked_storage.store(u::matmul<u::TransposeB::Yes>(q, k).add(mask));
         u::ComputeBlock rm = rowmax_storage.store(u::reduce_max<u::Axis::Cols>(sm, one));
 
         if (j == 0) {
