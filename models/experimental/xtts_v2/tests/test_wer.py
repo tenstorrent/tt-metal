@@ -29,8 +29,6 @@ Needs Whisper weights (cached or downloadable). The CPU pipeline dominates the r
 Run:
     pytest -svv models/experimental/xtts_v2/tests/test_wer.py
 """
-import re
-
 import torch
 from transformers import GPT2Model, WhisperForConditionalGeneration, WhisperProcessor  # noqa: F401
 
@@ -86,8 +84,13 @@ SENTENCES = (
 
 
 def _words(s):
-    """Lowercase, drop punctuation: WER on raw text is dominated by commas and capitals."""
-    return re.sub(r"[^a-z0-9' ]", " ", s.lower()).split()
+    """Casefold and drop punctuation, keeping letters and digits in ANY script.
+
+    WER on raw text is dominated by commas and capitals. An ASCII-only filter looks equivalent and
+    is not: it empties Arabic, Cyrillic and Devanagari completely, so both sides normalise to
+    nothing and every comparison scores a perfect 0.000."""
+    flat = s.casefold().replace("\u2019", "'").replace("\u02bc", "'")  # ASR emits curly apostrophes
+    return "".join(c if c.isalnum() or c.isspace() or c == "'" else " " for c in flat).split()
 
 
 def _wer(reference, hypothesis):
@@ -202,6 +205,13 @@ def test_wer_metric():
         ("the cat sat down", "", 1.0),  # nothing transcribed
         ("The cat, sat down!", "the cat sat down", 0.0),  # punctuation and case ignored
         ("the cat", "the dog ran fast today", 2.0),
+        # non-Latin scripts must survive normalisation rather than emptying to a free 0.000
+        ("привет мир", "привет мир", 0.0),
+        ("привет мир", "привет луна", 0.5),
+        ("привет мир", "", 1.0),
+        ("नमस्ते दुनिया", "नमस्ते दुनिया", 0.0),
+        ("Grüße, Welt!", "grüße welt", 0.0),
+        ("it doesn't matter", "it doesn\u2019t matter", 0.0),  # curly vs straight apostrophe
     )
     for reference, hypothesis, want in cases:
         assert _wer(reference, hypothesis) == want, f"WER({reference!r}, {hypothesis!r})"
