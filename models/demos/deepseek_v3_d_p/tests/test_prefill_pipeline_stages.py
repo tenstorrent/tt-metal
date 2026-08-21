@@ -33,7 +33,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.mistral_small4_config import MistralSmall4Config
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
@@ -99,13 +99,7 @@ def _tokens_to_device(token_ids, mesh_device, sp_factor):
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "l1_small_size": 768,
-            },
+            torus_xy_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE, l1_small_size=768),
             2,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),

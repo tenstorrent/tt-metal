@@ -49,7 +49,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.mistral_small4_config import MistralSmall4Config
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
@@ -130,16 +130,15 @@ def _seed_downstream_inputs(ctrls, outs, inputs, subs, sp, tp, pp):
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "l1_small_size": 768,
+            # Upstream moved the 8x4 prefill rows from FABRIC_1D to the Fabric2D torus profile;
+            # FABRIC_1D at this mesh now reports "unfeasible on the given hardware" and skips.
+            torus_xy_device_params(
+                fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=768,
                 # One stage's segmented trace lives on each device; without a reserved region the
                 # segments come out of general DRAM and trace_bytes() reads 0.
-                "trace_region_size": 512 * 1024 * 1024,
-            },
+                trace_region_size=512 * 1024 * 1024,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4",
         ),
@@ -348,14 +347,11 @@ _MESH_FOR_HOST_META = [None]  # set once per test; host-side from_torch still wa
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "l1_small_size": 768,
-                "trace_region_size": 512 * 1024 * 1024,
-            },
+            torus_xy_device_params(
+                fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=768,
+                trace_region_size=512 * 1024 * 1024,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4",
         ),
