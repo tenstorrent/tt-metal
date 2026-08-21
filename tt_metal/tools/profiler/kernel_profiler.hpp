@@ -137,7 +137,7 @@ TT_ZONE_DEFINE_ID(PROFILER_STALL_ZONE_ID, "PRODUCER-STALL");
 // ---- SPSC compact wire format (2-word / 8B packets) ------------------------
 // This backend emits the compact per-lane packet format the drainer drain pipeline expects:
 //   word0: [31:27] type(5)  [26:0] low27       word1: [31:0] payload32
-// A MARKER (ZONE_START/END/TOTAL/TS_*) carries: low27 = 16-bit zone srcloc hash (room to grow to 27),
+// A zone MARKER (ZONE_START/END) carries: low27 = the full 27-bit structural zone id,
 // payload32 = timer_low. Identity is NOT in the marker anymore -- it is reconstructed on the host from
 // three "sticky" packets that persist until updated:
 //   STICKY_PROG  (type 8): low27 = runtime host-id, 1 word. Emitted per RISC at its launch point
@@ -415,7 +415,6 @@ __attribute__((noinline)) void init_profiler(
     }
 }
 
-// Append accumulated SUM zones (if any) and publish the tail. No DRAM.
 // Publish whatever the launch wrote; the final commit point of a kernel's markers. No DRAM.
 __attribute__((noinline)) void finish_profiler() { publish_tail(); }
 
