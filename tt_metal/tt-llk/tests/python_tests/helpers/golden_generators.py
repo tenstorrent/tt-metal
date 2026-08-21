@@ -320,13 +320,16 @@ def sfpu_relu_max(value: float, threshold: float) -> float:
 def sfpu_clamp(value: float, low: float, high: float) -> float:
     """clamp under the SFPU's total order, in the kernel's order of operations.
 
-    `_calculate_clamp_` applies the bounds as `v_if (val < min)` then `v_elseif (val >= max)`,
-    both two-vector compares and so both on the total order, which sends a +NaN through the first
-    and onto *high* via the second. Composing torch.clamp instead would keep IEEE semantics and
-    return NaN.
+    Both bound kernels are the same max-then-min composition of SFPSWAP min/max, which
+    orders on the total order: metal `calculate_clamp` chains the unary_max_min bodies
+    (`max(x, min_val)` then `min(x, max_val)`), and metal `calculate_hardtanh` is
+    `sfpi::clamp(v, min, max)` = `min(max(val, lower), upper)` over the same SFPSWAP
+    min/max. A +NaN outranks every value, so the max leaves it in place and the min
+    replaces it with *high*. Composing torch.clamp instead would keep IEEE semantics
+    and return NaN.
 
-    The `>=` matters: tightening it to a strict `>` would change the answer at +NaN, and
-    _hardtanh's golden calls this too even though its kernel is a different one.
+    _clamp and _hardtanh both call this; their agreement is pinned in
+    test_sfpu_domains (test_hardtanh_golden_matches_the_clamp_golden).
     """
     return sfpu_min(sfpu_max(value, low), high)
 
@@ -2795,13 +2798,13 @@ class UnarySFPUGolden:
         return self._torch_unary(x, torch.log)
 
     # log_with_base dispatches the production metal calculate_log with
-    # base_scale = fp32 bits of 1/ln(2) (0x3FB8AA3B), mirroring log_with_base_tile,
-    # so the golden multiplies ln(x) by the same fp32 scale (=> log2(x) modulo the
-    # kernel's own ln approximation, which is within the same tolerance as plain log).
-    _LOG_WITH_BASE_SCALE = 1.4426950408889634  # 1/ln(2), rounds to fp32 0x3FB8AA3B
-
+    # IS_BASE_TWO=true and base_scale = fp32 bits of 1/ln(2) (0x3FB8AA3B), the only
+    # pairing ttnn emits for that constant (log_with_base_tile<..., true>, i.e. log2).
+    # IS_BASE_TWO applies the base change to the mantissa term only and keeps the
+    # exponent contribution exact, so the kernel is log2 to within its own ln
+    # approximation and torch.log2 is the faithful golden.
     def _log_with_base(self, x):
-        return self._torch_unary(x, lambda t: torch.log(t) * self._LOG_WITH_BASE_SCALE)
+        return self._torch_unary(x, torch.log2)
 
     def _log1p(self, x):
         return self._torch_unary(x, torch.log1p)
@@ -2964,9 +2967,9 @@ class UnarySFPUGolden:
         # Production metal calculate_hardtanh is sfpi::clamp(v, min, max) with fp32 bounds,
         # i.e. the same SFPU max/min composition sfpu_clamp models, so the golden is faithful
         # by construction (unlike the legacy tt-llk bf16 offset-chain kernel this harness
-        # bound before, whose agreement was arithmetic -- see
-        # test_hardtanh_golden_matches_the_hardtanh_kernel_chain in test_sfpu_domains,
-        # kept as a regression pin for that equivalence).
+        # bound before, whose agreement was arithmetic). Faithful-by-construction now means
+        # Hardtanh's golden IS Clamp's; that identity is pinned in test_sfpu_domains
+        # (test_hardtanh_golden_matches_the_clamp_golden).
         return sfpu_clamp(x, min_val, max_val)
 
     def _elu(self, x):
