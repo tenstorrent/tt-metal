@@ -516,27 +516,18 @@ def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tenso
     return x
 
 
-# Partitioning in TILE requires every split offset to be tile-aligned, which is the only reason T is
-# padded to `32 * factor` rather than `factor` -- and that padding is then upsampled up to 800x, so
-# band 6 runs 25600 rows/chip for 20700 of data and 1.53 of 8 chips hold nothing but padding.
-# `ttnn.mesh_partition` is happy in ROW_MAJOR at unaligned offsets (verified at 26 rows/shard), and
-# all four call sites untilize immediately afterwards anyway. Measured: 167.9 -> 146.9 ms for a
-# single clip on a 4x8 mesh at factor 8, bit-identical output, `test_audio_decode_t_parallel` passing
-# at the same 84.6 dB. Off by default pending wider coverage.
+# `32 * factor` (not `factor`) exists only because TILE-layout mesh_partition needs a tile-aligned
+# split offset; ROW_MAJOR partitions fine at unaligned offsets, and every call site untilizes right
+# after anyway. `tight_t_align` switches to the tighter `factor` alignment. Off by default pending
+# wider coverage (channel-TP, other shard factors).
 #
-# A `tight_t_align` / `local_tpad_tail` parameter, not a module-level flag: this file is shared with
-# LTX's audio decode (`Vocoder` is the same class for both), so a global read from a
-# MiniMax-namespaced env var would silently change LTX's partitioning too. Each affected function
-# takes the flag explicitly; `MiniMaxH3AudioDecoder` is the only place that defaults it from env
-# (`MINIMAX_H3_AUDIO_TIGHT_T_ALIGN` / `MINIMAX_H3_AUDIO_LOCAL_TPAD_TAIL`), matching how
-# `split_mode`/`tap_matmul`/`prefer_mac` are already scoped -- LTX's `Vocoder` construction never
-# passes these, so it always gets the hardcoded `False` default below regardless of that env var.
+# These are per-call parameters, not module globals: this file is shared with LTX's Vocoder, so a
+# global env read would silently change LTX's partitioning too. Only `MiniMaxH3AudioDecoder` defaults
+# them from env (`MINIMAX_H3_AUDIO_TIGHT_T_ALIGN` / `_LOCAL_TPAD_TAIL`); LTX's `Vocoder` always gets
+# `False` regardless of that env var.
 #
-# With `tight_t_align` on, the pad image is smaller than one shard (800 rows of 20800 for band 6), so
-# `local_tpad_tail` can localize the tail-set instead of rewriting whole tensors: see
-# `_set_tpad_tail_local`. Ablating the tail-set entirely is worth 19.7 ms (146.7 -> 127.0 ms), and
-# ~96% of that work is copying rows it cannot change. `local_tpad_tail` is a no-op without
-# `tight_t_align`, since the pad image then always spans whole shards.
+# `local_tpad_tail` only does anything once `tight_t_align` has shrunk the pad image below one shard
+# (see `_set_tpad_tail_local`); alone it's a no-op.
 
 
 def _partition_t(x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
@@ -691,11 +682,9 @@ def _set_tpad_tail(
 def _set_tpad_tail_local(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache):
     """``_set_tpad_tail`` restricted to the rows it can actually change, written back in place.
 
-    The masked form above rewrites every row of the tensor so that body rows can multiply by 1.0.
-    Once T is aligned to `factor` rather than `32 * factor` the pad image is small -- 800 rows of
-    20800 for band 6 -- so ~96% of that work is a copy. This slices the suffix, fixes it, and writes
-    it back with ttnn.experimental.slice_write (bit-identical to the multiply, and cheaper in
-    ROW_MAJOR).
+    Slices just the pad suffix, fixes it, and writes back with `ttnn.experimental.slice_write`
+    (bit-identical to the full-tensor multiply above, and cheaper in ROW_MAJOR) instead of rewriting
+    every row so body rows can multiply by 1.0.
 
     Writing in place is safe because every op with a receptive field is preceded by its own tail-set,
     so no consumer reads a stale tail, and the pad rows are cropped from the final waveform. It does

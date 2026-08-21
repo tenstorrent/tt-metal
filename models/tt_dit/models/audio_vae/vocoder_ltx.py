@@ -454,9 +454,7 @@ class Vocoder(Module):
         if sharded:
             factor = self.parallel_config.factor
             tile_h = 32
-            # `32 * factor` exists only so the TILE-layout mesh_partition splits on tile boundaries.
-            # Partitioning in ROW_MAJOR instead needs T divisible by `factor` alone, which for T=207
-            # means 1 pad row rather than 49 -- and those 49 get upsampled up to 800x downstream.
+            # See audio_ops.py's `_partition_t` header for why `tight_t_align` uses `factor` alone.
             align = factor if self.tight_t_align else tile_h * factor
             rem = x_BTC_torch.shape[1] % align
             if rem != 0:

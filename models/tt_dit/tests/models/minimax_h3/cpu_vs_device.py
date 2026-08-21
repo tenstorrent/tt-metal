@@ -58,9 +58,7 @@ MESH = tuple(int(v) for v in os.environ.get("CVD_MESH", "1x1").split("x"))
 T_FACTOR = int(os.environ.get("CVD_T_FACTOR", "1"))
 MESH_AXIS = int(os.environ.get("CVD_MESH_AXIS", "1"))
 TRACED = os.environ.get("CVD_TRACED", "0") == "1"
-# 2 matches decode_bench.py and every number quoted before this was added: the real deployment case
-# is one clip per request, so CVD_BATCH=1 is the honest per-clip cost. Default stays 2 so existing
-# invocations and saved numbers don't silently change underneath anyone.
+# Default 2 keeps existing invocations/numbers unchanged; CVD_BATCH=1 is the honest per-clip cost.
 BATCH = int(os.environ.get("CVD_BATCH", "2"))
 
 

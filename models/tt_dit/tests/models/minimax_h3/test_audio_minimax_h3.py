@@ -669,11 +669,8 @@ def test_audio_decode_t_parallel(mesh_device):
         assert psnr_db > 40.0, f"t_factor={factor} axis={axis} diverges from 1-device: PSNR {psnr_db:.1f} dB"
 
 
-# Each entry: (tight_t_align, local_tpad_tail). `local_tpad_tail` alone is a documented no-op --
-# `_set_tpad_tail` only takes the local-write path when the pad image is smaller than one shard,
-# which only happens once `tight_t_align` has shrunk it -- so that row exists to lock the no-op in as
-# a tested invariant, not because it exercises new code. Only the supported FACTORS entries with real
-# sharding are covered; factor 1 has no partitioning for either flag to change.
+# (tight_t_align, local_tpad_tail). `local_tpad_tail` alone is a no-op (needs `tight_t_align` to
+# shrink the pad image first) -- that row locks the no-op in as a tested invariant, not new coverage.
 LAYOUT_OPT_INS = [
     pytest.param(True, False, id="tight_t_align"),
     pytest.param(False, True, id="local_tpad_tail_alone_is_a_noop"),
@@ -688,10 +685,8 @@ LAYOUT_OPT_INS = [
 @pytest.mark.parametrize(("factor", "axis"), [f for f in FACTORS if f != (1, 1)])
 def test_audio_decode_layout_opt_ins_bit_identical(mesh_device, factor, axis, tight_t_align, local_tpad_tail):
     """`tight_t_align` / `local_tpad_tail` change partitioning and tail-write mechanics, not precision,
-    so unlike `test_audio_decode_t_parallel`'s ~40 dB sharded-vs-unsharded bar (genuinely different
-    math), the bar here is exact: these must reproduce the shipping-default path bit for bit at the
-    same shard factor. Copilot review on #53837 flagged that neither flag had automated coverage;
-    this is that coverage, run at both of `FACTORS`' real shard layouts (4, axis 0) and (8, axis 1).
+    so unlike `test_audio_decode_t_parallel`'s ~40 dB sharded-vs-unsharded bar, the bar here is exact:
+    bit-identical to the shipping-default path at the same shard factor.
     """
     weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
