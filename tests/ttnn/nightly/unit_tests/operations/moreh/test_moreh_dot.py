@@ -28,9 +28,6 @@ def get_torch_dtype(dtype):
 
 
 def run_moreh_dot_test(input_shape, ttnn_dtype, device, use_optional_output=False):
-    # TODO @thanhnguyen-moreh: Support bfloat8_b in kernel
-    if ttnn_dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported in the kernel")
     torch_dtype = get_torch_dtype(ttnn_dtype)
     output_shape = [1, 1, 1, 1]
 
@@ -91,7 +88,6 @@ def run_moreh_dot_test(input_shape, ttnn_dtype, device, use_optional_output=Fals
     (
         ttnn.bfloat16,
         ttnn.int32,
-        ttnn.bfloat8_b,
     ),
 )
 def test_moreh_dot(input_shape, dtype, device):

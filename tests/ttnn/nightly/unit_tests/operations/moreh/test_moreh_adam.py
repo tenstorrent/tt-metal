@@ -148,11 +148,9 @@ def run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_e
 @pytest.mark.parametrize("weight_decay", [0.0, 0.3])
 @pytest.mark.parametrize("amsgrad", [True, False])
 @pytest.mark.parametrize("fp32_dest_acc_en", compute_kernel_options, ids=compute_kernel_ids)
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, dtype, step=1):
     torch.manual_seed(0)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip("bfloat8_b not supported")
     return run_moreh_adam(
         shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, dtype=dtype, step=step
     )

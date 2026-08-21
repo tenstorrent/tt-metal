@@ -258,12 +258,10 @@ def moreh_matmul_backward(params, requires_grad, device, dtype=ttnn.bfloat16, us
     ),
 )
 @pytest.mark.parametrize("use_randint", [True, False])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_moreh_matmul(params, dtype, use_randint, compute_kernel_options, device):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip("bfloat8_b not supported")
     passing = moreh_matmul(params, True, compute_kernel_config, device, use_randint=use_randint, npu_dtype=dtype)
     assert passing
 
@@ -285,12 +283,10 @@ def test_moreh_matmul(params, dtype, use_randint, compute_kernel_options, device
     ),
 )
 @pytest.mark.parametrize("use_randint", [True, False])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_moreh_matmul_wo_output(params, use_randint, dtype, compute_kernel_options, device):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip("bfloat8_b not supported")
     passing = moreh_matmul(params, False, compute_kernel_config, device, use_randint, dtype)
     assert passing
 
@@ -413,11 +409,9 @@ def test_moreh_matmul_fp32_dest_acc(params, device):
         (True, True),
     ),
 )
-@pytest.mark.parametrize("dtype", (ttnn.bfloat8_b, ttnn.bfloat16), ids=["bfloat8_b", "bfloat16"])
+@pytest.mark.parametrize("dtype", (ttnn.bfloat16,), ids=["bfloat16"])
 def test_moreh_matmul_backward(params, requires_grad, dtype, device):
     torch.manual_seed(3072)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip("bfloat8_b not supported")
     moreh_matmul_backward(params, requires_grad, device, dtype=dtype)
 
 

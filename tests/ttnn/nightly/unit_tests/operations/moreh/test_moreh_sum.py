@@ -189,11 +189,9 @@ def moreh_sum(input_shape, dim, keepdim, use_provide_output, compute_kernel_opti
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 @pytest.mark.parametrize("keepdim", [True, False], ids=["keepdim-true", "keepdim-false"])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bfloat16", "bfloat8_b"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 def test_moreh_sum(input_shape, dim, keepdim, compute_kernel_options, dtype, device):
     torch.manual_seed(2023)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip("bfloat8_b not supported")
     passing = moreh_sum(input_shape, dim, keepdim, True, compute_kernel_options, device, dtype=dtype)
     assert passing
 
@@ -386,11 +384,9 @@ def moreh_sum_backward(
 )
 @pytest.mark.parametrize("keepdim", [True, False], ids=["keepdim-true", "keepdim-false"])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bfloat16", "bfloat8_b"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 def test_moreh_sum_backward(input_shape, dim, keepdim, compute_kernel_options, dtype, device):
     torch.manual_seed(2023)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip("bfloat8_b is not supported")
     passing = moreh_sum_backward(input_shape, dim, keepdim, True, compute_kernel_options, device, dtype=dtype)
     assert passing
 

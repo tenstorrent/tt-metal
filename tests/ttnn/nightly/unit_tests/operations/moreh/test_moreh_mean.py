@@ -33,10 +33,6 @@ def run_moreh_mean(
     torch_dtype=torch.float32,
     ttnn_dtype=ttnn.bfloat16,
 ):
-    # TODO @mrshaw01: Support bfloat8_b in kernel
-    if ttnn_dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported in the kernel")
-
     input_shape, dim = input_shape_dim
     check_dim(input_shape, dim, keepdim)
 
@@ -75,10 +71,6 @@ def run_moreh_mean_backward(
     torch_dtype=torch.float32,
     ttnn_dtype=ttnn.bfloat16,
 ):
-    # TODO @mrshaw01: Support bfloat8_b in kernel
-    if ttnn_dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported in the kernel")
-
     input_shape, dim = input_shape_dim
     check_dim(input_shape, dim, keepdim)
 
@@ -144,7 +136,7 @@ def run_moreh_mean_backward(
     ],
 )
 @pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
 def test_moreh_mean_ttnn_dtype(input_shape_dim, keepdim, ttnn_dtype, device):
     torch.manual_seed(2024)
     run_moreh_mean(input_shape_dim, device, keepdim=keepdim, ttnn_dtype=ttnn_dtype)
@@ -231,7 +223,7 @@ def test_moreh_mean_callback(input_shape_dim, device):
     ],
 )
 @pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
 def test_moreh_mean_backward_ttnn_dtype(ttnn_dtype, input_shape_dim, keepdim, device):
     torch.manual_seed(2024)
     run_moreh_mean_backward(input_shape_dim, device, keepdim=keepdim, ttnn_dtype=ttnn_dtype)

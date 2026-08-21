@@ -46,11 +46,7 @@ if is_wormhole_b0():
 )
 @pytest.mark.parametrize("has_param_out", [True, False], ids=["HAS_PARAM_OUT_TRUE", "HAS_PARAM_OUT_FALSE"])
 @pytest.mark.parametrize("fp32_dest_acc_en", fp32_dest_acc_en, ids=fp32_dest_acc_en_ids)
-@pytest.mark.parametrize(
-    "npu_dtype, cpu_dtype",
-    [[ttnn.bfloat8_b, torch.bfloat16], [ttnn.bfloat16, torch.bfloat16]],
-    ids=["bfloat8", "bfloat16"],
-)
+@pytest.mark.parametrize("npu_dtype, cpu_dtype", [[ttnn.bfloat16, torch.bfloat16]], ids=["bfloat16"])
 def test_moreh_sgd(
     shape,
     lr,
@@ -66,10 +62,6 @@ def test_moreh_sgd(
     device,
 ):
     if nesterov and (momentum <= 0 or dampening != 0):
-        pytest.skip()
-    if npu_dtype == ttnn.bfloat8_b:
-        # Duong: ttnn.bfloat8_b has some bugs. only around half the tests passed for bfloat8_b. Some tests produce 0.0 or Inf results.
-        # I couldn't identify the pattern of failed tests, it seems kind of random so I think it's a precision error.
         pytest.skip()
 
     torch.manual_seed(0)
