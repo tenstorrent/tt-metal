@@ -47,7 +47,9 @@ struct operation_attributes_t {
 using tensor_return_value_t = Tensor;
 using spec_return_value_t = tt::tt_metal::TensorSpec;
 
-// NOTE: output tensor is the last element in the vector io_tensors
+// NOTE: output tensor is the last element in the vector io_tensors. io_tensors may hold exactly one
+// tensor (a generator program, or a single-tensor in-place program), in which case it is both the
+// only argument and the output.
 struct tensor_args_t {
     const std::vector<Tensor>& io_tensors;
     const Tensor& output_tensor;
