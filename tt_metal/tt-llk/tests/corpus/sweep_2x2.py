@@ -1222,6 +1222,7 @@ class Sweep:
                     + ",".join(r["op"] for r in self.deferred)
                 )
         self.reds = []
+        self.notes = []  # informational report lines (never RED)
         self.reused = []  # cross-run adopted device cells (provenance)
         # --priority-ops sanity: a typo'd op must fail loudly, never
         # silently deprioritize everything.  Ops deferred by the schedule
@@ -1774,6 +1775,29 @@ class Sweep:
             "cc1plus_sha256": self.info["cc1plus_sha256"],
             "tt_metal_head": self.info["tt_metal_head"],
         }
+        # A NAMED compiler refusal in a knob leg is an honest, bookable
+        # outcome (fail-closed passes may legitimately refuse a solo-flag
+        # context the reviewed ON set makes compilable — e.g. a widened
+        # invariant-loadi hoisting past 8 live LREGs without
+        # const-residency to park constants).  Only unnamed failures are
+        # RED.  The refusal-name grep is deliberately narrow: the named
+        # rvtt errors all carry a lowercase-hyphen tag in parentheses.
+        log = work / f"compile-{leg}.log"
+        named = None
+        if leg == "knob" and log.exists():
+            m = re.search(
+                r"\(([a-z0-9-]+-(?:exceeded|refused|unproven|divergent|unmodeled|absent))\)",
+                log.read_text(errors="replace"),
+            )
+            named = m.group(1) if m else None
+        if named:
+            verdict["status"] = "KNOB_REFUSED_COMPILE"
+            verdict["refusal"] = named
+            (work / "verdict.json").write_text(json.dumps(verdict, indent=2) + "\n")
+            self.notes.append(
+                f"{row['op']}/{sel}: knob leg refused to compile by name ({named}) — recorded, not RED"
+            )
+            return verdict
         (work / "verdict.json").write_text(json.dumps(verdict, indent=2) + "\n")
         self.reds.append(f"{row['op']}/{sel}: compile {leg} failed")
         return verdict
@@ -4416,6 +4440,10 @@ exit $RC
         if self.reds:
             rag = "RED"
             lines += ["", "## RED events", ""] + [f"- {x}" for x in self.reds]
+        if getattr(self, "notes", None):
+            lines += ["", "## Notes (recorded, non-blocking)", ""] + [
+                f"- {x}" for x in self.notes
+            ]
         lines += ["", f"## Overall: {rag}"]
         (self.ev / "REPORT.md").write_text("\n".join(lines) + "\n")
         print(f"REPORT: {rag} -> {self.ev / 'REPORT.md'}")
