@@ -5,6 +5,7 @@
 #pragma once
 
 #include <mpi.h>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include "api/tt-metalium/distributed_context.hpp"
@@ -39,7 +40,8 @@ private:
 // ---------------------------------------------------------------------
 class MPIRequest : public Request {
 public:
-    explicit MPIRequest(MPI_Request req) : req_(req) {}
+    explicit MPIRequest(MPI_Request req, std::optional<std::size_t> recv_buffer_size = std::nullopt) :
+        req_(req), recv_buffer_size_(recv_buffer_size) {}
 
     Status wait() override;
     std::optional<Status> test() override;
@@ -49,6 +51,7 @@ public:
 private:
     mutable MPI_Request req_{};
     bool done_{};
+    std::optional<std::size_t> recv_buffer_size_;
 };
 
 // ---------------------------------------------------------------------
