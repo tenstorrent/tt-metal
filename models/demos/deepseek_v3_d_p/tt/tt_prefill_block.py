@@ -280,6 +280,13 @@ class TtPrefillBlock(LightweightModule):
         self.topology = tp_topology  # forward()'s dense-FFN all-gather is on the TP axis (cluster_axis=1)
         self.kv_only = kv_only
         self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
+        # The KV pad-zero and layer-ack path in forward() is the block's own: it addresses the
+        # cache by global layer index and by the SP geometry of the activation slab, neither of
+        # which belongs to whichever attention module a layer happens to build.
+        self.layer_idx = layer_idx
+        self.layer_num = layer_num
+        self.sp_axis = sp_axis
+        self.sp_factor = mesh_device.shape[sp_axis]
 
         emb_dim = config.hidden_size
 
@@ -636,19 +643,19 @@ class TtPrefillBlock(LightweightModule):
                         metadata[0],  # slot_idx tensor
                         metadata[2],  # valid_global (= actual_end) tensor
                         cache_layer_idx,
-                        self.mla.layer_num,
-                        seq_len_local * self.mla.sp_factor,
-                        self.mla.sp_axis,
+                        self.layer_num,
+                        seq_len_local * self.sp_factor,
+                        self.sp_axis,
                     )
                 else:
                     ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
                         cache_tensor,
                         cache_user_id,
                         cache_layer_idx,
-                        self.mla.layer_num,
+                        self.layer_num,
                         actual_end,
-                        seq_len_local * self.mla.sp_factor,
-                        self.mla.sp_axis,
+                        seq_len_local * self.sp_factor,
+                        self.sp_axis,
                     )
             if d2h_service is not None:
                 # Device-op ack, enqueued on the same CQ right after the zero: the record cannot reach the
@@ -667,10 +674,10 @@ class TtPrefillBlock(LightweightModule):
                 # is False (and on_layer_complete is None there, so neither fires).
                 tc = getattr(self, "_trace_controller", None)
                 if tc is not None and tc.has_layer_ack():
-                    tc.layer_ack(self.mla.layer_idx)
+                    tc.layer_ack(self.layer_idx)
                 else:
                     ttnn.synchronize_device(self.mesh_device)
-                    on_layer_complete(self.mla.layer_idx)
+                    on_layer_complete(self.layer_idx)
 
         if self.kv_only:
             # KV cache filled (by MLA), migration callback fired. The block
@@ -713,15 +720,15 @@ class TtPrefillBlock(LightweightModule):
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
             _t_ffn = time.perf_counter()
-            rec = _BLOCK_TIMINGS.setdefault(self.mla.layer_idx, {"mla": [], "ffn": []})
+            rec = _BLOCK_TIMINGS.setdefault(self.layer_idx, {"mla": [], "ffn": []})
             rec["mla"].append(_t_mla - _t_start)  # attn_norm + MLA + residual
             rec["ffn"].append(_t_ffn - _t_mla)  # ffn_norm + (MoE|dense FFN) + residual
 
         # Post-FFN output-residual tap (e.g. the DFlash drafter): fire with this block's GLOBAL layer
-        # index (self.mla.layer_idx) and its final output residual. Not reached for kv_only blocks (they
+        # index (self.layer_idx) and its final output residual. Not reached for kv_only blocks (they
         # returned above with no output). The callback must NOT free/mutate x — it flows to the next layer.
         if on_layer_hidden is not None:
-            on_layer_hidden(self.mla.layer_idx, x)
+            on_layer_hidden(self.layer_idx, x)
 
         if return_kv_intermediates:
             if return_indexer_indices:
