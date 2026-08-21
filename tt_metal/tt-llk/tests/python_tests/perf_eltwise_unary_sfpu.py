@@ -10,12 +10,11 @@ from helpers.llk_params import (
     DestAccumulation,
     FastMode,
     MathOperation,
-    PerfRunType,
     StableSort,
     Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.sfpu_domains import sfpu_unary_ops
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
@@ -194,13 +193,7 @@ def test_perf_eltwise_unary_sfpu(
     configuration = PerfConfig(
         "sources/eltwise_unary_sfpu_perf.cpp",
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
@@ -234,15 +227,19 @@ def test_perf_eltwise_unary_sfpu(
 
 
 # ---------------------------------------------------------------------------
-# MATH_ISOLATE slices that used to live in their own perf_*.py modules.
-# Same C++ dispatch (eltwise_unary_sfpu_perf.cpp); narrower format / run-type
-# matrices for conversion A/Bs and the Int32 path the main sweep does not cover.
+# Extra slices that used to live in their own perf_*.py modules.
+# Same C++ dispatch (eltwise_unary_sfpu_perf.cpp); narrower format matrices for
+# conversion A/Bs and the Int32 path the main sweep does not cover.
+#
+# They must share ALL_PERF_RUN_TYPES with the main sweep: this module writes one
+# CSV, and combine_perf_reports refuses worker files with different column
+# schemas (MATH_ISOLATE-only would omit mean(L1_TO_L1)/TEXT_SIZE(PACK_ISOLATE)/...).
 # ---------------------------------------------------------------------------
 
 _UNARY_SFPU_MATH_ISOLATE_DIMS = [[128, 64]]  # tile_cnt: 8
 
 # int32 unary ops share the eltwise_unary_sfpu_perf.cpp dispatch but need an
-# Int32 format, so they run through a dedicated MATH_ISOLATE test below.
+# Int32 format, so they run through a dedicated extra-slice test below.
 #
 # Coverage note: AddInt32/SubInt32 (binop_with_unary.h) currently have perf-only
 # coverage here and no functional golden/assert, because the int32-unary
@@ -285,7 +282,7 @@ def _math_isolate_config(formats, mathop, dest_acc, unpack_to_dest, input_dimens
     return PerfConfig(
         "sources/eltwise_unary_sfpu_perf.cpp",
         formats,
-        run_types=[PerfRunType.MATH_ISOLATE],
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_OP(mathop=mathop),
             APPROX_MODE(ApproximationMode.No),
