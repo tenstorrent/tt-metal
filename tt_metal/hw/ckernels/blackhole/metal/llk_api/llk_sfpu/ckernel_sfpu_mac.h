@@ -14,14 +14,14 @@ namespace ckernel::sfpu {
 // Replay slot and length shared by mac_init() (which records) and calculate_mac()
 // (which replays).  lltt::record() captures exactly `length` instructions, so the two
 // must agree: an under-count leaves the tail of the body out of the buffer, an
-// over-count swallows whatever the caller emits next.
+// over-count swallows whatever the caller emits next (which is why the body below is
+// written with explicit TTI_* intrinsics rather than sfpi C++ - the instruction count
+// then follows from the source and does not depend on how sfpi schedules the block).
 //
-// The lengths below are the instructions sfpi emits for mac_init()'s body:
-//   3x SFPLOAD, SFPMAD, SFPNOP (SFPMAD write latency), [SFPSTOCHRND for bf16,] SFPSTORE
-// If mac_init()'s body changes, re-check them against the generated kernel.
+// The body is 3x SFPLOAD, SFPMAD, [SFP_STOCH_RND when DST is 16-bit,] SFPSTORE.
 inline constexpr int MAC_REPLAY_SLOT = 0;
 template <bool is_fp32_dest_acc_en>
-inline constexpr int mac_replay_len = is_fp32_dest_acc_en ? 6 : 7;
+inline constexpr int mac_replay_len = is_fp32_dest_acc_en ? 5 : 6;
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat data_format>
 inline void mac_init() {
@@ -37,32 +37,40 @@ inline void mac_init() {
         .set(ADDR_MOD_6);
 
     // Record the replay sequence once at init time with fixed dest offsets.
-    // All callers use tile indices (0, 1, 2, 0), i.e. dst_reg[0], dst_reg[32], dst_reg[64]
-    // (sfpi indexes dst_reg in rows; the row stride is 2, so tile n starts at row n * 32).
+    // All callers use tile indices (0, 1, 2, 0); a tile is 32 rows and the dest
+    // offsets are in half-rows, so the operands sit at 0, 64 and 128.
     //
     // The SFPLOAD/SFPSTORE instruction mod describes the DST register layout, which is
     // 32-bit only when fp32 dest accumulation is enabled - it is not a property of the
     // input tensor's data format.  Keying it off data_format would issue FP32-mode
     // accesses against a 16-bit DST whenever the inputs are fp32 but the output dtype
     // (which is what drives fp32_dest_acc_en) is bf16, and 16-bit accesses against a
-    // 32-bit DST in the mirrored case.  DataLayout::FSrcB is mod 0, i.e. "whatever
-    // format DST is configured with".
+    // 32-bit DST in the mirrored case.  InstrModLoadStore::DEFAULT is mod 0, i.e.
+    // "whatever format DST is configured with".
     //
-    // sfpi defaults the loads to the arch's no-increment addr_mod (ADDR_MOD_7 here), which
-    // is what we want; only the store overrides it, with the auto-advancing mod set above.
-    constexpr sfpi::DataLayout dst_fmt = is_fp32_dest_acc_en ? sfpi::DataLayout::F32 : sfpi::DataLayout::FSrcB;
+    // The loads use ADDR_MOD_7 (no increment); only the store overrides it, with the
+    // auto-advancing mod set above.
+    constexpr std::uint32_t dst_mod =
+        is_fp32_dest_acc_en ? static_cast<std::uint32_t>(InstrModLoadStore::FP32)
+                            : static_cast<std::uint32_t>(InstrModLoadStore::DEFAULT);
 
     lltt::record<lltt::NoExec>(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
-    sfpi::vFloat a = sfpi::dst_reg[0].mode<dst_fmt>();
-    sfpi::vFloat b = sfpi::dst_reg[32].mode<dst_fmt>();
-    sfpi::vFloat c = sfpi::dst_reg[64].mode<dst_fmt>();
-    sfpi::vFloat result = a * b + c;
+    TTI_SFPLOAD(p_sfpu::LREG0, dst_mod, ADDR_MOD_7, 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, dst_mod, ADDR_MOD_7, 64);
+    TTI_SFPLOAD(p_sfpu::LREG2, dst_mod, ADDR_MOD_7, 128);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
     if constexpr (!is_fp32_dest_acc_en) {
         // SFPMAD accumulates in fp32; an SFPSTORE into a 16-bit DST truncates the
         // mantissa, so round to nearest-even on the way down to bf16 instead.
-        result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        TTI_SFP_STOCH_RND(
+            sfpi::SFPSTOCHRND_RND_EVEN,
+            0,
+            0,
+            p_sfpu::LREG0,
+            p_sfpu::LREG0,
+            sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
     }
-    sfpi::dst_reg[0].mode<dst_fmt>(ADDR_MOD_6) = result;
+    TTI_SFPSTORE(p_sfpu::LREG0, dst_mod, ADDR_MOD_6, 0);
 }
 
 // mac: out = a * b + c, computed in FP32 accumulator via SFPMAD.
@@ -71,8 +79,6 @@ inline void mac_init() {
 // matching tile indices 0, 1, 2) and replayed ITERATIONS times here.
 // ADDR_MOD_6 on SFPSTORE auto-advances the dest base register by 2 rows per
 // replay, so the next replay's SFPLOADs read the next row group automatically.
-// This avoids the explicit sfpi::dst_reg++ used in a plain for-loop, which
-// only advances the write counter and not the read counter.
 //
 // The dst_index_* parameters are accepted for signature compatibility with the
 // ternary SFPU dispatch but are NOT used: the dest offsets are baked into the
