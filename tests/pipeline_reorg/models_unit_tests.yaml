@@ -409,8 +409,8 @@
     # heavy full-model-build + device-trace tests added *after* that PR by #45355
     # (prefill device trace + batched prefill) time out the larger variants on
     # constrained runners (e.g. 26B/31B on wh_llmbox), so the whole
-    # test_prefill_trace_*, test_prefill_single_layer_tracy, and
-    # test_batched_prefill_perf files are ignored here.
+    # test_prefill_trace_* and test_batched_prefill_perf files are ignored
+    # here.
     # test_full_model_parity_* (vLLM full-model parity decode loops, from #44265)
     # is likewise deselected. The tier-1 promotion of 26B/31B/12B is intentionally
     # kept — only the heavy test cases are removed, not the tiers.
@@ -426,7 +426,6 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_single_layer_tracy.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
@@ -454,7 +453,6 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_single_layer_tracy.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
@@ -486,7 +484,6 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_single_layer_tracy.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
@@ -523,7 +520,6 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_single_layer_tracy.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
@@ -558,7 +554,6 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_single_layer_tracy.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
