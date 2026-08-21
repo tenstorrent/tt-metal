@@ -104,8 +104,12 @@ full suite are all `negative_zero_golden` on `SfpuElwdiv` / `SfpuXlogy` / `SfpuB
 `SfpuBinaryRemainder` — pre-existing and untouched; pow contributes none, which the edges-only run
 independently confirms (0 xpassed there).
 
-**Blackhole is compile-verified only** — no Blackhole silicon on this host, same limitation as the
-`RsqrtCompat` work. `test_sfpu_binary.py` compiles clean for the whole suite (709 passed compile).
+**Blackhole was compile-verified only at the time of this run** — no Blackhole silicon on that host,
+same limitation as the `RsqrtCompat` work. `test_sfpu_binary.py` compiles clean for the whole suite
+(709 passed compile). **Superseded on 2026-08-21:** Blackhole p100a silicon results are in
+[MEASUREMENTS_52930_pow_zero_zero_vs_main.md](MEASUREMENTS_52930_pow_zero_zero_vs_main.md) §3.2,
+§5.2 and §7 — the fix works there, and pre-fix Blackhole returns `+inf` rather than `0` for all
+three pole rows.
 
 ## 4. Performance — `MATH_ISOLATE`, `perf_eltwise_binary_sfpu.py -k SfpuElwpow`
 
@@ -181,7 +185,11 @@ both entries were removed together, as §5 requires.
 * **`SfpuElwpow` is still not in `SPECIALS_READY_OPS`**, so `pow(inf, 0)` and `pow(nan, 0)` — which the new
   guard also makes correct, since the guard is unconditional in `pow` — are never driven. The plan calls this
   optional hardening and a follow-up rather than a blocker; it is not closed here.
-* **Blackhole is compile-verified only.** The plan's §6 step 3 wants the edge sweep run on both arches; this
-  host has Wormhole n300 only. The xfail tables are not arch-keyed, so if Blackhole's silicon behaves
-  differently the removed entries would surface there as a failure rather than an XPASS — worth running
-  before merge.
+* ~~**Blackhole is compile-verified only.**~~ **Closed 2026-08-21.** The plan's §6 step 3 wanted the edge
+  sweep run on both arches; the host used for this run had Wormhole n300 only, and the concern was that
+  since the xfail tables are not arch-keyed, differing Blackhole silicon would surface the removed entries
+  as a failure rather than an XPASS. Run on Blackhole p100a: Blackhole pre-fix *does* differ — it returns
+  `+inf`, not `0`, for `0**0`, `0**-0.0` and `-0.0**0` — but the guard is unconditional and corrects both
+  behaviours, so the removed entries pass rather than fail. `binary_edges and SfpuElwpow` is 12 passed / 0
+  xfailed / 0 xpassed on Blackhole, and the whole file is 889 passed / 6 xfailed / 0 failed. See
+  [MEASUREMENTS_52930_pow_zero_zero_vs_main.md](MEASUREMENTS_52930_pow_zero_zero_vs_main.md) §7.
