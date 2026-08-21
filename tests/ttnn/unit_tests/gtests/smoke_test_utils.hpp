@@ -42,7 +42,7 @@ Tensor make_device_tensor_mc(
     DataType dtype,
     Layout layout,
     const MemoryConfig& mem_cfg) {
-    const TensorLayout tensor_layout(dtype, PageConfig(layout), mem_cfg);
+    const tt::tt_metal::TensorLayout tensor_layout(dtype, PageConfig(layout), mem_cfg);
     const tt::tt_metal::TensorSpec tensor_spec(shape, tensor_layout);
     return Tensor::from_vector(data, tensor_spec).to_device(&device, mem_cfg, ttnn::QueueId(0));
 }
