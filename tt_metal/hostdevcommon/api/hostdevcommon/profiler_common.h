@@ -367,17 +367,17 @@ constexpr static std::uint32_t SPSC_SPAN_RAW_FLAG = 1u;
 // pacing valves subtract it, so they fire on the earliest occupancy the lag could be hiding.
 static constexpr std::uint32_t SPSC_PUBLISH_BATCH_WORDS = 64;
 
-static constexpr std::uint32_t SPSC_TYPE_ZONE_START = 0;
-static constexpr std::uint32_t SPSC_TYPE_ZONE_END = 1;
+static constexpr std::uint32_t SPSC_TYPE_ZONE_START = 0;   // legacy pair (workers: stall zone, >3.2s fallback)
+static constexpr std::uint32_t SPSC_TYPE_ZONE_END = 1;     // legacy pair
+static constexpr std::uint32_t SPSC_TYPE_ZONE_ATOMIC = 2;  // one whole zone: id | end timer_low | duration32
 static constexpr std::uint32_t SPSC_TYPE_STICKY_TIMER = 9;
 static constexpr std::uint32_t SPSC_TIMER_HI_MASK = 0x7FFFFFFu;  // the 27-bit low field of word0
 
-inline std::uint32_t spsc_marker_w0(std::uint32_t type, std::uint32_t zone_id) {
-    // FULL 27 bits. This mask was 0xFFFF, and that truncation was invisible: markers rendered perfectly,
-    // with correct timestamps and nesting, and only their NAMES could not be resolved. Any change to the
-    // id width has to be made in EVERY copy of the packer at once -- this one, ppfmt in
-    // kernel_profiler.hpp, and pp_* in spsc_packet.h.
-    return (type << SPSC_SPAN_TYPE_SHIFT) | (zone_id & TT_ZONE_ID_MASK);
+// FULL 27 bits. This mask was 0xFFFF once, and that truncation was invisible: markers rendered
+// perfectly and only their NAMES could not be resolved. Any change to the id width has to be made in
+// EVERY copy of the packer at once -- this one, ppfmt in kernel_profiler.hpp, and pp_* in spsc_packet.h.
+inline std::uint32_t spsc_zone_atomic_w0(std::uint32_t zone_id) {
+    return (SPSC_TYPE_ZONE_ATOMIC << SPSC_SPAN_TYPE_SHIFT) | (zone_id & TT_ZONE_ID_MASK);
 }
 inline std::uint32_t spsc_sticky_timer_w0(std::uint32_t timer_hi) {
     return (SPSC_TYPE_STICKY_TIMER << SPSC_SPAN_TYPE_SHIFT) | (timer_hi & SPSC_TIMER_HI_MASK);
@@ -395,30 +395,30 @@ inline std::uint32_t spsc_data_w2(std::uint32_t size_words) { return (size_words
 
 // ---- The drainer's zone scope ------------------------------------------------------------------------
 //
-// An ordinary RAII zone: the constructor stamps ZONE_START, the destructor stamps ZONE_END, each from its
-// own clock read. Identity, ELF record and naming are identical to a worker zone; only the transport is
-// different, and that arrives as `mark`, a callable taking a packed word0 and returning whether the
-// marker was actually written.
+// An ATOMIC RAII zone, same shape as a worker's profileScope: the constructor only reads the clock (via
+// NowFn, which returns the 64-bit device now or 0 when instrumentation is off), and the destructor ships
+// the whole zone as one ZONE_ATOMIC packet through CloseFn(word0, start). Identity, ELF record and
+// naming are identical to a worker zone; only the transport differs.
 //
-// `started_` exists because the drainer decides MID-SWEEP whether to instrument (see self_on in
-// drisc_profiler_drain.cpp): if the constructor did not write START, the destructor must not write an
-// orphan END.
-template <std::uint32_t ZoneId, typename MarkFn>
+// start_ == 0 preserves the old started_ semantics: the drainer decides MID-SWEEP whether to instrument
+// (self_on in drisc_profiler_drain.cpp), and a zone opened while off stays off. A zone whose arming
+// turns off before it closes is dropped WHOLE by the close transport -- strictly better than the legacy
+// pair's orphan START.
+template <std::uint32_t ZoneId, typename NowFn, typename CloseFn>
 class SpscZoneScope {
 public:
-    inline __attribute__((always_inline)) explicit SpscZoneScope(MarkFn& mark) :
-        mark_(mark), started_(mark(spsc_marker_w0(SPSC_TYPE_ZONE_START, ZoneId))) {}
+    inline __attribute__((always_inline)) SpscZoneScope(NowFn& now, CloseFn& close) : close_(close), start_(now()) {}
     inline __attribute__((always_inline)) ~SpscZoneScope() {
-        if (started_) {
-            (void)mark_(spsc_marker_w0(SPSC_TYPE_ZONE_END, ZoneId));
+        if (start_ != 0) {
+            close_(spsc_zone_atomic_w0(ZoneId), start_);
         }
     }
     SpscZoneScope(const SpscZoneScope&) = delete;
     SpscZoneScope& operator=(const SpscZoneScope&) = delete;
 
 private:
-    MarkFn& mark_;
-    bool started_;
+    CloseFn& close_;
+    std::uint64_t start_;
 };
 
 // ---- NoC-FOOTPRINT per-sweep sample: the PP_DATA payload contract ------------------------------------

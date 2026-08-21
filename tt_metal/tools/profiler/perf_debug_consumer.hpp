@@ -8,7 +8,7 @@
 // Stream contracts:
 //  - A zone arrives as ONE record: `Zone`, carrying its start timestamp and duration. Worker
 //    zones ship from the device already whole (one ZONE_ATOMIC packet at scope close); the few
-//    remaining start/end pairs (stall zone, >3.2s fallback, DRISC self-zones) are paired by the
+//    remaining start/end pairs (stall zone, >3.2s fallback) are paired by the
 //    receiver BEFORE delivery -- consumers never see an unpaired half.
 //  - A Zone is emitted when it CLOSES, so per lane, Zones arrive in END order: with nested
 //    zones the child precedes its parent and data.zone.start is NOT monotonic. start+duration

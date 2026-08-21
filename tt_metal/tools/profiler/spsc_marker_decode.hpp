@@ -42,6 +42,7 @@ static_assert(
 // Same argument for the three codes the DRISC self-profiling packer in profiler_common.h emits directly.
 static_assert(PP_ZONE_START == kernel_profiler::SPSC_TYPE_ZONE_START, "ZONE_START wire code disagrees");
 static_assert(PP_ZONE_END == kernel_profiler::SPSC_TYPE_ZONE_END, "ZONE_END wire code disagrees");
+static_assert(PP_ZONE_ATOMIC == kernel_profiler::SPSC_TYPE_ZONE_ATOMIC, "ZONE_ATOMIC wire code disagrees");
 static_assert(PP_STICKY_TIMER == kernel_profiler::SPSC_TYPE_STICKY_TIMER, "STICKY_TIMER wire code disagrees");
 static_assert(PP_TYPE_SHIFT == kernel_profiler::SPSC_SPAN_TYPE_SHIFT, "packet type field moved");
 // The DRISC drain kernel keeps its OWN copy of the PP_DATA packer (it cannot include kernel_profiler.hpp),
@@ -112,7 +113,7 @@ inline void spsc_prefetch(const void* p) {
 // Decode ONE whole packed BULK_SPAN frame in place. For each zone packet calls
 //   emit(lane, wire_type, zone_id27, full_ts, dur, prog)
 // where for ZONE_ATOMIC full_ts is the zone END and dur its 32-bit duration (start = end - dur), and
-// for the legacy ZONE_START/END markers (stall zone, >3.2s fallback, DRISC self-zones) dur is 0.
+// for the legacy ZONE_START/END markers (stall zone, >3.2s fallback) dur is 0.
 // zone_id27 is the FULL 27-bit structural zone id (hostdevcommon/profiler_zone_id.h).
 // For each PP_DATA/PP_EVENT it calls
 //   emit_data(lane, wire_type, id, full_ts, prog, payload_words, n)   (payload in place, hi-word first)

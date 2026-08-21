@@ -814,13 +814,13 @@ void kernel_main() {
     // control vector. The clock is the SAME register the workers use (RISCV_DEBUG_REG_WALL_CLOCK_L, read here
     // through get_timestamp()), which is why no anchor, graft or calibration is needed anywhere.
     //
-    // Zones are ORDINARY RAII SCOPES (kernel_profiler::SpscZoneScope): the constructor stamps ZONE_START and
-    // the destructor ZONE_END, each from its OWN clock read inside self_mark_w0 -- exactly like a worker's
-    // DeviceZoneScopedN, with only the transport differing. Nothing is stamped from timestamps the sweep
+    // Zones are ATOMIC RAII SCOPES (kernel_profiler::SpscZoneScope): the constructor only reads the clock
+    // and the destructor ships the whole zone as one ZONE_ATOMIC packet (end + duration) -- exactly like a
+    // worker's DeviceZoneScopedN, with only the transport differing. Nothing is stamped from timestamps the sweep
     // loop read for its phase counters; those counters keep their own reads, so the host cross-check
     // (out[74..84]) is now approximate to a few cycles per zone boundary rather than exact by construction.
     // The cost of that honesty is the retroactive captures: a scope constructed while instrumentation was
-    // off stays off (SpscZoneScope::started_), so the sweep that DISCOVERS work is captured only from the
+    // off stays off (SpscZoneScope::start_ == 0), so the sweep that DISCOVERS work is captured only from the
     // arm point onward -- the armed window makes the next sweeps whole.
     //
     // This block sits ABOVE the egress lambdas because the egress phases (CREDIT-WAIT, WRITE) are
@@ -832,6 +832,7 @@ void kernel_main() {
     uint32_t self_head = 0;           // words the host has been shown (consumer side, kept by us)
     uint32_t self_tail = 0;           // words written (producer side)
     uint32_t self_hi = 0xFFFFFFFFu;   // last wall-clock high half emitted; ~0 forces a first sticky
+    uint64_t self_last_ts = 0;        // the fresh timestamp self_mark_w0 stamped last; the atomic close reads it
     uint32_t self_frames = 0;         // self frames shipped
     uint32_t self_markers = 0;        // markers written into the ring
     uint32_t self_dropped = 0;        // markers refused because a publish could not free the ring
@@ -903,7 +904,7 @@ void kernel_main() {
             if (!self_on || self_busy) {
                 return false;
             }
-            // The margin is 9 words, which covers every shape that uses this: 1-word sticky + 2-word marker = 3,
+            // The margin is 9 words, which covers every shape that uses this: 1-word sticky + 3-word atomic zone = 4,
             // and 1 + 3 + SPSC_NOCFP_WORDS = 8 for a footprint sample (PP_DATA grew a word2 when its id
             // widened to the full 27 bits). Leave a margin so a run can never exceed the ring capacity,
             // which the host clamps (spsc_span_live) rather than trusts.
@@ -923,6 +924,7 @@ void kernel_main() {
             // Clock read AFTER any publish, so a marker can never carry a time from before the publish that
             // made room for it (the same ordering argument mark_time makes in kernel_profiler.hpp).
             const uint64_t ts = get_timestamp();
+            self_last_ts = ts;
             const uint32_t hi = static_cast<uint32_t>(ts >> 32);
             if (hi != self_hi) {
                 self_ring[self_tail % kRingWords] = kernel_profiler::spsc_sticky_timer_w0(hi);
@@ -937,34 +939,43 @@ void kernel_main() {
             return true;
         }
     };
-    // The two RAII zone transports (the MarkFn SpscZoneScope takes). The guard is INLINE at the scope site
-    // -- an uninstrumented sweep pays a flag check, never a call (the N+41 lesson) -- and only then does the
-    // shared out-of-line prologue run. _phase compiles out entirely below full detail, so a detail-0 build
-    // carries no phase-zone code at all.
-    auto self_mark_now = [&](uint32_t w0) -> bool {
+    // The RAII zone transports (SpscZoneScope's NowFn + CloseFn). The OPEN is just a guarded clock read
+    // -- an uninstrumented sweep pays a flag check, never a call (the N+41 lesson); returning 0 keeps the
+    // zone silent (mid-sweep arming: a zone opened while off stays off). _phase compiles out entirely
+    // below full detail, so a detail-0 build carries no phase-zone code at all. The CLOSE is shared and
+    // out of line: it reuses the whole self_mark_w0 prologue (room check, publish-and-carry-on, sticky,
+    // fresh END stamp) and appends the duration word. Duration SATURATES at 0xFFFFFFFF instead of taking
+    // the workers' exact legacy-pair fallback: a >3.2 s self-zone means this drainer is wedged, and the
+    // fallback's code bytes are not worth carrying in this region's budget.
+    auto self_now = [&]() -> uint64_t {
         if constexpr (kSelfZones == 0) {
-            (void)w0;
-            return false;
+            return 0;
         } else {
-            if (!self_on || self_busy) {
-                return false;
-            }
-            return self_mark_w0(w0);
+            return (!self_on || self_busy) ? 0 : get_timestamp();
         }
     };
-    auto self_mark_phase = [&](uint32_t w0) -> bool {
+    auto self_now_phase = [&]() -> uint64_t {
         if constexpr (!kSelfPhases) {
-            (void)w0;
-            return false;
+            return 0;
         } else {
-            if (!self_on || self_busy) {
-                return false;
-            }
-            return self_mark_w0(w0);
+            return (!self_on || self_busy) ? 0 : get_timestamp();
         }
     };
-    using SelfMarkNow = decltype(self_mark_now);
-    using SelfMarkPhase = decltype(self_mark_phase);
+    auto self_zone_close = [&](uint32_t w0, uint64_t start) -> void {
+        if constexpr (kSelfZones != 0) {
+            if (self_mark_w0(w0)) {  // wrote w0 + end timer_low at a fresh stamp (self_last_ts)
+                const uint64_t d = self_last_ts - start;
+                self_ring[self_tail % kRingWords] = (d >> 32) != 0 ? 0xFFFFFFFFu : static_cast<uint32_t>(d);
+                self_tail++;
+            }
+        } else {
+            (void)w0;
+            (void)start;
+        }
+    };
+    using SelfNow = decltype(self_now);
+    using SelfNowPhase = decltype(self_now_phase);
+    using SelfClose = decltype(self_zone_close);
     // ~50 ms at 1.35 GHz. Enormously above anything healthy (worst observed credit wait is ~0.1 us), so it
     // never fires in normal operation -- it exists purely to convert "wait forever" into "lose a frame".
     constexpr uint64_t kCreditWaitCycles = 67500000ull;
@@ -1018,8 +1029,8 @@ void kernel_main() {
         {
             // The credit wait, as an ordinary zone. Suppressed automatically while self_publish ships the
             // self frame through this same path (self_busy), so the self frame's own egress is never a zone.
-            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_CREDIT_WAIT, SelfMarkPhase> z_credit(
-                self_mark_phase);
+            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_CREDIT_WAIT, SelfNowPhase, SelfClose> z_credit(
+                self_now_phase, self_zone_close);
             credited = reserve_pages_bounded(sender, npages, t0 + kCreditWaitCycles, stop);
         }
         *phase = kPhaseWrite;
@@ -1039,7 +1050,8 @@ void kernel_main() {
             max_reserve = static_cast<uint32_t>(t1 - t0);
         }
         // The egress write (gather + push + notify), as one zone; the t1..t4 reads stay for the counters.
-        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WRITE, SelfMarkPhase> z_write(self_mark_phase);
+        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WRITE, SelfNowPhase, SelfClose> z_write(
+            self_now_phase, self_zone_close);
         *phase = kPhWrChunk;
         noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
         const uint32_t fifo_size = sender.downstream_fifo_curr_size;
@@ -1162,8 +1174,8 @@ void kernel_main() {
             {
                 // A filler's only blocking wait (DRAM ring room), under the same CREDIT-WAIT name the mover's
                 // socket wait carries -- what c_reserve means for this role. Ordinary RAII zone.
-                kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_CREDIT_WAIT, SelfMarkPhase> z_credit(
-                    self_mark_phase);
+                kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_CREDIT_WAIT, SelfNowPhase, SelfClose>
+                    z_credit(self_now_phase, self_zone_close);
                 for (;;) {
                     invalidate_l1_cache();
                     // tail is only ever ADVANCED by the mover and head only by us, so this cannot underflow.
@@ -1195,7 +1207,8 @@ void kernel_main() {
                 dropped_frames += count;
                 return;
             }
-            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WRITE, SelfMarkPhase> z_write(self_mark_phase);
+            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WRITE, SelfNowPhase, SelfClose> z_write(
+                self_now_phase, self_zone_close);
             *phase = kPhWrChunk;
             const uint32_t src = kStageBase + start * kSlotBytes;
             const uint32_t slot0 = frames_staged % kDramFrames;
@@ -1351,7 +1364,7 @@ void kernel_main() {
     // control-vector scan (filler) says so, and arming from history alone misses the first sweep of every
     // burst. Arming sets self_on, so every zone SCOPE CONSTRUCTED FROM HERE ON in this sweep records; the
     // scopes already open (the SWEEP scope, a filler's PROC scope) were constructed while off and stay off
-    // (SpscZoneScope::started_) -- there is deliberately no retroactive back-fill any more, because a zone's
+    // (SpscZoneScope::start_ == 0) -- there is deliberately no retroactive back-fill any more, because a zone's
     // timestamps are its scope's own clock reads. The discovery sweep is therefore captured only from the
     // arm point onward (its egress children -- CREDIT-WAIT, WRITE, WR-BARRIER -- land parentless at depth
     // 0); the hold window makes every LATER sweep of the burst whole. That asymmetry is real and is stated
@@ -1506,8 +1519,8 @@ void kernel_main() {
                     // together still marks the same physical instant.
                     self_on = true;
                     {
-                        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_SYNC, SelfMarkNow> z_sync(
-                            self_mark_now);
+                        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_SYNC, SelfNow, SelfClose> z_sync(
+                            self_now, self_zone_close);
                     }
                     self_publish();  // ship it now; do not let it wait on the ring filling
                     sync_events++;
@@ -1554,7 +1567,8 @@ void kernel_main() {
             // sweep that arms itself mid-body (self_arm) gets no SWEEP zone -- this scope had already been
             // constructed off -- only its post-arm children. Closed BEFORE the pacing gap below, because
             // PACE is deliberately SWEEP's sibling at depth 0, not its child.
-            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_SWEEP, SelfMarkNow> z_sweep(self_mark_now);
+            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_SWEEP, SelfNow, SelfClose> z_sweep(
+                self_now, self_zone_close);
             if constexpr (kRole == kRoleMover) {
                 // ---- MOVER: kNPeer DRAM rings -> staging -> the existing D2H socket ----
                 //
@@ -1576,13 +1590,13 @@ void kernel_main() {
                         // The visit's READ -- the head poll, plus the contiguous DRAM batch read when the ring
                         // has frames -- as ONE ordinary RAII zone (there is no issue/wait split to make on a
                         // mover). On the visit that DISCOVERS work this scope was constructed before self_arm()
-                        // ran, so that visit's READ goes unrecorded (SpscZoneScope::started_); the knee phases
+                        // ran, so that visit's READ goes unrecorded (SpscZoneScope::start_ == 0); the knee phases
                         // that follow -- CREDIT-WAIT, WRITE, WR-BARRIER -- arm in time and are captured. Within
                         // an armed window every visit's READ is whole, idle visits included: the head poll and
                         // its barrier are what an idle mover sweep is made of (185,097 of 185,409 sweeps), and
                         // leaving them out would hide the whole idle cost.
-                        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ, SelfMarkPhase> z_read(
-                            self_mark_phase);
+                        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ, SelfNowPhase, SelfClose>
+                            z_read(self_now_phase, self_zone_close);
                         noc_async_read(
                             get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[peer] + kHsHead),
                             kHeadScratch,
@@ -1678,8 +1692,9 @@ void kernel_main() {
                         const uint64_t t_b0 = get_timestamp();
                         *phase = kPhBar2;
                         {
-                            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WR_BARRIER, SelfMarkPhase> z_bar(
-                                self_mark_phase);
+                            kernel_profiler::
+                                SpscZoneScope<kernel_profiler::DRISC_ZONE_WR_BARRIER, SelfNowPhase, SelfClose>
+                                    z_bar(self_now_phase, self_zone_close);
                             if (!write_barrier_bounded(t_b0 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack)) {
                                 egress_dead = true;
                             }
@@ -1713,10 +1728,10 @@ void kernel_main() {
                     // PROC as an ordinary RAII scope over the whole batch: START goes out here, so its children
                     // (the credit wait and the write inside emit_run) follow it in the stream and nest under it.
                     // On the batch that DISCOVERS work (self_arm below, after the scan) this scope was constructed
-                    // while instrumentation was off and stays off (SpscZoneScope::started_), so that batch
+                    // while instrumentation was off and stays off (SpscZoneScope::start_ == 0), so that batch
                     // contributes only its post-arm egress children -- there is no retroactive PROC any more.
-                    kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_PROC, SelfMarkPhase> z_proc(
-                        self_mark_phase);
+                    kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_PROC, SelfNowPhase, SelfClose> z_proc(
+                        self_now_phase, self_zone_close);
                     // `frames` advances once per LIVE core, so this is a zero-cost way to ask at the end of the batch
                     // whether it found any work -- no flag in the scan loop, which is the one place nothing may be
                     // added (see the SCAN comment below: it is register-pressure bound, and a call in there spilled
@@ -1883,8 +1898,9 @@ void kernel_main() {
                         *phase = kPhBar1;
                         bool flushed;
                         {
-                            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WR_BARRIER, SelfMarkPhase> z_bar(
-                                self_mark_phase);
+                            kernel_profiler::
+                                SpscZoneScope<kernel_profiler::DRISC_ZONE_WR_BARRIER, SelfNowPhase, SelfClose>
+                                    z_bar(self_now_phase, self_zone_close);
                             flushed = write_barrier_bounded(t_b0 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack);
                         }
                         c_barrier += get_timestamp() - t_b0;
@@ -1902,8 +1918,8 @@ void kernel_main() {
                     // the very error the c_read accounting comment below was written to fix.
                     const uint64_t t_batch0 = get_timestamp();
                     {
-                        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ, SelfMarkPhase> z_issue(
-                            self_mark_phase);
+                        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ, SelfNowPhase, SelfClose>
+                            z_issue(self_now_phase, self_zone_close);
                         for (uint32_t i = 0; i < n; i++) {
                             const uint32_t xy = coords[base_c + i];
                             CoreLocalMem<uint32_t> dst(kStageBase + (gen * kGenSlots + i) * kSlotBytes + kPrefix * 4u);
@@ -1962,8 +1978,8 @@ void kernel_main() {
                     // did, and the phases summed to 133%.
                     const uint64_t t_after_proc = get_timestamp();
                     {
-                        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ_WAIT, SelfMarkPhase> z_wait(
-                            self_mark_phase);
+                        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ_WAIT, SelfNowPhase, SelfClose>
+                            z_wait(self_now_phase, self_zone_close);
                         noc.async_read_barrier();
                         if constexpr (kReadSplit != 0) {
                             noc_b.async_read_barrier();  // staging reuse is only safe once BOTH read NoCs have landed
@@ -1987,8 +2003,8 @@ void kernel_main() {
                     *phase = kPhBar2;
                     bool flushed;
                     {
-                        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WR_BARRIER, SelfMarkPhase> z_bar(
-                            self_mark_phase);
+                        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WR_BARRIER, SelfNowPhase, SelfClose>
+                            z_bar(self_now_phase, self_zone_close);
                         flushed = write_barrier_bounded(t_b0 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack);
                     }
                     if (!flushed) {
@@ -2146,7 +2162,8 @@ void kernel_main() {
         // unreadable. A MOVER is excluded from the controller (see below), so its gap stays 0 and this zone
         // never appears on a mover row: the absence IS the answer to "is the mover being paced".
         if (gap != 0) {
-            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_PACE, SelfMarkNow> z_pace(self_mark_now);
+            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_PACE, SelfNow, SelfClose> z_pace(
+                self_now, self_zone_close);
             const uint64_t until = get_timestamp() + gap;
             while (get_timestamp() < until) {
             }
