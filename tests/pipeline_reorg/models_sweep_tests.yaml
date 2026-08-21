@@ -155,7 +155,7 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 120
+      timeout: 65
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
