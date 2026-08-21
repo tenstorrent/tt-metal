@@ -600,6 +600,20 @@ def run_exp_ring_joint_sdpa_nightly(
         mse = ((gt_out - tt_out_torch) ** 2).mean().item()
         logger.info(f"PCC: {out_pcc}, MSE: {mse:.2e}")
 
+        if tokens_per_frame is not None:
+            # Sparse triage: compare the TT output against BOTH the windowed reference (the real
+            # check) and the DENSE reference. If PCC-vs-dense ≈ 1.0, the frame mask isn't being
+            # applied (compute ran dense). If both PCCs are low AND |tt| >> |ref|, normalization is
+            # broken (unnormalized rows). Magnitudes bound attention output to the V range.
+            dense_gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False)[:, :, :total_seq, :]
+            _, pcc_vs_dense = comp_pcc(dense_gt, tt_out_torch, 0.0)
+            logger.info(
+                f"[sparse-triage] PCC(tt, windowed)={out_pcc} PCC(tt, dense)={pcc_vs_dense} "
+                f"|tt|max={tt_out_torch.abs().max().item():.3f} "
+                f"|windowed_ref|max={gt_out.abs().max().item():.3f} "
+                f"|dense_ref|max={dense_gt.abs().max().item():.3f}"
+            )
+
         assert out_pass, f"PCC {out_pcc} below threshold {pcc_threshold}"
         assert mse <= max_mse, f"MSE {mse:.2e} exceeds threshold {max_mse:.2e}"
 
@@ -743,6 +757,30 @@ def test_exp_ring_joint_attention_sparse_frames_accuracy(add_last_frame, reset_s
         num_frames_padded=nf,
         sparse_frame_mask=sparse_frame_mask,
         sparse_allow=allow,
+    )
+
+
+# === TEST 2c: DENSE AT THE SPARSE SHAPE (isolation control) ===
+@pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+def test_exp_ring_joint_attention_dense_small_shape_accuracy(reset_seeds):
+    """Control for the sparse-frames test: runs the SAME small shape (total_seq = sp*256, q/k chunk
+    256 → Sq=Sk=8) with NO sparse mask, checked against the dense SDPA reference. Isolates whether a
+    PCC failure comes from the sparse logic or from the streaming compute path at this shape (the
+    tuned dense accuracy test uses Sq=7/Sk=16, so Sq=Sk=8 is otherwise unexercised). If THIS fails,
+    the bug is shape/streaming, not sparse; if it passes but the sparse test fails, the bug is sparse.
+    """
+    num_devices = detect_devices_without_opening()
+    sp_size, _tp_size, _arch = calculate_mesh_config(num_devices)
+    tokens_per_frame = 256
+    total_seq = sp_size * tokens_per_frame
+    run_exp_ring_joint_sdpa_nightly(
+        1,  # b
+        8,  # nh
+        total_seq,
+        HEAD_DIM,
+        tokens_per_frame,  # q_chunk_size
+        tokens_per_frame,  # k_chunk_size
+        ttnn.bfloat16,
     )
 
 
