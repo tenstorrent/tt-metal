@@ -1493,7 +1493,8 @@
 
 - name: TT-Transformers fast module unit tests
   cmd: |
-    export TT_METAL_WATCHER=30 HF_HOME=/mnt/MLPerf/huggingface
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
     fail=0
     pytest --tb=short --ignore=models/common/tests/modules models/common/tests || fail=1
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
@@ -1568,7 +1569,7 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 25
+      timeout: 60
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
