@@ -85,7 +85,7 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
         attrs.sequence > 0 && attrs.sequence % tt::constants::TILE_HEIGHT == 0,
         "qkv_causal_conv1d_silu: sequence must be positive and tile aligned");
 
-    for (const auto [tensor, name] : std::array{
+    for (const auto& [tensor, name] : std::array{
              std::pair{&in.tap0, "tap0"},
              std::pair{&in.tap1, "tap1"},
              std::pair{&in.tap2, "tap2"},
