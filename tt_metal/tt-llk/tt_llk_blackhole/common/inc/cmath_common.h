@@ -63,12 +63,12 @@ static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 
 // Disable (or enable) the math ALU's src zero-substitution flag, draining the
 // math/SFPU units it feeds first.  The drain and write go through the config
-// intrinsics (__builtin_rvtt_stallwait / cfg_reg_rmw_tensix) so pass_rvtt_config
+// macros (TT_STALLWAIT / cfg_reg_rmw_tensix) so pass_rvtt_config
 // consumes and coalesces them; the disable value is constant here, but the same
 // call serves the runtime reconfig paths (runtime data -> __instrn_buffer store).
 TT_ALWAYS_INLINE void _configure_src_zero_flag_(const bool disable)
 {
-    __builtin_rvtt_stallwait(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+    TT_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable ? 1 : 0);
 }
 
@@ -281,6 +281,12 @@ inline void dest_section_flip()
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
 }
 
+// The builtin rather than TT_SETC16, unlike every other config write here.
+// SETC16 is the one config write whose word is already hoisted out of the raw
+// call: pass_rvtt_preword sums it at gimple and issues it through the _issue
+// form, which still recognises as the SETC16 insn.  Through the macro the word
+// arrives as a store instead, and one pass_rvtt_issue cannot fuse back becomes
+// a push, which the config model can only read as a barrier.
 template <DstStart Dst>
 inline void set_dest_section_base()
 {

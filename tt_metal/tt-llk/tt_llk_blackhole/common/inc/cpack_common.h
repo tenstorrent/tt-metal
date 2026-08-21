@@ -300,7 +300,7 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
 // Program the packer strides (X/Y/Z/W) for a pack source format: stage the
 // 16-bit halves of each stride into the TMP GPRs via TTSETDMAREG, drain the
 // THCON unit, then move them into the stride config words via TTWRCFG.  Through
-// the config-write intrinsics (__builtin_rvtt_setdmareg / stallwait / wrcfg) so
+// the config-write macros (TT_SETDMAREG / TT_STALLWAIT / TT_WRCFG) so
 // pass_rvtt_config sees the staging; the stride values are compile-time in
 // hw-configure (always-inline -> immediate instructions) and runtime in the
 // reconfig path (-> __instrn_buffer store for the setdmareg payloads).
@@ -315,36 +315,36 @@ TT_ALWAYS_INLINE void set_packer_strides(const std::uint32_t pack_src_format, co
     // faces, since z counter is only 1 bit (can't be programmed to inc by 2)
     const std::uint32_t z_stride = ((pack_mode != PackMode::Default) && (tile_c_dim == TILE_C_DIM)) ? 2 * FACE_R_DIM * y_stride : FACE_R_DIM * y_stride;
 
-    __builtin_rvtt_setdmareg(0, LOWER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)) & 0x3fff, 0, LO_16(p_gpr_pack::TMP0)); // x-stride not used!
-    __builtin_rvtt_setdmareg(0, UPPER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)) & 0x3fff, 0, HI_16(p_gpr_pack::TMP0));
-    __builtin_rvtt_setdmareg(0, LOWER_HALFWORD((z_stride << PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT)) & 0x3fff, 0, LO_16(p_gpr_pack::TMP1));
-    __builtin_rvtt_setdmareg(0, UPPER_HALFWORD((w_stride << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT)) & 0x3fff, 0, HI_16(p_gpr_pack::TMP1));
-    __builtin_rvtt_stallwait(p_stall::STALL_CFG, p_stall::THCON);
-    __builtin_rvtt_wrcfg(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
-    __builtin_rvtt_wrcfg(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
+    TT_SETDMAREG(0, LOWER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)) & 0x3fff, 0, LO_16(p_gpr_pack::TMP0)); // x-stride not used!
+    TT_SETDMAREG(0, UPPER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)) & 0x3fff, 0, HI_16(p_gpr_pack::TMP0));
+    TT_SETDMAREG(0, LOWER_HALFWORD((z_stride << PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT)) & 0x3fff, 0, LO_16(p_gpr_pack::TMP1));
+    TT_SETDMAREG(0, UPPER_HALFWORD((w_stride << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT)) & 0x3fff, 0, HI_16(p_gpr_pack::TMP1));
+    TT_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TT_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
+    TT_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
     TTI_NOP;
     TTI_NOP;
 
     if constexpr (pack_mode == PackMode::Tilize)
     {
         const std::uint32_t z_stride_ch1 = FACE_R_DIM * y_stride;
-        __builtin_rvtt_setdmareg(0, LOWER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)) & 0x3fff, 0, LO_16(p_gpr_pack::TMP1));
-        __builtin_rvtt_setdmareg(0, UPPER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)) & 0x3fff, 0, HI_16(p_gpr_pack::TMP1));
-        __builtin_rvtt_stallwait(p_stall::STALL_CFG, p_stall::THCON);
-        __builtin_rvtt_wrcfg(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
+        TT_SETDMAREG(0, LOWER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)) & 0x3fff, 0, LO_16(p_gpr_pack::TMP1));
+        TT_SETDMAREG(0, UPPER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)) & 0x3fff, 0, HI_16(p_gpr_pack::TMP1));
+        TT_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+        TT_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
         TTI_NOP;
         TTI_NOP;
     }
 }
 
 // Set the packer's L1-accumulation zero-flag behavior, draining the packer
-// first.  Through the config intrinsics (__builtin_rvtt_stallwait /
+// first.  Through the config macros (TT_STALLWAIT /
 // cfg_reg_rmw_tensix) so pass_rvtt_config consumes them; pack_l1_acc is
 // constant in hw-configure and runtime in the reconfig path.
 TT_ALWAYS_INLINE void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
 {
     // Stall to avoid clobbering current packer configuration
-    __builtin_rvtt_stallwait(p_stall::STALL_CFG, p_stall::PACK);
+    TT_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
 
     // While packing, if all datums of a face are 0s, the packer will automatically set the zflags. For L1 accumulation mode, even if we pack out an entire face
     // of 0s, because the data we are accumulating with is unknown, we don't want to set the zflags.
@@ -484,7 +484,12 @@ TT_ALWAYS_INLINE void set_packer_config(
 
     // Save to GPR for quick data format reconfig. Issued as the TTSETDMAREG intrinsic so
     // pass_rvtt_config sees the REGFILE write (it does not coalesce REGFILE with CONFIG space).
-    __builtin_rvtt_setdmareg(0, (((partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT) & 0x3fff), 0, LO_16(p_gpr_pack::EXP0_SEC_SIZE_BFP));
+    // Exp_section_size sits at bit 16, so the whole value is in the GPR's
+    // upper halfword and the lower one is zero.  A TTSETDMAREG payload is 14
+    // bits and reaches one halfword, so the pair is needed to write both.
+    static_assert(THCON_SEC0_REG8_Exp_section_size_SHAMT == 16, "Exp_section_size no longer starts a halfword");
+    TT_SETDMAREG(0, 0, 0, LO_16(p_gpr_pack::EXP0_SEC_SIZE_BFP));
+    TT_SETDMAREG(0, (partial_face ? 1 : num_faces), 0, HI_16(p_gpr_pack::EXP0_SEC_SIZE_BFP));
     sync_regfile_write(p_gpr_pack::EXP0_SEC_SIZE_BFP);
 }
 
