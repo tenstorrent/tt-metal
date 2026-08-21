@@ -212,7 +212,18 @@ jobs:
               .filter(r => r.run_number < currentRunNumber)
               .sort((a, b) => b.run_number - a.run_number);
 
+            // Cap how many cancelled/skipped runs we'll skip over. Without a
+            // bound, a burst of cancelled/skipped runs (e.g. during a CI
+            // congestion/retry storm) lets this walk straight past the real
+            // failure streak and land on a run from days ago, silently
+            // turning "who broke it" into "everyone who has merged since
+            // last week" -- exactly what caused the mass-ping incident this
+            // guards against. Hitting the cap means recent history is too
+            // noisy to trust as a blame baseline, so abstain instead of
+            // guessing.
+            const MAX_LOOKBACK_SKIPS = 20;
             let prevGood = null;
+            let skipped = 0;
             for (const run of candidates) {
               if (run.status !== 'completed') {
                 core.info(`Push run #${run.run_number} is still in progress; completion order is ambiguous. Abstaining.`);
@@ -220,6 +231,13 @@ jobs:
                 return;
               }
               if (run.conclusion === 'cancelled' || run.conclusion === 'skipped') {
+                skipped++;
+                if (skipped > MAX_LOOKBACK_SKIPS) {
+                  core.warning(`Skipped over ${skipped} cancelled/skipped push runs without finding a decisive (success/failure) prior state; ` +
+                    `recent history is too noisy to trust as a blame baseline. Abstaining.`);
+                  core.setOutput('should_notify', 'false');
+                  return;
+                }
                 core.info(`Push run #${run.run_number} was ${run.conclusion} (no real signal); looking further back.`);
                 continue;
               }
@@ -292,6 +310,22 @@ jobs:
             }
 
             core.info(`Found ${entries.length} culprit entr${entries.length === 1 ? 'y' : 'ies'} between #${prevGood.run_number} and #${currentRunNumber}`);
+
+            // Second, independent circuit breaker: a genuine fresh
+            // green->red transition implicates a small, fresh set of
+            // commits. A much larger list means the resolved baseline is
+            // stale or wrong (e.g. it slipped past the lookback cap above,
+            // or otherwise resolved to a run from long before the actual
+            // break) -- abstain rather than mass-pinging everyone who has
+            // merged since a stale baseline.
+            const MAX_CULPRIT_ENTRIES = 10;
+            if (entries.length > MAX_CULPRIT_ENTRIES) {
+              core.warning(`Resolved ${entries.length} culprit entries between #${prevGood.run_number} and #${currentRunNumber} -- ` +
+                `implausibly large for a single break, so the baseline run is likely stale. Abstaining instead of mass-pinging.`);
+              core.setOutput('should_notify', 'false');
+              return;
+            }
+
             core.setOutput('entries', JSON.stringify(entries));
             core.setOutput('logins_json',
               JSON.stringify([...new Set(entries.map(e => e.authorLogin).filter(l => l !== null))].sort()));
