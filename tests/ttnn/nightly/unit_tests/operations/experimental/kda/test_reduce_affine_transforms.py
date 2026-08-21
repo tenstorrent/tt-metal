@@ -28,24 +28,30 @@ pytestmark = [
 
 
 @dataclass(frozen=True)
-class _ProductionCase:
+class _Case:
     case_id: str
     batch_heads: int
     groups_per_head: int
     key_dim: int
     value_dim: int
-    expected_duration_ns: int
 
 
 _PRODUCTION_PERF_MARGIN = 0.05
-_PRODUCTION_CASE = _ProductionCase(
+_SMALL_CASE = _Case(
     "bh2-g4-k32-v64",
     batch_heads=2,
     groups_per_head=4,
     key_dim=32,
     value_dim=64,
-    expected_duration_ns=6616,
 )
+_PRODUCTION_PERF_CASE = _Case(
+    "sp2-tp4-bh24-g4-k128-v128",
+    batch_heads=24,
+    groups_per_head=4,
+    key_dim=128,
+    value_dim=128,
+)
+_PRODUCTION_PERF_EXPECTED_DURATION_NS = 46_038
 
 
 def _host_inputs(
@@ -166,7 +172,14 @@ def _composed_ttnn_baseline(
 @pytest.mark.parametrize("sharded_inputs", [False, True], ids=("interleaved", "height-sharded-l1"))
 @pytest.mark.parametrize(
     ("batch_heads", "groups_per_head", "key_dim", "value_dim"),
-    [(2, 1, 32, 32), (2, 3, 32, 32), (2, 4, 32, 32), (3, 2, 32, 64)],
+    [
+        (2, 1, 32, 32),
+        (2, 3, 32, 32),
+        (2, 4, 32, 32),
+        (3, 2, 32, 64),
+        (2, 2, 160, 32),
+        (2, 2, 32, 160),
+    ],
 )
 def test_reduce_affine_transforms_contract_and_trace(
     device: ttnn.Device,
@@ -219,7 +232,7 @@ def test_reduce_affine_transforms_contract_and_trace(
 
 @pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])
 def test_reduce_affine_transforms_is_device_deterministic(device: ttnn.Device, summary_dtype: ttnn.DataType) -> None:
-    case = _PRODUCTION_CASE
+    case = _SMALL_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1441)
     a_tt, b_tt = (_to_device(tensor, device, summary_dtype) for tensor in host)
     expected = _oracle(*host, case.batch_heads, case.groups_per_head)
@@ -240,7 +253,7 @@ def test_reduce_affine_transforms_is_device_deterministic(device: ttnn.Device, s
 
 
 def test_reduce_affine_transforms_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
+    case = _SMALL_CASE
     host_a = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1911)
     host_b = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1912)
     device_a = tuple(_to_device(tensor, device) for tensor in host_a)
@@ -268,7 +281,7 @@ def test_reduce_affine_transforms_cache_hit_rebinds_fresh_tensors(device: ttnn.D
 
 
 def test_reduce_affine_transforms_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
+    case = _SMALL_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=817)
     a_tt, b_tt = (_to_device(tensor, device) for tensor in host)
     implicit = _run(a_tt, b_tt, case.groups_per_head)
@@ -293,7 +306,7 @@ def test_reduce_affine_transforms_default_compute_config_matches_explicit_defaul
 
 
 def test_reduce_affine_transforms_approximate_math_uses_distinct_accurate_program(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
+    case = _SMALL_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=818)
     a_tt, b_tt = (_to_device(tensor, device) for tensor in host)
     exact = _run(a_tt, b_tt, case.groups_per_head)
@@ -316,7 +329,7 @@ def test_reduce_affine_transforms_approximate_math_uses_distinct_accurate_progra
 def test_reduce_affine_transforms_rejects_unsupported_compute_config(
     device: ttnn.Device, expect_error: Callable
 ) -> None:
-    case = _PRODUCTION_CASE
+    case = _SMALL_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim)
     a_tt, b_tt = (_to_device(tensor, device) for tensor in host)
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
@@ -331,15 +344,24 @@ def test_reduce_affine_transforms_rejects_unsupported_compute_config(
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_reduce_affine_transforms_production_performance(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
+    case = _PRODUCTION_PERF_CASE
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for affine-transform reduction performance checks")
 
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=117)
-    a_tt, b_tt = (_to_device(tensor, device) for tensor in host)
+    expected = _oracle(*host, case.batch_heads, case.groups_per_head)
+    a_tt, b_tt = (_to_device(tensor, device, ttnn.bfloat16) for tensor in host)
+    production_compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+        dst_full_sync_en=False,
+    )
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        return _run(a_tt, b_tt, case.groups_per_head)
+        return _run(a_tt, b_tt, case.groups_per_head, compute_kernel_config=production_compute_config)
 
     outputs, perf_record = profile_realtime_program(device, run)
     duration_ns = perf_record["duration_ns"]
@@ -348,15 +370,17 @@ def test_reduce_affine_transforms_production_performance(device: ttnn.Device) ->
         (case.batch_heads, case.key_dim, case.value_dim),
     )
     assert all(output.dtype == ttnn.float32 for output in outputs)
+    for name, golden, output in zip(("A", "B"), expected, outputs, strict=True):
+        assert_accurate(golden, ttnn.to_torch(output), name=f"production reduced {name}", pcc_threshold=0.999)
     logger.info(
         f"affine-transform reduction {case.case_id}: duration={duration_ns:.0f} ns, "
         f"profiler_runtime_id={perf_record['runtime_id']}"
     )
-    lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
-    upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
+    lower = _PRODUCTION_PERF_EXPECTED_DURATION_NS * (1 - _PRODUCTION_PERF_MARGIN)
+    upper = _PRODUCTION_PERF_EXPECTED_DURATION_NS * (1 + _PRODUCTION_PERF_MARGIN)
     assert lower <= duration_ns <= upper, (
         f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
-        f"(reference {case.expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+        f"(reference {_PRODUCTION_PERF_EXPECTED_DURATION_NS} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
     )
 
 
@@ -424,6 +448,49 @@ def test_reduce_affine_transforms_rejects_invalid_inputs(
         _run(a_tt, b_tt, groups_per_head)
 
 
+def test_reduce_affine_transforms_rejects_excess_workers(
+    device: ttnn.Device,
+    expect_error: Callable,
+) -> None:
+    grid = device.compute_with_storage_grid_size()
+    worker_limit = min(grid.x * grid.y, 128)
+    group_workers = worker_limit + 1
+    a, b = _host_inputs(1, group_workers, 32, 32)
+    a_tt = _to_device(a, device)
+    b_tt = _to_device(b, device)
+
+    with expect_error(RuntimeError, f"supports at most {worker_limit} group workers on this device"):
+        _run(a_tt, b_tt, group_workers)
+
+
+@pytest.mark.parametrize("input_name", ["a", "b"])
+@pytest.mark.parametrize(
+    "memory_layout",
+    [ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.TensorMemoryLayout.BLOCK_SHARDED],
+    ids=["width_sharded", "block_sharded"],
+)
+def test_reduce_affine_transforms_rejects_unsupported_input_sharding(
+    device: ttnn.Device,
+    expect_error: Callable,
+    input_name: str,
+    memory_layout: ttnn.TensorMemoryLayout,
+) -> None:
+    a, b = _host_inputs(1, 4, 32, 32)
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        [128, 32],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    unsupported = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
+    a_memory = unsupported if input_name == "a" else ttnn.DRAM_MEMORY_CONFIG
+    b_memory = unsupported if input_name == "b" else ttnn.DRAM_MEMORY_CONFIG
+    a_tt = _to_device(a, device, memory_config=a_memory)
+    b_tt = _to_device(b, device, memory_config=b_memory)
+
+    with expect_error(RuntimeError, f"{input_name} must use interleaved or height-sharded memory"):
+        _run(a_tt, b_tt, 4)
+
+
 def test_reduce_affine_transforms_rejects_invalid_configuration(
     device: ttnn.Device,
     expect_error: Callable,
@@ -439,5 +506,5 @@ def test_reduce_affine_transforms_rejects_invalid_configuration(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-    with expect_error(RuntimeError, "output memory configuration must be interleaved"):
+    with expect_error(RuntimeError, "output memory layout must be INTERLEAVED, got HEIGHT_SHARDED"):
         _run(a_tt, b_tt, 4, memory_config=sharded)
