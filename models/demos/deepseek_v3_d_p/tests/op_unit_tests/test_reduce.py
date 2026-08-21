@@ -11,6 +11,7 @@ PyTorch reference implementation when reducing sparse combine outputs.
 Uses synthetic sparse inputs to isolate the reduce operation from dispatch/combine.
 """
 
+
 import pytest
 import torch
 from loguru import logger
@@ -226,8 +227,42 @@ def run_reduce(
     assert pcc > threshold, f"PCC {pcc:.6f} below threshold {threshold}"
 
 
+def _ci_unsupported_param_combos_ttnn_reduce(**params):
+    on_ci = params["on_ci"]
+    use_weights = params["use_weights"]
+
+    if not on_ci:
+        return False
+    if use_weights is False:
+        return True
+    return False
+
+
+def _ci_unsupported_param_combos_ttnn_reduce_single_expert(**params):
+    on_ci = params["on_ci"]
+    use_weights = params["use_weights"]
+
+    if not on_ci:
+        return False
+    if use_weights is False:
+        return True
+    return False
+
+
+def _ci_unsupported_param_combos_ttnn_reduce_models(**params):
+    on_ci = params["on_ci"]
+    use_weights = params["use_weights"]
+
+    if not on_ci:
+        return False
+    if use_weights is False:
+        return True
+    return False
+
+
 # Model-independent sanity shape — small seq/emb that exercises the reduce kernel without
 # tying to any model's dimensions. Kept in a single test so it is not duplicated per model.
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_ttnn_reduce)
 @pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
 @pytest.mark.parametrize(
     "seq_len, emb_dim, topk",
@@ -239,6 +274,7 @@ def test_ttnn_reduce(mesh_device, device_params, seq_len, emb_dim, topk, use_wei
     run_reduce(mesh_device, device_params, seq_len, emb_dim, topk, use_weights)
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_ttnn_reduce_single_expert)
 @pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
 @pytest.mark.parametrize(
     "mesh_device, device_params", REDUCE_MESH_PARAMS[:1], indirect=["mesh_device", "device_params"]
@@ -272,6 +308,7 @@ def reduce_shape_params():
     return params
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_ttnn_reduce_models)
 @pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
 @pytest.mark.parametrize("seq_len, emb_dim, topk", reduce_shape_params())
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])

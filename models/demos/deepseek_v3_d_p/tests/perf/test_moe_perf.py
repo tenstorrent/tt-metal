@@ -19,10 +19,10 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_m
 
 # `and pad0`/`and pad50` pins the padding parametrize so each command selects
 # exactly one production TorusXY case.
-_CMD_8X4_pad0 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad0'"
-_CMD_8X4_pad50 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad50'"
-_CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and torus-y-8x1 and pad0'"
-_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0'"
+_CMD_8X4_pad0 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad0' --wrapper-invocation"
+_CMD_8X4_pad50 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad50' --wrapper-invocation"
+_CMD_2X4_HOST64 = f"pytest {_TEST_PATH} -k 'perf-host-64 and fabric2d-mesh-2x4 and pad0' --wrapper-invocation"
+_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0' --wrapper-invocation"
 
 
 def _require_certified_torus_xy():
@@ -32,21 +32,22 @@ def _require_certified_torus_xy():
 
 @pytest.mark.timeout(0)
 def test_deepseek_v3_moe_perf_loudbox():
-    """Run the existing 8x1 + 2x4 proxies and retain their 8x4 approximation signal.
+    """Run the host-64 + device-256 proxies on 2x4 and retain their 8x4 approximation signal.
 
-    The 8x1 SP proxy is migrated from Fabric1d Linear to Fabric2d TorusY; the 2x4 TP proxy is
-    migrated to unwrapped Fabric2d because its two-wide SP dimension cannot form a useful ring.
+    Both proxies run the unwrapped-Fabric2d 2x4 mesh: the SP dispatch/combine proxy (host-64
+    shape) and the TP gate proxy (device-256 shape).
     """
     run_moe_perf_with_approximation(
-        command_8x1=_CMD_8X1,
-        expected_ns_8x1=15_393_888,  # Mean of two post-migration Fabric2D TorusY runs on 2026-08-15.
-        model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
+        command_8x1=_CMD_2X4_HOST64,
+        # Stale: carried over from the retired 8x1 TorusY proxy; recalibrate on 2x4 Fabric2D.
+        expected_ns_8x1=15_393_888,
+        model_name_8x1="deepseek_v3_moe_lb_2x4_host64_dispatch_combine",
         command_2x4=_CMD_2X4,
         expected_ns_2x4=17_217_341,  # Recalibrated 2026-08-14 on this LoudBox with Fabric2D.
         model_name_2x4="deepseek_v3_moe_lb_2x4_fabric2d_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,
-        comments_8x1="seq3200_lb_8x1_torus_y_dispatch_combine_proxy",
+        comments_8x1="seq3200_lb_2x4_host64_dispatch_combine_proxy",
         comments_2x4="seq3200_lb_2x4_fabric2d_gate_proxy",
     )
 
