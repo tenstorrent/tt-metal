@@ -73,9 +73,9 @@ The environment variables are read once while TT-NN starts up, so they must be s
 
 Once a trace has been captured, the checker accounts for subsequent device-buffer allocations for that trace. Immediately before `ttnn.execute_trace`, it runs Python garbage collection and checks whether any buffers unsafe for the requested trace are still alive. If so, `ttnn.execute_trace` raises a `RuntimeError` instead of replaying the trace and potentially corrupting the buffers. Buffers that have already been released are removed from the accounting automatically.
 
-Accounting is kept separately for each trace. For example, given `capture(trace_a)`, `allocate(x)`, then `capture(trace_b)`, `x` is unsafe when executing `trace_a` but safe when executing `trace_b`, because it was already present in the allocator when `trace_b` was captured. An allocation made after both captures is unsafe for both traces.
+Accounting is kept separately for each `(sub-device manager, trace ID)` pair. Trace IDs are interpreted under the currently active sub-device manager, so the manager used to capture a trace must also be active when the trace is ended, executed, or released. For example, given `capture(trace_a)`, `allocate(x)`, then `capture(trace_b)` under one manager, `x` is unsafe when executing `trace_a` but safe when executing `trace_b`, because it was already present in the allocator when `trace_b` was captured. An allocation made after both captures is unsafe for both traces.
 
-Trace buffers in the reserved `BufferType::TRACE` region are excluded because that region cannot overlap ordinary buffers. With `trace_region_size=0`, trace storage is instead a top-down DRAM allocation and is tracked as unsafe for older traces. Until https://github.com/tenstorrent/tt-metal/issues/48869 is fixed, this is another reason to avoid dynamic trace storage with multiple traces.
+Trace storage itself is excluded from accounting. Buffers in the reserved `BufferType::TRACE` region cannot overlap ordinary buffers. With `trace_region_size=0`, trace storage is instead allocated top-down in DRAM; capture validates its address against the current capture's DRAM high-water marks and the maximum high-water mark of every live trace. Capture fails rather than retaining a dynamic trace buffer that could be corrupted by replay.
 
 For more information about where unsafe buffers were allocated and which Python objects still hold them, enable diagnostics as well:
 
@@ -144,8 +144,7 @@ If there are multiple decision points and capturing traces for all combinations 
 Usually, the traces are recorded into a pre-allocated trace region, with its size set when opening the device.
 This means you need to appropriately size the buffer to accommodate all traces you plan to capture.
 
-You can avoid this by passing `trace_region_size=0`. With this set, traces will be saved in dynamically allocated buffers.
-As of July 2026, dynamic trace buffer allocation should be avoided when using multiple traces due to a bug https://github.com/tenstorrent/tt-metal/issues/48869
+You can avoid this by passing `trace_region_size=0`. With this set, traces will be saved in dynamically allocated, top-down DRAM buffers. The allocation is validated against the DRAM high-water marks of the current capture and every live trace. If the trace buffer could overlap memory used by trace replay, capture fails and a reserved trace region must be used instead.
 
 # Common pattern
 

@@ -71,7 +71,12 @@ In order to use trace, we need to use the following trace APIs:
   This marks the end of the trace. All operations that were run between beginning and end will be recorded and associated with the trace id.
 * `ttnn.execute_trace(device, tid, cq_id=0, blocking=False)`
 
-  This will execute the captured trace with the specified trace id, and is equivalent to running all the operations that were captured between begin and end
+  This will execute the captured trace with the specified trace id, and is equivalent to running all the operations that were captured between begin and end.
+* `ttnn.release_trace(device, tid)`
+
+  This releases the captured trace and its storage when it is no longer needed.
+
+Trace IDs are scoped to the sub-device manager that is active on the mesh device when capture begins. `end_trace_capture`, `execute_trace`, and `release_trace` interpret the ID under the manager that is active when they are called. If another manager has been loaded, reload the original manager before operating on the trace. A numeric trace ID does not identify a trace independently of its manager.
 
 In addition, since trace requires the addresses of the used tensors to be the same, we need to statically preallocate our input tensor, and reuse this tensor instead of recreating our input tensor each iteration using the following APIs:
 
