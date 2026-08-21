@@ -535,8 +535,6 @@
     { "job-name-component": "t3k gpt-oss unit tests", "owner": { "id": "U08TJ70UFRT", "name": "Harry Andrews" } },
     { "job-name-component": "t3000-unit-tests / t3k deepseek tests", "owner": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" } },
     { "job-name-component": "t3k deepseek tests", "owner": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" } },
-    { "job-name-component": "t3000-unit-tests / t3k tttv2 modules tests", "owner": { "id": "U08JFM3CFA4", "name": "Gongyu Wang" } },
-    { "job-name-component": "t3k tttv2 modules tests", "owner": { "id": "U08JFM3CFA4", "name": "Gongyu Wang" } },
     { "job-name-component": "runtime-unit-tests", "owner": { "id": "U099A7FMKL2", "name": "Manish Sudumbrekar" } },
     { "job-name-component": "runtime-sanity-tests", "owner": { "id": "U099A7FMKL2", "name": "Manish Sudumbrekar" } },
     { "job-name-component": "runtime-integration-tests", "owner": { "id": "U099A7FMKL2", "name": "Manish Sudumbrekar" } },
