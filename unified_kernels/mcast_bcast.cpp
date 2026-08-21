@@ -61,7 +61,7 @@ void kernel_main() {
     const auto out = TensorAccessor(out_args, out_addr);
 
     // The whole row, expressed logically. Core (0,0) of the row is the sender.
-    const u::LogicalMcast row{u::LogicalCoord{0, 0}, u::Extent{1, MC_ROW_W}};
+    const u::LogicalMcast row{u::LogicalCoord::yx(0, 0), u::Extent::hw(1, MC_ROW_W)};
 
     u::ComputeBlock x = u::noc_load<MC_DM_THREAD>(in_storage, row, in, 0).wait();
 #if defined(MC_BARRIER)

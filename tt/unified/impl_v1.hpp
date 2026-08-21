@@ -23,9 +23,9 @@ namespace unified {
 
 inline PhysicalCoord PhysicalCoord::this_core() {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
-    return PhysicalCoord{my_y[noc_index], my_x[noc_index]};
+    return PhysicalCoord::yx(my_y[noc_index], my_x[noc_index]);
 #else
-    return PhysicalCoord{0, 0};
+    return PhysicalCoord::yx(0, 0);
 #endif
 }
 
@@ -47,19 +47,19 @@ inline uint64_t PhysicalCoord::get_noc_addr(uintptr_t l1_addr) const {
 // from the launch message before calling the kernel -- so all five projections
 // agree on where they are. Only the VIRTUAL mapping below is data-movement-only.
 inline LogicalCoord LogicalCoord::this_core() {
-    return LogicalCoord{get_relative_logical_y(), get_relative_logical_x()};
+    return LogicalCoord::yx(get_relative_logical_y(), get_relative_logical_x());
 }
 
-inline LogicalCoord LogicalCoord::origin() { return LogicalCoord{0, 0}; }
+inline LogicalCoord LogicalCoord::origin() { return LogicalCoord::yx(0, 0); }
 
 inline PhysicalCoord LogicalCoord::to_physical(uint32_t y_offset, uint32_t x_offset) const {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
-    return PhysicalCoord{
-        worker_logical_row_to_virtual_row[y + y_offset], worker_logical_col_to_virtual_col[x + x_offset]};
+    return PhysicalCoord::yx(
+        worker_logical_row_to_virtual_row[y + y_offset], worker_logical_col_to_virtual_col[x + x_offset]);
 #else
     (void)y_offset;
     (void)x_offset;
-    return PhysicalCoord{0, 0};
+    return PhysicalCoord::yx(0, 0);
 #endif
 }
 
@@ -896,7 +896,7 @@ void synchronize_cores() {
         kCoreGridKnown,
         "synchronize_cores() with no region needs the program's core grid: build the program through "
         "unified_program(), which defines TT_UNIFIED_CORE_GRID_H/W -- or pass a region explicitly");
-    synchronize_cores<thread>(LogicalMcast{LogicalCoord{0, 0}, Extent{kCoreGridH, kCoreGridW}});
+    synchronize_cores<thread>(LogicalMcast{LogicalCoord::yx(0, 0), Extent::hw(kCoreGridH, kCoreGridW)});
 }
 
 // --- Core-to-core movement ---
