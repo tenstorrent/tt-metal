@@ -19,7 +19,7 @@ What is specific to Gemma4 (and therefore what these tests pin):
   an all-gather reconstructs the hidden dim after the lookup. A wrong mapper or
   a missing gather is invisible at TP=1.
 * ``layout=ttnn.TILE_LAYOUT`` tilizes *inside* the embedding kernel instead of
-  emitting ROW_MAJOR for a separate ``to_layout``. That landed as a 1.64x win on
+  emitting ROW_MAJOR for a separate ``to_layout``. That was adopted as a win on
   the embed+all-gather path claiming bit-identical output;
   ``test_embedding_tile_layout_is_bit_exact`` is what holds that claim.
 
@@ -249,9 +249,9 @@ def test_raw_embed_undoes_embed_scale(mesh_device, reset_seeds, request):
 def test_embedding_tile_layout_is_bit_exact(batch_size, seq_len, mesh_device, reset_seeds):
     """Fused in-kernel tilize must equal ROW_MAJOR + a separate ``to_layout``.
 
-    ``layout=ttnn.TILE_LAYOUT`` was adopted as a 1.64x win on the embed+all-gather
-    path specifically because it was bit-identical. That is a bit-exactness claim,
-    so assert ``torch.equal`` — a PCC gate would pass on a genuine regression here.
+    ``layout=ttnn.TILE_LAYOUT`` was adopted as a win on the embed+all-gather path
+    specifically because it was bit-identical. That is a bit-exactness claim, so
+    assert ``torch.equal`` — a PCC gate would pass on a genuine regression here.
     """
     text_config = _embedding_only_text_config(_RANDOM_VOCAB)
     hidden_size = text_config.hidden_size
