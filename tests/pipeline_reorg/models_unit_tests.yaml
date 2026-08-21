@@ -1497,7 +1497,7 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 32
+      timeout: 24
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
@@ -1508,7 +1508,7 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 5
+      timeout: 4
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
@@ -1519,7 +1519,7 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 12
+      timeout: 10
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
@@ -1541,7 +1541,7 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 24
+      timeout: 18
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
@@ -1552,7 +1552,7 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 10
+      timeout: 8
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
@@ -1563,7 +1563,7 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 12
+      timeout: 10
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
