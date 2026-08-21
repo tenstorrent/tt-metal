@@ -48,9 +48,20 @@ def test_wrapped_vision_model_inference(
         pytest.skip("CI only runs the two_layers test")
 
     dtype = ttnn.bfloat8_b
-    pcc = (
-        0.99 if num_layers and num_layers <= 3 else 0.91
-    )  # Llama 3 repo allows 0.91 for prefill, vision probably even less sensitive to pcc
+    # MEASURED floors, not inherited ones. This is the tower's only REAL-WEIGHT gate -- it builds its
+    # reference from the checkpoint, where tests/test_vision_tower_pcc.py uses config-init weights and
+    # so cannot see the outlier-driven quantization error that dominates here. Measured against the
+    # fp32 HF reference at grid 86x128:
+    #
+    #                  1 layer    2 layers   27 layers (full)
+    #   9B  / N300     0.99981    0.99938    0.98850
+    #   27B / T3K      0.99996    0.99991    0.99762
+    #
+    # The full-depth floor was 0.91, inherited from the Llama 3 prefill test. That was loose enough to
+    # pass at 0.96875 -- which is what the tower actually scored while the attention out-projection
+    # wrote the residual stream in bfloat8_b (see VisionAttention.attn_out_dtype). A floor has to be
+    # near the measured value to be a gate at all.
+    pcc = 0.998 if num_layers and num_layers <= 3 else 0.985
     batch_size = 1  # For prefill we only support batch_size = 1
 
     # Example inputs for http://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg
