@@ -19,10 +19,13 @@ on:
 
 # Serializes processing of the SAME underlying run (e.g. a duplicate
 # workflow_run delivery GitHub occasionally sends, or a re-dispatch of the
-# same run) so the idempotency-marker check-and-claim below is race-free.
+# same run) so the per-run idempotency-marker check-and-claim below is
+# race-free.
 # NOTE: this only serializes -- a queued duplicate still runs afterwards, it
 # does not by itself prevent a second Slack post. That guarantee comes from
-# the commit-status marker claimed in "Check and claim idempotency marker".
+# the commit-status markers claimed below: the per-run marker in "Check and
+# claim idempotency marker" and the per-regression marker in "Identify the
+# regression point and its culprit PRs".
 concurrency:
   group: sanity-tests-slack-notify-${{ github.event.workflow_run.id || github.event.inputs.run_id }}
   cancel-in-progress: false
@@ -31,7 +34,9 @@ permissions:
   actions: read
   contents: read
   pull-requests: read
-  # Needed for the idempotency marker: a commit status on the failing head_sha.
+  # Needed for the idempotency markers: commit statuses on the triggering
+  # run's head_sha (per-run dedupe) and on the regression point's head_sha
+  # (per-regression dedupe).
   statuses: write
 
 jobs:
@@ -115,33 +120,62 @@ jobs:
         env:
           HEAD_SHA: ${{ steps.context.outputs.head_sha }}
         with:
-          # ========================= IDEMPOTENCY MARKER =======================
-          # workflow_run deliveries can be duplicated, and a human can press
-          # "Re-run" in the UI after attempt 3, producing attempt 4/5/... which
-          # still satisfies the finality gate above. To guarantee at most one
-          # Slack post per broken head_sha, we keep a durable marker in GitHub
-          # itself (not Slack, not an external store): a commit status on the
-          # run's head_sha under a fixed, private context string.
+          # ===================== IDEMPOTENCY MARKERS (1 of 2) =================
+          # Two layered commit-status markers keep this workflow from double-
+          # posting. They guard DIFFERENT failure modes, which is why both
+          # exist; neither subsumes the other:
           #
-          # Claim-then-act: this runs BEFORE any expensive work (commit walk,
-          # PR resolution, mention lookup) so a serialized duplicate (queued
-          # behind the first by the concurrency group above) sees the claim and
-          # skips instead of redoing everything and re-posting.
-          #   - marker state 'success'          -> already notified; skip.
+          #   1. Per-run marker (THIS step; context
+          #      'sanity-tests-slack-notify', on the TRIGGERING run's
+          #      head_sha). workflow_run deliveries can be duplicated, and a
+          #      human can press "Re-run" in the UI after attempt 3, producing
+          #      attempt 4/5/... which still satisfies the finality gate
+          #      above. This marker lets such a re-processing of the SAME run
+          #      bail out here, before any expensive work (run-history walk,
+          #      PR resolution, mention lookup). The concurrency group above
+          #      serializes those duplicates, so this check-and-claim is
+          #      race-free for them.
+          #
+          #   2. Per-regression marker (claimed in "Identify the regression
+          #      point and its culprit PRs" below; context
+          #      'sanity-tests-slack-notify-culprit', on the FIRST red run's
+          #      head_sha). While main stays red, every NEW failing commit
+          #      completes its own "Sanity tests" run and triggers a fresh,
+          #      independent evaluation here -- a marker keyed on the
+          #      triggering commit cannot dedupe those, which is how one
+          #      outage used to produce one Slack ping per failing commit.
+          #      All evaluations during the same outage resolve the SAME
+          #      first-red run, so a marker keyed on ITS head_sha collapses
+          #      them into a single Slack post per regression.
+          #
+          # Claim-then-act; both markers follow the same state rules:
+          #   - marker state 'success'          -> already handled; skip.
           #   - absent, or 'pending' (a prior attempt claimed but never
           #     finished, e.g. Slack was down) -> (re)claim with 'pending' and
-          #     proceed. Only a finalized 'success' permanently blocks a future
-          #     post, so a genuine posting failure stays retryable.
+          #     proceed. Only a finalized 'success' permanently blocks a
+          #     future post, so a genuine posting failure stays retryable --
+          #     for the per-regression marker that even means the NEXT failing
+          #     run of the same outage retries the report.
           #
-          # workflow_dispatch (manual test/replay) never reads or writes this
-          # marker: it must always be replayable for testing, and must not be
-          # blocked by, or interfere with, the automated path's dedupe state.
+          # workflow_dispatch (manual test/replay) never reads or writes
+          # either marker: it must always be replayable for testing, and must
+          # not be blocked by, or interfere with, the automated path's dedupe
+          # state.
           #
-          # Accepted residual risk: a crash between "Slack accepted the post"
-          # and "marker finalized to success" (see the last step) could allow
-          # one duplicate post if a duplicate delivery also arrives in that
-          # window. That failure mode is one extra Slack message -- not worth
-          # a two-phase commit to close.
+          # Accepted residual risks (each costs at most one extra Slack
+          # message; not worth a two-phase commit or a global lock to close):
+          #   - a crash between "Slack accepted the post" and "markers
+          #     finalized to success" (see the last step) could allow one
+          #     duplicate post if a duplicate delivery also arrives in that
+          #     window.
+          #   - evaluations triggered by DIFFERENT failing runs live in
+          #     different concurrency groups, so two completing near-
+          #     simultaneously can race between the per-regression check and
+          #     claim and both post. The window is seconds wide. The obvious
+          #     fix -- one global concurrency group -- was rejected: GitHub
+          #     keeps only the newest queued run per group, which could
+          #     silently discard the only evaluation of a second, distinct
+          #     regression starting right after the first one is fixed.
           script: |
             const MARKER_CONTEXT = 'sanity-tests-slack-notify';
 
@@ -174,97 +208,183 @@ jobs:
             });
             core.setOutput('already_notified', 'false');
 
-      - name: Find culprit PRs since last green run
+      - name: Identify the regression point and its culprit PRs
         id: culprits
         if: steps.claim.outputs.already_notified != 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
           CURRENT_RUN_NUMBER: ${{ steps.context.outputs.run_number }}
           CURRENT_HEAD_SHA: ${{ steps.context.outputs.head_sha }}
+          CURRENT_RUN_URL: ${{ steps.context.outputs.html_url }}
         with:
+          # ============================ BLAME MODEL ===========================
+          # "Sanity tests" runs on every push to main, so (except for
+          # [skip ci] pushes) every merge to main has its own push run. The
+          # run history therefore pinpoints a regression by itself: walking
+          # back from the triggering run, it looks like
+          #
+          #   ...green(prevGood) [cancelled/skipped...] RED(firstRed) RED ... RED(current)
+          #
+          # The FIRST red run after the last green one -- firstRed -- is the
+          # regression point, and the only commits that can have broken main
+          # are those in (prevGood.head_sha, firstRed.head_sha]: usually the
+          # single PR whose push firstRed tested, occasionally plus a few
+          # never-tested commits ([skip ci] pushes, or pushes whose runs were
+          # cancelled/skipped) that landed immediately before it and so
+          # cannot be exonerated. Everything that merged AFTER firstRed,
+          # while main was already red, is noise and must NOT be blamed.
+          # (The previous implementation diffed prevGood against the CURRENT
+          # failing commit, blaming everyone who merged during the outage --
+          # the direct cause of the 2026-08-21 mass-ping incident.)
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const currentRunNumber = Number(process.env.CURRENT_RUN_NUMBER);
             const currentHeadSha = process.env.CURRENT_HEAD_SHA;
+            const currentRunUrl = process.env.CURRENT_RUN_URL;
 
-            const { data: runsResp } = await github.rest.actions.listWorkflowRuns({
-              owner,
-              repo,
-              workflow_id: 'sanity-tests.yaml',
-              branch: 'main',
-              event: 'push',
-              per_page: 100,
-            });
+            // -----------------------------------------------------------------
+            // Phase 1: walk back through prior push runs (newest first) to find
+            // the last green baseline (prevGood) and, along the way, the OLDEST
+            // red run after it (firstRed) -- the regression point.
+            //
+            // Classification per run (mirrors the finality gate's notion of
+            // "red"):
+            //   - not yet completed   -> completion order is ambiguous; abstain.
+            //   - cancelled / skipped -> no red/green signal; look further back.
+            //   - success             -> baseline found; stop.
+            //   - anything else (failure, timed_out, startup_failure, ...) ->
+            //     red, and older than the current firstRed candidate, so the
+            //     regression point moves back onto it.
+            //
+            // The walk is intentionally UNCAPPED in depth: a long red streak or
+            // a burst of cancelled runs must not stop it from reaching the true
+            // last-green baseline. (An earlier interim fix capped the number of
+            // skipped runs here, which just made the bot abstain exactly when
+            // attribution mattered most; correctness comes from anchoring blame
+            // to firstRed, not from limiting how far back we look.) Pages are
+            // fetched one at a time so the walk stops at the first success
+            // instead of always downloading the whole history. The only
+            // termination guards are structural: the API running out of pages,
+            // and a generous absolute page ceiling so a pathological/looping
+            // API response cannot spin forever. Neither is a blame-radius
+            // control.
+            // -----------------------------------------------------------------
 
-            // Walk backwards (by run_number, not necessarily run_number - 1, since
-            // schedule/dispatch runs of the same workflow interleave and also
-            // consume run_numbers) to find the most recent MEANINGFUL prior state:
-            //  - a still-in-progress run (e.g. mid auto-retry-attempt) makes the
-            //    true completion order ambiguous -- abstain rather than silently
-            //    skip past it and risk misattributing to the wrong set of authors.
-            //  - cancelled/skipped runs carry no real red/green signal -- skip over
-            //    them and keep looking, so they can't permanently swallow a break.
-            //  - success -> this is a fresh green->red transition; use it as baseline.
-            //  - failure (or any other bad terminal conclusion) -> main was already
-            //    red before us; stay silent to avoid re-notifying / re-blaming.
-            const candidates = runsResp.workflow_runs
-              .filter(r => r.run_number < currentRunNumber)
-              .sort((a, b) => b.run_number - a.run_number);
-
-            // Cap how many cancelled/skipped runs we'll skip over. Without a
-            // bound, a burst of cancelled/skipped runs (e.g. during a CI
-            // congestion/retry storm) lets this walk straight past the real
-            // failure streak and land on a run from days ago, silently
-            // turning "who broke it" into "everyone who has merged since
-            // last week" -- exactly what caused the mass-ping incident this
-            // guards against. Hitting the cap means recent history is too
-            // noisy to trust as a blame baseline, so abstain instead of
-            // guessing.
-            const MAX_LOOKBACK_SKIPS = 20;
+            // Seed firstRed with the triggering run itself: the job-level
+            // finality gate guarantees it is terminally red, so if no earlier
+            // red run exists after the baseline, the triggering run IS the
+            // regression point.
+            let firstRed = { run_number: currentRunNumber, head_sha: currentHeadSha, html_url: currentRunUrl };
             let prevGood = null;
-            let skipped = 0;
-            for (const run of candidates) {
-              if (run.status !== 'completed') {
-                core.info(`Push run #${run.run_number} is still in progress; completion order is ambiguous. Abstaining.`);
-                core.setOutput('should_notify', 'false');
-                return;
-              }
-              if (run.conclusion === 'cancelled' || run.conclusion === 'skipped') {
-                skipped++;
-                if (skipped > MAX_LOOKBACK_SKIPS) {
-                  core.warning(`Skipped over ${skipped} cancelled/skipped push runs without finding a decisive (success/failure) prior state; ` +
-                    `recent history is too noisy to trust as a blame baseline. Abstaining.`);
+            const seenRunNumbers = new Set();
+            const MAX_PAGES = 50; // x100 runs/page -- loop safety only, see above.
+
+            for (let page = 1; page <= MAX_PAGES && prevGood === null; page++) {
+              const { data: runsResp } = await github.rest.actions.listWorkflowRuns({
+                owner,
+                repo,
+                workflow_id: 'sanity-tests.yaml',
+                branch: 'main',
+                event: 'push',
+                per_page: 100,
+                page,
+              });
+              if (runsResp.workflow_runs.length === 0) break; // ran out of history
+
+              // The API returns newest-first, but runs created while we
+              // paginate shift older items down and can make a run reappear on
+              // the next page: dedupe by run_number, and sort explicitly (by
+              // run_number, not run_number - 1 steps -- schedule/dispatch runs
+              // of the same workflow interleave and also consume run_numbers)
+              // so ordering never depends on API defaults.
+              const batch = runsResp.workflow_runs
+                .filter(r => r.run_number < currentRunNumber && !seenRunNumbers.has(r.run_number))
+                .sort((a, b) => b.run_number - a.run_number);
+
+              for (const run of batch) {
+                seenRunNumbers.add(run.run_number);
+                if (run.status !== 'completed') {
+                  // A still-running earlier push run (e.g. mid auto-retry) may
+                  // itself turn out red and be the real regression point --
+                  // attributing now would risk blaming the wrong PR. Abstain:
+                  // if that run fails it triggers its own evaluation, and any
+                  // later failing run re-evaluates against settled history.
+                  core.info(`Push run #${run.run_number} is still in progress; completion order is ambiguous. Abstaining.`);
                   core.setOutput('should_notify', 'false');
                   return;
                 }
-                core.info(`Push run #${run.run_number} was ${run.conclusion} (no real signal); looking further back.`);
-                continue;
+                if (run.conclusion === 'cancelled' || run.conclusion === 'skipped') {
+                  core.info(`Push run #${run.run_number} was ${run.conclusion} (no red/green signal); looking further back.`);
+                  continue;
+                }
+                if (run.conclusion === 'success') {
+                  prevGood = run;
+                  break;
+                }
+                core.info(`Push run #${run.run_number} was red (${run.conclusion}); regression point moves back to it.`);
+                firstRed = run;
               }
-              if (run.conclusion === 'success') {
-                prevGood = run;
-              } else {
-                core.info(`Push run #${run.run_number} also did not succeed (${run.conclusion}); ` +
-                  `main is still red from an earlier break. Not re-notifying to avoid repeat/duplicate pings.`);
-              }
-              break;
             }
 
-            if (!prevGood) {
-              core.warning('No usable previous "Sanity tests" push run found on main (either none within the last 100 runs, or main is still red from an earlier break); skipping.');
+            if (prevGood === null) {
+              core.warning('Walked the entire available "Sanity tests" push-run history on main without finding a green run; ' +
+                'there is no baseline to attribute a regression against. Abstaining.');
               core.setOutput('should_notify', 'false');
               return;
             }
 
-            core.setOutput('should_notify', 'true');
-            core.setOutput('prev_run_url', prevGood.html_url);
-            core.setOutput('prev_run_number', String(prevGood.run_number));
+            core.info(`Baseline: green run #${prevGood.run_number} (${prevGood.head_sha}). ` +
+              `Regression point: first red run #${firstRed.run_number} (${firstRed.head_sha}).`);
 
+            // -----------------------------------------------------------------
+            // Phase 2: per-regression dedupe. Every failing commit while main
+            // stays red triggers an independent evaluation, but they all
+            // resolve the SAME firstRed -- so a marker on firstRed.head_sha
+            // collapses them into one Slack post per regression. This is
+            // marker 2 of 2 described on the "Check and claim idempotency
+            // marker" step and follows the same rules: only a finalized
+            // 'success' blocks (a failed post stays retryable, even by a LATER
+            // failing run of the same outage), 'pending' is reclaimed, and
+            // workflow_dispatch replays neither read nor write it.
+            // -----------------------------------------------------------------
+            const CULPRIT_MARKER_CONTEXT = 'sanity-tests-slack-notify-culprit';
+            if (context.eventName === 'workflow_dispatch') {
+              core.info('workflow_dispatch replay: per-regression idempotency marker intentionally not consulted.');
+            } else {
+              const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+                owner, repo, ref: firstRed.head_sha, per_page: 100,
+              });
+              const marker = statuses.find(s => s.context === CULPRIT_MARKER_CONTEXT);
+              if (marker && marker.state === 'success') {
+                core.info(`The regression at run #${firstRed.run_number} (${firstRed.head_sha}) was already reported ` +
+                  `(marker set ${marker.updated_at}); main is still red from that break. Not re-notifying.`);
+                core.setOutput('should_notify', 'false');
+                return;
+              }
+              await github.rest.repos.createCommitStatus({
+                owner, repo, sha: firstRed.head_sha,
+                state: 'pending',
+                context: CULPRIT_MARKER_CONTEXT,
+                description: `Culprit notification claimed by run ${context.runId}`,
+                target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+              });
+            }
+
+            // -----------------------------------------------------------------
+            // Phase 3: resolve the culprit commits/PRs. The blame range is
+            // ONLY (prevGood.head_sha, firstRed.head_sha] -- see BLAME MODEL
+            // above. By construction every run between prevGood and firstRed
+            // is cancelled/skipped (a red one would have become firstRed, a
+            // green one would have become prevGood), so this range is the
+            // commits of firstRed's own push plus any immediately preceding
+            // never-tested pushes. Almost always exactly one PR.
+            // -----------------------------------------------------------------
             const { data: cmp } = await github.rest.repos.compareCommits({
               owner,
               repo,
               base: prevGood.head_sha,
-              head: currentHeadSha,
+              head: firstRed.head_sha,
             });
 
             // PR titles and commit subjects are attacker-controlled (anyone who can
@@ -309,23 +429,44 @@ jobs:
               }
             }
 
-            core.info(`Found ${entries.length} culprit entr${entries.length === 1 ? 'y' : 'ies'} between #${prevGood.run_number} and #${currentRunNumber}`);
+            core.info(`Resolved ${entries.length} culprit entr${entries.length === 1 ? 'y' : 'ies'} between green #${prevGood.run_number} and first red #${firstRed.run_number}`);
 
-            // Second, independent circuit breaker: a genuine fresh
-            // green->red transition implicates a small, fresh set of
-            // commits. A much larger list means the resolved baseline is
-            // stale or wrong (e.g. it slipped past the lookback cap above,
-            // or otherwise resolved to a run from long before the actual
-            // break) -- abstain rather than mass-pinging everyone who has
-            // merged since a stale baseline.
-            const MAX_CULPRIT_ENTRIES = 10;
-            if (entries.length > MAX_CULPRIT_ENTRIES) {
-              core.warning(`Resolved ${entries.length} culprit entries between #${prevGood.run_number} and #${currentRunNumber} -- ` +
-                `implausibly large for a single break, so the baseline run is likely stale. Abstaining instead of mass-pinging.`);
+            // compareCommits returns no commits when base is not an ancestor of
+            // head (e.g. main's history was rewritten between the two runs).
+            // There is nothing attributable to ping about -- abstain.
+            if (entries.length === 0) {
+              core.warning(`No commits found between green #${prevGood.run_number} (${prevGood.head_sha}) and ` +
+                `first red #${firstRed.run_number} (${firstRed.head_sha}) -- history may have been rewritten. Abstaining.`);
               core.setOutput('should_notify', 'false');
               return;
             }
 
+            // Defense-in-depth ONLY -- this is NOT the attribution mechanism
+            // and must never be lowered to "tune" blame radius. With blame
+            // anchored to firstRed, the culprit set is structurally the
+            // commits of one push plus any immediately preceding never-tested
+            // pushes: almost always 1 entry, occasionally a small handful. A
+            // large list can only mean something pathological happened (e.g.
+            // a mass-cancellation storm swallowed a whole day of pushes
+            // between the last green run and the first red one), where
+            // pinging everyone would repeat the mass-ping incident this
+            // workflow was redesigned to prevent -- abstain and leave a
+            // warning for a human to triage instead.
+            const MAX_CULPRIT_ENTRIES = 15;
+            if (entries.length > MAX_CULPRIT_ENTRIES) {
+              core.warning(`Resolved ${entries.length} culprit entries between green #${prevGood.run_number} and first red #${firstRed.run_number} -- ` +
+                `implausibly large for a single regression, so something upstream is pathological (mass-cancellation storm?). ` +
+                `Abstaining instead of mass-pinging; a human should triage this outage.`);
+              core.setOutput('should_notify', 'false');
+              return;
+            }
+
+            core.setOutput('should_notify', 'true');
+            core.setOutput('prev_run_url', prevGood.html_url);
+            core.setOutput('prev_run_number', String(prevGood.run_number));
+            core.setOutput('first_red_sha', firstRed.head_sha);
+            core.setOutput('first_red_run_url', firstRed.html_url);
+            core.setOutput('first_red_run_number', String(firstRed.run_number));
             core.setOutput('entries', JSON.stringify(entries));
             core.setOutput('logins_json',
               JSON.stringify([...new Set(entries.map(e => e.authorLogin).filter(l => l !== null))].sort()));
@@ -356,7 +497,10 @@ jobs:
           DRY_RUN: ${{ steps.context.outputs.dry_run }}
           ENTRIES_JSON: ${{ steps.culprits.outputs.entries }}
           MENTIONS_JSON: ${{ steps.mentions.outputs.mentions-json }}
-          FAILING_RUN_URL: ${{ steps.context.outputs.html_url }}
+          # The regression point's run, NOT the (possibly much later) run that
+          # triggered this evaluation: "the failing run on that commit" must
+          # point at the run that actually first went red on the culprit.
+          FAILING_RUN_URL: ${{ steps.culprits.outputs.first_red_run_url }}
           PREV_RUN_URL: ${{ steps.culprits.outputs.prev_run_url }}
         run: |
           set -euo pipefail
@@ -406,24 +550,39 @@ jobs:
       # succeeded -- in particular, only after "Compose and send Slack
       # message" actually completed (a real post, or a dry-run summary). Real
       # non-dry-run sends only reach here once Slack accepted the message.
-      # If that step failed (e.g. Slack API down), the marker stays 'pending'
-      # and the head_sha remains claimable by a later duplicate delivery or a
-      # manual replay. Never runs for workflow_dispatch, matching "claim" above.
-      - name: Finalize idempotency marker
+      # If that step failed (e.g. Slack API down), both markers stay
+      # 'pending': the triggering head_sha remains claimable by a duplicate
+      # delivery or a manual replay, and the regression itself remains
+      # reportable by the NEXT failing run's evaluation. Never runs for
+      # workflow_dispatch, matching the claim behavior above.
+      - name: Finalize idempotency markers
         if: github.event_name != 'workflow_dispatch' && steps.culprits.outputs.should_notify == 'true' && steps.context.outputs.dry_run != 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
           HEAD_SHA: ${{ steps.context.outputs.head_sha }}
+          FIRST_RED_SHA: ${{ steps.culprits.outputs.first_red_sha }}
         with:
           script: |
             const { owner, repo } = context.repo;
-            await github.rest.repos.createCommitStatus({
-              owner, repo, sha: process.env.HEAD_SHA,
-              state: 'success',
-              context: 'sanity-tests-slack-notify',
-              description: `Slack notification posted by run ${context.runId}`,
-              target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
-            });
+            const finalize = (sha, markerContext, description) =>
+              github.rest.repos.createCommitStatus({
+                owner, repo, sha,
+                state: 'success',
+                context: markerContext,
+                description,
+                target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+              });
+
+            // Per-regression marker first: it is the one that prevents a
+            // repeat post for this outage, so if we crash between the two
+            // writes the important marker is already durable. A per-run
+            // marker left 'pending' by such a crash only costs a duplicate
+            // delivery of this same run a redundant re-evaluation, which the
+            // per-regression marker then dedupes anyway.
+            await finalize(process.env.FIRST_RED_SHA, 'sanity-tests-slack-notify-culprit',
+              `Culprit notification posted by run ${context.runId}`);
+            await finalize(process.env.HEAD_SHA, 'sanity-tests-slack-notify',
+              `Slack notification posted by run ${context.runId}`);
 
       - name: Skip notification
         if: steps.claim.outputs.already_notified == 'true' || steps.culprits.outputs.should_notify != 'true'
@@ -431,5 +590,5 @@ jobs:
           if [ "${{ steps.claim.outputs.already_notified }}" = "true" ]; then
             echo "This commit was already notified about (idempotency marker present) -- nothing to do."
           else
-            echo "Not a fresh green->red transition (or no baseline run found) -- nothing to notify. See the 'Find culprit PRs' step log for why."
+            echo "Nothing to notify: no green baseline, an ambiguous in-progress run, or this regression was already reported. See the 'Identify the regression point' step log for why."
           fi
