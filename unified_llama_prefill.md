@@ -1385,8 +1385,15 @@ slack, the reader 100us):
 | FPU eltwise | 16.8 us | ~13% |
 | SFPU tree | 16.6 us | ~13% |
 
-Shares are approximate: the zones were taken in separate runs and each adds two timestamp
-writes per call, so the columns sum to about 110% of the span.
+Shares are approximate, and the reason is worse than instrument overhead. A sum zone around
+a strategy measures how long that REGION lasts on the thread it is read from, not how much
+work that thread did in it -- and the regions OVERLAP, because the threads are pipelined:
+while math is inside strategy N+1, pack is still finishing N. So the columns sum past the
+span (here ~110%, and a later re-measure reached 127us against a 115us span), and a zone's
+absolute value is not comparable across runs whose pipeline balance differs. The same zone
+reading ~51us on BOTH math and pack is the giveaway. Use these to rank, never to subtract.
+For a number to trust, ablate: change one thing and measure the whole kernel, which is how
+the mask fold got its 1.65us.
 
 **There is no dominant item left**, which is what 1.5x looks like from the inside. The old
 56% concentration is gone -- the FPU dispatch moved eltwise work off the SFPU, and the
@@ -1507,6 +1514,46 @@ through by hand; the third turned out to be expressible as a static_assert becau
 geometry is already in the type. The remaining argument for making the addend part of
 `MatmulNode`'s TYPE is that it would have prevented the first two rather than requiring them
 to be found.
+
+### Where the perf exploration stands
+
+Selftest traces are current -- byte-identical across all three projections. The per-strategy
+BUDGET is not, and re-measuring it produced a number that says more about the method than
+about the kernel: `reduce` came out at 51us having had HALF its work removed (the sums are
+matmuls now), and the same zone read 52us on the pack thread. Strategy regions overlap
+across a pipelined set of threads, so the zones cannot be summed or compared across runs.
+They rank; they do not attribute. Ablation is the method that gives a number.
+
+Two lessons now constrain what is worth trying, both learned the expensive way:
+
+- **Only math-thread work counts.** Math is the constraint; unpack and pack have slack. So
+  removing L1 round trips does nothing, which is why the mask fold was a wash.
+- **Swapping one math op for another is therefore neutral.** `add` replaced an FPU add with
+  a dest-reuse add: same instruction per tile. This retires the broadcast-chain item
+  (`o_prev * bcast(c) + pv` as one pass) before it is written -- 16 bcast-muls plus 16 adds
+  either way.
+
+What is left, ranked by how much math work it actually removes:
+
+1. **The wasted half of the diagonal chunk -- unexplored, and the largest.** Each q-chunk's
+   LAST key chunk straddles the diagonal, so about half its score tiles are masked to -inf
+   and computed anyway. The wasted fraction of all score work is `1/(n+1)` for n q-chunks:
+   at S=512 with sq=8 that is n=2 and **33%**. This is real math on the critical path, and
+   it is precisely what ttnn avoids -- `causal_k_limit` skips chunks fully above the
+   diagonal, and `apply_causal_mask_lightweight` stamps only the diagonal band. Recovering
+   it needs finer granularity near the diagonal, which the rectangular score block does not
+   express today. Note the interaction with the sq search: a smaller sq wastes proportionally
+   less (n is larger) but pays more launches and more state updates, so part of what the
+   search was balancing was this.
+2. **Defer `o / l` into the output projection (~8%).** `recip` is 9.53us at sq=8, SFPU-only
+   with no approximation parameter. `diag(1/l) @ (o @ W_o) == (o/l) @ W_o`, so it can leave
+   attention entirely rather than be optimised. Layer-level, so it lands with phase 11.
+3. **`reduce_max`** is the last large reduction, 128 `reduce_tile` calls for a 2-chunk pair,
+   and has no matmul form. Dropping the running maximum altogether is what would remove it,
+   and that is a numerics change flash exists to avoid -- ttnn tracks it too.
+4. **The state copy**, ~2%, still waiting on the read-but-not-consumed ownership question.
+5. **GQA and multi-core** -- throughput rather than per-core time, and the only items that
+   make a real model runnable. Phase 11.
 
 ### What to test next
 
