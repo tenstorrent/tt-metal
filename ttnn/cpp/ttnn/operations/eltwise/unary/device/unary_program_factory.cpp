@@ -365,11 +365,13 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     ProgramDescriptor desc;
 
     const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
+    const auto& input_tile = input.tensor_spec().tile();
+    const auto& output_tile = output.tensor_spec().tile();
 
     DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tile_size(cb_data_format);
+    uint32_t single_tile_size = input_tile.get_tile_size(cb_data_format);
     DataFormat cb_data_format_output = datatype_to_dataformat_converter(output.dtype());
-    uint32_t single_tile_size_output = tile_size(cb_data_format_output);
+    uint32_t single_tile_size_output = output_tile.get_tile_size(cb_data_format_output);
 
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -388,7 +390,9 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     auto shard_pages = [](const tt::tt_metal::ShardSpec& spec, const Tensor& t, bool rm) -> uint32_t {
         if (rm) {
             auto df = datatype_to_dataformat_converter(t.dtype());
-            uint32_t ts = tile_size(df);
+            // ROW_MAJOR CBs still use a tile-sized page as the CB unit; size from the tensor tile
+            // so tiny-tile page sizes stay consistent with TILE-layout paths.
+            uint32_t ts = t.tensor_spec().tile().get_tile_size(df);
             uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * datum_size(df);
             TT_ASSERT(
                 shard_bytes % ts == 0,
@@ -438,6 +442,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = cb_data_format_for_input,
             .page_size = input_cb_page_size,
+            .tile = is_row_major ? std::nullopt : std::optional<TileDescriptor>(TileDescriptor(input_tile)),
         }}},
         .buffer = src_sharded ? src_buffer : nullptr,
     });
@@ -450,6 +455,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
                 .buffer_index = static_cast<uint8_t>(tmp0_cb_index),
                 .data_format = cb_data_format,
                 .page_size = input_cb_page_size,
+                .tile = is_row_major ? std::nullopt : std::optional<TileDescriptor>(TileDescriptor(input_tile)),
             }}},
         });
     }
@@ -462,6 +468,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = cb_data_format_output,
             .page_size = output_cb_page_size,
+            .tile = is_row_major ? std::nullopt : std::optional<TileDescriptor>(TileDescriptor(output_tile)),
         }}},
         .buffer = dst_sharded ? dst_buffer : nullptr,
     });

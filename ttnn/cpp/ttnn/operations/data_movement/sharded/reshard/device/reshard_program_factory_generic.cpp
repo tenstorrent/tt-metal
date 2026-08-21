@@ -680,10 +680,17 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
     auto output_shard_shape = output.shard_spec().value().shape;
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
+    std::optional<Tile> tile = std::nullopt;
     if (input.layout() == Layout::TILE) {
-        page_size = tt::tile_size(data_format);
+        tile = input.tensor_spec().tile();
+        page_size = tile.value().get_tile_size(data_format);
         unit_size = page_size;
-        total_size = static_cast<uint32_t>(output.shard_spec().value().numel() / TILE_HW) * unit_size;
+        const uint32_t tile_hw = tile.value().get_tile_hw();
+        TT_FATAL(
+            output.shard_spec().value().numel() % tile_hw == 0,
+            "Output shard numel must be divisible by tile hw {}",
+            tile_hw);
+        total_size = static_cast<uint32_t>(output.shard_spec().value().numel() / tile_hw) * unit_size;
     } else {
         // For ROW_MAJOR, use base page size from GCD calculation
         uint32_t input_page_size = input_buffer->page_size();
@@ -826,6 +833,7 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         .entry_size = dfb_entry_size,
         .num_entries = std::min(total_size, output_packed_bytes) / dfb_entry_size,
         .data_format_metadata = data_format,
+        .tile_format_metadata = tile,
         .borrowed_from = TensorParamName{kGenOutputTensorParam},
     }};
 

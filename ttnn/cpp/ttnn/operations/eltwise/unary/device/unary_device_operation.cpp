@@ -8,8 +8,10 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
+using namespace tt::constants;
 
 namespace ttnn::operations::unary {
 
@@ -113,6 +115,17 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
             static_cast<int>(output_tensor->layout()),
             static_cast<int>(input_tensor.layout()));
     }
+
+    if (input_tensor.layout() == Layout::TILE) {
+        const auto& tile = input_tensor.tensor_spec().tile();
+        TT_FATAL(tile.get_width() == TILE_WIDTH, "Unary requires tile width {}, got {}", TILE_WIDTH, tile.get_width());
+        if (output_tensor.has_value()) {
+            const auto& out_tile = output_tensor->tensor_spec().tile();
+            TT_FATAL(
+                tile.get_tile_shape() == out_tile.get_tile_shape(),
+                "Unary: Input and output tensors must have the same tile shape when layout is TILE");
+        }
+    }
 }
 
 tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
@@ -122,9 +135,11 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
     }
 
     const auto output_shape = tensor_args.input.logical_shape();
+    // Preserve the input page config (including non-32x32 / tiny tiles). PageConfig(layout)
+    // alone defaults to 32x32, which undersizes the output relative to CBs sized from the real tile.
+    const auto& page_config = tensor_args.input.tensor_spec().page_config();
 
     if (args.memory_config.is_sharded()) {
-        const auto output_layout = tensor_args.input.layout();
         const auto& memory_layout = args.memory_config.memory_layout();
         const auto& buffer_type = args.memory_config.buffer_type();
         auto shard_spec_opt = args.memory_config.shard_spec();
@@ -143,21 +158,13 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
 
         return tt::tt_metal::TensorSpec(
             output_shape,
-            TensorLayout(
-                args.output_dtype,
-                PageConfig(output_layout),
-                MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
+            TensorLayout(args.output_dtype, page_config, MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
     }
 
-    const auto output_layout = tensor_args.input.layout();
     return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(
-            args.output_dtype,
-            PageConfig(output_layout),
-            args.memory_config,
-            output_shape,
-            tensor_args.input.padded_shape()));
+            args.output_dtype, page_config, args.memory_config, output_shape, tensor_args.input.padded_shape()));
 }
 
 Tensor UnaryDeviceOperation::create_output_tensors(
@@ -186,6 +193,9 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
+    // Include tile shape so tiny-tile programs are not reused with default 32x32 kernels.
+    const auto& tile = input_tensor.tensor_spec().tile();
+
     // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
     // different widths get separate cache entries. Consider hashing only the last
     // dimension to allow cache reuse when only height differs
@@ -197,7 +207,9 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
             input_tensor.memory_config(),
             input_tensor.padded_shape(),
             src_shard_vol,
-            dst_shard_vol);
+            dst_shard_vol,
+            tile.get_height(),
+            tile.get_width());
     }
 
     return operation::hash_operation<UnaryDeviceOperation>(
@@ -206,7 +218,9 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         input_tensor.layout(),
         input_tensor.memory_config(),
         src_shard_vol,
-        dst_shard_vol);
+        dst_shard_vol,
+        tile.get_height(),
+        tile.get_width());
 }
 
 bool UnaryDeviceOperation::skip_launch(

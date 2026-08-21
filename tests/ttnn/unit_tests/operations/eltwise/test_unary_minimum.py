@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, select_tile
 
 _bf16_max = torch.finfo(torch.bfloat16).max
 
@@ -38,12 +38,14 @@ def test_unary_min_fill_val_fp32(input_shapes, input_val, scalar, device):
     golden_function = ttnn.get_golden_function(ttnn.minimum)
     golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
 
+    tile = select_tile(ttnn.float32)
     tt_in = ttnn.from_torch(
         torch_input,
         dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     tt_result = ttnn.minimum(tt_in, scalar)
@@ -74,12 +76,14 @@ def test_unary_min_bf16(input_shapes, low, high, scalar, device):
     golden_function = ttnn.get_golden_function(ttnn.minimum)
     golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
 
+    tile = select_tile(ttnn.bfloat16)
     tt_in = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     tt_result = ttnn.minimum(tt_in, scalar)
@@ -107,12 +111,14 @@ def test_unary_min_fp32(input_shapes, low, high, scalar, device):
     golden_function = ttnn.get_golden_function(ttnn.minimum)
     golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
 
+    tile = select_tile(ttnn.float32)
     tt_in = ttnn.from_torch(
         torch_input,
         dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     tt_result = ttnn.minimum(tt_in, scalar)
@@ -142,12 +148,14 @@ def test_unary_min_int32_test(scalar, ttnn_dtype, device):
     golden_function = ttnn.get_golden_function(ttnn.minimum)
     golden = golden_function(torch_input, torch.full(torch.Size([1, 1, 32, 32]), scalar), device=device).to(torch.int32)
 
+    tile = select_tile(ttnn_dtype)
     tt_in = ttnn.from_torch(
         torch_input,
         dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     tt_result = ttnn.minimum(tt_in, scalar)
     comp_pass = compare_equal([tt_result], [golden])
@@ -190,12 +198,14 @@ def test_unary_min_int32(input_shapes, low, high, scalar, ttnn_dtype, device):
     golden_function = ttnn.get_golden_function(ttnn.minimum)
     golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device).to(torch.int32)
 
+    tile = select_tile(ttnn_dtype)
     tt_in = ttnn.from_torch(
         torch_input,
         dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     tt_result = ttnn.minimum(tt_in, scalar)
@@ -236,12 +246,14 @@ def test_unary_min_fill_val_int32(input_shapes, input_val, scalar, ttnn_dtype, d
     golden_function = ttnn.get_golden_function(ttnn.minimum)
     golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device).to(torch.int32)
 
+    tile = select_tile(ttnn_dtype)
     tt_in = ttnn.from_torch(
         torch_input,
         dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     tt_result = ttnn.minimum(tt_in, scalar)

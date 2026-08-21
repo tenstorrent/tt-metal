@@ -58,6 +58,22 @@ TORCH_INTEGER_DTYPES = [
 NP_INTEGER_DTYPES = [np.byte, np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
 
 
+def dtype_supports_tiny_tile(dtype):
+    return dtype == ttnn.bfloat16 or dtype == ttnn.float32
+
+
+def select_tile(*dtypes, layout=ttnn.TILE_LAYOUT):
+    if layout == ttnn.TILE_LAYOUT:
+        # return ttnn.Tile((16, 32))
+        if all(dtype_supports_tiny_tile(dtype) for dtype in dtypes):
+            print("Using tiny tile 16 x 32")
+            return ttnn.Tile((16, 32))
+        else:
+            print("Using tile 32 x 32")
+            return ttnn.Tile((16, 32))
+    return None
+
+
 def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorch_result):
     messages = []
     messages.append(message)

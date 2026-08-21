@@ -303,14 +303,16 @@ tt::tt_metal::ProgramDescriptor build_reshape_tiled_program(
 
     constexpr auto mapping_cb_idx = tt::CBIndex::c_0;
 
-    // set up CB for input tiles
+    // set up CB for input tiles — size from the tensor tile (supports tiny tiles, e.g. 16x32)
+    const auto& input_tile = input_tensor.tensor_spec().tile();
+    const auto& output_tile = output_tensor.tensor_spec().tile();
     const auto input_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    const auto input_tile_size_bytes = tt::tile_size(input_cb_data_format);
+    const auto input_tile_size_bytes = input_tile.get_tile_size(input_cb_data_format);
     constexpr auto input_cb_idx = tt::CBIndex::c_1;
 
     // TODO assert output tile size and data format same as input
     const auto output_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
-    const auto output_tile_size_bytes = tt::tile_size(output_cb_data_format);
+    const auto output_tile_size_bytes = output_tile.get_tile_size(output_cb_data_format);
     constexpr auto output_cb_idx = tt::CBIndex::c_2;
 
     const auto
@@ -324,7 +326,7 @@ tt::tt_metal::ProgramDescriptor build_reshape_tiled_program(
     ProgramDescriptor desc;
 
     // mapping metadata CB (no buffer binding — reader stages mapping pages
-    // through this CB on the fly)
+    // through this CB on the fly). ROW_MAJOR mapping pages: leave tile unset.
     desc.cbs.push_back(CBDescriptor{
         .total_size = mapping_page_size_bytes * reader_cb_len,
         .core_ranges = all_cores,
@@ -335,7 +337,7 @@ tt::tt_metal::ProgramDescriptor build_reshape_tiled_program(
         }}},
     });
 
-    // input tile CB
+    // input tile CB — attach TileDescriptor so JIT get_tile_size(cb) matches tiny tiles
     desc.cbs.push_back(CBDescriptor{
         .total_size = input_tile_size_bytes * reader_cb_len,
         .core_ranges = all_cores,
@@ -343,10 +345,11 @@ tt::tt_metal::ProgramDescriptor build_reshape_tiled_program(
             .buffer_index = static_cast<uint8_t>(input_cb_idx),
             .data_format = input_cb_data_format,
             .page_size = input_tile_size_bytes,
+            .tile = TileDescriptor(input_tile),
         }}},
     });
 
-    // output tile CB
+    // output / scratch tile CB
     desc.cbs.push_back(CBDescriptor{
         .total_size = output_tile_size_bytes,
         .core_ranges = all_cores,
@@ -354,6 +357,7 @@ tt::tt_metal::ProgramDescriptor build_reshape_tiled_program(
             .buffer_index = static_cast<uint8_t>(output_cb_idx),
             .data_format = output_cb_data_format,
             .page_size = output_tile_size_bytes,
+            .tile = TileDescriptor(output_tile),
         }}},
     });
 

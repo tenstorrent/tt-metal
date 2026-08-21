@@ -6,11 +6,13 @@
 
 #include <algorithm>
 #include <numeric>
+#include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -51,6 +53,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     uint32_t page_size;
     uint32_t elements_per_page_width;
     uint32_t elements_per_page_height;
+    std::optional<Tile> tile = std::nullopt;
     if (rm_layout) {
         std::vector<uint32_t> all_stick_sizes;
         all_stick_sizes.reserve(input_tensors.size() + 1);
@@ -63,10 +66,14 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
         elements_per_page_width = page_size / element_size;
         elements_per_page_height = 1;
     } else {
-        page_size = tt::tile_size(cb_data_format);
-        elements_per_page_width = TILE_WIDTH;
-        elements_per_page_height = TILE_HEIGHT;
+        tile = output.tensor_spec().tile();
+        page_size = tile->get_tile_size(cb_data_format);
+        elements_per_page_width = tile->get_width();
+        elements_per_page_height = tile->get_height();
     }
+
+    const std::optional<TileDescriptor> tile_descriptor =
+        tile.has_value() ? std::optional<TileDescriptor>(TileDescriptor(tile.value())) : std::nullopt;
 
     std::vector<uint32_t> input_num_pages_per_stick;
     std::vector<uint32_t> input_num_sticks;
@@ -94,6 +101,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
                 .buffer_index = static_cast<uint8_t>(input_id),
                 .data_format = cb_data_format,
                 .page_size = page_size,
+                .tile = tile_descriptor,
             }}},
             .buffer = input_tensors[input_id].buffer(),
         });
@@ -113,6 +121,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(cb_dst_id),
             .data_format = cb_data_format,
             .page_size = page_size,
+            .tile = tile_descriptor,
         }}},
         .buffer = output.buffer(),
     });

@@ -9,6 +9,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
+from tests.ttnn.utils_for_testing import select_tile
 
 from models.common.utility_functions import skip_for_blackhole
 
@@ -72,8 +73,9 @@ def run_reshard_test(
         buffer_type=ttnn.BufferType.DRAM,
     )
     # torch_tensor = torch.randn(input_shape).bfloat16()
+    tile = select_tile(tt_dtype, layout=input_layout)
     torch_tensor = random_torch_tensor(tt_dtype, input_shape)
-    tt_tensor_sharded = ttnn.Tensor(torch_tensor, tt_dtype).to(input_layout)
+    tt_tensor_sharded = ttnn.Tensor(torch_tensor, tt_dtype, layout=input_layout, tile=tile)
     tt_tensor_sharded = tt_tensor_sharded.to(device, dram_memory_config)
     tt_tensor_sharded = ttnn.interleaved_to_sharded(
         tt_tensor_sharded,
@@ -593,8 +595,11 @@ def test_dram_reshard(
     output_shard_spec = ttnn.ShardSpec(output_shard_grid, output_shard_shape, output_shard_orientation)
     output_mem_config = ttnn.MemoryConfig(output_sharding_scheme, output_buffer_type, output_shard_spec)
 
+    tile = select_tile(ttnn.bfloat16, layout=input_layout)
     input = torch.randn(input_shape).bfloat16()
-    input_tensor = ttnn.Tensor(input, ttnn.bfloat16, device=device, layout=input_layout, mem_config=input_mem_config)
+    input_tensor = ttnn.Tensor(
+        input, ttnn.bfloat16, device=device, layout=input_layout, mem_config=input_mem_config, tile=tile
+    )
 
     output_tensor = ttnn.reshard(input_tensor, output_mem_config)
 
@@ -1069,8 +1074,9 @@ def test_reshard_interleaved_to_block_sharded(
         pytest.skip(f"Core grid ({core_grid_x}, {core_grid_y}) exceeds device grid size ({grid_size.x}, {grid_size.y})")
 
     # Create input tensor in interleaved L1 memory
+    tile = select_tile(in_dtype, out_dtype)
     torch_tensor = torch.randn(input_shape).bfloat16()
-    tt_tensor = ttnn.from_torch(torch_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_tensor = ttnn.from_torch(torch_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     tt_tensor = ttnn.to_memory_config(tt_tensor, ttnn.L1_MEMORY_CONFIG)
 
     # Create BLOCK sharded memory config (same as SentenceBERT embeddings)
@@ -1140,10 +1146,11 @@ def test_reshard_sentencebert_embeddings(
     input_shape = [batch_size, 1, seq_len, hidden_size]
 
     # Simulate the embeddings computation (word + token_type + position embeddings)
+    tile = select_tile(ttnn.bfloat16, out_dtype, layout=layout)
     torch_tensor = torch.randn(input_shape).bfloat16()
 
     # Create tensor in interleaved L1 (result of embedding additions)
-    tt_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=layout, device=device)
+    tt_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=layout, tile=tile, device=device)
     tt_tensor = ttnn.to_memory_config(tt_tensor, ttnn.L1_MEMORY_CONFIG)
 
     # Create BLOCK sharded memory config (exact match to SentenceBERT embeddings)
@@ -1213,7 +1220,8 @@ def test_reshard_sentencebert_embeddings_full(device):
 
     # Step 3: Create new tensor and reshard to BLOCK sharded
     embeddings = torch.randn(batch_size, seq_len, hidden_size).bfloat16()
-    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16, ttnn.bfloat8_b)
+    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     tt_embeddings = ttnn.to_memory_config(tt_embeddings, ttnn.L1_MEMORY_CONFIG)
 
     # Step 4: Reshard to BLOCK sharded - NOC ERROR OCCURS HERE
@@ -1266,7 +1274,8 @@ def test_reshard_variant1_skip_sharded_to_interleaved(device):
 
     # Create new tensor and reshard to BLOCK sharded
     embeddings = torch.randn(batch_size, seq_len, hidden_size).bfloat16()
-    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16, ttnn.bfloat8_b)
+    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     tt_embeddings = ttnn.to_memory_config(tt_embeddings, ttnn.L1_MEMORY_CONFIG)
 
     output_mem_config = ttnn.create_sharded_memory_config(
@@ -1314,7 +1323,8 @@ def test_reshard_variant2_skip_deallocates(device):
 
     # Create new tensor and reshard to BLOCK sharded
     embeddings = torch.randn(batch_size, seq_len, hidden_size).bfloat16()
-    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16, ttnn.bfloat8_b)
+    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     tt_embeddings = ttnn.to_memory_config(tt_embeddings, ttnn.L1_MEMORY_CONFIG)
 
     output_mem_config = ttnn.create_sharded_memory_config(
@@ -1360,7 +1370,8 @@ def test_reshard_variant3_skip_height_sharded(device):
 
     # Create new tensor and reshard to BLOCK sharded
     embeddings = torch.randn(batch_size, seq_len, hidden_size).bfloat16()
-    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16, ttnn.bfloat8_b)
+    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     tt_embeddings = ttnn.to_memory_config(tt_embeddings, ttnn.L1_MEMORY_CONFIG)
 
     output_mem_config = ttnn.create_sharded_memory_config(
@@ -1409,7 +1420,8 @@ def test_reshard_variant4_only_deallocate_interleaved(device):
 
     # Create new tensor and reshard to BLOCK sharded
     embeddings = torch.randn(batch_size, seq_len, hidden_size).bfloat16()
-    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16, ttnn.bfloat8_b)
+    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     tt_embeddings = ttnn.to_memory_config(tt_embeddings, ttnn.L1_MEMORY_CONFIG)
 
     output_mem_config = ttnn.create_sharded_memory_config(
@@ -1461,7 +1473,8 @@ def test_reshard_variant5_only_deallocate_sharded(device):
 
     # Create new tensor and reshard to BLOCK sharded
     embeddings = torch.randn(batch_size, seq_len, hidden_size).bfloat16()
-    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16, ttnn.bfloat8_b)
+    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     tt_embeddings = ttnn.to_memory_config(tt_embeddings, ttnn.L1_MEMORY_CONFIG)
 
     output_mem_config = ttnn.create_sharded_memory_config(
@@ -1514,7 +1527,8 @@ def test_reshard_variant6_reverse_dealloc_order(device):
 
     # Create new tensor and reshard to BLOCK sharded
     embeddings = torch.randn(batch_size, seq_len, hidden_size).bfloat16()
-    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16, ttnn.bfloat8_b)
+    tt_embeddings = ttnn.from_torch(embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     tt_embeddings = ttnn.to_memory_config(tt_embeddings, ttnn.L1_MEMORY_CONFIG)
 
     output_mem_config = ttnn.create_sharded_memory_config(

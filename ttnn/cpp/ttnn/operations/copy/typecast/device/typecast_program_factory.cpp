@@ -4,10 +4,13 @@
 
 #include "typecast_program_factory.hpp"
 
+#include <optional>
+
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -91,9 +94,19 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
     const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
 
     const tt::DataFormat cb_data_format_input = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const uint32_t single_tile_size_input = tt::tile_size(cb_data_format_input);
     const tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    const uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
+
+    std::optional<tt::tt_metal::Tile> tile = std::nullopt;
+    uint32_t single_tile_size_input;
+    uint32_t single_tile_size_output;
+    if (is_row_major) {
+        single_tile_size_input = tt::tile_size(cb_data_format_input);
+        single_tile_size_output = tt::tile_size(cb_data_format_output);
+    } else {
+        tile = input.tensor_spec().tile();
+        single_tile_size_input = tile->get_tile_size(cb_data_format_input);
+        single_tile_size_output = tile->get_tile_size(cb_data_format_output);
+    }
 
     const auto* device = input.device();
 
@@ -249,14 +262,16 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
 
     TT_FATAL(sub_core_grids.has_value(), "sub_core_grids cannot be null");
 
+
+    const auto& tile = input.tensor_spec().tile();
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t single_tile_size = tile.get_tile_size(cb_data_format);
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
+    uint32_t single_tile_size_output = tile.get_tile_size(cb_data_format_output);
 
     const auto* device = input.device();
 
-    uint32_t ntiles = input.physical_volume() / tt::constants::TILE_HW;
+    uint32_t ntiles = input.physical_volume() / tile.get_tile_hw();
     uint32_t ncores = sub_core_grids->num_cores();
 
     TT_FATAL(ncores != 0, "number of cores cannot be 0");

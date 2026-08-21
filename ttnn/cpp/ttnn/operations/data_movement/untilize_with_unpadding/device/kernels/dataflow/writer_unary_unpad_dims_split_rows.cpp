@@ -14,7 +14,9 @@ inline uint64_t round_down_32(uint64_t a) { return (a >> 5) << 5; }
 void kernel_main() {
     // Constexpr
     constexpr uint32_t dfb_id_out0 = 16;
-    constexpr uint32_t tile_height = 32;
+    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t tile_height = get_compile_time_arg_val(1);
+    constexpr auto dst_args = TensorAccessorArgs<2>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_unpadded_W = get_arg_val<uint32_t>(1);
@@ -33,9 +35,6 @@ void kernel_main() {
     const uint32_t block_row_leftover_size = get_arg_val<uint32_t>(14);
 
     uint32_t stick_id = 0;
-
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
-    constexpr auto dst_args = TensorAccessorArgs<2>();
 
     const uint32_t num_tiles_block_c =
         FLOAT32_DTYPE ? block_row_size / 128

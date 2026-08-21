@@ -93,10 +93,16 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     }
     if (input_tensor.layout() == Layout::TILE) {
         auto tile = input_tensor.tensor_spec().tile();
-        if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
-            return {false, fmt::format("interleaved_to_sharded requires standard 32x32 tiles, got {}x{}", tile.get_height(), tile.get_width())};
+        if (tile.get_width() != tt::constants::TILE_WIDTH) {
+            return {
+                false,
+                fmt::format(
+                    "interleaved_to_sharded requires tile width {}, got {}",
+                    tt::constants::TILE_WIDTH,
+                    tile.get_width())};
         }
         if (tensor_args.output_tensor.has_value()) {
+
             auto out_tile = tensor_args.output_tensor.value().tensor_spec().tile();
             if (out_tile != tile) {
                 return {false, "Output tensor tile shape must match input tensor tile shape"};
@@ -123,7 +129,7 @@ InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDev
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             operation_attributes.output_dtype,
-            tt::tt_metal::PageConfig(input_tensor.layout()),
+            input_tensor.tensor_spec().page_config(),
             operation_attributes.output_mem_config));
 }
 
@@ -141,6 +147,8 @@ InterleavedToShardedDeviceOperation::tensor_return_value_t InterleavedToShardedD
 ttsl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
+    // Include tile shape so tiny-tile programs are not reused with default 32x32 kernels.
+    const auto& tile = input_tensor.tensor_spec().tile();
     return tt::tt_metal::operation::hash_operation<InterleavedToShardedDeviceOperation>(
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
@@ -148,7 +156,9 @@ ttsl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
         input_tensor.dtype(),
         input_tensor.memory_config(),
         input_tensor.layout(),
-        input_tensor.padded_shape());
+        input_tensor.padded_shape(),
+        tile.get_height(),
+        tile.get_width());
 }
 
 Tensor interleaved_to_sharded(

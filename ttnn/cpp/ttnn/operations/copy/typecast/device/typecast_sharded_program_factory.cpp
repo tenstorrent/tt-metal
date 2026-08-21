@@ -4,6 +4,8 @@
 
 #include "typecast_sharded_program_factory.hpp"
 
+#include <optional>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -42,8 +44,17 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
     tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_tile_size = tt::tile_size(act_df);
-    uint32_t output_tile_size = tt::tile_size(out_df);
+    std::optional<tt::tt_metal::Tile> tile = std::nullopt;
+    uint32_t input_tile_size;
+    uint32_t output_tile_size;
+    if (input.layout() == Layout::TILE) {
+        tile = input.tensor_spec().tile();
+        input_tile_size = tile->get_tile_size(act_df);
+        output_tile_size = tile->get_tile_size(out_df);
+    } else {
+        input_tile_size = tt::tile_size(act_df);
+        output_tile_size = tt::tile_size(out_df);
+    }
 
     // For TILE layout, input_tile_size != output_tile_size is supported (e.g., BFLOAT8_B <-> BFLOAT16).
     // The number of tiles stays the same; only the bytes per tile changes.
@@ -65,8 +76,10 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
 
     if (is_block_format) {
         // For block formats, calculate tile count based on element dimensions
-        uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)tt::constants::TILE_WIDTH);
-        uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tt::constants::TILE_HEIGHT);
+        const uint32_t tile_width = tile.has_value() ? tile->get_width() : TILE_WIDTH;
+        const uint32_t tile_height = tile.has_value() ? tile->get_height() : TILE_HEIGHT;
+        uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)tile_width);
+        uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tile_height);
         num_tile_per_core = ntiles_along_width * ntiles_along_height;
     } else {
         TT_FATAL(
@@ -99,6 +112,7 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
         .entry_size = in_cb_pagesize,
         .num_entries = in_cb_npages,
         .data_format_metadata = act_df,
+        .tile_format_metadata = tile,
         .borrowed_from = INPUT,
     };
 
@@ -112,6 +126,7 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
         .entry_size = out_cb_pagesize,
         .num_entries = out_cb_npages,
         .data_format_metadata = out_df,
+        .tile_format_metadata = tile,
         .borrowed_from = OUTPUT,
     };
 

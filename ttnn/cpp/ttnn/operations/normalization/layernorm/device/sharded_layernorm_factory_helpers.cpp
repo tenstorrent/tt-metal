@@ -1122,12 +1122,13 @@ void add_cb_descriptors(
                                  uint8_t buffer_index,
                                  tt::DataFormat data_format,
                                  uint32_t page_size,
+                                 const tt::tt_metal::Tile& tile,
                                  Buffer* buffer = nullptr) {
         CBDescriptor cb_desc;
         cb_desc.total_size = total_size;
         cb_desc.core_ranges = core_ranges;
-        cb_desc.format_descriptors.push_back(
-            CBFormatDescriptor{.buffer_index = buffer_index, .data_format = data_format, .page_size = page_size});
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = buffer_index, .data_format = data_format, .page_size = page_size, .tile = tile});
         cb_desc.buffer = buffer;
         return cb_desc;
     };
@@ -1144,12 +1145,14 @@ void add_cb_descriptors(
             tt::CBIndex::c_0,
             cb_config.in_data_format,
             cb_config.in_single_tile_size,
+            cb_config.tile,
             cb_config.a_buffer);
         if (cb_config.welford_fp32_alias && !cb_config.has_b) {
             cb0_desc.format_descriptors.push_back(CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
                 .data_format = cb_config.in_data_format,
-                .page_size = cb_config.in_single_tile_size});
+                .page_size = cb_config.in_single_tile_size,
+                .tile = cb_config.tile});
         }
         program_descriptor.cbs.push_back(std::move(cb0_desc));
     }
@@ -1162,6 +1165,7 @@ void add_cb_descriptors(
             tt::CBIndex::c_1,
             cb_config.in_data_format,
             cb_config.in_single_tile_size,
+            cb_config.tile,
             cb_config.b_buffer));
         if (cb_config.is_pre_all_gather) {
             program_descriptor.cbs.push_back(make_cb_descriptor(
@@ -1170,6 +1174,7 @@ void add_cb_descriptors(
                 tt::CBIndex::c_14,
                 cb_config.in_data_format,
                 cb_config.in_single_tile_size,
+                cb_config.tile,
                 cb_config.a_buffer));
         }
     }
@@ -1181,7 +1186,8 @@ void add_cb_descriptors(
             core_ranges.all_cores,
             tt::CBIndex::c_5,
             cb_config.gamma_cb_data_format,
-            cb_config.gamma_single_tile_size));
+            cb_config.gamma_single_tile_size,
+            cb_config.tile));
     }
 
     // CB 6: beta
@@ -1191,7 +1197,8 @@ void add_cb_descriptors(
             core_ranges.all_cores,
             tt::CBIndex::c_6,
             cb_config.beta_cb_data_format,
-            cb_config.beta_single_tile_size));
+            cb_config.beta_single_tile_size,
+            cb_config.tile));
     }
 
     // CB 24: x. In fused welford-fp32 mode we add c_29 as a second buffer index on c_24
@@ -1203,12 +1210,14 @@ void add_cb_descriptors(
             core_ranges.all_cores,
             tt::CBIndex::c_24,
             cb_config.cb_data_format,
-            cb_config.single_tile_size);
+            cb_config.single_tile_size,
+            cb_config.tile);
         if (cb_config.welford_fp32_alias && cb_config.has_b) {
             cbx_desc.format_descriptors.push_back(CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
                 .data_format = cb_config.cb_data_format,
-                .page_size = cb_config.single_tile_size});
+                .page_size = cb_config.single_tile_size,
+                .tile = cb_config.tile});
         }
         program_descriptor.cbs.push_back(std::move(cbx_desc));
     }
@@ -1219,7 +1228,8 @@ void add_cb_descriptors(
         core_ranges.all_cores,
         tt::CBIndex::c_18,
         cb_config.cb_data_format,
-        cb_config.single_tile_size));
+        cb_config.single_tile_size,
+        cb_config.tile));
 
     // ex_partial, ex, ex_external (if not rms_norm)
     if (!cb_config.rms_norm) {
@@ -1228,19 +1238,22 @@ void add_cb_descriptors(
             core_ranges.all_cores,
             tt::CBIndex::c_8,
             cb_config.cb_data_format,
-            cb_config.single_tile_size));
+            cb_config.single_tile_size,
+            cb_config.tile));
         program_descriptor.cbs.push_back(make_cb_descriptor(
             cb_config.ex_CB_size,
             core_ranges.all_cores,
             tt::CBIndex::c_9,
             cb_config.cb_data_format,
-            cb_config.single_tile_size));
+            cb_config.single_tile_size,
+            cb_config.tile));
         program_descriptor.cbs.push_back(make_cb_descriptor(
             cb_config.ex_external_CB_size,
             core_ranges.all_cores,
             tt::CBIndex::c_10,
             cb_config.cb_data_format,
-            cb_config.single_tile_size));
+            cb_config.single_tile_size,
+            cb_config.tile));
     }
 
     if (!cb_config.use_welford) {
@@ -1250,7 +1263,8 @@ void add_cb_descriptors(
             core_ranges.all_cores,
             tt::CBIndex::c_2,
             tt::DataFormat::Float16_b,
-            cb_config.bfloat16_tile_size));
+            cb_config.bfloat16_tile_size,
+            cb_config.tile));
         if (cb_config.do_legacy_layernorm_col_mask) {
             // CB 14: scratch holding the masked input for the LayerNorm E[x] reduction (so cb_in stays
             // intact for the (x - E[x]) pass). The mask itself is the writer-generated CB 19 below.
@@ -1259,7 +1273,8 @@ void add_cb_descriptors(
                 core_ranges.all_cores,
                 tt::CBIndex::c_14,
                 cb_config.cb_data_format,
-                cb_config.single_tile_size));
+                cb_config.single_tile_size,
+                cb_config.tile));
         }
         if (cb_config.do_col_mask) {
             // CB 19: writer-generated column mask, block_wt tiles (one tile-row), always in bfloat16.
@@ -1270,7 +1285,8 @@ void add_cb_descriptors(
                 core_ranges.all_cores,
                 tt::CBIndex::c_19,
                 tt::DataFormat::Float16_b,
-                cb_config.bfloat16_tile_size));
+                cb_config.bfloat16_tile_size,
+                cb_config.tile));
         }
         // CB 3: in3 eps
         program_descriptor.cbs.push_back(make_cb_descriptor(
@@ -1278,7 +1294,8 @@ void add_cb_descriptors(
             core_ranges.all_cores,
             tt::CBIndex::c_3,
             tt::DataFormat::Float16_b,
-            cb_config.bfloat16_tile_size));
+            cb_config.bfloat16_tile_size,
+            cb_config.tile));
         // CB 4: in4 scaler-c (global reduce scaler — F32 when intermediates are F32, otherwise BF16)
         tt::DataFormat scaler_global_format =
             cb_config.cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -1288,35 +1305,40 @@ void add_cb_descriptors(
             core_ranges.all_cores,
             tt::CBIndex::c_4,
             scaler_global_format,
-            scaler_global_tile_size));
+            scaler_global_tile_size,
+            cb_config.tile));
         // CB 11: ex_partial2
         program_descriptor.cbs.push_back(make_cb_descriptor(
             cb_config.ex_partial_CB_size,
             core_ranges.all_cores,
             tt::CBIndex::c_11,
             cb_config.cb_data_format,
-            cb_config.single_tile_size));
+            cb_config.single_tile_size,
+            cb_config.tile));
         // CB 12: ex2
         program_descriptor.cbs.push_back(make_cb_descriptor(
             cb_config.ex_CB_size,
             core_ranges.all_cores,
             tt::CBIndex::c_12,
             cb_config.cb_data_format,
-            cb_config.single_tile_size));
+            cb_config.single_tile_size,
+            cb_config.tile));
         // CB 13: ex_external2
         program_descriptor.cbs.push_back(make_cb_descriptor(
             cb_config.ex_external_CB_size,
             core_ranges.all_cores,
             tt::CBIndex::c_13,
             cb_config.cb_data_format,
-            cb_config.single_tile_size));
+            cb_config.single_tile_size,
+            cb_config.tile));
         // CB 20: ex2pe
         program_descriptor.cbs.push_back(make_cb_descriptor(
             cb_config.ex2pe_CB_size,
             core_ranges.all_cores,
             tt::CBIndex::c_20,
             cb_config.cb_data_format,
-            cb_config.single_tile_size));
+            cb_config.single_tile_size,
+            cb_config.tile));
     }
 
     // CB 15: ex_global
@@ -1325,7 +1347,8 @@ void add_cb_descriptors(
         core_ranges.all_cores,
         tt::CBIndex::c_15,
         cb_config.cb_data_format,
-        cb_config.single_tile_size));
+        cb_config.single_tile_size,
+        cb_config.tile));
 
     if (cb_config.use_welford) {
         // CB 22: transpose intermediate
@@ -1334,7 +1357,8 @@ void add_cb_descriptors(
             core_ranges.all_cores,
             tt::CBIndex::c_22,
             cb_config.cb_data_format,
-            cb_config.single_tile_size));
+            cb_config.single_tile_size,
+            cb_config.tile));
 
         // CB 25: Reciprocal LUT
         CBDescriptor recip_cb_desc;
@@ -1343,7 +1367,8 @@ void add_cb_descriptors(
         recip_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_25,
             .data_format = cb_config.reciprocal_cb_data_format,
-            .page_size = cb_config.reciprocal_CB_size_bytes});
+            .page_size = cb_config.reciprocal_CB_size_bytes,
+            .tile = cb_config.tile});
         recip_cb_desc.buffer = cb_config.recip_buffer;
         program_descriptor.cbs.push_back(std::move(recip_cb_desc));
     }
@@ -1356,7 +1381,8 @@ void add_cb_descriptors(
         stats_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_7,
             .data_format = cb_config.stats_cb_data_format,
-            .page_size = cb_config.stats_single_tile_size});
+            .page_size = cb_config.stats_single_tile_size,
+            .tile = cb_config.tile});
         stats_cb_desc.buffer = cb_config.stats_buffer;
         program_descriptor.cbs.push_back(std::move(stats_cb_desc));
 
@@ -1366,7 +1392,8 @@ void add_cb_descriptors(
             core_ranges.sender_cores,
             tt::CBIndex::c_21,
             cb_config.cb_data_format,
-            cb_config.single_tile_size));
+            cb_config.single_tile_size,
+            cb_config.tile));
 
         // CB 19: cb_var
         program_descriptor.cbs.push_back(make_cb_descriptor(
@@ -1374,7 +1401,8 @@ void add_cb_descriptors(
             core_ranges.sender_cores,
             tt::CBIndex::c_19,
             cb_config.cb_data_format,
-            cb_config.single_tile_size));
+            cb_config.single_tile_size,
+            cb_config.tile));
     }
 
     // CB 16: output
@@ -1385,6 +1413,7 @@ void add_cb_descriptors(
             tt::CBIndex::c_16,
             cb_config.out_data_format,
             cb_config.out_single_tile_size,
+            cb_config.tile,
             cb_config.output_buffer));
     } else {
         program_descriptor.cbs.push_back(make_cb_descriptor(
@@ -1393,6 +1422,7 @@ void add_cb_descriptors(
             tt::CBIndex::c_16,
             cb_config.out_data_format,
             cb_config.out_single_tile_size,
+            cb_config.tile,
             cb_config.output_buffer));
     }
 
@@ -1404,6 +1434,7 @@ void add_cb_descriptors(
             tt::CBIndex::c_17,
             cb_config.out_data_format,
             cb_config.out_single_tile_size,
+            cb_config.tile,
             cb_config.output_reshard_buffer));
     }
 
