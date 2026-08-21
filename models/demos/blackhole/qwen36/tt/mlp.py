@@ -442,8 +442,22 @@ class Qwen36MLP:
             # these matmuls is bandwidth-bound -- the win is the elementwise multiply, which is, plus
             # up no longer contending with it for DRAM.
             _gu_mc = ttnn.L1_MEMORY_CONFIG if _mlp_full_grid else ttnn.DRAM_MEMORY_CONFIG
-            w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=_gu_mc)
-            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=_gu_mc)
+            # FLOOR THE OUTPUT AT bf8 IF in0 EVER GOES BELOW IT. Inert today (in0 is bf16 or bf8);
+            # it exists because ttnn.linear defaults its output dtype to in0's (matmul.cpp:72), and
+            # that inheritance is a trap here. It was a WIN going to bf8 (narrowing ff_norm's gather
+            # made gate/up emit bf8 too: up 507 -> 373us), but it does NOT keep being one: gate/up
+            # outputs are post-matmul ACCUMULATIONS feeding the SwiGLU product, where a 4-bit
+            # mantissa costs far more than it does on an input activation whose error the bfp4
+            # weights already dominate. A bfp4 ff_norm gather was measured and rejected (layer.py
+            # _ff_gather_dtype); this line is what kept that experiment measuring the ACTIVATION
+            # narrowing alone, which is the only claim ever made for it. Keep it if you re-open that.
+            _gu_dt = {"dtype": ttnn.bfloat8_b} if x.dtype == ttnn.bfloat4_b else {}
+            w1_out = ttnn.linear(
+                x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=_gu_mc, **_gu_dt
+            )
+            w3_out = ttnn.linear(
+                x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=_gu_mc, **_gu_dt
+            )
             _silu_fused = True
         else:
             # Interleaved weights: auto matmul program for decode and prefill.

@@ -464,11 +464,21 @@ class TPGatedDeltaNet:
         # Zero cross-chunk conv carry for new sequence
         ttnn.copy(self._zero_conv_carry, self.conv_carry)
 
-    def _col_proj(self, x, weight, decode_progcfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    def _col_proj(self, x, weight, decode_progcfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG, prefill_out_dtype=None):
         """Column-parallel qkvz projection; DRAM-sharded decode matmul when enabled.
-        out_memory_config: decode result placement (default DRAM; L1 keeps it resident)."""
+        out_memory_config: decode result placement (default DRAM; L1 keeps it resident).
+        prefill_out_dtype: pin the PREFILL result dtype (see sharded_decode_matmul); needed because
+        ttnn.linear otherwise inherits in0's dtype, and in0 here can be a bf8 norm output. Callers
+        only ever pass it when in0 IS narrowed, which never happens in decode, so the non-sharded
+        limb below can apply it unconditionally."""
         if not self._dram_sharded:
-            return ttnn.linear(x, weight, compute_kernel_config=self.cfg, memory_config=out_memory_config)
+            return ttnn.linear(
+                x,
+                weight,
+                compute_kernel_config=self.cfg,
+                memory_config=out_memory_config,
+                **({"dtype": prefill_out_dtype} if prefill_out_dtype is not None else {}),
+            )
         _kpass1 = getattr(self.args, "gdn_qkvzab_prefill_progcfg", None)
         return tpc.sharded_decode_matmul(
             x,
@@ -511,7 +521,33 @@ class TPGatedDeltaNet:
             self.args.dim,
             decode_out_memory_config=out_memory_config,
             prefill_compute_cfg=tpc.COMPUTE_HIFI2_NO_FP32_ACC if _kpass1 is not None else None,
+            prefill_out_dtype=prefill_out_dtype,
         )
+
+    def _normalize_valid_len(self, valid_len, T):
+        """``valid_len >= T`` means "no padding in this chunk" == ``None``. See forward_prefill for
+        why the None form is the one to take (cheaper, trace-safe, better tested) and why the
+        normalization is Wormhole-only."""
+        if (
+            not tpc.is_blackhole()
+            and valid_len is not None
+            and not isinstance(valid_len, (list, tuple))
+            and valid_len >= T
+        ):
+            return None
+        return valid_len
+
+    def prefill_uses_native_conv1d(self, T, valid_len=None):
+        """Will a T-token prefill chunk with this ``valid_len`` take the native ttnn.conv1d depthwise
+        path (True), or the MAC FIR fallback (False)?
+
+        Public because the CALLER needs it before the call: layer.py decides attention_norm's prefill
+        gather dtype from it (the FIR's ttnn.addcmul requires all three operands to share a dtype, so
+        the FIR path forces bf16 -- see layer.py). This is the same expression forward_prefill uses
+        for ``_use_native_conv1d``, exported rather than duplicated so the two cannot drift: a caller
+        that narrowed the gather while the conv silently fell back to the FIR would crash in
+        ternary.cpp, and only on the masked tail chunk that no single-layer perf test exercises."""
+        return self._gdn_conv1d and self._normalize_valid_len(valid_len, T) is None and self._conv1d_native_fits_l1(T)
 
     def _conv1d_native_fits_l1(self, T):
         """Can ttnn.conv1d's statically-allocated CBs fit L1 for a T-token prefill?
@@ -992,7 +1028,23 @@ class TPGatedDeltaNet:
                     out_memory_config=ttnn.L1_MEMORY_CONFIG if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG,
                 )
             else:
-                qkvzab = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvzab_progcfg, out_memory_config=_proj_mc)
+                # PIN THE RESULT TO in0's WIDEST FORM, NOT in0's OWN dtype. On the unfused prefill
+                # path in0 is attention_norm's gathered output, which layer.py narrows to bf8 on the
+                # native-conv chunks. ttnn.linear would then emit a bf8 qkvzab (matmul.cpp:72
+                # defaults the output dtype to in0's) and every downstream consumer would silently
+                # change with it: qkv feeds the depthwise conv, and a/b feed sigmoid/softplus ->
+                # beta/g, i.e. the RECURRENT decay, where error compounds across chunks rather than
+                # dying with the token. The gather win is a read-side one (half the bytes over the
+                # ring, half the in0 CB) and survives pinning the output; the output narrowing is a
+                # separate, unmeasured accuracy trade, so it is deliberately not taken here.
+                _qkvzab_dt = ttnn.bfloat16 if x.dtype != ttnn.bfloat16 else None
+                qkvzab = self._col_proj(
+                    x,
+                    self.tw["qkvz"],
+                    self.args.gdn_qkvzab_progcfg,
+                    out_memory_config=_proj_mc,
+                    prefill_out_dtype=_qkvzab_dt,
+                )
             if qkv_row_major:
                 # end index is INCLUSIVE; qkvzab is (1,S,W) so the slice is [0:1, 0:S, 0:qz].
                 qkv = ttnn.untilize_with_unpadding(qkvzab, (0, S - 1, qz - 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1084,13 +1136,9 @@ class TPGatedDeltaNet:
         # FIR to the native ttnn.conv1d — a different kernel with different rounding. That may well be
         # the better path there, but it is a Blackhole retune and needs Blackhole measurement, so this
         # normalization stays off BH until then.
-        if (
-            not tpc.is_blackhole()
-            and valid_len is not None
-            and not isinstance(valid_len, (list, tuple))
-            and valid_len >= T
-        ):
-            valid_len = None
+        # (_normalize_valid_len / prefill_uses_native_conv1d implement this and the _use_native_conv1d
+        # gate below; layer.py reads the same predicate to pick attention_norm's gather dtype.)
+        valid_len = self._normalize_valid_len(valid_len, T)
 
         # Cross-chunk carry (chunk-outer prefill): when _stable_state, the recurrent + conv
         # state continue from the persistent buffers (zeroed at sequence start by
@@ -1114,7 +1162,7 @@ class TPGatedDeltaNet:
         _proj_mc = ttnn.DRAM_MEMORY_CONFIG if _big_prefill else ttnn.L1_MEMORY_CONFIG
         # Native ttnn.conv1d only where its CBs fit L1 (see _conv1d_native_fits_l1); otherwise the
         # MAC FIR, exactly as Wormhole did before the native path was enabled.
-        _use_native_conv1d = self._gdn_conv1d and valid_len is None and self._conv1d_native_fits_l1(T)
+        _use_native_conv1d = self.prefill_uses_native_conv1d(T, valid_len)
         # qkv_row_major would fold the qkv slice into the ROW_MAJOR relayout that the native conv1d
         # needs (worth ~140us/layer at T=2048: SliceDeviceOperation 198us + UntilizeDeviceOperation
         # 220us become one pass). It is OFF because ttnn.untilize_with_unpadding HANGS on Wormhole

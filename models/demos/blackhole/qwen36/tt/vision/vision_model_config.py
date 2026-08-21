@@ -323,7 +323,19 @@ class VisionModelArgs(ModelArgs):
             return auto
 
         tile = self.tile_size
-        assert rows % tile == 0 and k % tile == 0 and n % tile == 0, f"{family}: {rows}x{k}x{n} not tile-aligned"
+        # NOT AN ASSERT. The 2D plan below divides all three extents by the tile size (k_t, n_t, m_t)
+        # and needs `chunk` to divide `rows` exactly, so a non-tile-aligned shape simply cannot take
+        # it -- but that is a reason to DECLINE the tuned plan, not to kill the model. Asserting here
+        # made every non-multiple-of-32 token count a hard failure: images happen to produce aligned
+        # counts, VIDEO does not, and test_demo_vision[traced_video] died with
+        #   "merger_fc2: 728x576x5120 not tile-aligned"   (728 video tokens, 728/32 = 22.75)
+        # on a path that has nothing wrong with it. `auto` is ttnn's own config on an unchunked
+        # activation -- exactly what the tower ran before any of this tuning existed -- so declining
+        # costs those shapes the speedup and nothing else. Plans are cached per (family, rows, k, n,
+        # dtypes), so tile-aligned callers of the SAME family still get the tuned config.
+        if rows % tile or k % tile or n % tile:
+            logger.debug(f"vision {family}: {rows}x{k}x{n} not tile-aligned -> ttnn auto config")
+            return auto
         k_t, n_t = k // tile, n // tile
         grid = self.mesh_device.compute_with_storage_grid_size()
 
