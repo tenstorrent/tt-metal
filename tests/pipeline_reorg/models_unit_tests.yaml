@@ -1494,7 +1494,7 @@
 - name: TT-Transformers MLP module unit tests
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/mlp
   model: tt-transformers-common
-  model_family: TT-Transformers
+  model_family: TTTv2
   skus:
     wh_llmbox:
       timeout: 24
@@ -1505,7 +1505,7 @@
 - name: TT-Transformers RoPE module unit tests
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rope
   model: tt-transformers-common
-  model_family: TT-Transformers
+  model_family: TTTv2
   skus:
     wh_llmbox:
       timeout: 3
@@ -1516,7 +1516,7 @@
 - name: TT-Transformers RMSNorm module unit tests
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rmsnorm
   model: tt-transformers-common
-  model_family: TT-Transformers
+  model_family: TTTv2
   skus:
     wh_llmbox:
       timeout: 9
@@ -1527,7 +1527,7 @@
 - name: TT-Transformers attention module unit tests
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d pytest --tb=short models/common/tests/modules/attention
   model: tt-transformers-common
-  model_family: TT-Transformers
+  model_family: TTTv2
   skus:
     wh_llmbox:
       timeout: 65
@@ -1538,7 +1538,7 @@
 - name: TT-Transformers embedding module unit tests
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d pytest --tb=short models/common/tests/modules/embedding
   model: tt-transformers-common
-  model_family: TT-Transformers
+  model_family: TTTv2
   skus:
     wh_llmbox:
       timeout: 17
@@ -1549,7 +1549,7 @@
 - name: TT-Transformers sampling module unit tests
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface pytest --tb=short models/common/tests/modules/sampling
   model: tt-transformers-common
-  model_family: TT-Transformers
+  model_family: TTTv2
   skus:
     wh_llmbox:
       timeout: 8
@@ -1560,7 +1560,7 @@
 - name: TT-Transformers LM head module unit tests
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d pytest --tb=short models/common/tests/modules/lm_head
   model: tt-transformers-common
-  model_family: TT-Transformers
+  model_family: TTTv2
   skus:
     wh_llmbox:
       timeout: 8
