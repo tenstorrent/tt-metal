@@ -43,7 +43,7 @@ FORCE_INLINE void recordFabricNocEvent(
                                         : KernelProfilerNocEventMetadata::NocType::NOC_0;
     fabric_noc_event.routing_fields_type = packet_type;
 
-    kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
+    kernel_profiler::time_stamped_data<STATIC_ID>(ev_md.asU64());
 }
 
 template <uint32_t STATIC_ID = noc_event_profiler::kNocTraceZoneId>
@@ -68,7 +68,7 @@ FORCE_INLINE void recordFabricNocEventMulticast(
                                         : KernelProfilerNocEventMetadata::NocType::NOC_0;
     fabric_noc_event.routing_fields_type = packet_type;
 
-    kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
+    kernel_profiler::time_stamped_data<STATIC_ID>(ev_md.asU64());
 }
 
 template <uint32_t STATIC_ID = noc_event_profiler::kNocTraceZoneId>
@@ -100,7 +100,7 @@ FORCE_INLINE void recordFabricScatterEvent(
         fabric_scatter_event.num_chunks = num_chunks;
         fabric_scatter_event.routing_fields_type = packet_type;
 
-        kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
+        kernel_profiler::time_stamped_data<STATIC_ID>(ev_md.asU64());
     }
 }
 
@@ -111,7 +111,7 @@ FORCE_INLINE void recordRoutingFields1D(uint32_t routing_fields) {
         KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS_1D;
     event_routing_fields.data.fabric_routing_fields_1d.routing_fields_value = routing_fields;
 
-    kernel_profiler::timeStampedData<STATIC_ID>(event_routing_fields.asU64());
+    kernel_profiler::time_stamped_data<STATIC_ID>(event_routing_fields.asU64());
 }
 
 // how slow is this? alternative is storing entire route buffer which isn't ideal either...
@@ -157,7 +157,7 @@ FORCE_INLINE void recordRoutingFields2D(
         routing_fields_2d.is_mcast = true;
     }
 
-    kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
+    kernel_profiler::time_stamped_data<STATIC_ID>(ev_md.asU64());
 }
 
 void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) {

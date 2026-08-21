@@ -91,7 +91,7 @@ FORCE_INLINE void recordNocEvent(
     // supported here; local_addr/dst_local_addr survive in the signature for call-site compatibility.)
     (void)local_addr;
     (void)dst_local_addr;
-    kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
+    kernel_profiler::time_stamped_data<STATIC_ID>(ev_md.asU64());
 }
 
 template <
@@ -124,7 +124,7 @@ FORCE_INLINE void recordMulticastNocEvent(
     // One self-describing PP_DATA packet -- see recordNocEvent above.
     (void)local_addr;
     (void)dst_noc_addr;
-    kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
+    kernel_profiler::time_stamped_data<STATIC_ID>(ev_md.asU64());
 }
 
 template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, bool posted, typename AddrGen, typename NocIDU32>
