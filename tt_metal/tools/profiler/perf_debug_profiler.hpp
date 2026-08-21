@@ -142,6 +142,10 @@ private:
         // the host has to subtract THAT BANK's offset. It measures 0 in every bank on bh-26, but with four
         // rings a single shared address would silently mis-address any bank whose offset differed.
         uint32_t dram_addr[kMaxDrisc] = {};
+        // CHANNEL-local base of the same ring, for the DMA mover: the GDDR<->L1 DMA engine takes raw channel
+        // addresses, not allocator banks, so this is the HAL region address plus the ring's slot within the
+        // bank -- no bank-offset adjustment (that dance exists only for get_noc_addr_from_bank_id).
+        uint32_t dram_dma_base[kMaxDrisc] = {};
         uint32_t dram_frames = 0;  // ring capacity in whole frames (identical for every ring)
         // No buffer handle: the rings live in the HAL's per-bank DRAM PROFILER region, which is reserved for
         // the profiler's whole lifetime by construction. Nothing to own, nothing to free.

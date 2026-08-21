@@ -294,7 +294,13 @@ constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE
 //
 //   [0]                       w0 = SPSC_SPAN_PACKET_TYPE << PP_TYPE_SHIFT; low 27 bits RESERVED, zero
 //   [1]                       payload_words = PROFILER_L1_CONTROL_VECTOR_SIZE + pack pads + shipped ring words
-//   [2 .. PREFIX)             zero
+//   [3]                       role split: the frame's 1-based monotonic ring index. 0 in the bulk slot
+//                             write; stamped by a trailing 4 B write on the same route, so its visibility
+//                             proves every payload packet landed. The mover verifies it after its
+//                             GDDR-DMA read and consumes only the verified prefix. Host decoder skips it.
+//   [7]                       role split: the stamp value again (the trailing write's L1 source, placed
+//                             for src%16 == dst%16 NoC alignment; the decoder skips it too)
+//   [2], [4..7), [8 .. PREFIX) zero
 //   [PREFIX .. +CONTROL)      the worker's profiler control vector, verbatim
 //   [.. +payload)             for each RISC in ascending order with a live run: spsc_span_pack_pad()
 //                             skipped words, then the run, ring wrap resolved into a flat array

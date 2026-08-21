@@ -99,15 +99,6 @@ bool no_static_tlb() {
     return v;
 }
 
-// TT_METAL_PERF_DEBUG_DRAIN_TENSIX: run the drain kernel on a Tensix BRISC instead of a DRISC. Control
-// path only -- see boot_device(). Requires slow dispatch.
-bool drain_on_tensix() {
-    static const bool v = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRAIN_TENSIX");
-        return s != nullptr && *s != '\0' && *s != '0';
-    }();
-    return v;
-}
 
 // TT_METAL_PERF_DEBUG_NO_NOC_INIT: do not resync the drainer's software NoC counter mirrors from hardware at
 // kernel entry. That resync is what fixes the slow-dispatch wedge (a resident core's mirrors persist across
@@ -251,6 +242,7 @@ bool role_split() {
     return v;
 }
 
+
 // Per-filler DRAM ring size, in MiB. The whole reason to stage in DRAM is that this number is not capped by
 // the TLB window budget the way the 12 MiB host FIFO is, so make it large enough that a host hiccup cannot
 // reach the producers: 64 MiB is ~6,300 frames, roughly 115 busy sweeps of slack against the host FIFO's 21.
@@ -259,16 +251,17 @@ bool role_split() {
 // read before any device is opened. Lowering it lowers DRAM held per bank one-for-one; 12 MiB is enough for a
 // 5,000-zone/RISC capture and 64 MiB buys ~16-17k zones/RISC of runway (FINDINGS §N+39).
 //
-// Default 128: the kimi_k2 1000-iteration fused loop measured a worst-case transient backlog of 174 MiB of
-// 37%-full frames on one ring -- ~100 MiB at the ship-threshold's >=50% fill -- and a 64 MiB ring FILLING is
-// what turned a backlog into 71k producer stalls (fillers block on ring room, sweeps stretch, every ring on
-// the device overflows). 128 covers that transient with margin at 1 GiB of reserved DRAM across 8 banks; a
-// 2 GiB reserve was verified allocation-safe on that same workload.
+// Default: 64 with the DMA mover (whose 2 co-located rings put 128 MiB in each mover bank -- the same
+// 1 GiB total reservation as the 128 MiB NoC-mover default), 128 without it. The measured stakes: a 64 MiB
+// ring FILLING under the ~6 GB/s NoC mover is what turned a backlog into 71k producer stalls, and the
+// worst measured transient was ~100-130 MiB; the DMA mover's drain headroom is what makes 64 MiB per ring
+// sufficient again.
 uint32_t role_ring_mb() {
     static const uint32_t v = [] {
+        constexpr uint32_t def = 64u;
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_ROLE_RING_MB");
-        const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 128u;
-        return n == 0 ? 128u : n;
+        const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : def;
+        return n == 0 ? def : n;
     }();
     return v;
 }
@@ -305,42 +298,10 @@ const std::vector<uint32_t>& role_filler_banks() {
     return v;
 }
 
-// ALLOCATOR bank ids the RINGS live in. Rings 0 and 1 stay on banks 1 and 2, exactly where they were measured;
-// rings 2 and 3 take banks 4 and 5.
-//
-// The old invariant -- a ring shares a DRAM channel with NO drainer -- is now UNREACHABLE and has been
-// deliberately relaxed: 6 drainer channels plus 4 rings is 10 against 7 allocator banks. What is kept is the
-// part with evidence behind it: a ring is never placed on a MOVER bank (0, 3), because host-facing duty is
-// where the N+29 hazard was measured. Ring traffic terminates at the channel's PREFERRED WORKER endpoint while
-// a drainer sits on that channel's unused subchannel, so even a shared channel means different cores and
-// different NIUs -- and the per-ring load (~1.4 GB/s written, ~1.4 GB/s read) is a rounding error against a
-// GDDR channel. Measured with the overlap in place: 0 ring-room waits, 0 hs_bad, staged == moved on all four
-// rings, and the knee moved the right way. Overridable with TT_METAL_PERF_DEBUG_ROLE_RING_BANKS.
-const std::vector<uint32_t>& role_ring_banks() {
-    static const std::vector<uint32_t> v = [] {
-        std::vector<uint32_t> out;
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_ROLE_RING_BANKS");
-        if (s != nullptr && *s != '\0') {
-            const char* p = s;
-            while (*p != '\0') {
-                out.push_back(static_cast<uint32_t>(std::strtoul(p, nullptr, 10)));
-                while (*p != '\0' && *p != ',') {
-                    p++;
-                }
-                if (*p == ',') {
-                    p++;
-                }
-            }
-        }
-        if (out.empty()) {
-            out = {1u, 2u, 4u, 5u};
-        }
-        return out;
-    }();
-    return v;
-}
 
 constexpr uint32_t kRoleFull = 0, kRoleFiller = 1, kRoleMover = 2;
+// Rings per mover bank under the DMA mover (mover m drains fillers m and m + kNSockets).
+constexpr uint32_t kNPeerRings = 2;
 // Must match drisc_profiler_drain.cpp's kProbeMoverMagic and handshake offsets.
 constexpr uint32_t kProbeFillerMagic = 0xF11E5A17u;
 constexpr uint32_t kProbeMoverMagic = 0x5A0FE1EDu;
@@ -483,11 +444,17 @@ uint32_t nstage_cap(uint32_t computed) {
 // Nothing downstream assumes this landed on exactly ROLE_RING_MB: those multipliers live in the arch HALs and
 // are not visible here, so if an arch differs the region comes out a different size and the ring adapts to
 // whatever was actually reserved (frames = region_bytes / slot_bytes).
+// Each mover's bank holds BOTH of its peer rings (the GDDR DMA is same-channel hardware). Region sizing
+// and the frames divisor must agree on this or co-located rings alias.
+uint32_t rings_per_bank() { return kNPeerRings; }
+
 uint32_t perf_debug_dram_region_bytes_per_risc() {
     if (!role_split()) {
         return 0;
     }
-    const uint64_t want_bytes = static_cast<uint64_t>(role_ring_mb()) * 1024ull * 1024ull;
+    // With the DMA mover each mover's TWO peer rings co-locate in its own bank, so the per-bank region
+    // must hold both.
+    const uint64_t want_bytes = static_cast<uint64_t>(role_ring_mb()) * rings_per_bank() * 1024ull * 1024ull;
     return static_cast<uint32_t>((want_bytes + 99) / 100);
 }
 
@@ -565,29 +532,6 @@ uint32_t ship_min_pct() {
     return v;
 }
 
-// TT_METAL_PERF_DEBUG_CV_FIRST (default on; a falsy value disables): a FILLER reads only each core's
-// ring TAILS (32 B) per sweep and bulk-reads spans for the cores it is shipping, instead of reading
-// every core's whole 10,496 B span every sweep -- and a cheap sweep means the inter-sweep gap stays
-// small, which is what closes the burst-onset service race. Coexists with DRISC self-zones: the tails
-// staging lives in the self frame's structurally-dead ring 1..4 space. Needs the ship threshold, which
-// the tails scan feeds.
-bool cv_first() {
-    static const bool v = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_CV_FIRST");
-        const bool want = (s == nullptr || *s == '\0') ? true : env_flag("TT_METAL_PERF_DEBUG_CV_FIRST");
-        if (!want) {
-            return false;
-        }
-        if (ship_min_pct() == 0) {
-            log_warning(
-                tt::LogMetal,
-                "[perf-debug profiler] CV_FIRST needs the ship threshold (SHIP_MIN_PCT != 0); disabling CV-first");
-            return false;
-        }
-        return true;
-    }();
-    return v;
-}
 
 bool tracy_push_enabled() {
     static const bool on = [] {
@@ -1130,12 +1074,6 @@ bool PerfDebugProfiler::boot_device(
     const uint32_t device_id = ctx.chip_id;
     const auto& soc = cluster.get_soc_desc(device_id);
 
-    // TT_METAL_PERF_DEBUG_DRAIN_TENSIX=1 runs the identical drain kernel on a Tensix BRISC instead of a
-    // DRISC. It is a control for "does the DRAM core have anything to do with the PCIe hang", not a product
-    // mode: it needs TT_METAL_SLOW_DISPATCH_MODE=1 so the dispatch row/column is free (the drainer core is
-    // taken from there, leaving the producers the full compute grid) and so a resident non-CQ program is
-    // legal on a worker at all.
-    const bool tensix_drain = drain_on_tensix();
     const char* sd_env = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     const bool slow_dispatch = sd_env != nullptr && *sd_env != '\0' && *sd_env != '0';
 
@@ -1148,27 +1086,10 @@ bool PerfDebugProfiler::boot_device(
     // result compared DRISC+fast against Tensix+slow -- two variables at once -- precisely BECAUSE the Tensix
     // arm was believed to be slow-dispatch-only. It is not, and core type can finally be tested with dispatch
     // mode held fixed.
-    std::optional<CoreCoord> fd_tensix_core;
-    if (tensix_drain && !slow_dispatch) {
-        auto rt_core = MetalContext::instance(context_id)
-                           .get_dispatch_core_manager()
-                           .get_reserved_realtime_profiler_core(device_id);
-        if (!rt_core.has_value()) {
-            log_warning(
-                tt::LogMetal,
-                "[perf-debug profiler] Device {}: no reserved real-time-profiler core to borrow, so a Tensix "
-                "drainer has nowhere to live under fast dispatch (reservation is skipped for non-MMIO chips, "
-                "ETH dispatch, fabric tensix datamover, and Quasar) -- use TT_METAL_SLOW_DISPATCH_MODE=1",
-                device_id);
-            disarm_producers(mesh_device, device_id);
-            return false;
-        }
-        fd_tensix_core = CoreCoord{rt_core->x, rt_core->y};
-    }
 
     // The drainer is a DRISC: one DM RISC-V on a DRAM core. Nothing else here is Blackhole-specific, but
     // that is the only place they exist today.
-    if (!tensix_drain && !hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         log_warning(
             tt::LogMetal,
             "[perf-debug profiler] Device {}: no DRAM programmable cores (card FW below the DRISC gate?)",
@@ -1197,7 +1118,7 @@ bool PerfDebugProfiler::boot_device(
     //
     // TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1 forces the 110 reservation on the DRISC arm too, for 2x2 runs
     // where equal poll-list length (= equal idle sweep cost) matters more than coverage. See FINDINGS N+24.
-    const bool reserve_column = slow_dispatch && (tensix_drain || reserve_column_env());
+    const bool reserve_column = slow_dispatch && reserve_column_env();
     const uint32_t gx = static_cast<uint32_t>(grid.x) - (reserve_column ? 1u : 0u);
     const uint32_t gy = static_cast<uint32_t>(grid.y);
     const uint64_t num_cores = static_cast<uint64_t>(gx) * gy;
@@ -1258,7 +1179,7 @@ bool PerfDebugProfiler::boot_device(
     // Losslessness never depends on the count: fewer drainers means producers stall sooner, not that markers
     // are dropped.
     const uint32_t need_split = kNFillers + kNSockets;
-    bool rsplit = role_split() && !tensix_drain;
+    bool rsplit = role_split();
     if (rsplit && nbanks < need_split) {
         log_warning(
             tt::LogMetal,
@@ -1284,20 +1205,22 @@ bool PerfDebugProfiler::boot_device(
     if (rsplit) {
         ctx.n_drisc = kNFillers + kNSockets;
         const auto& fb = role_filler_banks();
-        const auto& rb = role_ring_banks();
         TT_FATAL(
-            fb.size() >= kNFillers && rb.size() >= kNFillers,
-            "perf-debug role split needs {} filler banks and {} ring banks (got {} and {})",
-            kNFillers,
-            kNFillers,
-            fb.size(),
-            rb.size());
+            fb.size() >= kNFillers, "perf-debug role split needs {} filler banks (got {})", kNFillers, fb.size());
+        if (std::getenv("TT_METAL_PERF_DEBUG_ROLE_RING_BANKS") != nullptr) {
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] ROLE_RING_BANKS is ignored: each ring must live in its mover's own "
+                "bank for the GDDR DMA to reach it");
+        }
         for (uint32_t f = 0; f < kNFillers; f++) {
             ctx.role[f] = kRoleFiller;
             ctx.sock_of[f] = kNoSocket;
             ctx.n_peer[f] = 0;
             banks.push_back(fb[f]);
-            ringbank.push_back(rb[f]);
+            // Filler f belongs to mover f % kNSockets; its ring lives in that mover's bank so the
+            // mover's same-channel DMA engine can read it.
+            ringbank.push_back(kSafeBanks[f % kNSockets]);
         }
         // Mover m drains fillers m, m + kNSockets, ... -- so at 4 fillers, mover 0 takes fillers 0 and 2 and
         // mover 1 takes 1 and 3. STRIDED rather than adjacent on purpose: the fillers own contiguous quarters
@@ -1313,9 +1236,9 @@ bool PerfDebugProfiler::boot_device(
                 ctx.peer_of[d][p] = m + p * kNSockets;
             }
             banks.push_back(kSafeBanks[m]);
-            // A mover owns no ring of its own -- it reads its PEERS' rings, and their banks/addresses reach it
-            // as compile args taken from those peers' entries. Recorded as peer 0's only for the log line.
-            ringbank.push_back(rb[ctx.peer_of[d][0]]);
+            // A mover owns no ring of its own -- it reads its PEERS' rings (both live in its own bank).
+            // Recorded as peer 0's for the log line.
+            ringbank.push_back(kSafeBanks[m]);
         }
     } else {
         ctx.n_drisc = n_full;
@@ -1374,7 +1297,7 @@ bool PerfDebugProfiler::boot_device(
             const auto& hal = MetalContext::instance().hal();
             const uint32_t region_bytes = hal.get_dev_size(HalDramMemAddrType::PROFILER);
             const uint32_t region_addr = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::PROFILER));
-            ctx.dram_frames = region_bytes / slot_bytes_all;
+            ctx.dram_frames = (region_bytes / rings_per_bank()) / slot_bytes_all;
             TT_FATAL(
                 ctx.dram_frames >= 64,
                 "perf-debug role split: the DRAM profiler region holds {} frames ({} B / {} B per frame), need at "
@@ -1409,7 +1332,15 @@ bool PerfDebugProfiler::boot_device(
             // filler already carries its own (bank, addr) pair, and a mover gets its peers' pairs explicitly.
             for (uint32_t f = 0; f < kNFillers; f++) {
                 const int32_t off = ctx.device->allocator()->get_bank_offset(BufferType::DRAM, ringbank[f]);
-                ctx.dram_addr[f] = static_cast<uint32_t>(static_cast<int64_t>(region_addr) - off);
+                // A bank holding several rings gives filler f the slot of its ordinal among same-bank
+                // fillers (under the DMA mover that is exactly f / kNSockets).
+                uint32_t ord = 0;
+                for (uint32_t e = 0; e < f; e++) {
+                    ord += (ringbank[e] == ringbank[f]) ? 1u : 0u;
+                }
+                const uint32_t ring_slot_off = ord * ring_bytes;
+                ctx.dram_addr[f] = static_cast<uint32_t>(static_cast<int64_t>(region_addr + ring_slot_off) - off);
+                ctx.dram_dma_base[f] = region_addr + ring_slot_off;
             }
             // Movers address their peers' rings, so copy the peer-0 pair over for the log line only.
             for (uint32_t d = kNFillers; d < ctx.n_drisc; d++) {
@@ -1452,7 +1383,6 @@ bool PerfDebugProfiler::boot_device(
         }
     }
 
-    if (!tensix_drain) {
         std::vector<CoreCoord> flip_cores;
         for (uint32_t d = 0; d < ctx.n_drisc; d++) {
             flip_cores.push_back(mesh_device->impl().pick_unused_dram_logical_core(banks[d]));
@@ -1480,7 +1410,6 @@ bool PerfDebugProfiler::boot_device(
             }
         }
         set_drisc_niu_mode(ctx.device, flip_cores, 1);
-    }
 
     for (uint32_t d = 0; d < ctx.n_drisc; d++) {
         // A MOVER has no slice of the worker grid -- it never touches a worker core. Fillers (and the default
@@ -1501,31 +1430,6 @@ bool PerfDebugProfiler::boot_device(
         }
         CoreCoord drisc_phys{};  // NOC0 coords of the drainer core, for the socket and the log line
         uint32_t region = 0;     // usable L1 on the drainer core
-        if (tensix_drain) {
-            // Under slow dispatch the dispatch row/column is idle, so the drainer takes a core from there
-            // and the producers keep the FULL compute grid -- the offered load is then identical to the
-            // DRISC runs, which is the only way the two are comparable.
-            // Column gx is the one held back above; drainer d takes row d of it.
-            // Slow dispatch: the held-back column is free, drainer d takes row d of it. Fast dispatch: the
-            // column belongs to dispatch, so borrow the idle RT-profiler core instead (see above). Either way
-            // the drainer sits OUTSIDE the producer grid, which is what keeps the two arms comparable.
-            if (fd_tensix_core.has_value()) {
-                ctx.drisc_logical[d] = *fd_tensix_core;
-            } else {
-                TT_FATAL(d < gy, "drainer {} does not fit the reserved column (only {} rows)", d, gy);
-                ctx.drisc_logical[d] = CoreCoord{gx, d};
-            }
-            ctx.drisc_virtual[d] = ctx.device->virtual_core_from_logical_core(ctx.drisc_logical[d], CoreType::WORKER);
-            drisc_phys = cluster.get_physical_coordinate_from_logical_coordinates(
-                device_id, ctx.drisc_logical[d], CoreType::WORKER, /*no_warn=*/true);
-            // A Tensix's unreserved L1 belongs to the allocator, so the HAL refuses to name it (hal.hpp:705)
-            // -- take the allocator's base instead and run to the top of L1. Safe to carve raw here because
-            // the drainer core is outside the producer grid and this workload allocates no L1 buffers; a
-            // workload that did would need a real sharded allocation on this core.
-            ctx.drisc_l1_base[d] = ctx.device->allocator()->get_base_allocator_addr(HalMemType::L1);
-            ctx.drisc_l1_noc[d] = ctx.drisc_l1_base[d];  // worker L1 is addressed directly, no DRAM-view offset
-            region = ctx.device->l1_size_per_core() - static_cast<uint32_t>(ctx.drisc_l1_base[d]);
-        } else {
             // TT_METAL_PERF_DEBUG_DRISC_BANK shifts which DRAM bank drainer d takes. DEFAULT 0, AND
             // BANK 0 IS THE ONE THAT IS KNOWN GOOD -- do not "fix" this to something else.
             //
@@ -1594,7 +1498,6 @@ bool PerfDebugProfiler::boot_device(
             ctx.drisc_l1_base[d] = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
             ctx.drisc_l1_noc[d] = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
             region = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-        }
 
         const uint32_t slot_bytes = slot_bytes_all;
         constexpr uint32_t kCfgReserve = 8 * 1024;
@@ -1660,7 +1563,6 @@ bool PerfDebugProfiler::boot_device(
         // Stream mode first: the socket config is written from the host and only lands in L1 once the NIU
         // stops forwarding inbound DRAM-range addresses to GDDR. The kernel restores it on the host's word.
         // A Tensix NIU is already a NoC master, so this (and the kernel's restore tail) is DRISC-only.
-        if (!tensix_drain) {
             // NIU already flipped to stream mode for EVERY drainer by the single pre-pass above.
 
             // TT_METAL_PERF_DEBUG_NIU_TEST isolates the NIU mode flip from everything else the drainer does.
@@ -1687,7 +1589,6 @@ bool PerfDebugProfiler::boot_device(
                 disarm_producers(mesh_device, device_id);
                 return false;
             }
-        }
 
         // Give the DRISC drainer a STATIC TLB window, so the socket's per-read ack write skips UMD's
         // per-access TLB reconfigure -- the same path the Tensix drainer already gets for free. Measured on
@@ -1702,7 +1603,7 @@ bool PerfDebugProfiler::boot_device(
         // what workers get, so both drainers end up on an identical host write path.
         //
         // Best-effort: a window is a finite device resource, and losing this race only costs the ~210 ns.
-        if (!tensix_drain && !no_static_tlb() && !cluster.is_mock_or_emulated()) {
+        if (!no_static_tlb() && !cluster.is_mock_or_emulated()) {
             auto* tlb_manager = cluster.get_driver()->get_chip(device_id)->get_tlb_manager();
             const tt_xy_pair tlb_core(ctx.drisc_virtual[d].x, ctx.drisc_virtual[d].y);
             if (!tlb_manager->is_tlb_mapped(tlb_core)) {
@@ -1737,10 +1638,10 @@ bool PerfDebugProfiler::boot_device(
                 ctx.sockets[sk] = std::make_unique<distributed::D2HSocket>(
                     mesh_device,
                     distributed::MeshCoreCoord{
-                        scoord, tensix_drain ? ctx.drisc_logical[d] : CoreCoord(drisc_phys.x, drisc_phys.y)},
+                        scoord, CoreCoord(drisc_phys.x, drisc_phys.y)},
                     static_cast<uint32_t>((static_cast<uint64_t>(kHRingWords) * 4 / kPageSize) * kPageSize),
                     distributed::D2HSocket::ExternalConfigBuffer{
-                        .address = cfg_l1, .sender_uses_physical_noc_addr = !tensix_drain});
+                        .address = cfg_l1, .sender_uses_physical_noc_addr = true});
                 ctx.sockets[sk]->set_page_size(kPageSize);
                 // MEASURE the flow-control poll directly. The per-poll cost derived from the rounded "poll X%"
                 // log line differed ~10x between a fast and a degraded card, but that figure is too indirect to
@@ -1867,8 +1768,7 @@ bool PerfDebugProfiler::boot_device(
             // and drisck.cc emits DRISC-KERNEL zones -- it just was never run 74 times inside one
             // card-reset window. Zero it here for both rather than wait to rediscover it on the DRISC.
             const uint64_t drainer_prof_l1 =
-                tensix_drain ? prof_l1
-                             : hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::PROFILER);
+                hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::PROFILER);
             cluster.write_core(
                 zero_ctrl.data(),
                 (uint32_t)zero_ctrl.size(),
@@ -1939,7 +1839,7 @@ bool PerfDebugProfiler::boot_device(
             // not this. Default is now to use the socket's own encoding on both NoCs.
             const char* mirror_env = std::getenv("TT_METAL_PERF_DEBUG_NOC_MIRROR");
             const bool want_mirror = mirror_env != nullptr && *mirror_env != '\0' && *mirror_env != '0';
-            if (!tensix_drain && drain_noc() == 1 && want_mirror) {
+            if (drain_noc() == 1 && want_mirror) {
                 const auto& mmio_soc = cluster.get_soc_desc(cluster.get_associated_mmio_device(device_id));
                 const auto pcie_noc0 = mmio_soc.get_cores(CoreType::PCIE, CoordSystem::NOC0).front();
                 const uint32_t mx =
@@ -1969,6 +1869,7 @@ bool PerfDebugProfiler::boot_device(
             uint32_t peer_hs[kNPeerMax] = {};
             uint32_t peer_bank[kNPeerMax] = {};
             uint32_t peer_addr[kNPeerMax] = {};
+            uint32_t peer_dma[kNPeerMax] = {};
             if (is_mover) {
                 for (uint32_t pi = 0; pi < ctx.n_peer[d]; pi++) {
                     const uint32_t p = ctx.peer_of[d][pi];
@@ -1977,6 +1878,7 @@ bool PerfDebugProfiler::boot_device(
                     peer_hs[pi] = ctx.hs_addr[p];
                     peer_bank[pi] = ctx.dram_bank[p];
                     peer_addr[pi] = ctx.dram_addr[p];
+                    peer_dma[pi] = ctx.dram_dma_base[p];
                 }
             }
             ctx.drain_program[d] = std::make_unique<Program>(CreateProgram());
@@ -2039,25 +1941,20 @@ bool PerfDebugProfiler::boot_device(
                 (sync_event_count() != 0 && self_frames_base != 0) ? 1u : 0u,
                 // arg 39: FILLER ship threshold (percent of live span capacity); movers never read it.
                 ship_min_pct(),
-                // arg 40: CV-first sweeps (fillers only; needs the spare staging slot, see cv_first()).
-                cv_first() ? 1u : 0u};
+                // args 40/41: retired knobs (CV-first and the DMA mover are unconditional now); the indices
+                // stay occupied because arg positions appear in JIT cache keys and in the FINDINGS notes.
+                1u,
+                1u,
+                // args 42/43: CHANNEL-local ring bases for the mover's GDDR DMA reads, per peer slot.
+                peer_dma[0],
+                peer_dma[1]};
             TT_FATAL(
-                !cv_first() || my_cores * 32u <= 4u * kernel_profiler::PROFILER_L1_BUFFER_SIZE,
+                my_cores * 32u <= 4u * kernel_profiler::PROFILER_L1_BUFFER_SIZE,
                 "CV-first tails staging ({} cores x 32 B) does not fit the self slot's dead ring space",
                 my_cores);
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
-                tensix_drain
-                    ? CreateKernel(
-                          *ctx.drain_program[d],
-                          kdrain,
-                          ctx.drisc_logical[d],
-                          DataMovementConfig{
-                              .processor = DataMovementProcessor::RISCV_0,
-                              .noc = NOC::RISCV_0_default,
-                              .compile_args = cargs,
-                              .defines = {{"DRAIN_ON_TENSIX", "1"}}})
-                    : CreateKernel(
+                    CreateKernel(
                           *ctx.drain_program[d],
                           kdrain,
                           ctx.drisc_logical[d],
@@ -2250,9 +2147,8 @@ bool PerfDebugProfiler::boot_device(
             "[perf-debug profiler] Device {}: {} {} resident on logical ({},{}) [noc0 ({},{})], cores "
             "[{},{}) of {}, {} staging slots x {} B",
             device_id,
-            tensix_drain ? "TENSIX-BRISC drainer"
-                         : (is_filler ? "DRISC FILLER (worker rings -> DRAM ring)"
-                                      : (is_mover ? "DRISC MOVER (DRAM ring -> D2H socket)" : "DRISC")),
+            is_filler ? "DRISC FILLER (worker rings -> DRAM ring)"
+                      : (is_mover ? "DRISC MOVER (DRAM ring -> D2H socket)" : "DRISC"),
             d,
             ctx.drisc_logical[d].x,
             ctx.drisc_logical[d].y,
@@ -2717,6 +2613,14 @@ void PerfDebugProfiler::stop() {
                     res[170],
                     res[171]);
             }
+            if (res[174] != 0 || res[175] != 0) {
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] DRISC DMA visibility: {} in-place re-reads, {} deferred sub-batches "
+                    "[stamps still in NoC flight when the mover arrived; both resolve without waiting]",
+                    res[174],
+                    res[175]);
+            }
             // proc sub-split. `proc` is the biggest busy-sweep phase, and it is two unrelated things:
             // a LOCAL scan of the staged control vectors, and a per-live-core 20 B NoC head write-back
             // (up to one issue per core per sweep). This drainer is issue-bound, so which half dominates
@@ -2946,9 +2850,9 @@ void PerfDebugProfiler::stop() {
                     return (static_cast<uint64_t>(res[o + 1]) << 32) | res[o];
                 };
                 // A posted write is acked without the data words being counted where we read them, so a
-                // non-zero count means the byte totals are UNDER-reported. Every write on this path is
-                // posted=false, so this must be 0; say so rather than print a plausible low number.
-                const bool posted_ok = (res[125] == 0 && res[126] == 0);
+                // res[125]/[126] are retired zeros: the kernel's write totals now sum posted +
+                // non-posted words (the DMA mover's PCIe pushes are posted by design).
+                const bool posted_ok = true;
                 const bool win_ok = (res[127] != 0);
                 for (uint32_t blk = 0; blk < 2; blk++) {
                     const uint32_t base = (blk == 0) ? 104u : 88u;
@@ -3061,11 +2965,15 @@ void PerfDebugProfiler::stop() {
             // write sub-split. Exact per busy sweep: ship_run only executes when a frame is being sent.
             const uint64_t c_chunk = u64(27), c_push = u64(29), c_notify = u64(31);
             const double pu = res[9] ? static_cast<double>(res[9]) : 1.0;  // pushes
+            const uint64_t c_pack = u64(172);
             log_info(
                 tt::LogMetal,
-                "[perf-debug profiler] DRISC write split over {} pushes: noc-chunk {:.2f} us/push ({:.1f} ms) | "
+                "[perf-debug profiler] DRISC write split over {} pushes: pack {:.2f} us/push ({:.1f} ms) | "
+                "noc-chunk {:.2f} us/push ({:.1f} ms) | "
                 "push_pages {:.2f} us/push ({:.1f} ms) | notify {:.2f} us/push ({:.1f} ms)",
                 res[9],
+                res[9] ? (static_cast<double>(c_pack) / kCycPerUs) / res[9] : 0.0,
+                (static_cast<double>(c_pack) / kCycPerUs) / 1000.0,
                 (c_chunk / kCycPerUs) / pu,
                 c_chunk / kCycPerUs / 1000.0,
                 (c_push / kCycPerUs) / pu,

@@ -6196,3 +6196,158 @@ Single-device sweep (same params): delay 15 -> 285,025 (at/below the bh-18 §N+5
 8-parallel per-device counts nearly coincide at every point, so this box's knee is DEVICE-side (filler
 service vs ring refill), not host-sharing -- the number generalizes, and it is the floor the DMA-mover
 rework (§N+66) targets next.
+
+## §N+67 — DMA-mover landed: rings on the mover's banks, GDDR-DMA reads, deterministic per-frame seq verification (yyz 8xp150, 2026-08-21)
+
+The §N+66 rework is in (`TT_METAL_PERF_DEBUG_DMA_MOVER`, carg 41, default on). Rings co-locate 2 x 64 MiB
+per mover bank (banks 0,3; fillers 0/2 -> bank 0, 1/3 -> bank 3; `ROLE_RING_BANKS` is ignored with a
+warning), ring default back to 64 MiB, channel-local DMA base addresses as cargs 42/43. The mover drains
+each visit in kGenSlots-frame sub-batches pipelined across two staging generations: wait DMA(k), verify,
+issue DMA(k+1) into the other generation, release ring credit, ship. Per-visit cap 64*kGenSlots frames
+(192): an uncapped visit measured a whole 6,355-frame ring in one 6.7 ms sweep while the mover's other
+ring filled — the cap is PEER FAIRNESS, not throughput (a deficit round-robin would be the deterministic
+next shape if two hot rings ever need weighting).
+
+Five hardware/protocol findings, each of which cost a run to learn:
+
+1. **WR_ACK does not order GDDR-DMA reads** (GDDR_ss_MAS §2.7: NoC and DMA enter the tile through separate
+   ports; same-address cross-port ordering is undefined; WR_ACK = "landed at destination", not a fence
+   against another master). First tight-chase run: 85,223 clean-framing order regressions = stale DMA
+   reads of frames the filler had *acked* microseconds earlier. John's tensor prefetcher has the same
+   formal gap (WAIT_CQ = CQ order + slack, no fence) — it works because of the slack, not a contract.
+2. **Resolution is deterministic, not a distance heuristic.** A "stay 8 frames behind head" chase guard
+   worked but withheld frames at every quiesce point (wedged the host's teardown drain-wait; stranded
+   exactly the withheld frames). Replaced by per-frame sequence verification: the filler stamps prefix
+   word 2 of every frame with its 1-based monotonic ring index (fence before the DRAM write); the mover
+   verifies after each DMA, re-reads on mismatch (32 tries), falls back to the NoC read (the ordered
+   path), and only a post-NoC mismatch — genuine corruption — kills egress. Counters in result words
+   174/175. Measured across the full kimi_k2 run AND a delay-15 synthetic hammer: **0 re-reads, 0
+   fallbacks** — the pipelined mover always trails the head probe by a sub-batch, so the visibility
+   window never opens; the verification is free insurance.
+3. **The posted/non-posted bit is command-buffer state** (`noc_write_init_state<cmd_buf, CQ_NOC_mkP>`),
+   not the per-write template arg — the template only picks the SW counter. Setting one without the
+   other freezes the flush predicate (HW acks accumulate, SW mirror doesn't) and egress dies silently at
+   the first barrier. Even initialized correctly, the posted-sent equality (HW POSTED_WR_REQ_SENT vs SW
+   issued) diverged slowly on the DRISC->PCIe path and killed movers after ~24k frames — posted pushes
+   are PARKED behind `TT_METAL_PERF_DEBUG_POSTED_PUSH` (carg 44, default off) with the HW/SW pair
+   published as debug words for a cheap future bring-up. Related trap, comment pinned in ship_once:
+   `socket_notify_receiver`'s D2H path re-inits the shared write_cmd_buf to NON-posted, so posted state
+   must be re-initialized per push.
+4. **A sent-based barrier is NOT a safe source-reuse gate against the DMA engine — negative result.**
+   The inter-sub-batch barrier looks like pure source-buffer safety (staging slots are the next DMA's
+   destination), and dispatch's rule for that is the SENT predicate (NONPOSTED_WR_REQ_SENT), not WR_ACK.
+   Tried it: one kimi run produced 77,905 and 42,197 decode order regressions on two streams — data
+   corruption — with stalls improved (4,510 on one chip) and every other counter green. "Sent" orders
+   the NIU against CPU refills of the buffer; it evidently does not order it against the GDDR-DMA
+   engine's L1 writes (another master, another port — the §2.7 lesson again, from the other side).
+   Reverted to the acked flush; the constraint is pinned as a comment on write_barrier_bounded. The ack
+   RTT (~1-2 us/sub-batch) stays until posted pushes are brought up.
+5. **Batched notifies must fire on the drop path too.** Deferring socket_notify to the last sub-batch of
+   a visit deadlocked when a mid-visit push hit the credit wall: the receiver was never told about the
+   pages already pushed, so credits never returned. `notify_pending` now flushes on the drop path and at
+   exit before the socket barrier.
+
+Two smaller fixes: the stop-path drain deadline was 100 ms — less than one full-ring drain — and expired
+mid-drain, stranding 12-16k words/device; it is now 1 s (host waits 10 s). And a self-inflicted arithmetic
+bug worth its lesson: the verify's expected index added `done` on top of `mv_tail`, but `mv_tail` is
+bumped per sub-batch (incremental tail release), so the formula double-counted and killed every mover at
+the FIRST multi-sub-batch visit — while passing every single-sub-batch visit (done=0 degenerates to
+correct), i.e. every light-load test. When a counter moves inside the loop, audit every expression that
+also adds the loop accumulator. Debug recipe that cracked it: publish got/expected through the live hs
+probe words on the death path and reproduce on the synthetic harness (~90 s) instead of 12-min workload
+runs.
+
+Validation (kimi_k2 8-chip, full config): PASSED, 8/8 devices 650/650 lanes complete, 0 words stranded,
+0 seq re-reads/fallbacks, order regressions at the known one-per-lane artifact only. Producer stalls
+5,259 across 4 chips / 0 on the other 4 (pre-fix §N+65 config: 0/35/1,841 across runs at 128 MiB) — the
+residue is burst margin at 64 MiB with the acked barrier still in (run predates finding 4). Mover work
+per push (3 frames): pack 0.32 us + noc-chunk 2.09 us + push_pages 0.04 us + notify 0.04 us. Pack cost
+0.11 us/frame (~4%) retires the filler-precomputed-descriptor idea. NoC footprint after relocation: the
+mover's ring reads leave the NoC entirely (GDDR-DMA); its NIU carries only PCIe pushes. Filler ring
+writes remain NoC writes, now cross-channel into the mover's bank — same bytes, different destination.
+
+## §N+68 — The host decoder was the hidden half of every stall story: atomic zones had silently halved it (yyz 8xp150, 2026-08-21/22)
+
+The >50 ms "host writer stall" episodes and the kimi run-to-run variance finally decompose. The
+load-bearing discovery: **PP_ZONE_ATOMIC records never had a vectorized decode path.** The AVX2
+emit_zones8 screen accepts 2-word START/END pairs only; every 3-word atomic record was "rejected"
+into the scalar walk (the code even said so). The atomic-format stopgap therefore silently took host
+decode from ~12 GB/s to ~6.5 GB/s the day it landed — and since kimi's burst offer (~80 zones/RISC per
+150 us iteration x 5 RISCs x 130 cores ~ 350M zones/s) sits right at that crippled ceiling, the host ran
+saturated with zero headroom, and every scheduler burp became a producer-stall episode. The old
+128 MiB rings ABSORBED most of those episodes (the 0/35/1,841 band); the DMA config's budget-neutral
+64 MiB rings stopped absorbing them (5,259/4,510/7,763) — the DMA mover was blamed for exposing a host
+regression it had nothing to do with.
+
+Fixes, both host-only, decoder-side (survive Mo's emit rework):
+1. **emit_atomic8** — stride-3 deinterleave (3 loads, 9 lane-permutes, 6 blends per 8 records), same
+   NT-store shape as zones8 plus the duration quadword. 6.45 -> 9.3-10 GB/s.
+2. **Count-limited blocks** — the type screen's movemask names the leading run of atomic lanes
+   (countr_zero of the inverted mask), so a block containing a sticky or a run-tail emits its leading k
+   records through the vector path instead of bailing scalar and rescanning per-record. Vectorized
+   records 78% -> 88%; scalar records and wasted reject-scans both halved. The residual ~12% on the
+   SYNTHETIC is per-launch STICKY_PROG density (100k tiny launches = one sticky per ~6 records); on
+   kimi-shaped traffic (one per ~80 records) effective vectorization is ~98%. Format note for the emit
+   rework: a 3-word prog record (full 32-bit id in w1; kills PROG_EXT too) makes launch-dense workloads
+   fully vectorizable via the existing count-limited path — worker launch-preamble change only,
+   deliberately NOT done in the stopgap.
+
+Measurement discipline this section paid for twice over:
+- perf (unlocked via a privileged-container sysctl; paranoid=1 resets on reboot) attached to the decode
+  threads during a stalling synthetic run showed 3.3-3.6 GHz, IPC 2.9-3.4 — HEALTHY. Synthetic
+  delay-150/175 stalls are plain saturation (offered > sustainable, by design), not the episode defect;
+  hours went into conflating them.
+- The receiver's "busy GB/s" is confounded by pass size (backlogged = big passes = fast per byte;
+  keeping-up = small passes = slow per byte). Never compare it across runs as a capability metric.
+- Nearest-symbol attribution lies for code AND data under ICF/hot-cold splitting: a run of samples
+  "inside ~D2HSocket" mid-capture was disproven by a breakpoint-with-backtrace run (destructor fires
+  exactly twice, at teardown). gdb-as-parent with breakpoints is a serviceable unprivileged perf
+  substitute (yama scope=1 requires ancestry); ptrace RIP sampling needs the maps snapshot from the
+  SAME process instance and its samples' wall-position checked against run-phase log markers.
+- The mover's 300-400 us credit-waits at saturation are the visit-batched notify (do_notify per visit)
+  presenting bytes_sent in visit-sized steps: normal backpressure, not a defect. Both credit-poll loops
+  (socket_api and the drain kernel's bounded replacement) invalidate correctly; pages_available carries
+  the full clflush/lfence discipline.
+
+State after the fixes, kimi 8-chip, DMA mover at Mo's exact 1 GiB budget (64 MiB rings): four runs
+{0, 1360, 3184, 5652} producer stalls — first hard-zero ever recorded on this workload, capture
+integrity perfect on every run (650/650 lanes, 0 stranded, ordering clean). The residual is the
+episodic host hole (1-2 chips per run, tens of ms), which 128 MiB rings used to absorb; hunting it with
+per-second perf timelines on all 16 decode threads during kimi is the open item, now fully tooled.
+
+## N+69: The cleanup-surgery corruption was a hardcoded experimental read path
+
+Post-surgery gates showed 25-537 anomalies/stream (rate-proportional, packed frames only, word-slipped
+final records). Three expensive false leads first: barrier removal (restoring acked-publish changed
+nothing), seq stamps/verify (disabling them changed nothing -- and that diagnostic itself was incoherent:
+issue-time publish + sent-only barriers are only sound UNDER stamp verification, so the diag state
+manufactured a second, real race that muddied every gate), and decoder over-read (frame_words=0 changed
+nothing).
+
+The decisive discriminators, in order:
+1. **Force-raw** (kPackMaxPayload=0): near-clean (3 vs ~500) => staged bytes fine, packed lane suspect.
+   Earlier "raw frames decode clean" evidence was VACUOUS -- at gate fills nearly all frames pack, so the
+   raw-path counters were idle, not exonerating.
+2. **Anomaly-site counters**: all hits at one linear-walk site, dumps perfectly regular -- always the
+   final record, contents [ts,dur,w0] = previous-lap bytes phase-shifted by 2 (512-word ring % 3-word
+   records = 2).
+3. **Lane arithmetic**: every offending lane was r2/r3 (lane % 5) -- exactly the lanes in the SECOND HALF
+   of a split span read.
+
+Root cause: the surgery flattened `kReadSplit` to the split-2 arm (half-span reads on both NoCs). But
+`read_split()` on the host **defaults to 0** and the env knob was never set: the live config had always
+been ONE whole-span read per core. The split arms were opt-in experiments. With the split hardcoded on,
+the control vector (first half, NoC A) and lanes r2-r4's data (second half, NoC B) complete in either
+order, so a tail can claim a record the other NoC's capture predates -> the final record reads stale
+previous-lap bytes. The frame's own CV is only trustworthy because a single ascending read captures every
+tail BEFORE the data it points at -- an invariant now stated at the read site.
+
+Fix: restored the whole-span single-NoC read (and deleted noc_b entirely). d150-10K: anomalies 0, order
+regressions 0, both streams.
+
+Lessons: (a) when flattening a compile-time knob, flatten to the LIVE value (host default / env), not the
+arm most recently worked on -- check the host side before deleting the selector; (b) never stack
+diagnostics that disable a safety mechanism (stamps) while leaving the machinery that depends on it
+(issue-time publish) -- the diag itself then generates corruption and every subsequent A/B is polluted;
+(c) per-site anomaly counters + a 4-shot context dump located in one run what three days of A/B gates
+could not.
