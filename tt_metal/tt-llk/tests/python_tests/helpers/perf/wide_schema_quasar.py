@@ -49,7 +49,8 @@ DB_SCHEMA = [
     Column("formats.output", "string", True, "formats"),
     Column("formats.register_A", "string", True, "formats"),
     Column("formats.register_B", "string", True, "formats"),
-    Column("formats.sfpu_math", "string", True, "formats"),
+    Column("formats.sfpu_src", "string", True, "formats"),
+    Column("formats.sfpu_dst", "string", True, "formats"),
     # flags
     Column("dest_acc", "string", True, "flags"),
     Column("speed_of_light", "bool", True, "flags"),

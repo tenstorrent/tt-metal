@@ -2,17 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# Tests corner cases of reduction operations.
-# These tests are not meant to exhaustively sweep over all parameter combinations.
-# Many parameters are exposed to make it easy to add new tests, but are currently
-# set to a single value.
+# Corner cases of topk/argmax/cumsum/cumprod/moe/sampling and multi-dim RM sum.
 
 import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_allclose_and_pcc, torch_random, is_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from models.common.utility_functions import comp_allclose_and_pcc, torch_random
 from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import (
     ttnn_sum,
     ttnn_topk,
@@ -27,6 +23,11 @@ from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import
     TTNN_REDUCTION_PREALLOCATED_WRAPPERS,
 )
 from loguru import logger
+
+# Module-scoped device: these tests all run with the default device config, so the
+# device is opened once per file (one device context per test group) instead of
+# once per test case.
+pytestmark = pytest.mark.use_module_device
 
 TEST_PADDING_VALUE = -42
 
@@ -189,623 +190,6 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
     # Output shape (1, 1, 1, num_users): one sampled index value per user.
     out_tensor = torch.tensor(out_list, dtype=indices.dtype).view(1, 1, 1, num_users)
     return out_tensor
-
-
-# Test a 0D, 1D, 1-element, 1 column, 0-volume, and a 5D tensor
-@pytest.mark.parametrize(
-    "tensor_shape", [(), (2,), (1, 1), (32, 1), (6, 0, 32), (3, 6, 40, 63, 20), (4, 8, 32, 64), (2, 4, 8, 32, 64)]
-)
-@pytest.mark.parametrize("dim", [None, 0, -1, (-2, -1), (0, 2), (0, 2, 4), (0, 2, 3), (0, 3, 4), (1, 2, 3)])
-@pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("dtype", [torch.bfloat16])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("correction", [True, False])
-@pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "prod", "std", "var"])
-def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correction, op):
-    """
-    Test the compatibility of the torch and ttnn output for the given operation and different
-    tensor shapes, keepdim, and dim values.
-    Checks that resulting tensors are within a certain tolerance of PyTorch outputs.
-    Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
-    Note: We do not enforce the same exception type or message.
-    """
-    if op not in ("var", "std") and correction:
-        pytest.skip("PyTorch supports the correction argument only for var and std")
-
-    torch.manual_seed(0)
-    torch_tensor = torch.randn(tensor_shape, dtype=dtype)
-    pad_value = 1.0 if op == "prod" else None
-    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device, pad_value=pad_value)
-
-    # torch.max/min don't accept a tuple for dim; use amax/amin which do.
-    torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
-    torch_op = getattr(torch, torch_op_name)
-
-    ttnn_op = TTNN_REDUCTION_WRAPPERS[op]
-
-    # Run on both and flag exceptions
-    torch_errored = False
-    try:
-        # tensor.size, which is called by various torch reduction ops, doesn't accept dim=None,
-        # so we need to handle it separately.
-        # See https://github.com/pytorch/pytorch/issues/127882
-        if dim is None:
-            # PyTorch supports the correction argument only for var and std.
-            # ttnn supports it for all except prod, but it is ignored for all except var and std.
-            if op in ("var", "std"):
-                torch_result = torch_op(torch_tensor, correction=correction)
-            else:
-                torch_result = torch_op(torch_tensor)
-            if keepdim:
-                # Various torch ops don't support keepdim=True for dim=None,
-                # so we need to reshape to match the input tensor.
-                new_shape = [1] * torch_tensor.dim()
-                torch_result = torch_result.reshape(new_shape)
-        else:
-            if op in ("var", "std"):
-                torch_result = torch_op(torch_tensor, dim=dim, keepdim=keepdim, correction=correction)
-            else:
-                torch_result = torch_op(torch_tensor, dim=dim, keepdim=keepdim)
-    except (IndexError, TypeError, RuntimeError) as e:
-        logger.info(f"torch {op} raised: {e}")
-        torch_errored = True
-
-    ttnn_errored = False
-    try:
-        # ttnn.prod doesn't support the correction argument.
-        if op in ("var", "std"):
-            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, correction=correction)
-        elif op != "prod":
-            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, correction=correction)
-        else:
-            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
-    except (IndexError, TypeError, RuntimeError) as e:
-        ttnn_errored = True
-        if not torch_errored:
-            logger.error(f"torch passed and produced result: {torch_result}, but ttnn raised exception: {e}")
-
-    assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
-
-    # Skip the rest of the test if an exception was raised in both
-    if torch_errored:
-        return
-
-    # torch.min/max does not return just a tensor like ttnn.min/max.
-    # It returns a small named tuple type (torch.return_types.min or torch.return_types.max) with:
-    # .values – the min/max values (tensor of reduced values)
-    # .indices – the indices where those values occur (equivalent to ttnn.argmin/argmax)
-    # To make comparison with ttnn meaningful, extract the values only
-    if isinstance(torch_result, (torch.return_types.min, torch.return_types.max)):
-        torch_result = torch_result.values
-
-    ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
-
-    if op == "sum" and tensor_shape == (3, 6, 40, 63, 20):
-        # Summing large number of bfloat16 values accumulates rounding errors,
-        # and results also vary from near 0 to relatively large values (in hundreds)
-        # PCC should catch any significant errors.
-        atol = 1.5
-    else:
-        atol = 0.1
-
-    if op == "var":
-        # For var/std there are cases where all output values are close to 1, and we're using bfloat16,
-        # so even a rounding error of 0.5 ULP has a significant impact on PCC.
-        pcc = 0.99
-    elif op == "std":
-        # For std, sqrtf() adds an extra rounding step on top of variance, further
-        # lowering PCC when values cluster near 1.0 (e.g. 3-dim reduction on large tensors).
-        # Therefore PCC threshold has to be lower. ATOL and RTOL should catch any significant errors.
-        pcc = 0.98
-    else:
-        pcc = 0.999
-
-    rtol = 0.05
-
-    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
-    assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
-
-
-# Test that generic reduction ops work correctly with N-dimensional sharding.
-@pytest.mark.parametrize(
-    "shapes",
-    [
-        ([2, 1, 256, 2048], [1, 1, 128, 256], 2, 4),
-        ([4, 4, 64, 128], [2, 2, 32, 64], 2, 4),
-        ([4, 4, 64, 128], [2, 2, 32, 64], 0, 0),
-    ],
-)
-@pytest.mark.parametrize("keepdim", [True])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "std", "var"])
-@pytest.mark.parametrize("explicit_output_mem_config", [True, False])
-def test_generic_ops_ndim_shard(device, shapes, keepdim, layout, op, explicit_output_mem_config):
-    # To reduce the number of tests, we only test sum and var with explicit output mem_config.
-    # This exercises both known code paths where this could make a meaningful difference.
-    if explicit_output_mem_config and op not in ("sum", "var"):
-        pytest.skip("explicit output mem_config only tested for sum and var")
-
-    torch.manual_seed(0)
-    dim = -2
-    input_shape, shard_shape, end_x, end_y = shapes
-
-    memory_config = ttnn.MemoryConfig(
-        buffer_type=ttnn.BufferType.L1,
-        nd_shard_spec=ttnn.NdShardSpec(
-            shard_shape,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(end_x, end_y))}),
-        ),
-    )
-
-    torch_input_tensor = torch.rand(input_shape)
-
-    # torch.max/min don't accept a tuple for dim; use amax/amin which do.
-    torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
-    torch_op = getattr(torch, torch_op_name)
-    torch_output_tensor = torch_op(torch_input_tensor, dim=dim, keepdim=keepdim)
-
-    # Use the op directly (not the ttnn_<op> determinism wrapper): the wrapper's
-    # second execution exhausts device memory for the larger sharded shapes here.
-    ttnn_op = getattr(ttnn, op)
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=ttnn.float32,
-        device=device,
-        layout=layout,
-        memory_config=memory_config,
-    )
-    if explicit_output_mem_config:
-        op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim, memory_config=memory_config)
-    else:
-        op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim)
-
-    # Verify output is sharded with correct properties (doc: "Output sharding will mirror the input")
-    output_mem_config = op_output_tensor.memory_config()
-    assert output_mem_config.is_sharded(), f"op={op}: expected output to be sharded"
-    assert (
-        output_mem_config.buffer_type == ttnn.BufferType.L1
-    ), f"op={op}: expected L1 buffer type, got {output_mem_config.buffer_type}"
-    output_nd_spec = output_mem_config.nd_shard_spec
-    assert output_nd_spec is not None, f"op={op}: expected output to have nd_shard_spec"
-
-    # Expected output shard shape: same as input shard shape, but the reduced dim
-    # becomes 1 when keepdim=True, or is removed when keepdim=False.
-    # Output is always TILE layout (per nanobind doc), so the last two shard
-    # dimensions are tile-aligned (multiples of 32) regardless of input layout.
-    expected_output_shard_shape = list(shard_shape)
-    normalized_dim = dim if dim >= 0 else dim + len(input_shape)
-    if keepdim:
-        expected_output_shard_shape[normalized_dim] = 1
-    else:
-        del expected_output_shard_shape[normalized_dim]
-    # Align the last two shard dims up to tile boundaries, since the output is
-    # always TILE layout. E.g. a reduced dim of logical size 1 becomes 32 (one full tile).
-    rank = len(expected_output_shard_shape)
-    for i in range(max(0, rank - 2), rank):
-        # The formula rounds up to the nearest multiple of TILE_SIZE:
-        #   1. Add (TILE_SIZE - 1) so that integer division rounds up instead of down
-        #   2. Integer-divide by TILE_SIZE to get the number of tiles needed
-        #   3. Multiply back by TILE_SIZE to convert from tile count to element count
-        expected_output_shard_shape[i] = (
-            (expected_output_shard_shape[i] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-        ) * ttnn.TILE_SIZE
-    actual_output_shard_shape = list(output_nd_spec.shard_shape)
-    assert actual_output_shard_shape == expected_output_shard_shape, (
-        f"op={op}: expected output shard shape {expected_output_shard_shape}, " f"got {actual_output_shard_shape}"
-    )
-
-    output_tensor = ttnn.to_torch(op_output_tensor)
-
-    atol = rtol = 0.01
-    pcc = 0.99
-    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
-    assert passing, f"op={op} {output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
-
-
-# Test that generic reduction ops work correctly with Width, Height, and Block sharding.
-@pytest.mark.parametrize(
-    "input_shape, shard_2d_shape, end_x, end_y, memory_layout, dim",
-    [
-        # HEIGHT_SHARDED: each core gets a horizontal slice (some rows, full width)
-        ([8, 8, 32, 32], [1024, 32], 1, 0, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, -2),
-        ([4, 4, 64, 64], [512, 64], 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, -2),
-        # WIDTH_SHARDED: each core gets a vertical slice (full height, some columns)
-        ([8, 8, 32, 128], [2048, 32], 3, 0, ttnn.TensorMemoryLayout.WIDTH_SHARDED, -2),
-        ([4, 4, 64, 256], [1024, 32], 7, 0, ttnn.TensorMemoryLayout.WIDTH_SHARDED, -2),
-        # BLOCK_SHARDED: both height and width split across a 2D grid
-        ([4, 4, 64, 64], [512, 32], 1, 1, ttnn.TensorMemoryLayout.BLOCK_SHARDED, -2),
-        # Also test W reduction case to validate shard-shape recomputation when
-        # the reduced output width becomes one tile.
-        ([4, 4, 64, 64], [512, 32], 1, 1, ttnn.TensorMemoryLayout.BLOCK_SHARDED, -1),
-    ],
-)
-@pytest.mark.parametrize("keepdim", [True])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "std", "var"])
-@pytest.mark.parametrize("explicit_output_mem_config", [True, False])
-def test_generic_ops_wh_block_shard(
-    device,
-    input_shape,
-    shard_2d_shape,
-    end_x,
-    end_y,
-    memory_layout,
-    dim,
-    keepdim,
-    layout,
-    op,
-    explicit_output_mem_config,
-):
-    # To reduce the number of tests, we only test sum and var with explicit output mem_config.
-    # This exercises both known code paths where this could make a meaningful difference.
-    if explicit_output_mem_config and op not in ("sum", "var"):
-        pytest.skip("explicit output mem_config only tested for sum and var")
-
-    torch.manual_seed(0)
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(end_x, end_y))}),
-        shard_2d_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    memory_config = ttnn.MemoryConfig(
-        memory_layout=memory_layout,
-        buffer_type=ttnn.BufferType.L1,
-        shard_spec=shard_spec,
-    )
-
-    torch_input_tensor = torch.rand(input_shape)
-
-    # torch.max/min don't accept a tuple for dim; use amax/amin which do.
-    torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
-    torch_op = getattr(torch, torch_op_name)
-    torch_output_tensor = torch_op(torch_input_tensor, dim=dim, keepdim=keepdim)
-
-    ttnn_op = TTNN_REDUCTION_WRAPPERS[op]
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=ttnn.float32,
-        device=device,
-        layout=layout,
-        memory_config=memory_config,
-    )
-    if explicit_output_mem_config:
-        op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim, memory_config=memory_config)
-    else:
-        op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim)
-
-    # Verify output is sharded with correct properties (doc: "Output sharding will mirror the input")
-    output_mem_config = op_output_tensor.memory_config()
-    assert output_mem_config.is_sharded(), f"op={op}: expected output to be sharded"
-    assert (
-        output_mem_config.buffer_type == ttnn.BufferType.L1
-    ), f"op={op}: expected L1 buffer type, got {output_mem_config.buffer_type}"
-    assert (
-        output_mem_config.memory_layout == memory_layout
-    ), f"op={op}: expected memory layout {memory_layout}, got {output_mem_config.memory_layout}"
-    output_shard_spec = output_mem_config.shard_spec
-    assert output_shard_spec is not None, f"op={op}: expected output to have shard_spec"
-
-    def round_up_to_tile(dim_size):
-        """Round up to the nearest multiple of TILE_SIZE (e.g. 1 -> 32, 33 -> 64).
-
-        Adding (TILE_SIZE - 1) before integer-dividing by TILE_SIZE effectively
-        computes ceil(dim_size / TILE_SIZE), i.e. the number of tiles needed.
-        Multiplying back by TILE_SIZE converts from tile count to element count.
-        """
-        return ((dim_size + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-
-    # Compute expected 2D output shard shape.
-    # Legacy sharding flattens the tensor to 2D: [product(dims[:-1]), dims[-1]].
-    # After reducing dim with keepdim=True, that product changes.
-    # Output is always TILE layout, so the last two dims must be tile-padded
-    # BEFORE flattening to 2D (physical_shape pads then flattens, not the
-    # other way around).
-    output_shape = list(input_shape)
-    normalized_dim = dim if dim >= 0 else dim + len(input_shape)
-    if keepdim:
-        output_shape[normalized_dim] = 1
-    else:
-        del output_shape[normalized_dim]
-
-    # Tile-pad the last two dims before flattening, matching physical_shape().
-    rank = len(output_shape)
-    padded_shape = list(output_shape)
-    for i in range(max(0, rank - 2), rank):
-        padded_shape[i] = round_up_to_tile(padded_shape[i])
-
-    output_2d_height = 1
-    for d in padded_shape[:-1]:
-        output_2d_height *= d
-    output_2d_width = padded_shape[-1]
-    num_cores = (end_x + 1) * (end_y + 1)
-
-    if memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-        # Height is split across cores, width stays full
-        expected_shard_h = (output_2d_height + num_cores - 1) // num_cores
-        expected_shard_w = output_2d_width
-    elif memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-        # Height split across grid rows, width split across grid columns
-        num_rows = end_y + 1
-        num_cols = end_x + 1
-        expected_shard_h = (output_2d_height + num_rows - 1) // num_rows
-        expected_shard_w = (output_2d_width + num_cols - 1) // num_cols
-    else:
-        # Width is split across cores, height stays full
-        expected_shard_h = output_2d_height
-        expected_shard_w = (output_2d_width + num_cores - 1) // num_cores
-
-    # The output is always TILE layout, so each per-core shard must contain
-    # whole tiles. Round up both shard dimensions to tile boundaries.
-    expected_shard_h = round_up_to_tile(expected_shard_h)
-    expected_shard_w = round_up_to_tile(expected_shard_w)
-
-    actual_shard_shape = list(output_shard_spec.shape)
-    assert actual_shard_shape == [expected_shard_h, expected_shard_w], (
-        f"op={op}: expected output shard shape [{expected_shard_h}, {expected_shard_w}], " f"got {actual_shard_shape}"
-    )
-
-    output_tensor = ttnn.to_torch(op_output_tensor)
-
-    atol = rtol = 0.01
-    pcc = 0.99
-    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
-    assert passing, f"op={op} {output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
-
-
-# Test that generic reduction ops work correctly with a scalar applied to the input.
-@pytest.mark.parametrize("op", ["sum", "mean", "max", "min", "std", "var"])
-@pytest.mark.parametrize("scalar", [1.0, -2.0, 2.0, -2.43, 2.43, 4.0])
-@pytest.mark.parametrize("correction", [True, False])
-@pytest.mark.parametrize("dim", [-1, -2, 0, (-2, -1), (0, -2, -1), None])
-@pytest.mark.parametrize("shape", [(3, 4), (1, 1, 3, 4, 5), (3, 4, 8, 56, 33)])
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype):
-    rank = len(shape)
-    if isinstance(dim, tuple) and len(dim) > rank:
-        pytest.skip("More reduction dims than tensor rank")
-
-    if op not in ("var", "std") and correction:
-        pytest.skip("PyTorch supports the correction argument only for var and std")
-
-    if op in ("var", "std") and correction:
-        # Bessel's correction divides by (N - 1) where N is the number of elements
-        # reduced. With N == 1 this is a divide-by-zero, producing all-NaN output;
-        # both PyTorch and ttnn match here, but the result is mathematically
-        # degenerate and not meaningful to compare numerically.
-        if dim is None:
-            reduction_count = 1
-            for s in shape:
-                reduction_count *= s
-        elif isinstance(dim, tuple):
-            reduction_count = 1
-            for d in dim:
-                reduction_count *= shape[d]
-        else:
-            reduction_count = shape[dim]
-        if reduction_count <= 1:
-            pytest.skip("Bessel-corrected std/var with reduction count of 1 produces NaN output")
-
-    torch.manual_seed(0)
-    torch_input = torch.randn(shape, dtype=dtype)
-
-    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_op = TTNN_REDUCTION_WRAPPERS[op]
-    ttnn_result = ttnn.to_torch(ttnn_op(ttnn_input, dim=dim, scalar=scalar, correction=correction))
-
-    # torch.max/min don't accept a tuple for dim; use amax/amin which do.
-    torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
-    torch_op = getattr(torch, torch_op_name)
-    # PyTorch supports the correction argument only for var and std.
-    # ttnn supports it for all, but it is ignored for all except var and std.
-    if op in ("var", "std"):
-        torch_result = torch_op(scalar * torch_input, dim=dim, correction=correction)
-    else:
-        torch_result = torch_op(scalar * torch_input, dim=dim)
-
-    if dtype == torch.float32 and op in ("var", "std"):
-        # var/std always run the Welford single-pass path unscaled and apply the scalar
-        # afterwards (var(s*x) = s^2 var(x), std(s*x) = |s| std(x)), so the reduction stays
-        # at full FP32 precision (eps = 2^-23 ~= 1.19e-7) and avoids the FPU scale-mul.
-        # Welford has relative error bounded by O(sqrt(N) * eps); for N up to 177408 this is
-        # ~5e-5. rtol = 1e-4 covers this with margin, and atol = 1e-4 handles the
-        # small-magnitude regime.
-        rtol = 1e-4
-        atol = 1e-4
-        frobenius_threshold = 1e-4
-        pcc = 0.9999
-    elif dtype == torch.float32:
-        # sum/mean/max/min on FP32 go through the FPU SrcA TF32 floor: inputs
-        # are loaded at TF32 precision (10-bit mantissa, eps_TF32 = 2^-10 ~= 1e-3)
-        # before any arithmetic. This is the precision floor; FP32 accumulation
-        # after the truncated load does not recover it.
-        #
-        # Notation used in the comments below:
-        #   x_i = an individual input element (after the implicit scalar*input
-        #         applied by the ttnn op); the test feeds randn samples so
-        #         |x_i| has unit stddev pre-scaling and |scalar| stddev post-scaling.
-        #   y, y_i = the reduction output (scalar for dim=None, otherwise an
-        #            element of the output tensor).
-        #   N = number of input elements reduced into a single output (the full
-        #       input count for dim=None, the product of the reduced axes for
-        #       a tuple, the single axis size for an int dim).
-        #
-        # Per-element error model:
-        # 13 mantissa bits are discarded by FP32->TF32, so for any
-        # x_i the truncated value has magnitude <= |x_i|. Treating the dropped
-        # fraction as uniform on [0, eps_TF32 * |x_i|] gives:
-        #   E[error_i] = -eps_TF32 / 2 * x_i   (sign(error_i) = -sign(x_i))
-        #   Var(error_i) = (eps_TF32 * |x_i|)^2 / 12   (uniform on a 1-ULP interval)
-        # The non-zero mean adds a systematic bias of -eps_TF32 / 2 * sum to the
-        # sum-reduction output, i.e. a constant relative bias of -5e-4. The
-        # variance is the same as for round-to-nearest. Per-op behavior:
-        #   - max/min: output relative error <= eps_TF32 ~ 1e-3 (one input selected).
-        #   - sum of N values: 1-sigma random walk eps_TF32 / (2*sqrt(3)) * sqrt(N) *
-        #     |scalar| ~ 0.49 for N=177408, |scalar|_max=4; plus a deterministic
-        #     bias eps_TF32 / 2 * |sum| (scales with the output, like rtol).
-        #   - mean: same relative behavior as sum; absolute error is sum_error / N.
-        #
-        # rtol = 5e-3 ~ 5*eps_TF32 absorbs the 5e-4 bias plus 1-sigma random walk
-        # for typical |y|. pcc = 0.999 is preserved because TF32 noise has small
-        # relative magnitude that does not bias the output *pattern* meaningfully.
-        rtol = 5e-3
-        pcc = 0.999
-        if op in ("sum", "mean") and shape == (3, 4, 8, 56, 33) and dim is None:
-            # Scalar output of zero-mean reduction (sum or mean of 177408 randn
-            # samples). mean = sum/N preserves relative errors, so both share the
-            # same error distribution. Using the model from above, the 1-sigma
-            # random walk on the sum is eps_TF32 / (2*sqrt(3)) * sqrt(N) * |scalar|
-            # ~ 0.49 (3-sigma ~ 1.46) for N=177408, |scalar|_max=4. The systematic
-            # bias is eps_TF32/2 * |sum|, which scales with |sum| and is absorbed
-            # by rtol for typical |sum|. bf16 with the same random-walk formula
-            # gives 1-sigma ~ 3.89; the user's atol=1.5 covers ~0.4-sigma. Here
-            # atol=0.3 covers ~0.6-sigma -- same tuning style (rtol*|y| carries
-            # typical |sum|). Mean inherits the default atol since its absolute
-            # error is sum_error/N ~ 3e-6.
-            #
-            # Frobenius on a scalar output degenerates to |error|/|y|, and |y|
-            # follows a zero-mean Gaussian (sqrt(N)*|scalar|-stddev for sum,
-            # |scalar|/sqrt(N)-stddev for mean) that can land in the lower tail
-            # of its distribution and inflate the ratio. 1e-1 covers the
-            # practical-unlucky regime where |y| is a small fraction of its stddev.
-            atol = 0.3 if op == "sum" else 5e-2
-            frobenius_threshold = 1e-1
-        elif op == "sum" and shape == (3, 4, 8, 56, 33):
-            # Tensor-output sum on the largest shape. Per-element error scales
-            # with sqrt(N_reduce); the worst non-None reduction is dim=(0,-2,-1)
-            # (N_reduce=5544) with 1-sigma random walk eps_TF32 * sqrt(N_reduce)
-            # * |scalar|_max / (2*sqrt(3)) ~ 0.086, so 3-sigma ~ 0.26. Output
-            # elements can land near zero by randn cancellation, so atol (not
-            # rtol*|y|) must absorb that per-element error: atol = 0.3 covers
-            # ~3-sigma. Frobenius is RMS-style on tensor output and stays at
-            # ~eps_TF32, so the default threshold applies.
-            atol = 0.3
-            frobenius_threshold = 5e-3
-        else:
-            # Smaller shapes (N <= 60), or non-sum ops on the largest shape:
-            # max/min absolute error bounded by eps_TF32 * 3 * |scalar|_max ~
-            # 0.012; sum on smaller shapes bounded by 1-sigma random walk
-            # eps_TF32 * sqrt(N_max) * |scalar|_max / (2*sqrt(3)) ~ 9e-3 for
-            # N=60; mean on the largest shape with a non-None dim has
-            # per-element error sum_error / N_reduce, smaller still. atol = 5e-2
-            # covers all with margin. Per-element relative error of ~eps_TF32
-            # ~ 1e-3 gives a relative Frobenius norm of the same order; 5e-3 = 5x margin.
-            atol = 5e-2
-            frobenius_threshold = 5e-3
-    else:
-        rtol = 0.05
-        if op == "sum" and shape == (3, 4, 8, 56, 33):
-            # Summing large number of bfloat16 values accumulates rounding errors,
-            # and results also vary from near 0 to relatively large values (in hundreds)
-            # PCC should catch any significant errors.
-            atol = 1.5
-            # dim=None reduces the largest input to a single scalar whose
-            # expected value can be near 0 (randn has mean 0), so the relative
-            # Frobenius norm ~ atol/|value| can be substantially larger than for
-            # multi-element output cases. 0.3 stays well inside what allclose
-            # already permits (atol + rtol*|value|) for any |value| >= ~6 and
-            # tightens to ~5% for typical |sum| ~ 100.
-            frobenius_threshold = 0.3
-        else:
-            atol = 0.1
-            # bf16 default PCC=0.999 implies per-element shape-noise ratio of
-            # sqrt(2*(1-PCC)) ~= 4.5%; the relative Frobenius norm is the same
-            # order of magnitude on the raw values. 0.1 gives ~2x margin.
-            # For var/std on the largest shape, outputs cluster around scalar^2
-            # or |scalar| (both >= 1), and per-element absolute error remains
-            # bounded by the same ~5% relative bf16 precision, so the Frobenius
-            # bound does not need to be loosened the way PCC does.
-            frobenius_threshold = 0.1
-
-        if op == "var" and shape == (3, 4, 8, 56, 33):
-            # For var/std there are cases where all output values are close to 1, and we're using bfloat16,
-            # so even a rounding error of 0.5 ULP has a significant impact on PCC with large tensors.
-            pcc = 0.98
-        elif op == "std" and shape == (3, 4, 8, 56, 33):
-            # For std, sqrtf() adds an extra rounding step on top of variance, further
-            # lowering PCC when values cluster near 1.0 (e.g. 3-dim reduction on large tensors).
-            # Therefore PCC threshold has to be lower. ATOL/RTOL should catch any significant errors.
-            pcc = 0.95
-        else:
-            pcc = 0.999
-
-    passing, output_msg = assert_numeric_metrics(
-        torch_result,
-        ttnn_result,
-        rtol=rtol,
-        atol=atol,
-        pcc_threshold=pcc,
-        frobenius_threshold=frobenius_threshold,
-        assert_on_fail=False,
-    )
-
-    assert passing, f"{output_msg}, torch: {torch_result}, ttnn: {ttnn_result}"
-
-
-# Test that generic reduction ops produce correct results, preserve dtype, and emit the
-# layout documented in nanobind across all supported dtype/layout combinations.
-@pytest.mark.parametrize("op", ["sum", "mean", "max", "min", "std", "var"])
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-def test_generic_ops_dtypes_layouts(device, op, dtype, layout):
-    """
-    Test generic reduction ops across all documented dtype/layout combinations.
-    Validates numerical correctness against PyTorch, verifies output dtype matches
-    input dtype, and verifies output layout is TILE as documented in nanobind.
-
-    Unset output_layout: dense RM sum/mean keep ROW_MAJOR; else TILE.
-    """
-    shape = (4, 2, 64, 64)
-    dim = -1
-
-    if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("bfloat8_b requires TILE_LAYOUT at tensor creation (py_to_tt_tensor.cpp)")
-
-    # torch has no bfloat8_b; use float32 as highest-precision reference.
-    torch_dtype_map = {
-        ttnn.float32: torch.float32,
-        ttnn.bfloat16: torch.bfloat16,
-        ttnn.bfloat8_b: torch.float32,
-    }
-    torch_dtype = torch_dtype_map[dtype]
-
-    torch.manual_seed(0)
-    torch_tensor = torch.randn(shape, dtype=torch_dtype)
-    ttnn_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, device=device)
-
-    # torch.max/min with a single int dim return a namedtuple; use amax/amin instead.
-    torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
-    torch_op = getattr(torch, torch_op_name)
-    torch_result = torch_op(torch_tensor, dim=dim)
-
-    ttnn_op = TTNN_REDUCTION_WRAPPERS[op]
-    ttnn_result = ttnn_op(ttnn_tensor, dim=dim)
-
-    # Validate output dtype matches input dtype
-    assert ttnn_result.dtype == dtype, f"Expected output dtype {dtype}, got {ttnn_result.dtype}"
-
-    # Dense RM sum/mean keep ROW_MAJOR; everything else returns TILE.
-    if op in ("sum", "mean") and layout == ttnn.ROW_MAJOR_LAYOUT and dtype in (ttnn.float32, ttnn.bfloat16):
-        assert ttnn_result.layout == ttnn.ROW_MAJOR_LAYOUT
-    else:
-        assert ttnn_result.layout == ttnn.TILE_LAYOUT
-
-    ttnn_result_torch = ttnn.to_torch(ttnn.from_device(ttnn_result))
-
-    rtol = 0.01
-    if dtype == ttnn.bfloat8_b:
-        # BFLOAT8_B has lower precision.
-        atol = 0.25
-        pcc = 0.997
-    elif op == "sum" and is_wormhole_b0():
-        # Due to hardware bug (#38306), Wormhole B0 uses lower precision.
-        atol = 0.04
-        pcc = 0.999
-    else:
-        atol = 0.01
-        pcc = 0.999
-
-    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result_torch, pcc=pcc, rtol=rtol, atol=atol)
-    assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result_torch}"
 
 
 @pytest.mark.parametrize("tensor_shape", [(), (170,), (3, 6, 40, 63, 20), (60, 0, 32)])
@@ -1371,3 +755,50 @@ def test_sum_multi_dim_row_major(device, input_shape, dims, keepdim):
     pcc = 0.999
     passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
+
+
+# ---------------------------------------------------------------------------
+# Dim-validity parity: (shape, dim) combinations whose dim set does not fit the
+# tensor rank must raise in both torch and ttnn. These rows used to live inside
+# test_generic_ops as ~500 executed cross-product cells (multiplied by keepdim
+# and correction); one explicit row per invalid combination, through both
+# generic-reduce front-ends (sum) and the welford front-end (var), keeps the
+# same parity guarantee at a fraction of the cost.
+# ---------------------------------------------------------------------------
+
+_PARITY_SHAPES = [(), (2,), (1, 1), (32, 1), (6, 0, 32), (3, 6, 40, 63, 20), (4, 8, 32, 64), (2, 4, 8, 32, 64)]
+_PARITY_DIMS = [(-2, -1), (0, 2), (0, 2, 4), (0, 2, 3), (0, 3, 4), (1, 2, 3)]
+
+
+def _dims_invalid(shape, dim):
+    rank = len(shape)
+    if rank == 0:
+        return any(d not in (0, -1) for d in dim)
+    return any(not (-rank <= d < rank) for d in dim)
+
+
+INVALID_SHAPE_DIMS = [(s, d) for s in _PARITY_SHAPES for d in _PARITY_DIMS if _dims_invalid(s, d)]
+
+
+@pytest.mark.parametrize("tensor_shape, dim", INVALID_SHAPE_DIMS)
+@pytest.mark.parametrize("op", ["sum", "var"])
+def test_generic_ops_dim_parity(device, tensor_shape, dim, op):
+    torch.manual_seed(0)
+    torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    torch_errored = False
+    try:
+        getattr(torch, op)(torch_tensor, dim=dim)
+    except (IndexError, TypeError, RuntimeError) as e:
+        logger.info(f"torch {op} raised: {e}")
+        torch_errored = True
+
+    ttnn_errored = False
+    try:
+        TTNN_REDUCTION_WRAPPERS[op](ttnn_tensor, dim=dim, keepdim=True)
+    except (IndexError, TypeError, RuntimeError) as e:
+        logger.info(f"ttnn {op} raised: {e}")
+        ttnn_errored = True
+
+    assert torch_errored and ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"

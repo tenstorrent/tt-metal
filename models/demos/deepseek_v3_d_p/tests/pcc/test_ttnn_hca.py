@@ -31,8 +31,8 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
 )
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA, TtHCACompressor
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # Real (pre-pad) prompt lengths. prepare_input pads each up to compress_rate*sp, so the ragged ones
@@ -98,28 +98,24 @@ _MODEL_CONFIGS_FORWARD = [pytest.param(cfg, fwd, id=name) for name, cfg, _, _, f
 _MESH_CONFIGS = [
     pytest.param(
         (2, 2),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        fabric2d_device_params(),
         ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-        id="mesh-2x2",
+        id="fabric2d-mesh-2x2",
     ),
     pytest.param(
         (4, 2),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        fabric2d_device_params(),
         ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-        id="mesh-4x2",
+        id="fabric2d-mesh-4x2",
     ),
     pytest.param(
         (8, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
-        ttnn.Topology.Linear,
+        torus_xy_device_params(),
+        ttnn.Topology.Ring,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="fabric2d-mesh-8x4",
+        id="torus-xy-8x4",
     ),
 ]
 
