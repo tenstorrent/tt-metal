@@ -71,6 +71,11 @@ DECODE_STEPS = int(os.environ.get("GEMMA4_DECODER_PCC_DECODE_STEPS", "10"))
 # under test is the shipped one.
 KV_BLOCK_SIZE = 64
 
+# KV-cache readback threshold. The cache stores bf16 while HF keeps fp32, so an
+# exact match is not on the table; anything below this is a wrong row, not
+# rounding.
+KV_PCC_REQUIRED = 0.99
+
 
 def hf_text_config():
     """HF text config for the active ``HF_MODEL``, with per-layer input disabled.

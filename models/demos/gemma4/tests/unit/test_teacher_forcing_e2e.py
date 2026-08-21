@@ -102,18 +102,18 @@ Run. Test ids are ``[wormhole_b0-<case>-<mesh>]``, e.g.
 
   # 12B (same lengths / token-accuracy floors; logit-PCC floor is under gemma-4-12B-it)
   HF_MODEL=google/gemma-4-12B-it MESH_DEVICE=1x8 GEMMA4_HF_DEVICE_MAP=auto \\
-    pytest ".../test_teacher_forcing_e2e.py::test_teacher_forcing_e2e[wormhole_b0-prefill_512-max_new_tokens_500-1x8]" -sv --timeout=0
+    pytest "models/demos/gemma4/tests/unit/test_teacher_forcing_e2e.py::test_teacher_forcing_e2e[wormhole_b0-prefill_512-max_new_tokens_500-1x8]" -sv --timeout=0
 
   # token accuracy only -- select by node id, NOT by ``-k``. The module filename
   # is itself a keyword, so ``-k test_teacher_forcing_e2e`` also matches every
   # test_e2e_logits_pcc case in this file.
-  pytest .../test_teacher_forcing_e2e.py::test_teacher_forcing_e2e -k 1x8 -sv --timeout=0
+  pytest models/demos/gemma4/tests/unit/test_teacher_forcing_e2e.py::test_teacher_forcing_e2e -k 1x8 -sv --timeout=0
 
   # logit PCC only (this name is unique, so -k is safe)
-  pytest .../test_teacher_forcing_e2e.py -k "test_e2e_logits_pcc and 1x8" -sv --timeout=0
+  pytest models/demos/gemma4/tests/unit/test_teacher_forcing_e2e.py -k "test_e2e_logits_pcc and 1x8" -sv --timeout=0
 
   # one exact case
-  pytest ".../test_teacher_forcing_e2e.py::test_teacher_forcing_e2e[wormhole_b0-prefill_512-max_new_tokens_500-1x8]" -sv --timeout=0
+  pytest "models/demos/gemma4/tests/unit/test_teacher_forcing_e2e.py::test_teacher_forcing_e2e[wormhole_b0-prefill_512-max_new_tokens_500-1x8]" -sv --timeout=0
 """
 
 from __future__ import annotations

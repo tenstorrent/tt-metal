@@ -51,6 +51,7 @@ from models.tt_transformers.tt.common import get_max_prefill_chunk_size
 
 from ...tests.test_factory import get_pcc_threshold, parametrize_mesh_with_fabric, uses_ci_config_only_checkpoint
 from .decoder_pcc_common import (
+    KV_PCC_REQUIRED,
     PCC_BATCH_SIZE,
     build_decoder_pcc_context,
     check_pcc,
@@ -122,9 +123,6 @@ PREFILL_ISL_SWEEP = [
 
 # Short gate for CI / smoke runs: one length inside the sliding window, one at it.
 PREFILL_ISL_SANITY = [128, 1024]
-
-# KV readback threshold — bf16 cache vs fp32 HF reference (see test_decode.py).
-KV_PCC_REQUIRED = 0.99
 
 
 @pytest.fixture(autouse=True)
