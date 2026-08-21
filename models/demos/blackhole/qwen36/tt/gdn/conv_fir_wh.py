@@ -52,6 +52,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt import ttnn_gated_deltanet as _shared
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_decode_t1
 
@@ -92,9 +93,24 @@ def causal_conv1d_fir_dispatch(
     weight_taps=None,
     bias_dev=None,
     valid_len=None,
+    model_args=None,
 ):
-    """Drop-in for the shared ``_causal_conv1d_fir``; upstream on Blackhole, ROW_MAJOR fork on WH."""
-    if is_blackhole():
+    """Drop-in for the shared ``_causal_conv1d_fir``; upstream on Blackhole, ROW_MAJOR fork on WH.
+
+    model_args: the caller's ModelArgs (gdn/tp.py passes self.args), used to scope the fork to
+    wh_9b_n300. None (default, for any caller that hasn't been updated) falls back to the previous
+    is_blackhole()-only decision.
+
+    DELIBERATE narrowing (Wormhole gating audit, item 1): this used to be is_blackhole()-gated
+    (Wormhole-wide), so T3K and N150 got the ROW_MAJOR fork too. Narrowed to wh_9b_n300 on purpose
+    -- the fork is a pure perf optimization (same taps, same accumulation order, only the
+    intermediate layout changes; see this file's module docstring), so T3K/N150 falling back to
+    the upstream TILE-layout path is a measured perf regression there, not a correctness one.
+    Accepted per explicit instruction -- don't revert this to is_blackhole() without re-measuring
+    on T3K/N150.
+    """
+    _use_wh = tpc.wh_9b_n300(model_args) if model_args is not None else (not is_blackhole())
+    if not _use_wh:
         return _shared._causal_conv1d_fir(
             x,
             weight,
