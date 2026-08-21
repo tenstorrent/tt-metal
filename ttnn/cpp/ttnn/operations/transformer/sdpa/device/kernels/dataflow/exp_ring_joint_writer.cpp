@@ -130,16 +130,6 @@ void kernel_main() {
 
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
 
-    // Per-q_chunk work bitmap (one uint32 per q_chunk; bit `iter` set iff that q_chunk processes any
-    // attended K in ring iter `iter`). Present in the RT stream only when sparse is enabled (the host
-    // gates it identically), read right after the fused-op indexer to match the reader/compute layout.
-    uint32_t writer_q_work_bitmap[num_q_chunks] = {};
-    if constexpr (sparse_frames_enabled) {
-        for (uint32_t q = 0; q < num_q_chunks; ++q) {
-            writer_q_work_bitmap[q] = get_arg_val<uint32_t>(argidx++);
-        }
-    }
-
 #ifdef USE_MUX
 
     // Parse fabric MUX client connection RT args (17 values).
@@ -252,6 +242,17 @@ void kernel_main() {
     const auto gathered_k_writer = TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt);
     const auto gathered_v_writer = TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt);
 #endif
+
+    // Per-q_chunk work bitmap (one uint32 per q_chunk; bit `iter` set iff that q_chunk processes any
+    // attended K in ring iter `iter`). Present in the RT stream only when sparse is enabled (the host
+    // gates it identically). Read LAST — after all fixed args (incl. the fabric MUX/AG block) — so the
+    // hash-excluded dynamic semaphore slots stay at their fixed indices; only the total arg count grows.
+    uint32_t writer_q_work_bitmap[num_q_chunks] = {};
+    if constexpr (sparse_frames_enabled) {
+        for (uint32_t q = 0; q < num_q_chunks; ++q) {
+            writer_q_work_bitmap[q] = get_arg_val<uint32_t>(argidx++);
+        }
+    }
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;

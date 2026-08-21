@@ -1634,6 +1634,20 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         // Direction: top half of rows = backward (0), bottom half = forward (1)
         const uint32_t direction = (core.y < args.num_workers_per_link) ? 0 : 1;
 
+        // Sparse: append this core's direction-matched per-q_chunk work bitmap as the writer's TRAILING
+        // runtime args (after every fixed arg, incl. the fabric MUX/AG block). Trailing placement keeps
+        // the hash-excluded dynamic semaphore slots at their fixed indices — only the total arg count
+        // grows, which override_runtime_arguments accounts for. Gated so the dense RT stream is unchanged.
+        auto append_writer_sparse_bitmap = [&](KernelDescriptor::RTArgList& wargs) {
+            if (!sparse_frames_enabled) {
+                return;
+            }
+            const std::vector<uint32_t>& wbmp = q_work_bitmap_by_direction[direction];
+            for (uint32_t q = 0; q < num_q_chunks; ++q) {
+                wargs.push_back(q < wbmp.size() ? wbmp[q] : 0u);
+            }
+        };
+
         // log the above
         log_debug(tt::LogOp, "core: {}", i);
         log_debug(tt::LogOp, "x={},y={}", core.x, core.y);
@@ -1735,15 +1749,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         writer_args.push_back(static_cast<uint32_t>(args.ring_size));
         writer_args.push_back(device_index);
         writer_args.push_back(direction);
-        // Sparse: append this core's direction-matched per-q_chunk work bitmap so the writer can drain
-        // the output at each q_chunk's last work iter (matching compute). Gated so the dense RT stream
-        // is byte-unchanged. Read right after the fused-op indexer in exp_ring_joint_writer.cpp.
-        if (sparse_frames_enabled) {
-            const std::vector<uint32_t>& writer_bitmap = q_work_bitmap_by_direction[direction];
-            for (uint32_t q = 0; q < num_q_chunks; ++q) {
-                writer_args.push_back(q < writer_bitmap.size() ? writer_bitmap[q] : 0u);
-            }
-        }
 
         if (is_mux_writer) {
             // Direction is determined by row half: top half = backward, bottom half = forward.
@@ -1845,8 +1850,10 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
                 writer_args.push_back(gathered_k_buf);
                 writer_args.push_back(gathered_v_buf);
             }
+            append_writer_sparse_bitmap(writer_args);
             writer_fabric_kernel.emplace_runtime_args(core, writer_args);
         } else {
+            append_writer_sparse_bitmap(writer_args);
             writer_kernel.emplace_runtime_args(core, writer_args);
         }
 
@@ -1980,6 +1987,17 @@ void ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     const uint32_t num_sdpa_cores = sdpa_grid.x * sdpa_grid.y;
     const uint32_t expected_reader_args = dyn::reader_arg_count(args.num_links);
 
+    // Sparse frames append a trailing per-q_chunk work bitmap to the fabric-writer args (after all
+    // fixed args, so the dynamic semaphore slots keep their indices). Recompute num_q_chunks exactly
+    // as the bake does so the count assert stays exact. The reader carries no bitmap (unchanged).
+    const std::size_t q_chunk_size = args.get_q_chunk_size();
+    const uint32_t local_padded_N = tensor_args.input_q.logical_shape()[2];
+    const uint32_t joint_l = tensor_args.joint_q.has_value() ? tensor_args.joint_q.value().logical_shape()[2] : 0u;
+    const uint32_t num_q_chunks = tt::div_up(local_padded_N, static_cast<uint32_t>(q_chunk_size)) +
+                                  tt::div_up(joint_l, static_cast<uint32_t>(q_chunk_size));
+    const uint32_t expected_writer_fabric_args =
+        dyn::kWriterFabricArgCount + (args.has_sparse_frames() ? num_q_chunks : 0u);
+
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         // Hoisted out of the per-core loop, and by reference: a copy would clone the whole arg grid.
         auto& reader_grid = GetRuntimeArgs(program, dyn::kReaderKernelIdx);
@@ -2006,9 +2024,9 @@ void ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
                 const uint32_t link = (core.x == sdpa_grid.x - 1) ? 1u : 0u;
                 auto& writer_args = writer_fabric_grid[core.x][core.y];
                 TT_FATAL(
-                    writer_args.size() == dyn::kWriterFabricArgCount,
+                    writer_args.size() == expected_writer_fabric_args,
                     "Exp ring joint SDPA fabric writer expected {} runtime args on core ({},{}), cached program has {}",
-                    dyn::kWriterFabricArgCount,
+                    expected_writer_fabric_args,
                     core.x,
                     core.y,
                     writer_args.size());
