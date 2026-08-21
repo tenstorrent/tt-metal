@@ -27,7 +27,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
         input.device()->arch(),
         compute_kernel_config,
         MathFidelity::HiFi4,
-        /*default_approx_mode=*/true,
+        /*default_approx_mode=*/false,
         /*default_fp32_acc=*/false,
         /*default_l1_acc=*/false);
     auto outputs = ttnn::experimental::prim::qkv_causal_conv1d_silu(

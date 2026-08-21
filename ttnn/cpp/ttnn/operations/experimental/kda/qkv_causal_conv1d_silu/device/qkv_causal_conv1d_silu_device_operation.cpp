@@ -99,6 +99,9 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     }
     check_output_interleaved(attrs.output_mem_config, operation_name);
     check_compute_config(attrs.compute_kernel_config, operation_name);
+    TT_FATAL(
+        !attrs.compute_kernel_config.math_approx_mode,
+        "qkv_causal_conv1d_silu: math_approx_mode=true is unsupported because silu_tile always uses precise sigmoid");
 }
 
 QkvCausalConv1dSiluOperation::spec_return_value_t QkvCausalConv1dSiluOperation::compute_output_specs(

@@ -260,7 +260,7 @@ def test_qkv_causal_conv1d_silu_default_compute_config_matches_explicit_defaults
     explicit_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=True,
+        math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
         dst_full_sync_en=False,
@@ -283,38 +283,26 @@ def test_qkv_causal_conv1d_silu_default_compute_config_matches_explicit_defaults
         )
 
 
-def test_qkv_causal_conv1d_silu_exact_math_uses_distinct_accurate_program(device: ttnn.Device) -> None:
-    host, (input_tt, history_tt, taps_tt) = _device_inputs(device, sequence=32, widths=(128, 128, 128), seed=818)
-    approximate = _run(
-        input_tt,
-        history_tt,
-        taps_tt,
-        widths=(128, 128, 128),
-        channel_chunk_size=384,
-    )
-    entries = device.num_program_cache_entries()
-    exact_config = ttnn.init_device_compute_kernel_config(
+def test_qkv_causal_conv1d_silu_rejects_approximate_math(device: ttnn.Device, expect_error: Callable) -> None:
+    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, sequence=32, widths=(128, 128, 128), seed=818)
+    approximate_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
+        math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
-    exact = _run(
-        input_tt,
-        history_tt,
-        taps_tt,
-        widths=(128, 128, 128),
-        channel_chunk_size=384,
-        compute_kernel_config=exact_config,
-    )
-    assert device.num_program_cache_entries() == entries + 1
-    expected = _reference(*host, (128, 128, 128))
-    for name, golden, approximate_output, exact_output in zip(
-        ("q", "k", "v"), expected, approximate, exact, strict=True
+    with expect_error(
+        RuntimeError, "math_approx_mode=true is unsupported because silu_tile always uses precise sigmoid"
     ):
-        assert_accurate(golden, ttnn.to_torch(approximate_output), name=f"{name} approximate math", pcc_threshold=0.999)
-        assert_accurate(golden, ttnn.to_torch(exact_output), name=f"{name} exact math", pcc_threshold=0.999)
+        _run(
+            input_tt,
+            history_tt,
+            taps_tt,
+            widths=(128, 128, 128),
+            channel_chunk_size=384,
+            compute_kernel_config=approximate_config,
+        )
 
 
 def test_qkv_causal_conv1d_silu_rejects_unsupported_compute_config(device: ttnn.Device, expect_error: Callable) -> None:
