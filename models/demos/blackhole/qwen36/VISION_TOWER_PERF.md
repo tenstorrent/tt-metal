@@ -544,6 +544,13 @@ it accumulates error across `SEQ/k_chunk` flash chunks over 27 blocks. Not taken
 4. **LoFi on the four `bf16 × bf8b` matmul families** — ≈−46 ms/tower on the 9B, at ~0.9998 per-matmul
    PCC over a 27-block tower. An accuracy decision. (LoFi on *SDPA* is a different story and already
    rejected — see above.)
+5. **`fp32_dest_acc_en=True` on `wo` / `mlp_fc1` / `mlp_fc2`** — the opposite trade, and the one place
+   where spending time buys accuracy. Those three run `lofi` / `hifi2_fp16` / `hifi2_fp16`, all of
+   which accumulate the K dim in a bf16 dest. Forcing them to `hifi2` costs **+9 ms/tower** (798 → 806
+   ms on the 9B/N300) and is worth **+0.002 real-weight PCC at full depth** (0.98850 → 0.99034). NOT
+   taken: the two precision fixes that ship (`VisionAttention.attn_out_dtype`, and `fp32_dest_acc_en`
+   on the block LayerNorms) already buy +0.0198 for +8.7 ms, so this is the same money for a tenth of
+   the return. Revisit if the tower ever needs the last 0.002.
 
 ## Not covered
 
