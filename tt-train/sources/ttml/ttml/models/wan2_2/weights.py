@@ -134,7 +134,10 @@ def load_expert_from_safetensors(model, model_id: str, subfolder: str = "transfo
             loaded += 1
 
     if unexpected:
-        print(f"[wan] {len(unexpected)} checkpoint tensors had no home, e.g. {unexpected[:4]}")
+        message = f"[wan] {len(unexpected)} checkpoint tensors had no home, e.g. {unexpected[:4]}"
+        if strict:
+            raise RuntimeError(message)
+        print(message)
     if remaining:
         message = f"[wan] {len(remaining)} parameters were not initialised, e.g. {sorted(remaining)[:4]}"
         if strict:

@@ -10,7 +10,7 @@ try:
     import wandb  # noqa: F401
 
     _WANDB_OK = True
-except Exception:
+except ImportError:
     _WANDB_OK = False
 
 

@@ -153,6 +153,8 @@ class Config:
         return self
 
     def validate(self) -> None:
+        if not 0.0 < self.BOUNDARY_RATIO < 1.0:
+            raise ValueError(f"BOUNDARY_RATIO must be between 0 and 1, got {self.BOUNDARY_RATIO}")
         if self.TRAIN_EXPERTS not in ("low", "high", "both"):
             raise ValueError(f"TRAIN_EXPERTS must be low|high|both, got {self.TRAIN_EXPERTS!r}")
         if self.LORA_TARGET_SET not in ("attn", "attn+ffn"):
@@ -167,6 +169,8 @@ class Config:
             raise ValueError(f"INFER_FRAMES must be 1 or 4k+1, got {self.INFER_FRAMES}")
         if self.BATCH < 1:
             raise ValueError(f"BATCH must be >= 1, got {self.BATCH}")
+        if self.GRAD_ACCUM < 1:
+            raise ValueError(f"GRAD_ACCUM must be >= 1, got {self.GRAD_ACCUM}")
         # VAE spatial stride 8 * patch 2. Checked here so a bad resolution fails in a second
         # rather than deep inside WanEncoder, after the VAE build; precompute._validate_res
         # re-checks it against the real VAE config in case the stride ever differs.

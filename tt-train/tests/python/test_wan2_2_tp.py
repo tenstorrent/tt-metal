@@ -26,10 +26,14 @@ import ttml
 
 torch = pytest.importorskip("torch")
 
-# Opening a 4x8 mesh -- fabric init plus JIT kernels for every collective -- can take many
-# minutes on a cold ~/.cache/tt-metal-cache, and because the mesh fixture is module-scoped
+# requires_device: the standard `pytest tt-train/tests/python` job runs on single-card SKUs
+# (bh_p100, bh_p150b_civ2) with a 20-minute budget, where nothing here can run -- the mesh
+# fixture skips there, so the module costs seconds rather than failing every test.
+#
+# timeout: opening a 4x8 mesh -- fabric init plus JIT kernels for every collective -- can take
+# many minutes on a cold ~/.cache/tt-metal-cache, and because the mesh fixture is module-scoped
 # that whole cost is billed to whichever test runs first. Well above pytest-timeout's 300s.
-pytestmark = pytest.mark.timeout(1800)
+pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
 DP, TP = 4, 8
 DIM, SEQ, EPS = 512, 64, 1e-6
@@ -38,7 +42,22 @@ LOCAL = DIM // TP
 
 @pytest.fixture(scope="module")
 def mesh():
-    ttml.open_device_mesh(ttml.Mesh((DP, TP), ("dp", "tp")))
+    """A [4, 8] mesh with axes ("dp", "tp"); skips the module if one is unavailable.
+
+    Mirrors conftest's ``tp_mesh``: opening the mesh is the availability probe, since a
+    device count alone does not say whether the 32 chips are cabled into a 4x8 Galaxy.
+    Needs TT_MESH_GRAPH_DESC_PATH pointing at bh_galaxy_4_8_line_line.textproto -- see the
+    module docstring.
+    """
+    try:
+        ttml.open_device_mesh(ttml.Mesh((DP, TP), ("dp", "tp")))
+    except Exception as e:  # noqa: BLE001
+        try:
+            ttml.close_device_mesh()
+        except Exception:  # noqa: BLE001
+            pass
+        pytest.skip(f"needs a [{DP}, {TP}] 'dp'/'tp' mesh: {e}")
+
     try:
         yield ttml.mesh()
     finally:

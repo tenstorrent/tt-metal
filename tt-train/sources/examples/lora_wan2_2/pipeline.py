@@ -3,7 +3,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Wan 2.2 T2V-A14B style LoRA pipeline. Run one stage per process; see README.md."""
 
 from __future__ import annotations
 
