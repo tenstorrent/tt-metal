@@ -15,6 +15,7 @@ import pytest
 from models.demos.common.prefill.adapter import get_adapter
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_OUTPUT_TOKENS
 
 KVPE_DIM = 576  # kv_lora_rank (512) + qk_rope_head_dim (64)
 
@@ -37,8 +38,8 @@ def test_resolve_trace_dir_has_metadata(variant_name):
 def test_load_trace_token_ids(variant_name):
     """token_ids load, truncate to the requested length, and span >= one production chunk."""
     trace = _trace_or_skip(variant_name)
-    assert len(load_trace_token_ids(trace, 5120)) == 5120
-    assert len(load_trace_token_ids(trace)) >= 5120
+    assert len(load_trace_token_ids(trace, PREFILL_CHUNK_OUTPUT_TOKENS)) == PREFILL_CHUNK_OUTPUT_TOKENS
+    assert len(load_trace_token_ids(trace)) >= PREFILL_CHUNK_OUTPUT_TOKENS
 
 
 @pytest.mark.parametrize("variant_name", ["deepseek_v3_d_p", "kimi_k2_6"])

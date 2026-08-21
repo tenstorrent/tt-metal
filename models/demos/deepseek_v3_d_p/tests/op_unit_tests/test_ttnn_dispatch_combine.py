@@ -50,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import ISL_TOKENS_PER_CHIP
 
 
 def run_dispatch_combine(
@@ -713,7 +714,7 @@ def test_ttnn_dispatch_combine_top4(
     topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     run_dispatch_combine(
         mesh_device=mesh_device,
-        seq_len_per_chip=1600,
+        seq_len_per_chip=ISL_TOKENS_PER_CHIP,
         emb_dim=7168,
         num_routed_experts=64,
         num_experts_per_tok=4,

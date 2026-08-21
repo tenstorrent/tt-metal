@@ -48,12 +48,13 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_p
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import run_model
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import ISL_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.perf_utils import adjust_margin_for_ddr_speed
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 
 # 640 tokens/chip over SP=8 = the 5k ISL the pcc leg's `kimi_k3-5k-perf` case runs.
-_SEQ_LEN_PER_CHIP = 640
+_SEQ_LEN_PER_CHIP = ISL_TOKENS_PER_CHIP
 # Capacity factor 5 carries over from K2.6, as in the pcc parametrize.
 _DISPATCH_BUFFER_CAPACITY_FACTOR = 5
 

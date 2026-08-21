@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtD
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_OUTPUT_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_dflash_kv_cache
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -29,7 +30,7 @@ PCC_THRESHOLD = 0.999
 
 # The production chunk width on the target 8x4 mesh (sp=8 -> chunk_local=640), same literal as
 # test_mla.py:558's `chunk_size_global=5120` default. There is no config constant for it.
-CHUNK_GLOBAL = 5120
+CHUNK_GLOBAL = PREFILL_CHUNK_OUTPUT_TOKENS
 
 # Per-user cache depth
 MAX_SEQ_LEN = 11 * CHUNK_GLOBAL

@@ -50,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import ISL_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBOOK_TRACE, load_trace_gate_input
 
@@ -69,7 +70,7 @@ GATE_MODELS = {
 
 # Per-chip sequence every gate case runs at. Must be passed at construction: TtMoEGateConfig keeps
 # only the tuned matmul configs keyed to sp_dim, so assigning it afterwards drops to default tiling.
-GATE_SP_DIM = 640
+GATE_SP_DIM = ISL_TOKENS_PER_CHIP
 
 
 def _gate_config(gate_model: str) -> TtMoEGateConfig:
