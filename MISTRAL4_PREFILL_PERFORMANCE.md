@@ -128,30 +128,47 @@ win exists only with an empty KV.
 **Still true of all of it:** `PP_HANDOFF=none`, so no activation crosses a stage boundary and a real
 device-to-device transport cost has to come off these margins.
 
-## 2. 12 kW — STALE, needs re-measurement
+## 2. 12 kW — measured with the fixed driver
 
-The 12 kW runs predate the fix, so their PP column is understated at the two short windows. Applying
-the 8 kW correction factors gives estimates only — **re-run with the fixed driver before quoting
-these.**
+Measured 2026-08-21 at `2bc6bc7210b` (`FABRIC_1D`, pre-rebase), 14/14 runs passed, no reset needed,
+no other users. Correctness: PP=4 and PP=2 both sample **token 2 at p=0.7147**, matching 8 kW exactly.
 
-| window | single-rank (12 kW) | PP=4 measured (buggy) | PP=4 estimated | est. ratio | was |
+**Single-rank was re-measured in the same run**, which matters: the earlier 12 kW single-rank figures
+came from a *different commit* (`c34e372b47d`), so quoting PP against them mixes two code states.
+
+| window | single-rank (same commit) | single-rank (earlier, `c34e372b47d`) | PP=4 x (8,1) | PP=4 x (4,2) | PP=2 x (8,2) |
 |---|---|---|---|---|---|
-| 5,120 | 36,312 | 34,004 | ~37,970 | **~1.05x** | 0.94x (a loss) |
-| 25,600 | 32,821 | 41,664 | ~45,550 | **~1.39x** | 1.27x |
-| 102,400 | 23,546 | 20,592 / 23,437 | ~21,220 / ~23,330 | ~0.90x / **~0.99x** | 0.87x / 1.00x |
-| 261,120 | 15,022 | 15,697 / 16,377 | ~15,500 / ~16,340 | ~1.03x / **~1.09x** | 1.04x / 1.09x |
+| 5,120 | 32,611 | 36,312 | 38,737 | **41,108** | 27,173 |
+| 25,600 | 28,225 | 32,821 | **46,629** | 26,163 | — |
+| 102,400 | 21,285 | 23,546 | **28,880** steady / 25,225 total | — | — |
+| 261,120 | 14,026 | 15,022 | **18,098** steady / 17,107 total | 8,713 steady / 8,373 total | — |
 
-**This may partly reverse the earlier recommendation.** The old reading was "PP=4 wins 1 of 4 windows
-on 12 kW"; corrected, it plausibly wins 3 of 4 (marginally at 5,120, clearly at 25,600, modestly at
-261,120) and washes at 102,400. That is materially different, and it is an *estimate* — the 12 kW
-re-run is now the highest-value item in the queue.
+Ratios against the **same-commit** single-rank:
 
-What does **not** change: single-rank still scales with board power far better than PP=4 does. Those
-8→12 kW scaling factors (1.11-1.38x for single-rank vs ~1.00x for PP at three of four windows) came
-from comparing each config against itself across machines, so the bug affects both sides of each
-ratio roughly equally at a given window.
+| window | PP=4 x (8,1) | PP=4 x (4,2) | PP=2 x (8,2) |
+|---|---|---|---|
+| 5,120 | 1.19x | **1.26x** | 0.83x |
+| 25,600 | **1.65x** | 0.93x | — |
+| 102,400 | **1.36x** steady / 1.19x total | — | — |
+| 261,120 | **1.29x** steady / 1.22x total | 0.62x | — |
 
-### Single-rank scales with power
+**The predicted 5,120 flip happened.** Pre-fix it read 0.94x — a loss. It is now 1.19x against the
+same-commit baseline, or 1.07x against the older cross-commit one. Either way it is a win, and
+**PP=4 x (8,1) now wins all four windows on the target box**, up from one of four.
+
+Two honest caveats on the magnitude:
+
+- **Part of the margin is single-rank getting slower**, not PP getting faster: same-commit single-rank
+  is 6.6-14% below the `c34e372b47d` figures at every window. No code path between those commits
+  touches chunked single-rank (see §0b), so this is unexplained and most likely environmental or an
+  extraction difference. Quote the conservative ratios if the number has to be defended.
+- `(4,2)` reproduces the 8 kW crossover exactly: best at 5,120 (1.26x), then 0.93x and 0.62x as
+  context accumulates. Short-prompt special case, not a general win.
+
+**These are all `FABRIC_1D` numbers.** Upstream has since retired that fabric for 8x4 (§0b), so this
+whole section will need re-baselining on `FABRIC_2D_TORUS_XY` before it describes the shipping path.
+
+### Single-rank scales with power### Single-rank scales with power
 
 | window | 8 kW | 12 kW | 12/8 |
 |---|---|---|---|
