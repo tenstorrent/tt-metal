@@ -11,7 +11,7 @@
 # Until that is settled, regenerate locally -- it takes ~40 s on CPU:
 #
 #   export PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS
-#   /root/tt/cosyvoice_env/bin/python ../../scripts/gen_golden.py --mode zero_shot
+#   /mnt/cosyvoice_env/bin/python ../../scripts/gen_golden.py --mode zero_shot
 #
 # Tests that need a golden skip cleanly when it is absent (see `needs_golden` in
 # tests/pcc/test_istft.py), so an un-regenerated checkout still runs green.

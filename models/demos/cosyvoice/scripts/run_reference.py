@@ -10,7 +10,7 @@ perf gates (R8: >= 30 tok/s, RTF < 0.5) meaningful rather than absolute.
 RUN THIS IN THE CosyVoice VENV:
 
     PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS \
-    /root/tt/cosyvoice_env/bin/python run_reference.py --out <dir>
+    /mnt/cosyvoice_env/bin/python run_reference.py --out <dir>
 
 Mode / checkpoint mapping (CosyVoice-300M alone cannot do all four):
 
