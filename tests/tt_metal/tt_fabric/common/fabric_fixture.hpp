@@ -19,6 +19,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/allocator.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "test_host_kernel_common.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
@@ -135,7 +136,7 @@ public:
     void RunProgramNonblocking(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
-            tt::tt_metal::detail::LaunchProgram(device->get_devices()[0], program, false);
+            tt::tt_metal::slow_dispatch::LaunchProgram(*device, program, false);
         } else {
             tt::tt_metal::distributed::MeshCommandQueue& cq = device->mesh_command_queue();
             // Create a mesh workload from the program

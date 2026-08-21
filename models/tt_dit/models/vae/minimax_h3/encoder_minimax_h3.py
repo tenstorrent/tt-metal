@@ -18,11 +18,10 @@ Two facts drive the plumbing:
   the batch axis so no statistic ever mixes across frames.
 
 The norm is :class:`MiniMaxH3DistributedFrameGroupNorm`, which computes the per-(frame,
-group) statistics itself. Measured alternatives all lose: ``ttnn.group_norm`` with T as
-batch is 2.7x slower and bf16-only, which makes every norm a bf16 island in an otherwise
-fp32 encoder; a fused distributed GroupNorm device op is 1.6x slower per frame (~30 GB/s
-against the stats norm's ~112); carrying the resnet chain in TILE to avoid the round trip
-is a wash. Do not re-derive them.
+group) statistics itself. Three alternatives were tried and all lose, so do not re-derive
+them: ``ttnn.group_norm`` with T as batch is 2.7x slower and bf16-only, making every norm a
+bf16 island in an otherwise fp32 encoder; a fused distributed GroupNorm device op is 1.6x
+slower per frame; carrying the resnet chain in TILE to avoid the round trip is a wash.
 
 Each norm is still specialised to its ``(T, H, W)`` at construction, because the divisor is
 the *global* element count per (frame, group) and only the constructor knows the mesh factor.

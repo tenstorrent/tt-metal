@@ -27,6 +27,9 @@
 #include "ttnn/operations/experimental/quasar/to_device/to_device_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/padded_slice/padded_slice_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/slice_write/slice_write_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/typecast/typecast_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/sharded_to_interleaved/sharded_to_interleaved_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/interleaved_to_sharded/interleaved_to_sharded_nanobind.hpp"
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -85,7 +88,15 @@ void bind_quasar(nb::module_& mod) {
     detail::bind_padded_slice(m_quasar);
     detail::bind_slice_write(m_quasar);
 
-    // NOTE: halo and binary_ng have no python binding (internal device backends).
+    // typecast (dtype conversion).
+    detail::bind_typecast(m_quasar);
+
+    // sharded_to_interleaved / interleaved_to_sharded (standalone; to_memory_config also dispatches to these).
+    detail::bind_sharded_to_interleaved(m_quasar);
+    detail::bind_interleaved_to_sharded(m_quasar);
+
+    // NOTE: halo has no python binding (internal device backend). The binary_ng device op is exposed through the
+    // binary front-end (binary::py_module -> add/subtract/multiply/...), not a direct binary_ng binding.
 }
 
 }  // namespace ttnn::operations::experimental::quasar
