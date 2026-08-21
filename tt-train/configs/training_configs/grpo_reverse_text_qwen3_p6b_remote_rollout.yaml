@@ -52,6 +52,9 @@ training_config:
     max_completion_length: 384
     num_generations: 16
     warmup_steps: 2
+    log_completions: true
+    num_completions_to_print: 1
+    report_to: none
 
 device_config:
   enable_ddp: false

@@ -35,7 +35,6 @@ Run:
 
 from __future__ import annotations
 
-import csv
 import gc
 import logging
 import os
@@ -176,56 +175,6 @@ class WeightSyncCallback:
         pass
 
 
-class GRPOMonitor:
-    """on_step_end CSV/stdout monitor.
-
-    Columns are the training-time metrics only; the on-main example also logs
-    ``eval_similarity`` / ``eval_chars`` / ``eval_format``, which come from a
-    greedy-eval callback that the async version cannot run (see module
-    docstring). The ``similarity_reward`` INFO line still surfaces per-step
-    ``mean_similarity`` / ``frac_exact`` / ``frac_format`` for the current batch.
-    """
-
-    def __init__(self, output_dir: str) -> None:
-        self.file_path = os.path.join(output_dir, "grpo_metrics.csv")
-        os.makedirs(output_dir, exist_ok=True)
-        with open(self.file_path, mode="w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(
-                ["step", "reward", "avg_length", "step_time_s", "step_time_with_weight_updates_s", "generation_time_s"]
-            )
-
-    def on_train_begin(self, trainer: Any) -> None:
-        pass
-
-    def on_step_end(self, trainer: Any, step: int, *args: Any, **kwargs: Any) -> None:
-        reward = kwargs["reward_mean"]
-        length = kwargs["mean_completion_len"]
-        min_length = kwargs["min_completion_len"]
-        max_length = kwargs["max_completion_len"]
-        step_time_s = kwargs.get("step_time_s", float("nan"))
-        step_time_and_previous_callbacks_s = kwargs.get("step_time_and_previous_callbacks_s", float("nan"))
-        generation_time_s = kwargs.get("generation_time_s", float("nan"))
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        print(
-            f"[{timestamp}] Step {step} | Reward: {reward:.4f} "
-            f"| Len: {length:.2f} (min {min_length}, max {max_length}) tokens "
-            f"| Step: {step_time_s:.2f}s (with updates: {step_time_and_previous_callbacks_s:.2f}s) | Gen: {generation_time_s:.2f}s"
-        )
-        with open(self.file_path, mode="a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([step, reward, length, step_time_s, step_time_and_previous_callbacks_s, generation_time_s])
-
-    def on_before_optimizer_step(self, trainer: Any) -> None:
-        pass
-
-    def on_save(self, trainer: Any, step: int, path: str) -> None:
-        pass
-
-    def on_train_end(self, trainer: Any) -> None:
-        print("Training complete.")
-
-
 def _load_device_config():
     raw = load_config(os.path.join(str(REPO_ROOT), CONFIG_REL))
     return DeviceConfig(raw), raw
@@ -294,7 +243,6 @@ def _ttml_main() -> None:
             optimizer_dict=optimizer_dict,
             callbacks=[
                 WeightSyncCallback(completer, every=weight_sync_every),
-                GRPOMonitor(output_dir),
             ],
             model_source=model_id,
         )

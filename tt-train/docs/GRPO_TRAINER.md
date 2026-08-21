@@ -198,7 +198,7 @@ from ttml.trainers import GRPOConfig
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |
 | `checkpoint_interval` | `int` | — | *(use `save_steps`)* | Save a checkpoint every *N* optimizer steps (when `checkpointing=True`). |
-| `logging_steps` | `int` | — | `logging_steps` | Fire `on_step_end` callbacks every *N* optimizer steps (0 or negative to disable). The trainer's only built-in logging is the auto-added `GRPOMonitor` (see [Built-in GRPOMonitor](#built-in-grpomonitor)); everything else is callback-driven. |
+| `logging_steps` | `int` | — | `logging_steps` | Cadence of the built-in `GRPOMonitor` (CSV / console / wandb). `0` or negative disables that monitor. `on_step_end` itself fires every optimizer step so per-step callbacks such as `WeightSyncCallback` are not logging-gated; the monitor self-gates on this field. |
 | `log_completions` | `bool` | `False` | `log_completions` | When `True`, the built-in [`GRPOMonitor`](#built-in-grpomonitor) prints a sample of `(prompt, completion, reward)` triples every logging step (and, if `report_to == "wandb"`, logs them as a `wandb.Table`). |
 | `num_completions_to_print` | `int` | `0` | `num_completions_to_print` | Upper bound on how many completions per step the monitor prints when `log_completions=True`. `0` disables the sample dump even when `log_completions` is set (a warning is emitted). |
 | `report_to` | `str` | `"none"` | `report_to` | Where the built-in monitor forwards scalar metrics and the optional completions table. Only `"none"` and `"wandb"` are accepted in this framework (TRL takes a list; here it must be a single string). When `"wandb"` is set, the built-in `GRPOMonitor` calls `wandb.init(...)` itself in `on_train_begin` (matching the TRL / `transformers` `WandbCallback` convention); `project` / `entity` / `mode` come from the `WANDB_PROJECT` / `WANDB_ENTITY` / `WANDB_MODE` env vars, and `name` from `run_name` below. If the caller already opened a wandb run before constructing the trainer, the monitor logs into it and leaves its lifecycle alone. |
@@ -361,7 +361,7 @@ Two contracts are worth calling out:
 - **`trainer.metrics` is mutable and shared**: callbacks earlier in
   `trainer.callbacks` can add scalar columns by writing into it, and any
   callback later in the list (including the built-in `GRPOMonitor`) will read
-  the merged view. The dict is rebuilt at the top of every logging step, so
+  the merged view. The dict is rebuilt at the top of every optimizer step, so
   writes do not leak between steps.
 - **Column-set freeze**: `GRPOMonitor` snapshots the CSV column set at
   `on_train_begin`. New keys added mid-run log a one-time warning instead of
@@ -372,7 +372,7 @@ Two contracts are worth calling out:
 | Hook | Signature | When |
 |------|-----------|------|
 | `on_train_begin` | `(trainer)` | Before the first batch. |
-| `on_step_end` | `(trainer, step, **kwargs)` | Every `logging_steps` optimizer steps. Keyword args are the current contents of `trainer.metrics`: `reward_mean`, `reward_std`, `mean_completion_len`, `min_completion_len`, `max_completion_len`, `lr`, `step_time_s`, `generation_time_s`, one `<CallbackClassName>_time_s` per callback (from the PREVIOUS step; `nan` on step 1), and — when `log_completions=True` — truncated `prompts` / `completions` / `rewards` lists. |
+| `on_step_end` | `(trainer, step, **kwargs)` | Every optimizer step (not gated by `logging_steps`). Keyword args are the current contents of `trainer.metrics`: `reward_mean`, `reward_std`, `mean_completion_len`, `min_completion_len`, `max_completion_len`, `lr`, `step_time_s`, `generation_time_s`, one `<CallbackClassName>_time_s` per callback (from the PREVIOUS step; `nan` on step 1), and — when `log_completions=True` — truncated `prompts` / `completions` / `rewards` lists. The built-in `GRPOMonitor` self-gates on `logging_steps`. |
 | `on_before_optimizer_step` | `(trainer)` | After gradient accumulation, before `optimizer.step()`. |
 | `on_save` | `(trainer, step, path)` | After a checkpoint is saved. `path` is the checkpoint directory. |
 | `on_train_end` | `(trainer)` | After the final batch. |
@@ -610,6 +610,10 @@ same `GRPOTrainer`; they differ in where token generation runs.
   runs the ttml policy and `GRPOTrainer`; rank 1 runs generation
   workers.
 
-Both examples plug into `GRPOTrainer` through the same
+- [`tt-train/sources/examples/grpo_remote_rollout/reverse_text/`](../sources/examples/grpo_remote_rollout/reverse_text/)
+  — the same two-rank layout for the reverse-text task on Qwen3-0.6B
+  (2 chips, one host).
+
+These examples plug into `GRPOTrainer` through the same
 `GRPOCompleter` abstraction — the trainer itself does not know which
 of the two deployments it's in.
