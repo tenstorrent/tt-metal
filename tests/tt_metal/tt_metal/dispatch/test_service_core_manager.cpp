@@ -27,6 +27,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
+#include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/llrt.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -335,6 +336,46 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreAllocatorCorrectness) {
         MetalContext::instance().get_service_core_manager().allocate_l1(device, core, k1p5MB), std::runtime_error);
 
     MetalContext::instance().get_service_core_manager().release(device, {core});
+}
+
+// A sharded L1 buffer may live on a claimed service core. Such a core has L1 but no allocator
+// bank -- it is a dispatch-column core, outside the compute grid -- and buffer construction
+// validates shard cores against the bank map, so it has to ask ServiceCoreManager before rejecting
+// one. This is how MeshSocket places its config buffer (see create_socket_config_buffer), which
+// then reserves that span via reserve_l1_to_top so the two allocators stay disjoint.
+TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1BufferOnClaimedCore) {
+    auto& mesh_device = this->devices_[0];
+    IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
+
+    auto claimable = MetalContext::instance().get_service_core_manager().get_claimable_cores(device);
+    const CoreCoord core = claimable[0];
+    ASSERT_FALSE(device->allocator_impl()->has_bank(BufferType::L1, core))
+        << "a claimable dispatch-column core is not expected to own an L1 bank";
+
+    // Qualified: in this namespace an unqualified ShardedBufferConfig is the mesh-level one.
+    constexpr uint32_t kPageSize = 1024;
+    const tt::tt_metal::ShardedBufferConfig config{
+        .device = device,
+        .size = kPageSize,
+        .page_size = kPageSize,
+        .buffer_type = BufferType::L1,
+        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
+        .shard_parameters = ShardSpecBuffer(
+            CoreRangeSet(CoreRange(core, core)),
+            {1, kPageSize / sizeof(uint32_t)},
+            ShardOrientation::ROW_MAJOR,
+            {1, 1},
+            {1, kPageSize / sizeof(uint32_t)})};
+
+    // Unclaimed, it is just a core the allocator knows nothing about.
+    EXPECT_ANY_THROW(tt::tt_metal::CreateBuffer(config));
+
+    MetalContext::instance().get_service_core_manager().claim(device, {core});
+    EXPECT_NO_THROW(tt::tt_metal::CreateBuffer(config));
+    MetalContext::instance().get_service_core_manager().release(device, {core});
+
+    // Released, it is rejected again -- the exception is the claim, not the coordinate.
+    EXPECT_ANY_THROW(tt::tt_metal::CreateBuffer(config));
 }
 
 // Actual use case: Launch a persistent service kernel on a claimed FD idle core while simultaneously
