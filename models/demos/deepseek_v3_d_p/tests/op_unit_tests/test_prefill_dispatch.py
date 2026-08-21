@@ -10,8 +10,6 @@ PyTorch reference implementation when dispatching tokens to experts.
 """
 
 
-from dataclasses import dataclass
-
 import pytest
 import torch
 from loguru import logger
@@ -26,7 +24,11 @@ from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
-from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_xy_device_params,
+    torus_y_device_params,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
@@ -415,64 +417,6 @@ def run_dispatch(
     logger.debug("✅ TTNN dispatch operation matches torch reference!")
 
 
-@dataclass
-class _Test_Mesh:
-    full_model_mesh: tuple[int, int]  # Intended for full production-scale testing
-    target_meshes: dict[tuple[int, int], ttnn.FabricConfig]  # Intended for [0..N] proxy tests, typically on smaller HW
-
-
-# Dispatch moves data along a single mesh axis, so unlike combine there is no need to cover
-# multiple axis decompositions per chip count — one representative mesh per chip count suffices.
-SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh(
-    (8, 4),
-    {
-        # Ideally all would run torus XY, but some HW configurations like LB/QB cannot support
-        # rings in all configurations. Pick fabric option as representative as possible.
-        (8, 4): ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-        (4, 2): ttnn.FabricConfig.FABRIC_2D,  # 8-chip proxy
-        (2, 2): ttnn.FabricConfig.FABRIC_2D,  # 4-chip proxy
-        (2, 1): ttnn.FabricConfig.FABRIC_1D_RING,
-        # TODO: add (1, 8) and (1, 4) with FABRIC_2D once fabric 2d works out on these meshes
-        # and remove 4,2 and 2,2
-    },
-)
-
-
-_SP_RING_CAPABLE_FABRICS = (
-    ttnn.FabricConfig.FABRIC_1D_RING,
-    ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-    ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-)
-
-
-def _fabric_id(fabric_cfg):
-    # FABRIC_2D_TORUS_XY -> "fabric2d-xy", FABRIC_1D_RING -> "fabric1d-ring", FABRIC_2D -> "fabric2d"
-    return fabric_cfg.name.lower().replace("fabric_", "fabric").replace("_torus_", "-").replace("_", "-")
-
-
-def _dispatch_mesh_params():
-    """Build the (mesh_device, device_params, topology) axis from SINGLE_GLX_AND_PROXY_MESHES:
-    every mesh runs Topology.Linear, and additionally Topology.Ring when its fabric supports it."""
-    params = []
-    for target_mesh, fabric_cfg in SINGLE_GLX_AND_PROXY_MESHES.target_meshes.items():
-        mesh_id = f"mesh-{target_mesh[0]}x{target_mesh[1]}"
-        topologies = [ttnn.Topology.Linear]
-        if fabric_cfg in _SP_RING_CAPABLE_FABRICS:
-            topologies.append(ttnn.Topology.Ring)
-        for topology in topologies:
-            topo_id = "ring" if topology == ttnn.Topology.Ring else "linear"
-            params.append(
-                pytest.param(
-                    target_mesh,
-                    fabric_to_device_params(fabric_cfg),
-                    topology,
-                    marks=pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=mesh_id),
-                    id=f"{mesh_id}-{_fabric_id(fabric_cfg)}-{topo_id}",
-                )
-            )
-    return params
-
-
 # Per-model dispatch shapes as (id_prefix, config, extended_model). Each model contributes two
 # param sets sharing the same scaling rationale: these models deploy their routed experts across a
 # 32-chip Galaxy (experts/chip = NUM_ROUTED_EXPERTS // num_devices), but this op test runs on at
@@ -541,8 +485,6 @@ def _ci_unsupported_param_combos(**params):
     input_layout = params["input_layout"]
     input_dtype = params["input_dtype"]
     output_dtype = params["output_dtype"]
-    num_links = params["num_links"]
-    fabric_config = params["device_params"]["fabric_config"]
     on_ci = params["on_ci"]
     is_bh = params["is_bh"]
 
@@ -577,15 +519,6 @@ def _ci_unsupported_param_combos(**params):
         # --wrapper-invocation flag bypasses this predicate entirely, so they still run there.
         if not run_pcc_check:
             return True
-        if num_links == 1:
-            return True
-        if fabric_config not in (
-            ttnn.FabricConfig.FABRIC_2D,
-            ttnn.FabricConfig.FABRIC_1D_RING,
-            ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-            ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-        ):
-            return True
 
     return False
 
@@ -596,11 +529,39 @@ def _ci_unsupported_param_combos(**params):
     dispatch_shape_params(),
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, topology",
-    _dispatch_mesh_params(),
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (2, 1),
+            fabric2d_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
+            id="fabric2d-2x1",
+        ),
+        pytest.param(
+            (4, 1),
+            torus_y_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="torus-y-4x1",
+        ),
+        pytest.param(
+            (8, 1),
+            torus_y_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="torus-y-8x1",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
 @pytest.mark.parametrize(
     "input_layout",
