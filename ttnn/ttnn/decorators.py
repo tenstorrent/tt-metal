@@ -21,6 +21,60 @@ import ttnn.operation_tracer
 from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
 
 
+@dataclasses.dataclass(frozen=True)
+class GoldenComparisonConfig:
+    method: str
+    scope: str = "degenerate"
+    ulp_threshold: float | None = None
+    rtol: float = 1e-5
+    atol: float = 1e-4
+    equal_nan: bool = True
+    nonfinite: str = "strict"
+
+
+def set_golden_comparison_config(
+    tensor,
+    *,
+    method,
+    scope="degenerate",
+    ulp_threshold=None,
+    rtol=1e-5,
+    atol=1e-4,
+    equal_nan=True,
+    nonfinite="strict",
+):
+    import torch
+
+    if not isinstance(tensor, torch.Tensor):
+        raise TypeError(f"Expected torch.Tensor, got {type(tensor)}")
+    if method not in ("ulp", "allclose", "skip"):
+        raise ValueError(f"Unsupported golden comparison method: {method}")
+    if scope not in ("degenerate", "all"):
+        raise ValueError(f"Unsupported golden comparison scope: {scope}")
+    if nonfinite not in ("strict", "mask"):
+        raise ValueError(f"Unsupported golden nonfinite policy: {nonfinite}")
+    if method == "ulp" and ulp_threshold is None:
+        raise ValueError("ULP golden comparison requires ulp_threshold")
+
+    tensor._ttnn_comparison_config = GoldenComparisonConfig(
+        method=method,
+        scope=scope,
+        ulp_threshold=ulp_threshold,
+        rtol=rtol,
+        atol=atol,
+        equal_nan=equal_nan,
+        nonfinite=nonfinite,
+    )
+    return tensor
+
+
+def _copy_golden_comparison_config(source, destination):
+    comparison_config = getattr(source, "_ttnn_comparison_config", None)
+    if comparison_config is not None:
+        destination._ttnn_comparison_config = comparison_config
+    return destination
+
+
 def compare_tensors_using_pcc(
     python_fully_qualified_name, golden_outputs, outputs, desired_pcc, level, fail_on_bad_comparison
 ):
@@ -77,20 +131,68 @@ def compare_tensors_using_pcc(
             or is_constant(flattened_golden)
             or is_constant(flattened_output)
         )
-        if pcc_is_degenerate:
-            if golden_output.dtype != torch_output.dtype:
-                torch_output = torch_output.to(golden_output.dtype)
-            same_shape = golden_output.shape == torch_output.shape
-            ulp_threshold = getattr(golden_output, "_ttnn_comparison_ulp_threshold", None)
-            if same_shape and ulp_threshold is not None and golden_output.dtype in (torch.bfloat16, torch.float16):
-                # Only goldens with an operation-specific ULP contract opt into this path.
-                # Other constant outputs retain the established allclose comparison behavior.
-                matches, _ = comp_ulp(golden_output, torch_output, ulp_threshold=ulp_threshold, allow_nonfinite=True)
+        comparison_config = getattr(golden_output, "_ttnn_comparison_config", None)
+        use_comparison_config = comparison_config is not None and (
+            comparison_config.scope == "all" or pcc_is_degenerate
+        )
+
+        # Operation goldens opt into non-PCC metrics only where their numerical contract requires it.
+        # Unmarked outputs retain the existing PCC and degenerate allclose behavior without relaxation.
+        if use_comparison_config and comparison_config.method == "skip":
+            continue
+
+        same_shape = golden_output.shape == torch_output.shape
+        if use_comparison_config and same_shape:
+            comparison_golden = golden_output
+            comparison_output = torch_output
+            nonfinite_masks_match = True
+            if comparison_config.nonfinite == "mask" and (
+                comparison_golden.dtype.is_floating_point
+                or comparison_golden.dtype.is_complex
+                or comparison_output.dtype.is_floating_point
+                or comparison_output.dtype.is_complex
+            ):
+                golden_finite = torch.isfinite(comparison_golden)
+                output_finite = torch.isfinite(comparison_output)
+                nonfinite_masks_match = bool(torch.equal(golden_finite, output_finite))
+                if nonfinite_masks_match and not bool(golden_finite.all()):
+                    comparison_golden = comparison_golden.clone()
+                    comparison_output = comparison_output.clone()
+                    comparison_golden[~golden_finite] = 0
+                    comparison_output[~output_finite] = 0
+
+            if not nonfinite_masks_match:
+                matches = False
+            elif comparison_config.method == "ulp":
+                matches, _ = comp_ulp(
+                    comparison_golden,
+                    comparison_output,
+                    ulp_threshold=comparison_config.ulp_threshold,
+                    allow_nonfinite=True,
+                )
                 matches = bool(matches)
             else:
-                matches = same_shape and bool(
-                    torch.allclose(golden_output, torch_output, rtol=1e-5, atol=1e-4, equal_nan=True)
+                if comparison_golden.dtype != comparison_output.dtype:
+                    comparison_output = comparison_output.to(comparison_golden.dtype)
+                matches = bool(
+                    torch.allclose(
+                        comparison_golden,
+                        comparison_output,
+                        rtol=comparison_config.rtol,
+                        atol=comparison_config.atol,
+                        equal_nan=comparison_config.equal_nan,
+                    )
                 )
+            actual_pcc = 1.0 if matches else 0.0
+        elif use_comparison_config:
+            matches = False
+            actual_pcc = 0.0
+        elif pcc_is_degenerate:
+            if golden_output.dtype != torch_output.dtype:
+                torch_output = torch_output.to(golden_output.dtype)
+            matches = same_shape and bool(
+                torch.allclose(golden_output, torch_output, rtol=1e-5, atol=1e-4, equal_nan=True)
+            )
             actual_pcc = 1.0 if matches else 0.0
         else:
             matches, actual_pcc = comp_pcc(golden_output, torch_output, desired_pcc)
@@ -605,10 +707,12 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
     for output, golden_output in zip(outputs, golden_outputs):
         if output.tensor_id is None:
             raise RuntimeError(f"Output tensor does not have a tensor_id")
-        # Keep global goldens independent from caller-owned tensors and mutable golden temporaries.
-        # In-place goldens may update their inputs; without a storage boundary, later host-side
-        # golden calls can silently corrupt the state used by comparison mode.
-        TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output.tensor_id] = golden_output.clone()
+        # Clone the value as a storage boundary, but retain only the recognized comparison contract.
+        # This lets a later to_torch validate the originating operation without copying arbitrary metadata.
+        golden_clone = golden_output.clone()
+        TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output.tensor_id] = _copy_golden_comparison_config(
+            golden_output, golden_clone
+        )
 
 
 if TRACE_ALLOC_DIAGNOSTICS:
@@ -676,7 +780,12 @@ def refresh_or_invalidate_global_goldens(inplace_tensors, global_golden_output):
         if tensor_id is None:
             continue
         if len(golden_tensors) == len(inplace_tensors):
-            TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[tensor_id] = golden_tensors[index]
+            # Keep caller-buffer goldens behind the same storage boundary as ordinary outputs.
+            # Copy the operation-owned comparison contract so a later read retains its tolerance.
+            golden_clone = golden_tensors[index].clone()
+            TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[tensor_id] = _copy_golden_comparison_config(
+                golden_tensors[index], golden_clone
+            )
         else:
             TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR.pop(tensor_id, None)
 
@@ -997,6 +1106,10 @@ class Operation:
                 global_golden_function_output = None
                 if global_golden_function_args_and_kwargs is not None:
                     global_golden_function_args, global_golden_function_kwargs = global_golden_function_args_and_kwargs
+                    if getattr(self.golden_function, "_ttnn_mutates_global_inputs", False):
+                        # Only marked global goldens may update stored inputs for positional in-place operations.
+                        # Local and directly requested goldens remain ordinary out-of-place references.
+                        global_golden_function_kwargs["_ttnn_global_golden"] = True
                     # Global backward goldens need the same autograd inputs as local goldens.
                     if self.python_fully_qualified_name.endswith("_bw"):
                         global_golden_function_args, global_golden_function_kwargs = prepare_backward_golden_inputs(

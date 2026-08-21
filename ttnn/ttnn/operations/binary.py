@@ -12,6 +12,57 @@ from ttnn.operations import integer_golden
 __all__ = []
 
 
+def _preprocess_binary_golden_function_inputs(function_args, function_kwargs):
+    function_args = tuple(function_args)
+    original_kwargs = function_kwargs
+    golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
+        function_args, function_kwargs
+    )
+
+    input_tensor_a = function_args[0] if function_args else original_kwargs.get("input_tensor_a")
+    input_tensor_b = function_args[1] if len(function_args) > 1 else original_kwargs.get("input_tensor_b")
+    output_tensor = original_kwargs.get("output_tensor")
+    golden_kwargs["_ttnn_input_tensor_a_dtype"] = getattr(input_tensor_a, "dtype", None)
+    golden_kwargs["_ttnn_input_tensor_b_dtype"] = getattr(input_tensor_b, "dtype", None)
+    golden_kwargs["_ttnn_output_tensor_dtype"] = getattr(output_tensor, "dtype", None)
+    return golden_args, golden_kwargs
+
+
+def _set_binary_scalar_comparison_config(
+    output_tensor,
+    input_tensor_b,
+    *,
+    ulp_threshold,
+    _ttnn_input_tensor_a_dtype=None,
+    _ttnn_output_tensor_dtype=None,
+):
+    import torch
+
+    if _ttnn_input_tensor_a_dtype == ttnn.bfloat8_b or _ttnn_output_tensor_dtype == ttnn.bfloat8_b:
+        # BF8 scalar and output-buffer results use block quantization, so BF16 ULP is not meaningful.
+        # Keep PCC for normal outputs and use the suite's direct tolerance only when PCC is degenerate.
+        ttnn.decorators.set_golden_comparison_config(
+            output_tensor, method="allclose", scope="degenerate", rtol=0.4, atol=0.35
+        )
+    elif not hasattr(input_tensor_b, "shape") and output_tensor.dtype in (torch.bfloat16, torch.float16):
+        ttnn.decorators.set_golden_comparison_config(
+            output_tensor, method="ulp", scope="degenerate", ulp_threshold=ulp_threshold
+        )
+    return output_tensor
+
+
+def _copy_inplace_golden_result(input_tensor_a, output_tensor):
+    # Positional in-place operations mutate the first operand even though their host arithmetic is out of place.
+    # Copy the computed value and its comparison contract back so the global golden follows the caller-visible alias.
+    input_tensor_a.copy_(output_tensor)
+    comparison_config = getattr(output_tensor, "_ttnn_comparison_config", None)
+    if comparison_config is not None:
+        input_tensor_a._ttnn_comparison_config = comparison_config
+    elif hasattr(input_tensor_a, "_ttnn_comparison_config"):
+        del input_tensor_a._ttnn_comparison_config
+    return input_tensor_a
+
+
 def apply_activations(tensor, activations):
     import torch
 
@@ -42,26 +93,43 @@ def apply_activations(tensor, activations):
             # The API accepts either a bare enum or a parameter descriptor for fused activations.
             # Normalize both forms before dispatching so comparison goldens match device-side overloads.
             activation_type = getattr(activation, "op_type", activation)
-            if activation_type in (ttnn.UnaryOpType.POWER, ttnn.UnaryOpType.POWER_ITERATIVE):
+            if activation_type == ttnn.UnaryOpType.NEG:
+                tensor = (
+                    integer_golden.binary(tensor, 0, lambda value, _: -value)
+                    if integer_golden.is_unsigned_dtype(tensor.dtype)
+                    else torch.neg(tensor)
+                )
+            elif activation_type in (ttnn.UnaryOpType.POWER, ttnn.UnaryOpType.POWER_ITERATIVE):
                 params = getattr(activation, "params", ())
                 if not params:
                     raise ValueError(f"{activation_type} requires an exponent parameter")
                 # Both device power variants have the same mathematical host reference; iterative
                 # execution affects implementation accuracy, not the golden function's definition.
                 tensor = torch.pow(tensor, params[0])
+            elif activation_type == ttnn.UnaryOpType.RELU_MAX:
+                params = getattr(activation, "params", ())
+                if not params:
+                    raise ValueError(f"{activation_type} requires a maximum parameter")
+                tensor = (
+                    integer_golden.clamp(tensor, min_value=0, max_value=params[0])
+                    if integer_golden.is_unsigned_dtype(tensor.dtype)
+                    else torch.clamp(tensor, min=0, max=params[0])
+                )
             else:
                 activation_function = act_func_map[activation_type]
                 tensor = activation_function(tensor)
     return tensor
 
 
-def _golden_function(
+def _golden_function_add(
     input_tensor_a,
     input_tensor_b,
     *args,
     activations=None,
     input_tensor_a_activations=None,
     input_tensor_b_activations=None,
+    _ttnn_input_tensor_a_dtype=None,
+    _ttnn_output_tensor_dtype=None,
     **kwargs,
 ):
     # Binary kernels apply operand activations before the elementwise operation and
@@ -73,50 +141,158 @@ def _golden_function(
         output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: a + b)
     else:
         output_tensor = input_tensor_a + input_tensor_b
-    return apply_activations(output_tensor, activations)
+    output_tensor = apply_activations(output_tensor, activations)
+    return _set_binary_scalar_comparison_config(
+        output_tensor,
+        input_tensor_b,
+        ulp_threshold=1,
+        _ttnn_input_tensor_a_dtype=_ttnn_input_tensor_a_dtype,
+        _ttnn_output_tensor_dtype=_ttnn_output_tensor_dtype,
+    )
 
 
-ttnn.attach_golden_function(ttnn.add, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn.add_, golden_function=_golden_function)
+def _golden_function_add_(input_tensor_a, input_tensor_b, *args, _ttnn_global_golden=False, **kwargs):
+    output_tensor = _golden_function_add(input_tensor_a, input_tensor_b, *args, **kwargs)
+    return _copy_inplace_golden_result(input_tensor_a, output_tensor) if _ttnn_global_golden else output_tensor
 
 
-def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
+_golden_function_add_._ttnn_mutates_global_inputs = True
+
+
+ttnn.attach_golden_function(
+    ttnn.add,
+    golden_function=_golden_function_add,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
+ttnn.attach_golden_function(
+    ttnn.add_,
+    golden_function=_golden_function_add_,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
+
+
+def _golden_function_subtract(
+    input_tensor_a,
+    input_tensor_b,
+    *args,
+    activations=None,
+    _ttnn_input_tensor_a_dtype=None,
+    _ttnn_output_tensor_dtype=None,
+    **kwargs,
+):
     if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
         # PyTorch lacks unsigned arithmetic kernels; widen and restore TT wraparound.
         output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: a - b)
     else:
         output_tensor = input_tensor_a - input_tensor_b
-    return apply_activations(output_tensor, activations)
+    output_tensor = apply_activations(output_tensor, activations)
+    return _set_binary_scalar_comparison_config(
+        output_tensor,
+        input_tensor_b,
+        ulp_threshold=3,
+        _ttnn_input_tensor_a_dtype=_ttnn_input_tensor_a_dtype,
+        _ttnn_output_tensor_dtype=_ttnn_output_tensor_dtype,
+    )
 
 
-ttnn.attach_golden_function(ttnn.subtract, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn.subtract_, golden_function=_golden_function)
+def _golden_function_subtract_(input_tensor_a, input_tensor_b, *args, _ttnn_global_golden=False, **kwargs):
+    output_tensor = _golden_function_subtract(input_tensor_a, input_tensor_b, *args, **kwargs)
+    return _copy_inplace_golden_result(input_tensor_a, output_tensor) if _ttnn_global_golden else output_tensor
 
 
-def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
+_golden_function_subtract_._ttnn_mutates_global_inputs = True
+
+
+ttnn.attach_golden_function(
+    ttnn.subtract,
+    golden_function=_golden_function_subtract,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
+ttnn.attach_golden_function(
+    ttnn.subtract_,
+    golden_function=_golden_function_subtract_,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
+
+
+def _golden_function_rsub(
+    input_tensor_a,
+    input_tensor_b,
+    *args,
+    activations=None,
+    _ttnn_input_tensor_a_dtype=None,
+    _ttnn_output_tensor_dtype=None,
+    **kwargs,
+):
     if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
         # PyTorch lacks unsigned arithmetic kernels; widen and restore TT wraparound.
         output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: b - a)
     else:
         output_tensor = input_tensor_b - input_tensor_a
-    return apply_activations(output_tensor, activations)
+    output_tensor = apply_activations(output_tensor, activations)
+    return _set_binary_scalar_comparison_config(
+        output_tensor,
+        input_tensor_b,
+        ulp_threshold=3,
+        _ttnn_input_tensor_a_dtype=_ttnn_input_tensor_a_dtype,
+        _ttnn_output_tensor_dtype=_ttnn_output_tensor_dtype,
+    )
 
 
-ttnn.attach_golden_function(ttnn.rsub, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn.rsub_, golden_function=_golden_function)
+ttnn.attach_golden_function(
+    ttnn.rsub,
+    golden_function=_golden_function_rsub,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
+ttnn.attach_golden_function(
+    ttnn.rsub_,
+    golden_function=_golden_function_rsub,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
 
 
-def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
+def _golden_function_multiply(
+    input_tensor_a,
+    input_tensor_b,
+    *args,
+    activations=None,
+    _ttnn_input_tensor_a_dtype=None,
+    _ttnn_output_tensor_dtype=None,
+    **kwargs,
+):
     if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
         # PyTorch lacks unsigned arithmetic kernels; widen and restore TT wraparound.
         output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: a * b)
     else:
         output_tensor = input_tensor_a * input_tensor_b
-    return apply_activations(output_tensor, activations)
+    output_tensor = apply_activations(output_tensor, activations)
+    return _set_binary_scalar_comparison_config(
+        output_tensor,
+        input_tensor_b,
+        ulp_threshold=3,
+        _ttnn_input_tensor_a_dtype=_ttnn_input_tensor_a_dtype,
+        _ttnn_output_tensor_dtype=_ttnn_output_tensor_dtype,
+    )
 
 
-ttnn.attach_golden_function(ttnn.multiply, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn.multiply_, golden_function=_golden_function)
+def _golden_function_multiply_(input_tensor_a, input_tensor_b, *args, _ttnn_global_golden=False, **kwargs):
+    output_tensor = _golden_function_multiply(input_tensor_a, input_tensor_b, *args, **kwargs)
+    return _copy_inplace_golden_result(input_tensor_a, output_tensor) if _ttnn_global_golden else output_tensor
+
+
+_golden_function_multiply_._ttnn_mutates_global_inputs = True
+
+
+ttnn.attach_golden_function(
+    ttnn.multiply,
+    golden_function=_golden_function_multiply,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
+ttnn.attach_golden_function(
+    ttnn.multiply_,
+    golden_function=_golden_function_multiply_,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -254,15 +430,63 @@ ttnn.attach_golden_function(ttnn.logaddexp2, golden_function=_golden_function)
 ttnn.attach_golden_function(ttnn.logaddexp2_, golden_function=_golden_function)
 
 
-def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function_divide(
+    input_tensor_a,
+    input_tensor_b,
+    *args,
+    rounding_mode=None,
+    fast_and_approximate_mode=False,
+    _ttnn_input_tensor_a_dtype=None,
+    _ttnn_output_tensor_dtype=None,
+    **kwargs,
+):
     import torch
 
-    return torch.divide(input_tensor_a, input_tensor_b)
+    if input_tensor_a.dtype == torch.int32 and rounding_mode in ("trunc", "floor"):
+        # Widen integer division so the golden does not take the float32 quotient path.
+        wide_input_b = input_tensor_b.to(torch.int64) if torch.is_tensor(input_tensor_b) else input_tensor_b
+        output_tensor = torch.div(input_tensor_a.to(torch.int64), wide_input_b, rounding_mode=rounding_mode).to(
+            torch.int32
+        )
+    else:
+        output_tensor = torch.divide(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode)
+    if (
+        input_tensor_a.dtype == torch.bfloat16
+        and fast_and_approximate_mode
+        and rounding_mode is None
+        and bool(torch.any(input_tensor_b == 0) if torch.is_tensor(input_tensor_b) else input_tensor_b == 0)
+    ):
+        # Fast BF16 division by zero is intentionally outside the operation's numerical contract.
+        # Preserve its global golden state, but do not fail before the caller's existing skip is reached.
+        ttnn.decorators.set_golden_comparison_config(output_tensor, method="skip", scope="all")
+        return output_tensor
+    return _set_binary_scalar_comparison_config(
+        output_tensor,
+        input_tensor_b,
+        ulp_threshold=3,
+        _ttnn_input_tensor_a_dtype=_ttnn_input_tensor_a_dtype,
+        _ttnn_output_tensor_dtype=_ttnn_output_tensor_dtype,
+    )
 
 
-# `divide` and `divide_` are separate registered operations and both need the same reference.
-ttnn.attach_golden_function(ttnn.divide, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn.divide_, golden_function=_golden_function)
+def _golden_function_divide_(input_tensor_a, input_tensor_b, *args, _ttnn_global_golden=False, **kwargs):
+    output_tensor = _golden_function_divide(input_tensor_a, input_tensor_b, *args, **kwargs)
+    return _copy_inplace_golden_result(input_tensor_a, output_tensor) if _ttnn_global_golden else output_tensor
+
+
+_golden_function_divide_._ttnn_mutates_global_inputs = True
+
+
+ttnn.attach_golden_function(
+    ttnn.divide,
+    golden_function=_golden_function_divide,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
+ttnn.attach_golden_function(
+    ttnn.divide_,
+    golden_function=_golden_function_divide_,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
 
 
 def _golden_function_assign(input_tensor_a, input_tensor_b=None, *args, **kwargs):
@@ -314,7 +538,14 @@ ttnn.attach_golden_function(ttnn.bias_gelu, golden_function=_golden_function)
 ttnn.attach_golden_function(ttnn.bias_gelu_, golden_function=_golden_function)
 
 
-def _golden_function_squared_difference(input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function_squared_difference(
+    input_tensor_a,
+    input_tensor_b,
+    *args,
+    _ttnn_input_tensor_a_dtype=None,
+    _ttnn_output_tensor_dtype=None,
+    **kwargs,
+):
     import torch
 
     if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
@@ -326,12 +557,25 @@ def _golden_function_squared_difference(input_tensor_a, input_tensor_b, *args, *
         output_tensor = torch_squared_difference(input_tensor_a, input_tensor_b)
     # Singleton low-precision squared-difference results are validated to three ULP.
     # Mark this golden explicitly instead of weakening all constant-tensor comparisons.
-    output_tensor._ttnn_comparison_ulp_threshold = 3
+    if _ttnn_input_tensor_a_dtype == ttnn.bfloat8_b or _ttnn_output_tensor_dtype == ttnn.bfloat8_b:
+        ttnn.decorators.set_golden_comparison_config(
+            output_tensor, method="allclose", scope="degenerate", rtol=0.4, atol=0.35
+        )
+    elif output_tensor.dtype in (torch.bfloat16, torch.float16):
+        ttnn.decorators.set_golden_comparison_config(output_tensor, method="ulp", scope="degenerate", ulp_threshold=3)
     return output_tensor
 
 
-ttnn.attach_golden_function(ttnn.squared_difference, golden_function=_golden_function_squared_difference)
-ttnn.attach_golden_function(ttnn.squared_difference_, golden_function=_golden_function_squared_difference)
+ttnn.attach_golden_function(
+    ttnn.squared_difference,
+    golden_function=_golden_function_squared_difference,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
+ttnn.attach_golden_function(
+    ttnn.squared_difference_,
+    golden_function=_golden_function_squared_difference,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
 
 
 def _golden_function_addalpha(input_tensor_a, input_tensor_b, alpha, *args, **kwargs):
@@ -472,7 +716,12 @@ ttnn.attach_golden_function(ttnn.nextafter, golden_function=_golden_function_nex
 def _golden_function_isclose(input_tensor_a, input_tensor_b, *args, rtol=1e-05, atol=1e-08, equal_nan=False, **kwargs):
     import torch
 
-    if torch.is_tensor(input_tensor_b) and input_tensor_a.dtype != input_tensor_b.dtype:
+    if torch.is_tensor(input_tensor_b) and torch.int32 in (input_tensor_a.dtype, input_tensor_b.dtype):
+        # Binary-ng evaluates INT32 isclose through FLOAT32, including mixed INT32/BF16 inputs.
+        # Match that promotion explicitly instead of relying on PyTorch's BF16 common dtype.
+        input_tensor_a = input_tensor_a.to(torch.float32)
+        input_tensor_b = input_tensor_b.to(torch.float32)
+    elif torch.is_tensor(input_tensor_b) and input_tensor_a.dtype != input_tensor_b.dtype:
         common_dtype = torch.promote_types(input_tensor_a.dtype, input_tensor_b.dtype)
         input_tensor_a = input_tensor_a.to(common_dtype)
         input_tensor_b = input_tensor_b.to(common_dtype)
@@ -482,17 +731,13 @@ def _golden_function_isclose(input_tensor_a, input_tensor_b, *args, rtol=1e-05, 
 ttnn.attach_golden_function(ttnn.isclose, golden_function=_golden_function_isclose)
 
 
-def _golden_function_div(input_tensor_a, input_tensor_b, rounding_mode=None, *args, **kwargs):
-    import torch
-
-    if input_tensor_a.dtype == torch.int32 and rounding_mode in ("trunc", "floor"):
-        # Widen integer division so the golden does not take the float32 quotient path.
-        wide_input_b = input_tensor_b.to(torch.int64) if torch.is_tensor(input_tensor_b) else input_tensor_b
-        return torch.div(input_tensor_a.to(torch.int64), wide_input_b, rounding_mode=rounding_mode).to(torch.int32)
-    return torch.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode)
-
-
-ttnn.attach_golden_function(ttnn.div, golden_function=_golden_function_div)
+# Public ttnn.divide is aliased to ttnn.div after operation modules load.
+# Reuse the same scalar, output-buffer, and special-value contract on the surviving operation object.
+ttnn.attach_golden_function(
+    ttnn.div,
+    golden_function=_golden_function_divide,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
 
 
 def _golden_function_div_no_nan(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -519,14 +764,26 @@ def _golden_function_floor_div(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.floor_div, golden_function=_golden_function_floor_div)
 
 
-def _golden_function_remainder(input_tensor_a, input_tensor_b, *args, device=None, **kwargs):
+def _golden_function_remainder(
+    input_tensor_a,
+    input_tensor_b,
+    *args,
+    device=None,
+    activations=None,
+    input_tensor_a_activations=None,
+    input_tensor_b_activations=None,
+    **kwargs,
+):
     import torch
 
-    # Comparison mode does not inject device, and this reference does not use it.
+    # Remainder follows the same operand-before/result-after activation ordering as binary-ng.
+    # Applying it here also preserves unsigned widening before restoring TTNN wraparound.
+    input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations)
+    input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations)
     input_dtype = input_tensor_a.dtype
     if integer_golden.is_unsigned_dtype(input_dtype):
-        # PyTorch lacks unsigned remainder kernels; widen and restore the input dtype.
-        return integer_golden.binary(input_tensor_a, input_tensor_b, torch.remainder)
+        result = integer_golden.binary(input_tensor_a, input_tensor_b, torch.remainder)
+        return apply_activations(result, activations)
     if not torch.is_tensor(input_tensor_b):
         if input_dtype == torch.bfloat16:
             input_tensor_a = input_tensor_a.float()
@@ -535,6 +792,13 @@ def _golden_function_remainder(input_tensor_a, input_tensor_b, *args, device=Non
 
     if input_dtype == torch.bfloat16:
         result = result.bfloat16()
+    result = apply_activations(result, activations)
+    if input_dtype == torch.bfloat16 and not torch.is_tensor(input_tensor_b):
+        # Tiny scalar divisors are accepted by absolute error, while zero divisors may encode
+        # the same undefined positions as NaN or infinity depending on the device path.
+        ttnn.decorators.set_golden_comparison_config(
+            result, method="allclose", scope="all", rtol=0.0, atol=0.001, nonfinite="mask"
+        )
     return result
 
 
@@ -545,8 +809,8 @@ def _golden_function_fmod(input_tensor_a, input_tensor_b, *args, device=None, **
     import torch
 
     # Comparison-mode golden calls do not provide the unused device argument.
+    input_dtype = input_tensor_a.dtype
     if not torch.is_tensor(input_tensor_b):
-        input_dtype = input_tensor_a.dtype
         if input_dtype == torch.bfloat16:
             input_tensor_a = input_tensor_a.float()
         result = torch.fmod(input_tensor_a, input_tensor_b)
@@ -555,6 +819,12 @@ def _golden_function_fmod(input_tensor_a, input_tensor_b, *args, device=None, **
     else:
         result = torch.fmod(input_tensor_a, input_tensor_b)
 
+    if input_dtype == torch.bfloat16 and not torch.is_tensor(input_tensor_b):
+        # Scalar BF16 fmod has the same tiny-divisor and zero-divisor contract as remainder.
+        # Use direct absolute error and compare only the placement of nonfinite results.
+        ttnn.decorators.set_golden_comparison_config(
+            result, method="allclose", scope="all", rtol=0.0, atol=0.001, nonfinite="mask"
+        )
     return result
 
 
@@ -567,15 +837,25 @@ def torch_squared_difference(x, y, *args, **kwargs):
     return torch.square(torch.sub(x, y))
 
 
-def _golden_function_outer(input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function_outer(input_tensor_a, input_tensor_b, *args, _ttnn_input_tensor_a_dtype=None, **kwargs):
     import torch
 
     if input_tensor_a.dim() == 1 and input_tensor_b.dim() == 1:
-        return torch.outer(input_tensor_a, input_tensor_b)
-    return torch.einsum("...i,...j->...ij", input_tensor_a, input_tensor_b)
+        result = torch.outer(input_tensor_a, input_tensor_b)
+    else:
+        result = torch.einsum("...i,...j->...ij", input_tensor_a, input_tensor_b)
+    if _ttnn_input_tensor_a_dtype == ttnn.bfloat8_b:
+        # A one-element BF8 outer product carries block-float quantization for which PCC is undefined.
+        # Retain PCC elsewhere and use the operation's scalar-output tolerance only in that case.
+        ttnn.decorators.set_golden_comparison_config(result, method="allclose", scope="degenerate", rtol=0.05, atol=2.0)
+    return result
 
 
-ttnn.attach_golden_function(ttnn.outer, golden_function=_golden_function_outer)
+ttnn.attach_golden_function(
+    ttnn.outer,
+    golden_function=_golden_function_outer,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
 
 
 def _golden_function_polyval(input_tensor_a, coeffs, *args, **kwargs):
