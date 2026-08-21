@@ -41,13 +41,22 @@ _PRODUCTION_PERF_MARGIN = 0.05
 # implementation. Removing DFB aliasing costs 2 extra physical buffers and
 # 12,288 bytes of worker L1, and that structural cost is accepted, so the
 # reference tracks the accepted implementation rather than its aliased ancestor.
-_PRODUCTION_CASE = _ProductionCase(
+_UNIT_CASE = _ProductionCase(
     "bh2-g4-k32-v64",
     batch_heads=2,
     groups_per_head=4,
     key_dim=32,
     value_dim=64,
     expected_duration_ns=8250,
+)
+
+# Kimi-K3 production layouts. References are the pooled medians from two
+# independent 21-sample Blackhole profiler runs; see
+# specs/pr4-internal-format-bf16-report.md.
+_PRODUCTION_CASES = (
+    _ProductionCase("sp1-tp8", 12, 8, 128, 128, 129107),
+    _ProductionCase("sp2-tp4", 24, 4, 128, 128, 99994),
+    _ProductionCase("sp4-tp2", 48, 2, 128, 128, 87234),
 )
 
 
@@ -232,7 +241,7 @@ def test_affine_exclusive_scan_contract_and_trace(
 
 @pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])
 def test_affine_exclusive_scan_is_device_deterministic(device: ttnn.Device, summary_dtype: ttnn.DataType) -> None:
-    case = _PRODUCTION_CASE
+    case = _UNIT_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1441)
     device_inputs = (
         _to_device(host[0], device, summary_dtype),
@@ -255,7 +264,7 @@ def test_affine_exclusive_scan_is_device_deterministic(device: ttnn.Device, summ
 
 
 def test_affine_exclusive_scan_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
+    case = _UNIT_CASE
     host_a = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1911)
     host_b = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1912)
     device_a = (
@@ -288,7 +297,7 @@ def test_affine_exclusive_scan_cache_hit_rebinds_fresh_tensors(device: ttnn.Devi
 
 
 def test_affine_exclusive_scan_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
+    case = _UNIT_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=817)
     device_inputs = tuple(_to_device(tensor, device) for tensor in host)
     implicit = _run(*device_inputs, case.groups_per_head)
@@ -312,7 +321,7 @@ def test_affine_exclusive_scan_default_compute_config_matches_explicit_defaults(
 
 
 def test_affine_exclusive_scan_approximate_math_uses_distinct_accurate_program(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
+    case = _UNIT_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=818)
     device_inputs = tuple(_to_device(tensor, device) for tensor in host)
     exact = _run(*device_inputs, case.groups_per_head)
@@ -332,7 +341,7 @@ def test_affine_exclusive_scan_approximate_math_uses_distinct_accurate_program(d
 
 
 def test_affine_exclusive_scan_rejects_unsupported_compute_config(device: ttnn.Device, expect_error: Callable) -> None:
-    case = _PRODUCTION_CASE
+    case = _UNIT_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim)
     device_inputs = tuple(_to_device(tensor, device) for tensor in host)
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
@@ -346,16 +355,30 @@ def test_affine_exclusive_scan_rejects_unsupported_compute_config(device: ttnn.D
 @pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_affine_exclusive_scan_production_performance(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
+@pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
+def test_affine_exclusive_scan_production_performance(device: ttnn.Device, case: _ProductionCase) -> None:
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for affine exclusive-scan performance checks")
 
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=117)
-    device_inputs = tuple(_to_device(tensor, device) for tensor in host)
+    expected = _oracle(*host, case.batch_heads, case.groups_per_head)
+    device_inputs = (
+        _to_device(host[0], device, ttnn.bfloat16),
+        _to_device(host[1], device, ttnn.bfloat16),
+        _to_device(host[2], device, ttnn.float32),
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+        dst_full_sync_en=False,
+        throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
+    )
 
     def run() -> ttnn.Tensor:
-        return _run(*device_inputs, case.groups_per_head)
+        return _run(*device_inputs, case.groups_per_head, compute_kernel_config=compute_kernel_config)
 
     output, perf_record = profile_realtime_program(device, run)
     duration_ns = perf_record["duration_ns"]
@@ -365,6 +388,7 @@ def test_affine_exclusive_scan_production_performance(device: ttnn.Device) -> No
         case.value_dim,
     )
     assert output.dtype == ttnn.float32
+    assert_accurate(expected, ttnn.to_torch(output), name=f"{case.case_id} production output", pcc_threshold=0.999)
     logger.info(
         f"affine exclusive scan {case.case_id}: duration={duration_ns:.0f} ns, "
         f"profiler_runtime_id={perf_record['runtime_id']}"
