@@ -36,7 +36,11 @@ void bind_sdpa_decode(nb::module_& mod) {
 
         Keyword args:
             is_causal (bool): whether the attention is is_causal. Defaults to `True`.
-            attn_mask (ttnn.Tensor, optional): the input tensor [b x 1 x s x s]. Defaults to `None`.
+            attn_mask (ttnn.Tensor, optional): the input tensor [1 x b x nh x s], where dim 2 is the padded
+                number of Q heads and dim 3 is the KV length. The KV length must be a multiple of
+                `k_chunk_size`, which defaults to the largest power-of-two divisor of the sequence
+                length unless `program_config` overrides it. Only valid with `is_causal=False`.
+                Defaults to `None`.
             cur_pos (List of int, optional): list of integers of length b. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             cur_pos_tensor (ttnn.Tensor, optional): [b] tensor of integers of length b. Defaults to `None`.
