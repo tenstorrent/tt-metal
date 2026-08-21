@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdlib>
 #include <string>
+#include <thread>
 
 #include "tt_metal/common/host_threading.hpp"
 
@@ -14,6 +15,9 @@ namespace {
 
 using tt::tt_metal::detail::get_host_worker_threads;
 using tt::tt_metal::detail::hardware_concurrency_or_one;
+using tt::tt_metal::detail::parse_host_worker_threads;
+
+constexpr size_t kHardwareConcurrency = 8;
 
 // RAII helper that sets TT_METAL_HOST_WORKER_THREADS for the duration of a test
 // case and restores the previous value (or unsets it) on destruction, so tests
@@ -55,70 +59,93 @@ private:
 // A negative value must not be accepted. std::strtoul would parse "-1" to
 // ULONG_MAX without error; the guard must reject it and fall back.
 TEST(HostThreading, RejectsNegativeOne) {
-    ScopedWorkerThreadsEnv env("-1");
-    EXPECT_EQ(get_host_worker_threads(), hardware_concurrency_or_one());
+    EXPECT_EQ(parse_host_worker_threads("-1", kHardwareConcurrency), kHardwareConcurrency);
 }
 
 TEST(HostThreading, RejectsNegativeFive) {
-    ScopedWorkerThreadsEnv env("-5");
-    EXPECT_EQ(get_host_worker_threads(), hardware_concurrency_or_one());
+    EXPECT_EQ(parse_host_worker_threads("-5", kHardwareConcurrency), kHardwareConcurrency);
 }
 
 // Leading whitespace is silently skipped by strtoul; the guard must reject it.
 TEST(HostThreading, RejectsLeadingWhitespace) {
-    ScopedWorkerThreadsEnv env("  4");
-    EXPECT_EQ(get_host_worker_threads(), hardware_concurrency_or_one());
+    EXPECT_EQ(parse_host_worker_threads("  4", kHardwareConcurrency), kHardwareConcurrency);
 }
 
 // A leading '+' is accepted by strtoul but should be rejected here.
 TEST(HostThreading, RejectsLeadingPlus) {
-    ScopedWorkerThreadsEnv env("+4");
-    EXPECT_EQ(get_host_worker_threads(), hardware_concurrency_or_one());
+    EXPECT_EQ(parse_host_worker_threads("+4", kHardwareConcurrency), kHardwareConcurrency);
 }
 
 TEST(HostThreading, RejectsNonNumeric) {
-    ScopedWorkerThreadsEnv env("abc");
-    EXPECT_EQ(get_host_worker_threads(), hardware_concurrency_or_one());
+    EXPECT_EQ(parse_host_worker_threads("abc", kHardwareConcurrency), kHardwareConcurrency);
 }
 
 TEST(HostThreading, RejectsEmpty) {
-    ScopedWorkerThreadsEnv env("");
-    EXPECT_EQ(get_host_worker_threads(), hardware_concurrency_or_one());
+    EXPECT_EQ(parse_host_worker_threads("", kHardwareConcurrency), kHardwareConcurrency);
 }
 
 TEST(HostThreading, RejectsZero) {
-    ScopedWorkerThreadsEnv env("0");
-    EXPECT_EQ(get_host_worker_threads(), hardware_concurrency_or_one());
+    EXPECT_EQ(parse_host_worker_threads("0", kHardwareConcurrency), kHardwareConcurrency);
 }
 
 TEST(HostThreading, RejectsTrailingGarbage) {
-    ScopedWorkerThreadsEnv env("3x");
-    EXPECT_EQ(get_host_worker_threads(), hardware_concurrency_or_one());
+    EXPECT_EQ(parse_host_worker_threads("3x", kHardwareConcurrency), kHardwareConcurrency);
 }
 
 TEST(HostThreading, UnsetFallsBackToHardwareConcurrency) {
-    ScopedWorkerThreadsEnv env(nullptr);
-    EXPECT_EQ(get_host_worker_threads(), hardware_concurrency_or_one());
+    EXPECT_EQ(parse_host_worker_threads(nullptr, kHardwareConcurrency), kHardwareConcurrency);
 }
 
-// A valid positive value must parse — subject to the hardware-concurrency
-// clamp, so on a 1-2 CPU runner the result is the cap, not 3 verbatim.
 TEST(HostThreading, AcceptsValidPositive) {
-    ScopedWorkerThreadsEnv env("3");
-    EXPECT_EQ(get_host_worker_threads(), std::min<size_t>(3, hardware_concurrency_or_one()));
+    EXPECT_EQ(parse_host_worker_threads("3", kHardwareConcurrency), size_t{3});
 }
 
 // ULONG_MAX is digit-only and in-range for strtoul (no ERANGE), so it clears
 // the digit/parse guards. It must be clamped to the hardware-concurrency cap
 // rather than returned verbatim, which would drive spawning ~2^64 threads.
 TEST(HostThreading, ClampsUlongMax) {
-    ScopedWorkerThreadsEnv env("18446744073709551615");
-    EXPECT_EQ(get_host_worker_threads(), hardware_concurrency_or_one());
+    EXPECT_EQ(parse_host_worker_threads("18446744073709551615", kHardwareConcurrency), kHardwareConcurrency);
 }
 
 // A plausible typo (10 billion) is well under ULONG_MAX, so it also clears the
 // parse guards and must be clamped rather than returned verbatim.
 TEST(HostThreading, ClampsPlausibleTypo) {
-    ScopedWorkerThreadsEnv env("10000000000");
-    EXPECT_EQ(get_host_worker_threads(), hardware_concurrency_or_one());
+    EXPECT_EQ(parse_host_worker_threads("10000000000", kHardwareConcurrency), kHardwareConcurrency);
+}
+
+TEST(HostThreading, ZeroHardwareConcurrencyStillUsesOneWorker) {
+    EXPECT_EQ(parse_host_worker_threads(nullptr, 0), size_t{1});
+    EXPECT_EQ(parse_host_worker_threads("4", 0), size_t{1});
+}
+
+TEST(HostThreading, WorkerCountIsThreadSafeAndStableAfterEnvironmentChanges) {
+    const size_t hardware_concurrency = hardware_concurrency_or_one();
+    const size_t expected_worker_threads =
+        parse_host_worker_threads(std::getenv("TT_METAL_HOST_WORKER_THREADS"), hardware_concurrency);
+
+    constexpr size_t caller_count = 8;
+    std::array<size_t, caller_count> observed_worker_threads{};
+    std::array<std::thread, caller_count> callers;
+    for (size_t i = 0; i < callers.size(); ++i) {
+        callers[i] =
+            std::thread([i, &observed_worker_threads] { observed_worker_threads[i] = get_host_worker_threads(); });
+    }
+    for (auto& caller : callers) {
+        caller.join();
+    }
+
+    const size_t initial_worker_threads = observed_worker_threads.front();
+    EXPECT_EQ(initial_worker_threads, expected_worker_threads);
+    for (size_t worker_threads : observed_worker_threads) {
+        EXPECT_EQ(worker_threads, initial_worker_threads);
+    }
+
+    if (hardware_concurrency == 1) {
+        GTEST_SKIP() << "The hardware cap makes all valid settings equivalent";
+    }
+
+    const char* different_worker_threads = initial_worker_threads == 1 ? "2" : "1";
+    ScopedWorkerThreadsEnv env(different_worker_threads);
+    ASSERT_NE(parse_host_worker_threads(different_worker_threads, hardware_concurrency), initial_worker_threads);
+    EXPECT_EQ(get_host_worker_threads(), initial_worker_threads);
 }
