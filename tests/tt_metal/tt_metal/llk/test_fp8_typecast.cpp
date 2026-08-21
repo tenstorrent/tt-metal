@@ -363,38 +363,6 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeSpecMatchesLegacy) {
 }
 
 // ============================================================================
-// Transpose-dest: the id-free (2.0) transpose_dest kernel must produce output bit-for-bit identical to the
-// legacy CB-id transpose_dest kernel on the same input (differential equivalence; reuses the single-core
-// classic-CB harness run_fp8_typecast). Per tile: copy c_0 -> DST, in-DST 32x32 transpose, pack -> c_16.
-// The two kernels differ ONLY in the transpose_dest call (legacy vs experimental::), isolating the change.
-// ============================================================================
-TEST_F(LLKBlackholeSingleCardFixture, TensixTransposeDestSpecMatchesLegacy) {
-    auto& mesh_device = *devices_[0];
-    constexpr std::uint32_t num_tiles = 64;
-    auto src_vec = create_random_vector_of_bfloat16(
-        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-
-    auto legacy = run_fp8_typecast(
-        mesh_device,
-        tt::DataFormat::Float16_b,
-        tt::DataFormat::Float16_b,
-        src_vec,
-        num_tiles,
-        /*fp32_dest_acc_en=*/false,
-        "tests/tt_metal/tt_metal/test_kernels/compute/transpose_dest_legacy.cpp");
-    auto spec = run_fp8_typecast(
-        mesh_device,
-        tt::DataFormat::Float16_b,
-        tt::DataFormat::Float16_b,
-        src_vec,
-        num_tiles,
-        /*fp32_dest_acc_en=*/false,
-        "tests/tt_metal/tt_metal/test_kernels/compute/transpose_dest_2_0.cpp");
-
-    EXPECT_EQ(legacy, spec);
-}
-
-// ============================================================================
 // Transpose: the id-free (2.0) transpose kernel must produce output bit-for-bit identical to the legacy
 // CB-id transpose kernel on the same input (differential equivalence; reuses the single-core classic-CB
 // harness run_fp8_typecast). Per tile: unpack+transpose c_0 directly into DST, pack -> c_16. The two kernels

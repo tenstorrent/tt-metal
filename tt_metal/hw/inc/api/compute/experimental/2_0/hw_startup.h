@@ -60,14 +60,17 @@ ALWI void compute_kernel_hw_startup(
     experimental::LLKOperand<FA, SA> /*in0*/,
     experimental::LLKOperand<FB, SB> /*in1*/,
     experimental::LLKOperand<FO, SO> /*out*/) {
+    // Map the operands onto the physical source registers. For SrcOrder::Reverse (matmul) in0 -> SrcB and
+    // in1 -> SrcA. src_order is a template parameter, so this is resolved at compile time. Each descriptor is
+    // referenced only inside its own thread's macro (UNPACK/MATH/PACK) and so is unused on the other threads;
+    // that is fine under the kernel build's -Wno-unused-variable, exactly as the CB-id overload's src_a_cb /
+    // src_b_cb locals are.
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
-    // Each descriptor is used only inside its own thread's macro (UNPACK/MATH/PACK), so it is unused on the
-    // other threads -- [[maybe_unused]] keeps that from warning.
-    [[maybe_unused]] constexpr experimental::LLKMemDescriptor SRCA =
+    constexpr experimental::LLKMemDescriptor SRCA =
         reverse ? experimental::LLKOperand<FB, SB>::descriptor : experimental::LLKOperand<FA, SA>::descriptor;
-    [[maybe_unused]] constexpr experimental::LLKMemDescriptor SRCB =
+    constexpr experimental::LLKMemDescriptor SRCB =
         reverse ? experimental::LLKOperand<FA, SA>::descriptor : experimental::LLKOperand<FB, SB>::descriptor;
-    [[maybe_unused]] constexpr experimental::LLKMemDescriptor OUT = experimental::LLKOperand<FO, SO>::descriptor;
+    constexpr experimental::LLKMemDescriptor OUT = experimental::LLKOperand<FO, SO>::descriptor;
 
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, SRCA, SRCB>()));
 
