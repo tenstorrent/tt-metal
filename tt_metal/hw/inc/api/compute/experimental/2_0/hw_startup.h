@@ -31,6 +31,23 @@
 
 namespace ckernel {
 
+// clang-format off
+/**
+ * Id-free (2.0) two-input hardware startup. Programs the UNPACK/MATH/PACK register formats + tile geometry
+ * from the operand descriptors (NTTPs) -- no CB ids, no runtime L1-format inference. Call exactly once at the
+ * top of the kernel, before any op-specific init. src_order selects how (in0, in1) map onto SrcA/SrcB
+ * (SrcOrder::Reverse for matmul: in0 -> SrcB, in1 -> SrcA). The operands' runtime l1_address is unused here.
+ * The two source-register formats are reconciled to a common exponent-width family (C1); a mixed-width pairing
+ * that is not Float32-rebiasable is a hard compile error.
+ *
+ * | Param Type | Name             | Description                                      | Type                   | Valid Range | Required |
+ * |------------|------------------|--------------------------------------------------|------------------------|-------------|----------|
+ * | Template   | src_order        | (in0,in1) -> SrcA/SrcB mapping (Reverse=matmul)  | SrcOrder               | N/A         | False    |
+ * | Template   | FA/SA, FB/SB, FO/SO | in0 / in1 / out L1 format + geometry (deduced) | DataFormat/TensorShape | N/A         | True     |
+ * | Function   | in0 / in1        | Input operands (natural order)                   | LLKOperand             | N/A         | True     |
+ * | Function   | out              | Output operand                                   | LLKOperand             | N/A         | True     |
+ */
+// clang-format on
 template <
     SrcOrder src_order = SrcOrder::Regular,
     DataFormat FA,
@@ -62,7 +79,20 @@ ALWI void compute_kernel_hw_startup(
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
 }
 
-// Single-input id-free overload: both source registers configured from the same operand.
+// clang-format off
+/**
+ * Id-free (2.0) single-input hardware startup: convenience overload that configures both source registers from
+ * the same operand. Equivalent to the two-input overload with in0 == in1. Used by single-operand ops
+ * (copy/tilize/pack_untilize).
+ *
+ * | Param Type | Name       | Description                              | Type                   | Valid Range | Required |
+ * |------------|------------|------------------------------------------|------------------------|-------------|----------|
+ * | Template   | src_order  | (in,in) -> SrcA/SrcB mapping             | SrcOrder               | N/A         | False    |
+ * | Template   | F/S, FO/SO | in / out L1 format + geometry (deduced)  | DataFormat/TensorShape | N/A         | True     |
+ * | Function   | in         | The single input operand                 | LLKOperand             | N/A         | True     |
+ * | Function   | out        | Output operand                           | LLKOperand             | N/A         | True     |
+ */
+// clang-format on
 template <SrcOrder src_order = SrcOrder::Regular, DataFormat F, TensorShape S, DataFormat FO, TensorShape SO>
 ALWI void compute_kernel_hw_startup(experimental::LLKOperand<F, S> in, experimental::LLKOperand<FO, SO> out) {
     compute_kernel_hw_startup<src_order>(in, in, out);

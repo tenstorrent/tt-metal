@@ -57,25 +57,74 @@ ALWI void binary_tiles_init(LLKOperand<AFormat, AShape> /*a*/, bool acc_to_dest 
     }
 }
 
+// clang-format off
+/**
+ * Paired init for add_tiles (ELWADD). Configures MATH + the AB unpacker from operand A's descriptor;
+ * compute_kernel_hw_startup(a, b, out) must already have programmed the formats. Only operand A is needed at
+ * init (A.shape == B.shape is assumed, enforced at add_tiles) -- see binary_tiles_init.
+ *
+ * | Param Type | Name           | Description                              | Type                   | Valid Range | Required |
+ * |------------|----------------|------------------------------------------|------------------------|-------------|----------|
+ * | Template   | AFormat/AShape | Operand A L1 format + geometry (deduced) | DataFormat/TensorShape | N/A         | True     |
+ * | Function   | a              | Operand A (drives geometry)              | LLKOperand             | N/A         | True     |
+ * | Function   | acc_to_dest    | Accumulate the result into DST           | bool                   | N/A         | False    |
+ */
+// clang-format on
 template <DataFormat AFormat, TensorShape AShape>
 ALWI void add_init(LLKOperand<AFormat, AShape> a, bool acc_to_dest = false) {
     binary_tiles_init<true, EltwiseBinaryType::ELWADD>(a, acc_to_dest);
 }
 
+// clang-format off
+/**
+ * Paired init for sub_tiles (ELWSUB). Configures MATH + the AB unpacker from operand A's descriptor;
+ * compute_kernel_hw_startup(a, b, out) must already have programmed the formats. Only operand A is needed at
+ * init (A.shape == B.shape is assumed, enforced at sub_tiles) -- see binary_tiles_init.
+ *
+ * | Param Type | Name           | Description                              | Type                   | Valid Range | Required |
+ * |------------|----------------|------------------------------------------|------------------------|-------------|----------|
+ * | Template   | AFormat/AShape | Operand A L1 format + geometry (deduced) | DataFormat/TensorShape | N/A         | True     |
+ * | Function   | a              | Operand A (drives geometry)              | LLKOperand             | N/A         | True     |
+ * | Function   | acc_to_dest    | Accumulate the result into DST           | bool                   | N/A         | False    |
+ */
+// clang-format on
 template <DataFormat AFormat, TensorShape AShape>
 ALWI void sub_init(LLKOperand<AFormat, AShape> a, bool acc_to_dest = false) {
     binary_tiles_init<true, EltwiseBinaryType::ELWSUB>(a, acc_to_dest);
 }
 
+// clang-format off
+/**
+ * Paired init for mul_tiles (ELWMUL). Configures MATH + the AB unpacker from operand A's descriptor;
+ * compute_kernel_hw_startup(a, b, out) must already have programmed the formats. Only operand A is needed at
+ * init (A.shape == B.shape is assumed, enforced at mul_tiles) -- see binary_tiles_init.
+ *
+ * | Param Type | Name           | Description                              | Type                   | Valid Range | Required |
+ * |------------|----------------|------------------------------------------|------------------------|-------------|----------|
+ * | Template   | AFormat/AShape | Operand A L1 format + geometry (deduced) | DataFormat/TensorShape | N/A         | True     |
+ * | Function   | a              | Operand A (drives geometry)              | LLKOperand             | N/A         | True     |
+ * | Function   | acc_to_dest    | Accumulate the result into DST (mul defaults on) | bool           | N/A         | False    |
+ */
+// clang-format on
 template <DataFormat AFormat, TensorShape AShape>
 ALWI void mul_init(LLKOperand<AFormat, AShape> a, bool acc_to_dest = true) {
     binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(a, acc_to_dest);
 }
 
 namespace detail {
-// Per-tile L1 base for operand X at tile index (16B words); stride folds to a constant from X's geometry via
-// tile_stride_words == one tile's L1 size (geometry-exact for linear formats, exp section included for BFP),
-// consistent with tilize/untilize/reduce/matmul.
+// clang-format off
+/**
+ * (detail) Absolute per-tile L1 base for operand `op` at `tile_index` (16B words). The per-tile stride folds to
+ * a compile-time constant from the operand geometry via tile_stride_words == one tile's L1 size (geometry-exact
+ * for linear formats, exp section included for block floats), consistent with tilize/untilize/reduce/matmul.
+ *
+ * | Param Type | Name         | Description                            | Type                   | Valid Range | Required |
+ * |------------|--------------|----------------------------------------|------------------------|-------------|----------|
+ * | Template   | Format/Shape | Operand L1 format + geometry (deduced) | DataFormat/TensorShape | N/A         | True     |
+ * | Function   | op           | The operand (base address + geometry)  | LLKOperand             | N/A         | True     |
+ * | Function   | tile_index   | Tile index within the operand          | uint32_t               | N/A         | True     |
+ */
+// clang-format on
 template <DataFormat Format, TensorShape Shape>
 ALWI std::uint32_t tile_address(LLKOperand<Format, Shape> op, std::uint32_t tile_index) {
     constexpr std::uint32_t stride = tile_stride_words(static_cast<std::uint8_t>(Format), Shape);
@@ -114,6 +163,18 @@ ALWI void add_tiles(
           EltwiseBinaryReuseDestType::NONE>(idst, true /*clear_fp32_dst_acc*/)));
 }
 
+// clang-format off
+/**
+ * Element-wise C = A - B for one tile pair, writing DST[idst]. Pair with sub_init. The DST register must be
+ * acquired. itile0/itile1 index within operand A/B; idst indexes DST. Geometry (for MATH) comes from operand A.
+ *
+ * | Param Type | Name            | Description                       | Type       | Valid Range | Required |
+ * |------------|-----------------|-----------------------------------|------------|-------------|----------|
+ * | Function   | a / b           | Input operands                    | LLKOperand | N/A         | True     |
+ * | Function   | itile0 / itile1 | Tile indices within A / B         | uint32_t   | N/A         | True     |
+ * | Function   | idst            | DST register index for the result | uint32_t   | N/A         | True     |
+ */
+// clang-format on
 template <DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
 ALWI void sub_tiles(
     LLKOperand<AFormat, AShape> a,
@@ -134,6 +195,18 @@ ALWI void sub_tiles(
           EltwiseBinaryReuseDestType::NONE>(idst, true /*clear_fp32_dst_acc*/)));
 }
 
+// clang-format off
+/**
+ * Element-wise C = A * B for one tile pair, writing DST[idst]. Pair with mul_init. The DST register must be
+ * acquired. itile0/itile1 index within operand A/B; idst indexes DST. Geometry (for MATH) comes from operand A.
+ *
+ * | Param Type | Name            | Description                       | Type       | Valid Range | Required |
+ * |------------|-----------------|-----------------------------------|------------|-------------|----------|
+ * | Function   | a / b           | Input operands                    | LLKOperand | N/A         | True     |
+ * | Function   | itile0 / itile1 | Tile indices within A / B         | uint32_t   | N/A         | True     |
+ * | Function   | idst            | DST register index for the result | uint32_t   | N/A         | True     |
+ */
+// clang-format on
 template <DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
 ALWI void mul_tiles(
     LLKOperand<AFormat, AShape> a,

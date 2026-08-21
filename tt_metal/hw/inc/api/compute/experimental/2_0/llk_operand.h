@@ -27,6 +27,19 @@
 namespace ckernel {
 namespace experimental {
 
+// clang-format off
+/**
+ * The public id-free operand every 2.0 compute op consumes. Bundles the compile-time "what" (Format + Shape as
+ * NTTPs) with the single runtime "where" (l1_address). ::descriptor packs Format+Shape into the LLKMemDescriptor
+ * the LLK layer takes as an NTTP. Construct at the call site from an address (e.g. cb_read_address(cb, tile)).
+ *
+ * | Param Type | Name   | Description                               | Type        | Valid Range | Required |
+ * |------------|--------|-------------------------------------------|-------------|-------------|----------|
+ * | Template   | Format | Buffer L1 data format                     | DataFormat  | N/A         | True     |
+ * | Template   | Shape  | Tile geometry                             | TensorShape | N/A         | True     |
+ * | Function   | addr   | Absolute L1 tile base address (16B words) | uint32_t    | N/A         | True     |
+ */
+// clang-format on
 template <DataFormat Format, TensorShape Shape>
 struct LLKOperand {
     std::uint32_t l1_address;  // runtime "where"; Format/Shape are the compile-time "what"
