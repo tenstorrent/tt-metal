@@ -83,13 +83,15 @@ static constexpr int kWallClockLowIdx = 0;
 void kernel_main() {
     // Durations span ~1..100 us (typical ~10 us). CYC = us * 2500 (see ZONE calibration note above).
     for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
-        // The three POINT-marker types, once per iteration, so a capture of this workload exercises every
-        // packet shape on the streaming wire, not just zones: PP_EVENT (a bare 2-word flag -- nothing else
-        // in the tree emits one), PP_DATA with a compile-time tag + payload, and the runtime-id event
-        // (PP_DATA whose payload is the kernel's runtime value, named "RUNTIME-EVENT" from the ELF).
+        // Three POINT markers per iteration, so a capture of this workload exercises every point-marker
+        // shape on the streaming wire, not just zones: PP_EVENT (a bare 2-word flag -- nothing else in
+        // the tree emits one) and PP_DATA with a compile-time tag + payload. The third marker carries the
+        // iteration index as PAYLOAD -- a runtime value on this wire is ordinary DeviceData payload (the
+        // separate runtime-id event type is gone). Kept at three so the offered marker load stays
+        // comparable with older knee/decode benchmarks of this workload.
         DeviceFlag(ZTAG "_Flag");
         DeviceTimestampedData(ZTAG "_Data", ((uint64_t)0xF00D << 32) | it);
-        DeviceRecordEvent(it);
+        DeviceTimestampedData(ZTAG "_Iter", it);
         ZONE(ZTAG "_Zone0", 2500u);    // ~1 us
         ZONE(ZTAG "_Zone1", 5000u);    // ~2 us
         ZONE(ZTAG "_Zone2", 7500u);    // ~3 us

@@ -271,9 +271,9 @@ void PerfDebugTracyHandler::HandleWorkerEvent([[maybe_unused]] const perf_debug:
     marker.risc = kRisc[event.risc % 5];
     marker.timestamp = event.timestamp;
     marker.runtime_host_id = event.runtime_host_id;
-    // Two kinds, by payload -- every id on this wire is a compile-time structural id now, so there is no
-    // "runtime id" kind any more (DeviceRuntimeEvent ships its runtime value as PP_DATA payload):
-    //   DATA: compile-time tag + payload (DeviceData / DeviceRuntimeEvent)
+    // Two kinds, by payload -- every id on this wire is a compile-time structural id, so there is no
+    // "runtime id" kind (a runtime value rides PP_DATA payload):
+    //   DATA: compile-time tag + payload (DeviceData)
     //   FLAG: compile-time tag, no payload (DeviceFlag)
     marker.marker_type = (event.num_values != 0) ? tracy::TTDeviceMarkerType::DATA : tracy::TTDeviceMarkerType::FLAG;
     // Every id resolves from its kernel's ELF; an empty name here is the bug the teardown summary counts.

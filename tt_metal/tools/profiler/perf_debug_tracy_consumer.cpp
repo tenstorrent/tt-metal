@@ -67,7 +67,7 @@ void PerfDebugTracyConsumer::flush_event(const PerfDebugCaptureContext& ctx) {
     pkt.id = pend_.id;
     // BOTH point-marker types carry a compile-time structural id, so both resolve exactly like a zone.
     // (PP_EVENT used to carry a RUNTIME value here, which was the one id on this wire that could not be
-    // named; DeviceRuntimeEvent now ships that value as PP_DATA payload instead.)
+    // named; a runtime value now ships as ordinary PP_DATA payload instead.)
     pkt.name = names_.lookup(pend_.id);
     const uint64_t base = dev.clock_synced ? 0 : ts_base_[pend_.dev];
     pkt.timestamp = pend_.ts >= base ? pend_.ts - base : 0;

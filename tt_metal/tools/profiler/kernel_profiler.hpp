@@ -595,30 +595,6 @@ inline __attribute__((always_inline)) void recordFlag() {
     mark_point(ppfmt::event_w0(data_id));
 }
 
-// A RUNTIME-id marker. The runtime value is now the PAYLOAD of an ordinary PP_DATA packet whose ID is a
-// compile-time structural id, rather than being the id itself.
-//
-// That inversion is the point. Every id on this wire is a source location and therefore has a name in the
-// ELF; a raw kernel value sitting in the id field would be the one thing the host could not name, and
-// would silently borrow the name of whatever zone happens to own that id. Carrying it as data costs one
-// word and makes "every marker on this wire resolves" an invariant instead of an aspiration -- which is
-// what lets the consumer treat any unnamed id as a bug.
-template <uint32_t data_id>
-inline __attribute__((always_inline)) void recordRuntimeEvent(uint32_t runtime_id) {
-    ring_ensure_room(1 + 3 + 1);
-    uint32_t hi, lo;
-    read_wall_clock(hi, lo);
-    if (hi != g_prev_timer_hi) {
-        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));
-        g_prev_timer_hi = hi;
-    }
-    ring_write_word(ppfmt::data_w0(data_id));  // word0: PP_DATA | 27-bit structural id ("RUNTIME-EVENT")
-    ring_write_word(lo);                       // word1: timer_low
-    ring_write_word(ppfmt::data_w2(1));        // word2: one payload word
-    ring_write_word(runtime_id);               // payload: the kernel's runtime value
-    publish_tail();
-}
-
 inline __attribute__((always_inline)) void increment_trace_count() { traceCount++; }
 
 }  // namespace kernel_profiler
@@ -630,9 +606,11 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
     TT_ZONE_DEFINE_ID(hash, name); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
-// The three point markers. DeviceData/DeviceFlag take a compile-time tag (string literal) and therefore
-// get a source location and a resolvable name; DeviceRuntimeEvent takes a runtime value and gets neither,
-// which is why it is a distinct wire type (see PP_EVENT in spsc_packet.h).
+// The two point markers, both with a compile-time tag (string literal) and therefore a source
+// location and an ELF-resolvable name: DeviceData carries a payload (runtime values ride there),
+// DeviceFlag carries nothing and is 2 words. (DeviceRuntimeEvent is gone -- it was DeviceData with a
+// hardcoded "RUNTIME-EVENT" tag and a u32 payload, a wire type of its own only in the era when the
+// runtime value rode in the id field itself.)
 #define DeviceData(name, data)                        \
     {                                                 \
         TT_ZONE_DEFINE_ID(hash, name);                \
@@ -643,12 +621,6 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
     {                                        \
         TT_ZONE_DEFINE_ID(hash, name);       \
         kernel_profiler::recordFlag<hash>(); \
-    }
-
-#define DeviceRuntimeEvent(runtime_id)                            \
-    {                                                             \
-        TT_ZONE_DEFINE_ID(rt_hash, "RUNTIME-EVENT");              \
-        kernel_profiler::recordRuntimeEvent<rt_hash>(runtime_id); \
     }
 
 #define DeviceValidateProfiler(condition) kernel_profiler::set_profiler_zone_valid(condition);
@@ -712,8 +684,6 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 
 #define DeviceFlag(data_id) (void(sizeof(data_id)))
 
-#define DeviceRuntimeEvent(runtime_id) (void(sizeof(runtime_id)))
-
 #define DeviceProfilerInit()
 
 #define DeviceIncrementTraceCount()
@@ -734,13 +704,10 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 
 #endif
 
-// ---- Back-compat aliases -------------------------------------------------------------------------
-// The point-marker macros were renamed to say what distinguishes them (compile-time tag vs runtime id).
-// Existing kernels still use the old spellings, so keep them as thin aliases. Defined once, outside the
-// enabled/disabled branches, so they hold in every configuration.
-//   DeviceTimestampedData -> DeviceData        (compile-time tag + payload)
-//   DeviceRecordEvent     -> DeviceRuntimeEvent (runtime id, no payload)
+// ---- Back-compat alias ---------------------------------------------------------------------------
+// DeviceData is the renamed DeviceTimestampedData; existing kernels still use the old spelling (and it
+// is the one point-marker spelling the Quasar/DRAM backend also defines, so shared kernels write it).
+// Defined once, outside the enabled/disabled branches, so it holds in every configuration.
 #define DeviceTimestampedData(name, data) DeviceData(name, data)
-#define DeviceRecordEvent(runtime_id) DeviceRuntimeEvent(runtime_id)
 
 #endif  // ARCH_QUASAR -- see the arch dispatch at the top of this file
