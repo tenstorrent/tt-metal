@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import torch
@@ -21,7 +22,7 @@ class _FakeDecoderOptimizations:
         return None
 
 
-def test_galaxy_qkv_bias_uses_weight_matching_2d_sharding(monkeypatch, expect_error):
+def test_galaxy_qkv_bias_uses_weight_matching_2d_sharding_and_survives_column_reduce(monkeypatch, expect_error):
     mesh_device = object()
     mesh_mapper_calls = []
     as_tensor_calls = []
@@ -71,7 +72,7 @@ def test_galaxy_qkv_bias_uses_weight_matching_2d_sharding(monkeypatch, expect_er
         layer_types=None,
         cluster_shape=[8, 4],
         is_multichip=True,
-        dummy_weights=True,
+        dummy_weights=False,
         qkv_size=10240,
         get_model_config=lambda: {},
         ccl_topology=lambda: None,
@@ -90,7 +91,7 @@ def test_galaxy_qkv_bias_uses_weight_matching_2d_sharding(monkeypatch, expect_er
             tt_ccl=None,
             args=args,
             state_dict=state_dict,
-            weight_cache_path=None,
+            weight_cache_path=Path("cache"),
             layer_num=0,
             dtype=None,
             transformation_mats=None,
@@ -101,7 +102,13 @@ def test_galaxy_qkv_bias_uses_weight_matching_2d_sharding(monkeypatch, expect_er
     assert mesh_mapper_calls[0][:3] == (mesh_device, (-1, None), [8, 4])
     qkv_bias, tensor_kwargs = as_tensor_calls[0]
     assert tensor_kwargs["mesh_mapper"] is mesh_mapper_calls[0][3]
-    expected_device_shards = [torch.tensor([2 * i, 2 * i + 1, 100 + i, 200 + i]) for i in range(8)]
-    assert all(
-        torch.equal(actual, expected) for actual, expected in zip(torch.chunk(qkv_bias, 8), expected_device_shards)
-    )
+    assert tensor_kwargs["cache_file_name"].name.endswith("wqkv_bias_prefill_sharded_2d_col_reduce_4")
+
+    # Each row shard is replicated over all four mesh columns and added before
+    # the column all-reduce. Their sum must restore one copy of the model bias,
+    # rather than the four copies produced by an unscaled replicated bias.
+    expected_device_shards = [
+        torch.tensor([2 * i, 2 * i + 1, 100 + i, 200 + i], dtype=qkv_bias.dtype) for i in range(8)
+    ]
+    reduced_device_shards = [shard * configuration.cluster_shape[1] for shard in torch.chunk(qkv_bias, 8)]
+    assert all(torch.equal(actual, expected) for actual, expected in zip(reduced_device_shards, expected_device_shards))

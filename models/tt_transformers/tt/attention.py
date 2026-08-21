@@ -200,6 +200,13 @@ class Attention(LightweightModule):
                 ],
                 dim=-1,
             )
+            # Galaxy QKV matmuls shard the input dimension over mesh columns, so the
+            # column all-reduce sums one partial result from every column. The bias is
+            # replicated over those columns and added to each partial before the
+            # collective; divide it by the number of contributors so the reduced
+            # result contains exactly one copy of the model bias.
+            if self.TG:
+                qkv_bias = qkv_bias / configuration.cluster_shape[1]
             bias_mesh_mapper = (
                 ttnn.ShardTensor2dMesh(
                     self.mesh_device,
@@ -209,7 +216,7 @@ class Attention(LightweightModule):
                 if self.TG
                 else ttnn.ShardTensorToMesh(self.mesh_device, dim=-1)
             )
-            bias_cache_suffix = "sharded_2d" if self.TG else "sharded"
+            bias_cache_suffix = f"sharded_2d_col_reduce_{configuration.cluster_shape[1]}" if self.TG else "sharded"
             # Prefill can use broadcasting on the bias add so wants a 1d tensor
             self.wqkv_bias_prefill = ttnn.as_tensor(
                 qkv_bias,
