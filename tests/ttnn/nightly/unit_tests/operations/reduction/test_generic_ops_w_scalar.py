@@ -53,7 +53,7 @@ OP_CORRECTION = [
 ]
 
 
-def run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype):
+def _run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype):
     if op in ("var", "std") and correction:
         # Bessel's correction divides by (N - 1) where N is the number of elements
         # reduced. With N == 1 this is a divide-by-zero, producing all-NaN output;
@@ -230,20 +230,22 @@ def run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype):
 
 # Test that generic reduction ops work correctly with a scalar applied to the input.
 # Split into two parts to avoid large test count from full cross product.
+# Simple powers of two run with reduced set of dim parameters.
 @pytest.mark.parametrize("op, correction", OP_CORRECTION)
 @pytest.mark.parametrize("scalar", [1.0, -2.0, 2.0])
 @pytest.mark.parametrize("shape, dim", VALID_SHAPE_DIMS_PART1)
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_generic_ops_w_scalar_part1(device, op, scalar, correction, dim, shape, dtype):
-    run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
+    _run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
 
 
+# Non-powers of two and a slightly larger power of two run with full set of dim parameters.
 @pytest.mark.parametrize("op, correction", OP_CORRECTION)
 @pytest.mark.parametrize("scalar", [-2.43, 2.43, 4.0])
 @pytest.mark.parametrize("shape, dim", VALID_SHAPE_DIMS_PART2)
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_generic_ops_w_scalar_part2(device, op, scalar, correction, dim, shape, dtype):
-    run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
+    _run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
 
 
 # Test that generic reduction ops produce correct results, preserve dtype, and emit the
