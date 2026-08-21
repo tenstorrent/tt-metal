@@ -107,10 +107,16 @@ void kernel_main() {
     // Key tiles already behind the first query chunk. Zero is a fresh prefill; a positive
     // value is prefill-with-history, where the queries see context they did not produce.
     constexpr uint32_t k_offset = get_compile_time_arg_val(4);
-    // Only read when FLASH_NONCAUSAL is set, where every q-chunk sweeps the whole range.
+    // The head's whole key range in tiles. The causal walk derives its per-chunk bound
+    // from k_offset instead, but this is still what the head stride is measured in.
     constexpr uint32_t k_tiles = get_compile_time_arg_val(5);
+    // GQA: n_heads query heads share n_kv_heads key/value heads, n_heads/n_kv_heads of
+    // them per KV head. n_kv_heads == n_heads is ordinary multi-head attention and
+    // n_kv_heads == 1 is multi-query; both fall out of the same mapping.
+    constexpr uint32_t n_heads = get_compile_time_arg_val(6);
+    constexpr uint32_t n_kv_heads = get_compile_time_arg_val(7);
 
-    constexpr auto q_args = TensorAccessorArgs<6>();
+    constexpr auto q_args = TensorAccessorArgs<8>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -142,6 +148,16 @@ void kernel_main() {
     // All-ones would put the sum in every column instead, and while nothing downstream
     // reads those, `bcast<Cols>` taking column 0 is a contract worth not quietly changing.
     using Kt1 = u::Shape<sk, 1>;
+
+    static_assert(
+        n_kv_heads > 0 && n_heads % n_kv_heads == 0,
+        "GQA needs n_kv_heads to divide n_heads: every KV head serves the same number of "
+        "query heads, and a remainder has no meaning");
+    constexpr uint32_t kv_group = n_heads / n_kv_heads;
+    // Blocks of sk tiles per head, which is the stride between one head's keys and the
+    // next's. Derived rather than passed so it cannot disagree with the loop bound below.
+    constexpr uint32_t k_blocks_per_head = k_tiles / sk;
+    static_assert(k_blocks_per_head * sk == k_tiles, "sk must divide the head's key range");
 
     // Every q-chunk's key range has to divide into whole chunks, which for the causal
     // walk means sk must divide both the offset and sq. Checked here because getting it
@@ -196,21 +212,40 @@ void kernel_main() {
     // reduce_max keeps the scaler above: a maximum has no matmul form.
     u::ComputeBlock col_ones = u::noc_load<1>(colones_storage, colones_acc, 0).wait();
 
-    // Mask blocks are consumed in one flat sequence across the whole nest, so the host can
-    // lay them out in exactly this order and the kernel needs no two-dimensional indexing.
-    uint32_t mask_idx = 0;
+    // One launch covers n_heads query heads, so everything above -- matmul_init's hardware
+    // startup, the reduce scaler, the column of ones -- is paid once for the group rather
+    // than once per head.
+    //
+    // Measured at sq=2 sk=4 dt=2 with two query chunks: a single head is 29.24us, and eight
+    // heads fused are 201.20us against 233.94us as eight launches. That is 4.1us saved per
+    // head, 14% at eight, and the per-head cost falls 29.24 -> 25.15us as the group grows.
+    // (Not the 13.1us the q-loop saved per query chunk -- that was a different measurement
+    // and it does not transfer; this one is the head loop's own.)
+    for (uint32_t h = 0; h < n_heads; ++h) {
+        // The GQA mapping, and the only place the two head counts meet: consecutive query
+        // heads share a KV head, so query head h reads KV head h / kv_group.
+        const uint32_t kv_head = h / kv_group;
+        const uint32_t q_base = h * num_q_chunks;
+        const uint32_t kv_base = kv_head * k_blocks_per_head;
 
-    for (uint32_t i = 0; i < num_q_chunks; ++i) {
-        // Causal: this chunk's queries see the history plus their own rows, and nothing
-        // after. Chunks beyond that are entirely -inf, and skipping them is what the
-        // rectangular block cannot express any other way.
+        // Mask blocks are consumed in one flat sequence across the query nest, so the host
+        // can lay them out in exactly that order and the kernel needs no two-dimensional
+        // indexing. The sequence does not depend on the head -- a causal mask is the same
+        // for every one -- so this resets here and the same blocks are re-read per head,
+        // rather than the host storing n_heads identical copies.
+        uint32_t mask_idx = 0;
+
+        for (uint32_t i = 0; i < num_q_chunks; ++i) {
+            // Causal: this chunk's queries see the history plus their own rows, and nothing
+            // after. Chunks beyond that are entirely -inf, and skipping them is what the
+            // rectangular block cannot express any other way.
 #if defined(FLASH_NONCAUSAL)
         const uint32_t chunks = k_tiles / sk;
 #else
         const uint32_t chunks = (k_offset + (i + 1) * sq) / sk;
 #endif
 
-        u::ComputeBlock q = u::noc_load<1>(q_storage, q_acc, i).wait();
+        u::ComputeBlock q = u::noc_load<1>(q_storage, q_acc, q_base + i).wait();
 
         // The running state, per query chunk: fresh here, drained by the tail below.
         // ~RetainedBlock asserts on a slot that was pushed and never waited on, so a
@@ -220,8 +255,8 @@ void kernel_main() {
         u::RetainedBlock<Out> o_slot;
 
         for (uint32_t j = 0; j < chunks; ++j) {
-            u::ComputeBlock k = u::noc_load<1>(k_storage, k_acc, j).wait();
-            u::ComputeBlock v = u::noc_load<1>(v_storage, v_acc, j).wait();
+            u::ComputeBlock k = u::noc_load<1>(k_storage, k_acc, kv_base + j).wait();
+            u::ComputeBlock v = u::noc_load<1>(v_storage, v_acc, kv_base + j).wait();
             u::ComputeBlock mask = u::noc_load<1>(mask_storage, mask_acc, mask_idx++).wait();
 
             // The mask rides along in the matmul: `add` puts it into the product while that is
@@ -275,6 +310,7 @@ void kernel_main() {
         (void)sizeof(m_done);
 
         u::ComputeBlock rl = recipl_storage.store(u::recip(l_done));
-        u::noc_store<0>(out_storage.store(o_done * u::bcast<u::Axis::Cols>(rl)), out, i);
+        u::noc_store<0>(out_storage.store(o_done * u::bcast<u::Axis::Cols>(rl)), out, q_base + i);
+        }
     }
 }
