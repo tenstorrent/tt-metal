@@ -17,7 +17,7 @@
     wh_galaxy:
       timeout: 30
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+  team: runtime
 
 - name: Galaxy realtime profiler cross-reference (TG)
   cmd: run_realtime_profiler_cross_reference_tg_test
@@ -25,4 +25,4 @@
     wh_galaxy:
       timeout: 15
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+  team: runtime
