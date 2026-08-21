@@ -1,13 +1,14 @@
-# sfpi release 7.70.0
+# sfpi trial 7.70.0-sfpconfig-53830
+
+		#######################################
+		###   NOT A RELEASE, DO NOT DEPLOY  ###
+		#######################################
 
 sfpi_repo='https://github.com/tenstorrent/sfpi'
-sfpi_version='7.70.0'
+sfpi_version='7.70.0-sfpconfig-53830'
 sfpi_base=''
-sfpi_build='847'
+sfpi_build='856'
 sfpi_hashtype='sha256'
-sfpi_aarch64_debian_txz_hash='9081fe36a768abe47cbd3306b8d747f9f01ba1d524b1e4201989609dbcac9258'
-sfpi_aarch64_debian_deb_hash='b63f3c7607dad59e406a4960877cf103d9bec9f1c8b1438e4889036b9f6ff902'
-sfpi_x86_64_debian_txz_hash='06d1c43831c2ea42a062ad46d274cf7221a3c013c638d52da2de4660586e4b30'
-sfpi_x86_64_debian_deb_hash='ce1fcbfde600ceaf133e575113ffe1904ad2f0e015ab680ba1d0d3bf727aa2ca'
-sfpi_x86_64_fedora_txz_hash='c6903fc47f1d854954237c38a314d773731a240447f437034a8341cb38ab2812'
-sfpi_x86_64_fedora_rpm_hash='cccb4791e555aca12233466bf5e249bbf56c452d97d6afa495c8c6e589d60bc5'
+sfpi_x86_64_debian_txz_hash='314d66967c20a340c5f1fa436738f3cc56f6fbdb73f85611dfb5db21a7cee7cb'
+sfpi_x86_64_debian_deb_hash='1ab57908dd9f95e4cf8e91401d00b6563687b1dbbfa00e3742080d7177f05283'
+sfpi_x86_64_fedora_rpm_hash='9129f5325c880e2998d17ce1d08d339ad56928e3332bca4f89c17492e3cd888a'
