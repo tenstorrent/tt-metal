@@ -620,15 +620,6 @@ TEST_F(NormalizationSmoke, LayerNormFp32) {
 
 namespace detail {
 
-// Flattened row-major pattern alternating a, b along the width (all our widths are even).
-inline std::vector<float> dist_norm_alternating(size_t n, float a, float b) {
-    std::vector<float> v(n);
-    for (size_t i = 0; i < n; ++i) {
-        v[i] = (i % 2 == 0) ? a : b;
-    }
-    return v;
-}
-
 inline std::vector<float> dist_norm_constant(size_t n, float value) { return std::vector<float>(n, value); }
 
 }  // namespace detail
@@ -666,7 +657,7 @@ TEST_F(NormalizationSmoke, DistributedLayerNormEndToEnd) {
     // reproduce single-stage ttnn::layer_norm.
     auto& device = *device_;
     const ttnn::Shape shape({1, 1, 32, 64});
-    const auto x_data = detail::dist_norm_alternating(32 * 64, 1.0f, -1.0f);
+    const auto x_data = detail::norm_alternating(32 * 64, 1.0f, -1.0f);
     auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
     const float eps = 1e-6f;
 
@@ -714,7 +705,7 @@ TEST_F(NormalizationSmoke, DistributedRmsNormEndToEnd) {
     // rmsnorm_post_allgather_metal2.cpp via LayerNormPostAllGatherProgramFactory, num_devices = 1.
     auto& device = *device_;
     const ttnn::Shape shape({1, 1, 32, 64});
-    const auto x_data = detail::dist_norm_alternating(32 * 64, 2.0f, -2.0f);
+    const auto x_data = detail::norm_alternating(32 * 64, 2.0f, -2.0f);
     auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
     // TILE-layout weight [1,1,32,64], constant 3: validator wants padded height == tile height and
     // last dim == input's; constant fill makes the broadcast row irrelevant.
@@ -731,7 +722,7 @@ TEST_F(NormalizationSmoke, DistributedRmsNormEndToEnd) {
     // E(x^2) = 4 exactly (sum 256 / 64), rms = sqrt(4 + eps) ~ 2, out = 3 * x / 2 = +-3.
     // Tolerance covers the SFPU sqrt/recip approximation only.
     const auto v2 = detail::to_float_vector(out_two_stage);
-    const auto expected = detail::dist_norm_alternating(32 * 64, 3.0f, -3.0f);
+    const auto expected = detail::norm_alternating(32 * 64, 3.0f, -3.0f);
     detail::expect_close(v2, expected, 0.02f, 0.05f, 0.999f);
 }
 
@@ -765,7 +756,7 @@ TEST_F(NormalizationSmoke, DistributedRmsNorm2DGrid) {
     // the 2D pre factory is asserted by DistributedRmsNorm2DGridStats above.
     auto& device = *device_;
     const ttnn::Shape shape({1, 1, 32, 64});
-    const auto x_data = detail::dist_norm_alternating(32 * 64, 2.0f, -2.0f);
+    const auto x_data = detail::norm_alternating(32 * 64, 2.0f, -2.0f);
     auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
     const auto w_data = detail::dist_norm_constant(32 * 64, 3.0f);
     auto weight = detail::make_device_tensor(device, shape, w_data, DataType::BFLOAT16, Layout::TILE);
@@ -794,7 +785,7 @@ TEST_F(NormalizationSmoke, DistributedRmsNorm2DGrid) {
 
     // Same +-3 closed form as the 1D cell; tolerance rationale identical.
     const auto v = detail::to_float_vector(out);
-    const auto expected = detail::dist_norm_alternating(32 * 64, 3.0f, -3.0f);
+    const auto expected = detail::norm_alternating(32 * 64, 3.0f, -3.0f);
     detail::expect_close(v, expected, 0.02f, 0.05f, 0.999f);
 }
 
@@ -804,7 +795,7 @@ TEST_F(NormalizationSmoke, DistributedPreResidualFused) {
     // on host-precomputed (x + res); both must agree exactly at the meaningful stats positions.
     auto& device = *device_;
     const ttnn::Shape shape({1, 1, 32, 64});
-    const auto x_data = detail::dist_norm_alternating(32 * 64, 1.0f, 3.0f);
+    const auto x_data = detail::norm_alternating(32 * 64, 1.0f, 3.0f);
     const auto res_data = detail::dist_norm_constant(32 * 64, 1.0f);
     std::vector<float> sum_data(32 * 64);
     for (size_t i = 0; i < sum_data.size(); ++i) {
@@ -838,7 +829,7 @@ TEST_F(NormalizationSmoke, DistributedPostGammaBeta) {
     // exercised here.
     auto& device = *device_;
     const ttnn::Shape shape({1, 1, 32, 64});
-    const auto x_data = detail::dist_norm_alternating(32 * 64, 1.0f, -1.0f);
+    const auto x_data = detail::norm_alternating(32 * 64, 1.0f, -1.0f);
     auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
     const auto g_data = detail::dist_norm_constant(32 * 64, 2.0f);
     const auto b_data = detail::dist_norm_constant(32 * 64, 1.0f);
@@ -852,7 +843,7 @@ TEST_F(NormalizationSmoke, DistributedPostGammaBeta) {
     // Hand-checkable golden: mean 0, var 1 (both exact in bf16), xhat ~ x, out = 2*x + 1 in {3, -1}.
     // atol 0.06 = the +-1 rsqrt-approximation budget from the end-to-end cell scaled by gamma = 2.
     const auto v = detail::to_float_vector(out);
-    const auto expected = detail::dist_norm_alternating(32 * 64, 3.0f, -1.0f);
+    const auto expected = detail::norm_alternating(32 * 64, 3.0f, -1.0f);
     detail::expect_close(v, expected, 0.0f, 0.06f);
 }
 
@@ -865,7 +856,7 @@ TEST_F(NormalizationSmoke, DISABLED_DistributedLayerNormPostWelford) {
     // issue, hang class.
     auto& device = *device_;
     const ttnn::Shape shape({1, 1, 32, 64});
-    const auto x_data = detail::dist_norm_alternating(32 * 64, 1.0f, -1.0f);
+    const auto x_data = detail::norm_alternating(32 * 64, 1.0f, -1.0f);
     auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
 
     auto stats = ttnn::layer_norm_pre_all_gather(x);
@@ -1112,8 +1103,8 @@ TEST_F(NormalizationSmoke, GroupNormShardedBlock1x1GammaBeta) {
 TEST_F(NormalizationSmoke, GroupNormWelfordInterleaved) {
     // GroupNormNoMcastProgramFactory with use_welford=true (kernels/compute/welford_groupnorm.cpp).
     // Welford interleaved requires TILE in/out (groupnorm_device_operation.cpp) -- satisfied.
-    // CAUTION: the actively-broken CI welford is the SHARDED v2 path (#53143 / #52700); this is the
-    // interleaved path. Verify on hardware; exclude if red, citing #53143 / #50304.
+    // Note: the actively-broken CI welford is the SHARDED v2 path (#53143 / #52700); this
+    // interleaved path passes on both WH (PR-gate ttnn validation smoke) and BH p100a.
     auto& device = *device_;
     auto input = detail::make_device_tensor(
         device, ttnn::Shape({1, 1, 32, 64}), detail::gn_golden_input(32, false), DataType::BFLOAT16, Layout::TILE);

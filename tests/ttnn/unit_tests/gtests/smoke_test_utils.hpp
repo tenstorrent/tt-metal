@@ -65,9 +65,21 @@ inline std::vector<float> to_float_vector(const Tensor& t) {
     return t.to_vector<float>();
 }
 
-// Tolerance-based comparison: non-finite positions must match, every element must
-// satisfy allclose(rtol, atol), and optionally PCC >= pcc_min and relative Frobenius
-// error <= frob_max (pass -1 to skip).
+// Pass as pcc_min / frob_max to skip that aggregate check explicitly.
+inline constexpr float kSkipCheck = -1.0f;
+
+// Tolerance-based comparison. Always enforced: non-finite positions must match and every
+// element must satisfy allclose(rtol, atol) -- an element-wise bound, strictly stronger at
+// these tolerances than any aggregate metric. On top of that:
+//
+// - PCC >= pcc_min, on by default (0.99). Skipped automatically when either vector is
+//   constant: correlation is undefined there (pcc() returns 0), and constant closed-form
+//   goldens are this suite's main technique, so a correct result would otherwise fail.
+//   Pass kSkipCheck to opt out explicitly, or a higher value to tighten.
+// - Relative Frobenius error <= frob_max, off by default (kSkipCheck). No universal default
+//   is sound: for the exact-zero goldens used throughout, relative_frobenius() falls back to
+//   the ABSOLUTE norm, which grows with sqrt(N) -- any fixed threshold would fail correct
+//   results at some tensor size. Opt in per case where rtol/atol are loose.
 //
 // Note the ASSERT_* macros below return from this helper, not from the calling test.
 inline void expect_close(
@@ -75,8 +87,8 @@ inline void expect_close(
     const std::vector<float>& expected,
     float rtol,
     float atol,
-    float pcc_min = -1.0f,
-    float frob_max = -1.0f) {
+    float pcc_min = 0.99f,
+    float frob_max = kSkipCheck) {
     ASSERT_EQ(actual.size(), expected.size());
     const NonfiniteReport nf = check_nonfinite_positions(actual, expected);
     ASSERT_TRUE(nf.positions_match) << "non-finite mismatch at flat index " << nf.first_mismatch_index
@@ -91,8 +103,15 @@ inline void expect_close(
         return;  // pcc / relative_frobenius NaN-poison on non-finite inputs
     }
     if (pcc_min >= 0.0f) {
-        const float p = pcc(actual, expected);
-        EXPECT_GE(p, pcc_min);
+        // PCC is undefined for constant vectors (pcc() returns 0); a deviation from a constant
+        // golden is already caught by the mandatory element-wise allclose above.
+        const auto [amin, amax] = std::minmax_element(actual.begin(), actual.end());
+        const auto [emin, emax] = std::minmax_element(expected.begin(), expected.end());
+        const bool degenerate = actual.empty() || *amin == *amax || *emin == *emax;
+        if (!degenerate) {
+            const float p = pcc(actual, expected);
+            EXPECT_GE(p, pcc_min);
+        }
     }
     if (frob_max >= 0.0f) {
         bool expected_norm_is_zero = false;
