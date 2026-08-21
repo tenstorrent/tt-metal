@@ -278,4 +278,3 @@ python3 tools/scaleout/sweep_rank_binding_solutions.py \
 python3 tools/scaleout/sweep_rank_binding_solutions.py \
   -m <mgd> --hosts nodeA,nodeB,nodeC,nodeD --limit 3 --dry-run -- ./my_app
 ```
-
