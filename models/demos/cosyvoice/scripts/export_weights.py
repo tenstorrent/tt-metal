@@ -13,7 +13,7 @@ into the runtime that has to stay clean.
 So this runs ONCE in the CosyVoice venv and emits a flat array dictionary:
 
     PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS \
-    /root/tt/cosyvoice_env/bin/python export_weights.py --out hift_weights.npz
+    /mnt/cosyvoice_env/bin/python export_weights.py --out hift_weights.npz
 
 weight_norm is folded with torch's own machinery rather than by reimplementing
 `w = g*v/||v||` -- that arithmetic is easy to get subtly wrong (the wrong norm

@@ -100,8 +100,8 @@ no bare `yaml.load` anywhere in the tree.
 Audit the pins:
 
 ```bash
-VIRTUAL_ENV=/root/tt/cosyvoice_env uv pip install pip-audit
-/root/tt/cosyvoice_env/bin/python -m pip_audit
+VIRTUAL_ENV=/mnt/cosyvoice_env uv pip install pip-audit
+/mnt/cosyvoice_env/bin/python -m pip_audit
 ```
 
 Check that a pin change has not moved the reference — the step that makes a bump safe to take,
@@ -109,7 +109,7 @@ and the one worth repeating before any future bump:
 
 ```bash
 export PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS
-/root/tt/cosyvoice_env/bin/python scripts/gen_golden.py --mode zero_shot --out /tmp/golden-check
+/mnt/cosyvoice_env/bin/python scripts/gen_golden.py --mode zero_shot --out /tmp/golden-check
 ```
 
 Then PCC every array in `/tmp/golden-check/*.npz` against `tests/golden/`. A bump that reproduces

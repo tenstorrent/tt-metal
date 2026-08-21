@@ -11,7 +11,7 @@ against, so they are the definition of correct for this bring-up.
 RUN THIS IN THE CosyVoice VENV, NOT THE TT-METAL ONE:
 
     PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS \
-    /root/tt/cosyvoice_env/bin/python gen_golden.py --out <dir>
+    /mnt/cosyvoice_env/bin/python gen_golden.py --out <dir>
 
 Why the reference is not deterministic, and what this script does about it
 -------------------------------------------------------------------------
