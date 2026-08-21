@@ -33,6 +33,12 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 
+def from_torch_host_tiled(t, device, mesh_mapper, dtype=ttnn.bfloat16):
+    """Tilize on host, then DMA — avoids a device Tilize / TilizeWithValPadding."""
+    host = ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper)
+    return ttnn.to_device(host, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
 class VisionEmbed(LightweightModule):
     """patch_embed + interpolated pos_embed, entirely on device."""
 
@@ -96,16 +102,15 @@ class VisionEmbed(LightweightModule):
         )
 
         # ---- learned positional embedding table, sharded the same way ----
-        # ttnn.embedding needs the table 2D [num_positions, dim]; the hidden shard is its last dim,
-        # so the same mapper applies.
+        # ROW_MAJOR: ttnn.embedding untilizes a TILE table on every call. Cache key `_rm`.
         self.pos_table = ttnn.as_tensor(
             reference_model.pos_embed.weight.contiguous(),
             dtype=ttnn.bfloat16,
             device=mesh_device,
             mesh_mapper=self._hidden_mapper,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache("pos_embed_w"),
+            cache_file_name=cache("pos_embed_w_rm"),
         )
         self.num_positions = reference_model.pos_embed.weight.shape[0]
 
@@ -165,13 +170,14 @@ class VisionEmbed(LightweightModule):
         x = pixel_values.to(torch.bfloat16)
         if rows != n:
             x = torch.nn.functional.pad(x, (0, 0, 0, rows - n))
+        replicate = ttnn.ReplicateTensorToMesh(self.mesh_device)
         x_tt = ttnn.from_torch(
             x.reshape(1, 1, rows, self.patch_dim),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=replicate,
         )
         plan = self.args.vision_mm_plan(
             "patch_embed",
@@ -208,17 +214,11 @@ class VisionEmbed(LightweightModule):
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=replicate,
         )
+        wts_tt = from_torch_host_tiled(wts.reshape(4, rows, 1), self.mesh_device, replicate)
         pos = ttnn.embedding(idx_tt, self.pos_table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         ttnn.deallocate(idx_tt)
-        wts_tt = ttnn.from_torch(
-            wts.reshape(4, rows, 1),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
         pos = ttnn.multiply(pos, wts_tt)  # broadcasts over the hidden dim
         ttnn.deallocate(wts_tt)
         pos_sum = ttnn.sum(pos, dim=0, keepdim=True)  # [1, rows, dim_local]
