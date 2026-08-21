@@ -464,6 +464,39 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixPackBlockSpecMatchesLegacy) {
 }
 
 // ============================================================================
+// Unary-bcast: the id-free (2.0) unary_bcast kernel must produce output bit-for-bit identical to the legacy
+// CB-id unary_bcast kernel on the same input (differential equivalence; reuses run_fp8_typecast). Per tile:
+// unary_bcast c_0 -> DST (BroadcastType::ROW), pack -> c_16. The two kernels differ ONLY in the unary_bcast
+// init/op call (legacy CB-id vs experimental:: id-free), isolating it. hw_startup / pack_tile are legacy CB-id
+// in BOTH kernels. ROW (not NONE) is tested because NONE is a pass-through identical to copy_tile.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixUnaryBcastSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 64;
+    auto src_vec = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+
+    auto legacy = run_fp8_typecast(
+        mesh_device,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast_legacy.cpp");
+    auto spec = run_fp8_typecast(
+        mesh_device,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast_2_0.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
 // Eltwise binary (add): two classic circular buffers (c_0, c_1) -> c_16. The id-free (2.0) add kernel must
 // produce output bit-for-bit identical to the legacy CB-id add kernel on the same inputs (differential
 // equivalence -- no golden needed).
