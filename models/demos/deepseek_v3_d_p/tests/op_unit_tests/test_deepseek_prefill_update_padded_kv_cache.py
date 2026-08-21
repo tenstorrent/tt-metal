@@ -69,14 +69,15 @@ def _make_input(torch_chunk, dtype, layout, mesh_device, mesh_mapper):
     )
 
 
-_MESH_1X1 = pytest.param(
-    (1, 1),
-    marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="mesh-1x1"),
-    id="1x1",
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param(
+            (1, 1), marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="mesh-1x1"), id="1x1"
+        ),
+    ],
+    indirect=True,
 )
-
-
-@pytest.mark.parametrize("mesh_device", [_MESH_1X1], indirect=True)
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_scaled_fp8_packed_row(mesh_device):
     """The update op preserves the complete 656-byte mixed-format row as one FP8-typed stream."""
@@ -130,7 +131,15 @@ def test_update_padded_kv_cache_scaled_fp8_packed_row(mesh_device):
     assert torch.count_nonzero(result[1, 0, chunk_tokens:].float()) == 0
 
 
-@pytest.mark.parametrize("mesh_device", [_MESH_1X1], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param(
+            (1, 1), marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="mesh-1x1"), id="1x1"
+        ),
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_single_device(mesh_device, dtype, layout):
