@@ -41,7 +41,6 @@ from ttnn.operations.examples.eltwise_l1_vs_dest_accumulate.eltwise_l1_vs_dest_a
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-pytestmark = pytest.mark.skip(reason="Pending migration from the retired eltwise helper API")
 
 TILE = 32
 
