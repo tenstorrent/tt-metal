@@ -48,8 +48,32 @@ _UPSTREAM = _seq.chunk_gated_delta_rule_seq
 
 
 def chunk_gated_delta_rule_seq_dispatch(*args, **kwargs):
-    """Blackhole -> upstream (verbatim); Wormhole -> the bf16 variant below."""
+    """Blackhole -> upstream (verbatim); Wormhole (N300, N150) -> the bf16 variant below;
+    T3K -> upstream too (see DELIBERATE narrowing note).
+
+    DELIBERATE narrowing (Wormhole gating audit, item 1, chunk-seq piece): this used to be
+    unconditional on Wormhole (is_blackhole()-gated only), so T3K got the bf16 fork along with
+    N300 and N150. Narrowed away for T3K specifically, but NOT for N150 -- the two are not
+    symmetric:
+      * N150 (9B, TP=1, no head split) holds this kernel's [BH,L,V] output at the model's FULL
+        head count on one chip -- 2x N300's per-chip size (9B: 32 value heads / TP=2 = 16/chip
+        vs N150's 32/chip, same head_dim). N300 already needs bf16 to avoid the fp32 "Out of
+        Memory" this file's module docstring documents, at HALF N150's per-chip size -- so N150
+        must keep the fix. Narrowing this to wh_9b_n300 (which excludes N150 too) would very
+        likely reproduce that exact OOM on N150; left alone on purpose.
+      * T3K (27B, TP=8) has 48 value heads / TP=8 = 6/chip -- ~0.375x N300's per-chip size, i.e.
+        LESS L1 pressure from this specific tensor than the config that first needed the fix, not
+        more. This is a head-count/TP-division ESTIMATE, not a T3K hardware measurement -- accepted
+        per explicit instruction to narrow T3K wherever defensible. If a real OOM ever shows up on
+        T3K here, the fix is reverting this one exclusion (T3K back to the bf16 fork), not
+        reverting N150's protection.
+    Detects T3K via the mesh_device kwarg the shared module always passes at its one call site
+    (ttnn_delta_rule_seq.py: `chunk_gated_delta_rule_seq(..., mesh_device=device, ...)`) -- not via
+    model_args, which this generically-invoked monkeypatch target has no way to receive."""
     if is_blackhole():
+        return _UPSTREAM(*args, **kwargs)
+    _mesh_device = kwargs.get("mesh_device")
+    if _mesh_device is not None and _mesh_device.get_num_devices() == 8:
         return _UPSTREAM(*args, **kwargs)
     return _chunk_gated_delta_rule_seq_wh(*args, **kwargs)
 
