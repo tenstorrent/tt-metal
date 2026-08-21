@@ -304,29 +304,52 @@ Tensor swiglu(const Tensor& input_a, std::int32_t dim, const std::optional<Memor
     return swiglu_result;
 }
 
+// The 0/1 mask has to be built in the input's own dtype. A bfloat16 mask against an
+// integer input promotes the multiply to bfloat16, and the result comes back rounded
+// to 8 mantissa bits -- tril(int32 around 2^30) was off by up to 1023.
+static Tensor trilu_mask(
+    const Tensor& input_a, std::int32_t diag, bool upper, const std::optional<MemoryConfig>& output_mem_config) {
+    const auto mem = output_mem_config.value_or(input_a.memory_config());
+    const DataType dt = input_a.dtype();
+    if (dt == DataType::INT32) {
+        return upper ? ttnn::index_triu<std::int32_t>(
+                           input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem)
+                     : ttnn::index_tril<std::int32_t>(
+                           input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem);
+    }
+    if (dt == DataType::UINT32) {
+        return upper ? ttnn::index_triu<std::uint32_t>(
+                           input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem)
+                     : ttnn::index_tril<std::uint32_t>(
+                           input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem);
+    }
+    return upper ? ttnn::index_triu<::bfloat16>(
+                       input_a.logical_shape(),
+                       input_a.padded_shape(),
+                       diag,
+                       DataType::BFLOAT16,
+                       Layout::TILE,
+                       input_a.device(),
+                       mem)
+                 : ttnn::index_tril<::bfloat16>(
+                       input_a.logical_shape(),
+                       input_a.padded_shape(),
+                       diag,
+                       DataType::BFLOAT16,
+                       Layout::TILE,
+                       input_a.device(),
+                       mem);
+}
+
 // tril : select lower triangular region of input matrix
 Tensor tril(const Tensor& input_a, std::int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor index_l = ttnn::index_tril<::bfloat16>(
-        input_a.logical_shape(),
-        input_a.padded_shape(),
-        diag,
-        DataType::BFLOAT16,
-        Layout::TILE,
-        input_a.device(),
-        output_mem_config.value_or(input_a.memory_config()));
+    Tensor index_l = trilu_mask(input_a, diag, /*upper=*/false, output_mem_config);
     return ttnn::multiply(input_a, index_l, std::nullopt, output_mem_config);
 }
 
 // triu : select upper triangular region of input matrix
 Tensor triu(const Tensor& input_a, std::int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor index_u = ttnn::index_triu<::bfloat16>(
-        input_a.logical_shape(),
-        input_a.padded_shape(),
-        diag,
-        DataType::BFLOAT16,
-        Layout::TILE,
-        input_a.device(),
-        output_mem_config.value_or(input_a.memory_config()));
+    Tensor index_u = trilu_mask(input_a, diag, /*upper=*/true, output_mem_config);
     return ttnn::multiply(input_a, index_u, std::nullopt, output_mem_config);
 }
 
