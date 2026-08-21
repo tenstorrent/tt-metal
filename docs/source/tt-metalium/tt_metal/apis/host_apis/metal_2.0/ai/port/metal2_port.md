@@ -782,6 +782,8 @@ In the *default* DM and compute cases the arch-agnostic helpers already emit a c
 
 `KernelSpec::compiler_options` is `hw_config`'s sibling, and `opt_level` is in the same hazard class as everything in the section above: a **pure performance setting** that almost never fails the build and usually slips past the op's tests too. Get it wrong and the op compiles and passes; what shifts is its performance profile — subtly, in no guaranteed direction, and with nothing pointing back to this line.
 
+**It also fails one step earlier than `hw_config` does, which is why this is the field that actually gets missed.** `compiler_options` is *defaulted* — `opt_level` is `O2` on a `KernelSpec` that never mentions it — so a compute kernel does not need you to make a wrong choice, only no choice: the spec compiles, validates and runs. A compute kernel's `hw_config` cannot be skipped that way; leave the variant alone and the spec isn't a compute kernel at all. So an `hw_config` mistake is a **wrong value** you can diff against the legacy config, and this one is an **absent line**, with nothing on either side of a diff to compare. Doing the section above carefully does not carry you across — this needs checking as its own item, mechanically ([anti-pattern self-audit](#anti-pattern-self-audit)).
+
 Two rules cover it:
 
 1. **The legacy kernel set an explicit `opt_level`** → carry that value verbatim into `compiler_options.opt_level`, DM kernels included. An op that asked for `Os` or `O0` meant it; don't "correct" it toward a default.
@@ -947,6 +949,14 @@ Scan the ported code against this checklist. Each item is a Metal 2.0 design-int
   Expect **no output**; the right-hand side reads the working tree, so uncommitted port work counts. Compare counts rather than reading `git diff` output directly: these macros usually span several lines, so the removed line is a bare `TT_FATAL(` with its condition invisible — it tells you that one vanished, not which. For each file whose count dropped, list the pre-port checks (`git show "$BASE":<file> | grep -nE 'TT_FATAL|TT_ASSERT|TT_THROW'`) and place every one of them: **moved** (a sibling file's count rose — confirm it is the same check), **dropped in error** → restore it verbatim, since you may not loosen a guard that lives in the factory ([Host-side: stay in the lane](#host-side-stay-in-the-lane)), or **subject deleted** → the only legitimate loss, and it gets a line in `METAL2_PORT_REPORT.md`. The canonical legitimate case is a guard on a raw `Buffer*` that a `TensorBinding` replaced. **An `override_runtime_arguments` is never a subject-deleted case** — the port translates that method rather than removing it, so its guards come across with it and a guard dropped there is a real loss. A count delta **outside** the factory — the device-operation class, the op's top-level `.cpp` — is a scope violation on its own: that code is off-limits and should be byte-identical.
 - [ ] **Every `hw_config` reproduces the legacy op's resolved values.** For each kernel, diff the ported config against the legacy one: DM `(processor, noc, noc_mode)`, and the compute knobs — *including* the two fields the helper does not cover, `bfp_pack_precision_mode` and `unpack_modes`, swept from the legacy `ComputeConfig`. These are silent perf/precision settings with no test net; see [Hardware configuration](#hardware-configuration).
 - [ ] **Every `KernelSpec`'s `opt_level` matches its legacy kernel's.** Compute *and* DM: an explicit legacy level is carried verbatim; a compute kernel that set none gets an explicit `O3` (legacy `ComputeConfig` defaults to `O3`, Metal 2.0 to `O2`). Silent perf loss with no test net; see [Compiler options](#compiler-options).
+
+  **Do not eyeball this one.** The failure is an *absent line*, so unlike every other item here there is nothing in the ported code to read and object to — which is exactly why it survives an otherwise careful port. Run it:
+
+  ```bash
+  grep -nE 'opt_level' <factory>.cpp
+  ```
+
+  Then enumerate the compute `KernelSpec`s the factory builds — from the construction code, not from the grep — and pair each one with a line of that output. **A compute `KernelSpec` with no line is the defect.** A factory that builds a compute kernel and prints *nothing at all* has it on every one of them; that is the dominant shape of this miss, and it is a one-command check. Specs built in a loop or through a shared helper are no exception — the level is per `KernelSpec`, so each needs its own.
 
 If any checklist item fails, return to planning / construction to fix. Do not paper over with kernel-side modifications.
 
