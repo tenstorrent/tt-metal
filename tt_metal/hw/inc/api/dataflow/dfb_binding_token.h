@@ -29,9 +29,9 @@
 struct DFBBindingToken {
     explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
 
-    // Compute endpoints additionally bake the operand's LLK format + face grid.
-    // DM-only DFBs use the id-only constructor.
-    constexpr DFBBindingToken(uint16_t id, LLKMetadata llk) noexcept : id_(id), llk_metadata_(llk) {}
+    // Binding token constructor when host supplies LLK metadata.
+    // See "Entry format metadata" in DataflowBufferSpec. DM-only DFBs use the id-only constructor.
+    constexpr DFBBindingToken(uint16_t id, binding_details::LLKMetadata llk) noexcept : id_(id), llk_metadata_(llk) {}
 
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
 
@@ -43,7 +43,7 @@ struct DFBBindingToken {
 
 private:
     uint16_t id_;
-    LLKMetadata llk_metadata_{};
+    binding_details::LLKMetadata llk_metadata_{};
 };
 
 // Compile-time handle for a CrossNode/PrefetcherPipe *relay* local DFB binding.
@@ -61,7 +61,7 @@ struct RelayDFBBindingToken {
 
     explicit constexpr RelayDFBBindingToken(uint16_t id, uint8_t prefetcher_pipe_id = NO_PREFETCHER_PIPE) noexcept :
         id_(id), prefetcher_pipe_id_(prefetcher_pipe_id) {}
-    constexpr RelayDFBBindingToken(uint16_t id, uint8_t prefetcher_pipe_id, LLKMetadata llk) noexcept :
+    constexpr RelayDFBBindingToken(uint16_t id, uint8_t prefetcher_pipe_id, binding_details::LLKMetadata llk) noexcept :
         id_(id), prefetcher_pipe_id_(prefetcher_pipe_id), llk_metadata_(llk) {}
 
     constexpr operator uint32_t() const noexcept { return id_; }
@@ -71,5 +71,5 @@ struct RelayDFBBindingToken {
 private:
     uint16_t id_;
     uint8_t prefetcher_pipe_id_;
-    LLKMetadata llk_metadata_{};
+    binding_details::LLKMetadata llk_metadata_{};
 };
