@@ -73,9 +73,18 @@ static constexpr int kWallClockLowIdx = 0;
         }                                                                 \
     }
 
+// EMPTY body (ZONE_MODE == 2): the pure-overhead microbenchmark -- see zones_dm.cpp for the
+// duration/gap decomposition it measures.
+#define ZONE_EMPTY(NAME)         \
+    {                            \
+        DeviceZoneScopedN(NAME); \
+    }
+
 // GRADUATED (ZONE_MODE == 0) keeps the wall-clock spin (ZONE_WALL above): its point is durations calibrated in
 // microseconds for a representative capture, which a nop-iteration count cannot express.
-#if ZONE_MODE
+#if ZONE_MODE == 2
+#define ZONE(NAME, GRADUATED) ZONE_EMPTY(NAME)
+#elif ZONE_MODE
 #define ZONE(NAME, GRADUATED) ZONE_NOPS(NAME, ZONE_CYC)
 #else
 #define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)

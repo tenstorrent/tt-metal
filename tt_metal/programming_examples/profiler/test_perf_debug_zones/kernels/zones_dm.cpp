@@ -72,9 +72,23 @@ static constexpr int kWallClockLowIdx = 0;
         }                                                                 \
     }
 
+// EMPTY body (ZONE_MODE == 2): the pure-overhead microbenchmark. Ten fully unrolled back-to-back empty
+// zones per iteration, nothing between them, so the profiler measures ITSELF: each zone's recorded
+// DURATION = open's clock read -> close's clock read with an empty body (the in-zone overhead: the
+// close's ring room check + the wall-clock read), and the GAP between one zone's end and the next
+// zone's start = the close's post-clock work (sticky check + 3 ring stores + publish) plus the next
+// open's clock read. duration + gap = the full cost one zone adds at max rate. The host workload
+// (--empty 1) registers a consumer that computes exactly those two numbers per RISC.
+#define ZONE_EMPTY(NAME)         \
+    {                            \
+        DeviceZoneScopedN(NAME); \
+    }
+
 // GRADUATED (ZONE_MODE == 0) keeps the wall-clock spin (ZONE_WALL above): its point is durations calibrated in
 // microseconds for a representative capture, which a nop-iteration count cannot express.
-#if ZONE_MODE
+#if ZONE_MODE == 2
+#define ZONE(NAME, GRADUATED) ZONE_EMPTY(NAME)
+#elif ZONE_MODE
 #define ZONE(NAME, GRADUATED) ZONE_NOPS(NAME, ZONE_CYC)
 #else
 #define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)
@@ -89,9 +103,11 @@ void kernel_main() {
         // iteration index as PAYLOAD -- a runtime value on this wire is ordinary DeviceData payload (the
         // separate runtime-id event type is gone). Kept at three so the offered marker load stays
         // comparable with older knee/decode benchmarks of this workload.
+#if ZONE_MODE != 2  // EMPTY overhead mode wants a pure zone stream: no point markers between zones
         DeviceFlag(ZTAG "_Flag");
         DeviceTimestampedData(ZTAG "_Data", ((uint64_t)0xF00D << 32) | it);
         DeviceTimestampedData(ZTAG "_Iter", it);
+#endif
         ZONE(ZTAG "_Zone0", 2500u);    // ~1 us
         ZONE(ZTAG "_Zone1", 5000u);    // ~2 us
         ZONE(ZTAG "_Zone2", 7500u);    // ~3 us

@@ -31,6 +31,12 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "llrt/tt_cluster.hpp"
 
+// --empty only: registers a stats consumer on the streaming profiler to measure the profiler's own
+// per-zone overhead from the captured zones themselves.
+#include <algorithm>
+#include <mutex>
+#include "tools/profiler/perf_debug_consumer.hpp"
+
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -138,6 +144,116 @@ void clock_probe(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     fflush(stdout);
 }
 
+// ---- --empty mode: profiler self-overhead measurement --------------------------------------------
+//
+// The kernels emit 10 fully unrolled EMPTY zones back-to-back per iteration (ZONE_MODE=2), so the
+// captured stream measures the profiler itself. Per lane, sorted by zone start:
+//   DURATION = end - start of one empty zone = open's clock read -> close's clock read around nothing
+//              (the close's ring room check + the wall-clock read latency);
+//   GAP      = next.start - this.end between two adjacent empty zones = the close's post-clock work
+//              (sticky check + 3 ring stores + fence + tail publish) + the next open's clock read.
+//   DURATION + GAP = the full cost one zone adds to a kernel at max rate.
+// Negative gaps are NESTED pairs (the "<RISC>-KERNEL" wrapper zone contains everything) and are
+// dropped; the loop back-edge inflates one gap in ten by a couple of cycles, which the median ignores.
+struct EmptyZoneStats {
+    std::mutex mu;  // register/unregister lifetime only; batches arrive on a single consumer thread
+    // Per (dev, lane): (start, duration) of every Zone record seen.
+    std::map<uint32_t, std::vector<std::pair<uint64_t, uint64_t>>> lanes;
+    double frequency_ghz = 0.0;
+
+    void operator()(const perf_debug::PerfDebugRecordBatch& batch) {
+        std::lock_guard<std::mutex> lk(mu);
+        if (frequency_ghz == 0.0 && !batch.context->devices.empty()) {
+            frequency_ghz = batch.context->devices[0].frequency_ghz;
+        }
+        for (const auto& r : batch.records) {
+            if (r.meta.type != perf_debug::PerfDebugRecType::Zone) {
+                continue;
+            }
+            lanes[(r.meta.dev << 10) | r.meta.lane].push_back({r.data.zone.start, r.data.zone.duration});
+        }
+    }
+
+    static uint64_t median(std::vector<uint64_t>& v) {
+        if (v.empty()) {
+            return 0;
+        }
+        std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+        return v[v.size() / 2];
+    }
+
+    void report() {
+        std::lock_guard<std::mutex> lk(mu);
+        const double ghz = frequency_ghz > 0.0 ? frequency_ghz : 1.35;
+        // Aggregate by RISC index (lane % 5): 0 = BRISC, 1 = NCRISC, 2..4 = TRISC0..2.
+        static const char* kRisc[5] = {"BRISC ", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
+        printf(
+            "\n[empty-zone overhead] per-RISC, cycles @ %.4f GHz (median [mean]); duration = in-zone "
+            "(room check + clock read), gap = close+reopen (ring stores + publish + clock read)\n",
+            ghz);
+        printf(
+            "[empty-zone overhead] %-7s %8s %22s %22s %22s\n",
+            "risc",
+            "zones",
+            "duration cyc (ns)",
+            "gap cyc (ns)",
+            "dur+gap cyc (ns)");
+        for (uint32_t risc = 0; risc < 5; risc++) {
+            std::vector<uint64_t> durs, gaps;
+            uint64_t dur_sum = 0, gap_sum = 0;
+            for (auto& [key, zones] : lanes) {
+                if ((key & 0x3FF) % 5 != risc || zones.size() < 2) {
+                    continue;
+                }
+                std::sort(zones.begin(), zones.end());
+                for (size_t i = 0; i < zones.size(); i++) {
+                    // The kernel-wrapper zone contains the whole run; its duration would dwarf the
+                    // stats. It is exactly the zone whose END is past the NEXT zone's start (nested),
+                    // which the gap filter below already identifies -- for durations, drop the single
+                    // largest per lane instead (the wrapper), cheap and exact for this workload.
+                    durs.push_back(zones[i].second);
+                    if (i + 1 < zones.size()) {
+                        const uint64_t end = zones[i].first + zones[i].second;
+                        if (zones[i + 1].first >= end) {
+                            gaps.push_back(zones[i + 1].first - end);
+                        }
+                    }
+                }
+                // Drop this lane's wrapper duration (the max).
+                if (!durs.empty()) {
+                    auto mx = std::max_element(durs.begin(), durs.end());
+                    durs.erase(mx);
+                }
+            }
+            if (durs.empty()) {
+                continue;
+            }
+            for (uint64_t d : durs) {
+                dur_sum += d;
+            }
+            for (uint64_t g : gaps) {
+                gap_sum += g;
+            }
+            const uint64_t dmed = median(durs), gmed = median(gaps);
+            const double dmean = durs.empty() ? 0.0 : (double)dur_sum / durs.size();
+            const double gmean = gaps.empty() ? 0.0 : (double)gap_sum / gaps.size();
+            printf(
+                "[empty-zone overhead] %-7s %8zu %9llu (%5.1f) [%6.1f] %9llu (%5.1f) [%6.1f] %9llu (%5.1f)\n",
+                kRisc[risc],
+                durs.size(),
+                (unsigned long long)dmed,
+                dmed / ghz,
+                dmean,
+                (unsigned long long)gmed,
+                gmed / ghz,
+                gmean,
+                (unsigned long long)(dmed + gmed),
+                (dmed + gmed) / ghz);
+        }
+        fflush(stdout);
+    }
+};
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -148,6 +264,7 @@ int main(int argc, char** argv) {
     uint32_t gx = 2, gy = 2, n_iters = 50, zone_cyc = 0;  // small grid + modest iters keep the run quick
     bool knee_mode = false;                               // set by --delay, including --delay 0
     bool clkprobe = false;                                // --clkprobe 1: read wall clocks and exit, no workload
+    bool empty_mode = false;  // --empty 1: unrolled EMPTY zones + stats consumer -> profiler self-overhead
     for (int i = 1; i + 1 < argc; i += 2) {
         std::string a = argv[i];
         uint32_t v = (uint32_t)std::strtoul(argv[i + 1], nullptr, 10);
@@ -162,7 +279,18 @@ int main(int argc, char** argv) {
         } else if (a == "--delay") {
             zone_cyc = v;
             knee_mode = true;  // NOT `zone_cyc != 0`: --delay 0 is a real knee point (max rate)
+        } else if (a == "--empty") {
+            empty_mode = v != 0;
         }
+    }
+
+    // --empty: register the overhead stats consumer BEFORE device bring-up, so the profiler attaches
+    // it at capture start (registration is process-wide and time-independent, but earliest is safest).
+    auto empty_stats = std::make_shared<EmptyZoneStats>();
+    perf_debug::PerfDebugConsumerHandle empty_handle = 0;
+    if (empty_mode) {
+        empty_handle = perf_debug::register_consumer(
+            "empty-zone-overhead", [empty_stats](const perf_debug::PerfDebugRecordBatch& b) { (*empty_stats)(b); });
     }
 
     // TT_METAL_SLOW_DISPATCH_MODE=1 takes the whole run off the command queue. Needed by the Tensix-BRISC
@@ -200,7 +328,7 @@ int main(int argc, char** argv) {
     CoreRange cores(CoreCoord{0, 0}, CoreCoord{gx - 1, gy - 1});
     std::map<std::string, std::string> defs{
         {"N_ITERS", std::to_string(n_iters) + "u"},
-        {"ZONE_MODE", knee_mode ? "1" : "0"},
+        {"ZONE_MODE", empty_mode ? "2" : (knee_mode ? "1" : "0")},
         {"ZONE_CYC", std::to_string(zone_cyc) + "u"}};
     const std::string kdir = "tt_metal/programming_examples/profiler/test_perf_debug_zones/kernels/";
 
@@ -259,5 +387,11 @@ int main(int argc, char** argv) {
     }
     printf("[perf-debug zones] workload done; closing device.\n");
     mesh_device->close();
+    if (empty_mode) {
+        // close() detached the consumers (delivery threads joined), so the stats are complete and
+        // race-free to read here.
+        perf_debug::unregister_consumer(empty_handle);
+        empty_stats->report();
+    }
     return 0;
 }
