@@ -12,6 +12,7 @@ Output: per row, slot0's value tiles, then slot0's index tiles, as uint32.
 
 # For the sake of exactness, SrcA stimuli are built by hand.
 # helpers.stimuli_generator is very awkward for these tests.
+import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -19,12 +20,14 @@ from helpers.golden_generators import TopKXLGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
+    PerfRunType,
     TopKSortDirection,
     TopKXLChunkBaseMode,
     TopKXLIndexOp,
     format_dict,
 )
 from helpers.param_config import parametrize
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import DEST_SYNC, TOPK_XL
@@ -666,3 +669,63 @@ def test_topk_xl_dest_sync_half(K):
     (K,) = K
 
     _run_test_topk(K, num_chunks=2, num_rows=2, dest_sync=DestSync.Half)
+
+
+# Device profile node (lane ET, e2e-metric charter): the topk_xl perf vehicle
+# the corpus row was blocked on.  The old blocker was METRIC validity — cost
+# sits per-chunk inside a rows x chunks loop and any MOP-issue body zone
+# under-counts Tensix retirement without a drain barrier (HANDOFF §1 caveat).
+# Under the ratified end-to-end verdict metric (owner, 2026-08-21) the honest
+# zone EXISTS structurally: the harness KERNEL zone wraps run_kernel() AND
+# tensix_sync() (helpers/src/trisc.cpp), so it is drain-inclusive by
+# construction and needs no in-body marker seam.  The profiled variant is the
+# op-shaped row-major path (K=512, 2 chunks, 2 rows: covers copy_sort, the
+# merge tree, rebuild, and the per-row chunk_base reset).
+@pytest.mark.parametrize("label", ["production"])
+def test_topk_xl_device_profile(perf_report, label: str):
+    K, num_chunks, num_rows = 512, 2, 2
+    tiles_per_seq = _tiles_per_sequence(K)
+    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=format_dict[FORMATS.input_format])
+    src_A, _rows = _build_input(K, num_chunks, K, num_rows, "positive", False)
+
+    configuration = PerfConfig(
+        "sources/topk_xl_test.cpp",
+        FORMATS,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            DEST_SYNC(DestSync.Full),
+            TOPK_XL(
+                k=K,
+                num_chunks=num_chunks,
+                tail_elements=K,
+                num_rows=num_rows,
+                index_op=TopKXLIndexOp.RowMajor,
+                group_id=0,
+                group_shift=GROUP_SHIFT,
+                core_id=0,
+                sort_direction=TopKSortDirection.Descending,
+                fused_reduce=False,
+                chunk_base_mode=TopKXLChunkBaseMode.Static,
+                chunk_base=0,
+            ),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            FORMATS.input_format,
+            src_B,
+            FORMATS.input_format,
+            FORMATS.output_format,
+            tile_count_A=num_rows * num_chunks * tiles_per_seq,
+            tile_count_B=1,
+            tile_count_res=num_rows * 2 * tiles_per_seq,
+        ),
+        dest_acc=DestAccumulation.Yes,  # 32-bit fused value|index words in Dest.
+        unpack_to_dest=False,
+    )
+    configuration.run(perf_report, run_count=1)
+    rows = perf_report.frame()
+    kernel_rows = rows[rows["marker"] == "KERNEL"]
+    assert len(kernel_rows) >= 1, rows.to_string(index=False)
+    cycles = float(kernel_rows.iloc[-1]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(f"TOPK_XL_DEVICE_PROFILE impl={label} kernel_cycles={cycles:.2f}")
