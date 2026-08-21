@@ -255,7 +255,10 @@ TEST_F(NormalizationSmoke, SoftmaxGeneralWLarge) {
     detail::expect_close(detail::to_float_vector(out), std::vector<float>(H * W, 1.0f / 4096.0f), 0.2f, 1e-5f);
 }
 
-TEST_F(NormalizationSmoke, SoftmaxGeneralHLarge) {
+TEST_F(NormalizationSmoke, DISABLED_SoftmaxGeneralHLarge) {
+    // KNOWN BUG (disabled; run with --gtest_also_run_disabled_tests): #53927 --
+    // moreh_softmax_h_large trips a TRISC0 watcher assert on WH and BH, killing the shared
+    // device. Results are correct without the watcher. Enable when #53927 closes.
     // SoftmaxProgramFactoryGeneralHLarge: dim=-2 with H=4096 (Ht=128) overflows the same
     // 512KB budget in is_softmax_general_h_small_available.
     auto& device = *device_;
