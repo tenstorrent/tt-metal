@@ -403,11 +403,7 @@ void kernel_main() {
     //   age >= kShipMaxAgeSweeps         -- bounded staleness for trickling cores
     //   stop seen                        -- the sweep-to-empty contract ships everything
     constexpr uint32_t kShipMinPct = get_compile_time_arg_val(39);
-    // The scan reads the PUBLISHED tail, which lags true occupancy by up to SPSC_PUBLISH_BATCH_WORDS
-    // (the producer's batched fence) -- subtract it so the valve fires on what the lag could be hiding
-    // (measured on the paced controller: delay 200 went 0 -> ~8k stalls when the batch landed unadjusted).
-    constexpr uint32_t kShipSafeWords =
-        (3u * kernel_profiler::PROFILER_L1_VECTOR_SIZE) / 4u - kernel_profiler::SPSC_PUBLISH_BATCH_WORDS;
+    constexpr uint32_t kShipSafeWords = (3u * kernel_profiler::PROFILER_L1_VECTOR_SIZE) / 4u;
     constexpr uint32_t kShipMaxAgeSweeps = 512u;
     constexpr uint32_t kShipMinWords = (kLiveWords * kShipMinPct) / 100u;
     // CV-FIRST SWEEPS. A filler's sweep is two phases: read each core's ring TAILS (32 B), decide the ship
