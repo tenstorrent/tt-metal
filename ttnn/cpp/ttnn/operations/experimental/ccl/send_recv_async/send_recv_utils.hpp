@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace tt::tt_metal {
@@ -36,7 +37,7 @@ void validate(
     std::optional<uint32_t> min_fifo_size = std::nullopt);
 
 template <tt::tt_metal::distributed::SocketEndpoint socket_type>
-MeshCoordinateRangeSet get_workload_coords(
+ttnn::MeshCoordinateRangeSet get_workload_coords(
     const ttnn::MeshCoordinateRangeSet& tensor_coords, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
 
 }  // namespace ttnn::send_recv_utils

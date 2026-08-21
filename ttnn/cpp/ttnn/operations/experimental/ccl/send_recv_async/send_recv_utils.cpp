@@ -64,7 +64,7 @@ void validate(
 }
 
 template <tt::tt_metal::distributed::SocketEndpoint socket_type>
-MeshCoordinateRangeSet get_workload_coords(
+ttnn::MeshCoordinateRangeSet get_workload_coords(
     const ttnn::MeshCoordinateRangeSet& tensor_coords, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
     ttnn::MeshCoordinateRangeSet workload_coords;
     const auto& socket_connections = mesh_socket.get_config().socket_connection_config;
@@ -76,7 +76,7 @@ MeshCoordinateRangeSet get_workload_coords(
                                        : connection.receiver_core.device_coord;
         if (std::find(tensor_coords_flattened.begin(), tensor_coords_flattened.end(), device_coord) !=
             tensor_coords_flattened.end()) {
-            workload_coords.merge(MeshCoordinateRange(device_coord, device_coord));
+            workload_coords.merge(ttnn::MeshCoordinateRange(device_coord, device_coord));
         }
     }
     TT_FATAL(
@@ -96,9 +96,9 @@ template void validate<tt::tt_metal::distributed::SocketEndpoint::RECEIVER>(
     const tt::tt_metal::distributed::MeshSocket&,
     const std::string&,
     std::optional<uint32_t>);
-template MeshCoordinateRangeSet get_workload_coords<tt::tt_metal::distributed::SocketEndpoint::SENDER>(
+template ttnn::MeshCoordinateRangeSet get_workload_coords<tt::tt_metal::distributed::SocketEndpoint::SENDER>(
     const ttnn::MeshCoordinateRangeSet&, const tt::tt_metal::distributed::MeshSocket&);
-template MeshCoordinateRangeSet get_workload_coords<tt::tt_metal::distributed::SocketEndpoint::RECEIVER>(
+template ttnn::MeshCoordinateRangeSet get_workload_coords<tt::tt_metal::distributed::SocketEndpoint::RECEIVER>(
     const ttnn::MeshCoordinateRangeSet&, const tt::tt_metal::distributed::MeshSocket&);
 
 }  // namespace ttnn::send_recv_utils
