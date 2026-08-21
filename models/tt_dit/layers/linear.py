@@ -326,6 +326,7 @@ class ColParallelLinear(Module):
         addcmul_a=None,
         addcmul_b=None,
         addcmul_scalar: float = 1.0,
+        force_transpose: bool = True,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -393,7 +394,7 @@ class ColParallelLinear(Module):
                 topology=self.ccl_manager.topology,
                 cluster_axis=parallel_config.tensor_parallel.mesh_axis,
                 barrier_semaphore=None,
-                force_transpose=True,
+                force_transpose=force_transpose,
                 num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,

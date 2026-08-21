@@ -213,10 +213,12 @@ all_gather_minimal_matmul_async_factory_helper(
         log_debug(tt::LogOp, "No config provided, using default block sizes and core grid");
     }
 
-    auto grid_size =
-        config.has_value() ? config.value().compute_with_storage_grid_size : device->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    auto num_cores = core_grid.size();
+    // NOTE: the matmul worker grid is derived below, after the transpose decision -- NOT taken from
+    // config.compute_with_storage_grid_size. AGMM reserves a fixed mux row (transposed) or column
+    // (non-transposed), so the factory computes the grid itself; a caller-passed grid can't leave the
+    // correct axis free and only invites the wrong orientation (e.g. a full-width grid forces the
+    // non-transposed muxes onto a row, dropping M by one core). The config field is retained because
+    // the sibling ops (minimal_matmul / strided-AG / MMRS) still need it; AGMM just ignores it.
 
     bool use_bias = bias_tensor.has_value();
     // Derive from scalar presence, matching validate (which guarantees tensors are also present).
@@ -308,7 +310,19 @@ all_gather_minimal_matmul_async_factory_helper(
 
     // Transpose core grid if the output is wide (M > N)
     // If transpose core grid, we parallelize M on cores_x and N on cores_y and swap the NOCs and RISCVs
+    // force_transpose forces it on; otherwise the orientation is chosen by (M > N).
     bool transpose_core_grid = force_transpose ? true : (M > N);
+
+    // Derive the matmul worker grid from the physical device, reserving the axis the muxes need:
+    // transposed -> muxes on the last ROW, so free a row (x, y-1); non-transposed -> muxes on the
+    // last COLUMN, so free a column (x-1, y). This keeps the mux row/column disjoint from the matmul
+    // workers regardless of caller input (config.compute_with_storage_grid_size is ignored for AGMM).
+    auto full_device_grid = device->compute_with_storage_grid_size();
+    tt::tt_metal::CoreCoord grid_size = transpose_core_grid
+                                            ? tt::tt_metal::CoreCoord{full_device_grid.x, full_device_grid.y - 1}
+                                            : tt::tt_metal::CoreCoord{full_device_grid.x - 1, full_device_grid.y};
+    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    auto num_cores = core_grid.size();
 
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;

@@ -113,20 +113,26 @@ class ParallelFeedForward(Module):
         )
 
     def forward(
-        self, x: ttnn.Tensor, compute_kernel_config=None, parallel_config=None, default_block_size=None
+        self,
+        x: ttnn.Tensor,
+        compute_kernel_config=None,
+        parallel_config=None,
+        default_block_size=None,
+        force_transpose: bool = True,
     ) -> ttnn.Tensor:
         """
         Expects x to be replicated.
         Return output fractured on columns.
 
         `default_block_size` is forwarded to ff1 only, for callers that have measured block sizes for
-        their ff1 shape; ff2 keeps the generic path.
+        their ff1 shape; ff2 keeps the generic path. `force_transpose` is likewise forwarded to ff1.
         """
         ff1_out = self.ff1(
             x,
             compute_kernel_config=compute_kernel_config,
             parallel_config=parallel_config,
             default_block_size=default_block_size,
+            force_transpose=force_transpose,
         )
         return self.ff2(ff1_out, compute_kernel_config=compute_kernel_config)
 
@@ -139,6 +145,7 @@ class ParallelFeedForward(Module):
         compute_kernel_config=None,
         parallel_config=None,
         default_block_size=None,
+        force_transpose: bool = True,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
@@ -153,6 +160,7 @@ class ParallelFeedForward(Module):
             compute_kernel_config=compute_kernel_config,
             parallel_config=parallel_config,
             default_block_size=default_block_size,
+            force_transpose=force_transpose,
         )
         return self.ff2.forward_fused_addcmul(
             ff1_out,

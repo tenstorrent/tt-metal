@@ -119,8 +119,10 @@ def resolve_config(name):
 # use_case controls per-shape configuration to match model behavior:
 #   "plain"     - no fused activation or addcmul
 #   "ff2"       - RowParallelLinear (no fused activation, label only)
-#   "qkv"       - attention QKV projection (chunks=3, math_approx_mode=True)
-#   "to_out"    - attention to_out projection (addcmul fused, math_approx_mode=True)
+#   "qkv"       - attention QKV projection (chunks=3, math_approx_mode=True, +bias)  [Wan]
+#   "to_out"    - attention to_out projection (addcmul fused, math_approx_mode=True, +bias)  [Wan]
+#   "qkv_h3"    - H3 QKV projection: like "qkv" but bias-free (H3 projections carry no bias)
+#   "to_out_h3" - H3 to_out projection: like "to_out" but bias-free
 #   "ff1_gelu"  - FFN first linear (fused GELU activation)
 #   "cross_attn_kv" - cross-attention to_kv (minimal_matmul_split, chunks=2, math_approx_mode=True)
 # Example shapes from Wan2.2 configs in matmul.py — one per use case.
@@ -144,27 +146,33 @@ SHAPES = [
     (3072, 5120, 3840, 8, 8, True, "plain"),
     (3072, 5120, 1280, 8, 8, True, "plain"),
     (3072, 5120, 3456, 8, 8, True, "plain_gelu"),
-    # MiniMax-H3 AGMM shapes, BH Galaxy TP=4 / SP=8, 12x9 grid (the model reserves one core column
-    # for CCL). M is the per-device packed sequence length at 768P; 4768 is the 5s case and is used
-    # for all three because the model keys its block sizes on (K, N) only -- M changes with the
-    # requested duration while K and N are fixed by the architecture and the TP factor.
-    #   to_qkv  K_tiles_per_device = 42
-    #   to_out  K_tiles_per_device = 56
-    #   ff1     K_tiles_per_device = 42, fused SwiGLU
-    (4768, 5376, 5376, 12, 9, True, "qkv"),
-    (4768, 7168, 1344, 12, 9, True, "plain"),
-    (4768, 5376, 7168, 12, 9, True, "ff1_swiglu"),
     # MiniMax-H3 fused MM+RS+addcmul (ff2). K = 14336 / tp = 3584 is already per-device. The core grid
     # is the *matmul* grid; the reduce-scatter takes the rows above it, so one entry per candidate grid.
     (4768, 3584, 5376, 12, 7, False, "mmrs"),
     (4768, 3584, 5376, 12, 8, False, "mmrs"),
     (4768, 3584, 5376, 12, 9, False, "mmrs"),
-    # 12x8 won that grid sweep (1.313 ms vs 1.373 at 12x7 and 1.487 at 12x9); the longer durations
-    # (M = 9216 / 13632) reuse its blocking rather than being swept -- warmup compiles one program per
-    # combo and compile time grows with M, so M=9216 alone is ~75 min against ~9 min here, for a block
-    # shape that has little reason to change with M. To check that assumption, add
-    #   (9216, 3584, 5376, 12, 8, False, "mmrs"),
 ]
+
+# --- MiniMax-H3 clean-fit per-M_block geometry sweep (artifact "Per-Device Block Geometry") ---
+# One shape per (projection, M_block) row of that table, sized to the AGMM's real worker grid on the
+# BH galaxy (12x10). Non-transposed reserves the last COLUMN for muxes -> M over grid.y = 10, so
+# M_device = M_block*10*32; transposed reserves the last ROW -> M over grid.x = 12, so M_device =
+# M_block*12*32. The M_device values are chosen so the op's own M>N rule lands on the intended
+# layout with no forcing: qkv & ff1 stay M<N (non-transposed) for all M_block; to_out is M<N for
+# M_block 1-3 (non-transposed, x320) and M>N for 4-12 (transposed, x384). Per-K/N config matches the
+# H3 pipeline: qkv_h3 (chunks=3), ff1_swiglu, to_out_h3 (addcmul); all bias-free. The (12,9) grid in
+# the tuples is vestigial -- AGMM ignores it and derives its own grid.
+H3_GEOM_START = len(SHAPES)
+for _mb in range(1, 13):  # qkv + ff1, non-transposed (M over 10 cores)
+    SHAPES.append((_mb * 10 * 32, 5376, 5376, 12, 9, True, "qkv_h3"))
+    SHAPES.append((_mb * 10 * 32, 5376, 7168, 12, 9, True, "ff1_swiglu"))
+for _mb in range(1, 4):  # to_out non-transposed (M_block 1-3, M over 10 cores)
+    SHAPES.append((_mb * 10 * 32, 7168, 1344, 12, 9, True, "to_out_h3"))
+for _mb in range(4, 13):  # to_out transposed (M_block 4-12, M over 12 cores)
+    SHAPES.append((_mb * 12 * 32, 7168, 1344, 12, 9, True, "to_out_h3"))
+H3_GEOM_NT_IDXS = list(range(H3_GEOM_START, H3_GEOM_START + 27))  # 24 qkv/ff1 + 3 to_out
+H3_GEOM_T_IDXS = list(range(H3_GEOM_START + 27, len(SHAPES)))  # 9 to_out transposed
+del _mb
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
 
@@ -212,8 +220,31 @@ USE_CASE_CONFIGS = {
     # ff1 (proj_mlp) with fused SwiGLU — gate+up packed into N=4608 weight.
     # fp32_dest_acc_en=True (always on); N_block MUST be even (gate/up tile-pairs interleave along N).
     # No fused_activation (incompatible with fuse_swiglu per TT_FATAL).
+    # H3's ff1 is bias-free and runs on mm_compute_kernel_config (math_approx_mode=True); this
+    # use_case is H3-only (Wan's FFN uses ff1_gelu/plain_gelu), so both are set here directly.
     "ff1_swiglu": {
         "fuse_swiglu": True,
+        "math_approx_mode": True,
+        "use_bias": False,
+        "force_transpose": False,  # H3: let the op pick orientation by M>N
+    },
+    # ---- MiniMax-H3 attention projections (bias-free; Wan's "qkv"/"to_out" keep bias) ----
+    # H3's to_q/k/v and to_out are every-projection-bias-free (attention_minimax_h3.py:136,145)
+    # and run on mm_compute_kernel_config: HiFi2, math_approx_mode=True, fp32_dest_acc_en=True,
+    # packer_l1_acc=True. Same fused behavior as "qkv"/"to_out" but with use_bias=False so the
+    # swept L1 footprint and epilogue match the real pipeline.
+    "qkv_h3": {
+        "chunks": 3,
+        "math_approx_mode": True,
+        "use_bias": False,
+        "force_transpose": False,  # H3: let the op pick orientation by M>N
+    },
+    "to_out_h3": {
+        "scalar": 1.0,
+        "use_addcmul": True,
+        "math_approx_mode": True,
+        "use_bias": False,
+        "force_transpose": False,  # H3: let the op pick orientation by M>N
     },
 }
 
@@ -237,6 +268,10 @@ FP32_DEST_ACC_EN = True
 #               ring iteration. No upper cap — large divisors don't add padding.
 MN_BLOCK_MIN, MN_BLOCK_MAX = 2, 16
 K_BLOCK_MIN = 2
+
+# Blackhole galaxy physical compute grid (x, y). The AGMM factory derives its worker grid from this,
+# reserving the mux axis: transposed -> (x, y-1); non-transposed -> (x-1, y). Kept in sync with the op.
+BH_FULL_GRID = (12, 10)
 
 # L1 budget for pre-filtering block combos (KB).
 # BH L1 usable ~1464 KB; conservative threshold accounts for kernel/firmware overhead.
@@ -298,16 +333,39 @@ def get_k_block_candidates(K_per_device):
     return sorted(d for d in range(K_BLOCK_MIN, K_per_device + 1) if K_per_device % d == 0)
 
 
-def get_per_core_dims(shape, cluster_size):
+def use_case_force_transpose(use_case):
+    """force_transpose the sweep passes for a use_case. H3 use_cases set it False so the op picks
+    the orientation by M>N (matching the H3 pipeline); everything else keeps the historical True.
+    """
+    return USE_CASE_CONFIGS.get(use_case, {}).get("force_transpose", True)
+
+
+def get_per_core_dims(shape, cluster_size, force_transpose=None):
     """Compute (M_per_core, K_per_device, N_per_core) for a shape.
 
-    Assumes force_transpose=True (the only mode the sweep currently runs):
-    in0 parallelizes M across grid_x cores, in1 parallelizes N across grid_y cores.
+    Mirrors the program factory's core-grid mapping (all_gather_minimal_matmul_async
+    _program_factory.cpp): transpose_core_grid = force_transpose ? True : (M > N). When
+    transposed, in0 parallelizes M across grid_x cores and in1 parallelizes N across grid_y;
+    when NOT transposed the axes swap (M on grid_y, N on grid_x). force_transpose defaults to the
+    use_case's value (H3 use_cases -> False so the op auto-picks by M>N; others -> True).
     """
-    M, K, N, cgx, cgy, is_agmm, _ = shape
+    M, K, N, cgx, cgy, is_agmm, use_case = shape
+    if force_transpose is None:
+        force_transpose = use_case_force_transpose(use_case)
     M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
-    M_per_core = -(-M_tiles // cgx)  # ceiling
-    N_per_core = -(-N_tiles // cgy)
+    # transpose_core_grid: force it on, else auto by (M > N).
+    transpose = force_transpose or (M > N)
+    if is_agmm:
+        # AGMM derives its own worker grid from the device (it ignores the passed grid): it reserves
+        # the mux axis -- last ROW when transposed -> (dev.x, dev.y-1), last COLUMN when non-transposed
+        # -> (dev.x-1, dev.y). So M parallelizes over dev.x (transposed) / dev.y (non-transposed).
+        dev_x, dev_y = BH_FULL_GRID
+        m_axis, n_axis = (dev_x, dev_y - 1) if transpose else (dev_y, dev_x - 1)
+    else:
+        # Non-AGMM ops use the caller-passed grid verbatim.
+        m_axis, n_axis = (cgx, cgy) if transpose else (cgy, cgx)
+    M_per_core = -(-M_tiles // m_axis)  # ceiling
+    N_per_core = -(-N_tiles // n_axis)
     K_per_device = K_tiles // cluster_size if is_agmm else K_tiles
     return M_per_core, K_per_device, N_per_core
 
@@ -328,15 +386,17 @@ def estimate_l1_kb(m_blk, k_blk, n_blk, use_case="plain"):
     bf16_kb = 2  # KB per bf16 tile (32x32x2 bytes)
     f32_kb = 4  # KB per f32 tile (32x32x4 bytes)
 
+    uc_cfg = USE_CASE_CONFIGS.get(use_case, {})
+
     kb = (
         2 * m_blk * k_blk * bf16_kb  # c_0: in0
         + 2 * k_blk * n_blk * bf16_kb  # c_1: in1
         + 2 * m_blk * n_blk * bf16_kb  # c_2: out
         + m_blk * n_blk * f32_kb  # c_3: intermediate (f32 accumulator)
-        + n_blk * bf16_kb  # c_4: bias
     )
+    if uc_cfg.get("use_bias", True):
+        kb += n_blk * bf16_kb  # c_4: bias (H3 projections are bias-free -> skip)
 
-    uc_cfg = USE_CASE_CONFIGS.get(use_case, {})
     if uc_cfg.get("use_addcmul", False):
         kb += m_blk * n_blk * bf16_kb  # c_5: ternary_a
         kb += n_blk * bf16_kb  # c_6: ternary_c
@@ -392,6 +452,45 @@ def compute_tile_counts(M, K, N):
     K_tiles = K // 32
     N_tiles = N // 32
     return M_tiles, K_tiles, N_tiles
+
+
+def reuse_device_enabled():
+    """True when MM_SWEEP_REUSE_DEVICE selects the single-device (device-reuse) path.
+
+    In that mode ONE mesh is opened and every shape is swept back-to-back on it
+    (per-shape tensor teardown between shapes), rather than opening a fresh mesh
+    per shape. Amortizes the dominant cost — mesh + fabric init — across shapes.
+    """
+    return os.environ.get("MM_SWEEP_REUSE_DEVICE", "").lower() in ("1", "true", "yes")
+
+
+def gen_combos_for_shape(shape, cluster_size):
+    """Host-side feasible-combo list for a shape: (combos, m_cands, k_cands, n_cands, per_core).
+
+    K restricted to divisors of K_per_device; M/N to even<=16 union divisors; the
+    (K, N) product then L1-filtered. Subblock attached via pick_subblock. No device
+    needed — this runs before the mesh is touched. Honors MM_SWEEP_EXPLICIT_COMBOS.
+    """
+    M, K, N, cgx, cgy, is_agmm, use_case = shape
+    M_per_core, K_per_device, N_per_core = get_per_core_dims(shape, cluster_size)
+
+    explicit_combos_str = os.environ.get("MM_SWEEP_EXPLICIT_COMBOS")
+    if explicit_combos_str:
+        combos = [tuple(c) for c in json.loads(explicit_combos_str)]
+        m_cands = sorted({c[0] for c in combos})
+        k_cands = sorted({c[1] for c in combos})
+        n_cands = sorted({c[2] for c in combos})
+        return combos, m_cands, k_cands, n_cands, (M_per_core, K_per_device, N_per_core)
+
+    m_cands = get_mn_block_candidates(M_per_core)
+    k_cands = get_k_block_candidates(K_per_device)
+    n_cands = get_mn_block_candidates(N_per_core)
+    combos = []
+    for m_block in m_cands:
+        for k_blk, n_blk in generate_kn_combos(K_per_device, N_per_core, m_block=m_block, use_case=use_case):
+            sb_h, sb_w = pick_subblock(m_block, n_blk)
+            combos.append((m_block, k_blk, n_blk, sb_h, sb_w))
+    return combos, m_cands, k_cands, n_cands, (M_per_core, K_per_device, N_per_core)
 
 
 def create_fabric_router_config(max_payload_size):
@@ -515,16 +614,72 @@ def parse_ops_log(subdir, expected_ops=None):
     return durations
 
 
+def _durations_from_slice(df_slice, expected_ops):
+    """Extract per-op mean device-kernel durations from a df slice (one shape segment).
+
+    Same collapse logic as parse_ops_log: group by GLOBAL CALL COUNT, then fold the
+    per-device trace rows down to expected_ops by chunk-averaging.
+    """
+    import numpy as np
+
+    seg = df_slice[df_slice["OP TYPE"] != "signpost"]
+    seg = seg[seg["DEVICE KERNEL DURATION [ns]"] != "-"]
+    if seg.empty:
+        return []
+    seg = seg.copy()
+    seg["DEVICE KERNEL DURATION [ns]"] = seg["DEVICE KERNEL DURATION [ns]"].astype(float)
+    if "GLOBAL CALL COUNT" in seg.columns:
+        durations = seg.groupby("GLOBAL CALL COUNT", sort=False)["DEVICE KERNEL DURATION [ns]"].mean().values.tolist()
+    else:
+        durations = seg["DEVICE KERNEL DURATION [ns]"].values.tolist()
+    if expected_ops and len(durations) > expected_ops and len(durations) % expected_ops == 0:
+        chunk = len(durations) // expected_ops
+        durations = np.array(durations).reshape(expected_ops, chunk).mean(axis=1).tolist()
+    return durations
+
+
+def parse_ops_log_multi(subdir, segments):
+    """Parse one ops log holding multiple start{sfx}/stop{sfx} signpost pairs.
+
+    segments: list of (label_suffix, expected_ops), one per shape in run order.
+    Returns a list of duration-lists, aligned to `segments`. A segment whose
+    signposts are absent (e.g. a shape with zero valid combos) yields [].
+    """
+    import pandas as pd
+    from tracy.process_model_log import get_latest_ops_log_filename
+
+    df = pd.read_csv(get_latest_ops_log_filename(subdir))
+    signpost_rows = df[df["OP TYPE"] == "signpost"]
+
+    out = []
+    for suffix, expected_ops in segments:
+        starts = signpost_rows[signpost_rows["OP CODE"] == f"start{suffix}"]
+        stops = signpost_rows[signpost_rows["OP CODE"] == f"stop{suffix}"]
+        if starts.empty or stops.empty:
+            out.append([])
+            continue
+        out.append(_durations_from_slice(df.iloc[starts.index[0] + 1 : stops.index[0]], expected_ops))
+    return out
+
+
 # ============================================================================
 # SHARED WORKER HELPERS
 # ============================================================================
 
 
-def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_grid):
-    """Allocate tensors + return a run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True) closure.
+def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_grid, shared_ccl_semaphores=None):
+    """Allocate tensors + return (run_op, cleanup).
+
+    run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True) reuses the allocated operands
+    across every block combo (only the MinimalMatmulConfig changes). cleanup()
+    deallocates this shape's operands — call it before allocating the next shape when
+    reusing one mesh across shapes (device-reuse path); harmless to skip when the mesh
+    is closed after each shape.
 
     AGMM path: sharded input, dummy bias/addcmul (when use_addcmul), CCL semaphores,
-    persistent output buffer.
+    persistent output buffer. When shared_ccl_semaphores is provided (device-reuse
+    path), reuse those device-level semaphores instead of creating per-shape ones
+    (they are NOT freed by cleanup).
     Non-AGMM path: replicated input/weight/bias; minimal_matmul or minimal_matmul_split
     based on use_case.
     """
@@ -540,6 +695,9 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     fuse_swiglu = uc_cfg.get("fuse_swiglu", False)
     chunks = uc_cfg.get("chunks", 1)
     scalar = uc_cfg.get("scalar", None)
+    # Bias defaults on (Wan projections carry bias); H3 projections are bias-free
+    # (use_bias=False), so skip allocating/passing a bias tensor for them.
+    use_bias = uc_cfg.get("use_bias", True)
     mesh_shape = tuple(mesh_device.shape)
 
     def _matmul_config(m_blk, k_blk, n_blk, sb_h, sb_w):
@@ -635,22 +793,27 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
         )
-        tt_bias = ttnn.from_torch(
-            torch.randn((1, N), dtype=torch.float32),
-            dtype=dtype,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-        )
+        tt_bias = None
+        if use_bias:
+            tt_bias = ttnn.from_torch(
+                torch.randn((1, N), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+            )
 
         # CCL infrastructure (matches model's CCLManager)
         full_grid = mesh_device.compute_with_storage_grid_size()
         ccl_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
         )
-        ccl_semaphore_handles = [
-            ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
-            ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
-        ]
+        if shared_ccl_semaphores is not None:
+            ccl_semaphore_handles = shared_ccl_semaphores
+        else:
+            ccl_semaphore_handles = [
+                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+            ]
         persistent_output_buffer = ttnn.from_torch(
             torch.empty((M, K), dtype=torch.float32),
             layout=ttnn.TILE_LAYOUT,
@@ -662,19 +825,23 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
         addcmul_tensor1 = None
         addcmul_tensor2 = None
         if uc_cfg.get("use_addcmul", False):
+            # The addcmul (ternary) tensors are element-wise on the op OUTPUT, whose
+            # logical M is the full (pre-SP-shard) sequence = full_M. Allocate at full_M
+            # and shard on the SP axis (matching the input), so each device sees the
+            # M-slice that lines up with its output. N is already the per-device (TP) width.
             addcmul_tensor1 = ttnn.from_torch(
-                torch.randn((M, N), dtype=torch.float32),
+                torch.randn((full_M, N), dtype=torch.float32),
                 dtype=dtype,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, tp_axis]),
             )
             addcmul_tensor2 = ttnn.from_torch(
-                torch.randn((M, N), dtype=torch.float32),
+                torch.randn((full_M, N), dtype=torch.float32),
                 dtype=dtype,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, tp_axis]),
             )
 
         def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
@@ -691,7 +858,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 topology=cfg["topology"],
                 cluster_axis=cfg["cluster_axis"],
                 barrier_semaphore=None,
-                force_transpose=True,
+                force_transpose=uc_cfg.get("force_transpose", True),
                 num_workers_per_link=cfg["num_workers_per_link"],
                 num_buffers_per_channel=48,
                 scalar=scalar,
@@ -703,7 +870,20 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
             if sync:
                 ttnn.synchronize_device(mesh_device)
 
-        return run_op
+        _allocated = [t for t in (tt_input, tt_weight, tt_bias, persistent_output_buffer) if t is not None]
+        if addcmul_tensor1 is not None:
+            _allocated += [addcmul_tensor1, addcmul_tensor2]
+
+        def cleanup():
+            # Free this shape's operands. Shared CCL semaphores are device-level and
+            # intentionally NOT freed here (reused across shapes; released on close_mesh).
+            for t in _allocated:
+                try:
+                    ttnn.deallocate(t)
+                except Exception:
+                    pass
+
+        return run_op, cleanup
 
     # Non-AGMM
     use_matmul_split = uc_cfg.get("use_matmul_split", False)
@@ -756,16 +936,27 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
         if sync:
             ttnn.synchronize_device(mesh_device)
 
-    return run_op
+    _allocated = [tt_input, tt_weight, tt_bias]
+
+    def cleanup():
+        for t in _allocated:
+            try:
+                ttnn.deallocate(t)
+            except Exception:
+                pass
+
+    return run_op, cleanup
 
 
 PROFILER_DUMP_EVERY = 10  # call ReadDeviceProfiler every N combos to avoid buffer overflow
 
 
-def _execute_sweep(mesh_device, run_op, combos):
+def _execute_sweep(mesh_device, run_op, combos, signpost_label=""):
     """Warmup (compile + filter OOMs) + trace-based measurement, single mesh open.
 
     combos: list of (m_blk, k_blk, n_blk, sb_h, sb_w) tuples.
+    signpost_label: suffix appended to the start/stop signposts (e.g. "_3") so the
+    log parser can segment a multi-shape run; "" preserves the plain start/stop.
 
     Capture/execute/release one trace at a time so peak trace memory is bounded.
     Periodically calls ttnn.ReadDeviceProfiler to flush the device profiler
@@ -798,7 +989,7 @@ def _execute_sweep(mesh_device, run_op, combos):
     # synchronizes devices before dispatch, eliminating host dispatch skew that
     # can stall fabric transfers. Single-trace-at-a-time keeps trace memory
     # bounded regardless of combo count.
-    signpost("start")
+    signpost(f"start{signpost_label}")
     with tqdm(total=len(valid_combos), desc="Measure", unit="combo", file=sys.stdout, leave=False) as pbar:
         for i, c in enumerate(valid_combos):
             trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -813,7 +1004,7 @@ def _execute_sweep(mesh_device, run_op, combos):
             pbar.update(1)
             if (i + 1) % PROFILER_DUMP_EVERY == 0:
                 ttnn.ReadDeviceProfiler(mesh_device)
-    signpost("stop")
+    signpost(f"stop{signpost_label}")
     ttnn.ReadDeviceProfiler(mesh_device)  # final flush of measured data
 
     return valid_combos, skipped
@@ -889,7 +1080,9 @@ def test_mm_sweep_worker(device_config, shape):
 
     parent_mesh, mesh_device = open_mesh(cfg, trace_region_size=4194304)  # 4MB trace region (one trace at a time)
     try:
-        run_op = _build_op_runner(cfg, mesh_device, M, K, N, ttnn.bfloat16, is_agmm, uc_cfg, ttnn.CoreCoord(cgx, cgy))
+        run_op, _cleanup = _build_op_runner(
+            cfg, mesh_device, M, K, N, ttnn.bfloat16, is_agmm, uc_cfg, ttnn.CoreCoord(cgx, cgy)
+        )
 
         valid_combos, skipped = _execute_sweep(mesh_device, run_op, combos)
 
@@ -904,6 +1097,92 @@ def test_mm_sweep_worker(device_config, shape):
 
         print(f"  measured: {len(valid_combos)}  skipped (L1 OOM): {skipped}", flush=True)
 
+    finally:
+        close_mesh(parent_mesh)
+
+
+@pytest.mark.timeout(0)  # unbounded: one worker now covers ALL shapes on one mesh
+@pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
+def test_mm_sweep_worker_batch(device_config):
+    """Device-reuse worker: open ONE mesh, sweep EVERY selected shape back-to-back.
+
+    Behind MM_SWEEP_REUSE_DEVICE. Shapes selected by MM_SWEEP_SHAPE_IDXS (JSON list
+    of indices into SHAPES); defaults to all. Each shape allocates its operands,
+    sweeps its combos under a per-shape signpost (start_i/stop_i), then deallocates
+    before the next — amortizing the mesh+fabric init over all shapes.
+
+    Writes MM_SWEEP_VALID_COMBOS_FILE as a JSON list of {shape_id, valid_combos},
+    in the same order as the signpost segments, so the orchestrator can line rows up.
+    """
+    _quiet_loguru()
+
+    cfg = resolve_config(device_config)
+    idxs_env = os.environ.get("MM_SWEEP_SHAPE_IDXS")
+    shape_idxs = json.loads(idxs_env) if idxs_env else list(range(len(SHAPES)))
+    cluster_size = cfg["mesh_shape"][cfg["cluster_axis"]]
+
+    parent_mesh, mesh_device = open_mesh(cfg, trace_region_size=4194304)  # 4MB, one trace at a time
+    shared_sems = None
+    batch_valid = []
+    try:
+        # Device-level CCL semaphores, created once and reused across every AGMM shape
+        # (shape-independent: whole-grid, value 0). Freed on close_mesh.
+        if any(SHAPES[i][5] for i in shape_idxs):
+            full_grid = mesh_device.compute_with_storage_grid_size()
+            ccl_cores = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
+            )
+            shared_sems = [
+                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+            ]
+
+        for seg_i, shape_idx in enumerate(shape_idxs):
+            shape = SHAPES[shape_idx]
+            M, K, N, cgx, cgy, is_agmm, use_case = shape
+            uc_cfg = USE_CASE_CONFIGS[use_case]
+            op_type = "agmm" if is_agmm else "mm"
+            shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}_{use_case}"
+
+            combos, m_cands, k_cands, n_cands, per_core = gen_combos_for_shape(shape, cluster_size)
+            M_pc, K_pd, N_pc = per_core
+            print(f"\n=== [{seg_i + 1}/{len(shape_idxs)}] {shape_id} on {device_config} ===", flush=True)
+            print(f"  per_core: M={M_pc}  K_per_device={K_pd}  N={N_pc}  combos: {len(combos)}", flush=True)
+
+            if not combos:
+                batch_valid.append({"shape_id": shape_id, "valid_combos": []})
+                continue
+
+            run_op, cleanup = _build_op_runner(
+                cfg,
+                mesh_device,
+                M,
+                K,
+                N,
+                ttnn.bfloat16,
+                is_agmm,
+                uc_cfg,
+                ttnn.CoreCoord(cgx, cgy),
+                shared_ccl_semaphores=shared_sems,
+            )
+            try:
+                valid_combos, skipped = _execute_sweep(mesh_device, run_op, combos, signpost_label=f"_{seg_i}")
+            except Exception as e:
+                # A whole shape failing shouldn't sink the batch — record empty, keep going.
+                logger.warning(f"[batch] shape {shape_id} failed on device, skipping: {str(e).splitlines()[0]}")
+                valid_combos = []
+                skipped = len(combos)
+            finally:
+                cleanup()
+                ttnn.synchronize_device(mesh_device)
+
+            print(f"  measured: {len(valid_combos)}  skipped (L1 OOM): {skipped}", flush=True)
+            batch_valid.append({"shape_id": shape_id, "valid_combos": [list(c) for c in valid_combos]})
+
+        combos_file = os.environ.get("MM_SWEEP_VALID_COMBOS_FILE")
+        if combos_file:
+            with open(combos_file, "w") as f:
+                json.dump(batch_valid, f)
     finally:
         close_mesh(parent_mesh)
 
@@ -1041,6 +1320,133 @@ def test_mm_sweep(device_config, shape):
 
 
 # ============================================================================
+# DEVICE-REUSE ORCHESTRATOR — one profiler subprocess sweeps all shapes
+# ============================================================================
+
+
+def _drive_batched_sweep(device_config, shape_idxs, csv_file, write_header=True):
+    """Run the device-reuse worker in ONE profiler subprocess and parse the result.
+
+    Opens a single mesh, sweeps every shape in shape_idxs on it, and writes one row
+    per (shape, combo) to csv_file. Returns {shape_id: best_row_or_None}.
+    """
+    from tracy.process_model_log import run_device_profiler
+
+    subdir = f"mm_sweep_batch_{device_config}"
+    combos_file = f"valid_combos_batch_{device_config}.json"
+    os.environ["MM_SWEEP_SHAPE_IDXS"] = json.dumps(shape_idxs)
+    os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
+    os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
+    saved_logger_level = os.environ.get("TT_LOGGER_LEVEL")
+    os.environ["TT_LOGGER_LEVEL"] = "Error"
+
+    command = (
+        f"pytest models/tt_dit/utils/sweep_mm_block_sizes.py" f"::test_mm_sweep_worker_batch[{device_config}] -x -s"
+    )
+    if write_header:
+        write_csv_header(csv_file)
+
+    try:
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    finally:
+        os.environ.pop("MM_SWEEP_SHAPE_IDXS", None)
+        os.environ.pop("MM_SWEEP_VALID_COMBOS_FILE", None)
+        os.environ.pop("TT_METAL_PROFILER_MID_RUN_DUMP", None)
+        if saved_logger_level is None:
+            os.environ.pop("TT_LOGGER_LEVEL", None)
+        else:
+            os.environ["TT_LOGGER_LEVEL"] = saved_logger_level
+
+    if not os.path.exists(combos_file):
+        print(f"  WARN: no batch valid_combos at {combos_file}", flush=True)
+        return {}
+    with open(combos_file) as f:
+        batch_valid = json.load(f)
+    os.remove(combos_file)
+
+    segments = [(f"_{i}", len(entry["valid_combos"])) for i, entry in enumerate(batch_valid)]
+    seg_durations = parse_ops_log_multi(subdir, segments)
+
+    best_by_shape = {}
+    for i, entry in enumerate(batch_valid):
+        shape = SHAPES[shape_idxs[i]]
+        M, K, N, cgx, cgy, is_agmm, use_case = shape
+        op_type = "agmm" if is_agmm else "mm"
+        core_grid_str = f"{cgx}x{cgy}"
+        shape_id = entry["shape_id"]
+        valid_combos = [tuple(c) for c in entry["valid_combos"]]
+        durations = seg_durations[i] if i < len(seg_durations) else []
+        if durations and len(durations) != len(valid_combos):
+            print(f"  WARN [{shape_id}]: expected {len(valid_combos)} ops, got {len(durations)}", flush=True)
+
+        results = []
+        for j, (m_blk, k_blk, n_blk, sb_h, sb_w) in enumerate(valid_combos):
+            ok = j < len(durations)
+            duration_ns = durations[j] if ok else -1
+            append_csv_row(
+                csv_file,
+                [
+                    device_config,
+                    op_type,
+                    use_case,
+                    M,
+                    K,
+                    N,
+                    core_grid_str,
+                    m_blk,
+                    k_blk,
+                    n_blk,
+                    sb_h,
+                    sb_w,
+                    f"{duration_ns:.0f}",
+                    "OK" if ok else "MISSING",
+                ],
+            )
+            if ok:
+                results.append(
+                    {
+                        "M_block": m_blk,
+                        "K_block": k_blk,
+                        "N_block": n_blk,
+                        "subblock_h": sb_h,
+                        "subblock_w": sb_w,
+                        "duration_ns": duration_ns,
+                    }
+                )
+
+        if results:
+            results.sort(key=lambda r: r["duration_ns"])
+            best = results[0]
+            best_by_shape[shape_id] = best
+            print(
+                f"  [{shape_id}] BEST: M={best['M_block']} K={best['K_block']} N={best['N_block']} "
+                f"sb=({best['subblock_h']},{best['subblock_w']}) -> {best['duration_ns']:.0f} ns",
+                flush=True,
+            )
+        else:
+            best_by_shape[shape_id] = None
+            print(f"  [{shape_id}] no valid results", flush=True)
+
+    return best_by_shape
+
+
+@pytest.mark.timeout(0)
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance sweep - skip on CI")
+@pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
+def test_mm_sweep_batch(device_config):
+    """Device-reuse orchestrator: sweep every SHAPE on ONE mesh in one profiler run.
+
+    Select a subset via MM_SWEEP_SHAPE_IDXS (JSON list of indices into SHAPES);
+    defaults to all. This is the batched counterpart of test_mm_sweep — use it (or
+    `python sweep_mm_block_sizes.py` with MM_SWEEP_REUSE_DEVICE=1) to avoid a mesh
+    open per shape.
+    """
+    idxs_env = os.environ.get("MM_SWEEP_SHAPE_IDXS")
+    shape_idxs = json.loads(idxs_env) if idxs_env else list(range(len(SHAPES)))
+    _drive_batched_sweep(device_config, shape_idxs, CSV_FILE, write_header=True)
+
+
+# ============================================================================
 # STANDALONE ENTRY POINT
 # ============================================================================
 
@@ -1098,6 +1504,14 @@ def main():
         f"Device config: {device_config} (mesh={cfg['mesh_shape']}, "
         f"sp_axis={cfg['sp_axis']}, links={cfg['num_links']})"
     )
+
+    # Device-reuse path: one mesh open, all shapes swept back-to-back.
+    if reuse_device_enabled():
+        shape_idxs = [SHAPES.index(s) for s in shapes]
+        print(f"MM_SWEEP_REUSE_DEVICE: sweeping {len(shape_idxs)} shape(s) on one mesh", flush=True)
+        _drive_batched_sweep(device_config, shape_idxs, args.csv, write_header=False)
+        print(f"\nResults written to {args.csv}")
+        return
 
     # Mid-run profiler dumps so the worker can flush between combos.
     os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
