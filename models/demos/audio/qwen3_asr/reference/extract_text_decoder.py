@@ -11,7 +11,9 @@ copies the tokenizer files. Then runs one short transcription and saves the merg
 `inputs_embeds` (audio+text) and `position_ids`, plus `decoder_meta.json` (the
 transcription text). The prefill-logits golden comes separately from `dump_reference.py`.
 
-Run with the qwen3-asr-eval venv.
+Run in the CPU-reference virtualenv (``requirements-reference.txt``); it needs the full
+``qwen_asr`` package and its transformers pin, which must not be installed into the
+tt-metal environment. Defaults need nothing outside a clean checkout.
 """
 import argparse
 import glob
@@ -44,6 +46,25 @@ TEXT_CFG = dict(
     eos_token_id=151645,
 )
 TOK_FILES = ["merges.txt", "vocab.json", "tokenizer_config.json", "generation_config.json", "chat_template.json"]
+
+# Defaults that work from a clean checkout (previously machine-local paths): an in-repo
+# 16 kHz mono speech wav, and output dirs from the same env vars the tests read.
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
+DEFAULT_WAV = os.path.join(
+    REPO_ROOT,
+    "models",
+    "demos",
+    "audio",
+    "whisper",
+    "demo",
+    "dataset",
+    "conditional_generation",
+    "17646385371758249908.wav",
+)
+DEFAULT_GOLDEN_DIR = os.environ.get("QWEN3ASR_GOLDEN_DIR", os.environ.get("GOLDEN_DIR", "/tmp/qwen3_asr_golden"))
+DEFAULT_CKPT_DIR = os.environ.get("QWEN3ASR_TEXT_DECODER", os.environ.get("HF_MODEL", "/tmp/qwen3_asr_text_decoder"))
+# Whole seconds, matching dump_reference.DEFAULT_DUR — see the note there on chunk alignment.
+DEFAULT_DUR = 7.0
 
 
 def snap_dir():
@@ -136,11 +157,11 @@ def dump_decoder_golden(out_dir, wav, start, dur, language):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt-out", default="/home/ttuser/ttwork/qwen3_asr_text_decoder")
-    ap.add_argument("--golden-out", default="/home/ttuser/ttwork/qwen3_asr_golden")
-    ap.add_argument("--wav", default="/tmp/qwen3-asr-eval/audio/patlabor.wav")
-    ap.add_argument("--start", type=float, default=30.0)
-    ap.add_argument("--dur", type=float, default=12.0)
+    ap.add_argument("--ckpt-out", default=DEFAULT_CKPT_DIR)
+    ap.add_argument("--golden-out", default=DEFAULT_GOLDEN_DIR)
+    ap.add_argument("--wav", default=DEFAULT_WAV)
+    ap.add_argument("--start", type=float, default=0.0)
+    ap.add_argument("--dur", type=float, default=DEFAULT_DUR)
     ap.add_argument("--language", default="English")
     ap.add_argument("--skip-extract", action="store_true")
     ap.add_argument("--skip-golden", action="store_true")

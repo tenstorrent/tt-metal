@@ -6,18 +6,25 @@
 # Boots straight into the OpenAI /v1/audio/transcriptions server.
 # tt-metal (TT_METAL_HOME) + model weights mount at runtime as volumes
 # (same model as the CPU Qwen3-ASR; this is the TT-accelerated server).
+#
+# Build from a clean checkout — the build context is this model's directory, so every
+# file the image needs is tracked in the repo:
+#   docker build -f models/demos/audio/qwen3_asr/server/Dockerfile \
+#                -t qwen3-asr-server models/demos/audio/qwen3_asr
 FROM ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
 SHELL ["/bin/bash", "-c"]
 
-# server + audio deps INTO the dev image's /opt/venv (system pip would miss it)
+# server + audio deps and the pinned Qwen3-ASR processor INTO the dev image's /opt/venv
+# (system pip would miss it). The processor goes in with --no-deps so its own
+# transformers pin cannot displace tt-metal's — see requirements-processor.txt and
+# reference/qwen_asr_processor.py.
+COPY requirements.txt requirements-processor.txt /tmp/qwen3asr/
 RUN source /opt/venv/bin/activate && \
-    uv pip install --python /opt/venv/bin/python3 \
-      fastapi "uvicorn[standard]" python-multipart librosa requests
+    uv pip install --python /opt/venv/bin/python3 -r /tmp/qwen3asr/requirements.txt && \
+    uv pip install --python /opt/venv/bin/python3 --no-deps -r /tmp/qwen3asr/requirements-processor.txt && \
+    uv pip install --python /opt/venv/bin/python3 requests
 
-# bake the Qwen3-ASR processor (prompt build + mel); __init__ pre-minimized so it
-# loads with stock transformers (skips the newer-transformers modeling import)
-COPY qwen_asr /opt/venv/lib/python3.10/site-packages/qwen_asr
-COPY entrypoint.sh /usr/local/bin/qwen3asr-entrypoint.sh
+COPY server/entrypoint.sh /usr/local/bin/qwen3asr-entrypoint.sh
 RUN chmod +x /usr/local/bin/qwen3asr-entrypoint.sh
 
 ENV ARCH_NAME=blackhole \

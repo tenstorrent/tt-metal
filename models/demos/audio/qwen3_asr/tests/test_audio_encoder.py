@@ -65,6 +65,16 @@ def test_audio_encoder_pcc(device, golden, audio_tower_weights):
     params = tt_enc.preprocess_weights(w, device)
     out = tt_enc.encode(x_host, params, device)  # (S, 2048) torch
 
+    # The golden must come from a chunk-aligned clip (a whole number of 1 s / 100-mel-frame
+    # conv chunks). The CPU reference masks the audio tower's output to feature_lens, so a
+    # partial final chunk makes the golden shorter than the port's chunk-aligned output AND
+    # changes the attention blocks for every row (PCC ~0.96 on a 7.62 s clip). Fail with that
+    # explanation rather than a bare shape mismatch — regenerate with a whole-second --dur.
+    assert out.shape[0] == gold.shape[0], (
+        f"golden has {gold.shape[0]} rows, encoder produced {out.shape[0]}: the golden clip is not "
+        f"chunk-aligned. Regenerate reference/dump_reference.py with a whole-second --dur "
+        f"(see 'Known limitations' in the model README)."
+    )
     assert_with_pcc(gold, out, PCC_ENCODER)
 
 

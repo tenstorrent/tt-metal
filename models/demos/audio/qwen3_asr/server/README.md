@@ -26,24 +26,43 @@ safetensors_rust.SafetensorError: File does not contain tensor model.embed_token
 ```
 Fix: clear the bad checkpoint and let the entrypoint re-extract, or extract manually:
 ```bash
-# in the eval venv (needs the base Qwen3-ASR-1.7B in the HF cache; QWEN3ASR_SNAP_BASE to override)
-rm -f /home/ttuser/ttwork/qwen3_asr_text_decoder/model.safetensors   # drop the wrong file
-python models/demos/audio/qwen3_asr/reference/extract_text_decoder.py \
-    --ckpt-out /home/ttuser/ttwork/qwen3_asr_text_decoder --skip-golden
+# in the CPU-reference venv (requirements-reference.txt); needs the base Qwen3-ASR-1.7B in
+# the HF cache (QWEN3ASR_SNAP_DIR / QWEN3ASR_SNAP_BASE to override)
+rm -f "$CKPT/model.safetensors"          # drop the wrong file
+/tmp/qwen3-asr-ref/bin/python models/demos/audio/qwen3_asr/reference/extract_text_decoder.py \
+    --ckpt-out "$CKPT" --skip-golden
 ```
 This writes 311 decoder tensors (`thinker.` stripped) + a Qwen3 `config.json` + tokenizer.
 Keep the HF cache mounted too — the audio tower is loaded from the raw snapshot.
 
 ## Dedicated container (recommended) — boots straight into the API server
 ```bash
-# build the image once (build ctx bakes deps + qwen_asr processor + entrypoint):
-docker build -t qwen3-asr-server:latest /home/ttuser/ttwork/qwen3asr-server-build
+# Build from a clean checkout — the build context is the model dir, so the pinned
+# requirement files and the entrypoint all come from the repo (no external context):
+docker build -f models/demos/audio/qwen3_asr/server/Dockerfile \
+             -t qwen3-asr-server:latest models/demos/audio/qwen3_asr
 
 # launch (chip 3 = fake P150, publishes :8002 to the host):
 bash server/run.sh            # -> container `qwen3-asr-api`, READY in ~25s
-curl http://127.0.0.1:8002/health
-curl -s -X POST http://127.0.0.1:8002/v1/audio/transcriptions -F file=@clip.wav -F model=qwen3-asr
 ```
+
+Smoke-test it with any 16 kHz mono wav — `language` is optional (omit it for auto-detect):
+```bash
+curl http://127.0.0.1:8002/health
+# -> {"status":"ok"}
+
+curl -s -X POST http://127.0.0.1:8002/v1/audio/transcriptions \
+     -F file=@clip.wav -F model=qwen3-asr
+# -> {"text":"...","language":"English","duration":11.0,"rtf":0.081,"segments":1,"model":"qwen3-asr"}
+
+# force a language instead of auto-detecting:
+curl -s -X POST http://127.0.0.1:8002/v1/audio/transcriptions \
+     -F file=@clip.wav -F model=qwen3-asr -F language=Japanese
+```
+
+The image installs the pinned Qwen3-ASR processor from PyPI with `--no-deps`
+(`requirements-processor.txt`); it no longer copies a `qwen_asr` tree out of a machine-local
+venv. See the top-level README "Install" section for why the two environments are separate.
 The entrypoint wires ttnn to the mounted tt-metal (`uv pip install -e /work`, ~9s) then runs
 uvicorn. Mounts: tt-metal→/work, extracted checkpoint→/models/qwen3_asr_text_decoder, HF cache.
 First request of each new prefill length pays a one-time JIT (~1.5 RTF); later requests ~0.1.
@@ -52,8 +71,10 @@ in-server decode trace was prototyped but removed — it destabilized the long-l
 re-landing it stably (RTF back to ~0.05) is a TODO.)
 
 ### Dev-container alternative (manual)
-`docker exec qwen3asr-dev bash /work/models/demos/audio/qwen3_asr/server/setup_container.sh` then
-launch uvicorn manually; see `setup_container.sh`. The dedicated image above is preferred.
+`docker exec qwen3asr-dev bash /work/models/demos/audio/qwen3_asr/server/setup_container.sh`
+installs the same pinned deps into a stock tt-metal dev container (and fails loudly if the
+processor cannot be imported), then launch uvicorn manually. The dedicated image above is
+preferred.
 
 ## Transparent `--engine` in qwen3-asr-eval
 `asr_engines.py` gained a `ttqwen3asr` engine (a `TTWhisperEngine` pointed at :8002,

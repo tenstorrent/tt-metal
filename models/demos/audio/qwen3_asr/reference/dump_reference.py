@@ -8,11 +8,18 @@ Runs the HF CPU model on a short clip and captures per-stage intermediate
 tensors as PCC golden data for the ttnn bring-up (encoder conv frontend,
 encoder layers, projector, decoder logits, end-to-end token ids).
 
-Run with the qwen3-asr-eval venv (has qwen_asr + transformers + torch):
-    /tmp/qwen3-asr-eval/venv/bin/python \
-        models/demos/audio/qwen3_asr/reference/dump_reference.py \
-        --wav /tmp/qwen3-asr-eval/audio/patlabor.wav --start 30 --dur 12 \
-        --out /home/ttuser/ttwork/qwen3_asr_golden
+Run in the CPU-reference virtualenv (``requirements-reference.txt``: full qwen_asr +
+its transformers pin + torch — deliberately NOT the tt-metal env):
+
+    python3 -m venv /tmp/qwen3-asr-ref
+    /tmp/qwen3-asr-ref/bin/pip install -r models/demos/audio/qwen3_asr/requirements-reference.txt
+    /tmp/qwen3-asr-ref/bin/python models/demos/audio/qwen3_asr/reference/dump_reference.py \
+        --out /tmp/qwen3_asr_golden
+
+The defaults need nothing outside a clean checkout: the input clip is an in-repo 16 kHz
+mono wav and the model comes from the HF cache. Pass ``--wav/--start/--dur`` to use your
+own audio (the PCC goldens are content-independent — they only have to match what the
+ttnn port is fed).
 
 Golden tensors are written outside the repo (large) with a small manifest
 (shapes/dtypes) printed and saved next to them.
@@ -27,6 +34,32 @@ import soundfile as sf
 import torch
 
 MODEL_ID = "Qwen/Qwen3-ASR-1.7B"
+
+# Default clip: an in-repo 16 kHz mono speech wav, so golden generation works from a clean
+# checkout with no external assets (previously a machine-local path).
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
+DEFAULT_WAV = os.path.join(
+    REPO_ROOT,
+    "models",
+    "demos",
+    "audio",
+    "whisper",
+    "demo",
+    "dataset",
+    "conditional_generation",
+    "17646385371758249908.wav",
+)
+DEFAULT_GOLDEN_DIR = os.environ.get("QWEN3ASR_GOLDEN_DIR", os.environ.get("GOLDEN_DIR", "/tmp/qwen3_asr_golden"))
+
+# Keep the clip length a whole number of seconds. The AuT front-end consumes mel in 1 s
+# chunks (100 frames at the 10 ms hop) and emits 13 encoder rows per chunk. A whole-second
+# clip therefore has no partial final chunk, and the CPU reference's audio_tower output
+# (masked to feature_lens) has exactly the same row count as the ttnn encoder's chunk-aligned
+# output — which is what the PCC tests compare. A 7.62 s clip, say, gives the reference
+# 7*13 + ceil(62/8) = 99 rows against the port's 8*13 = 104, and the differing attention
+# blocks drop the encoder PCC to ~0.96. See "Known limitations" in the README.
+CHUNK_SEC = 1.0
+DEFAULT_DUR = 7.0  # <= the in-repo sample clip (7.62 s), whole seconds
 
 
 def load_slice(path, start, dur, sr=16000):
@@ -71,11 +104,11 @@ def first_tensor(out):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--wav", default="/tmp/qwen3-asr-eval/audio/patlabor.wav")
-    ap.add_argument("--start", type=float, default=30.0)
-    ap.add_argument("--dur", type=float, default=12.0)
+    ap.add_argument("--wav", default=DEFAULT_WAV)
+    ap.add_argument("--start", type=float, default=0.0)
+    ap.add_argument("--dur", type=float, default=DEFAULT_DUR)
     ap.add_argument("--language", default="English")
-    ap.add_argument("--out", default="/home/ttuser/ttwork/qwen3_asr_golden")
+    ap.add_argument("--out", default=DEFAULT_GOLDEN_DIR)
     ap.add_argument("--dtype", default="float32", choices=["float32", "bfloat16"])
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
@@ -135,6 +168,13 @@ def main():
     # ---- run one short transcription ----
     wav = load_slice(args.wav, args.start, args.dur)
     print(f"[run] {args.wav} [{args.start},{args.start+args.dur}]s  {len(wav)/16000:.1f}s", flush=True)
+    if abs(len(wav) / 16000 / CHUNK_SEC - round(len(wav) / 16000 / CHUNK_SEC)) > 1e-6:
+        print(
+            f"[warn] clip is {len(wav)/16000:.2f}s — not a whole number of {CHUNK_SEC}s chunks. The "
+            "encoder PCC test will see a shorter (feature_lens-masked) golden than the port's "
+            "chunk-aligned output; use a whole-second --dur.",
+            flush=True,
+        )
     t0 = time.time()
     res = wrap.transcribe(audio=[(wav, 16000)], language=args.language)
     txt = res[0].text.strip()

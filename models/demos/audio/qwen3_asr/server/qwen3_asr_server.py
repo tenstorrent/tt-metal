@@ -29,7 +29,6 @@ import numpy as np
 import soundfile as sf
 import torch
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
-from qwen_asr.core.transformers_backend import Qwen3ASRProcessor
 from safetensors import safe_open
 from transformers import AutoTokenizer
 
@@ -42,6 +41,9 @@ sys.path.insert(0, os.path.join(ROOT, "reference"))
 import audio_encoder as tt_enc  # noqa: E402
 import audio_encoder_ref as ref  # noqa: E402  (weights loader only)
 from qwen3_asr_decoder import Qwen3ASRDecoder  # noqa: E402
+from qwen_asr_processor import load_processor_cls  # noqa: E402
+
+Qwen3ASRProcessor = load_processor_cls()
 
 CKPT = os.environ.get("HF_MODEL", "/ttwork/qwen3_asr_text_decoder")
 AUDIO_TOKEN_ID = 151676
@@ -251,11 +253,14 @@ def health():
     return {"status": "ok" if STATE else "loading"}
 
 
-@app.post("/v1/audio/transcriptions")
-async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"), language: str = Form(None)):
-    from collections import Counter
+def _transcribe_blocking(raw, force):
+    """Decode the upload and run the (device-serialized) transcription. Blocking.
 
-    raw = await file.read()
+    Runs in a thread executor, never on the event loop: warmup, every encoder/decoder
+    call and long-form segment loop happen here under _LOCK, and a long upload would
+    otherwise stall /health, further uploads and the WebSocket stream for its whole
+    duration (the streaming path already offloads the same way).
+    """
     wav, sr = sf.read(io.BytesIO(raw), dtype="float32")
     if wav.ndim > 1:
         wav = wav.mean(1)
@@ -263,7 +268,6 @@ async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"
         import librosa
 
         wav = librosa.resample(wav, orig_sr=sr, target_sr=SR)
-    force = None if (not language or language.strip().lower() in ("auto", "", "none")) else language
     dur = len(wav) / SR
     with _LOCK:
         _ensure_warm()
@@ -290,6 +294,18 @@ async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"
                     langs.append(lg)
             text = " ".join(parts)
         dt = time.time() - t0
+    return text, langs, nseg, dt, dur
+
+
+@app.post("/v1/audio/transcriptions")
+async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"), language: str = Form(None)):
+    from collections import Counter
+
+    raw = await file.read()
+    force = None if (not language or language.strip().lower() in ("auto", "", "none")) else language
+    loop = asyncio.get_running_loop()
+    # Only request parsing / response assembly stays on the event loop.
+    text, langs, nseg, dt, dur = await loop.run_in_executor(None, _transcribe_blocking, raw, force)
     # forced language: the tag lives in the prompt, not the generated tokens, so _parse
     # returns "" — echo the requested language instead. Auto-detect: majority vote.
     if force:

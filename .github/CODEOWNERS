@@ -538,6 +538,7 @@ models/**/distilbert/ @tt-aho @uaydonat
 models/*/mnist/ @esmalTT @uaydonat
 models/*/squeezebert/ @cfjchu @uaydonat
 models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT
+models/demos/audio/qwen3_asr @yasuhiroitoTT @sott0n @uaydonat
 models/demos/audio/whisper @atupe-tt @djordje-tt @uaydonat
 models/demos/bge_large_en @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
 models/demos/blackhole/qwen36 @atupe-tt @tenstorrent/cse-developer-ttnn

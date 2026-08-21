@@ -10,12 +10,15 @@ short-circuit): raw waveform -> processor (mel + prompt input_ids) -> ttnn AuT e
 decode -> text. This is the same path `demo/demo_wav.py` and `server/qwen3_asr_server._infer`
 run, asserted against an expected transcription.
 
-Needs (all via env; the test ``pytest.skip``s cleanly when any is absent):
+Needs (all via env; skipped when absent, or failed under QWEN3ASR_REQUIRE_ARTIFACTS=1):
   QWEN3ASR_E2E_WAV    path to a 16 kHz mono wav to transcribe
   QWEN3ASR_E2E_TEXT   expected substring of the transcription (case/punct-insensitive)
   QWEN3ASR_SNAP       HF snapshot of Qwen/Qwen3-ASR-1.7B (audio-tower weights + processor)
   QWEN3ASR_TEXT_DECODER / HF_MODEL   extracted Qwen3-1.7B text-decoder checkpoint
-and the ``qwen_asr`` processor package importable. See tests/conftest.py for the fixtures.
+See tests/conftest.py for the fixtures. The Qwen3-ASR processor is a pinned dependency
+(``requirements-processor.txt``), so a processor import failure fails the test rather than
+skipping it. Set ``QWEN3ASR_REQUIRE_ARTIFACTS=1`` on an unattended run to make the wav/text
+env vars mandatory too.
 
 Run on a P150 (single Blackhole) box, e.g.:
   QWEN3ASR_E2E_WAV=/data/jfk.wav QWEN3ASR_E2E_TEXT="ask not what your country" \
@@ -30,6 +33,8 @@ import torch
 
 import ttnn
 from models.demos.audio.qwen3_asr.reference import audio_encoder_ref as ref
+from models.demos.audio.qwen3_asr.reference.qwen_asr_processor import load_processor_cls
+from models.demos.audio.qwen3_asr.tests._artifacts import missing_artifact
 from models.demos.audio.qwen3_asr.tt import audio_encoder as tt_enc
 from models.demos.audio.qwen3_asr.tt.qwen3_asr_decoder import Qwen3ASRDecoder
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -58,13 +63,12 @@ def test_e2e_wav_transcription(device, snap_dir, text_decoder_ckpt):
     wav_path = os.environ.get("QWEN3ASR_E2E_WAV")
     expected = os.environ.get("QWEN3ASR_E2E_TEXT")
     if not wav_path or not os.path.isfile(wav_path):
-        pytest.skip("set QWEN3ASR_E2E_WAV to a 16 kHz mono wav to run the e2e test")
+        missing_artifact("set QWEN3ASR_E2E_WAV to a 16 kHz mono wav to run the e2e test")
     if not expected:
-        pytest.skip("set QWEN3ASR_E2E_TEXT to the expected transcription substring")
-    try:
-        from qwen_asr.core.transformers_backend import Qwen3ASRProcessor
-    except Exception as e:  # noqa: BLE001 - external processor package is optional
-        pytest.skip(f"qwen_asr processor not importable: {e}")
+        missing_artifact("set QWEN3ASR_E2E_TEXT to the expected transcription substring")
+    # The processor is a pinned dependency now (requirements-processor.txt), so a failed
+    # import is a real breakage, not an optional extra: surface it instead of skipping.
+    Qwen3ASRProcessor = load_processor_cls()
 
     # --- load + pad the waveform to the fixed inference length (shipped behavior) ---
     wav, sr = sf.read(wav_path, dtype="float32")

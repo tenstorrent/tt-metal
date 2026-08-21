@@ -1,0 +1,18 @@
+# Runtime dependencies for the Qwen3-ASR server + demos (on top of a built tt-metal).
+#
+#   pip install -r models/demos/audio/qwen3_asr/requirements.txt
+#   pip install --no-deps -r models/demos/audio/qwen3_asr/requirements-processor.txt
+#
+# The second file is separate because it must be installed with --no-deps; see the
+# comments there. CPU reference / golden-dump tooling has its own environment:
+# requirements-reference.txt.
+#
+# Bounded rather than exactly pinned: these are installed alongside tt-metal's own
+# requirements, and hard-pinning shared transitive deps (numpy, soundfile) would fight
+# tt-metal's pins. The dependency that actually needed pinning for reproducibility is
+# qwen-asr (requirements-processor.txt).
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+python-multipart>=0.0.20,<1.0
+librosa>=0.10,<2.0
+soundfile>=0.12,<1.0

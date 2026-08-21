@@ -74,14 +74,76 @@ program-cache fix — the batch dim `-3` must be part of the prefill matmul prog
 fixed at the model layer (bucketing still collides). Tracking issue + repro:
 `docs/prefill_program_cache_collision_issue.md` in this PR.
 
+## Install
+
+Two environments, deliberately separate:
+
+```bash
+# 1) device side (server, demos, tests) — on top of a built tt-metal
+pip install -r models/demos/audio/qwen3_asr/requirements.txt
+pip install --no-deps -r models/demos/audio/qwen3_asr/requirements-processor.txt
+
+# 2) CPU reference / golden tooling — its own venv, NEVER the tt-metal env
+python3 -m venv /tmp/qwen3-asr-ref
+/tmp/qwen3-asr-ref/bin/pip install -r models/demos/audio/qwen3_asr/requirements-reference.txt
+```
+
+`qwen-asr` is pinned and installed with `--no-deps` on the device side because it declares
+an older `transformers` than tt-metal pins. Only its processor (prompt template + log-mel)
+is used there, and `reference/qwen_asr_processor.py` imports that module without executing
+the package `__init__` chain that would pull in the CPU modeling stack. The reference
+tooling does need the full package, hence its own venv.
+
+**Encoder golden requires a chunk-aligned clip (no partial final chunk).**
+The AuT front-end consumes mel in 1 s chunks (100 frames at the 10 ms hop) and emits 13 encoder
+rows per chunk. The CPU reference masks the audio tower's output down to `feature_lens`, so on a
+clip that does not fill whole chunks the reference emits fewer rows than the ttnn port's
+chunk-aligned output (e.g. a 7.62 s clip: reference `7*13 + ceil(62/8) = 99` rows vs the port's
+`8*13 = 104`), and because the windowed-attention blocks then differ the encoder PCC drops to
+~0.96 across *all* rows — not just the trailing ones. The port does not implement the reference's
+partial-final-chunk masking; the shipped pipeline sidesteps it instead by padding every request to
+a fixed length and trimming the encoder output to the processor's audio-token count
+(`server/_infer`, `demo/`, `tests/test_e2e.py`). Consequence for the PCC suite: generate goldens
+from a **whole-second** clip (`reference/dump_reference.py` defaults to 7.0 s and warns otherwise;
+`tests/test_audio_encoder.py` fails with this explanation if the golden is misaligned).
+Implementing feature-lens masking in the ttnn encoder would remove the constraint.
+
 ## Reference golden
 
-`reference/dump_reference.py` (run with the `/tmp/qwen3-asr-eval` venv) loads the CPU
-model, hooks submodules, transcribes a short clip, and saves per-stage tensors +
-`manifest.json`. Default golden lives outside the repo at
-`/home/ttuser/ttwork/qwen3_asr_golden/` (tensors are large). Captured stages:
+`reference/dump_reference.py` (run in the reference venv above) loads the CPU model, hooks
+submodules, transcribes a short clip, and saves per-stage tensors + `manifest.json`. The
+defaults need nothing outside a clean checkout (an in-repo 16 kHz wav; output to
+`$QWEN3ASR_GOLDEN_DIR` or `/tmp/qwen3_asr_golden` — tensors are large, so they stay out of
+the repo). Captured stages:
 `conv2d1`, `conv_out`, `enc_layer0`, `ln_post`, `audio_tower`/`proj2` (= audio embeds),
 `lm_head` (prefill + decode logits), plus end-to-end token text.
 
 Verified shapes on a 12 s clip: conv_out `(12,13,1024)`, audio embeds `(156,2048)`,
 prefill logits `(1,174,151936)`.
+
+## Tests and CI
+
+```bash
+# staged artifacts (regenerate with the reference venv, see above)
+export QWEN3ASR_SNAP=<hf-hub>/models--Qwen--Qwen3-ASR-1.7B/snapshots
+export QWEN3ASR_GOLDEN_DIR=/tmp/qwen3_asr_golden
+export QWEN3ASR_TEXT_DECODER=/tmp/qwen3_asr_text_decoder
+pytest models/demos/audio/qwen3_asr/tests/test_audio_encoder.py
+pytest models/demos/audio/qwen3_asr/tests/test_decoder.py
+QWEN3ASR_E2E_WAV=<16k-mono.wav> QWEN3ASR_E2E_TEXT="<expected words>" \
+  pytest models/demos/audio/qwen3_asr/tests/test_e2e.py -s
+```
+
+The golden tensors and the extracted text-decoder checkpoint are too large for the repo, so
+the fixtures skip when they are absent — convenient on a dev box, but on a runner that is
+supposed to have them staged a skip would hide exactly the breakage these tests exist to
+catch. Set **`QWEN3ASR_REQUIRE_ARTIFACTS=1`** to turn every such skip into a hard failure.
+
+Use that flag whenever this suite runs unattended (a pipeline leg, a nightly, a bring-up
+script): point `QWEN3ASR_GOLDEN_DIR` / `QWEN3ASR_TEXT_DECODER` at the staged artifacts and set
+the flag, and a missing artifact, a dependency break or a `tt_transformers` API change fails
+loudly instead of reporting a green skip. `tests/test_e2e.py` needs no staged audio — it runs
+on the in-repo clip above.
+
+> Wiring this into the shared model pipelines (`tests/pipeline_reorg/`) is deliberately left
+> out of this PR; see the follow-ups in the PR description.
