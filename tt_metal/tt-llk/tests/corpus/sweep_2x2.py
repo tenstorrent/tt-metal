@@ -530,7 +530,12 @@ KNOBS = {
     # REFUSAL_BYTE_IDENTICAL.
     "milp": "-mtt-tensix-optimize-pressure-schedule "
     "-mtt-tensix-pressure-schedule-use-milp",
-    # EJ (reassoc-license): THE LICENSED REASSOCIATION LEG (owner
+    # EJ (reassoc-license): THE LICENSED REASSOCIATION LEG.  COUPLED:
+    # this entry merges only at a pin advance whose toolchain carries
+    # sfpi-gcc agent/reassoc-license — the pin-15 driver REJECTS
+    # -mtt-tensix-optimize-reassoc, so an earlier merge would turn every
+    # weekly knob-attribution classify leg into a loud CLASSIFY_FAIL
+    # (the crossloop-hoist-conf coupling discipline).  (owner
     # ratification 2026-08-21: value-changing FP reassociation is
     # licensed when the user passes -fassociative-math, the explicit
     # industry opt-in; the charter's silent-rounding-change ban stands —
