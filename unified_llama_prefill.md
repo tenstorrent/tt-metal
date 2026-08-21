@@ -1658,7 +1658,9 @@ would go stale and then lie in the direction that matters.
 banded path is FASTER than ttnn at several wide ones -- 8x8 at kt=2 is 0.90x, 4x8 is 0.92x,
 2x8 is 0.96x. There is no shape-dependent cliff.
 
-**Hole 1, functional: a large output block cannot be ACCUMULATED.** `rt*ct > 8` is refused
+**Hole 1, functional: a large output block cannot be ACCUMULATED.** FIXED -- see
+"Subblocking the output" below, which also lifted ct > 8. Kept here for the shape of the
+finding. `rt*ct > 8` is refused
 on both accumulating modes, which is 48 of the 160 cells. Single-shot covers all sixteen
 rt x ct combinations via row banding, so the gap is specific: big output block AND several
 k-blocks together. A real matmul with a long K and a wide output has to split the output
@@ -1817,8 +1819,9 @@ in the same measurement.
 
 ### Re-swept on kt: no rate holes left, and parity with ttnn at size
 
-With kt as the axis and k_blocks pinned to 1, `bench_matmul.py` covers 332 cells across
-rt, ct in {1,2,4,8}, kt in {1,2,8,32,64} and all three carry modes. The result is much
+With kt as the axis and k_blocks pinned to 1, `bench_matmul.py` covers 240 cells across
+rt, ct in {1,2,4,8}, kt in {1,2,8,32,64} and all three carry modes (I first wrote 332 here,
+which was a miscount -- the grep that produced it also counted the per-MAC report's lines). The result is much
 duller than the previous sweep, which is the point -- the interesting holes it used to
 report were ones we were making ourselves.
 
@@ -1847,6 +1850,110 @@ flash work has been chasing all along, now visible without a softmax around it. 
 matmul at 2.23us against a 0.061us/MAC best rate is the same statement -- 36x the best
 per-MAC cost, and no implementation makes two tile-multiplies efficient. The per-MAC filter
 flagging those is a property of the filter, not a hole.
+
+### Subblocking the output: rt*ct > 8 is gone, and so is ct > 8
+
+Hole 1 -- a large output block could not be ACCUMULATED -- is fixed, and the fix turned out
+to also lift a limit next to it that I had asserted was impossible.
+
+**The subblock shape.** `dst_subblock(rt, ct)` is a port of tt-mlir's
+`calculateOutputSubblockFactors`, and what carries over is the priority order rather than
+the arithmetic: serve the INNER dimension first, so the subblock is as wide as it can be,
+then spend whatever capacity is left on rows. If the inner dimension is fully consumed the
+leftover is real and buys rows; if it is not, the subblock is pinned to one row. That yields
+the invariant everything else leans on:
+
+> a subblock is EITHER full-width and several rows tall, OR a single row and narrower
+> than the block -- never both partial-width and multi-row.
+
+Which matters because partial-width multi-row is the one case whose tiles are *not*
+contiguous in a row-major output block. Under the invariant, walking subblocks with rows
+outermost visits the output in exactly flat row-major order, so each subblock's pack lands
+immediately after the previous one -- `pack_block` advances the buffer's write pointer
+itself and only `cb_push_back` resets it. No addressing, no offsets, no second pass.
+Checked exhaustively over every (rt, ct) pair drawn from {1..9, 11, 12, 16, 32, 64}: 196
+pairs, all within the 8-tile budget, all dividing their dimension, all satisfying the
+invariant.
+
+**What had to be banded with it**, and this is the part the old assert was warning about:
+the matmul itself, the reload, the pack, a fused addend, the per-step chain, the finish-only
+epilogue, the L1 copy-out, and `bias_finish`. One caveat on that last one, since the tests
+do not cover it: for any shape with rt*ct <= 8 `dst_subblock` returns the whole block as a
+single subblock, and `bias()` still refuses anything larger, so `bias_finish`'s loop always
+runs exactly once today. Its banding is therefore a no-op that no test exercises with more
+than one subblock -- correct by construction and by the unchanged bias tests, but not
+verified in the multi-subblock case, and it will not be until the `bias()` limit below is
+lifted. The reload is the interesting one. Partials
+are popped from `acc_cb` a SUBBLOCK at a time rather than a block at a time, because the
+pack has to reserve pages again in the same call -- `acc_cb` holds exactly one output block,
+so reads and writes chase each other around it in lockstep, and a block-sized pop would
+deadlock against a subblock-sized reserve.
+
+**`matmul_block` takes the subblock's extents but the true strides.** A's rows are `kt_dim`
+apart and B's k rows are `ct_dim` apart however the output is cut; only the output extents
+change. `ct_dim` doubles as B's column count and as DST's row stride, which is *why* a
+partial-width subblock has to be a single row -- and with `rt_dim = 1` that stride is never
+used, so the case is expressible after all.
+
+**Which retires a claim I had put in an assert.** The old message said a column band "would
+have to address partial output rows, which the packer cannot do in order". That is true of a
+multi-row column band and false of a single-row one, and the algorithm only ever produces
+the latter. So `ct > 8` now works, which no path allowed before:
+
+| single-shot | PCC |
+|---|---|
+| 1x16, kt=2 | 0.999989 |
+| 2x16, kt=2 | 0.999989 |
+| 1x12, kt=2 | 0.999989 |
+| 1x9, kt=1 | 0.999993 |
+| 2x32, kt=1 | 0.999993 |
+
+**Correct on the shapes that were refused**, both accumulating modes, including 64-tile
+output blocks and multi-k-block runs that exercise the reload rotation -- 4x4, 8x8, 4x8,
+8x4, 8x2, 2x8 all at PCC > 0.9996, with per-step, finish-only and both-at-once SFPU chains
+all correct on top. All 16 unified tests still pass.
+
+**And they are competitive**, which was not guaranteed -- a 64-tile block is eight passes:
+
+| kt=2 | ours | ttnn | ratio |
+|---|---|---|---|
+| 4x8 | 8.66 us | 9.48 us | **0.91x** |
+| 8x8 | 14.21 us | 15.81 us | **0.90x** |
+| 8x4 | 8.55 us | 7.91 us | 1.08x |
+| 8x8, kt=32 | 124.24 us | 126.10 us | 0.99x |
+
+Faster than ttnn at several of them. Dst mode and single-shot now measure identically on
+these shapes (14.21 vs 14.21 at 8x8 kt=2), which is the expected consequence: with one
+k-block and an output past the budget, the accumulating path walks the same subblocks the
+banded path does.
+
+**The sweep, same 240 cells as before the change:**
+
+| | before | after |
+|---|---|---|
+| holes | 64 | **9** |
+| of which `rt*ct > 8` refused | 60 | 0 |
+| of which L1 capacity | 3 | 9 |
+| rate holes (>2x) | 0 | 0 |
+| WRONG cells | 0 | 0 |
+
+Every one of the 60 functional holes is gone, and the 9 that remain are all the L1 ceiling
+at kt=64 -- 4x8, 8x4 and 8x8, now reported for all three modes rather than only single-shot,
+because the other two no longer refuse those shapes before the allocator gets a chance to.
+That is a chip limit: two operands of 512 tiles are 2MB against 1.5MB of L1. Across the 201
+cells with a ttnn reference the ratio runs 0.90x to 1.40x with a median of 1.14x, and 20
+cells are faster than ttnn.
+
+**What is left.** `bias()` still static_asserts that the output fits one acquire. The
+accumulating path could now band a bias -- `bias_finish` does -- but the SINGLE-SHOT path
+has no two-pass form to put a bias in, and the presence of a bias is a runtime field rather
+than part of the node's type, so the builder cannot tell which path a given expression will
+take and refuses the shape for both. The way out is not a second pass at all: a bias is one
+row broadcast down the block, and `AddOp::fpu_reuse_apply` adds a named CB tile into a named
+DST slot, so tile `t` of a subblock at (r0, c0) wants bias tile `c0 + t % cols` -- the same
+tile re-read once per row. That would fold the bias into the subblock loop exactly as the
+addend already is, delete the whole `bias_finish` pass, and lift the limit for both paths at
+once. It is also the same mechanism the deferred "merge bias into add" note wanted.
 
 ### What to test next
 
