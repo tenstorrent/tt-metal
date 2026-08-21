@@ -137,6 +137,27 @@ void kernel_main() {
     constexpr uint32_t dfb_x_id = dfb_in_id;
 #endif
 
+    constexpr auto in_input = ckl::input(
+        dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+    constexpr auto inb_input = ckl::input(
+        dfb_inb_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+    constexpr auto xmm_input = ckl::input(
+        dfb_xmm_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+    constexpr auto fusion_input = ckl::input(
+        dfb_fusion_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+    constexpr auto gamma_input = ckl::input(
+        dfb_gamma_id,
+        ckl::BroadcastDim::Row,
+        ckl::WaitPolicy::PerBlockSize,
+        ckl::PopPolicy::PerBlockSize,
+        ckl::InputTileMapping::Block);
+    constexpr auto beta_input = ckl::input(
+        dfb_beta_id,
+        ckl::BroadcastDim::Row,
+        ckl::WaitPolicy::PerBlockSize,
+        ckl::PopPolicy::PerBlockSize,
+        ckl::InputTileMapping::Block);
+
     DataflowBuffer dfb_eps_obj(dfb_eps_id);
     DataflowBuffer dfb_scaler_obj(dfb_scaler_id);
     DataflowBuffer dfb_in_obj(dfb_in_id);
@@ -213,33 +234,16 @@ void kernel_main() {
                 block_shape,
                 ckl::Optional<
                     is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
-                    ckl::CopyTile<
-                        ckl::input(
-                            dfb_in_id,
-                            ckl::WaitPolicy::PerBlockSize,
-                            ckl::PopPolicy::PerBlockSize,
-                            ckl::InputTileMapping::Block),
-                        ckl::Dst::D0>>{},
+                    ckl::CopyTile<in_input, ckl::Dst::D0>>{},
                 ckl::Optional<
                     !is_rmsnorm,  // LayerNorm: x - E[x] (reads dfb_ex_id; stripped under RMSNORM)
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Sub,
-                        ckl::input(
-                            dfb_in_id,
-                            ckl::WaitPolicy::PerBlockSize,
-                            ckl::PopPolicy::PerBlockSize,
-                            ckl::InputTileMapping::Block),
+                        in_input,
                         ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>>{},
                 ckl::Optional<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
-                    ckl::DestReuseBinary<
-                        ckl::BinaryFpuOp::Add,
-                        ckl::input(
-                            dfb_inb_id,
-                            ckl::WaitPolicy::PerBlockSize,
-                            ckl::PopPolicy::PerBlockSize,
-                            ckl::InputTileMapping::Block),
-                        ckl::DestReuseType::DEST_TO_SRCB>>{},
+                    ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, inb_input, ckl::DestReuseType::DEST_TO_SRCB>>{},
                 // (x-E[x])^2. Pack to CB
                 ckl::Square<ckl::Dst::D0>{},
                 ckl::PackTile<ckl::output(
@@ -340,33 +344,16 @@ void kernel_main() {
                 block_shape,
                 ckl::Optional<
                     is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
-                    ckl::CopyTile<
-                        ckl::input(
-                            dfb_in_id,
-                            ckl::WaitPolicy::PerBlockSize,
-                            ckl::PopPolicy::PerBlockSize,
-                            ckl::InputTileMapping::Block),
-                        ckl::Dst::D0>>{},
+                    ckl::CopyTile<in_input, ckl::Dst::D0>>{},
                 ckl::Optional<
                     !is_rmsnorm,  // LayerNorm: x - E[x] (reads dfb_ex_id; stripped under RMSNORM)
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Sub,
-                        ckl::input(
-                            dfb_in_id,
-                            ckl::WaitPolicy::PerBlockSize,
-                            ckl::PopPolicy::PerBlockSize,
-                            ckl::InputTileMapping::Block),
+                        in_input,
                         ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>>{},
                 ckl::Optional<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
-                    ckl::DestReuseBinary<
-                        ckl::BinaryFpuOp::Add,
-                        ckl::input(
-                            dfb_inb_id,
-                            ckl::WaitPolicy::PerBlockSize,
-                            ckl::PopPolicy::PerBlockSize,
-                            ckl::InputTileMapping::Block),
-                        ckl::DestReuseType::DEST_TO_SRCB>>{},
+                    ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, inb_input, ckl::DestReuseType::DEST_TO_SRCB>>{},
                 // Note: We shouldn't have to pack to
                 // intermediate CB. We should be able to
                 // do a binary dest with reuse (as we used
@@ -379,11 +366,7 @@ void kernel_main() {
                 block_shape,
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Mul,
-                    ckl::input(
-                        dfb_xmm_id,
-                        ckl::WaitPolicy::PerBlockSize,
-                        ckl::PopPolicy::PerBlockSize,
-                        ckl::InputTileMapping::Block),
+                    xmm_input,
                     ckl::input(dfb_ex2pe_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{},
                 ckl::Optional<activate_after_normalize, FusedActivation>{},
                 ckl::PackTile<ckl::output(
@@ -393,19 +376,7 @@ void kernel_main() {
                 constexpr auto dfb_gamma_out_id = do_beta ? dfb_fusion_id : dfb_out_id;
                 ckl::eltwise_chain(
                     block_shape,
-                    ckl::BinaryFpu<
-                        ckl::BinaryFpuOp::Mul,
-                        ckl::input(
-                            dfb_fusion_id,
-                            ckl::WaitPolicy::PerBlockSize,
-                            ckl::PopPolicy::PerBlockSize,
-                            ckl::InputTileMapping::Block),
-                        ckl::input(
-                            dfb_gamma_id,
-                            ckl::BroadcastDim::Row,
-                            ckl::WaitPolicy::PerBlockSize,
-                            ckl::PopPolicy::PerBlockSize,
-                            ckl::InputTileMapping::Block)>{},
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, fusion_input, gamma_input>{},
                     ckl::Optional<activate_after_gamma, FusedActivation>{},
                     ckl::PackTile<ckl::output(
                         dfb_gamma_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
@@ -413,19 +384,7 @@ void kernel_main() {
             if constexpr (do_beta == 1) {
                 ckl::eltwise_chain(
                     block_shape,
-                    ckl::BinaryFpu<
-                        ckl::BinaryFpuOp::Add,
-                        ckl::input(
-                            dfb_fusion_id,
-                            ckl::WaitPolicy::PerBlockSize,
-                            ckl::PopPolicy::PerBlockSize,
-                            ckl::InputTileMapping::Block),
-                        ckl::input(
-                            dfb_beta_id,
-                            ckl::BroadcastDim::Row,
-                            ckl::WaitPolicy::PerBlockSize,
-                            ckl::PopPolicy::PerBlockSize,
-                            ckl::InputTileMapping::Block)>{},
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Add, fusion_input, beta_input>{},
                     ckl::Optional<fused_activation_enabled, FusedActivation>{},
                     ckl::PackTile<ckl::output(
                         dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
