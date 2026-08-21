@@ -226,16 +226,21 @@ jobs:
           #   ...green(prevGood) [cancelled/skipped...] RED(firstRed) RED ... RED(current)
           #
           # The FIRST red run after the last green one -- firstRed -- is the
-          # regression point, and the only commits that can have broken main
-          # are those in (prevGood.head_sha, firstRed.head_sha]: usually the
-          # single PR whose push firstRed tested, occasionally plus a few
-          # never-tested commits ([skip ci] pushes, or pushes whose runs were
-          # cancelled/skipped) that landed immediately before it and so
-          # cannot be exonerated. Everything that merged AFTER firstRed,
-          # while main was already red, is noise and must NOT be blamed.
-          # (The previous implementation diffed prevGood against the CURRENT
-          # failing commit, blaming everyone who merged during the outage --
-          # the direct cause of the 2026-08-21 mass-ping incident.)
+          # regression point, and the ONLY thing ever pinged is the single
+          # PR (or, failing that, the single commit author) behind
+          # firstRed's own push: the one push CONFIRMED red by its own test
+          # run. Other commits inside (prevGood.head_sha, firstRed.head_sha]
+          # -- [skip ci] pushes, or pushes whose runs were cancelled/skipped
+          # -- were merely walked through to locate firstRed and were never
+          # confirmed as culprits, so they are never pinged; they only feed
+          # the ambiguity check in phase 3 (a wide window means firstRed
+          # itself may be misidentified, so abstain rather than guess).
+          # Everything that merged AFTER firstRed, while main was already
+          # red, is noise and must NOT be blamed. Net effect: at most ONE
+          # identity is pinged per regression. (The previous implementation
+          # diffed prevGood against the CURRENT failing commit, blaming
+          # everyone who merged during the outage -- the direct cause of the
+          # 2026-08-21 mass-ping incident.)
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -372,20 +377,54 @@ jobs:
             }
 
             // -----------------------------------------------------------------
-            // Phase 3: resolve the culprit commits/PRs. The blame range is
-            // ONLY (prevGood.head_sha, firstRed.head_sha] -- see BLAME MODEL
-            // above. By construction every run between prevGood and firstRed
-            // is cancelled/skipped (a red one would have become firstRed, a
-            // green one would have become prevGood), so this range is the
-            // commits of firstRed's own push plus any immediately preceding
-            // never-tested pushes. Almost always exactly one PR.
+            // Phase 3a: ambiguity check on the (prevGood.head_sha,
+            // firstRed.head_sha] window. This does NOT decide who gets pinged
+            // (that is always the single PR/author behind firstRed's own
+            // push, resolved in phase 3b); it bounds how much walked-through-
+            // but-unconfirmed history we tolerate before trusting that
+            // firstRed resolution at all. Commits in this window other than
+            // firstRed's own push were never tested ([skip ci] pushes, or
+            // pushes whose runs were cancelled/skipped): they are possible
+            // alternative culprits we cannot rule out. One or two of those is
+            // normal churn; more than MAX_AMBIGUITY_WINDOW_COMMITS means the
+            // break could plausibly live in any of a pile of untested pushes
+            // (e.g. a mass-cancellation storm swallowed a day of merges), so
+            // blaming firstRed's author alone would likely be WRONG blame,
+            // not just noisy blame -- abstain and leave a warning for a human
+            // to triage instead. This cap bounds ambiguity tolerated before
+            // resolving one culprit, NOT how many people get pinged (that is
+            // structurally <= 1 regardless of this value).
             // -----------------------------------------------------------------
+            const MAX_AMBIGUITY_WINDOW_COMMITS = 10;
+            // per_page: 1 -- only total_commits is needed, not the commit list.
             const { data: cmp } = await github.rest.repos.compareCommits({
               owner,
               repo,
               base: prevGood.head_sha,
               head: firstRed.head_sha,
+              per_page: 1,
             });
+            if (cmp.total_commits === 0) {
+              // base is not an ancestor of head (e.g. main's history was
+              // rewritten between the two runs) -- nothing attributable.
+              core.warning(`No commits found between green #${prevGood.run_number} (${prevGood.head_sha}) and ` +
+                `first red #${firstRed.run_number} (${firstRed.head_sha}) -- history may have been rewritten. Abstaining.`);
+              core.setOutput('should_notify', 'false');
+              return;
+            }
+            if (cmp.total_commits > MAX_AMBIGUITY_WINDOW_COMMITS) {
+              core.warning(`${cmp.total_commits} commits landed between green #${prevGood.run_number} and first red #${firstRed.run_number}, ` +
+                `most of them never tested by their own run -- too ambiguous to trust that first red run's push is the real culprit. ` +
+                `Abstaining instead of risking wrong blame; a human should triage this outage.`);
+              core.setOutput('should_notify', 'false');
+              return;
+            }
+
+            // -----------------------------------------------------------------
+            // Phase 3b: resolve the ONE culprit -- the PR behind firstRed's
+            // own push (its head_sha), the only push confirmed red by its own
+            // run. Commits merely walked through above are never pinged.
+            // -----------------------------------------------------------------
 
             // PR titles and commit subjects are attacker-controlled (anyone who can
             // open a PR) and end up inside Slack `<url|label>` mrkdwn links below --
@@ -394,72 +433,57 @@ jobs:
             // link syntax or smuggle in a broadcast mention like <!subteam^...>.
             const escapeSlack = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-            const entries = [];
-            const seenPrNumbers = new Set();
+            const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner,
+              repo,
+              commit_sha: firstRed.head_sha,
+            });
 
-            for (const commit of cmp.commits) {
-              const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+            let entry;
+            if (pulls.length > 0) {
+              // A single commit can, in rare merge-commit edge cases, be
+              // associated with more than one PR (e.g. a PR merged into
+              // another PR's branch before that lands on main). Never ping
+              // more than one identity: pick deterministically -- the lowest
+              // PR number, i.e. the oldest PR, which for those nested-merge
+              // shapes is the one whose content actually changed main.
+              const pr = pulls.reduce((a, b) => (a.number <= b.number ? a : b));
+              if (pulls.length > 1) {
+                core.info(`Commit ${firstRed.head_sha} is associated with ${pulls.length} PRs ` +
+                  `(${pulls.map(p => '#' + p.number).join(', ')}); deterministically blaming the oldest, #${pr.number}.`);
+              }
+              entry = {
+                type: 'pr',
+                number: pr.number,
+                url: pr.html_url,
+                title: escapeSlack(pr.title),
+                authorLogin: pr.user ? pr.user.login : null,
+              };
+            } else {
+              // No associated PR (direct push, or API lag right after merge) --
+              // fall back to the commit's own author (a single identity, or
+              // "(unknown author)" downstream if GitHub can't map one) so the
+              // culprit is never silently dropped.
+              const { data: commit } = await github.rest.repos.getCommit({
                 owner,
                 repo,
-                commit_sha: commit.sha,
+                ref: firstRed.head_sha,
               });
-
-              if (pulls.length > 0) {
-                for (const pr of pulls) {
-                  if (seenPrNumbers.has(pr.number)) continue;
-                  seenPrNumbers.add(pr.number);
-                  entries.push({
-                    type: 'pr',
-                    number: pr.number,
-                    url: pr.html_url,
-                    title: escapeSlack(pr.title),
-                    authorLogin: pr.user ? pr.user.login : null,
-                  });
-                }
-              } else {
-                // No associated PR (direct push, or API lag right after merge) --
-                // fall back to the commit's own author so a culprit is never silently dropped.
-                entries.push({
-                  type: 'commit',
-                  sha: commit.sha,
-                  url: commit.html_url,
-                  title: escapeSlack(commit.commit.message.split('\n')[0]),
-                  authorLogin: commit.author ? commit.author.login : null,
-                });
-              }
+              entry = {
+                type: 'commit',
+                sha: commit.sha,
+                url: commit.html_url,
+                title: escapeSlack(commit.commit.message.split('\n')[0]),
+                authorLogin: commit.author ? commit.author.login : null,
+              };
             }
 
-            core.info(`Resolved ${entries.length} culprit entr${entries.length === 1 ? 'y' : 'ies'} between green #${prevGood.run_number} and first red #${firstRed.run_number}`);
-
-            // compareCommits returns no commits when base is not an ancestor of
-            // head (e.g. main's history was rewritten between the two runs).
-            // There is nothing attributable to ping about -- abstain.
-            if (entries.length === 0) {
-              core.warning(`No commits found between green #${prevGood.run_number} (${prevGood.head_sha}) and ` +
-                `first red #${firstRed.run_number} (${firstRed.head_sha}) -- history may have been rewritten. Abstaining.`);
-              core.setOutput('should_notify', 'false');
-              return;
-            }
-
-            // Defense-in-depth ONLY -- this is NOT the attribution mechanism
-            // and must never be lowered to "tune" blame radius. With blame
-            // anchored to firstRed, the culprit set is structurally the
-            // commits of one push plus any immediately preceding never-tested
-            // pushes: almost always 1 entry, occasionally a small handful. A
-            // large list can only mean something pathological happened (e.g.
-            // a mass-cancellation storm swallowed a whole day of pushes
-            // between the last green run and the first red one), where
-            // pinging everyone would repeat the mass-ping incident this
-            // workflow was redesigned to prevent -- abstain and leave a
-            // warning for a human to triage instead.
-            const MAX_CULPRIT_ENTRIES = 15;
-            if (entries.length > MAX_CULPRIT_ENTRIES) {
-              core.warning(`Resolved ${entries.length} culprit entries between green #${prevGood.run_number} and first red #${firstRed.run_number} -- ` +
-                `implausibly large for a single regression, so something upstream is pathological (mass-cancellation storm?). ` +
-                `Abstaining instead of mass-pinging; a human should triage this outage.`);
-              core.setOutput('should_notify', 'false');
-              return;
-            }
+            // Kept as an array for the downstream steps' shape (jq iteration,
+            // mention resolution), but by construction it always has exactly
+            // one element: at most one person is blamed per regression.
+            const entries = [entry];
+            core.info(`Culprit resolved: ${entry.type === 'pr' ? '#' + entry.number : entry.sha} by ${entry.authorLogin || '(unknown)'} ` +
+              `(first red run #${firstRed.run_number}).`);
 
             core.setOutput('should_notify', 'true');
             core.setOutput('prev_run_url', prevGood.html_url);
