@@ -632,6 +632,7 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 
 #include "noc_event_profiler.hpp"
 #include "perf_counters.hpp"
+#include "synchronization_event_profiler.hpp"
 
 // Not dispatch
 #if (!defined(DISPATCH_KERNEL))
@@ -667,11 +668,11 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 // Dispatch and enabled
 #elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
 
-#define DeviceZoneScopedN(name)                                                          \
+#define DeviceZoneScopedN(name, ...)                                                     \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                         \
     TT_ZONE_DEFINE_ID(hash, name);                                                       \
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
-        kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
+        kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>(__VA_ARGS__);
 
 #define DeviceData(name, data)                                                                       \
     {                                                                                                \
@@ -696,7 +697,7 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 // Dispatch but disabled
 #else
 
-#define DeviceZoneScopedN(name) (void(sizeof(name)))
+#define DeviceZoneScopedN(name, ...) (void(sizeof(name)))
 
 #define DeviceData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
 
@@ -767,7 +768,7 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 
 #define DeviceZoneScopedMainChildN(name) (void(name))
 
-#define DeviceZoneScopedN(name) (void(name))
+#define DeviceZoneScopedN(name, ...) (void(name))
 
 #define DeviceZoneScopedSumN1(name) (void(name))
 
@@ -792,6 +793,23 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 #define RECORD_NOC_EVENT_WITH_ID(type, local_addr, noc_id, addrgen, offset, num_bytes, vc, posted, noc)
 #define RECORD_NOC_EVENT(type, posted, noc)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
+
+// null macros when kernel profiling is disabled. Needed because the real
+// definitions live in synchronization_event_profiler.hpp, which is only included
+// from the PROFILE_KERNEL branch above -- so without these, cb_push_back /
+// cb_wait_front in dataflow_api.h and cb_api.h fail to compile in a non-profiled
+// build.
+#define RECORD_CB_PUSH_BACK(cb_id) (void(sizeof(cb_id)))
+#define RECORD_CB_WAIT_FRONT_START(cb_id) (void(sizeof(cb_id)))
+#define RECORD_CB_WAIT_FRONT_END(cb_id) (void(sizeof(cb_id)))
+
+// Same reasoning for the semaphore events: the noc_semaphore_* functions in
+// dataflow_api.h, the Semaphore class in noc_semaphore.h and the blaze cross-RISC
+// primitives all use these, and they must compile in a non-profiled build too.
+#define RECORD_SEMAPHORE_SET(semaphore_address) (void(sizeof(semaphore_address)))
+#define RECORD_SEMAPHORE_SET_REMOTE(semaphore_address) (void(sizeof(semaphore_address)))
+#define RECORD_SEMAPHORE_WAIT_START(semaphore_address) (void(sizeof(semaphore_address)))
+#define RECORD_SEMAPHORE_WAIT_END(semaphore_address) (void(sizeof(semaphore_address)))
 
 // null macros when noc debugging is disabled
 #define RECORD_SCOPED_LOCK_EVENT(event_type, locked_address_base, num_bytes)
