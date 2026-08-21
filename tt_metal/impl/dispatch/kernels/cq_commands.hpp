@@ -11,7 +11,6 @@
 #pragma once
 
 #include <cstdint>
-#include <cstddef>  // offsetof, for the aligned-overlay static_asserts below
 
 constexpr uint32_t CQ_DISPATCH_CMD_SIZE = 16;  // for L1 alignment
 
@@ -169,10 +168,9 @@ struct CQPrefetchPagedToRingbufferCmd {
 } __attribute__((packed));
 
 struct CQPrefetchSetRingbufferOffsetCmd {
-    uint32_t offset;
-    uint16_t pad1;
-    uint8_t pad2;
     uint8_t update_wp;  // if set, the ringbuffer write pointer will be updated to the offset
+    uint16_t pad1;
+    uint32_t offset;
 } __attribute__((packed));
 
 // Current implementation limit is based on size of the l1_cache which stores the sub_cmds
@@ -230,67 +228,6 @@ struct CQPrefetchCmdLarge {
         uint8_t padding[32 - sizeof(CQPrefetchBaseCmd)];
     } __attribute__((packed));
 };
-
-//////////////////////////////////////////////////////////////////////////////
-// Aligned read-only overlays of the packed command layouts above.
-//
-// The packed structs describe the wire format, which is what host and device must agree on. But
-// `packed` also drops the struct's alignment requirement to 1, which forbids the compiler from
-// assuming ANY alignment -- so every field read compiles to a byte-at-a-time load plus shift/or
-// reassembly. Measured on the relay_linear handler: the three field reads below became 20 `lbu` plus
-// ~13 `slli`/`or`, on BOTH Quasar and Blackhole. On Quasar those loads also go through the uncached
-// alias (~20-36 cyc each), so the pessimization is an order of magnitude more expensive there.
-//
-// The pads in the packed structs already place every field on its natural boundary relative to the
-// command base (the base's single byte plus pad1+pad2 lands noc_xy_addr at 4, addr at 8, length at
-// 16). These overlays describe those SAME bytes at those SAME offsets, unpacked -- so natural C
-// alignment reproduces the layout exactly while letting the compiler use lw/ld.
-//
-// This is a reinterpretation, not a hint: if the offsets ever diverge from the packed layout the
-// compiler will silently read the wrong bytes, which is what the static_asserts below prevent. They
-// tie each overlay field to its packed counterpart, so a layout change breaks the build.
-//
-// Requires the command base to be 8-byte aligned. Guaranteed with 8x margin: every command boundary
-// is aligned to PCIE_ALIGNMENT (64) -- host side by tt::align(..., pcie_alignment) at each emit in
-// device_command.cpp, device side by the fixed CQ_PREFETCH_CMD_BARE_MIN_SIZE strides. 8 (not 64) is
-// the real requirement, so a future reduction of the command stride to 16 or 32 stays safe.
-
-struct CQPrefetchRelayLinearCmdAligned {
-    uint32_t base_and_pad;  //  0-3: base.cmd_id + pad1 + pad2
-    uint32_t noc_xy_addr;   //  4-7
-    uint64_t addr;          //  8-15
-    uint64_t length;        // 16-23
-};
-
-static_assert(alignof(CQPrefetchRelayLinearCmdAligned) == 8);
-static_assert(
-    offsetof(CQPrefetchCmdLarge, relay_linear) + offsetof(CQPrefetchRelayLinearCmd, noc_xy_addr) ==
-        offsetof(CQPrefetchRelayLinearCmdAligned, noc_xy_addr),
-    "aligned overlay diverged from the packed relay_linear layout");
-static_assert(
-    offsetof(CQPrefetchCmdLarge, relay_linear) + offsetof(CQPrefetchRelayLinearCmd, addr) ==
-        offsetof(CQPrefetchRelayLinearCmdAligned, addr),
-    "aligned overlay diverged from the packed relay_linear layout");
-static_assert(
-    offsetof(CQPrefetchCmdLarge, relay_linear) + offsetof(CQPrefetchRelayLinearCmd, length) ==
-        offsetof(CQPrefetchRelayLinearCmdAligned, length),
-    "aligned overlay diverged from the packed relay_linear layout");
-
-struct CQPrefetchRelayInlineCmdAligned {
-    uint32_t base_and_pad;  //  0-3: base.cmd_id + dispatcher_type + pad
-    uint32_t length;        //  4-7
-    uint32_t stride;        //  8-11
-};
-
-static_assert(alignof(CQPrefetchRelayInlineCmdAligned) == 4);
-static_assert(
-    offsetof(CQPrefetchCmd, relay_inline) + offsetof(CQPrefetchRelayInlineCmd, length) ==
-        offsetof(CQPrefetchRelayInlineCmdAligned, length),
-    "aligned overlay diverged from the packed relay_inline layout");
-static_assert(
-    offsetof(CQPrefetchCmd, relay_inline) + offsetof(CQPrefetchRelayInlineCmd, stride) ==
-        offsetof(CQPrefetchRelayInlineCmdAligned, stride),
-    "aligned overlay diverged from the packed relay_inline layout");
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -458,11 +395,11 @@ struct CQDispatchSetUnicastOnlyCoresCmd {
 constexpr uint8_t CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET = 0xff;
 
 struct CQDispatchGoSignalMcastCmd {
-    uint32_t go_signal;
     uint8_t multicast_go_offset;  // Index of the multicast go to write to. CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET - no
                                   // multicast gos.
     uint8_t num_unicast_txns;
     uint8_t noc_data_start_index;
+    uint32_t go_signal;
     uint32_t wait_count;
     uint32_t wait_stream;  // Index of the stream to wait on
 } __attribute__((packed));
@@ -475,6 +412,8 @@ struct CQDispatchNotifySubordinateGoSignalCmd {
 } __attribute__((packed));
 
 struct CQDispatchRtProfilerFlushCmd {
+    uint8_t pad1;
+    uint16_t pad2;
     uint32_t wait_count;   // worker completion count to wait on
     uint32_t wait_stream;  // stream index to wait on
 } __attribute__((packed));
