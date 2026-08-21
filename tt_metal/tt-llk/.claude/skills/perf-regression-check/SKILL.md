@@ -33,10 +33,10 @@ it works on any branch whether or not the perf infra is merged.
    `git stash pop` if you stashed). Treat this as mandatory cleanup.
 
 ## Procedure
-Let `WORK=/tmp/perf-regression-check` (mkdir -p) and the compare script be resolved from the repo
+Let `WORK=/tmp/perf-regression-check` (mkdir -p) and the compare module be resolved from the repo
 root (cwd-independent):
 ```bash
-SCRIPT="$(git rev-parse --show-toplevel)/tt_metal/tt-llk/.claude/scripts/perf_regression_compare.py"
+SCRIPT="$(git rev-parse --show-toplevel)/tt_metal/tt-llk/perf/regression_compare.py"
 ```
 
 **0. Determine commits.**

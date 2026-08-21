@@ -1,0 +1,203 @@
+name: "LLK perf gate impl"
+# Entry points: workflow_call only. Trigger lives in llk-perf-gate.yaml.
+
+on:
+  workflow_call:
+    inputs:
+      baseline_run_id:
+        description: "The workflow run ID of the perf measurement to gate against"
+        required: false
+        type: string
+      run_types:
+        description: "Comma-separated run types to gate on (e.g. L1_TO_L1, MATH_ISOLATE, PACK_ISOLATE)"
+        required: false
+        default: L1_TO_L1
+        type: string
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  llk-perf-gate:
+    name: "Compare perf: current vs main"
+    runs-on: ubuntu-slim
+    outputs:
+      gate_exit_code: ${{ steps.compare.outputs.gate_exit_code }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9e0d6c9882fc7902038978ad1a988142 # v5.0.0
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas snowflake-connector-python
+          # sshpass is available in most CI environments; if not: apt-get install sshpass
+
+      # Query Snowflake for the latest main baseline
+      - name: Get branch point commit
+        id: branch_point
+        run: |
+          git fetch origin main --quiet
+          BRANCH_POINT=$(git merge-base origin/main HEAD)
+          echo "branch_point=$BRANCH_POINT" >> $GITHUB_OUTPUT
+          echo "Comparing against branch point: $BRANCH_POINT"
+
+      - name: Query Snowflake for baseline
+        id: baseline
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+          SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
+          BASELINE_COMMIT: ${{ steps.branch_point.outputs.branch_point }}
+          ARCH: wormhole
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          import json
+          from snowflake.connector import connect
+
+          # Snowflake credentials from GitHub secrets
+          conn = connect(
+            account=os.environ['SNOWFLAKE_ACCOUNT'],
+            user=os.environ['SNOWFLAKE_USER'],
+            password=os.environ['SNOWFLAKE_PASSWORD'],
+            warehouse=os.environ['SNOWFLAKE_WAREHOUSE'],
+            database=os.environ['SNOWFLAKE_DATABASE']
+          )
+
+          cursor = conn.cursor()
+
+          # Query: Get the latest baseline for this architecture at the branch point
+          # If exact commit exists, use it; otherwise use the latest before it
+          query = """
+          SELECT commit_sha, timestamp, run_id
+          FROM llk_baselines
+          WHERE arch = %s
+            AND timestamp = (
+              SELECT MAX(timestamp)
+              FROM llk_baselines
+              WHERE arch = %s
+                AND commit_sha <= %s
+            )
+          LIMIT 1
+          """
+
+          cursor.execute(query, (os.environ['ARCH'], os.environ['ARCH'], os.environ['BASELINE_COMMIT']))
+          result = cursor.fetchone()
+          cursor.close()
+          conn.close()
+
+          if result:
+            commit_sha, timestamp, run_id = result
+            print(f"✓ Found baseline: {commit_sha} ({timestamp})")
+            with open('baseline_metadata.json', 'w') as f:
+              json.dump({
+                'commit_sha': commit_sha,
+                'timestamp': timestamp,
+                'run_id': run_id
+              }, f)
+          else:
+            print("⚠️  No baseline found; this may be the first run")
+            # Store empty metadata; gate will skip comparison
+            with open('baseline_metadata.json', 'w') as f:
+              json.dump({}, f)
+          PYTHON
+
+      - name: Download baseline perf_data from SFTP
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_USER: ${{ secrets.SFTP_USER }}
+          SFTP_PASS: ${{ secrets.SFTP_PASSWORD }}
+        run: |
+          set +e  # Don't fail if baseline doesn't exist (first run)
+
+          # Read baseline commit from metadata
+          BASELINE_COMMIT=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', ''))")
+
+          if [ -z "$BASELINE_COMMIT" ]; then
+            echo "⚠️  No baseline commit found; skipping baseline download"
+            exit 0
+          fi
+
+          mkdir -p baseline_perf
+
+          echo "Downloading baseline from SFTP: perf_${BASELINE_COMMIT}/"
+          sshpass -p "${SFTP_PASS}" sftp -o StrictHostKeyChecking=no \
+            "${SFTP_USER}@${SFTP_HOST}:/baselines/llk/perf_${BASELINE_COMMIT}/" \
+            baseline_perf/ || {
+            echo "⚠️  Could not download baseline (may be staging -> baselines delay)"
+            exit 0
+          }
+
+          echo "✓ Baseline downloaded"
+          find baseline_perf -name "*.csv" | wc -l | xargs echo "CSV files:"
+
+      # Download current run artifacts (perf_data CSVs from the build job)
+      - name: Download current run artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: perf_data
+          path: current_perf
+
+      # Run the comparison
+      - name: Compare regressions
+        id: compare
+        run: |
+          python3 ${{ env.LLK_PATH }}/perf/regression_compare.py \
+            --current 'current_perf/**/*.csv' \
+            --baseline 'baseline_perf/**/*.csv' \
+            --threshold 0.02 \
+            --min-cycles 30 \
+            --run-types '${{ inputs.run_types }}' \
+            --report perf_gate_report.md \
+            --test 'LLK perf' \
+            --baseline-sha "${{ github.event.workflow_run.head_commit }}" \
+            --current-sha "${{ github.sha }}" \
+            --baseline-label "main branch point" \
+            --current-label "PR branch"
+          EXIT_CODE=$?
+          echo "gate_exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          exit 0  # Don't fail the step; let the check step decide
+
+      # Post the report as a PR comment
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('perf_gate_report.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            });
+
+      # Check whether the gate passed
+      - name: Gate verdict
+        if: steps.compare.outputs.gate_exit_code != '0'
+        run: |
+          echo "❌ Performance regressions detected"
+          cat perf_gate_report.md
+          exit 1
+
+      - name: Gate passed
+        if: steps.compare.outputs.gate_exit_code == '0'
+        run: |
+          echo "✅ No regressions detected"
+          cat perf_gate_report.md
