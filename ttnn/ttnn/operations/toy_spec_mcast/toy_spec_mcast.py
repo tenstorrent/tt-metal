@@ -1,15 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Row-broadcast via a Metal 2.0 ProgramSpec + a kernel_lib mcast family.
+"""Broadcast via a Metal 2.0 ProgramSpec + a kernel_lib mcast family, in both mcast topologies.
 
-`in` holds one tile per grid row. The sender core of each row reads its tile and multicasts it
-across the row; every core writes what it received to its own output tile. So the output is `in`
-replicated across the grid width, which a broken mcast cannot fake.
+`toy_spec_mcast` (1D): `in` holds one tile per grid row. The sender core of each row reads its tile
+and multicasts it across the row; every core writes what it received to its own output tile. So the
+output is `in` replicated across the grid width, which a broken mcast cannot fake.
+
+`toy_spec_mcast_2d` (2D): `in` is ONE tile. A single sender core reads it and multicasts it over the
+whole receiver rectangle in one shot; every participating core writes its copy to its own output
+tile. The sender may sit inside the rectangle or outside it.
 
 The point of the op is the mcast plumbing: one McastFamily.attach() call writes the semaphores,
 bindings, named CT args and per-core varargs into the spec, and the kernel reads them back with
-MCAST_ARGS(row). Neither side spells a CT or RT offset.
+MCAST_ARGS(row). Neither side spells a CT or RT offset -- and the SAME reader kernel serves both
+topologies unchanged, because the wire (four named CT words + a 4-word vararg block) is identical.
 """
 
 from pathlib import Path
@@ -107,6 +112,93 @@ def toy_spec_mcast(inp: ttnn.Tensor, rows: int, cols: int) -> ttnn.Tensor:
             ttnn.KernelRunArgs(
                 kernel=K_WRITER,
                 runtime_arg_values={"out_page": {c: c.y * cols + c.x for c in cores}},
+            ),
+        ]
+    )
+
+    mcast.attach(spec, run_args, kernels=[K_READER], cores=cores)
+
+    return ttnn.generic_op([inp, out], spec, run_args, {TP_IN: 0, TP_OUT: 1})
+
+
+def toy_spec_mcast_2d(inp: ttnn.Tensor, rows: int, cols: int, sender=None) -> ttnn.Tensor:
+    """One 2D mcast of a single tile over a `cols` x `rows` rectangle at the grid origin.
+
+    `inp` is (1, 1, 32, 32). `sender` is the one broadcasting core, inside the rectangle or outside
+    it; it defaults to the rectangle's origin. Returns (1, 1, 32, 32 * n) holding one copy of the
+    tile per participating core, in the enumeration order of `McastFamily.nodes` -- a flat mapping
+    rather than a grid-shaped one so that a sender outside the rectangle needs no special case.
+    """
+    if inp.layout != ttnn.TILE_LAYOUT or inp.dtype != ttnn.bfloat16:
+        raise NotImplementedError("toy_spec_mcast_2d requires TILE_LAYOUT bfloat16")
+    if tuple(inp.shape) != (1, 1, TILE, TILE):
+        raise NotImplementedError(f"expected shape (1, 1, {TILE}, {TILE}), got {tuple(inp.shape)}")
+
+    device = inp.device()
+    rect = _grid(device, rows, cols)
+    sender = ttnn.CoreCoord(0, 0) if sender is None else ttnn.CoreCoord(*sender)
+    grid_size = device.compute_with_storage_grid_size()
+    if sender.x >= grid_size.x or sender.y >= grid_size.y:
+        raise NotImplementedError(f"sender ({sender.x},{sender.y}) is outside device grid {grid_size.x}x{grid_size.y}")
+
+    # The kernel spells MCAST_ARGS(row), so the prefix stays "row" for the 2D family too: the macro
+    # names a family, not a topology.
+    mcast = McastFamily(device, rect, MCAST_PREFIX, sender=sender, config=ttnn.McastConfig(noc=ttnn.NOC.NOC_0))
+    # nodes is the rectangle plus the sender when the sender sits outside it; every one of those
+    # cores runs the program, so it is both the work unit and the output page map.
+    cores = list(ttnn.corerange_to_cores(mcast.nodes, None, True))
+
+    out_spec = ttnn.TensorSpec(
+        ttnn.Shape([1, 1, TILE, TILE * len(cores)]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+    )
+    out = ttnn.allocate_tensor_on_device(out_spec, device)
+    tile_bytes = inp.buffer_page_size()
+
+    spec = ttnn.ProgramSpec(
+        name="toy_spec_mcast_2d",
+        kernels=[
+            ttnn.KernelSpec(
+                unique_id=K_READER,
+                source=str(KERNEL_DIR / "reader.cpp"),
+                hw_config=ttnn.create_reader_dm_config(),
+                dfb_bindings=[ttnn.producer_of(DFB_TILE, DFB_TILE)],
+                tensor_bindings=[ttnn.TensorBinding(TP_IN, TP_IN)],
+                runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["row_page", "is_sender"]),
+            ),
+            ttnn.KernelSpec(
+                unique_id=K_WRITER,
+                source=str(KERNEL_DIR / "writer.cpp"),
+                hw_config=ttnn.create_writer_dm_config(),
+                dfb_bindings=[ttnn.consumer_of(DFB_TILE, DFB_TILE)],
+                tensor_bindings=[ttnn.TensorBinding(TP_OUT, TP_OUT)],
+                runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["out_page"]),
+            ),
+        ],
+        dataflow_buffers=[
+            ttnn.DataflowBufferSpec(unique_id=DFB_TILE, entry_size=tile_bytes, num_entries=1, data_format=ttnn.bfloat16)
+        ],
+        tensor_parameters=[
+            ttnn.TensorParameter(unique_id=TP_IN, spec=inp.spec),
+            ttnn.TensorParameter(unique_id=TP_OUT, spec=out.spec),
+        ],
+        work_units=[ttnn.WorkUnitSpec(name="main", kernels=[K_READER, K_WRITER], target_nodes=mcast.nodes)],
+    )
+
+    run_args = ttnn.ProgramRunArgs(
+        kernel_run_args=[
+            ttnn.KernelRunArgs(
+                kernel=K_READER,
+                runtime_arg_values={
+                    "row_page": {c: 0 for c in cores},
+                    "is_sender": {c: int(mcast.is_sender(c)) for c in cores},
+                },
+            ),
+            ttnn.KernelRunArgs(
+                kernel=K_WRITER,
+                runtime_arg_values={"out_page": {c: i for i, c in enumerate(cores)}},
             ),
         ]
     )
