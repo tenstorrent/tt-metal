@@ -122,6 +122,7 @@ jobs:
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
       tier: "1"
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
+      summary-scope: ${{ inputs.platform }}
 
   # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.
   # expected-jobs is the union of single-host and exabox multihost legs so a
@@ -129,7 +130,7 @@ jobs:
   ai-run-summary:
     name: "AI Run Summary"
     needs: [release-demo-tests]
-    if: always() && !cancelled() && needs.release-demo-tests.result != 'skipped'
+    if: always() && needs.release-demo-tests.result != 'skipped'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -155,7 +156,8 @@ jobs:
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "$GITHUB_WORKSPACE",
               "input_dir": "ai_job_summaries",
-              "output_dir": "ai_run_summaries"
+              "output_dir": "ai_run_summaries",
+              "scope": "${{ inputs.platform }}"
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
