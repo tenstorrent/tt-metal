@@ -1226,6 +1226,50 @@ decides whether a subtraction comes out backwards), FPU seed with an SFPU epilog
 op rule falling back on `max_`, and the SHAPE rule falling back on `(a+b)-(c+a)` where
 every op does have an FPU form.
 
+### Real model shapes, and a correction to the headline
+
+`bench_models.py` sweeps the smallest published config of each family. Per HEAD on ONE
+core, which is what this kernel does today, and causal prefill measured AS triangular:
+the kernel takes S_q queries against S_k keys and its mask already handles S_q < S_k, so
+one launch is exactly one q-chunk of a prefill, and a head is the SUM over q-chunks with
+chunk i attending to (i+1)*S_q keys. Both sides at HiFi2 + approx.
+
+| model | d | S | sq | ours/head | ttnn/head | ratio |
+|---|---|---|---|---|---|---|
+| Llama 3.2 1B | 64 | 512 | 4 | 314.1 us | 122.5 us | 2.56x |
+| Qwen2.5 0.5B | 64 | 512 | 4 | 314.1 us | 122.5 us | 2.56x |
+| TinyLlama 1.1B | 64 | 512 | 4 | 314.0 us | 122.5 us | 2.56x |
+| Phi-3 mini 3.8B | 96 | 512 | 2 | 336.6 us | 132.1 us | 2.55x |
+| Qwen3 0.6B | 128 | 512 | 2 | 360.8 us | 142.8 us | 2.53x |
+| Llama 3.2 3B | 128 | 512 | 2 | 360.9 us | 142.8 us | 2.53x |
+| Gemma 3 1B | 256 | 512 | 1 | 617.0 us | 200.0 us | 3.09x |
+
+**The 1.8x reported earlier was a small-shape artifact and this supersedes it.** The gap
+grows with sequence length and settles:
+
+| | S=128 | S=256 | S=512 | S=1024 |
+|---|---|---|---|---|
+| Llama 3.2 1B (d=64, sq=4) | 1.83x | 2.30x | 2.56x | 2.66x |
+| Gemma 3 1B (d=256, sq=1) | 2.30x | 2.50x | 3.09x | 3.58x |
+
+ttnn carries the larger fixed program cost, so at S=128 it was paying a floor we were
+not, and the ratio flattered us. As that floor amortises the ratio converges on the true
+work ratio, which is **2.5-2.7x for 64- and 128-wide heads and 3.6x for 256-wide**. The
+optimisation work in this file is real -- the same sweep against the pre-FPU code would
+be worse by the factors recorded above -- but 1.8x was never the number for a real shape.
+
+**Head width, not sequence length, is what the DST budget punishes.** sq*dt <= 8 bounds
+the PV matmul's output block, so a 256-wide head gets sq=1: 32 query rows per launch, and
+32 launches for S=1024. That is why Gemma is the outlier at 3.58x while every 64- and
+128-wide head sits at 2.5x regardless of family. Splitting the PV matmul into subblocks
+would lift it, at the cost of more matmul invocations.
+
+Worth stating for planning: heads are independent, so a layer is not n_heads serial
+passes. At 512 with 32 heads and a 64-core grid it is one round, so the per-head number
+IS the per-layer number -- 314us for Llama 3.2 1B, 361us for Llama 3.2 3B. What this
+kernel still lacks for that is the GQA head mapping and the multi-core partitioning, both
+phase 11, plus a q-loop: a prefill is currently N separate launches where ttnn's is one.
+
 ### What to test next
 
 Ordered by expected value, with what each result would actually mean. Six candidates are
