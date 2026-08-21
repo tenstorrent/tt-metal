@@ -41,18 +41,43 @@ Also note the `handoff=none` framing was wrong in **both** directions at once: i
 
 ## 1. The decision table — 8 kW, corrected
 
-Measured 2026-08-20 with the fixed driver, `kmabee/mistral4-prefill-full`, `PP_HANDOFF=none`, traced.
+All four parallelisations, fixed driver, `PP_HANDOFF=none`, traced, 2026-08-20/21.
+**Bold = best in row.** Rows marked \* are still pre-fix.
 
-| window | single-rank | PP=4 x (8,1) | ratio | previously reported |
+| measurement | single-rank (8,4) | PP=4 x (8,1) | PP=4 x (4,2) | PP=2 x (8,2) |
 |---|---|---|---|---|
-| 5,120 | 32,611 | **38,027** | **1.17x** | 1.04x |
-| 25,600 | 27,090 | **45,238** | **1.67x** | 1.53x |
-| 102,400 | 19,810 | 20,115 total / **23,132** steady | 1.02x / **1.17x** | 0.99x / 1.17x |
-| 261,120 | 10,888 | 12,192 total / **12,408** steady | 1.12x / **1.14x** | 1.13x / 1.14x |
+| 5,120 single-shot | 32,611 | 38,027 | **40,784** | 27,061 |
+| 25,600 single-shot | 27,090 | **45,238** | 24,729 | 13,370\* |
+| 102,400 chunked, steady | 19,810 | **23,132** | 13,862 | 11,368\* |
+| 102,400 chunked, total | 19,810 | **20,115** | 12,324 | 11,098\* |
+| 261,120 chunked, steady | 10,888 | **12,408** | 6,700 | 9,348\* |
+| 261,120 chunked, total | 10,888 | **12,192** | 6,457 | 9,227\* |
 
-PP=4 now wins every window on the steady-state metric, and only the 102,400 single-request total is a
-wash. The `PP_HANDOFF=none` caveat still applies to all of it: no activation crosses a stage boundary,
-so a real device-to-device transport cost has to come off these margins.
+Ratios vs single-rank (steady where applicable):
+
+| window | (8,1) | (4,2) | (8,2) |
+|---|---|---|---|
+| 5,120 | 1.17x | **1.25x** | 0.83x |
+| 25,600 | **1.67x** | 0.91x | — |
+| 102,400 | **1.17x** | 0.70x | — |
+| 261,120 | **1.14x** | 0.62x | — |
+
+### Conclusion: `(8,1)` is the candidate
+
+**PP=4 x (8,1) wins every window except one short single-shot case**, including both
+production-shaped chunked long contexts. It is the configuration to take forward.
+
+**`(4,2)` is a short-prompt special case, not a general win.** It beats everything at 5,120
+single-shot (1.25x single-rank) and then collapses — 0.55x, 0.60x, 0.54x of `(8,1)` at the other three.
+The mechanism: at 5,120 its 1,280 tokens/chip fill the core grid better than `(8,1)`'s 640, which is
+worth ~7%; but SP=4 gives each chip **half the sequence** SP=8 does, so once KV accumulates across
+chunks every chip carries 2x the KV through ring attention, and that dominates everything else. Its
+win exists only with an empty KV.
+
+**`(8,2)` is closed** — see the depth argument below.
+
+**Still true of all of it:** `PP_HANDOFF=none`, so no activation crosses a stage boundary and a real
+device-to-device transport cost has to come off these margins.
 
 ## 2. 12 kW — STALE, needs re-measurement
 
@@ -380,18 +405,22 @@ op *names* and `LayerNormPostAllGatherDeviceOperation` contains "AllGather". Fix
 
 ## 7. Measured and rejected — do not re-run
 
-### PP=4 × (4,2) — rejection WITHDRAWN pending re-measurement
+### PP=4 × (4,2) — re-measured; not rejected, but not the candidate
 
-| window | (4,2), buggy | (8,1), corrected | (4,2) vs single-rank, buggy |
+| window | buggy | corrected | vs (8,1) corrected |
 |---|---|---|---|
-| 5,120 | 24,416 | 38,027 | 0.93x |
-| 25,600 | 17,483 | 45,238 | 0.52x |
+| 5,120 single-shot | 24,416 | **40,784** | 1.07x — wins |
+| 25,600 single-shot | 17,483 | 24,729 | 0.55x |
+| 102,400 chunked steady | not run | 13,862 | 0.60x |
+| 261,120 chunked steady | not run | 6,700 | 0.54x |
 
-**These numbers are not trustworthy.** `(4,2)` is EP=2 — the configuration the §0 bug punished by
-2.07x — and it was rejected purely on them. It is being re-measured (queue #2) with the 65 GB `4x2`
-cache in `/home/kmabee/mistral4_ttnn_cache_pp`. The structural argument against it (halved sequence
-split, so each rank carries twice the tokens) still stands on its own, but "worse than not using PP at
-all" is no longer a supported claim.
+The original verdict — "worse than not using PP at all, do not retry this variant" — **was wrong**, an
+artefact of the §0 bug, which inflated this EP=2 configuration by 1.67x at 5,120 and 1.41x at 25,600.
+It is in fact the fastest configuration measured at the 5,120 single-shot window.
+
+It is still not the candidate: the advantage is core-utilisation with an **empty** KV, and it inverts
+as soon as context accumulates (see §1). Keep it in mind for short-prompt / low-context serving, not
+for the 100K-256K path.
 
 ### Others
 

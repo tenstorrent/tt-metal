@@ -342,7 +342,7 @@ def _meta1(val, sm=None):
 _MESH_FOR_HOST_META = [None]  # set once per test; host-side from_torch still wants a mapper
 
 
-@pytest.mark.parametrize("pp_shape", ["8x1", "8x2"], ids=["8x1", "8x2"])
+@pytest.mark.parametrize("pp_shape", ["8x1", "8x2", "4x2"], ids=["8x1", "8x2", "4x2"])
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
