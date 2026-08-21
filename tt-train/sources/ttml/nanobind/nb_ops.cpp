@@ -5,11 +5,15 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
+#include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
 #include <span>
+#include <string>
 #include <ttnn/distributed/distributed_tensor.hpp>
+#include <variant>
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
@@ -26,8 +30,8 @@
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
-#include "ops/mla_qkv_assemble_op.hpp"
 #include "ops/mla_q_rope.hpp"
+#include "ops/mla_qkv_assemble_op.hpp"
 #include "ops/moe_ffn_swiglu_op.hpp"
 #include "ops/moe_group_op.hpp"
 #include "ops/moe_ungroup_op.hpp"
@@ -557,7 +561,23 @@ void py_module(nb::module_& m) {
     {
         auto py_unary = static_cast<nb::module_>(m.attr("unary"));
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
-        py_unary.def("gelu", &ttml::ops::gelu, nb::arg("tensor"));
+        // `variant` accepts ttnn.GeluVariant (GeluVariant is an alias of ttnn's enum, so it is that
+        // exact Python type) or one of the strings "none"/"accurate", "tanh", "fast_lut".
+        py_unary.def(
+            "gelu",
+            [](const autograd::TensorPtr& tensor, const std::variant<GeluVariant, std::string>& variant) {
+                return ttml::ops::gelu(
+                    tensor,
+                    std::holds_alternative<GeluVariant>(variant)
+                        ? std::get<GeluVariant>(variant)
+                        : ttml::ops::gelu_variant_from_string(std::get<std::string>(variant)));
+            },
+            nb::arg("tensor"),
+            nb::kw_only(),
+            nb::arg("variant") = GeluVariant::ACCURATE,
+            "GELU activation. `variant` takes a ttnn.GeluVariant or one of the strings\n"
+            "\"none\"/\"accurate\", \"tanh\", \"fast_lut\". FastLut approximates only the forward\n"
+            "pass; its backward uses the exact GELU derivative.");
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
         py_unary.def("exp", &ttml::ops::exp, nb::arg("tensor"));
         py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));

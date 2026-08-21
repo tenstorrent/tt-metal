@@ -4,12 +4,24 @@
 
 #pragma once
 
+#include <string_view>
+
 #include "autograd/tensor.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttml::ops {
 
+using GeluVariant = ttnn::operations::unary::GeluVariant;
+
+// Parses a GELU variant name. Accepted spellings (lowercase, exact):
+//   "none", "accurate" -> ACCURATE   ("none" mirrors torch's and gelu_bw's `approximate=` vocabulary)
+//   "tanh"             -> TANH
+//   "fast_lut"         -> FAST_LUT
+// Throws std::invalid_argument otherwise; nanobind maps that to a Python ValueError.
+GeluVariant gelu_variant_from_string(std::string_view name);
+
 autograd::TensorPtr relu(const autograd::TensorPtr& tensor);
-autograd::TensorPtr gelu(const autograd::TensorPtr& tensor);
+autograd::TensorPtr gelu(const autograd::TensorPtr& tensor, GeluVariant variant = GeluVariant::ACCURATE);
 autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_bw = false);
 autograd::TensorPtr mean(const autograd::TensorPtr& tensor);
 // autograd::TensorPtr sum(const autograd::TensorPtr& tensor);
