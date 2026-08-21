@@ -373,7 +373,10 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             CONSUMER,
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer_2_0.cpp",
             static_cast<uint8_t>(p.num_consumers));
-        consumer.compile_time_args = {{"num_entries_per_consumer", num_entries_per_consumer}};
+        const bool consumer_batches_credits = consumer_blocked && p.num_producers <= p.num_consumers;
+        consumer.compile_time_args = {
+            {"num_entries_per_consumer", num_entries_per_consumer},
+            {"block_size", consumer_batches_credits ? p.block_size : 1u}};
     }
     consumer.dfb_bindings = {
         {.dfb_spec_name = DFB,
@@ -621,7 +624,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         } else if (
             p.producer_type == M2PorCType::TENSIX && p.pap == m2::DFBAccessPattern::BLOCKED &&
             p.cap == m2::DFBAccessPattern::ALL) {
-            // Trisc→DM BLOCKED→ALL routes the fan-out through the remapper (broadcast_tc needs a DM
+            // Trisc→DM BLOCKED→ALL routes the fan-out through the remapper (broadcast credits need a DM
             // producer). Over a flat prefilled ring the ALL consumer reads round-robin across the P producer
             // sub-rings, so output[r] = input[(r%P)*capacity + (r/P)], capacity = num_entries/P.
             // Identity at P==1, and block-size-independent since a flat prefill carries no block order.
@@ -688,8 +691,24 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             const uint32_t C = p.num_consumers;
             const uint32_t bs = p.block_size;
             std::vector<uint32_t> expected(input.size(), 0u);
-            if (C >= P) {
-                // Fan-out: producer pp round-robins ntc = C/P TCs; its k-th push to slot t is push t + k*ntc.
+            if (P > 1) {
+                // Region mesh (P > 1): producer pp owns the contiguous region starting at entry pp*R and
+                // lays its k-th block at region offset k*bs, so ring entry pp*R + k*bs + j holds input
+                // page (k*P + pp)*bs + j. Consumer c rotates over its P slots, so its m-th read is ring
+                // entry (m%P)*R + c + (m/P)*C, and it writes that to page m*C + c.
+                // Collapses to the identity when C == bs.
+                for (uint32_t c = 0; c < C; ++c) {
+                    for (uint32_t m = 0; m < p.num_entries / C; ++m) {
+                        const uint32_t pp = m % P;
+                        const uint32_t o = c + (m / P) * C;
+                        const uint32_t src = ((o / bs) * P + pp) * bs + (o % bs);
+                        const uint32_t dst = m * C + c;
+                        std::copy(
+                            input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + dst * wpe);
+                    }
+                }
+            } else {
+                // P == 1: the producer round-robins its C TCs; its k-th push to slot t is push t + k*C.
                 const uint32_t epp = p.num_entries / P;  // entries per producer
                 const uint32_t ntc = C / P;
                 for (uint32_t pp = 0; pp < P; ++pp) {
@@ -705,21 +724,6 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
                                 input.begin() + (src + 1) * wpe,
                                 expected.begin() + dst * wpe);
                         }
-                    }
-                }
-            } else {
-                // Fan-in: consumer c is fed round-robin by the P/C producers {c, c+C, ...}, so its read m
-                // comes from producer c + (m%ntc_c)*C, that producer's (m/ntc_c)-th push.
-                const uint32_t ntc_c = P / C;
-                for (uint32_t c = 0; c < C; ++c) {
-                    for (uint32_t m = 0; m < p.num_entries / C; ++m) {
-                        const uint32_t t = m % ntc_c;
-                        const uint32_t pp = c + t * C;
-                        const uint32_t k = m / ntc_c;  // producer pp's local push index
-                        const uint32_t src = (k / bs * P + pp) * bs + (k % bs);
-                        const uint32_t dst = m * C + c;
-                        std::copy(
-                            input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + dst * wpe);
                     }
                 }
             }

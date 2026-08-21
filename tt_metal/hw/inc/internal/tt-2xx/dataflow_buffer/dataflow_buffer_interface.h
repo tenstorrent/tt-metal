@@ -111,7 +111,8 @@ struct LocalDFBInterface {
     uint8_t num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t num_txn_ids;
-    uint8_t broadcast_tc;  // DM-DM ALL producer: post to all TCs instead of round-robin
+    uint8_t tc_credit_mode;  // dfb::TcCreditMode: all credits to the current TC (round-robin), all credits
+                             // to all TCs in full (broadcast), or a share of the credits to each TC (split)
     uint8_t _tc_align_pad;  // pad bytes [8,20) → 20B so tc_slots[] stays 4B-aligned
 
     uint16_t num_entries;

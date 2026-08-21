@@ -27,6 +27,17 @@ enum AccessPattern : uint8_t {
     UNKNOWN,
 };
 
+// The credit mode determines how many credits are posted to each consumer's tile counter(s) for
+// a given producer transaction.
+enum TcCreditMode : uint8_t {
+    // `count` credits go to the current counter, then rotate to the next.
+    kTcCreditRoundRobin = 0,
+    // `count` credits go to every counter.
+    kTcCreditBroadcast = 1,
+    // `count / num_tcs` credits go to every counter.
+    kTcCreditSplit = 2,
+};
+
 constexpr uint8_t NUM_DFBS = 32;
 // Pack TRISC stores only active logical DFBs in a compact local array to reduce local-memory pressure.
 constexpr uint8_t MAX_ACTIVE_DFBS_PACK = 16;
@@ -242,7 +253,7 @@ inline void dfb_write_dm_scalar_pack_to_blob(
     uint8_t num_entries_per_txn_id,
     uint8_t num_entries_per_txn_id_per_tc,
     uint8_t num_txn_ids,
-    uint8_t broadcast_tc,
+    uint8_t tc_credit_mode,
     uint8_t remapper_pair_index) {
     uint8_t* const p = entry_bytes + DFB_INIT_ENTRY_DM_SCALAR_PACK_BYTE_OFF;
     p[0] = num_tcs;
@@ -255,7 +266,7 @@ inline void dfb_write_dm_scalar_pack_to_blob(
     p[7] = num_entries_per_txn_id;
     p[8] = num_entries_per_txn_id_per_tc;
     p[9] = num_txn_ids;
-    p[10] = broadcast_tc;
+    p[10] = tc_credit_mode;
     p[11] = remapper_pair_index;
 }
 

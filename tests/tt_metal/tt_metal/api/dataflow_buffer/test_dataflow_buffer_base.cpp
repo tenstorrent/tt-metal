@@ -301,7 +301,7 @@ DFB_BLOCKED_TEST_2_0(DMTensixTest1xDFB2Bx1B_blk4, DM, TENSIX, 2, 1, 4, 16, false
 DFB_BLOCKED_TEST_2_0(DMTensixTest1xDFB4Bx4B_blk4, DM, TENSIX, 4, 4, 4, 32, false)
 
 // --- BLOCKED→ALL (Trisc→DM, explicit) ---
-// A Tensix producer routes the ALL fan-out through the remapper, not broadcast_tc.
+// A Tensix producer routes the ALL fan-out through the remapper, not the broadcast credit mode.
 // Golden: output[r] = input[(r%P)*capacity + (r/P)], capacity = num_entries/P (identity at P==1).
 // Odd P+C is deliberate: the config blob is 36 + 62*(P+C) bytes, so it lands non-word-aligned --
 // regression coverage for the write_to_device truncation that dropped the remapper bytes.
@@ -330,7 +330,7 @@ DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB4Bx1A_blk4, 4, 1, 4, 32)  // P+C
 DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB4Bx2A_blk4, 4, 2, 4, 32)  // P+C=6 (even)
 
 // --- BLOCKED→ALL (DM→DM, explicit) ---
-// Every ALL consumer reads every entry, freed after all acks via broadcast_tc (DM→DM never uses the
+// Every ALL consumer reads every entry, freed after all acks via broadcast credits (DM→DM never uses the
 // remapper). Identity at P==1; at P>1 the producer's per-block interleave doesn't cancel the consumer's
 // per-tile round-robin, so it's a permutation. C <= 4 (ALL slot cap), P+C <= 6 (Gen2 DM cap).
 #define DFB_BLOCKED_ALL_TEST_2_0(suffix, num_p, num_c, blk, entries) \

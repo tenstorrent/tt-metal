@@ -1420,6 +1420,19 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 const bool blocked_to_all = prod_blocked && cons.binding->access_pattern == DFBAccessPattern::ALL;
                 const bool blocked_to_strided =
                     prod_blocked && cons.binding->access_pattern == DFBAccessPattern::STRIDED;
+                if (blocked_to_strided) {
+                    const uint32_t cons_threads = cons.kernel->num_threads;
+                    TT_FATAL(
+                        cons_threads > 0 && prod.binding->block_size % cons_threads == 0,
+                        "DFB '{}': BLOCKED-producer->STRIDED-consumer requires the consumer thread count "
+                        "to divide block_size (producer '{}' block_size = {}, consumer '{}' num_threads = "
+                        "{}); otherwise a block cannot be split evenly across the consumers.",
+                        dfb.unique_id,
+                        prod.kernel->unique_id,
+                        prod.binding->block_size,
+                        cons.kernel->unique_id,
+                        cons_threads);
+                }
                 if (!blocked_to_all && !blocked_to_strided) {
                     TT_FATAL(
                         prod_blocked && cons_blocked,

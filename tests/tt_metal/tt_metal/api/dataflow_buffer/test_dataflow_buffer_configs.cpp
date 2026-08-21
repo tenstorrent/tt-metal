@@ -127,7 +127,7 @@ void validate_dfb_tile_counters(
     }
 
     // ALL mode engages the remapper ONLY when a Tensix endpoint is involved. Pure DM->DM ALL
-    // broadcasts via broadcast_tc, so remapper_pair_index / consumer_tcs are intentionally left
+    // broadcasts via kTcCreditBroadcast, so remapper_pair_index / consumer_tcs are intentionally left
     // at 0 (in dataflow_buffer.cpp they are populated only inside `if (use_remapper)`, and
     // use_remapper == ALL && !dm_dm_all). Tensix RISCs occupy mask bits 0x0F00.
     const bool dm_dm_all = config.cap == dfb::AccessPattern::ALL &&
@@ -233,12 +233,12 @@ void validate_dfb_tile_counters(
                 producer_risc_id,
                 actual_consumer_tcs);
         } else if (dm_dm_all) {
-            // DM->DM ALL broadcasts via broadcast_tc; the remapper-only fields must stay unset.
+            // DM->DM ALL broadcasts via kTcCreditBroadcast; the remapper-only fields must stay unset.
             EXPECT_EQ(producer_rc->config.consumer_tcs, 0u)
                 << "DM->DM ALL: Producer " << (int)producer_risc_id
-                << " must not populate consumer_tcs (broadcast_tc path, remapper unused)";
-            EXPECT_TRUE(producer_rc->config.broadcast_tc)
-                << "DM->DM ALL: Producer " << (int)producer_risc_id << " must have broadcast_tc set";
+                << " must not populate consumer_tcs (broadcast credit path, remapper unused)";
+            EXPECT_EQ(producer_rc->config.tc_credit_mode, ::dfb::kTcCreditBroadcast)
+                << "DM->DM ALL: Producer " << (int)producer_risc_id << " must use broadcast credits";
             EXPECT_EQ(producer_rc->config.remapper_pair_index, 0)
                 << "DM->DM ALL: Producer " << (int)producer_risc_id << " must not allocate a remapper pair index";
         }
@@ -1442,7 +1442,7 @@ static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh
              .accessor_name = "in",
              .endpoint_type = m2::DFBEndpointType::CONSUMER,
              .access_pattern = p.cap}};
-        k.compile_time_args = {{"num_entries_per_consumer", per_consumer}};
+        k.compile_time_args = {{"num_entries_per_consumer", per_consumer}, {"block_size", 1u}};
         return k;
     };
 

@@ -72,7 +72,7 @@ struct dfb_init_entry_hdr_t {
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t producer_signal_bit;  // bit position in dfb_signal[dfb_id]; 0xFF if consumer
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
-    uint8_t broadcast_tc;         // DM pack byte 22 → iface.broadcast_tc (DM unpack only)
+    uint8_t tc_credit_mode;       // DM pack byte 22 → iface.tc_credit_mode (DM unpack only)
     uint8_t remapper_pair_index;  // TRISC byte 22; DM pack byte 23
     uint8_t intra_shadow_tc_id;   // TRISC byte 23: intra-tensix ClientR shadow TC; 0xFF / unused on DM
     uint16_t block_size;          // bytes 28-29: how many entries this hart moves in one NoC
@@ -119,7 +119,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
     h.txn_ids[1]                 = static_cast<uint8_t>(w4 >> 24);
     h.txn_ids[2]                 = static_cast<uint8_t>(w5);
     h.txn_ids[3]                 = static_cast<uint8_t>(w5 >> 8);
-    h.broadcast_tc               = 0;
+    h.tc_credit_mode             = 0;
     h.remapper_pair_index        = static_cast<uint8_t>(w5 >> 16);
     h.intra_shadow_tc_id = static_cast<uint8_t>(w5 >> 24);
     h.num_entries                = static_cast<uint16_t>(w6);
@@ -149,7 +149,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
     h.num_entries_per_txn_id     = static_cast<uint8_t>(w4 >> 24);
     h.num_entries_per_txn_id_per_tc = static_cast<uint8_t>(w5);
     h.num_txn_ids                = static_cast<uint8_t>(w5 >> 8);
-    h.broadcast_tc               = static_cast<uint8_t>(w5 >> 16);
+    h.tc_credit_mode             = static_cast<uint8_t>(w5 >> 16);
     h.remapper_pair_index        = static_cast<uint8_t>(w5 >> 24);
     h.intra_shadow_tc_id = 0xFFu;  // intra-tensix never targets a DM hart
     h.num_entries                = static_cast<uint16_t>(w6);
@@ -168,7 +168,7 @@ FORCE_INLINE void dfb_write_dm_iface_scalars_from_hdr(LocalDFBInterface& iface, 
                              (static_cast<uint32_t>(eh.num_entries_per_txn_id) << 24);
     const uint32_t pack_w2 = static_cast<uint32_t>(eh.num_entries_per_txn_id_per_tc) |
                              (static_cast<uint32_t>(eh.num_txn_ids) << 8) |
-                             (static_cast<uint32_t>(eh.broadcast_tc) << 16) |
+                             (static_cast<uint32_t>(eh.tc_credit_mode) << 16) |
                              (static_cast<uint32_t>(eh.remapper_pair_index) << 24);
     uint32_t* const dm_scalar = reinterpret_cast<uint32_t*>(&iface.num_tcs_to_rr);
     dm_scalar[0] = pack_w0;
