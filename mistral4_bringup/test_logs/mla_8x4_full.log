@@ -1,0 +1,540 @@
+### CMD: python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla -k 8x4 -vvv --tb=short
+### START: 2026-08-21T21:09:35+00:00
+2026-08-21 21:09:51.601 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ssalice/.cache/ttnn,model_cache_path=/home/ssalice/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-9.0.3, pluggy-1.6.0 -- /data/ssalice/temp/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /data/ssalice/temp/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, split-0.11.0, dash-2.15.0, anyio-4.14.2, cov-7.0.0, repeat-0.9.4
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 8 items / 4 deselected / 4 selected
+
+models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq5k-max_sl-random-line-8x4] 2026-08-21 21:10:09.320 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-21 21:10:09.320 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-21 21:10:09.334 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-21 21:10:09.334 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-21 21:10:09.414 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:575)
+2026-08-21 21:10:09.419 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-21 21:10:10.886 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-08-21 21:10:10.886 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-21 21:10:10.886 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-21 21:10:10.886 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-21 21:10:10.907 | info     |             UMD | Starting devices in cluster (cluster.cpp:1188)
+2026-08-21 21:10:11.148 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:318)
+2026-08-21 21:10:12.599 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1196)
+2026-08-21 21:10:16.463 | INFO     | conftest:mesh_device:612 - No trace region size for (8, 4)
+2026-08-21 21:10:16.463 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-21 21:10:16.463 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-21 21:10:16.481 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3329)
+2026-08-21 21:10:16.481 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3337)
+2026-08-21 21:10:16.500 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:16.500 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:16.500 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:16.500 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:17.244 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:17.244 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:17.244 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:17.244 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:17.344 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-21 21:10:17.766 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:444)
+2026-08-21 21:10:17.766 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:313)
+2026-08-21 21:10:19.189 | DEBUG    | conftest:mesh_device:630 - multidevice with 32 devices is created
+2026-08-21 21:10:19.190 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:195 - ================================================================================
+2026-08-21 21:10:19.190 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:196 - Test: Reference vs TT Comparison (Random Weights, variant=mistral_small_4_119b)
+2026-08-21 21:10:19.190 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:197 - ================================================================================
+2026-08-21 21:10:19.377 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:random_weights:986 - Generated 7 random weight tensors using config dimensions
+2026-08-21 21:10:19.378 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:231 - Creating reference MLA with random weights...
+2026-08-21 21:10:19.656 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:243 - ================================================================================
+2026-08-21 21:10:19.656 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:244 - Testing forward pass comparison (seq_len=5120)
+2026-08-21 21:10:19.656 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:245 - ================================================================================
+2026-08-21 21:10:24.830 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_mla_inference:81 - Creating TT MLA...
+2026-08-21 21:10:25.176 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:__init__:534 - Loaded 8 weights in MLA layer 0 (kv_only=False)
+2026-08-21 21:10:25.265 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_mla_inference:130 - Creating test inputs: batch_size=1, seq_len=5120, hidden_size=4096
+2026-08-21 21:10:25.424 | INFO     | tracy:signpost:49 - MLA_START
+2026-08-21 21:10:25.562 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (high_bw_all_gather_unicast_factory.cpp:260)
+2026-08-21 21:10:25.570 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.571 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.571 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.572 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.572 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.572 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.572 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.573 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.574 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.575 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.575 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.575 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.575 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.576 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.576 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.576 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.576 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.577 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.577 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.577 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.579 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.582 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.582 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.582 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.583 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.583 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.583 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.583 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.585 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.585 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.588 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.589 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.743 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (high_bw_all_gather_unicast_factory.cpp:260)
+2026-08-21 21:10:25.745 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.745 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.746 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.746 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.749 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.749 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.750 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.751 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.752 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.754 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.754 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.754 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.755 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.755 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.755 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.759 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.759 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.759 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.763 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.763 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.763 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.764 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.766 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.766 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.767 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.767 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.770 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.770 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.770 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.770 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.771 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:25.771 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:31.655 | INFO     | tracy:signpost:49 - MLA_END
+2026-08-21 21:10:31.656 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:282 - Loading cached reference results from /tmp/mistral_small_4_119b_mla_ref_cache/random_seq5120.pt
+2026-08-21 21:10:31.682 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:286 - ✓ Loaded cached reference results
+2026-08-21 21:10:31.682 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:287 -   Output shape: torch.Size([1, 5120, 4096])
+2026-08-21 21:10:32.205 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:334 - Output PCC is 0.9981613099730129
+2026-08-21 21:10:32.309 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:348 - Starting synchronize call
+2026-08-21 21:10:32.312 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:350 - Synchronize call ended
+2026-08-21 21:10:32.312 | DEBUG    | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:352 -   Distributed synchronization started
+2026-08-21 21:10:32.312 | DEBUG    | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:354 - ✓ Distributed synchronization completed
+2026-08-21 21:10:32.315 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:364 - KVPE cache KV part PCC is 0.9999007791444973
+2026-08-21 21:10:32.317 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:368 - KVPE cache PE part PCC is 0.9999009030630389
+2026-08-21 21:10:32.318 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:374 - Running MLA reference (model=mistral_small_4_119b)
+2026-08-21 21:10:32.318 | SUCCESS  | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:397 - ✓ Reference and TT comparison with Random weights successful
+PASSED
+models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq5k-max_sl-pretrained-line-8x4] 2026-08-21 21:10:32.880 | INFO     | conftest:mesh_device:612 - No trace region size for (8, 4)
+2026-08-21 21:10:32.881 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:337)
+2026-08-21 21:10:32.881 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-21 21:10:32.881 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-21 21:10:32.897 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3329)
+2026-08-21 21:10:32.897 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3337)
+2026-08-21 21:10:32.914 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:32.914 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:32.914 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:32.914 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:33.753 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:33.753 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:33.753 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:33.753 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:33.774 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-21 21:10:33.928 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:444)
+2026-08-21 21:10:33.928 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:313)
+2026-08-21 21:10:34.518 | DEBUG    | conftest:mesh_device:630 - multidevice with 32 devices is created
+2026-08-21 21:10:34.519 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:195 - ================================================================================
+2026-08-21 21:10:34.519 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:196 - Test: Reference vs TT Comparison (Pretrained Weights, variant=mistral_small_4_119b)
+2026-08-21 21:10:34.519 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:197 - ================================================================================
+2026-08-21 21:10:34.521 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:get_or_download_model:668 - Using existing model from MISTRAL4_HF_MODEL: /data/kmabee/models/Mistral-Small-4-119B-2603
+2026-08-21 21:10:34.530 | INFO     | models.demos.deepseek_v3.utils.lazy_state_dict:__init__:94 - LazyStateDict initialized from /data/kmabee/models/Mistral-Small-4-119B-2603/model.safetensors.index.json (1485 keys across 3 files) in 2.4 ms
+2026-08-21 21:10:34.530 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:_resolve_state_dict:781 - Loaded state dict from /data/kmabee/models/Mistral-Small-4-119B-2603
+2026-08-21 21:10:34.531 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:_check_pretrained_available:889 - ✓ Pretrained weights found at /data/kmabee/models/Mistral-Small-4-119B-2603
+2026-08-21 21:10:34.531 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:pretrained_transformer_weights:1023 - Loading pretrained transformer weights for 1 layers from: /data/kmabee/models/Mistral-Small-4-119B-2603
+2026-08-21 21:10:34.531 | INFO     | models.demos.deepseek_v3_d_p.utils.test_utils:_log_conversion_mode:467 - Found `quantization_config` in hf_config (quant_method='fp8') -> checkpoint is quantized; dequantizing weights.
+2026-08-21 21:10:34.651 | DEBUG    | models.demos.deepseek_v3_d_p.utils.test_utils:_log_conversion_mode:464 - Found `quantization_config` in hf_config (quant_method='fp8') -> checkpoint is quantized; dequantizing weights.
+2026-08-21 21:10:34.655 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:pretrained_transformer_weights:1040 - Loading layer 0 weights...
+2026-08-21 21:10:34.655 | DEBUG    | models.demos.deepseek_v3_d_p.utils.test_utils:_log_conversion_mode:464 - Found `quantization_config` in hf_config (quant_method='fp8') -> checkpoint is quantized; dequantizing weights.
+2026-08-21 21:10:37.876 | INFO     | models.demos.deepseek_v3_d_p.utils.test_utils:_dequantize_per_tensor_fp8_state_dict:398 - per-tensor fp8: dequantized 10 weight tensor(s)
+2026-08-21 21:10:37.876 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:pretrained_transformer_weights:1095 - Layer 0 loaded (MoE)
+2026-08-21 21:10:37.876 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:pretrained_transformer_weights:1097 - Loaded pretrained transformer weights for 1 layers
+2026-08-21 21:10:38.504 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:223 - Creating reference MLA with pretrained weights...
+2026-08-21 21:10:38.769 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:243 - ================================================================================
+2026-08-21 21:10:38.769 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:244 - Testing forward pass comparison (seq_len=5120)
+2026-08-21 21:10:38.769 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:245 - ================================================================================
+2026-08-21 21:10:38.829 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_mla_inference:81 - Creating TT MLA...
+2026-08-21 21:10:39.199 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:__init__:534 - Loaded 8 weights in MLA layer 0 (kv_only=False)
+2026-08-21 21:10:39.256 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_mla_inference:130 - Creating test inputs: batch_size=1, seq_len=5120, hidden_size=4096
+2026-08-21 21:10:39.451 | INFO     | tracy:signpost:49 - MLA_START
+2026-08-21 21:10:39.516 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (high_bw_all_gather_unicast_factory.cpp:260)
+2026-08-21 21:10:39.523 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.523 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.524 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.524 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.524 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.524 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.525 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.525 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.525 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.525 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.526 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.529 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.529 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.529 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.530 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.531 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.531 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.532 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.532 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.532 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.533 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.533 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.533 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.533 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.535 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.535 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.535 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.537 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.537 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.540 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.542 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.544 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.640 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (high_bw_all_gather_unicast_factory.cpp:260)
+2026-08-21 21:10:39.642 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.642 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.642 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.642 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.643 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.643 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.643 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.644 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.644 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.644 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.647 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.647 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.647 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.647 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.648 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.648 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.648 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.648 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.649 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.649 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.649 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.649 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.650 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.650 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.650 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.652 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.653 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.655 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.655 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.656 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.656 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:39.658 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:40.104 | INFO     | tracy:signpost:49 - MLA_END
+2026-08-21 21:10:40.108 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:298 - Running reference CPU forward pass...
+2026-08-21 21:10:42.223 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:315 - ✓ Saved reference results to /tmp/mistral_small_4_119b_mla_ref_cache/pretrained_seq5120.pt
+2026-08-21 21:10:42.223 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:317 - ✓ Reference forward pass complete
+2026-08-21 21:10:42.223 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:318 -   Input shape:  torch.Size([1, 5120, 4096])
+2026-08-21 21:10:42.223 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:319 -   Output shape: torch.Size([1, 5120, 4096])
+2026-08-21 21:10:42.223 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:320 -   Output dtype: torch.bfloat16
+2026-08-21 21:10:42.238 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:321 -   Output mean:  -0.0000
+2026-08-21 21:10:42.245 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:322 -   Output std:   0.0013
+2026-08-21 21:10:42.821 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:334 - Output PCC is 0.999331383032172
+2026-08-21 21:10:42.925 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:348 - Starting synchronize call
+2026-08-21 21:10:42.928 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:350 - Synchronize call ended
+2026-08-21 21:10:42.928 | DEBUG    | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:352 -   Distributed synchronization started
+2026-08-21 21:10:42.928 | DEBUG    | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:354 - ✓ Distributed synchronization completed
+2026-08-21 21:10:42.932 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:364 - KVPE cache KV part PCC is 0.9998857578864979
+2026-08-21 21:10:42.934 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:368 - KVPE cache PE part PCC is 0.9998992581888326
+2026-08-21 21:10:42.934 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:374 - Running MLA reference (model=mistral_small_4_119b)
+2026-08-21 21:10:42.934 | SUCCESS  | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:397 - ✓ Reference and TT comparison with Pretrained weights successful
+PASSED
+models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq25k-max_sl-random-line-8x4] 2026-08-21 21:10:43.591 | INFO     | conftest:mesh_device:612 - No trace region size for (8, 4)
+2026-08-21 21:10:43.592 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:337)
+2026-08-21 21:10:43.592 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-21 21:10:43.592 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-21 21:10:43.610 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3329)
+2026-08-21 21:10:43.610 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3337)
+2026-08-21 21:10:43.637 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:43.637 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:43.637 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:43.637 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:44.495 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:44.495 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:44.495 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:44.495 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:44.517 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-21 21:10:44.686 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:444)
+2026-08-21 21:10:44.686 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:313)
+2026-08-21 21:10:45.269 | DEBUG    | conftest:mesh_device:630 - multidevice with 32 devices is created
+2026-08-21 21:10:45.270 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:195 - ================================================================================
+2026-08-21 21:10:45.270 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:196 - Test: Reference vs TT Comparison (Random Weights, variant=mistral_small_4_119b)
+2026-08-21 21:10:45.270 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:197 - ================================================================================
+2026-08-21 21:10:45.425 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:random_weights:986 - Generated 7 random weight tensors using config dimensions
+2026-08-21 21:10:45.425 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:231 - Creating reference MLA with random weights...
+2026-08-21 21:10:45.694 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:243 - ================================================================================
+2026-08-21 21:10:45.694 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:244 - Testing forward pass comparison (seq_len=25600)
+2026-08-21 21:10:45.694 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:245 - ================================================================================
+2026-08-21 21:10:45.789 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_mla_inference:81 - Creating TT MLA...
+2026-08-21 21:10:46.811 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:__init__:534 - Loaded 8 weights in MLA layer 0 (kv_only=False)
+2026-08-21 21:10:46.909 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_mla_inference:130 - Creating test inputs: batch_size=1, seq_len=25600, hidden_size=4096
+2026-08-21 21:10:47.753 | INFO     | tracy:signpost:49 - MLA_START
+2026-08-21 21:10:47.925 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (high_bw_all_gather_unicast_factory.cpp:260)
+2026-08-21 21:10:47.933 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.936 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.938 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.938 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.938 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.939 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.939 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.939 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.939 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.940 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.940 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.940 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.942 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.942 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.943 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.946 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.948 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.948 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.949 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.950 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.950 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.950 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.950 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.951 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.951 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.951 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.951 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.953 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.953 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.955 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.957 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:47.957 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.265 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (high_bw_all_gather_unicast_factory.cpp:260)
+2026-08-21 21:10:48.267 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.267 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.268 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.268 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.269 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.269 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.270 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.270 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.272 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.272 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.272 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.273 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.273 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.276 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.277 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.279 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.281 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.283 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.283 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.284 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.285 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.286 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.286 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.287 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.287 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.287 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.289 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.291 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.292 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.292 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.292 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:48.293 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:10:54.577 | INFO     | tracy:signpost:49 - MLA_END
+2026-08-21 21:10:54.578 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:282 - Loading cached reference results from /tmp/mistral_small_4_119b_mla_ref_cache/random_seq25600.pt
+2026-08-21 21:10:54.698 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:286 - ✓ Loaded cached reference results
+2026-08-21 21:10:54.698 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:287 -   Output shape: torch.Size([1, 25600, 4096])
+2026-08-21 21:10:57.425 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:334 - Output PCC is 0.998057080756494
+2026-08-21 21:10:57.999 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:348 - Starting synchronize call
+2026-08-21 21:10:58.000 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:350 - Synchronize call ended
+2026-08-21 21:10:58.000 | DEBUG    | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:352 -   Distributed synchronization started
+2026-08-21 21:10:58.000 | DEBUG    | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:354 - ✓ Distributed synchronization completed
+2026-08-21 21:10:58.048 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:364 - KVPE cache KV part PCC is 0.9999031529349802
+2026-08-21 21:10:58.052 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:368 - KVPE cache PE part PCC is 0.9999040804263855
+2026-08-21 21:10:58.052 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:387 - Skipping MLA reference comparison for seq_len=25600
+2026-08-21 21:10:58.052 | SUCCESS  | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:397 - ✓ Reference and TT comparison with Random weights successful
+PASSED
+models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq25k-max_sl-pretrained-line-8x4] 2026-08-21 21:10:58.649 | INFO     | conftest:mesh_device:612 - No trace region size for (8, 4)
+2026-08-21 21:10:58.649 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:337)
+2026-08-21 21:10:58.649 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-21 21:10:58.649 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-21 21:10:58.669 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3329)
+2026-08-21 21:10:58.669 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3337)
+2026-08-21 21:10:58.683 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:58.683 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:58.683 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:58.683 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:59.533 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:59.533 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:59.533 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:59.533 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1071)
+2026-08-21 21:10:59.555 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-21 21:10:59.726 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:444)
+2026-08-21 21:10:59.726 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:313)
+2026-08-21 21:11:00.290 | DEBUG    | conftest:mesh_device:630 - multidevice with 32 devices is created
+2026-08-21 21:11:00.291 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:195 - ================================================================================
+2026-08-21 21:11:00.291 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:196 - Test: Reference vs TT Comparison (Pretrained Weights, variant=mistral_small_4_119b)
+2026-08-21 21:11:00.291 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:197 - ================================================================================
+2026-08-21 21:11:00.291 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:_check_pretrained_available:889 - ✓ Pretrained weights found at /data/kmabee/models/Mistral-Small-4-119B-2603
+2026-08-21 21:11:00.291 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:pretrained_transformer_weights:1023 - Loading pretrained transformer weights for 1 layers from: /data/kmabee/models/Mistral-Small-4-119B-2603
+2026-08-21 21:11:00.291 | DEBUG    | models.demos.deepseek_v3_d_p.utils.test_utils:_log_conversion_mode:464 - Found `quantization_config` in hf_config (quant_method='fp8') -> checkpoint is quantized; dequantizing weights.
+2026-08-21 21:11:00.406 | DEBUG    | models.demos.deepseek_v3_d_p.utils.test_utils:_log_conversion_mode:464 - Found `quantization_config` in hf_config (quant_method='fp8') -> checkpoint is quantized; dequantizing weights.
+2026-08-21 21:11:00.408 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:pretrained_transformer_weights:1040 - Loading layer 0 weights...
+2026-08-21 21:11:00.408 | DEBUG    | models.demos.deepseek_v3_d_p.utils.test_utils:_log_conversion_mode:464 - Found `quantization_config` in hf_config (quant_method='fp8') -> checkpoint is quantized; dequantizing weights.
+2026-08-21 21:11:03.279 | INFO     | models.demos.deepseek_v3_d_p.utils.test_utils:_dequantize_per_tensor_fp8_state_dict:398 - per-tensor fp8: dequantized 10 weight tensor(s)
+2026-08-21 21:11:03.279 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:pretrained_transformer_weights:1095 - Layer 0 loaded (MoE)
+2026-08-21 21:11:03.279 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:pretrained_transformer_weights:1097 - Loaded pretrained transformer weights for 1 layers
+2026-08-21 21:11:03.915 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:223 - Creating reference MLA with pretrained weights...
+2026-08-21 21:11:04.173 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:243 - ================================================================================
+2026-08-21 21:11:04.173 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:244 - Testing forward pass comparison (seq_len=25600)
+2026-08-21 21:11:04.173 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:245 - ================================================================================
+2026-08-21 21:11:04.303 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_mla_inference:81 - Creating TT MLA...
+2026-08-21 21:11:05.328 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:__init__:534 - Loaded 8 weights in MLA layer 0 (kv_only=False)
+2026-08-21 21:11:05.571 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_mla_inference:130 - Creating test inputs: batch_size=1, seq_len=25600, hidden_size=4096
+2026-08-21 21:11:06.444 | INFO     | tracy:signpost:49 - MLA_START
+2026-08-21 21:11:06.757 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (high_bw_all_gather_unicast_factory.cpp:260)
+2026-08-21 21:11:06.764 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.765 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.766 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.766 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.768 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.768 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.768 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.769 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.769 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.769 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.769 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.770 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.770 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.771 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.772 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.772 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.772 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.772 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.775 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.776 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.779 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.779 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.779 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.779 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.780 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.780 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.780 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.780 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.781 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.781 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.781 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:06.781 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.771 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (high_bw_all_gather_unicast_factory.cpp:260)
+2026-08-21 21:11:07.773 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.773 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.774 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.774 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.774 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.775 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.775 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.776 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.776 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.777 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.777 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.777 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.778 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.778 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.779 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.779 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.780 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.780 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.780 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.782 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.782 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.786 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.787 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.787 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.788 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.788 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.789 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.789 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.789 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.790 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.792 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:07.793 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-21 21:11:09.915 | INFO     | tracy:signpost:49 - MLA_END
+2026-08-21 21:11:09.916 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:298 - Running reference CPU forward pass...
+2026-08-21 21:11:35.076 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:315 - ✓ Saved reference results to /tmp/mistral_small_4_119b_mla_ref_cache/pretrained_seq25600.pt
+2026-08-21 21:11:35.076 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:317 - ✓ Reference forward pass complete
+2026-08-21 21:11:35.076 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:318 -   Input shape:  torch.Size([1, 25600, 4096])
+2026-08-21 21:11:35.076 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:319 -   Output shape: torch.Size([1, 25600, 4096])
+2026-08-21 21:11:35.076 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:320 -   Output dtype: torch.bfloat16
+2026-08-21 21:11:35.126 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:321 -   Output mean:  -0.0000
+2026-08-21 21:11:35.144 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:322 -   Output std:   0.0011
+2026-08-21 21:11:37.863 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:334 - Output PCC is 0.998612870830774
+2026-08-21 21:11:38.438 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:348 - Starting synchronize call
+2026-08-21 21:11:38.439 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:350 - Synchronize call ended
+2026-08-21 21:11:38.439 | DEBUG    | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:352 -   Distributed synchronization started
+2026-08-21 21:11:38.439 | DEBUG    | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:354 - ✓ Distributed synchronization completed
+2026-08-21 21:11:38.486 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:364 - KVPE cache KV part PCC is 0.9998906099300408
+2026-08-21 21:11:38.490 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:368 - KVPE cache PE part PCC is 0.9999015809617723
+2026-08-21 21:11:38.490 | INFO     | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:387 - Skipping MLA reference comparison for seq_len=25600
+2026-08-21 21:11:38.490 | SUCCESS  | models.demos.deepseek_v3_d_p.tests.test_mla:run_model:397 - ✓ Reference and TT comparison with Pretrained weights successful
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291
+  /data/ssalice/temp/tt-metal/python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /data/ssalice/temp/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+38.25s call     models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq25k-max_sl-pretrained-line-8x4]
+13.19s call     models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq5k-max_sl-random-line-8x4]
+12.88s call     models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq25k-max_sl-random-line-8x4]
+10.08s setup    models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq5k-max_sl-random-line-8x4]
+8.43s call     models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq5k-max_sl-pretrained-line-8x4]
+1.87s setup    models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq25k-max_sl-random-line-8x4]
+1.83s setup    models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq25k-max_sl-pretrained-line-8x4]
+1.82s setup    models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq5k-max_sl-pretrained-line-8x4]
+0.45s teardown models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq5k-max_sl-pretrained-line-8x4]
+0.45s teardown models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq25k-max_sl-pretrained-line-8x4]
+0.32s teardown models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq25k-max_sl-random-line-8x4]
+0.31s teardown models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq5k-max_sl-random-line-8x4]
+=========================== short test summary info ============================
+PASSED models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq5k-max_sl-random-line-8x4]
+PASSED models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq5k-max_sl-pretrained-line-8x4]
+PASSED models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq25k-max_sl-random-line-8x4]
+PASSED models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla[blackhole-mistral4-sequential-check_pcc-seq25k-max_sl-pretrained-line-8x4]
+============ 4 passed, 4 deselected, 3 warnings in 90.89s (0:01:30) ============
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-08-21 21:11:41.091 | info     |    BuildKernels | JIT cache stats: 450/450 hits (100.0%) [450 cached, 5470 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-21 21:11:41.091 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-21 21:11:41.310 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-21 21:11:41.310 | info     |             UMD | Closing devices in cluster (cluster.cpp:1201)
+2026-08-21 21:11:49.020 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1210)
+2026-08-21 21:11:49.021 | info     |             UMD | Cluster destructor started. (cluster.cpp:916)
+2026-08-21 21:11:49.021 | info     |             UMD | Cluster destructor completed. (cluster.cpp:919)
+### END: 2026-08-21T21:11:49+00:00 rc=0

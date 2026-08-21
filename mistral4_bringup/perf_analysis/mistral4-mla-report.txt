@@ -1,0 +1,15 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 120
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'MLA_START'.
+Using operations until 'MLA_END'.
+Detected data from 32 devices. Merging device data...
+Writing CSV output to mistral4_bringup/perf_analysis/mistral4-mla-detailed.csv
+Overall DRAM roofline (modeled ops): 2.9% (15 GB/s)
+Warning: Unclassified operation 'ReduceScatterMinimalAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'HighBwAllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'UpdateKVCacheOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RingJointSDPADeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to mistral4_bringup/perf_analysis/mistral4-mla-by-op.csv
+Plotting PNG stacked report to mistral4_bringup/perf_analysis/mistral4-mla-by-op.png

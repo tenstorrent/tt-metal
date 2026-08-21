@@ -1,0 +1,148 @@
+### CMD: python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py -k dsv3 and mesh-8x4 -vvv --tb=line -rs
+### START: 2026-08-21T22:06:19+00:00
+2026-08-21 22:06:33.568 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ssalice/.cache/ttnn,model_cache_path=/home/ssalice/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-9.0.3, pluggy-1.6.0 -- /data/ssalice/temp/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /data/ssalice/temp/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, split-0.11.0, dash-2.15.0, anyio-4.14.2, cov-7.0.0, repeat-0.9.4
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-08-21 22:06:50.019 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-21 22:06:50.019 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-21 22:06:50.033 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-21 22:06:50.033 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-21 22:06:50.122 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:575)
+2026-08-21 22:06:50.126 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-21 22:06:50.501 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:50.863 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:51.205 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:51.549 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:51.878 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:52.205 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:52.528 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:52.849 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:53.160 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:53.472 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:53.780 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:54.089 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:54.410 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:54.722 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:55.028 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:55.333 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:55.636 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:55.942 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:56.247 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:56.550 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:56.854 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:57.157 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:57.461 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:57.766 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:58.070 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:58.378 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:58.679 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:58.985 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:59.293 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:59.597 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:06:59.909 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:07:00.216 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:106)
+2026-08-21 22:07:00.217 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-08-21 22:07:00.217 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-21 22:07:00.217 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-21 22:07:00.217 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-21 22:07:00.238 | info     |             UMD | Starting devices in cluster (cluster.cpp:1188)
+2026-08-21 22:07:01.238 | warning  |             UMD | Waiting for lock 'CHIP_IN_USE_0_PCIe' which is currently held by thread TID: 1934035, PID: 1934035 (robust_mutex.cpp:476)
+2026-08-21 22:07:23.053 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:318)
+2026-08-21 22:07:23.208 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1196)
+collected 1280 items / 1248 deselected / 32 selected
+
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-predictable-1link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-predictable-1link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-predictable-2link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-predictable-2link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-random-1link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-random-1link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-random-2link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-random-2link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-1link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-1link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-2link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-2link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-row_major-random-1link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-row_major-random-1link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-row_major-random-2link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-row_major-random-2link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-tile-predictable-1link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-tile-predictable-1link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-tile-predictable-2link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-tile-predictable-2link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-tile-random-1link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-tile-random-1link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-tile-random-2link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-tile-random-2link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-row_major-predictable-1link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-row_major-predictable-1link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-row_major-predictable-2link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-row_major-predictable-2link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-row_major-random-1link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-row_major-random-1link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-row_major-random-2link-dsv3-mesh-8x4-pcc] SKIPPED
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-row_major-random-2link-dsv3-mesh-8x4-perf_no_pcc] SKIPPED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291
+  /data/ssalice/temp/tt-metal/python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py:447
+  /data/ssalice/temp/tt-metal/models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py:447: PytestUnknownMarkWarning: Unknown pytest.mark.extended_model - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    (pytest.mark.extended_model, mesh_requirements_marker)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /data/ssalice/temp/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-tile-random-1link-dsv3-mesh-8x4-pcc]
+0.00s setup    models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-row_major-random-2link-dsv3-mesh-8x4-pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-predictable-2link-dsv3-mesh-8x4-perf_no_pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-2link-dsv3-mesh-8x4-perf_no_pcc]
+0.00s setup    models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-predictable-1link-dsv3-mesh-8x4-pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-predictable-1link-dsv3-mesh-8x4-pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-row_major-random-2link-dsv3-mesh-8x4-perf_no_pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-predictable-1link-dsv3-mesh-8x4-perf_no_pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-row_major-predictable-2link-dsv3-mesh-8x4-perf_no_pcc]
+0.00s setup    models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-predictable-1link-dsv3-mesh-8x4-perf_no_pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-predictable-2link-dsv3-mesh-8x4-pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-tile-predictable-1link-dsv3-mesh-8x4-pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-random-1link-dsv3-mesh-8x4-pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-tile-predictable-2link-dsv3-mesh-8x4-perf_no_pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-2link-dsv3-mesh-8x4-pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-tile-random-1link-dsv3-mesh-8x4-perf_no_pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-tile-random-1link-dsv3-mesh-8x4-perf_no_pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-tile-predictable-2link-dsv3-mesh-8x4-pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-tile-predictable-1link-dsv3-mesh-8x4-perf_no_pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-row_major-random-2link-dsv3-mesh-8x4-pcc]
+0.00s setup    models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-2link-dsv3-mesh-8x4-perf_no_pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-row_major-random-1link-dsv3-mesh-8x4-pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-row_major-random-1link-dsv3-mesh-8x4-pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-fp8_out-row_major-predictable-1link-dsv3-mesh-8x4-perf_no_pcc]
+0.00s teardown models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py::test_ttnn_combine[blackhole-bf16_out-row_major-predictable-1link-dsv3-mesh-8x4-pcc]
+=========================== short test summary info ============================
+SKIPPED [32] models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py:507: requested combination of fabric config and mesh, unfeasible on the given hardware
+============== 32 skipped, 1248 deselected, 4 warnings in 37.24s ===============
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-08-21 22:07:28.858 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-21 22:07:28.858 | info     |             UMD | Closing devices in cluster (cluster.cpp:1201)
+2026-08-21 22:07:39.506 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1210)
+2026-08-21 22:07:39.507 | info     |             UMD | Cluster destructor started. (cluster.cpp:916)
+2026-08-21 22:07:39.507 | info     |             UMD | Cluster destructor completed. (cluster.cpp:919)
+### END: 2026-08-21T22:07:40+00:00 rc=0

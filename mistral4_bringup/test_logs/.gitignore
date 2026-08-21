@@ -1,0 +1,8 @@
+# The repo root .gitignore blanket-ignores *.log. These logs are the evidence behind
+# RESULTS.md, so re-include them here (last matching rule wins).
+!*.log
+
+# ...except these two, which exceed pre-commit's 500 KB ceiling. They are committed
+# gzipped alongside instead.
+tracy_mla_mistral4.log
+vp_dispatch_combine.log
