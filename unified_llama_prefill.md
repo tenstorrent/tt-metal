@@ -2107,11 +2107,55 @@ Not measured, and worth stating: ttnn is solving the general problem -- batches,
 arbitrary sequence lengths -- while these kernels do one head at one shape, and the shapes our
 DST budget allows are far below where ttnn is designed to operate.
 
+### GQA head mapping: one launch, many heads
+
+The kernel now covers `n_heads` query heads over `n_kv_heads` key/value heads in ONE launch.
+The mapping is one line -- query head `h` reads KV head `h / (n_heads / n_kv_heads)` -- and
+everything else is addressing: `noc_load(storage, acc, block)` reads
+`[block * num_pages, +num_pages)`, so a head dimension is just a stride in block-index
+space. Q and the output stride by `num_q_chunks` per head, K and V by `k_tiles / sk` per KV
+head, derived rather than passed so it cannot disagree with the causal loop bound.
+
+MHA is `n_kv_heads == n_heads` and MQA is `n_kv_heads == 1`; both fall out of the same
+expression, with a static_assert that the counts divide.
+
+**The mask needs no head dimension.** A causal mask does not depend on the head, so the flat
+counter the host lays out for one head restarts per head and the same blocks are re-read --
+`n_heads` identical copies would otherwise sit in DRAM. Resetting that counter inside the
+head loop rather than outside it is the one thing here that would have been a silent
+cross-head corruption.
+
+**Why one launch rather than one per head**, measured at sq=2 sk=4 dt=2 with two query
+chunks:
+
+| | fused | as separate launches | saved |
+|---|---|---|---|
+| 2 heads | 53.49 us | 58.49 us | 9% |
+| 4 heads | 102.16 us | 116.97 us | 13% |
+| 8 heads | 201.20 us | 233.94 us | 14% |
+
+4.1us per head, and the per-head cost falls from 29.24 to 25.15us as the group grows --
+`matmul_init`'s hardware startup, the reduce scaler and the column of ones are paid once for
+the group. Worth noting that this is NOT the 13.1us the q-loop saved per query chunk; I
+initially wrote that number into the kernel comment and extrapolated 0.4ms for llama's 32
+heads, which was wrong. The head loop's saving is its own measurement, and 32 heads would
+save about 130us a layer, not 400.
+
+**Tested with per-head random data**, so reading the wrong head is a wrong answer rather than
+a coincidence -- identical heads would make a broken mapping invisible. Sabotaging the
+kernel's `h / kv_group` to `h % n_kv_heads` takes 4x2 and 8x2 to 0.46 error against a 0.03
+tolerance, so the cases bite. The `n_kv=1` rows cannot catch it and are not expected to:
+with one KV head every mapping selects it. Six (n_heads, n_kv) combinations are now in
+`test_unified_flash.py`.
+
+**Still open in phase 11:** multi-core partitioning across heads, which this sets up -- a
+core's share of the heads is now a range on this loop rather than a separate launch per head.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.
 
-- [ ] GQA head mapping (n_heads != n_kv_heads)
+- [x] GQA head mapping (n_heads != n_kv_heads) -- see below
 - [ ] Multi-core work partitioning across heads
 - [ ] Head concat + output projection wired to the attention core
 - [ ] End-to-end single-layer prefill against a reference
