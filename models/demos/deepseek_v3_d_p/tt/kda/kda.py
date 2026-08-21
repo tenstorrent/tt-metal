@@ -194,20 +194,29 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # Every ttnn.experimental.kda op rejects packer_l1_acc outright: their compute kernels do not
+        # accumulate through L1, so the flag was never doing anything for them. self.compute_config
+        # is therefore only safe on the generic ttnn ops.
+        self.kda_op_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
         self.affine_prefix_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=self.recurrence_config.affine_prefix_math_fidelity,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
         self.grouped_scan_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=self.recurrence_config.grouped_scan_math_fidelity,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
         self.recurrence_compute_config = ops._RecurrenceComputeConfig(
-            preparation=self.compute_config,
+            preparation=self.kda_op_compute_config,
             affine_prefix=self.affine_prefix_compute_config,
             grouped_scan=self.grouped_scan_compute_config,
         )
@@ -325,7 +334,7 @@ class ttKDA:
             config.k_dim,
             config.v_dim,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_config,
+            compute_kernel_config=self.kda_op_compute_config,
         )
         return q, k, v, new_state
 
@@ -479,7 +488,7 @@ class ttKDA:
             config.num_heads,
             epsilon=config.norm_eps,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_config,
+            compute_kernel_config=self.kda_op_compute_config,
             # Real-K3 component A/B: direct BF16 output retained PCC 1.0 for every LoudBox layout
             # and improved median component latency by 0.655%-1.339%.
             output_dtype=self.gated_rms_output_dtype,
