@@ -780,3 +780,16 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
     uint32_t command_size = sizeof(CQDispatchCmd) + num_sub_devices * sizeof(uint32_t);
     return round_up_pow2(command_size, L1_ALIGNMENT);
 }
+
+// Single wide load of a field in a `packed` struct, which the compiler would otherwise reassemble from
+// byte loads (packed sets struct alignment to 1).
+//
+// Do not change the `void*` parameter to `const volatile T*`: taking the address of a packed member as
+// `T*` fails the build under -Werror=address-of-packed-member.
+//
+// T must match the field's width -- a narrower T silently truncates. The field must also be naturally
+// aligned, which for the command structs is what their pad members exist to guarantee
+template <typename T>
+FORCE_INLINE T load_aligned(const volatile void* ptr) {
+    return *reinterpret_cast<const volatile T*>(ptr);
+}
