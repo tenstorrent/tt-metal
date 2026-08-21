@@ -69,14 +69,57 @@ inline constexpr uint32_t kMaxDstTiles = 8;
 // whole rows: its tiles stay contiguous in the output buffer, so consecutive packs land
 // where they should and nothing has to address a partial row. Returns 0 when even one row
 // is too wide, which is the case the caller has to reject.
-constexpr uint32_t dst_band_rows(uint32_t rt_dim, uint32_t ct_dim) {
-    uint32_t best = 0;
-    for (uint32_t rows = 1; rows <= rt_dim; ++rows) {
-        if (rt_dim % rows == 0 && rows * ct_dim <= kMaxDstTiles) {
-            best = rows;
+// The largest divisor of `dim` that is at most `cap`. 1 always qualifies, so this cannot
+// fail -- a dimension whose only divisors exceed the cap (a wide prime) degrades to
+// single-tile steps rather than becoming inexpressible.
+constexpr uint32_t largest_divisor_at_most(uint32_t dim, uint32_t cap) {
+    for (uint32_t f = cap; f > 0; --f) {
+        if (dim % f == 0) {
+            return f;
         }
     }
-    return best;
+    return 1;
+}
+
+// How much of a matmul's output block one DST acquire can hold, as a subblock shape.
+//
+// The priority order is what matters, not the arithmetic: the INNER dimension is served
+// first, so a subblock is as WIDE as it can be, and rows are added only from whatever
+// capacity is left over. If the inner dimension is fully consumed, the leftover capacity
+// is real and can buy rows; if it is not -- a block wider than the budget -- the subblock
+// is pinned to a single row.
+//
+// That yields an invariant the emitters depend on:
+//
+//     a subblock is EITHER full-width and several rows tall,
+//     OR a single row and narrower than the block.
+//
+// Never both partial-width and multi-row, which is the one case whose tiles are not
+// contiguous in a row-major output block. Because of it, walking subblocks with rows
+// outermost visits the output block in exactly flat row-major order, so each subblock's
+// pack lands immediately after the previous one and no addressing is needed --
+// pack_block advances the buffer's write pointer itself.
+//
+// This mirrors calculateOutputSubblockFactors from the tt-mlir side, which solves the
+// same problem against the same register file, reversing the shape to give the inner
+// dimension priority and snapping to 1 when a dimension is not consumed.
+struct DstSubblock {
+    uint32_t rows;
+    uint32_t cols;
+
+    constexpr uint32_t tiles() const { return rows * cols; }
+};
+
+constexpr DstSubblock dst_subblock(uint32_t rt_dim, uint32_t ct_dim, uint32_t capacity = kMaxDstTiles) {
+    const uint32_t cols = largest_divisor_at_most(ct_dim, capacity);
+    const uint32_t remaining = (cols == ct_dim) ? capacity / cols : 1;
+    return DstSubblock{largest_divisor_at_most(rt_dim, remaining), cols};
+}
+
+// Flat index, within the whole output block, of tile `t` of the subblock at (r0, c0).
+// The subblock's own tiles are row-major in DST, so t splits into a row and a column.
+constexpr uint32_t block_tile_index(uint32_t r0, uint32_t c0, uint32_t t, uint32_t sub_cols, uint32_t ct_dim) {
+    return (r0 + t / sub_cols) * ct_dim + c0 + t % sub_cols;
 }
 
 // --- Leaves and ops ---
@@ -1372,37 +1415,47 @@ struct Strategy<FPUFusion> {
     static void bias_finish(const Node& node, uint32_t acc_cb, uint32_t out_cb, EpilogueChain) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         using G = typename Node::geometry;
-        constexpr uint32_t kAccTiles = G::out_subblock_num_tiles;
         constexpr uint32_t kTranspose = G::transpose;
 
-        ckernel::tile_regs_acquire();
+        constexpr DstSubblock kSub = dst_subblock(G::rt_dim, G::ct_dim);
+        constexpr uint32_t kSubTiles = kSub.tiles();
+
+        // Neither of these touches DST, so they program once for every subblock.
         ckernel::reconfig_data_format(acc_cb, node.bias_cb);
         ckernel::add_bcast_rows_init_short(acc_cb, node.bias_cb);
 
-        cb_wait_front(acc_cb, kAccTiles);
-        for (uint32_t t = 0; t < kAccTiles; ++t) {
-            // Bias is 1 x ct_dim tiles broadcast DOWN the rows, so the tile for
-            // output (r, c) is c -- and the output block is row-major.
-            ckernel::add_tiles_bcast_rows(acc_cb, node.bias_cb, t, t % G::ct_dim, t);
-        }
-        cb_pop_front(acc_cb, kAccTiles);
+        for (uint32_t r0 = 0; r0 < G::rt_dim; r0 += kSub.rows) {
+            for (uint32_t c0 = 0; c0 < G::ct_dim; c0 += kSub.cols) {
+                ckernel::tile_regs_acquire();
+                cb_wait_front(acc_cb, kSubTiles);
+                for (uint32_t t = 0; t < kSubTiles; ++t) {
+                    // Bias is 1 x ct_dim tiles broadcast DOWN the rows, so the tile for
+                    // output (r, c) is c -- which within a subblock is its column offset
+                    // plus its own position across. The total is read from the front of
+                    // acc_cb, so its index is subblock-relative while the bias index is
+                    // block-absolute.
+                    ckernel::add_tiles_bcast_rows(acc_cb, node.bias_cb, t, c0 + t % kSub.cols, t);
+                }
+                cb_pop_front(acc_cb, kSubTiles);
 
-        if constexpr (!EpilogueChain::empty) {
-            for (uint32_t t = 0; t < kAccTiles; ++t) {
-                EpilogueChain::apply_in_place(t);
+                if constexpr (!EpilogueChain::empty) {
+                    for (uint32_t t = 0; t < kSubTiles; ++t) {
+                        EpilogueChain::apply_in_place(t);
+                    }
+                }
+
+                ckernel::tile_regs_commit();
+                cb_reserve_back(out_cb, kSubTiles);
+                ckernel::tile_regs_wait();
+                ckernel::pack_block(0, out_cb, kSubTiles);
+                ckernel::tile_regs_release();
+                cb_push_back(out_cb, kSubTiles);
             }
         }
 
-        ckernel::tile_regs_commit();
-        cb_reserve_back(out_cb, kAccTiles);
-        ckernel::tile_regs_wait();
-        ckernel::pack_block(0, out_cb, kAccTiles);
-        ckernel::tile_regs_release();
-        cb_push_back(out_cb, kAccTiles);
-
         // Put back what matmul_block needs, so the next output block can run.
         ckernel::reconfig_data_format_srca(acc_cb, node.in1_cb);
-        ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, G::rt_dim, G::kt_dim);
+        ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
 #else
         (void)node;
         (void)acc_cb;
@@ -1446,61 +1499,66 @@ struct Strategy<FPUFusion> {
         constexpr uint32_t kTranspose = G::transpose;
         // No bias handling, and none needed: bias() static_asserts that the output fits one
         // acquire, so a biased matmul never reaches this path.
-        constexpr uint32_t kBandRows = dst_band_rows(G::rt_dim, G::ct_dim);
-        static_assert(
-            kBandRows > 0,
-            "matmul output block is wider than the DST budget in a SINGLE row, so no row band "
-            "fits: ct_dim exceeds 8 tiles. Split the operand instead -- a column band would "
-            "have to address partial output rows, which the packer cannot do in order.");
-        constexpr uint32_t kBandTiles = kBandRows * G::ct_dim;
+        constexpr DstSubblock kSub = dst_subblock(G::rt_dim, G::ct_dim);
+        constexpr uint32_t kSubTiles = kSub.tiles();
         constexpr uint32_t kTotalTiles = G::out_subblock_num_tiles;
 
-        // All bands share their dimensions, and nothing between them touches the matmul
+        // All subblocks share their dimensions, and nothing between them touches the matmul
         // state -- only packs and the register handshake -- so this programs once.
-        ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, kBandRows, G::kt_dim);
+        //
+        // matmul_block takes the SUBBLOCK's extents for the output it produces, but the TRUE
+        // strides for reaching the operands: A's rows are kt_dim apart and B's k rows are
+        // ct_dim apart no matter how the output is cut. Only the extents change. Note that
+        // ct_dim serves as B's column count AND as DST's row stride, which is precisely why
+        // a partial-width subblock has to be a single row.
+        ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
 
         // One reserve and one push around the whole block. pack_block advances the
-        // buffer's write pointer itself and only cb_push_back resets it, so the bands
-        // land back to back exactly as the output's row-major order needs.
+        // buffer's write pointer itself and only cb_push_back resets it, so the subblocks
+        // land back to back exactly as the output's row-major order needs -- which is what
+        // dst_subblock's ordering invariant guarantees.
         cb_reserve_back(out_cb, kTotalTiles);
-        for (uint32_t r0 = 0; r0 < G::rt_dim; r0 += kBandRows) {
-            ckernel::tile_regs_acquire();
-            uint32_t in0_index = r0 * G::kt_dim;
-            uint32_t in1_index = 0;
-            for (uint32_t k = 0; k < G::kt_dim; ++k) {
-                ckernel::matmul_block(
-                    node.in0_cb,
-                    node.in1_cb,
-                    in0_index,
-                    in1_index,
-                    /*idst=*/0,
-                    kTranspose,
-                    G::ct_dim,
-                    kBandRows,
-                    G::kt_dim);
-                in0_index += 1;
-                in1_index += G::in1_row_stride;
-            }
-            // The addend is the whole block, so this band's slice of it starts at the
-            // band's first output tile; DST is indexed from zero within the band.
-            if (node.addend_cb != kNoBias) {
-                AddOp::fpu_reuse_init<true>(node.addend_cb);
-                for (uint32_t t = 0; t < kBandTiles; ++t) {
-                    AddOp::fpu_reuse_apply<true>(node.addend_cb, r0 * G::ct_dim + t, t);
+        for (uint32_t r0 = 0; r0 < G::rt_dim; r0 += kSub.rows) {
+            for (uint32_t c0 = 0; c0 < G::ct_dim; c0 += kSub.cols) {
+                ckernel::tile_regs_acquire();
+                uint32_t in0_index = r0 * G::kt_dim;
+                uint32_t in1_index = c0;
+                for (uint32_t k = 0; k < G::kt_dim; ++k) {
+                    ckernel::matmul_block(
+                        node.in0_cb,
+                        node.in1_cb,
+                        in0_index,
+                        in1_index,
+                        /*idst=*/0,
+                        kTranspose,
+                        kSub.cols,
+                        kSub.rows,
+                        G::kt_dim);
+                    in0_index += 1;
+                    in1_index += G::in1_row_stride;
                 }
-                // Put the matmul's own programming back for the next band.
-                ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, kBandRows, G::kt_dim);
-            }
+                // The addend is the whole block, so each subblock tile reads its own position
+                // in it; DST is indexed from zero within the subblock.
+                if (node.addend_cb != kNoBias) {
+                    AddOp::fpu_reuse_init<true>(node.addend_cb);
+                    for (uint32_t t = 0; t < kSubTiles; ++t) {
+                        AddOp::fpu_reuse_apply<true>(
+                            node.addend_cb, block_tile_index(r0, c0, t, kSub.cols, G::ct_dim), t);
+                    }
+                    // Put the matmul's own programming back for the next subblock.
+                    ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
+                }
 
-            if constexpr (!Chain::empty) {
-                for (uint32_t t = 0; t < kBandTiles; ++t) {
-                    Chain::apply_in_place(t);
+                if constexpr (!Chain::empty) {
+                    for (uint32_t t = 0; t < kSubTiles; ++t) {
+                        Chain::apply_in_place(t);
+                    }
                 }
+                ckernel::tile_regs_commit();
+                ckernel::tile_regs_wait();
+                ckernel::pack_block(0, out_cb, kSubTiles);
+                ckernel::tile_regs_release();
             }
-            ckernel::tile_regs_commit();
-            ckernel::tile_regs_wait();
-            ckernel::pack_block(0, out_cb, kBandTiles);
-            ckernel::tile_regs_release();
         }
         cb_push_back(out_cb, kTotalTiles);
 #else
@@ -1523,16 +1581,15 @@ struct Strategy<FPUFusion> {
         using G = typename Node::geometry;
         constexpr uint32_t kAccTiles = G::out_subblock_num_tiles;
 
-        static_assert(
-            kAccTiles <= kMaxDstTiles,
-            "matmul rt_dim * ct_dim exceeds the per-acquire DST budget (8 tiles under half-sync) on "
-            "an ACCUMULATING matmul, which is not banded -- the reload and the bias would have to be "
-            "banded with it. A single-shot store(matmul(a, b)) has no such limit; it walks row bands. "
-            "Otherwise split the output block into subblocks of at most 8 tiles -- 4x4 is not legal, "
-            "4x2 / 2x4 / 8x1 / 1x8 are the largest that are.");
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         using Chain = typename Node::chain;
         constexpr uint32_t kTranspose = G::transpose;
+        // No rt*ct <= 8 limit any more: the output block is walked in subblocks, and the
+        // reload, the pack and the bias are all walked with it. The subblocks are visited
+        // in row-major order, so each one's partial occupies the same pages of acc_cb on
+        // every call -- the reload reads them back in the same order they were written.
+        constexpr DstSubblock kSub = dst_subblock(G::rt_dim, G::ct_dim);
+        constexpr uint32_t kSubTiles = kSub.tiles();
 
         // Program the block dimensions here rather than trusting matmul_init to still be in
         // force. A broadcast, a reduction or an SFPU pass reconfigures the unpack and math
@@ -1542,108 +1599,123 @@ struct Strategy<FPUFusion> {
         // matmul_init still has to run once at kernel entry, for the hardware startup it
         // carries, and that part must NOT be repeated: compute_kernel_hw_startup is MMIO
         // plus a pack-sync init, and calling it a second time mid-kernel hangs the device.
-        ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, G::rt_dim, G::kt_dim);
+        ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
 
-        ckernel::tile_regs_acquire();
+        // A fused bias needs the total in a buffer to add against, so when there is one the
+        // finishing pack goes to acc_cb and bias_finish carries it to out_cb.
+        const bool via_bias = finish && node.bias_cb != kNoBias;
 
-        if constexpr (Mode == AccumulatorMode::Dst) {
-            if (reload) {
-                // Partials L1 -> DST, then restore the state matmul_block needs.
-                ckernel::copy_tile_to_dst_init_short_with_dt(node.in1_cb, acc_cb);
-                cb_wait_front(acc_cb, kAccTiles);
-                ckernel::copy_block(acc_cb, 0, 0, kAccTiles);
-                cb_pop_front(acc_cb, kAccTiles);
-                ckernel::reconfig_data_format_srca(acc_cb, node.in1_cb);
-                ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, G::rt_dim, G::kt_dim);
-            }
-        }
+        for (uint32_t r0 = 0; r0 < G::rt_dim; r0 += kSub.rows) {
+            for (uint32_t c0 = 0; c0 < G::ct_dim; c0 += kSub.cols) {
+                ckernel::tile_regs_acquire();
 
-        // This block's product. In Dst mode it lands on top of the reloaded
-        // partial; in L1 mode DST holds it alone.
-        uint32_t in0_index = 0;
-        uint32_t in1_index = 0;
-        for (uint32_t k = 0; k < G::kt_dim; ++k) {
-            ckernel::matmul_block(
-                node.in0_cb,
-                node.in1_cb,
-                in0_index,
-                in1_index,
-                /*idst=*/0,
-                kTranspose,
-                G::ct_dim,
-                G::rt_dim,
-                G::kt_dim);
-            in0_index += 1;
-            in1_index += G::in1_row_stride;
-        }
-
-        // Before the chain, so matmul(a, b).add(m).relu() is relu(A@B + m).
-        if (node.addend_cb != kNoBias) {
-            AddOp::fpu_reuse_init<true>(node.addend_cb);
-            for (uint32_t t = 0; t < kAccTiles; ++t) {
-                AddOp::fpu_reuse_apply<true>(node.addend_cb, t, t);
-            }
-            // The reuse op reprogrammed the math unit for an eltwise add, so anything
-            // matmul-shaped after this needs its own init back. The accumulating path
-            // re-inits at the top of every call, so only a later band would notice.
-            ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, G::rt_dim, G::kt_dim);
-        }
-
-        if constexpr (!Chain::empty) {
-            for (uint32_t t = 0; t < kAccTiles; ++t) {
-                Chain::apply_in_place(t);
-            }
-        }
-
-        // In L1 mode the total is not in DST yet, so the epilogue runs in the
-        // copy-out stage below instead. A fused bias moves it later in Dst mode
-        // too: the epilogue has to see the BIASED total, so bias_finish applies
-        // it and this must not, or the chain runs twice and the first run sees
-        // A@B without the bias -- relu(relu(A@B) + v) instead of relu(A@B + v).
-        if constexpr (Mode == AccumulatorMode::Dst) {
-            if constexpr (!EpilogueChain::empty) {
-                if (finish && node.bias_cb == kNoBias) {
-                    for (uint32_t t = 0; t < kAccTiles; ++t) {
-                        EpilogueChain::apply_in_place(t);
+                if constexpr (Mode == AccumulatorMode::Dst) {
+                    if (reload) {
+                        // This subblock's partial, L1 -> DST, then restore the state
+                        // matmul_block needs. Popping per subblock is what lets the pack
+                        // below reserve pages again: acc_cb holds exactly one output block,
+                        // so reads and writes chase each other around it in lockstep.
+                        ckernel::copy_tile_to_dst_init_short_with_dt(node.in1_cb, acc_cb);
+                        cb_wait_front(acc_cb, kSubTiles);
+                        ckernel::copy_block(acc_cb, 0, 0, kSubTiles);
+                        cb_pop_front(acc_cb, kSubTiles);
+                        ckernel::reconfig_data_format_srca(acc_cb, node.in1_cb);
+                        ckernel::matmul_block_init(
+                            node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
                     }
+                }
+
+                // This subblock's product. In Dst mode it lands on top of the reloaded
+                // partial; in L1 mode DST holds it alone.
+                uint32_t in0_index = r0 * G::kt_dim;
+                uint32_t in1_index = c0;
+                for (uint32_t k = 0; k < G::kt_dim; ++k) {
+                    ckernel::matmul_block(
+                        node.in0_cb,
+                        node.in1_cb,
+                        in0_index,
+                        in1_index,
+                        /*idst=*/0,
+                        kTranspose,
+                        kSub.cols,
+                        kSub.rows,
+                        G::kt_dim);
+                    in0_index += 1;
+                    in1_index += G::in1_row_stride;
+                }
+
+                // Before the chain, so matmul(a, b).add(m).relu() is relu(A@B + m).
+                if (node.addend_cb != kNoBias) {
+                    AddOp::fpu_reuse_init<true>(node.addend_cb);
+                    for (uint32_t t = 0; t < kSubTiles; ++t) {
+                        AddOp::fpu_reuse_apply<true>(
+                            node.addend_cb, block_tile_index(r0, c0, t, kSub.cols, G::ct_dim), t);
+                    }
+                    // The reuse op reprogrammed the math unit for an eltwise add, so
+                    // anything matmul-shaped after this needs its own init back.
+                    ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
+                }
+
+                if constexpr (!Chain::empty) {
+                    for (uint32_t t = 0; t < kSubTiles; ++t) {
+                        Chain::apply_in_place(t);
+                    }
+                }
+
+                // In L1 mode the total is not in DST yet, so the epilogue runs in the
+                // copy-out stage below instead. A fused bias moves it later in Dst mode
+                // too: the epilogue has to see the BIASED total, so bias_finish applies
+                // it and this must not, or the chain runs twice and the first run sees
+                // A@B without the bias -- relu(relu(A@B) + v) instead of relu(A@B + v).
+                if constexpr (Mode == AccumulatorMode::Dst) {
+                    if constexpr (!EpilogueChain::empty) {
+                        if (finish && node.bias_cb == kNoBias) {
+                            for (uint32_t t = 0; t < kSubTiles; ++t) {
+                                EpilogueChain::apply_in_place(t);
+                            }
+                        }
+                    }
+                }
+
+                ckernel::tile_regs_commit();
+
+                if constexpr (Mode == AccumulatorMode::Dst) {
+                    const uint32_t dest = (finish && !via_bias) ? out_cb : acc_cb;
+                    cb_reserve_back(dest, kSubTiles);
+                    ckernel::tile_regs_wait();
+                    ckernel::pack_block(0, dest, kSubTiles);
+                    ckernel::tile_regs_release();
+                    cb_push_back(dest, kSubTiles);
+                } else {
+                    // L1: the packer adds this subblock's product into what is already at
+                    // the destination, so the running total lives in L1 and never occupies
+                    // DST.
+                    //
+                    // The push/pop pair is load-bearing, not bookkeeping. pack_block
+                    // advances the CB's fifo_wr_tile_ptr itself and cb_push_back is the
+                    // only thing that resets it (llk_io_pack.h), so a pack without a
+                    // matching push lands one subblock further along each round instead of
+                    // on top of the previous one. Pushing every subblock and then popping
+                    // the whole block wraps both pointers back to the base address -- which
+                    // still holds the partials, since a pop does not erase.
+                    cb_reserve_back(acc_cb, kSubTiles);
+                    ckernel::tile_regs_wait();
+                    ckernel::pack_reconfig_l1_acc(reload ? 1 : 0);
+                    ckernel::pack_block(0, acc_cb, kSubTiles);
+                    ckernel::tile_regs_release();
+                    cb_push_back(acc_cb, kSubTiles);
+                    ckernel::pack_reconfig_l1_acc(0);  // leave the packer as we found it
                 }
             }
         }
 
-        ckernel::tile_regs_commit();
-
         if constexpr (Mode == AccumulatorMode::Dst) {
-            // A fused bias needs the total in a buffer to add against, so the
-            // finishing pack goes to acc_cb and bias_finish carries it to out_cb.
-            const bool via_bias = finish && node.bias_cb != kNoBias;
-            const uint32_t dest = (finish && !via_bias) ? out_cb : acc_cb;
-            cb_reserve_back(dest, kAccTiles);
-            ckernel::tile_regs_wait();
-            ckernel::pack_block(0, dest, kAccTiles);
-            ckernel::tile_regs_release();
-            cb_push_back(dest, kAccTiles);
+            // A fused bias needs the total in a buffer to add against, so the finishing
+            // packs went to acc_cb and bias_finish carries the block to out_cb.
             if (via_bias) {
                 bias_finish(node, acc_cb, out_cb, EpilogueChain{});
             }
         } else {
-            // L1: the packer adds this block's product into what is already at the
-            // destination, so the running total lives in L1 and never occupies DST.
-            //
-            // The push/pop pair is load-bearing, not bookkeeping. pack_block
-            // advances the CB's fifo_wr_tile_ptr itself and cb_push_back is the
-            // only thing that resets it (llk_io_pack.h), so a pack without a
-            // matching push lands one block further along each round instead of on
-            // top of the previous one. Pushing then popping a CB sized to exactly
-            // one block wraps both pointers back to the base address -- which
-            // still holds the partial, since a pop does not erase.
-            cb_reserve_back(acc_cb, kAccTiles);
-            ckernel::tile_regs_wait();
-            ckernel::pack_reconfig_l1_acc(reload ? 1 : 0);
-            ckernel::pack_block(0, acc_cb, kAccTiles);
-            ckernel::tile_regs_release();
-            cb_push_back(acc_cb, kAccTiles);
-            ckernel::pack_reconfig_l1_acc(0);  // leave the packer as we found it
-
             if (!finish) {
                 cb_wait_front(acc_cb, kAccTiles);
                 cb_pop_front(acc_cb, kAccTiles);
@@ -1657,29 +1729,33 @@ struct Strategy<FPUFusion> {
                 // one popper per CB -- compute owns acc_cb, the writer owns out_cb
                 // -- and gives the finish-only epilogue the whole total in DST,
                 // exactly as in Dst mode.
-                ckernel::tile_regs_acquire();
+                // A flat walk is enough here: no operand indexing is involved, and the
+                // subblocks are consumed in the order they were written.
                 ckernel::copy_tile_to_dst_init_short_with_dt(node.in1_cb, acc_cb);
-                cb_wait_front(acc_cb, kAccTiles);
-                ckernel::copy_block(acc_cb, 0, 0, kAccTiles);
-                cb_pop_front(acc_cb, kAccTiles);
+                for (uint32_t sb = 0; sb < kAccTiles; sb += kSubTiles) {
+                    ckernel::tile_regs_acquire();
+                    cb_wait_front(acc_cb, kSubTiles);
+                    ckernel::copy_block(acc_cb, 0, 0, kSubTiles);
+                    cb_pop_front(acc_cb, kSubTiles);
 
-                if constexpr (!EpilogueChain::empty) {
-                    for (uint32_t t = 0; t < kAccTiles; ++t) {
-                        EpilogueChain::apply_in_place(t);
+                    if constexpr (!EpilogueChain::empty) {
+                        for (uint32_t t = 0; t < kSubTiles; ++t) {
+                            EpilogueChain::apply_in_place(t);
+                        }
                     }
-                }
 
-                ckernel::tile_regs_commit();
-                cb_reserve_back(out_cb, kAccTiles);
-                ckernel::tile_regs_wait();
-                ckernel::pack_block(0, out_cb, kAccTiles);
-                ckernel::tile_regs_release();
-                cb_push_back(out_cb, kAccTiles);
+                    ckernel::tile_regs_commit();
+                    cb_reserve_back(out_cb, kSubTiles);
+                    ckernel::tile_regs_wait();
+                    ckernel::pack_block(0, out_cb, kSubTiles);
+                    ckernel::tile_regs_release();
+                    cb_push_back(out_cb, kSubTiles);
+                }
 
                 // Restore the state matmul_block needs, so the accumulator can be
                 // cleared and driven again for the next output block.
                 ckernel::reconfig_data_format_srca(acc_cb, node.in1_cb);
-                ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, G::rt_dim, G::kt_dim);
+                ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
             }
         }
 #else
