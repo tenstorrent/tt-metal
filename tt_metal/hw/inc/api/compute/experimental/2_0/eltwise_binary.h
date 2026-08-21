@@ -227,6 +227,126 @@ ALWI void mul_tiles(
           EltwiseBinaryReuseDestType::NONE>(idst, true /*clear_fp32_dst_acc*/)));
 }
 
+// clang-format off
+/**
+ * Element-wise C = A + B over `ntiles` consecutive tile pairs, writing DST[start_idst + i]. Block/loop form of
+ * add_tiles: a pure compute-layer loop over the existing 2.0 add_tiles (mirrors copy_block over copy_tile), so
+ * it inherits add_tiles's semantics and requires the same init (add_init). Tile (start_itile0 + i) of A is
+ * paired with tile (start_itile1 + i) of B; each per-tile source address is the operand base offset by
+ * (start_i + i) * tile_stride_words(Format, Shape) 16-byte words (folds to a compile-time stride). No CB id, no
+ * register format on the API. The DST register must be acquired; start_idst + ntiles <= DST size.
+ *
+ * | Param Type | Name          | Description                                       | Type       | Valid Range | Required |
+ * |------------|---------------|--------------------------------------------------|------------|-------------|----------|
+ * | Function   | a / b         | Input operands (base address + geometry)         | LLKOperand | N/A         | True     |
+ * | Function   | start_itile0  | Index of the first source tile within A          | uint32_t   | N/A         | True     |
+ * | Function   | start_itile1  | Index of the first source tile within B          | uint32_t   | N/A         | True     |
+ * | Function   | start_idst    | Index of the first destination tile in DST       | uint32_t   | 0 to 15     | True     |
+ * | Function   | ntiles        | Number of consecutive tile pairs to add          | uint32_t   | start_idst + ntiles <= 16 | True |
+ */
+// clang-format on
+template <DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+ALWI void add_block(
+    LLKOperand<AFormat, AShape> a,
+    LLKOperand<BFormat, BShape> b,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    static_assert(is_legal_tile_shape(AShape), "add_block: illegal tile shape for operand A.");
+    static_assert(same_tile_shape(AShape, BShape), "add_block: operands A and B must have the same tile shape.");
+    constexpr std::uint32_t stride_a = tile_stride_words(static_cast<std::uint8_t>(AFormat), AShape);
+    constexpr std::uint32_t stride_b = tile_stride_words(static_cast<std::uint8_t>(BFormat), BShape);
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        add_tiles(
+            LLKOperand<AFormat, AShape>(a.l1_address + (start_itile0 + i) * stride_a),
+            LLKOperand<BFormat, BShape>(b.l1_address + (start_itile1 + i) * stride_b),
+            0,
+            0,
+            start_idst + i);
+    }
+}
+
+// clang-format off
+/**
+ * Element-wise C = A - B over `ntiles` consecutive tile pairs, writing DST[start_idst + i]. Block/loop form of
+ * sub_tiles: a pure compute-layer loop over the existing 2.0 sub_tiles (mirrors copy_block over copy_tile), so
+ * it inherits sub_tiles's semantics and requires the same init (sub_init). Tile (start_itile0 + i) of A is
+ * paired with tile (start_itile1 + i) of B; each per-tile source address is the operand base offset by
+ * (start_i + i) * tile_stride_words(Format, Shape) 16-byte words (folds to a compile-time stride). No CB id, no
+ * register format on the API. The DST register must be acquired; start_idst + ntiles <= DST size.
+ *
+ * | Param Type | Name          | Description                                       | Type       | Valid Range | Required |
+ * |------------|---------------|--------------------------------------------------|------------|-------------|----------|
+ * | Function   | a / b         | Input operands (base address + geometry)         | LLKOperand | N/A         | True     |
+ * | Function   | start_itile0  | Index of the first source tile within A          | uint32_t   | N/A         | True     |
+ * | Function   | start_itile1  | Index of the first source tile within B          | uint32_t   | N/A         | True     |
+ * | Function   | start_idst    | Index of the first destination tile in DST       | uint32_t   | 0 to 15     | True     |
+ * | Function   | ntiles        | Number of consecutive tile pairs to subtract     | uint32_t   | start_idst + ntiles <= 16 | True |
+ */
+// clang-format on
+template <DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+ALWI void sub_block(
+    LLKOperand<AFormat, AShape> a,
+    LLKOperand<BFormat, BShape> b,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    static_assert(is_legal_tile_shape(AShape), "sub_block: illegal tile shape for operand A.");
+    static_assert(same_tile_shape(AShape, BShape), "sub_block: operands A and B must have the same tile shape.");
+    constexpr std::uint32_t stride_a = tile_stride_words(static_cast<std::uint8_t>(AFormat), AShape);
+    constexpr std::uint32_t stride_b = tile_stride_words(static_cast<std::uint8_t>(BFormat), BShape);
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        sub_tiles(
+            LLKOperand<AFormat, AShape>(a.l1_address + (start_itile0 + i) * stride_a),
+            LLKOperand<BFormat, BShape>(b.l1_address + (start_itile1 + i) * stride_b),
+            0,
+            0,
+            start_idst + i);
+    }
+}
+
+// clang-format off
+/**
+ * Element-wise C = A * B over `ntiles` consecutive tile pairs, writing DST[start_idst + i]. Block/loop form of
+ * mul_tiles: a pure compute-layer loop over the existing 2.0 mul_tiles (mirrors copy_block over copy_tile), so
+ * it inherits mul_tiles's semantics and requires the same init (mul_init). Tile (start_itile0 + i) of A is
+ * paired with tile (start_itile1 + i) of B; each per-tile source address is the operand base offset by
+ * (start_i + i) * tile_stride_words(Format, Shape) 16-byte words (folds to a compile-time stride). No CB id, no
+ * register format on the API. The DST register must be acquired; start_idst + ntiles <= DST size.
+ *
+ * | Param Type | Name          | Description                                       | Type       | Valid Range | Required |
+ * |------------|---------------|--------------------------------------------------|------------|-------------|----------|
+ * | Function   | a / b         | Input operands (base address + geometry)         | LLKOperand | N/A         | True     |
+ * | Function   | start_itile0  | Index of the first source tile within A          | uint32_t   | N/A         | True     |
+ * | Function   | start_itile1  | Index of the first source tile within B          | uint32_t   | N/A         | True     |
+ * | Function   | start_idst    | Index of the first destination tile in DST       | uint32_t   | 0 to 15     | True     |
+ * | Function   | ntiles        | Number of consecutive tile pairs to multiply     | uint32_t   | start_idst + ntiles <= 16 | True |
+ */
+// clang-format on
+template <DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+ALWI void mul_block(
+    LLKOperand<AFormat, AShape> a,
+    LLKOperand<BFormat, BShape> b,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    static_assert(is_legal_tile_shape(AShape), "mul_block: illegal tile shape for operand A.");
+    static_assert(same_tile_shape(AShape, BShape), "mul_block: operands A and B must have the same tile shape.");
+    constexpr std::uint32_t stride_a = tile_stride_words(static_cast<std::uint8_t>(AFormat), AShape);
+    constexpr std::uint32_t stride_b = tile_stride_words(static_cast<std::uint8_t>(BFormat), BShape);
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        mul_tiles(
+            LLKOperand<AFormat, AShape>(a.l1_address + (start_itile0 + i) * stride_a),
+            LLKOperand<BFormat, BShape>(b.l1_address + (start_itile1 + i) * stride_b),
+            0,
+            0,
+            start_idst + i);
+    }
+}
+
 #endif  // ARCH_BLACKHOLE
 
 }  // namespace experimental

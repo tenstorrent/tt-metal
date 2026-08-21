@@ -507,7 +507,10 @@ static vector<std::uint32_t> run_binary_add(
     const vector<std::uint32_t>& src1_vec,
     std::uint32_t num_tiles,
     const std::string& compute_kernel,
-    const std::map<std::string, std::string>& compute_defines = {}) {
+    const std::map<std::string, std::string>& compute_defines = {},
+    // CB depth in tiles (default 1). Block kernels that keep >1 tile resident (wait_front(BLOCK)) must pass a
+    // depth >= their block size, else a 1-tile CB deadlocks. reader_binary/writer_unary stream 1 tile at a time.
+    std::uint32_t cb_depth_tiles = 1) {
     IDevice* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
@@ -528,7 +531,8 @@ static vector<std::uint32_t> run_binary_add(
     auto dst_buffer = make_dram();
 
     auto make_cb = [&](tt::CBIndex idx) {
-        CircularBufferConfig cb_cfg = CircularBufferConfig(tile_bytes, {{idx, fmt}}).set_page_size(idx, tile_bytes);
+        CircularBufferConfig cb_cfg =
+            CircularBufferConfig(cb_depth_tiles * tile_bytes, {{idx, fmt}}).set_page_size(idx, tile_bytes);
         CreateCircularBuffer(program, core, cb_cfg);
     };
     make_cb(tt::CBIndex::c_0);
@@ -598,6 +602,101 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixBinaryAddSpecMatchesLegacy) {
         src1,
         num_tiles,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary_add_idfree.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Binary add-block: the id-free (2.0) add_block kernel must produce output bit-for-bit identical to the legacy
+// CB-id add_block kernel on the same two inputs (differential equivalence; reuses run_binary_add). Both process
+// the inputs in blocks of 4 tiles: per block, add_block c_0[0..3] + c_1[0..3] -> DST[0..3], then pack 4 -> c_16.
+// The kernels differ ONLY in the add_block call. num_tiles is a multiple of 4, and the CBs are num_tiles deep
+// (a block keeps 4 tiles resident via wait_front, so the default 1-deep CB would deadlock).
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixBinaryAddBlockSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 64;  // multiple of the 4-tile block size
+    auto src0 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto src1 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/7, /*offset=*/-10.0f);
+
+    auto legacy = run_binary_add(
+        mesh_device,
+        src0,
+        src1,
+        num_tiles,
+        "tests/tt_metal/tt_metal/test_kernels/compute/binary_add_block_legacy.cpp",
+        /*compute_defines=*/{},
+        /*cb_depth_tiles=*/num_tiles);
+    auto spec = run_binary_add(
+        mesh_device,
+        src0,
+        src1,
+        num_tiles,
+        "tests/tt_metal/tt_metal/test_kernels/compute/binary_add_block_2_0.cpp",
+        /*compute_defines=*/{},
+        /*cb_depth_tiles=*/num_tiles);
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Binary broadcast MUL (ROW): c_0 = A, c_1 = B (bcast tile) -> c_16. The id-free (2.0) bcast-mul-row kernel
+// must produce output bit-for-bit identical to the legacy CB-id kernel on the same inputs (differential
+// equivalence; reuses run_binary_add). c_1 is a full tile; both kernels read it identically, so the differential
+// holds regardless of its (non-bcast-shaped) contents. ROW exercises operand B's L1-format forwarding.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixBcastMulRowsSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 64;
+    auto src0 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto src1 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/7, /*offset=*/-10.0f);
+
+    auto legacy = run_binary_add(
+        mesh_device, src0, src1, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/bcast_mul_rows_legacy.cpp");
+    auto spec = run_binary_add(
+        mesh_device, src0, src1, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/bcast_mul_rows_2_0.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Binary broadcast MUL (COL): as above, BroadcastType::COL. Reuses run_binary_add; differential equivalence.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixBcastMulColsSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 64;
+    auto src0 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto src1 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/7, /*offset=*/-10.0f);
+
+    auto legacy = run_binary_add(
+        mesh_device, src0, src1, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/bcast_mul_cols_legacy.cpp");
+    auto spec = run_binary_add(
+        mesh_device, src0, src1, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/bcast_mul_cols_2_0.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Binary broadcast MUL (SCALAR): as above, BroadcastType::SCALAR. Reuses run_binary_add; differential equivalence.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixBcastMulScalarSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 64;
+    auto src0 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto src1 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/7, /*offset=*/-10.0f);
+
+    auto legacy = run_binary_add(
+        mesh_device, src0, src1, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/bcast_mul_scalar_legacy.cpp");
+    auto spec = run_binary_add(
+        mesh_device, src0, src1, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/bcast_mul_scalar_2_0.cpp");
 
     EXPECT_EQ(legacy, spec);
 }
@@ -681,6 +780,125 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulSpecMatchesLegacy) {
         run_matmul_single_tile(mesh_device, src0, src1, "tests/tt_metal/tt_metal/test_kernels/compute/matmul.cpp");
     auto spec = run_matmul_single_tile(
         mesh_device, src0, src1, "tests/tt_metal/tt_metal/test_kernels/compute/matmul_idfree.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Matmul BLOCK: C = A*B for a block of tiles. A is rt_dim x kt_dim (c_0 -> SrcB), B is kt_dim x ct_dim
+// (c_1 -> SrcA), C is rt_dim x ct_dim (c_16). The id-free (2.0) block matmul kernel must produce output
+// bit-for-bit identical to the legacy matmul_block kernel on the same inputs. reader_binary reads the SAME
+// tile count into c_0 and c_1, so the block must satisfy rt_dim == ct_dim; ct=rt=kt=2 => 4 tiles each. CBs
+// hold the whole block resident (the kernel does wait_front(block) / packs the whole block), else deadlock.
+// ============================================================================
+static vector<std::uint32_t> run_matmul_block(
+    distributed::MeshDevice& mesh_device,
+    const vector<std::uint32_t>& src0_vec,  // in0 (A) block: rt_dim*kt_dim tiles
+    const vector<std::uint32_t>& src1_vec,  // in1 (B) block: kt_dim*ct_dim tiles
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t kt_dim,
+    const std::string& compute_kernel) {
+    IDevice* dev = mesh_device.get_devices()[0];
+    Program program = CreateProgram();
+    CoreCoord core = {0, 0};
+
+    const tt::DataFormat fmt = tt::DataFormat::Float16_b;
+    std::uint32_t tile_bytes = tt::tile_size(fmt);
+
+    const std::uint32_t in0_tiles = rt_dim * kt_dim;  // A block
+    const std::uint32_t in1_tiles = kt_dim * ct_dim;  // B block
+    const std::uint32_t out_tiles = rt_dim * ct_dim;  // C block
+    // reader_binary reads the same count into c_0 and c_1 -> this differential requires rt_dim == ct_dim.
+    TT_FATAL(in0_tiles == in1_tiles, "run_matmul_block: reader_binary needs in0_tiles == in1_tiles (rt==ct)");
+
+    auto make_dram = [&](std::uint32_t n) {
+        InterleavedBufferConfig cfg{
+            .device = dev, .size = n * tile_bytes, .page_size = n * tile_bytes, .buffer_type = BufferType::DRAM};
+        return CreateBuffer(cfg);
+    };
+    auto src0_buffer = make_dram(in0_tiles);
+    auto src1_buffer = make_dram(in1_tiles);
+    auto dst_buffer = make_dram(out_tiles);
+
+    // CB depth = whole-block tile count: the kernel keeps the whole block resident (wait_front(block) / packs
+    // the whole block), so a shallower CB deadlocks against reader_binary's one-tile reserve_back/push_back.
+    auto make_cb = [&](tt::CBIndex idx, std::uint32_t depth) {
+        CircularBufferConfig cfg =
+            CircularBufferConfig(depth * tile_bytes, {{idx, fmt}}).set_page_size(idx, tile_bytes);
+        CreateCircularBuffer(program, core, cfg);
+    };
+    make_cb(tt::CBIndex::c_0, in0_tiles);
+    make_cb(tt::CBIndex::c_1, in1_tiles);
+    make_cb(tt::CBIndex::c_16, out_tiles);
+
+    auto reader = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    // Compile args are the runtime block dims: {ct_dim, rt_dim, kt_dim}.
+    CreateKernel(
+        program,
+        compute_kernel,
+        core,
+        ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {ct_dim, rt_dim, kt_dim}});
+
+    detail::WriteToBuffer(src0_buffer, src0_vec);
+    detail::WriteToBuffer(src1_buffer, src1_vec);
+    SetRuntimeArgs(program, reader, core, {src0_buffer->address(), 0, src1_buffer->address(), 0, in0_tiles});
+    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, out_tiles});
+
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+
+    vector<std::uint32_t> result_vec;
+    detail::ReadFromBuffer(dst_buffer, result_vec);
+    return result_vec;
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulBlockSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    // ct==rt required (reader_binary feeds c_0 and c_1 the same count). 2x2x2 block => 4 tiles each.
+    constexpr std::uint32_t ct_dim = 2, rt_dim = 2, kt_dim = 2;
+    auto src0 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * (rt_dim * kt_dim),
+        /*rand_max_float=*/2,
+        /*seed=*/42,
+        /*offset=*/-1.0f);
+    auto src1 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * (kt_dim * ct_dim),
+        /*rand_max_float=*/2,
+        /*seed=*/7,
+        /*offset=*/-1.0f);
+
+    auto legacy = run_matmul_block(
+        mesh_device,
+        src0,
+        src1,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        "tests/tt_metal/tt_metal/test_kernels/compute/matmul_block_legacy.cpp");
+    auto spec = run_matmul_block(
+        mesh_device,
+        src0,
+        src1,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        "tests/tt_metal/tt_metal/test_kernels/compute/matmul_block_2_0.cpp");
 
     EXPECT_EQ(legacy, spec);
 }

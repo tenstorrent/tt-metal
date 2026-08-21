@@ -10,10 +10,12 @@
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_unary_datacopy.h"
+#include "experimental/2_0/llk_math_binary.h"
 #endif
 
 #ifdef TRISC_UNPACK
 #include "experimental/2_0/llk_unpack_A.h"
+#include "experimental/2_0/llk_unpack_AB.h"
 #endif
 
 // =====================================================================================================
@@ -135,6 +137,160 @@ ALWI void unary_bcast_uninit(LLKOperand<Format, Shape> /*src*/) {
         (Format == DataFormat::Float32) || (Format == DataFormat::UInt32) || (Format == DataFormat::Int32);
     UNPACK((llk_unpack_A_uninit<bcast_type>()));
     MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, enable_unpack_to_dest>()));
+}
+
+// =====================================================================================================
+// Id-free (2.0) BINARY broadcast (any_tiles_bcast<EltwiseBinaryType, BroadcastType>). Two-input op: C = A [op]
+// broadcast(B), where B is a single tile broadcast across A per the BroadcastType (ROW / COL / SCALAR). Mirrors
+// the legacy ckernel::any_tiles_bcast<tBcastOp, tBcastDim> (bcast_init + any_tiles_bcast) but takes one
+// LLKOperand per input instead of CB ids: Format + Shape are compile-time NTTPs, l1_address the only runtime
+// state. Binary bcast is FORMAT-FREE at the op level (src/dst register formats are programmed once at
+// compute_kernel_hw_startup); geometry (for MATH + the AB-unpack init) is taken from operand A, matching legacy.
+// Per-tile input addresses are derived from each operand's geometry via tile_stride_words (one-tile page).
+//
+// The ROW broadcast path additionally needs operand B's L1 format (forwarded as the OperandBFormat NTTP of the
+// id-free llk_unpack_AB); COL / SCALAR ignore it. BroadcastType::NONE (plain binary) belongs to
+// experimental::add/sub/mul_tiles in eltwise_binary.h, not here.
+// =====================================================================================================
+
+// clang-format off
+/**
+ * Paired init for experimental::any_tiles_bcast (generic op/dim). Configures MATH + the AB unpacker for the
+ * id-free binary broadcast op; call before any_tiles_bcast (including when switching to it from another op).
+ * The one-time hardware configuration must already have been performed via compute_kernel_hw_startup(a, b, out)
+ * at kernel start. Geometry comes from operand A (A.shape == B.shape assumed for the non-broadcast dims).
+ *
+ * | Param Type | Name      | Description                                                  | Type              | Valid Range | Required |
+ * |------------|-----------|--------------------------------------------------------------|-------------------|-------------|----------|
+ * | Template   | tBcastOp  | The binary op (ELWADD / ELWSUB / ELWMUL)                     | EltwiseBinaryType | N/A         | True     |
+ * | Template   | tBcastDim | The broadcast dim (ROW / COL / SCALAR)                       | BroadcastType     | N/A         | True     |
+ * | Template   | AFormat   | Operand A L1 data format (deduced from the LLKOperand)       | DataFormat        | N/A         | True     |
+ * | Template   | AShape    | Operand A tile geometry (deduced from the LLKOperand)        | TensorShape       | N/A         | True     |
+ * | Function   | a         | Operand A (drives geometry; address unused here)            | LLKOperand        | N/A         | True     |
+ */
+// clang-format on
+template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim, DataFormat AFormat, TensorShape AShape>
+ALWI void bcast_init(LLKOperand<AFormat, AShape> /*a*/) {
+    static_assert(is_legal_tile_shape(AShape), "bcast_init: illegal tile shape for operand A.");
+    static_assert(tBcastDim != BroadcastType::NONE, "bcast_init: use add/sub/mul_init for BroadcastType::NONE.");
+    MATH((llk_math_eltwise_binary_init<LLKOperand<AFormat, AShape>::descriptor, tBcastOp, tBcastDim, MATH_FIDELITY>()));
+    UNPACK((llk_unpack_AB_init<LLKOperand<AFormat, AShape>::descriptor, tBcastDim>(ckernel::Transpose::None)));
+}
+
+// clang-format off
+/**
+ * Id-free binary broadcast: C = A [tBcastOp] broadcast(B) for one tile pair, writing DST[idst]. B is a single
+ * tile broadcast across A per tBcastDim (COL: B's row 0; ROW: B's col 0; SCALAR: B[0,0]). Pair with bcast_init.
+ * The DST register must be acquired. Blocking; compute-engine only. itile0/itile1 index within A/B; geometry
+ * (for MATH) comes from operand A, matching legacy. The ROW path forwards operand B's L1 format to the unpacker.
+ *
+ * | Param Type | Name            | Description                                              | Type              | Valid Range | Required |
+ * |------------|-----------------|--------------------------------------------------------|-------------------|-------------|----------|
+ * | Template   | tBcastOp        | The binary op (ELWADD / ELWSUB / ELWMUL)               | EltwiseBinaryType | N/A         | True     |
+ * | Template   | tBcastDim       | The broadcast dim (ROW / COL / SCALAR)                 | BroadcastType     | N/A         | True     |
+ * | Template   | AFormat/AShape  | Operand A L1 format + geometry (deduced)               | DataFormat/TensorShape | N/A    | True     |
+ * | Template   | BFormat/BShape  | Operand B L1 format + geometry (deduced)               | DataFormat/TensorShape | N/A    | True     |
+ * | Function   | a / b           | Input operands (A -> SrcA, broadcast B -> SrcB)        | LLKOperand        | N/A         | True     |
+ * | Function   | itile0 / itile1 | Tile indices within A / B                              | uint32_t          | N/A         | True     |
+ * | Function   | idst            | DST register index for the result                     | uint32_t          | 0 to 15     | True     |
+ */
+// clang-format on
+template <
+    EltwiseBinaryType tBcastOp,
+    BroadcastType tBcastDim,
+    DataFormat AFormat,
+    TensorShape AShape,
+    DataFormat BFormat,
+    TensorShape BShape>
+ALWI void any_tiles_bcast(
+    LLKOperand<AFormat, AShape> a,
+    LLKOperand<BFormat, BShape> b,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst) {
+    static_assert(is_legal_tile_shape(AShape), "any_tiles_bcast: illegal tile shape for operand A.");
+    static_assert(tBcastDim != BroadcastType::NONE, "any_tiles_bcast: use add/sub/mul_tiles for BroadcastType::NONE.");
+    constexpr std::uint32_t a_stride = tile_stride_words(static_cast<std::uint8_t>(AFormat), AShape);
+    constexpr std::uint32_t b_stride = tile_stride_words(static_cast<std::uint8_t>(BFormat), BShape);
+    // Match legacy any_tiles_bcast order: MATH then UNPACK.
+    MATH((llk_math_eltwise_binary<
+          LLKOperand<AFormat, AShape>::descriptor,
+          tBcastOp,
+          tBcastDim,
+          DST_ACCUM_MODE,
+          MATH_FIDELITY,
+          EltwiseBinaryReuseDestType::NONE>(idst, true /*clear_fp32_dst_acc*/)));
+    UNPACK((llk_unpack_AB<LLKOperand<AFormat, AShape>::descriptor, tBcastDim, static_cast<std::uint8_t>(BFormat)>(
+        a.l1_address + itile0 * a_stride, b.l1_address + itile1 * b_stride)));
+}
+
+// clang-format off
+/**
+ * Id-free broadcast add: C = A + broadcast(B). Shorthand for any_tiles_bcast<ELWADD, tBcastDim>. See
+ * any_tiles_bcast for the full parameter table and broadcast semantics.
+ *
+ * | Param Type | Name           | Description                              | Type          | Valid Range | Required |
+ * |------------|----------------|------------------------------------------|---------------|-------------|----------|
+ * | Template   | tBcastDim      | The broadcast dim (ROW / COL / SCALAR)   | BroadcastType | N/A         | True     |
+ * | Function   | a / b          | Input operands                           | LLKOperand    | N/A         | True     |
+ * | Function   | itile0 / itile1| Tile indices within A / B                | uint32_t      | N/A         | True     |
+ * | Function   | idst           | DST register index for the result        | uint32_t      | 0 to 15     | True     |
+ */
+// clang-format on
+template <BroadcastType tBcastDim, DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+ALWI void add_tiles_bcast(
+    LLKOperand<AFormat, AShape> a,
+    LLKOperand<BFormat, BShape> b,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst) {
+    any_tiles_bcast<EltwiseBinaryType::ELWADD, tBcastDim>(a, b, itile0, itile1, idst);
+}
+
+// clang-format off
+/**
+ * Id-free broadcast sub: C = A - broadcast(B). Shorthand for any_tiles_bcast<ELWSUB, tBcastDim>. See
+ * any_tiles_bcast for the full parameter table and broadcast semantics.
+ *
+ * | Param Type | Name           | Description                              | Type          | Valid Range | Required |
+ * |------------|----------------|------------------------------------------|---------------|-------------|----------|
+ * | Template   | tBcastDim      | The broadcast dim (ROW / COL / SCALAR)   | BroadcastType | N/A         | True     |
+ * | Function   | a / b          | Input operands                           | LLKOperand    | N/A         | True     |
+ * | Function   | itile0 / itile1| Tile indices within A / B                | uint32_t      | N/A         | True     |
+ * | Function   | idst           | DST register index for the result        | uint32_t      | 0 to 15     | True     |
+ */
+// clang-format on
+template <BroadcastType tBcastDim, DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+ALWI void sub_tiles_bcast(
+    LLKOperand<AFormat, AShape> a,
+    LLKOperand<BFormat, BShape> b,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst) {
+    any_tiles_bcast<EltwiseBinaryType::ELWSUB, tBcastDim>(a, b, itile0, itile1, idst);
+}
+
+// clang-format off
+/**
+ * Id-free broadcast mul: C = A * broadcast(B). Shorthand for any_tiles_bcast<ELWMUL, tBcastDim>. See
+ * any_tiles_bcast for the full parameter table and broadcast semantics. The most common broadcast use.
+ *
+ * | Param Type | Name           | Description                              | Type          | Valid Range | Required |
+ * |------------|----------------|------------------------------------------|---------------|-------------|----------|
+ * | Template   | tBcastDim      | The broadcast dim (ROW / COL / SCALAR)   | BroadcastType | N/A         | True     |
+ * | Function   | a / b          | Input operands                           | LLKOperand    | N/A         | True     |
+ * | Function   | itile0 / itile1| Tile indices within A / B                | uint32_t      | N/A         | True     |
+ * | Function   | idst           | DST register index for the result        | uint32_t      | 0 to 15     | True     |
+ */
+// clang-format on
+template <BroadcastType tBcastDim, DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+ALWI void mul_tiles_bcast(
+    LLKOperand<AFormat, AShape> a,
+    LLKOperand<BFormat, BShape> b,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst) {
+    any_tiles_bcast<EltwiseBinaryType::ELWMUL, tBcastDim>(a, b, itile0, itile1, idst);
 }
 
 #endif  // ARCH_BLACKHOLE
