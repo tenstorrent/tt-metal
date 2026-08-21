@@ -11,11 +11,14 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "ring_attention_all_gather_metadata.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <tuple>
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
@@ -28,11 +31,22 @@ constexpr uint32_t num_inputs = get_compile_time_arg_val(4);
 constexpr uint32_t unicast_route_arg0 = get_compile_time_arg_val(5);
 constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(6);
 constexpr bool send_backward = get_compile_time_arg_val(7);
+constexpr uint32_t meta_cb_id = get_compile_time_arg_val(8);
 
-constexpr uint32_t page_size_base_idx = 8;
+constexpr uint32_t page_size_base_idx = 9;
 
 void kernel_main() {
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
+    // See the halo reader: appended after the per-output accessors, with a valid fallback offset so the
+    // unconditionally-instantiated TensorAccessorArgs<> never names a non-accessor compile arg. Reader and
+    // writer MUST relocate to the same range or their cb_output page counts drift apart.
+    // The tuple itself has no offset accessor; the last element's next offset is where the
+    // accessors end.
+    constexpr uint32_t halo_meta_flag_idx = std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset();
+    constexpr bool has_halo_metadata = get_compile_time_arg_val(halo_meta_flag_idx) == 1;
+    constexpr uint32_t kv_meta_args_offset =
+        has_halo_metadata ? halo_meta_flag_idx + 1 : page_size_base_idx + num_inputs;
+    constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
 
     ///////////////////////////////////////////////////
     // ARGS
@@ -54,6 +68,29 @@ void kernel_main() {
         input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_origin_page[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+    }
+
+    if constexpr (has_halo_metadata) {
+        const uint32_t kv_actual_isl_addr = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t q_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t halo_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t source_device = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t baked_start_Ht = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t ring_size_rt = get_arg_val<uint32_t>(arg_idx++);
+        Noc meta_noc;
+        CircularBuffer cb_meta(meta_cb_id);
+        const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
+            meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
+        const uint32_t tail_start_Ht = ring_attention_all_gather::compute_halo_tail_start_Ht(
+            kv_actual_isl, q_local_tile_rows, ring_size_rt, halo_tile_rows, source_device);
+        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+            const uint32_t input_Wt = get_arg_val<uint32_t>(arg_idx++);
+            const uint32_t runtime_origin = tail_start_Ht * input_Wt;
+            const uint32_t baked_origin = baked_start_Ht * input_Wt;
+            ring_attention_all_gather::relocate_halo_range(
+                runtime_origin, baked_origin, input_tile_id_start[input_idx], input_tile_id_end[input_idx]);
+            input_origin_page[input_idx] = runtime_origin;
+        }
     }
 
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
