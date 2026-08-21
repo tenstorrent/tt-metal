@@ -253,7 +253,7 @@ jobs:
           total = failed = skipped = 0
           for s in suites:
               total   += int(s.attrib.get("tests",    0) or 0)
-              failed  += int(s.attrib.get("failures", 0) or 0)
+              failed  += int(s.attrib.get("failures", 0) or 0) + int(s.attrib.get("errors", 0) or 0)
               skipped += int(s.attrib.get("skipped",  0) or 0)
           ran = max(total - skipped, 0)
           passed = max(ran - failed, 0)
