@@ -1734,9 +1734,9 @@ class Gemma4Model:
                     mesh_mapper=mesh_mapper,
                 )
 
-        # Host embeds feed PLI only. Unconditional F.embedding over the vocab
-        # table was ~32 ms of start→Embeddings host gap at ISL 2048 on 31B
-        # (no PLI); skip when PLI is off. Same gate as _compute_per_layer_inputs.
+        # Host embeds feed PLI only. An unconditional F.embedding over the vocab
+        # table shows up as a start→Embeddings host gap on long ISLs, so skip it
+        # when PLI is off. Same gate as _compute_per_layer_inputs.
         self._stash_prefill_host_state(tokens_torch, batch_size, per_user_seq_len)
 
         if trace_enabled:
@@ -2000,11 +2000,12 @@ class Gemma4Model:
         device tensor already holds the full vocab.
 
         Do not try to drop the preceding ``ttnn.untilize`` (``tt_transformers/tt/
-        generator.py``): on the [1,1,32,262144] bf16 logits its 264 us of device
-        time saves ~690 us of host readback, and slicing the needed row first is
-        worse still (a TILE-layout height slice alone costs 778 us). The real fix
-        is to not read full-vocab logits at all — with ``sampling_params`` set the
-        generator samples on device and skips both the untilize and the readback.
+        generator.py``): on the [1,1,32,262144] bf16 logits it costs less device
+        time than the host readback it saves, and slicing the needed row first is
+        worse still (a TILE-layout height slice alone costs more than the
+        untilize). The real fix is to not read full-vocab logits at all — with
+        ``sampling_params`` set the generator samples on device and skips both the
+        untilize and the readback.
         """
         if self.mesh_config is not None and self.mesh_config.tp > 1:
             torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
@@ -2053,10 +2054,9 @@ class Gemma4Model:
 
         Stays on device. This used to read every TP shard of the last-token tile
         block to host, ``torch.cat`` them into the full hidden, pick one row per
-        user, and upload the result again: at padded_batch=4 on 12B that is
-        4x1x32x480 bf16 = 123 KB per device (~1 MB across an 8-chip mesh) down, a
-        host concat, and a 30 KB upload -- per prefill group -- to rearrange data
-        that never needed to leave the mesh. One ``ttnn.slice`` per user, one
+        user, and upload the result again -- a download, a host concat and an
+        upload per prefill group, to rearrange data that never needed to leave the
+        mesh. One ``ttnn.slice`` per user, one
         ``ttnn.concat``, and (only when the hidden arrives TP-sharded) one
         all-gather of the *selected rows* do the same thing with no host hop and
         no blocking read.

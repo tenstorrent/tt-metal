@@ -334,7 +334,7 @@ class Gemma4DecoderLayer:
         # the QKV matmul reads in0 from anyway. The default (DRAM) sent the norm
         # output on a full DRAM round-trip, because apply_qkv_projection always
         # passes a program config, so hoist_prefill_matmul_in0_if_needed copied it
-        # back to L1 — one CopyDeviceOperation per layer (61/step, 0.24 ms). The
+        # back to L1 — one CopyDeviceOperation per layer. The
         # matmul now sees the same bits in the same buffer type under the same
         # program config, so the change is bit-exact by construction.
         if is_decode:

@@ -264,9 +264,9 @@ def test_lm_head_decode_batch32(mesh_device, reset_seeds, request):
 def test_lm_head_bfp8_weight_decode_batch32(mesh_device, reset_seeds, request):
     """LM head decode matmul with bfp8 weight — DRAM relief for 32×5376×32768 @ TP=8.
 
-    Op 2137 in ``perf3_lm_head_32x5376x32768.txt`` is DRAM-bound at 33.4% of decode
-    step time with bf16 weights. bfp8 halves weight bandwidth; HiFi4 activations
-    preserve logit quality vs the bf16 torch reference.
+    With bf16 weights this matmul is DRAM-bound and a large share of the decode
+    step. bfp8 halves weight bandwidth; HiFi4 activations preserve logit quality
+    vs the bf16 torch reference.
     """
     tt_logits_torch, ref_logits = _run_lm_head_decode_batch32(
         mesh_device,

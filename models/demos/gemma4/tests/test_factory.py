@@ -38,8 +38,8 @@ def _get_model_path():
 
 
 # HF reference loading -- one path shared by every test that scores TT against
-# the real checkpoint (test_demo_v2_hf_reference, test_teacher_forcing_e2e), so
-# dtype/device_map never drift between the demo-agreement and accuracy numbers.
+# the real checkpoint (test_teacher_forcing_e2e), so dtype/device_map never drift
+# between the demo-agreement and accuracy numbers.
 _HF_DEVICE_MAP_ENV = "GEMMA4_HF_DEVICE_MAP"
 
 

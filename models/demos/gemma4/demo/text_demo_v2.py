@@ -18,13 +18,12 @@ Differences from the Gemma3 demo (Gemma4-specific):
     exposes a sampling module — every mesh from 1x1 up, since the shard-width cap
     is now ``_MAX_SAMPLING_SHARD_WIDTH`` (256K) rather than 64K-and-TP>1.
     Host sampling all-gathers the full-vocab logits and reads them to CPU each
-    token: measured 58.12 vs 41.97 ms/token on 31B / WH T3K (~16 ms/step, +38%
-    tok/s) with token-for-token identical output. Set ``GEMMA4_HOST_SAMPLE=1``
-    to force the host path.
+    token, which costs real time per step for token-for-token identical output.
+    Set ``GEMMA4_HOST_SAMPLE=1`` to force the host path.
   * Decode token reads are pipelined one step deep (``GEMMA4_DECODE_PIPELINE=1``,
     default): the sampled token's DMA overlaps the next decode submit instead of
-    blocking it. Worth ~0.6 ms/token on 31B — the step is device-bound, so this
-    matters most where the model is small relative to the host round trip.
+    blocking it. The step is device-bound, so this matters most where the model is
+    small relative to the host round trip.
     ``GEMMA4_DECODE_PIPELINE=0`` restores the blocking loop.
   * No decode warmup (``warmup_model_decode`` is Gemma3-generator specific); the
     first decode iteration serves as the compile step and is excluded from the
@@ -619,9 +618,9 @@ def test_demo_text(
     # "la", then repetition) showed up.
     #
     # Host sampling all-gathers the full 262K-vocab logits and reads 16 MB to CPU
-    # every token; skipping that is worth 17.51 -> 22.64 tok/s at batch-1 and
-    # 13.97 -> 16.56 tok/s at 128K. GEMMA4_HOST_SAMPLE=1 restores the host path
-    # if the trace hazard ever resurfaces on another config.
+    # every token; skipping that is a solid tok/s win at both batch-1 and 128K.
+    # GEMMA4_HOST_SAMPLE=1 restores the host path if the trace hazard ever
+    # resurfaces on another config.
     force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
     can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
     device_sampling_params = build_device_sampling_params(sampling_params, can_sample=can_sample)

@@ -43,9 +43,9 @@ the rest of the Gemma4 HF-reference tests:
     temperature 0), applied to the TT and the HF logits alike. TT decodes with
     ``sampling_params=None`` so the full logits row comes back -- the demo's
     ``GEMMA4_HOST_SAMPLE=1`` branch -- which top-5 and PCC both need.
-  * HF is loaded through ``test_factory.load_hf_reference_model``, the same
-    bf16 / ``trust_remote_code`` / ``GEMMA4_HF_DEVICE_MAP`` path that
-    ``test_demo_v2_hf_reference.py`` uses.
+  * HF is loaded through ``test_factory.load_hf_reference_model`` -- the shared
+    bf16 / ``trust_remote_code`` / ``GEMMA4_HF_DEVICE_MAP`` path, so every test
+    that scores against HF loads it identically.
 
 Reading the pair: top-1 agreement falling while top-5 holds at 100% means TT is
 reordering near-ties, the ordinary consequence of BFP8 weights or LoFi fidelity.
@@ -401,8 +401,8 @@ def _hf_reference_rows(model_path, tokens, prefill_len, max_new_tokens):
     prefill is itself teacher-forced by causal masking.
     """
     end = prefill_len + max_new_tokens
-    # Same loader as test_demo_v2_hf_reference (bf16, trust_remote_code,
-    # GEMMA4_HF_DEVICE_MAP) so both tests score against an identically loaded HF.
+    # Shared loader (bf16, trust_remote_code, GEMMA4_HF_DEVICE_MAP) so every test
+    # scores against an identically loaded HF.
     hf_model = load_hf_reference_model(model_path)
     try:
         device = hf_reference_model_device(hf_model)

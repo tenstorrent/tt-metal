@@ -99,9 +99,9 @@ def ccl_sync_split_enabled() -> bool:
     instead of the fused ``ttnn.all_reduce``. Default ON; ``GEMMA4_CCL_SPLIT=0``
     opts back out.
 
-    ``ttnn.all_reduce`` *is* those two ops -- measured identical to within noise
-    (fused 95.5 us vs split 96.1 us) and ``torch.equal`` bit-identical on
-    per-device-distinct data. But the fused op exposes only
+    ``ttnn.all_reduce`` *is* those two ops -- identical to within noise and
+    ``torch.equal`` bit-identical on per-device-distinct data. But the fused op
+    exposes only
     {cluster_axis, memory_config, num_links, topology, subdevice_id}, while the
     sync halves also expose ``chunks_per_sync`` / ``num_workers_per_link`` /
     ``num_buffers_per_channel``. Splitting therefore costs nothing and unlocks
@@ -117,46 +117,32 @@ def ccl_sync_split_enabled() -> bool:
 # (w=1,c=1). T3K chunk height 2048 (~22 MB) is bandwidth-bound and wants w=2,c=2.
 _PREFILL_RS_TALL_HEIGHT = 2048
 
-# Metal-trace isolate (WH 1x8, 31B [1,1,M,5376] bf16, torch.equal vs fused):
-#   M=2048 sync split 3078 us → async w=2 c=10 2310 us (−25%).
-# Decode / short prefill stay sync (small-payload async lost; L1 gather path).
+# At the T3K chunk height the async path (w=2, c=10) beats the sync split, and is
+# torch.equal against the fused op. Decode / short prefill stay sync -- async
+# lost on small payloads there, and that path takes the L1 gather.
 _CCL_ASYNC_MIN_HEIGHT = 2048
 
 
 def ccl_sync_rs_workers(padded_height: int | None = None) -> int:
     """``num_workers_per_link`` for the split all-reduce's reduce-scatter.
 
-    Trace-replay sweep of the Gemma4-31B decode all-reduce ([1,1,32,5376] bf16,
-    Ring, num_links=1, 1x8 WH LoudBox), 3 repeats, min-of-rounds, every arm
-    checked ``torch.equal`` against the fused ``ttnn.all_reduce`` result:
+    At decode / short prefill the winner is ``w=1, c=1``, and it is bit-exact --
+    the reduction order is unchanged, only the worker/sync granularity is.
+    ``num_buffers_per_channel`` is noise here; 4 is taken as the middle.
 
-        fused ttnn.all_reduce (shipping)           95.5 us  -> 11.46 ms/step
-        split, both halves default                 96.1 us  -> 11.54 ms/step
-        split, RS w=1 c=1                        **88.9 us**->**10.67 ms/step**
-        split, RS w=2 c=1                          94.0 us  -> 11.28 ms/step
-        split, RS w=1 c=2                          96.1 us  -> 11.54 ms/step
-        split, RS w=1 c=4                          99.0 us  -> 11.88 ms/step
-        split, RS w=4 c=1                         141.0 us  -> 16.9  ms/step
+    Prefill is height-dependent: a ~1 MB payload still wants ``w=1,c=1``, while
+    the T3K chunk height (~22 MB) wants ``w=2,c=2``, still bit-exact. Hence the
+    height-aware default below; ``GEMMA4_CCL_SYNC_RS_WORKERS`` overrides.
 
-    So ``w=1, c=1`` is worth -6.6 us/all-reduce = **-0.79 ms/decode step**, and
-    it is bit-exact -- the reduction order is unchanged, only the worker/sync
-    granularity is. ``num_buffers_per_channel`` is noise here (b=2/4/8 all
-    88.8-89.4 us); 4 is taken as the middle.
-
-    Prefill (same mesh, distinct per-device input, metal-trace min-of-3):
-    M=96 (~1 MB) still wants ``w=1,c=1``. M=2048 (~22 MB, T3K chunk) wants
-    ``w=2,c=2`` (~9% vs ``w=1,c=1``, still bit-exact). Height-aware default
-    below; ``GEMMA4_CCL_SYNC_RS_WORKERS`` overrides.
-
-    Note ``w=4`` is a 1.5x cliff at decode / short prefill, not a plateau: with
-    a single link, extra workers contend. Do not raise this without re-sweeping,
+    Note ``w=4`` is a cliff at decode / short prefill, not a plateau: with a
+    single link, extra workers contend. Do not raise this without re-sweeping,
     and do not confuse it with the async path's ``GEMMA4_CCL_NUM_WORKERS``
     default of 2.
 
-    The GATHER half was swept over the same knobs (w x c x b, 12 arms) and is
-    completely insensitive -- 95.5-95.9 us throughout. It runs on ONE worker core
-    (vs the reduce-scatter's 6) and 44.7 us for a 688 KB gather is the num_links=1
-    fabric floor, not core starvation. Leave it on defaults.
+    The GATHER half was swept over the same knobs (w x c x b) and is completely
+    insensitive. It runs on ONE worker core (vs the reduce-scatter's 6) and sits
+    at the ``num_links=1`` fabric floor, not core starvation. Leave it on
+    defaults.
     """
     env = os.environ.get("GEMMA4_CCL_SYNC_RS_WORKERS")
     if env is not None and str(env).strip() != "":
@@ -169,8 +155,8 @@ def ccl_sync_rs_workers(padded_height: int | None = None) -> int:
 def ccl_sync_rs_chunks(padded_height: int | None = None) -> int:
     """``chunks_per_sync`` for the split all-reduce's reduce-scatter.
 
-    Decode / short prefill: 1 measured 88.9 us, 2 measured 96.1, 4 measured 99.0.
-    Prefill M=2048: ``c=2`` with ``w=2`` is the isolated winner. See
+    Decode / short prefill want ``c=1``; raising it only costs time. At prefill
+    M=2048, ``c=2`` with ``w=2`` is the isolated winner. See
     ``ccl_sync_rs_workers``.
     """
     env = os.environ.get("GEMMA4_CCL_SYNC_RS_CHUNKS")
@@ -183,7 +169,7 @@ def ccl_sync_rs_chunks(padded_height: int | None = None) -> int:
 
 def ccl_sync_rs_buffers() -> int:
     """``num_buffers_per_channel`` for the split all-reduce's reduce-scatter.
-    Noise across 2/4/8; see ``ccl_sync_rs_workers``."""
+    Insensitive across the swept range; see ``ccl_sync_rs_workers``."""
     return max(1, int(os.environ.get("GEMMA4_CCL_SYNC_RS_BUFFERS", "4")))
 
 
@@ -193,29 +179,20 @@ def default_ccl_topology(mesh_device=None, is_moe: bool = False):
     Override with ``GEMMA4_CCL_TOPOLOGY=ring|linear``.
 
     Policy (when env unset):
-      * **Ring** on **Blackhole** meshes with **≥8 devices** (P150x8 TTFT
-        sweep: Ring+sync ~28.8s vs Linear+sync ~31.0s @ 31B/128k).
+      * **Ring** on **Blackhole** meshes with **≥8 devices** (Ring+sync beat
+        Linear+sync on the P150x8 TTFT sweep at 31B/128k).
       * **Ring** on **Wormhole** meshes with **≥8 devices** for **dense**
-        models. Trace-replay sweep of the 31B decode all-reduce
-        ([1,1,32,5376] bf16, 2/layer x 60 layers) on a 1x8 WH LoudBox:
-
-            sync all_reduce  Linear  114.4 us  -> 13.73 ms/step  (was default)
-            sync all_reduce  Ring     96.2 us  -> 11.55 ms/step  <-- now default
-            async RS+AG      Linear  131-142us -> 15.7-17.0 ms/step
-            async RS+AG      Ring    101-127us -> 12.2-15.2 ms/step
-
-        i.e. Ring is worth ~2.2 ms/step (~4% of a 50.6 ms decode step) and
-        sync beats async in every arm. Opening the mesh with
-        ``FABRIC_1D_RING`` instead of ``FABRIC_1D`` buys only a further
-        93.1 vs 96.2 us, so the topology is taken under plain ``FABRIC_1D``
-        and no harness device_params change is needed. ``num_links=2`` is NOT
-        usable here — it raises "Event Order Issue: expected to read back
-        completion signal for event 27 but got 14" (see default_num_links).
+        models: on the 31B decode all-reduce Ring beats Linear, and sync beats
+        async in every arm. Opening the mesh with ``FABRIC_1D_RING`` instead of
+        ``FABRIC_1D`` buys almost nothing further, so the topology is taken
+        under plain ``FABRIC_1D`` and no harness device_params change is needed.
+        ``num_links=2`` is NOT usable here — it raises "Event Order Issue:
+        expected to read back completion signal for event 27 but got 14" (see
+        default_num_links).
       * **Linear** for **MoE** models on WH: Ring drops 26B-A4B
-        ``test_full_model`` PCC below the TEMP 0.76 gate (~0.7505 vs
-        ~0.77/0.94 with Linear / main).
+        ``test_full_model`` PCC below its TEMP 0.76 gate, Linear clears it.
       * **Linear** everywhere else. Ring on 4-device BH drops 12B full-model
-        PCC (~0.97 → ~0.90).
+        PCC well below the Linear result.
     """
     override = os.environ.get("GEMMA4_CCL_TOPOLOGY", "").strip().lower()
     if override in ("ring", "r"):
@@ -250,7 +227,7 @@ def ccl_async_enabled(padded_height: int | None = None) -> bool:
 
     ``GEMMA4_CCL_ASYNC=1/0`` forces on/off for every height. When unset, async
     auto-enables only for ``padded_height >= 2048`` (bandwidth-bound prefill
-    chunks) — isolate bit-exact −25% vs sync split on WH 1x8 / 31B. Opt out of
+    chunks), where it is bit-exact and beats the sync split. Opt out of
     that auto path with ``GEMMA4_CCL_ASYNC_PREFILL=0`` without enabling decode
     async. Decode and short prefill stay on the sync split + L1-gather path.
     """
@@ -419,8 +396,7 @@ def _short_seq_l1_gather_memcfg(tensor, ccl_manager):
     into an ``RMSNorm`` (layer.py: post_attention_layernorm, post_feedforward_
     layernorm{,_1,_2}), and that norm's first act is to width-shard its input. So
     having the gather write that layout directly removes an
-    InterleavedToSharded per all-reduce -- measured 47.2 -> 43.5 us
-    (-0.45 ms/decode step on 31B), bit-exact (ops_list/tools/sweeps/l1_stream.py).
+    InterleavedToSharded per all-reduce, bit-exact.
 
     Decode: tile-aligned height <= ``TILE_SIZE``. Short prefill (physical
     height ``N*C*H`` <= ``_SHARDED_NORM_MAX_HEIGHT``): same win for post-attn /
@@ -463,8 +439,8 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
 
     By default, sync ``ttnn.reduce_scatter`` + sync ``ttnn.all_gather`` with a
     swept reduce-scatter worker config (``GEMMA4_CCL_SPLIT=0`` falls back to the
-    fused ``ttnn.all_reduce``, which is bit-identical but 6.6 us/call slower --
-    see ``ccl_sync_split_enabled`` / ``ccl_sync_rs_workers``).
+    fused ``ttnn.all_reduce``, which is bit-identical but slower -- see
+    ``ccl_sync_split_enabled`` / ``ccl_sync_rs_workers``).
 
     Async RS+AG (``reduce_scatter_minimal_async`` + ``all_gather_async``) is
     auto-selected for tall prefill (``ccl_async_enabled``); force with

@@ -254,8 +254,7 @@ class SharedMLP:
         m = matmul_rows(hidden_states)
         k = int(hidden_states.shape[-1])
         n = int(self.gate_up_proj.shape[-1])
-        # 12B long-4k (M=4096, K=N=3840): cutoff-reshape+LoFi beats auto+LoFi
-        # ~1.11x in isolation (PCC≥0.9998 vs HiFi2).
+        # 12B long-4k (M=4096, K=N=3840): cutoff-reshape+LoFi beats auto+LoFi.
         # At M=2048 (31B T3K chunks) auto+LoFi still wins — keep that path.
         if should_prefill_long_2d(m) and m >= 4096:
             act, owned = self._prepare_prefill_act(hidden_states, None)
@@ -265,12 +264,12 @@ class SharedMLP:
             return gate_up
         program_config, out_memcfg, compute_kernel_config = interleaved_gate_up_prefill_config(m, k, n)
         # Above the tuned 1D band, auto DRAM-in0 keeps HiFi2 by default; LoFi is
-        # the isolate winner at M=2048 (1.21x, PCC≥0.9998 vs HiFi2).
+        # the isolate winner at M=2048.
         if program_config is None and compute_kernel_config is None and prefill_matmul_lofi_enabled(m):
             compute_kernel_config = prefill_lofi_ckc()
         # Decode (M<=TILE): the tuned prefill config declines, so the output would
         # follow the op default (DRAM) and the whole GeGLU group — 2x slice + the
-        # gelu*mul — would run against DRAM at 3.6/3.6/6.9 us. The tensor is
+        # gelu*mul — would run against DRAM. The tensor is
         # [1,1,32,2*inter/tp] bf16 = 344 KB, i.e. 5 KB/core, so keep the group on
         # L1. (The prefill-sized rejection of an L1 GeGLU intermediate above is a
         # seq=4096 L1-budget result and does not apply at M=32.)
@@ -328,8 +327,8 @@ class SharedMLP:
                 act.deallocate(True)
             return output
         program_config, out_memcfg, compute_kernel_config = interleaved_down_proj_prefill_config(m, k, n)
-        # Decode: L1 writeback, same lever (and same bit-exactness) as o_proj —
-        # 82.9 -> 78.7 us in isolation. Consumer is the all-reduce.
+        # Decode: L1 writeback, same lever (and same bit-exactness) as o_proj.
+        # Consumer is the all-reduce.
         if out_memcfg is None and m <= TILE_SIZE:
             out_memcfg = ttnn.L1_MEMORY_CONFIG
         act, owned = self._prepare_prefill_act(hidden, program_config)
@@ -365,14 +364,13 @@ class SharedMLP:
 
         # NOTE: in PREFILL this GeGLU intermediate stays in DRAM. Keeping it in
         # L1 (so down_proj reads its input from L1) was measured and rejected
-        # there: the gain on down_proj was ~3 us of a 124 us op, inside the
-        # run-to-run noise band, while the intermediate is
-        # [seq, intermediate_size/tp] — at tp=1/tp=2 that is 4-8x wider than
-        # tp=8 and OOMs L1 (176 MB at tp=1 seq=4096).
+        # there: the gain on down_proj sat inside the run-to-run noise band, while
+        # the intermediate is [seq, intermediate_size/tp] — at tp=1/tp=2 that is
+        # 4-8x wider than tp=8 and OOMs L1 at seq=4096.
         # DECODE is the opposite case and does use L1 (see _gate_up_linear):
         # seq is one tile, so the whole group is 344 KB, and the win is not the
-        # down_proj read but the gate_up WRITE — 8.98 -> 8.67 ms/step over 60
-        # layers by not pushing its output through DRAM. ``geglu_mc`` inherits
+        # down_proj read but the gate_up WRITE, by not pushing its output through
+        # DRAM. ``geglu_mc`` inherits
         # whichever the matmul picked, so neither case is hard-coded here.
         # Fuse gelu(gate)*up into one BinaryNg: GELU param 1.0 == fast tanh approx.
         hidden = ttnn.mul(
