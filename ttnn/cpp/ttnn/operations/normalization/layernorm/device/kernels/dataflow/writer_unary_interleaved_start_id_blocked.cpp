@@ -21,10 +21,11 @@ void kernel_main() {
     // CB index - configurable via named compile-time args for kernel chaining support
     constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(dfb_id_out0);
 
     Noc noc;
     DataflowBuffer dfb_out0(dfb_id_out0);
+
+    const uint32_t tile_bytes = dfb_out0.get_tile_size();
 
     const auto s = TensorAccessor(dst_args, dst_addr);
 

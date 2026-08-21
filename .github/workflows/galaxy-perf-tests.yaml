@@ -14,7 +14,6 @@ on:
           #          - cnn
           #          - sentence_bert
           - wan2-2
-          - qwenimage
           - deepseek_v3
           - tinyllama_1_1b_ddp32_shakespeare
           - llama_8b_tp8_ddp4_shakespeare

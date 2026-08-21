@@ -34,6 +34,21 @@ template <
     DataFormat data_format,
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast>
 constexpr bool is_sfpu_reduce_path() {
+#ifdef ARCH_QUASAR
+    // Quasar has no SFPU reduce path (and no ckernel::PoolType::MIN) — every reduce runs on the FPU. Rather
+    // than silently sending an SFPU-only reduce to the FPU (unsupported / reduced-precision output), REJECT
+    // it at compile time. requires_sfpu mirrors the WH/BH contract in the #else branch (Int32 MAX/SUM, and
+    // accurate Float32 SUM/MAX, on REDUCE_ROW/COL require SFPU). It names only MAX/SUM — never the absent
+    // PoolType::MIN — so it stays valid on Quasar; a Quasar kernel cannot instantiate the missing MIN anyway.
+    constexpr bool requires_sfpu =
+        (reduce_dim == ckernel::ReduceDim::REDUCE_ROW || reduce_dim == ckernel::ReduceDim::REDUCE_COL) &&
+        ((data_format == DataFormat::Int32 &&
+          (pool_type == ckernel::PoolType::MAX || pool_type == ckernel::PoolType::SUM)) ||
+         (data_format == DataFormat::Float32 && fp32_mode == ReduceFp32Mode::Accurate &&
+          (pool_type == ckernel::PoolType::SUM || pool_type == ckernel::PoolType::MAX)));
+    static_assert(!requires_sfpu, "SFPU reduce path is not supported on Quasar");
+    return false;
+#else
     if constexpr (
         pool_type != ckernel::PoolType::MAX && pool_type != ckernel::PoolType::SUM &&
         pool_type != ckernel::PoolType::MIN) {
@@ -53,6 +68,7 @@ constexpr bool is_sfpu_reduce_path() {
         return false;
     }
     return reduce_dim == ckernel::ReduceDim::REDUCE_ROW || reduce_dim == ckernel::ReduceDim::REDUCE_COL;
+#endif  // ARCH_QUASAR
 }
 
 /**

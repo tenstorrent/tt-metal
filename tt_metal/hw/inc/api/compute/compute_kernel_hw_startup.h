@@ -145,4 +145,76 @@ ALWI void disable_fp32_dest_acc() {
 }
 #endif
 
+// clang-format off
+/**
+ * Sets FP32 destination accumulation to `enable` for a subsequent section
+ * of the kernel by calling enable_fp32_dest_acc() or disable_fp32_dest_acc().
+ *
+ * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
+ * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data).
+ * This is a lightweight, standalone reconfiguration that is safe to call
+ * mid-kernel without re-running compute_kernel_hw_startup.
+ *
+ * No-op when `enable` already matches the kernel's DST_ACCUM_MODE
+ * (compute_kernel_hw_startup already programmed the requested mode).
+ * Must be paired with restore_fp32_dest_acc<enable>() using the same flag.
+ *
+ * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
+ *
+ * Return value: None
+ *
+ * | Param Type | Name   | Description                                         | Type | Valid Range | Required |
+ * |------------|--------|-----------------------------------------------------|------|-------------|----------|
+ * | Template   | enable | Dest-acc mode the enclosed section needs            | bool | true, false | True     |
+ */
+// clang-format on
+#ifndef ARCH_QUASAR
+template <bool enable>
+ALWI void set_fp32_dest_acc() {
+    if constexpr (enable != static_cast<bool>(DST_ACCUM_MODE)) {
+        if constexpr (enable) {
+            enable_fp32_dest_acc();
+        } else {
+            disable_fp32_dest_acc();
+        }
+    }
+}
+#endif
+
+// clang-format off
+/**
+ * Restores destination accumulation to the kernel's DST_ACCUM_MODE after a
+ * matching set_fp32_dest_acc<enable>(), via enable_fp32_dest_acc() or
+ * disable_fp32_dest_acc().
+ *
+ * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
+ * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data).
+ * This is a lightweight, standalone reconfiguration that is safe to call
+ * mid-kernel without re-running compute_kernel_hw_startup.
+ *
+ * No-op when `enable` already matches DST_ACCUM_MODE (the matching set
+ * was also a no-op). Pass the same `enable` used at the set.
+ *
+ * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
+ *
+ * Return value: None
+ *
+ * | Param Type | Name   | Description                                         | Type | Valid Range | Required |
+ * |------------|--------|-----------------------------------------------------|------|-------------|----------|
+ * | Template   | enable | Same flag passed to the matching set_fp32_dest_acc  | bool | true, false | True     |
+ */
+// clang-format on
+#ifndef ARCH_QUASAR
+template <bool enable>
+ALWI void restore_fp32_dest_acc() {
+    if constexpr (enable != static_cast<bool>(DST_ACCUM_MODE)) {
+        if constexpr (DST_ACCUM_MODE) {
+            enable_fp32_dest_acc();
+        } else {
+            disable_fp32_dest_acc();
+        }
+    }
+}
+#endif
+
 }  // namespace ckernel
