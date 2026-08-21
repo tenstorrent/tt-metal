@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
+from models.demos.deepseek_v3_d_p.utils.chunk_config import ISL_TOKENS_PER_CHIP
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # Mapping from torch dtypes to corresponding ttnn dtypes
@@ -81,7 +82,7 @@ def _ci_unsupported_param_combos_global_to_local_token_id(**params):
     [
         # fmt: off
         pytest.param(32, 1024, 10240, True, id="small"),
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.VOCAB_SIZE, False, id="full-no-pcc"),
+        pytest.param(ISL_TOKENS_PER_CHIP, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.VOCAB_SIZE, False, id="full-no-pcc"),
         # fmt: on
     ],
 )

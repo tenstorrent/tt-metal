@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_pa
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, ACTIVATION_SITU
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import EMB_DIM, HIDDEN_DIM, TtFfn
+from models.demos.deepseek_v3_d_p.utils.chunk_config import ISL_TOKENS_PER_CHIP
 from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -29,14 +30,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "batch_seq_len, hidden_dim, activation",
     [
-        (4096, HIDDEN_DIM, ACTIVATION_SILU),
-        (3200, HIDDEN_DIM, ACTIVATION_SILU),
+        (ISL_TOKENS_PER_CHIP, HIDDEN_DIM, ACTIVATION_SILU),
         # Kimi-K3's layer-0 dense FFN: 33792 wide, on the checkpoint's SiTU-GLU (#53625). Both the
         # width and the activation are new here — 33792 is 1.8x DSv3's 18432, and it is far past
         # ttnn.situ_glu's 3072 L1 cutoff, so every intermediate is a full-size DRAM tensor.
-        (3200, KimiK3Config.INTERMEDIATE_SIZE, ACTIVATION_SITU),
+        (ISL_TOKENS_PER_CHIP, KimiK3Config.INTERMEDIATE_SIZE, ACTIVATION_SITU),
     ],
-    ids=["4K", "3.2K", "3.2K-k3-33792-situ"],
+    ids=["isl_5k", "isl_5k-k3-33792-situ"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",

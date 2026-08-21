@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, ACTIVATION_SITU, TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import ISL_TOKENS_PER_CHIP
 from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -32,21 +33,20 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim, activation",
     [
-        # 640 is the per-chip prefill chunk: 5120 tokens over sp_factor 8. Every case here runs that
-        # depth, which pins the matmul program configs to per_core_M=1 -- the blocking prefill uses.
-        (640, 7 * 1024, 2 * 1024, ACTIVATION_SILU),
+        # Every case runs the one prefill ISL, which pins the matmul program configs to
+        # per_core_M=1 -- the blocking prefill uses.
+        (ISL_TOKENS_PER_CHIP, 7 * 1024, 2 * 1024, ACTIVATION_SILU),
         # Kimi-K3: one shared-expert MLP at moe_intermediate_size * num_shared_experts = 3072 * 2.
         # Worth its own case because every prior model has num_shared_experts == 1, so hidden_dim and
         # the shared intermediate coincided and 6144 was never exercised here.
-        (640, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SILU),
+        (ISL_TOKENS_PER_CHIP, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SILU),
         # ...and the same shape on the activation the K3 checkpoint actually uses. This builds
         # TtSharedExpert without a sub-device, so ttnn.situ_glu runs here on the full grid; its
         # sub_core_grids form is only reachable through the MoE (test_ttnn_moe).
-        (640, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SITU),
+        (ISL_TOKENS_PER_CHIP, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SITU),
     ],
-    # Ids label seq_len_per_chip first, then what differs from the case above it (the 6144 shared
-    # intermediate, the activation).
-    ids=["640", "640-k3-6144", "640-k3-6144-situ"],
+    # Ids name what differs from the case above (the 6144 shared intermediate, the activation).
+    ids=["isl_5k", "isl_5k-k3-6144", "isl_5k-k3-6144-situ"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",

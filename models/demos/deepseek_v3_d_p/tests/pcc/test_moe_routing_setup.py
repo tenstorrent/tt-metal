@@ -38,6 +38,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import ISL_TOKENS_PER_CHIP
 
 
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
@@ -46,7 +47,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     [
-        (3200, 7168, 64, 2, 2),
+        (ISL_TOKENS_PER_CHIP, 7168, 64, 2, 2),
     ],
 )
 @pytest.mark.parametrize(
