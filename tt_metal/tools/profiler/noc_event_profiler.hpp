@@ -45,9 +45,6 @@ std::pair<uint32_t, uint32_t> decode_noc_addr_to_coord(uint64_t noc_addr) {
 }
 
 FORCE_INLINE
-uint32_t decode_noc_addr_to_local_addr(uint64_t noc_addr) { return NOC_LOCAL_ADDR_OFFSET(noc_addr); }
-
-FORCE_INLINE
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> decode_noc_addr_to_multicast_coord(uint64_t noc_addr) {
     // coordinates are stored as two packed pairs. End coordinate is in lower
     // bits like normal noc address; Start coordinate is in higher bits
@@ -65,31 +62,6 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> decode_noc_id_into_coord(uint32_t id,
     // shift so that coordinate is in LSB
     return decode_noc_coord_reg_to_coord<DRAM>(
         interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc) >> NOC_COORD_REG_OFFSET);
-}
-
-template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, bool posted>
-FORCE_INLINE KernelProfilerNocEventMetadata createNocEventDstTrailer(uint32_t src_addr, uint32_t dst_addr) {
-    KernelProfilerNocEventMetadata ev_md;
-    ev_md.data.local_event_dst_trailer.setSrcAddr(src_addr);
-    ev_md.data.local_event_dst_trailer.setDstAddr(dst_addr);
-    if constexpr (
-        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_ ||
-        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_WITH_TRID ||
-        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_WITH_STATE ||
-        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_WITH_TRID_WITH_STATE ||
-        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_MULTICAST ||
-        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::SEMAPHORE_SET_REMOTE ||
-        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::SEMAPHORE_SET_MULTICAST) {
-        ev_md.data.local_event_dst_trailer.counter_value = get_noc_counter_for_debug<true, posted>(noc_index);
-    } else if constexpr (
-        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ ||
-        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ_WITH_STATE ||
-        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ_WITH_STATE_AND_TRID) {
-        ev_md.data.local_event_dst_trailer.counter_value = get_noc_counter_for_debug<false, posted>(noc_index);
-    } else {
-        ev_md.data.local_event_dst_trailer.counter_value = 0;
-    }
-    return ev_md;
 }
 
 template <
@@ -115,31 +87,11 @@ FORCE_INLINE void recordNocEvent(
     local_noc_event.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
-#if defined(ARCH_QUASAR)
-    // DRAM-backend shape, verbatim: DoingDispatch::DISPATCH selects that backend's dispatch buffer
-    // half, and its non-dropping (debug-dump) mode ships a 16 B event with a dst trailer. The
-    // streaming backend has neither concept, which is why the two shapes split here.
-    if constexpr (kernel_profiler::NON_DROPPING) {
-        KernelProfilerNocEventMetadata dst_data =
-            createNocEventDstTrailer<noc_event_type, posted>(local_addr, dst_local_addr);
-
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3);
-
-        kernel_profiler::timeStampedData<
-            STATIC_ID,
-            kernel_profiler::DoingDispatch::DISPATCH,
-            kernel_profiler::PacketTypes::TS_DATA_16B>(ev_md.asU64(), dst_data.asU64());
-    } else {
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
-    }
-#else
-    // Streaming backend: one self-describing PP_DATA packet.
+    // One self-describing PP_DATA packet. (The DRAM backend's non-dropping dst-trailer mode is not
+    // supported here; local_addr/dst_local_addr survive in the signature for call-site compatibility.)
     (void)local_addr;
     (void)dst_local_addr;
     kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
-#endif
 }
 
 template <
@@ -169,30 +121,10 @@ FORCE_INLINE void recordMulticastNocEvent(
     local_noc_event.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
-#if defined(ARCH_QUASAR)
-    // DRAM-backend shape, verbatim -- see recordNocEvent above.
-    if constexpr (kernel_profiler::NON_DROPPING) {
-        uint32_t dst_local_addr = decode_noc_addr_to_local_addr(dst_noc_addr);
-        KernelProfilerNocEventMetadata dst_data =
-            createNocEventDstTrailer<noc_event_type, posted>(local_addr, dst_local_addr);
-
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3);
-
-        kernel_profiler::timeStampedData<
-            STATIC_ID,
-            kernel_profiler::DoingDispatch::DISPATCH,
-            kernel_profiler::PacketTypes::TS_DATA_16B>(ev_md.asU64(), dst_data.asU64());
-    } else {
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
-    }
-#else
-    // Streaming backend: one self-describing PP_DATA packet.
+    // One self-describing PP_DATA packet -- see recordNocEvent above.
     (void)local_addr;
     (void)dst_noc_addr;
     kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
-#endif
 }
 
 template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, bool posted, typename AddrGen, typename NocIDU32>
@@ -209,20 +141,9 @@ FORCE_INLINE void recordNocEventWithID(
         has_required_addrgen_traits_v<AddrGen>,
         "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
     auto [decoded_x, decoded_y] = decode_noc_id_into_coord<addrgen.is_dram>(noc_id, noc);
-#if defined(ARCH_QUASAR)
-    // The DRAM backend's non-dropping (debug-dump) mode wants the local addresses for the dst trailer.
-    if constexpr (kernel_profiler::NON_DROPPING) {
-        auto noc_addr_local =
-            decode_noc_addr_to_local_addr(get_noc_addr_from_bank_id<addrgen.is_dram>(noc_id, offset, noc));
-        recordNocEvent<noc_event_type, posted>(decoded_x, decoded_y, num_bytes, vc, noc, local_addr, noc_addr_local);
-    } else {
-        recordNocEvent<noc_event_type, posted>(decoded_x, decoded_y, num_bytes, vc, noc, 0, 0);
-    }
-#else
     (void)local_addr;
     (void)offset;
     recordNocEvent<noc_event_type, posted>(decoded_x, decoded_y, num_bytes, vc, noc, 0, 0);
-#endif
 }
 
 template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, bool posted, typename NocAddrU64>
@@ -230,18 +151,8 @@ FORCE_INLINE void recordNocEventWithAddr(
     uint32_t local_addr, NocAddrU64 noc_addr, uint32_t num_bytes, int8_t vc, uint8_t noc) {
     static_assert(std::is_same_v<NocAddrU64, uint64_t>);
     auto [decoded_x, decoded_y] = decode_noc_addr_to_coord(noc_addr);
-#if defined(ARCH_QUASAR)
-    // DRAM-backend non-dropping mode -- see recordNocEventWithID above.
-    if constexpr (kernel_profiler::NON_DROPPING) {
-        auto noc_addr_local = decode_noc_addr_to_local_addr(noc_addr);
-        recordNocEvent<noc_event_type, posted>(decoded_x, decoded_y, num_bytes, vc, noc, local_addr, noc_addr_local);
-    } else {
-        recordNocEvent<noc_event_type, posted>(decoded_x, decoded_y, num_bytes, vc, noc, 0, 0);
-    }
-#else
     (void)local_addr;
     recordNocEvent<noc_event_type, posted>(decoded_x, decoded_y, num_bytes, vc, noc, 0, 0);
-#endif
 }
 }  // namespace noc_event_profiler
 
@@ -304,21 +215,13 @@ FORCE_INLINE void recordNocEventWithAddr(
         }                                                                  \
     }
 
-// Preemptive quick push if transitioning from unlinked to linked state -- a DRAM-backend concept
-// (flush the L1 buffer before a linked transaction sequence). The streaming backend has no DRAM push
-// and defines no such call; swallow the args so callers compile identically.
-#if defined(ARCH_QUASAR)
-#define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)         \
-    {                                                           \
-        kernel_profiler::quick_push_if_linked(cmd_buf, linked); \
-    }
-#else
+// The "quick push before a linked transaction sequence" was a DRAM-backend concept; the streaming
+// backend has no DRAM push. The macro survives only to swallow its callers' args.
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked) \
     {                                                   \
         (void)(cmd_buf);                                \
         (void)(linked);                                 \
     }
-#endif
 
 #else
 
