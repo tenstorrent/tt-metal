@@ -5408,21 +5408,16 @@ def _mirror_arch_facts(facts: dict) -> None:
     reach it, outside the worktree so no reboot can take it, keyed per model.
     """
     try:
-        from cc_optimize.tmpstate import state_dir
-    except Exception:  # noqa: BLE001
-        try:
-            from .tmpstate import state_dir
-        except Exception:  # noqa: BLE001
-            return
-    try:
         import os as _os
 
-        if not (_os.environ.get("PERF_MCP_STATE_DIR") or "").strip():
-            return  # without --persist state_dir() is the temp dir this exists to escape
+        # Same reasoning as read_arch_mirror: no import, the variable IS the contract.
+        _sd = (_os.environ.get("PERF_MCP_STATE_DIR") or "").strip()
+        if not _sd:
+            return  # without --persist there is no durable directory to mirror into
         keep = {k: facts[k] for k in ARCH_KEYS if facts.get(k)}
         if not keep:
             return
-        d = state_dir()
+        d = Path(_sd)
         d.mkdir(parents=True, exist_ok=True)
         prev = {}
         try:
@@ -5437,13 +5432,18 @@ def _mirror_arch_facts(facts: dict) -> None:
 
 def read_arch_mirror() -> dict:
     """The mirrored architecture map, or {}. See _mirror_arch_facts."""
+    # NO IMPORT. The rebuild loads this module BY PATH -- spec_from_file_location, no package and
+    # often no sys.path entry -- so `from cc_optimize.tmpstate import` and `from .tmpstate import`
+    # BOTH fail there, and the reader silently returned {} in the one context it exists for. Measured
+    # on run 17: the mirror held blocks and stage_roots, the emitter rebuilt without them anyway.
+    # The variable is the whole contract, so read it directly and depend on nothing.
     try:
-        try:
-            from cc_optimize.tmpstate import state_dir
-        except Exception:  # noqa: BLE001
-            from .tmpstate import state_dir
+        import os as _os
 
-        d = json.loads((state_dir() / ARCH_MIRROR_NAME).read_text())
+        _sd = (_os.environ.get("PERF_MCP_STATE_DIR") or "").strip()
+        if not _sd:
+            return {}
+        d = json.loads((Path(_sd) / ARCH_MIRROR_NAME).read_text())
         return {k: v for k, v in d.items() if k in ARCH_KEYS and v} if isinstance(d, dict) else {}
     except Exception:  # noqa: BLE001
         return {}

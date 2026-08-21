@@ -15,6 +15,7 @@ total_params (3.611B -- the LANGUAGE model's per-token read set) for an audio en
 coincidence: total_params IS its read set, so the fallback was accidentally its right answer."""
 import importlib.util as ilu
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -105,3 +106,45 @@ def test_a_mirror_that_cannot_be_written_never_costs_the_write(monkeypatch):
     m.read_arch_mirror = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
     _emit(m, d, _FULL)
     assert (d / "perf_target_inputs.json").is_file()
+
+
+def test_the_mirror_is_reachable_when_loaded_by_path(tmp_path, monkeypatch):
+    """THE FAILURE THAT MADE THE FIRST VERSION USELESS.
+
+    perf_mcp rebuilds the facts by loading run.py with spec_from_file_location -- no package, and
+    often no sys.path entry. `from cc_optimize.tmpstate import` and `from .tmpstate import` BOTH
+    fail there, so the reader returned {} in the one context it exists for: run 17 held the map in
+    the mirror and rebuilt the facts without it anyway.
+
+    So neither side imports anything. PERF_MCP_STATE_DIR is the whole contract; read it directly.
+    """
+    import subprocess
+
+    (tmp_path / "model_blocks.json").write_text(
+        json.dumps({"blocks": {"audio_tower": {"params": 636968960}}, "stage_roots": {"encode": "audio_tower"}})
+    )
+    code = (
+        "import importlib.util as ilu;"
+        "spec=ilu.spec_from_file_location('x', %r);"
+        "m=ilu.module_from_spec(spec); spec.loader.exec_module(m);"
+        "print(sorted(m.read_arch_mirror().keys()))" % str(_PA / "cc_optimize" / "run.py")
+    )
+    env = {**os.environ, "PERF_MCP_STATE_DIR": str(tmp_path)}
+    # cwd deliberately elsewhere: the real rebuild does not run from the package root
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd="/tmp")
+    assert (
+        "blocks" in out.stdout and "stage_roots" in out.stdout
+    ), "the mirror is unreachable under a by-path load: %s %s" % (out.stdout, out.stderr[-300:])
+
+
+def test_neither_side_imports_tmpstate():
+    """An import is what broke it; the env var cannot fail the same way."""
+    src = (_PA / "cc_optimize" / "run.py").read_text()
+    i = src.index("def _mirror_arch_facts")
+    j = src.index("def _emit_perf_target_inputs")
+    # executable lines only -- the docstrings deliberately NAME the imports that used to fail
+    stanza = "\n".join(
+        ln for ln in src[i:j].splitlines() if ln.strip().startswith(("import ", "from ")) or "PERF_MCP_STATE_DIR" in ln
+    )
+    assert "tmpstate" not in stanza, "the mirror depends on an import again"
+    assert "PERF_MCP_STATE_DIR" in stanza
