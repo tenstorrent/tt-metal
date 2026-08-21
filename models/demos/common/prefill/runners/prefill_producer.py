@@ -951,23 +951,19 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
 
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
         n_index_layers = table.config(1).num_layers
-        # Config 1's layer axis is the full-indexer RANK (GLM-5.2 compacts the shared layers out of the
-        # cache); the golden is numbered by GLOBAL layer, so map rank -> global before loading it.
+        # Config 1 is published on the GLOBAL LAYER axis, same numbering as the golden: rows == full-indexer layer ids.
         full_layers = _full_indexer_layer_indices(NUM_LAYERS)
-        assert full_layers is None or len(full_layers) == n_index_layers, (
-            f"config 1 declares {n_index_layers} index-cache layers but layers [0,{NUM_LAYERS}) own only "
-            f"{len(full_layers)} full indexers. The index cache is sized from the model's WHOLE "
-            f"indexer_types map, so ranks {len(full_layers)}..{n_index_layers - 1} are never written by "
-            f"this run and would PCC against unwritten memory. Run the model's full layer count "
-            f"(PREFILL_NUM_LAYERS)."
+        index_rows = list(range(n_index_layers)) if full_layers is None else full_layers
+        assert full_layers is None or max(full_layers) < n_index_layers, (
+            f"config 1 has {n_index_layers} rows but layers [0,{NUM_LAYERS}) put a full indexer at layer "
+            f"{max(full_layers)}. On the layer axis the extent must cover the deepest full-indexer "
+            f"layer; a compacted (rank-axis) table reaching here would read another layer's keys."
         )
         min_index = 1.0
         checked_index = 0
-        for rank in range(n_index_layers):
-            # Same host-local filter as config 0: a merged multi-rank table spans every host's layers,
-            # so skip any index layer that resolves to no local unique_id (owned by another rank). Keyed
-            # by the full-indexer RANK (config 1's layer axis) -- same index the lookups below use.
-            loc0 = table.lookup(rank, 0, slot_id, 1)  # config 1 = index cache
+        for layer in index_rows:
+            # Same host-local filter as config 0: skip an index layer owned by another rank.
+            loc0 = table.lookup(layer, 0, slot_id, 1)  # config 1 = index cache
             try:
                 _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
             except KeyError:
@@ -975,7 +971,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
 
             decoded_rows = []
             for pos in range(0, read_len, tokens_per_block):
-                loc = table.lookup(rank, pos, slot_id, 1)  # config 1 = index cache, keyed by full-layer rank
+                loc = table.lookup(layer, pos, slot_id, 1)  # config 1 = index cache, keyed by global layer
                 unique_id = _resolve_unique_id(
                     table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
                 )
@@ -985,19 +981,15 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 decoded_rows.append(_decode_kv_chunk(raw, index_head_dim))
             dev_ik = torch.cat(decoded_rows, dim=0)[:real_len]
 
-            golden_layer = rank if full_layers is None else full_layers[rank]
-            golden_ik = _load_golden_index_k(trace_dir, golden_layer, real_len)
+            golden_ik = _load_golden_index_k(trace_dir, layer, real_len)
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             min_index = min(min_index, pcc_index)
             checked_index += 1
-            logger.info(
-                f"[producer] slot {slot_id} layer {golden_layer:>2} (index rank {rank:>2}) "
-                f"index PCC: {pcc_index:.5f}"
-            )
+            logger.info(f"[producer] slot {slot_id} layer {layer:>2} index PCC: {pcc_index:.5f}")
 
         logger.info(
             f"[producer] slot {slot_id} index PCC over [0,{real_len}) across "
-            f"{checked_index}/{n_index_layers} local layers -> {min_index:.6f}"
+            f"{checked_index}/{len(index_rows)} local layers -> {min_index:.6f}"
         )
         min_pcc = min(min_pcc, min_index)
 

@@ -95,6 +95,7 @@ def build_and_serialize_kv_chunk_table(
     first_layer_idx=0,
     num_my_layers=None,
     stage_layout=None,
+    index_layer_ids=None,
 ) -> str:
     """Build the MLA block-cyclic KV chunk address table and serialize it to ``path`` for the
     inference server's SET_TABLE. Returns the path on success.
@@ -157,6 +158,7 @@ def build_and_serialize_kv_chunk_table(
             num_users=num_users,
             chunk_size_global=chunk_size_global,
             path=path,
+            index_layer_ids=index_layer_ids,
         )
 
     def _builder(*, config, chunk_size_bytes, num_users):
@@ -197,13 +199,17 @@ def _build_and_serialize_merged_kv_chunk_table(
     path,
     tp_axis=1,
     chunk_size_global=None,
+    index_layer_ids=None,
 ) -> str:
     """Build ONE KvChunkAddressTable over every cache this rank owns and serialize it to ``path``.
     ``caches`` is a tagged list of ``(kind, payload)``: ``("kvpe", tensor)`` / ``("index", tensor)`` for
     the block-cyclic MLA caches, named "0" (KVPE), "1" (GLM-5.2 index); ``("dflash", (k_cache, v_cache))``
     for the DFlash drafter (Kimi-only), which adds one config per (K|V, kv-head) via
     :func:`dflash_config_name`. Names must stay in sorted order (asserted) so the protobuf round-trip
-    keeps KVPE at config id 0 and the index at 1 — see the naming note at the top of this module."""
+    keeps KVPE at config id 0 and the index at 1 — see the naming note at the top of this module.
+
+    ``index_layer_ids``: dense row -> global layer map; publishes config 1 on the LAYER axis so one
+    layer number selects the same layer in every config. None keeps the compacted axis."""
     disagg = ttnn.experimental.disaggregation
 
     def _table_config(cache):
@@ -223,8 +229,11 @@ def _build_and_serialize_merged_kv_chunk_table(
     entries = []
     dflash_kv_heads = 0
     n_block_cyclic = 0
+    index_config_name = None
     for kind, payload in caches:
         if kind in ("kvpe", "index"):  # block-cyclic MLA caches -> populate_kv_chunk_address_table_kimi
+            if kind == "index":
+                index_config_name = str(n_block_cyclic)
             entries.append((str(n_block_cyclic), payload, None))
             n_block_cyclic += 1
         elif kind == "dflash":
@@ -248,6 +257,20 @@ def _build_and_serialize_merged_kv_chunk_table(
     names = [name for name, _, _ in entries]
     assert names == sorted(names), f"config names must already be sorted (protobuf renumbers by name): {names}"
     configs = {name: _table_config(cache) for name, cache, _ in entries}
+
+    # Widen the index config to the layer axis before the table is built (extents are fixed at construction).
+    index_dense_layers = None
+    if index_config_name is not None and index_layer_ids is not None:
+        index_dense_layers = configs[index_config_name].num_layers
+        assert len(index_layer_ids) == index_dense_layers, (
+            f"index_layer_ids has {len(index_layer_ids)} entries but the index cache physically holds "
+            f"{index_dense_layers} layers; every dense row needs a global layer id"
+        )
+        assert (
+            max(index_layer_ids) < num_layers
+        ), f"index_layer_ids reaches layer {max(index_layer_ids)} but the model has {num_layers} layers"
+        configs[index_config_name].num_layers = num_layers
+
     table = disagg.KvChunkAddressTable(configs)
 
     for name, cache, head_idx in entries:
@@ -256,12 +279,14 @@ def _build_and_serialize_merged_kv_chunk_table(
             # The merged table has one config per physical cache, so each config needs a layout with that
             # cache's DRAM base address. The multi-cache path is single-stage today, but this remains a
             # collective to match the single-config builder and to produce the mesh/fabric-node metadata.
+            # DENSE row count: cfg.num_layers is the published extent, wider on the layer axis.
+            dense_layers = index_dense_layers if name == index_config_name and index_dense_layers else cfg.num_layers
             stage_layout = allgather_kv_stage_layout(
                 mesh_device,
                 int(cache.buffer_address()),
                 mesh_shape,
                 first_layer_idx=0,
-                num_my_layers=cfg.num_layers,
+                num_my_layers=dense_layers,
             )
             populate_kv_chunk_address_table_kimi(
                 lookup_table=table,
@@ -275,6 +300,7 @@ def _build_and_serialize_merged_kv_chunk_table(
                 num_users=num_users,
                 config_id=config_id,
                 stage_layout=stage_layout,
+                layer_rows=index_layer_ids if name == index_config_name else None,
             )
         else:  # one global kv-head of the drafter's K or V cache
             populate_kv_chunk_address_table_dflash(
