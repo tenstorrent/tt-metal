@@ -96,6 +96,7 @@ class PatchMerger(LightweightModule):
             eps=1e-6,  # Qwen3_VLPatchMerger hard-codes this
             ccl_topology=args.ccl_topology(),
             replicated_input=getattr(args, "vision_replicated_acts", False),
+            ccl_kwargs=args.vision_ccl_kwargs,
         )
 
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
@@ -161,8 +162,7 @@ class PatchMerger(LightweightModule):
         x_norm = self.norm(x)
 
         # Merge spatial_merge_size^2 consecutive rows into one row of mlp_size.
-        # The reshape workaround through ROW_MAJOR matches the replicated PatchMerger
-        # (see tt-metal#29932 for the underlying tilized reshape hang).
+        # ROW_MAJOR workaround for the tilized-reshape hang (tt-metal#29932).
         x_norm = ttnn.to_layout(x_norm, ttnn.ROW_MAJOR_LAYOUT)
         x_norm = ttnn.reshape(x_norm, (x_norm.shape[0], x_norm.shape[1], -1, self.mlp_size))
         x_norm = ttnn.to_layout(x_norm, ttnn.TILE_LAYOUT)
@@ -236,6 +236,7 @@ class PatchMerger(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.args.ccl_dtype,
             topology=self.args.ccl_topology(),
+            **self.args.vision_ccl_kwargs,
         )
         if w2_frac is not w2_partial:
             ttnn.deallocate(w2_partial)

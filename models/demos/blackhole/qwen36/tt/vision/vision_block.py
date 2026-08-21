@@ -74,6 +74,7 @@ class VisionBlock(LightweightModule):
             tt_ccl=tt_ccl,
             ccl_topology=args.ccl_topology(),
             replicated_input=getattr(args, "vision_replicated_acts", False),
+            ccl_kwargs=args.vision_ccl_kwargs,
         )
         self.attention_norm = DistributedLayerNorm(
             state_dict_prefix=args.get_state_dict_prefix("norm1", layer_num),

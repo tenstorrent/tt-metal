@@ -203,7 +203,12 @@ class MLP(LightweightModule):
         # fractured along dim=3 -- exactly the block I/O contract that the LLM uses. When dim cannot
         # be split into whole tiles per device, all-reduce to a replicated full-width tensor instead.
         if self.replicated_acts:
-            w2_frac = all_reduce_replicated(w2_partial, self.tt_ccl, self.args.ccl_topology())
+            w2_frac = all_reduce_replicated(
+                w2_partial,
+                self.tt_ccl,
+                self.args.ccl_topology(),
+                ccl_kwargs=self.args.vision_ccl_kwargs,
+            )
         else:
             w2_frac = tt_all_reduce(
                 w2_partial,
@@ -215,6 +220,7 @@ class MLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.args.ccl_dtype,
                 topology=self.args.ccl_topology(),
+                **self.args.vision_ccl_kwargs,
             )
         if w2_frac is not w2_partial:
             ttnn.deallocate(w2_partial)
