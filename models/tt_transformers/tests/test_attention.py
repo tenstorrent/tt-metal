@@ -53,7 +53,7 @@ from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (int(os.environ.get("TTSIM_MAXSEQ", "256")),),  # sizes the KV cache; TTSIM_CTX sets where decode starts
 )
 @pytest.mark.parametrize("use_hf_rope", (True, False), ids=("hf_rope", "mllama_rope"))
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
@@ -99,8 +99,8 @@ def test_attention_inference(
 
     seq_len = 1
 
-    generation_start_pos = 0
-    generation_length = 10
+    generation_start_pos = int(os.environ.get("TTSIM_CTX", "0"))
+    generation_length = int(os.environ.get("TTSIM_STEPS", "10"))
     all_tests_pass = True
 
     DefaultRopeSetup = HfRotarySetup if model_args.use_hf_rope else RotarySetup

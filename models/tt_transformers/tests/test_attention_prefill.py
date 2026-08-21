@@ -46,11 +46,7 @@ from models.tt_transformers.tt.rope import get_rot_mats, get_rot_mats_hf
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (
-        256,  # 4096,
-        # 1024 * 32,
-        # 1024 * 64,
-    ),
+    (int(os.environ.get("TTSIM_MAXSEQ", "256")),),
 )
 @pytest.mark.parametrize(
     "use_prefetcher",

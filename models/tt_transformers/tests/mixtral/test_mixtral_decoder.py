@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -69,6 +71,9 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
     else:
         raise ValueError(f"Batch size {batch} not supported")
 
+    generation_start_pos = int(os.environ.get("TTSIM_CTX", generation_start_pos))
+    max_seq_len = int(os.environ.get("TTSIM_MAXSEQ", max_seq_len))
+
     hf_config = load_hf_mixtral_config()
     model_args = ModelArgs(mesh_device, max_seq_len=max_seq_len, max_batch_size=batch)
     model_args.use_qk_fused = False
@@ -104,7 +109,7 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
         tt_ccl=tt_ccl,
     )
 
-    generation_length = 10
+    generation_length = int(os.environ.get("TTSIM_STEPS", "10"))
     all_tests_pass = True
 
     seqlen = 1

@@ -3395,8 +3395,10 @@ class ModelArgs:
                 return i
         return 1  # Fallback to 1 if no divisor found
 
-    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None, fused_activation=None):
-        # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
+    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None, fused_activation=None, max_in0_block_w=8):
+        # in0_block_w must evenly divide k and be no larger than tile_size * num_cores.
+        # The weight CB is in0_block_w * shard_width tiles, so callers whose weights land on a
+        # device with few DRAM banks (wide shards) can lower max_in0_block_w to fit L1.
         if num_cores is None:
             # num_cores = self.dram_shard_core_grid_for_k(k).num_cores
             num_cores = self.dram_shard_core_grid_for_k_and_n(k, n).num_cores
@@ -3405,7 +3407,7 @@ class ModelArgs:
             ), f"k must be divisible by tile_size * num_cores: {k} % {ttnn.TILE_SIZE * num_cores} != 0"
             # assert n % (ttnn.TILE_SIZE * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {ttnn.TILE_SIZE * num_cores} != 0"
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores)),
+            in0_block_w=self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores), max_in0_block_w),
             per_core_M=math.ceil(m / ttnn.TILE_SIZE),
             per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)),
             fused_activation=fused_activation,

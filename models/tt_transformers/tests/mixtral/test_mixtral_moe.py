@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -36,7 +38,7 @@ def convert2ref(state_dict):
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_moe_inference(mesh_device, reset_seeds, mode, device_params):
     pcc = 0.99
-    iterations = 1
+    iterations = int(os.environ.get("TTSIM_STEPS", "1"))
     dtype = ttnn.bfloat8_b
     mesh_device.disable_and_clear_program_cache()
     model_args = ModelArgs(mesh_device)
@@ -81,8 +83,8 @@ def test_mixtral_moe_inference(mesh_device, reset_seeds, mode, device_params):
 
     all_tests_pass = True
 
-    seqlen = 1
-    batch = 32
+    seqlen = int(os.environ.get("TTSIM_SEQ", "1"))
+    batch = int(os.environ.get("TTSIM_BATCH", "32"))
 
     for i in range(iterations):
         logger.info(f"[Decoder] Generating token {i}")

@@ -6,6 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.common import Mode
 
 
@@ -132,11 +133,16 @@ class TtMixtralMLP(LightweightModule):
             w2_out = ttnn.reshape(w2_out, original_shape)
 
         else:  # Decode
+            # w1/w3 are widest at n=14336. Blackhole has 8 DRAM banks against Wormhole's 12, so
+            # each bank holds 56 tiles of the shard rather than 38 and the default in0_block_w of
+            # 8 puts the weight CB 209 KB over L1. Halving the block trades inner-loop iterations
+            # for the space; Wormhole already fits and keeps the tuned value.
+            ff_block_w = 4 if is_blackhole() else 8
             w1_out = ttnn.matmul(
                 x,
                 self.w1,
                 program_config=self.model_args.dram_matmul_config(
-                    1, 4096, 14336, num_cores=8, fused_activation=ttnn.UnaryOpType.SILU
+                    1, 4096, 14336, num_cores=8, fused_activation=ttnn.UnaryOpType.SILU, max_in0_block_w=ff_block_w
                 ),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
@@ -145,7 +151,9 @@ class TtMixtralMLP(LightweightModule):
             w3_out = ttnn.matmul(
                 x,
                 self.w3,
-                program_config=self.model_args.dram_matmul_config(1, 4096, 14336, num_cores=8),
+                program_config=self.model_args.dram_matmul_config(
+                    1, 4096, 14336, num_cores=8, max_in0_block_w=ff_block_w
+                ),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,
