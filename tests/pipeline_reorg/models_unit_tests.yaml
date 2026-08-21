@@ -1493,33 +1493,76 @@
 
 - name: TT-Transformers fast module unit tests
   cmd: |
-    export TT_METAL_WATCHER=30 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_OFFLINE=1
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-    COV="--cov-report=term-missing --cov-config=models/common/tests/setup.cfg"
+    export TT_METAL_WATCHER=30 HF_HOME=/mnt/MLPerf/huggingface
     fail=0
     pytest --tb=short --ignore=models/common/tests/modules models/common/tests || fail=1
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d \
-      pytest models/common/tests/modules/mlp/test_mlp_1d.py -m "not slow" --tb=short --durations=10 \
-      --cov=models.common.modules.mlp.mlp_1d $COV || fail=1
+    pytest models/common/tests/modules/mlp/test_mlp_1d.py \
+      -m "not slow" \
+      --tb=short \
+      --durations=10 \
+      --cov=models.common.modules.mlp.mlp_1d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg || fail=1
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rmsnorm_1d \
-      pytest models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py -m "not slow" --tb=short --durations=10 \
-      --cov=models.common.modules.rmsnorm.rmsnorm_1d $COV || fail=1
+    pytest models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py \
+      -m "not slow" \
+      --tb=short \
+      --durations=10 \
+      --cov=models.common.modules.rmsnorm.rmsnorm_1d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg || fail=1
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rope_1d \
-      pytest models/common/tests/modules/rope/test_rope_1d.py -m "not slow" --tb=short --durations=10 \
-      --cov=models.common.modules.rope.rope_1d $COV || fail=1
+    pytest models/common/tests/modules/rope/test_rope_1d.py \
+      -m "not slow" \
+      --durations=10 \
+      --tb=short \
+      --cov=models.common.modules.rope.rope_1d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg || fail=1
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d \
-      pytest models/common/tests/modules/lm_head/test_lm_head_1d.py -m "not slow" --tb=short --durations=10 \
-      --cov=models.common.modules.lm_head.lm_head_1d $COV || fail=1
-    env -u HF_MODEL TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
-      pytest models/common/tests/modules/attention/test_attention_1d.py -m "not slow" --tb=short --durations=10 \
-      --cov=models.common.modules.attention.attention_1d $COV || fail=1
+    pytest models/common/tests/modules/lm_head/test_lm_head_1d.py \
+      -m "not slow" \
+      --tb=short \
+      --durations=10 \
+      --cov=models.common.modules.lm_head.lm_head_1d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg || fail=1
+    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
+    pytest models/common/tests/modules/attention/test_attention_1d.py \
+      -m "not slow" \
+      --tb=short \
+      --durations=10 \
+      --cov=models.common.modules.attention.attention_1d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg || fail=1
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d \
-      pytest models/common/tests/modules/embedding/test_embedding_1d.py -m "not slow" --tb=short --durations=10 \
-      --cov=models.common.modules.embedding.embedding_1d $COV || fail=1
-    pytest models/common/tests/modules/sampling/test_penalties_1d.py -m "not slow" --tb=short --durations=10 \
-      --cov=models.common.modules.sampling.penalties_1d $COV || fail=1
-    pytest models/common/tests/modules/sampling/test_sampling_1d.py -m "not slow" --tb=short --durations=10 \
-      --cov=models.common.modules.sampling.sampling_1d $COV || fail=1
+    pytest models/common/tests/modules/embedding/test_embedding_1d.py \
+      -m "not slow" \
+      --tb=short \
+      --durations=10 \
+      --cov=models.common.modules.embedding.embedding_1d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg || fail=1
+    pytest models/common/tests/modules/sampling/test_penalties_1d.py \
+      -m "not slow" \
+      --tb=short \
+      --durations=10 \
+      --cov=models.common.modules.sampling.penalties_1d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg || fail=1
+    pytest models/common/tests/modules/sampling/test_sampling_1d.py \
+      -m "not slow" \
+      --tb=short \
+      --durations=10 \
+      --cov=models.common.modules.sampling.sampling_1d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg || fail=1
     exit $fail
   model: tt-transformers-common
   model_family: TTTv2
