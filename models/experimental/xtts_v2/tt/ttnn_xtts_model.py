@@ -165,10 +165,9 @@ def _sample_token(latent, seen, gen, mh_w, mh_b, penalty=REPETITION_PENALTY):
     """coqui's decode strategy on one latent [1,1,1024]: mel_head -> repetition penalty ->
     temperature -> top-k -> top-p -> multinomial draw with the request's own RNG.
 
-    The repetition penalty is VECTORIZED (one gather/scatter over the `seen` set). A
-    per-token Python loop is O(len(seen)) per step and quadratic per utterance: measured
-    90.6 ms/step mean at 586 steps vs 8.9 ms/step for the device alone. Indexing once is
-    bit-identical (each index is touched exactly once)."""
+    The repetition penalty is VECTORIZED (one gather/scatter over the `seen` set), because a
+    per-token Python loop is O(len(seen)) per step and so quadratic over an utterance — enough to
+    dominate the device time. Indexing once is bit-identical: each index is touched exactly once."""
     logits = (latent @ mh_w.t() + mh_b)[0, 0].clone().float()  # [1026]
     if seen:
         idx = torch.tensor(sorted(seen))
@@ -257,6 +256,7 @@ class XttsV2:
         self._voc_slots = {}  # bucket length -> (z_in, g_in), allocated before any capture
         self._voc_traces = {}  # bucket length -> (trace_id, z_in, g_in, out), captured at warmup
         self.last_timings = {}
+        self.last_generation = {}  # codes + latents of the last request; see generate()
         logger.info(f"[XttsV2] built (ckpt={self.ckpt_path}) in {time.time() - t0:.1f}s")
 
     # ------------------------------------------------------------------ warmup
@@ -408,7 +408,10 @@ class XttsV2:
         Empty-audio contract: if the very FIRST sampled code is STOP (a legitimate, rare,
         seed-dependent outcome — coqui's HF generate returns zero codes for it), or
         max_new_tokens is 0, there is nothing to vocode and this returns an EMPTY waveform
-        torch.zeros(1, 1, 0) rather than raising; callers should check wav.shape[-1]."""
+        torch.zeros(1, 1, 0) rather than raising; callers should check wav.shape[-1].
+
+        Publishes `last_generation` = {codes, latents}: the sampled codes and the latents they
+        were predicted from, so a gate can ask the CPU reference what those codes imply."""
         if not self._warm:
             raise RuntimeError("call warmup() before generate()")
         dev = self.mesh_device
@@ -482,8 +485,10 @@ class XttsV2:
                     "wav_samples": 0,
                 }
             )
+            self.last_generation = {"codes": codes, "latents": None}
             return torch.zeros(1, 1, 0)
         gpt_latents = torch.cat(vlat, dim=1)  # [1,T,1024]
+        self.last_generation = {"codes": codes, "latents": gpt_latents}
 
         # --- vocoder: two host interpolates (HifiDecoder.forward) + HiFi-GAN on device. ---
         t0 = time.time()
