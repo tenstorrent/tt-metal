@@ -36,6 +36,28 @@ Wormhole rows are from CI (cold-start TTFT, including one-time program compile).
 
 E4B on N300 (1×2) is currently disabled in CI due to reduced N300 runner availability — see the Code Support Matrix below. Galaxy e2e entries are temporarily disabled (fabric / ethernet bring-up hang).
 
+### Per-ISL performance on Wormhole T3K
+
+Every row below is one `-k` filter of `models/demos/gemma4/demo/text_demo_v2.py` on **Wormhole B0 T3K / LoudBox, `MESH_DEVICE=T3K`, 1x8, TP=8**, at the branch defaults (on-device sampling, `enable_trace=True`, paged attention, greedy `temperature=0` / `top_p=0.08`). Record **warm** TTFT — traces and program cache primed by a preceding run — so these stay comparable to each other and are *not* mixed with the cold-start CI TTFT in the table above.
+
+Run one row with:
+
+```bash
+export HF_MODEL=google/gemma-4-12B-it   # or google/gemma-4-31B-it
+MESH_DEVICE=T3K pytest models/demos/gemma4/demo/text_demo_v2.py -k "long-context-128k" -s --timeout 1800
+```
+
+| ISL bucket (`-k`) | ISL | Batch | 12B TTFT (ms) | 12B ms/tok | 12B tok/s/user | 31B TTFT (ms) | 31B ms/tok | 31B tok/s/user |
+|---|---:|:-:|---:|---:|---:|---:|---:|---:|
+| `batch-1`           |   128 |  1 |  |  |  |  |  |  |
+| `batch-8`           |   128 |  8 |  |  |  |  |  |  |
+| `batch-32`          |   128 | 32 |  |  |  |  |  |  |
+| `long-context-4k`   |    4k |  1 |  |  |  |  |  |  |
+| `long-context-32k`  |   32k |  1 |  |  |  |  |  |  |
+| `long-context-64k`  |   64k |  1 |  |  |  |  |  |  |
+| `long-context-128k` |  128k |  1 |  |  |  |  |  |  |
+| `long-context-256k` |  256k |  1 |  |  |  |  |  |  |
+
 ## Code Support Matrix
 
 What the *code* in this directory supports, independent of what CI exercises.
@@ -46,12 +68,13 @@ Legend: 🟢 fully supported · 🟡 supported with known issues / limitations �
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | E2B     | 🟢 | 🟢 | 🟢 | 🟢 [^gemma4-p150] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
 | E4B     | 🟢 | 🟡 [^e4b-n300] | 🟢 | 🟢 [^gemma4-p150] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
-| 12B     | 🟡 [^gemma4-12b-wh] | 🔴 | — | 🟢 [^gemma4-p150-12b] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
+| 12B     | 🟡 [^gemma4-12b-wh] | 🔴 | 🟡 [^gemma4-12b-t3k] | 🟢 [^gemma4-p150-12b] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
 | 26B-A4B | 🔴 | 🔴 | 🟢 | 🔴 | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
 | 31B     | 🔴 | 🔴 | 🟢 | 🔴 | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
 
 [^e4b-n300]: E4B on N300 is exercised by the test suite locally but the CI entry is commented out due to runner availability. See `tests/pipeline_reorg/models_{unit,e2e}_tests.yaml`.
 [^gemma4-12b-wh]: 12B on Wormhole N150 is short-context only (does not fit long-context KV).
+[^gemma4-12b-t3k]: 12B on Wormhole T3K (1×8) runs the full demo and unit suite and is now gated in CI (`wh_llmbox` unit tier 1, `wh_llmbox_perf` e2e tier 2). 🟡 rather than 🟢 because the e2e leg is `release_ready: false` and a few decode PCC nodes still sit below the 0.99 default: 12B was Blackhole-only until this branch, so its `pcc_thresholds` rows carried `blackhole-*` keys with no `wormhole_b0` twin and the WH numerics were never gated. The residual loss is dominated by bfp8 attention weights (`GEMMA4_ATTN_WEIGHT_DTYPE=bf16` lifts four of six failing nodes over 0.99). Per-ISL perf: see [Per-ISL performance on Wormhole T3K](#per-isl-performance-on-wormhole-t3k).
 [^gemma4-p150]: Single Blackhole P150 — **E2B / E4B fully supported through HF 256k** with default multi-chunk prefill (4096), unbounded KV (`text_demo_v2.py -k long-context-{4k,…,256k}`). CI: `bh_p150` e2e for E2B/E4B.
 [^gemma4-p150-12b]: Single Blackhole P150 — **12B through full ISL 256k** with auto **bounded sliding + chunked prefill (4096)** above 32k (unbounded KV OOMs). Measured PASS + coherent gen at 64k/128k/256k (`isl_sweep_logs/full_matrix`). CI short-demo e2e on `bh_p150`; long-context via `MESH_DEVICE=P150 … text_demo_v2.py -k long-context-256k` (reports TTFT + decode tok/s). Prefill at 256k is slow (~6 min TTFT).
 [^gemma4-lc]: Long-context via `models/demos/gemma4/demo/text_demo_v2.py` (`-k long-context-{4k,32k,64k,128k,256k}`) — reports **TTFT and decode tok/s** (long-context `text_demo.py` only logs TTFT). Same `GEMMA4_LONG_CONTEXT_POLICY` in both demos. **Coherence target on QB2 + LoudBox for 12B and 31B: 4k–128k** (256k may allocate; 31B/26B quality not a target). QB2 — E2B/E4B unbounded through 256k; 12B/26B-A4B unbounded through 128k, bounded(+chunked) at 256k; 31B bounded from 64k (chunk=2048 at ≥128k). LoudBox / P150x8 — E2B/E4B/12B unbounded through 256k; **31B/26B-A4B auto-bounded at 128k** with chunk=2048. Defaults: `GEMMA4_HOST_SAMPLE=0` (on-device sampling; set `=1` to force host sampling); do not set `GEMMA4_DEMO_SINGLE_CHUNK=1`.
