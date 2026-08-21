@@ -372,6 +372,18 @@ def get_matmul_core_grid(mesh_device):
     return core_grid
 
 
+def agmm_worker_grid(full_grid, transpose):
+    """all_gather_minimal_matmul_async matmul worker grid, sized to leave the mux axis free.
+
+    The op places its input muxes on the device's last ROW when the core grid is transposed and its
+    last COLUMN when it is not (see the program factory's `in0_mux_in_column` logic). The matmul
+    workers must therefore avoid that row/column: reserve a row when transposed -> (x, y-1); reserve a
+    column when not -> (x-1, y). `transpose` should be the op's own decision, i.e.
+    `force_transpose or (M > N)`.
+    """
+    return ttnn.CoreCoord(full_grid.x, full_grid.y - 1) if transpose else ttnn.CoreCoord(full_grid.x - 1, full_grid.y)
+
+
 def _compute_heuristic_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, tp_factor: int = -1):
     """Heuristic matmul blocking for shapes absent from the per-grid lookup tables.
 
