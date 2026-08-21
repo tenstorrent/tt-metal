@@ -46,10 +46,11 @@ Each measured ``forward()`` uses production-style traced execution: compile outs
 one forward, warm the first replay outside the profiler window, then profile a second replay. Cold
 prefill captures one trace per ``actual_start`` because that scalar changes the command stream; each
 trace is released after its measured replay so trace memory stays bounded. ``runtime_id`` is a globally
-monotonic per-execution id, so every op execution gets a distinct id; the max-collapse only merges the
-per-chip records of one execution. Per-replay profiler regions attribute ops to each cold iteration
-(the per-iteration breakdown) and replace the old MLA_START signpost split. The run total is the sum
-of per-replay criticals.
+monotonic id for ordinary dispatch, but trace replay reuses the runtime ids stored when the trace was
+captured. Separate profiler regions isolate the warm-up and measured replays, so the max-collapse only
+merges per-chip records from the replay in that region. Per-replay profiler regions also attribute ops
+to each cold iteration (the per-iteration breakdown) and replace the old MLA_START signpost split. The
+run total is the sum of per-replay criticals.
 
 Single test (was a two-test tracy driver+impl split):
   * test_mla_chunked_perf — parametrized over [glm_5_1, glm_5_2] × [warm, cold, long] ×
@@ -629,9 +630,14 @@ def _profile_traced_forward(mesh_device, run_fn) -> dict:
         trace_capture_ended = True
         ttnn.synchronize_device(mesh_device)
 
-        # The first replay can carry one-time replay overhead. Keep it outside the measured region.
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_device(mesh_device)
+        # The first replay can carry one-time replay overhead. Profile and discard it so the realtime
+        # profiler's asynchronous receiver drains its records before the measured region opens. Trace
+        # replay reuses the runtime ids stored at capture, so a bare synchronize would leave a race in
+        # which late warm-up records could be max-collapsed with the measured replay.
+        _profile_forward(
+            mesh_device,
+            lambda: ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False),
+        )
 
         return _profile_forward(
             mesh_device,
