@@ -305,7 +305,8 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     # ...reachable through the stable `latest` path...
     assert (root / "perf_data" / "latest" / "perf_x" / "perf_x.csv").exists()
     # ...and a run-level Parquet batch alongside it.
-    parquet = run_dir / "testrun.parquet"
+    # Named from the run tag, not run_id: run_id is shared by every shard.
+    parquet = run_dir / "testrun-wormhole-0.parquet"
     assert parquet.exists()
     table = pq.read_table(parquet)
     assert table.schema.names == [c.name for c in DB_SCHEMA]
