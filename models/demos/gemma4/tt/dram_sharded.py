@@ -31,9 +31,9 @@ _L1_HEADROOM_BYTES = 64_000
 _DECODE_IN0_BLOCK_W_MAX = 2
 # Opt-in tuned attention o_proj prefill matmul; default off because it loses to
 # auto end-to-end (see interleaved_o_proj_prefill_config).
-# On by default: the tuned prefill o_proj is an ACCURACY win that a per-op
-# measurement cannot see. See interleaved_o_proj_prefill_config for the numbers.
-_OPROJ_TUNED = os.environ.get("GEMMA4_OPROJ_TUNED", "1") != "0"
+# Opt-in. It is a large accuracy win on 31B and a regression on 12B — the tuning
+# is shape-specific. See interleaved_o_proj_prefill_config for both measurements.
+_OPROJ_TUNED = os.environ.get("GEMMA4_OPROJ_TUNED", "0") != "0"
 
 
 def prefill_matmul_lofi_enabled(m: int) -> bool:
@@ -823,16 +823,30 @@ def interleaved_o_proj_prefill_config(m, k, n, grid=None):
     ``TT_FATAL``; ``_out_shard_matches_progcfg`` re-checks that invariant and
     returns all-``None`` if a different shape ever breaks it.
 
-    **On by default** (``GEMMA4_OPROJ_TUNED=0`` to opt out). It was previously off
-    because the throughput measurement below did not support it and its PCC check
-    read 0.99993 on *every* arm — per-op, the arms are indistinguishable. That check
-    is the wrong instrument: the difference compounds through 60 layers, and the
+    **Opt-in** (``GEMMA4_OPROJ_TUNED=1``), because the win is shape-specific: it is
+    large on 31B and a regression on 12B, so it cannot be a global default. Do not
+    flip it on globally without measuring the variant you care about.
+
+    On **31B** it is a substantial accuracy win that the throughput measurement
+    below could not see, because that measurement's PCC check read 0.99993 on
+    *every* arm — per-op, the arms are indistinguishable. That check is the wrong
+    instrument: the difference compounds through 60 layers, and the
     per-layer hidden-state PCC ladder against the HF reference (31B 1x8 len512,
     bit-deterministic across repeats) measures
     **total PCC lost 0.024539 -> 0.016006, a 34.8% reduction**. End to end on
     ``test_teacher_forcing_e2e[prefill_512-max_new_tokens_500-1x8]``: KL(HF||TT) mean
     0.671577 -> 0.458668, top-1 75.65% -> 78.64%, worst-step logit PCC 0.424 ->
     0.459, confident flips 6 -> 3, outside-HF-top-5 28 -> 11.
+
+    On **12B** the same config regresses accuracy. On
+    ``test_teacher_forcing_e2e[prefill_512-max_new_tokens_500-1x8]`` (bit-reproducible
+    across repeats) enabling it moves top-1 79.44% -> 75.85% and KL(HF||TT) mean
+    0.335644 -> 0.440552. The tuning pins a full-width 2D program config whose
+    block-sharded output grid depends on ``n``: 31B has n=5376 (Nt=168, 8 shard
+    columns) and 12B has n=3840 (Nt=120), so the blocking, subblock structure and
+    accumulation order differ per variant. A per-variant gate (the mesh/variant
+    keying ``Gemma4Precision`` already uses) is the right home for this if it is
+    ever turned on by default.
 
     The cost is bounded and one-off, not per-token: this config only fires for
     ``TILE_SIZE < m <= _PREFILL_CUTOFF`` (see the guard below), so decode (m=32)
