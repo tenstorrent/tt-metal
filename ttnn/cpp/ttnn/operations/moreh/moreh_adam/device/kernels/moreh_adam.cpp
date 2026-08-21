@@ -69,6 +69,31 @@ void kernel_main() {
     constexpr uint32_t weight_decay_tile = 4;
     constexpr uint32_t onetile = 1;
 
+    constexpr auto scalar_args_input = ckl::input(
+        dfb_scalar_args_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        kDataFormatReconfig,
+        ckl::TileAddressing::Offset);
+    constexpr auto one_input = ckl::input(dfb_one_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig);
+    constexpr auto tmp1_input =
+        ckl::input(dfb_tmp1_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig);
+    constexpr auto tmp1_output =
+        ckl::output(dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig);
+    constexpr auto tmp2_input =
+        ckl::input(dfb_tmp2_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig);
+    constexpr auto tmp2_output =
+        ckl::output(dfb_tmp2_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig);
+#ifdef AMSGRAD
+    constexpr auto max_exp_avg_sq_input =
+        ckl::input(dfb_max_exp_avg_sq_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig);
+    constexpr auto exp_avg_sq_input =
+        ckl::input(tmp_dfb_exp_avg_sq_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig);
+    constexpr auto max_exp_avg_sq_output = ckl::output(
+        tmp_dfb_max_exp_avg_sq_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig);
+#endif
+
     DataflowBuffer dfb_param_in_obj(dfb_param_in_id);
     DataflowBuffer dfb_grad_in_obj(dfb_grad_in_id);
     DataflowBuffer dfb_exp_avg_in_obj(dfb_exp_avg_in_id);
@@ -143,38 +168,20 @@ void kernel_main() {
         // dfb_tmp1_id = pow(beta2, step);
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),
-            ckl::CopyTile<
-                ckl::input(
-                    dfb_scalar_args_id,
-                    ckl::WaitPolicy::None,
-                    ckl::PopPolicy::None,
-                    ckl::InputTileMapping::Scalar,
-                    kDataFormatReconfig,
-                    ckl::TileAddressing::Offset),
-                ckl::Dst::D0>{beta2_tile},
+            ckl::CopyTile<scalar_args_input, ckl::Dst::D0>{beta2_tile},
             ckl::Power<ckl::Dst::D0>{step},
-            ckl::PackTile<ckl::output(
-                dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+            ckl::PackTile<tmp1_output>{});
 
         // dfb_tmp1_id = 1 / (1 - dfb_tmp1_id);
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),
-            ckl::BinaryFpu<
-                ckl::BinaryFpuOp::Sub,
-                ckl::input(dfb_one_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
-                ckl::input(dfb_tmp1_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
+            ckl::BinaryFpu<ckl::BinaryFpuOp::Sub, one_input, tmp1_input>{},
             ckl::Recip<ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(
-                dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+            ckl::PackTile<tmp1_output>{});
 
 #ifdef AMSGRAD
         // tmp_dfb_max_exp_avg_sq_id = max(dfb_max_exp_avg_sq_in_id, tmp_dfb_exp_avg_sq_id);
-        ckl::binary_sfpu<
-            ckl::BinaryMax<>,
-            ckl::input(dfb_max_exp_avg_sq_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
-            ckl::input(tmp_dfb_exp_avg_sq_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-            ckl::output(
-                tmp_dfb_max_exp_avg_sq_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
+        ckl::binary_sfpu<ckl::BinaryMax<>, max_exp_avg_sq_input, exp_avg_sq_input, max_exp_avg_sq_output>(
             ckl::IterationShape::tiles(onetile));
 
         // dfb_max_exp_avg_sq_out_id
@@ -189,72 +196,38 @@ void kernel_main() {
                 ckl::BinaryFpuOp::Mul,
                 ckl::input(
                     tmp_dfb_max_exp_avg_sq_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                ckl::input(dfb_tmp1_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
+                tmp1_input>{},
             ckl::Sqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(
-                dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+            ckl::PackTile<tmp1_output>{});
 #else
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),
-            ckl::BinaryFpu<
-                ckl::BinaryFpuOp::Mul,
-                ckl::input(tmp_dfb_exp_avg_sq_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                ckl::input(dfb_tmp1_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
+            ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, exp_avg_sq_input, tmp1_input>{},
             ckl::Sqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(
-                dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+            ckl::PackTile<tmp1_output>{});
 #endif
 
         // dfb_tmp1_id = 1 / (dfb_tmp1_id + eps)
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),
-            ckl::BinaryFpu<
-                ckl::BinaryFpuOp::Add,
-                ckl::input(dfb_tmp1_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                ckl::input(
-                    dfb_scalar_args_id,
-                    ckl::WaitPolicy::None,
-                    ckl::PopPolicy::None,
-                    ckl::InputTileMapping::Scalar,
-                    kDataFormatReconfig,
-                    ckl::TileAddressing::Offset)>{0u, eps_tile},
+            ckl::BinaryFpu<ckl::BinaryFpuOp::Add, tmp1_input, scalar_args_input>{0u, eps_tile},
             ckl::Recip<ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(
-                dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+            ckl::PackTile<tmp1_output>{});
 
         // bias_correction1 = 1 - pow(beta1, step);
         // dfb_tmp2_id = pow(beta1, step);
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
-            ckl::CopyTile<
-                ckl::input(
-                    dfb_scalar_args_id,
-                    ckl::WaitPolicy::None,
-                    ckl::PopPolicy::None,
-                    ckl::InputTileMapping::Scalar,
-                    kDataFormatReconfig,
-                    ckl::TileAddressing::Offset),
-                ckl::Dst::D0>{beta1_tile},
+            ckl::CopyTile<scalar_args_input, ckl::Dst::D0>{beta1_tile},
             ckl::Power<ckl::Dst::D0>{step},
-            ckl::PackTile<ckl::output(
-                dfb_tmp2_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+            ckl::PackTile<tmp2_output>{});
 
         // dfb_tmp2_id = 1 / (1 - dfb_tmp2_id);
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
-            ckl::BinaryFpu<
-                ckl::BinaryFpuOp::Sub,
-                ckl::input(
-                    dfb_one_id,
-                    ckl::WaitPolicy::None,
-                    ckl::PopPolicy::None,
-                    ckl::InputTileMapping::Scalar,
-                    kDataFormatReconfig,
-                    ckl::TileAddressing::Offset),
-                ckl::input(dfb_tmp2_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
+            ckl::BinaryFpu<ckl::BinaryFpuOp::Sub, one_input, tmp2_input>{},
             ckl::Recip<ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(
-                dfb_tmp2_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+            ckl::PackTile<tmp2_output>{});
 
         // dfb_tmp2_id = lr * dfb_tmp2_id;
         mul_tiles_to_dfb<dfb_scalar_args_id, dfb_tmp2_id, dfb_tmp2_id>(lr_tile, first_tile, 0);
