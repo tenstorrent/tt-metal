@@ -200,6 +200,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerCoversSubDeviceAllocat
     auto tracked_id = tracked->get_backing_buffer()->unique_id();
     EXPECT_TRUE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
                     .contains(tracked_id));
+    EXPECT_TRUE(distributed::trace_allocation_tracker::get_all_unsafe_tracked_ids().contains(tracked_id));
 
     distributed::trace_allocation_tracker::push_corruptible_allocation_scope(mesh_device.get());
     auto acknowledged = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
@@ -221,6 +222,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerCoversSubDeviceAllocat
     tracked->deallocate();
     EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
                      .contains(tracked_id));
+    EXPECT_FALSE(distributed::trace_allocation_tracker::get_all_unsafe_tracked_ids().contains(tracked_id));
     program_cache_allocation->deallocate();
     EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
                      .contains(program_cache_allocation_id));
@@ -252,6 +254,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerRegistrationIsIdempote
 
     distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), trace_id);
     EXPECT_TRUE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id).empty());
+    EXPECT_FALSE(distributed::trace_allocation_tracker::get_all_unsafe_tracked_ids().contains(tracked_id));
     distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), trace_id);
     tracked->deallocate();
 }

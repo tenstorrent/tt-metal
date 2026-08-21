@@ -44,7 +44,7 @@ void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id) {
     tracker::remove_unsafe_tracked_id(device, buffer_unique_id);
 }
 std::vector<size_t> drain_pending_traceback_ids() { return tracker::drain_pending_traceback_ids(); }
-std::vector<size_t> drain_retired_traceback_ids() { return tracker::drain_retired_traceback_ids(); }
+std::unordered_set<size_t> get_all_unsafe_tracked_ids() { return tracker::get_all_unsafe_tracked_ids(); }
 void push_corruptible_allocation_scope(MeshDevice* device) { tracker::push_corruptible_allocation_scope(device); }
 void pop_corruptible_allocation_scope(MeshDevice* device) { tracker::pop_corruptible_allocation_scope(device); }
 
