@@ -5,16 +5,11 @@
 #pragma once
 
 // Shared helpers for the per-op-family merge-gate smoke suites (test_matmul.cpp,
-// test_normalization.cpp, test_reduction.cpp, ...). These four wrappers were copy-pasted
-// into each suite as it was written; they live here so there is one definition.
+// test_normalization.cpp, test_reduction.cpp, ...).
 //
 // Kept separate from common_test_utils.hpp on purpose: that header is also included by the
 // conv and CCL tests, and these helpers pull in gtest plus the device-tensor construction
-// stack. common_test_utils.hpp still owns the numeric primitives (pcc, allclose_report,
-// relative_frobenius, check_nonfinite_positions) that expect_close() is built from.
-//
-// Suites bring these into their own `namespace detail` with using-declarations, so call
-// sites stay `detail::make_device_tensor(...)` / `detail::expect_close(...)`.
+// stack.
 
 #include <gtest/gtest.h>
 
