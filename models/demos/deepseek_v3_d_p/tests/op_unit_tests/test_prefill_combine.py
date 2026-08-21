@@ -10,6 +10,7 @@ PyTorch reference implementation when combining expert outputs back to token pos
 Uses torch-generated dispatch inputs to isolate the combine operation.
 """
 
+import os
 from dataclasses import dataclass
 
 import pytest
@@ -49,6 +50,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+
+
+# Launches of the op per test, for sampling its time. 1 keeps a test run a single launch.
+def perf_iterations():
+    return int(os.environ.get("CMBF2D_PERF_ITERS", "1"))
 
 
 def run_combine(
@@ -277,7 +283,7 @@ def run_combine(
     )
 
     if cmb_version == 1:
-        tt_output = tt_combine(
+        combine_inputs = (
             tt_dispatched_buffer,
             tt_dispatched_metadata,
             tt_expert_token_counts,
@@ -292,13 +298,28 @@ def run_combine(
             device=mesh_device,
             dtype=ttnn.int32,
         )
-        tt_output = tt_combine(
+        combine_inputs = (
             tt_dispatched_buffer,
             tt_dispatched_metadata,
             tt_expert_token_counts,
             tt_expert_region_offsets,
             tt_expert_offsets,
         )
+
+    tt_output = tt_combine(*combine_inputs)
+    # Sampling the op's time needs many launches, not many test runs: everything above this line — the torch
+    # reference included — is setup that a second launch does not repeat. The profiler reports one record per
+    # launch, so `perf_iterations` samples cost a launch each rather than a process each. When the output is
+    # checked, it is the LAST launch that gets checked, which is also what proves a launch leaves the op's
+    # counters fit for the next one.
+    for _ in range(perf_iterations() - 1):
+        # The op resets its ring counters at end of stream, which is only sound once every chip has finished:
+        # launches are not barriered against each other, so without this a chip that has already started the
+        # next launch has its neighbour's counter reset underneath it, and the neighbour then waits for pages
+        # that were counted and wiped.
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(tt_output)
+        tt_output = tt_combine(*combine_inputs)
 
     if not run_pcc_check:
         ttnn.synchronize_device(mesh_device)
