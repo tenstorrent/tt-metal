@@ -1388,6 +1388,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
                 {"number_of_tiles_per_core", number_of_tiles_per_core},
                 {"number_of_cores_used", all_core_utilization_count},
                 {"ascending", static_cast<uint32_t>(!attributes.descending)},
+                {"stable", static_cast<uint32_t>(attributes.stable)},
             },
         .hw_config = ComputeHardwareConfig{compute_hw_config},
     });

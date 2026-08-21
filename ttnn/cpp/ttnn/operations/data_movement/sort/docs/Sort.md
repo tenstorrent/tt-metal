@@ -17,7 +17,7 @@ The operation returns both the sorted tensor and the indices representing the or
 - input_tensor (Tensor): The input tensor to be sorted.
 - dim (int, optional): The dimension along which to sort. Defaults to -1 (last dimension).
 - descending (bool, optional): If True, sorts in descending order. Defaults to False.
-- stable (bool, optional): If True, ensures stable sorting (preserves order of equal elements). Defaults to False. Note: Currently not supported.
+- stable (bool, optional): If True, ensures stable sorting (preserves order of equal elements, matching `torch.sort(stable=True)`). Defaults to False.
 - memory_config (MemoryConfig, optional): Specifies memory configuration for the output tensor. Defaults to None.
 - out (tuple of Tensors, optional): Preallocated tensors for the sorted values and indices. Defaults to None.
 
@@ -83,8 +83,14 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
 - `descending` (bool): ascending (default) or descending order.
 - `memory_config` (optional): output memory config when `out=` is omitted.
   Defaults to the input's memory config.
-- `stable` (bool): **not supported** in this implementation. Passing
-  `stable=True` raises a `TT_FATAL` error.
+- `stable` (bool): preserve the original (ascending-index) order of equal
+  elements, matching `torch.sort(stable=True)`. Implemented in all three
+  program factories by the index-aware comparator-stable network: on exact
+  value ties each compare-exchange also compare-exchanges the paired index
+  tiles, with the tie-break polarity programmed once from the *global* sort
+  order (never the per-block bitonic direction). Roughly doubles the SFPU
+  cost of each compare-exchange; the data-movement-heavy phases of sort are
+  unaffected.
 
 ## Tensor Transformations
 
