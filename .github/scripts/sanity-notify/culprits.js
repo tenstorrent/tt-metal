@@ -61,6 +61,16 @@ function describeRuns(runs) {
 // A commit with no parent aborts with { decision: 'abstain', reason: 'no-parent' }.
 // A [skip ci] parent aborts upfront with { decision: 'abstain', reason: 'parent-skip-ci' }
 // (see the comment at that check).
+//
+// Known, ACCEPTED gap (maintainer decision, 2026-08-21): headSha's OWN runs
+// are NOT settled here -- the triggering run's final-red conclusion (already
+// vetted by the caller's finality gate) is taken as-is. Duplicate push
+// deliveries can give one sha several runs, so in theory a sibling run of
+// headSha could have succeeded (or still be running), making a notification
+// on this commit a false blame. Deliberately not handled: the 30-day
+// backtest observed exactly one duplicate-run pair and its outcomes matched
+// (success/success), never a split outcome. Revisit if a bad notification is
+// ever traced to a green sibling of the blamed sha.
 async function findBaseline({
   github,
   owner,
@@ -83,12 +93,12 @@ async function findBaseline({
   }
 
   // Known, ACCEPTED gap (maintainer decision, 2026-08-21): a [skip ci]
-  // parent never gets a push run, so its greenness is unknowable under the
-  // one-commit-back rule, and the break on top of it deliberately goes
-  // un-notified. Detect that upfront -- from the parent's commit message or
-  // an associated PR title -- and abstain immediately instead of
-  // discovering it by exhausting the poll budget (~8% of red events have a
-  // [skip ci] parent per the backtest; see BACKTEST.md).
+  // parent usually gets no push run, so its greenness is unknowable under
+  // the one-commit-back rule, and the break on top of it deliberately goes
+  // un-notified. By policy the marker alone decides -- even in the odd case
+  // where a marked commit does have a run (it happens; see BACKTEST.md) --
+  // so abstain immediately instead of spending the poll budget (~8% of red
+  // events have a [skip ci] parent per the backtest).
   const SKIP_CI_RE = /\[(skip ci|ci skip)\]/i;
   const { data: parentCommit } = await github.rest.git.getCommit({ owner, repo, commit_sha: parentSha });
   let skipCiSource = SKIP_CI_RE.test(parentCommit.message) ? 'commit message' : null;
@@ -101,7 +111,8 @@ async function findBaseline({
     if (parentPulls.some((pr) => SKIP_CI_RE.test(pr.title))) skipCiSource = 'associated PR title';
   }
   if (skipCiSource) {
-    log(`Parent ${parentSha} is [skip ci] (${skipCiSource}) -- no push run will ever exist for it; abstaining immediately without polling.`);
+    log(`Parent ${parentSha} is marked [skip ci] (${skipCiSource}); by policy it carries no baseline signal ` +
+      '(accepted gap, see BACKTEST.md). Abstaining immediately without polling.');
     return { decision: 'abstain', reason: 'parent-skip-ci', parentSha, parentRuns: [] };
   }
 

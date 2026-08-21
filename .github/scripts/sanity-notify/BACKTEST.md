@@ -74,6 +74,17 @@ also preempt a *green* marked parent (suppressing a legitimate notify);
 zero such cases in this window, and it falls inside the accepted
 [skip ci] trade-off.
 
+## Current-sha sibling runs: known, ACCEPTED gap (maintainer decision, 2026-08-21)
+
+`findBaseline` settles the PARENT's runs but takes the triggering run's
+final-red conclusion for the current sha as-is. Duplicate push deliveries
+can give one sha several runs, so in theory a sibling run of the failing
+sha could have succeeded (or still be in flight), making a notification a
+false blame. Deliberately not handled: this 30-day window contains exactly
+one duplicate-run pair (#13788/#13789) and its outcomes matched
+(success/success); zero split-outcome pairs were observed. Revisit if a
+bad notification is ever traced to a green sibling of the blamed sha.
+
 ## Finding that still needs a human decision
 
 **`_auto-retry-post-commit.yaml` is not 100% reliable: 4/417 (1.0%).**

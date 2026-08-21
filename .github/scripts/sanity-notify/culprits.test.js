@@ -220,7 +220,7 @@ test('[skip ci] in the parent commit message: abstains immediately, no run looku
     assert.equal(result.decision, 'abstain', msg);
     assert.equal(result.reason, 'parent-skip-ci', msg);
     assert.equal(h.lookups(), 0, msg); // never even queried the parent's runs
-    assert.match(h.logs.at(-1), /abstaining immediately without polling/);
+    assert.match(h.logs.at(-1), /by policy it carries no baseline signal .*Abstaining immediately without polling/);
   }
 });
 
