@@ -183,32 +183,46 @@ void kernel_main() {
     constexpr bool use_negative_mask = false;
 #endif
 
-    constexpr auto strided_col_input = [](uint32_t dfb_id) {
-        return ckl::input(
-            dfb_id,
-            ckl::WaitPolicy::None,
-            ckl::PopPolicy::None,
-            ckl::InputTileMapping::Col,
-            ckl::DataFormatReconfig::Disabled,
-            ckl::TileAddressing::Strided);
-    };
-    constexpr auto strided_block_input = [](uint32_t dfb_id) {
-        return ckl::input(
-            dfb_id,
-            ckl::WaitPolicy::None,
-            ckl::PopPolicy::None,
-            ckl::InputTileMapping::Block,
-            ckl::DataFormatReconfig::Disabled,
-            ckl::TileAddressing::Strided);
-    };
-    constexpr auto strided_output = [](uint32_t dfb_id) {
-        return ckl::output(
-            dfb_id,
-            ckl::ReservePolicy::None,
-            ckl::PushPolicy::None,
-            ckl::DataFormatReconfig::Disabled,
-            ckl::TileAddressing::Strided);
-    };
+    constexpr auto x_strided_col_input = ckl::input(
+        dfb_x_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Col,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Strided);
+    constexpr auto x_strided_block_input = ckl::input(
+        dfb_x_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Block,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Strided);
+    constexpr auto out_strided_col_input = ckl::input(
+        dfb_out_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Col,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Strided);
+    constexpr auto in_strided_block_input = ckl::input(
+        dfb_in_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Block,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Strided);
+    constexpr auto out_strided_output = ckl::output(
+        dfb_out_id,
+        ckl::ReservePolicy::None,
+        ckl::PushPolicy::None,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Strided);
+    constexpr auto in_strided_output = ckl::output(
+        dfb_in_id,
+        ckl::ReservePolicy::None,
+        ckl::PushPolicy::None,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Strided);
 
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_ex(dfb_ex_id);
@@ -363,7 +377,7 @@ void kernel_main() {
                 valid_group_shape,
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Mul,
-                    strided_block_input(dfb_x_id),
+                    x_strided_block_input,
                     ckl::input(
                         dfb_ones_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
                     ckl::Dst::D0,
@@ -495,8 +509,8 @@ void kernel_main() {
                 valid_group_shape,
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Mul,
-                    strided_block_input(dfb_x_id),
-                    strided_block_input(dfb_x_id),
+                    x_strided_block_input,
+                    x_strided_block_input,
                     ckl::Dst::D0,
                     ckl::DestAccumulation::WholeShape>{
                     ckl::StridedTileRange{0, block_w}, ckl::StridedTileRange{0, block_w}},
@@ -594,16 +608,14 @@ void kernel_main() {
                     if (copy_or_add) {
                         ckl::eltwise_chain(
                             ckl::IterationShape::col(block_h),
-                            ckl::CopyTile<strided_col_input(dfb_x_id)>{input_range},
-                            ckl::PackTile<strided_output(dfb_out_id)>{output_range});
+                            ckl::CopyTile<x_strided_col_input>{input_range},
+                            ckl::PackTile<out_strided_output>{output_range});
                     } else {
                         ckl::eltwise_chain(
                             ckl::IterationShape::col(block_h),
-                            ckl::BinaryFpu<
-                                ckl::BinaryFpuOp::Add,
-                                strided_col_input(dfb_out_id),
-                                strided_col_input(dfb_x_id)>{output_range, input_range},
-                            ckl::PackTile<strided_output(dfb_out_id)>{output_range});
+                            ckl::BinaryFpu<ckl::BinaryFpuOp::Add, out_strided_col_input, x_strided_col_input>{
+                                output_range, input_range},
+                            ckl::PackTile<out_strided_output>{output_range});
                     }
 
                     // update group tile offset
@@ -633,7 +645,7 @@ void kernel_main() {
                     ckl::IterationShape::grid(block_h, block_w_curr),
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
-                        strided_block_input(dfb_in_id),
+                        in_strided_block_input,
                         ckl::input(
                             dfb_in_negative_mask_id,
                             ckl::BroadcastDim::Row,
@@ -641,7 +653,7 @@ void kernel_main() {
                             ckl::PopPolicy::None,
                             ckl::InputTileMapping::Row,
                             ckl::DataFormatReconfig::Disabled)>{output_range},
-                    ckl::PackTile<strided_output(dfb_in_id)>{output_range});
+                    ckl::PackTile<in_strided_output>{output_range});
 
                 // data in dfb_x_id has valid data only for current group
                 // dfb_in_id has cleared data for that group
@@ -649,10 +661,9 @@ void kernel_main() {
                 reconfig_data_format_srcb(dfb_in_negative_mask_id, dfb_x_id);
                 ckl::eltwise_chain(
                     ckl::IterationShape::grid(block_h, block_w_curr),
-                    ckl::
-                        BinaryFpu<ckl::BinaryFpuOp::Add, strided_block_input(dfb_in_id), strided_block_input(dfb_x_id)>{
-                            output_range, ckl::StridedTileRange{0u, block_w}},
-                    ckl::PackTile<strided_output(dfb_in_id)>{output_range});
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Add, in_strided_block_input, x_strided_block_input>{
+                        output_range, ckl::StridedTileRange{0u, block_w}},
+                    ckl::PackTile<in_strided_output>{output_range});
                 dfb_in_negative_mask.pop_front(block_w);
             }
 
