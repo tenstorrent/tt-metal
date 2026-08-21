@@ -910,10 +910,17 @@ class TPAttention:
         if use_paged:
             # External paged KV: update at cur_pos, then paged SDPA-decode
             keys, values = self.paged_k, self.paged_v
-            # Wormhole drops the pad to [1,B,32,HD] (see _WH_KV_PAD_NOTE); Blackhole keeps the
-            # original pad-then-reshard sequence verbatim.
+            # N300-9B drops the pad to [1,B,32,HD] (see _WH_KV_PAD_NOTE); everyone else (Blackhole,
+            # and now T3K/N150 too) keeps the original pad-then-reshard sequence verbatim.
+            #
+            # DELIBERATE narrowing (Wormhole gating audit, item 8): this used to be tpc.is_blackhole(),
+            # so T3K/N150 rode the no-pad path along with N300. _WH_KV_PAD_NOTE's own measurements are
+            # "Controlled 2x2 on N300" and explicitly unverified beyond that config, so T3K/N150 are
+            # narrowed back to the safe pad-then-reshard branch on purpose -- not because they're
+            # Blackhole, but because the no-pad fix has no validation there. Don't revert this to
+            # is_blackhole() without measuring the no-pad path on T3K/N150 first.
             _kv_cfg = self._kv_shard_cfg(B)
-            if tpc.is_blackhole():
+            if not tpc.wh_9b_n300(self.args):
                 k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
                 v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
                 ttnn.deallocate(k)
