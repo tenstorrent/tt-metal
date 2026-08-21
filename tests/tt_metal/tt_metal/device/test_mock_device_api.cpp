@@ -186,18 +186,21 @@ TEST_F(MockDeviceAPIFixture, H2DSocketWritesDoNotDeadlockOnMock) {
     constexpr uint32_t kNumPages = 32;  // 8x the FIFO, so it must wrap and reclaim credit repeatedly
 
     const distributed::MeshCoreCoord recv_core{distributed::MeshCoordinate(0, 0), CoreCoord(0, 0)};
-    distributed::H2DSocket socket(
-        mesh_device, recv_core, BufferType::L1, kFifoSize, distributed::H2DMode::HOST_PUSH);
-    socket.set_page_size(kPageSize);
+    // Scoped: the socket owns device buffers, so it must be destroyed before the mesh it borrows.
+    {
+        distributed::H2DSocket socket(
+            mesh_device, recv_core, BufferType::L1, kFifoSize, distributed::H2DMode::HOST_PUSH);
+        socket.set_page_size(kPageSize);
 
-    std::vector<uint32_t> page(kPageSize / sizeof(uint32_t), 0xa5a5a5a5);
-    for (uint32_t i = 0; i < kNumPages; i++) {
-        socket.write(page.data(), 1);
+        std::vector<uint32_t> page(kPageSize / sizeof(uint32_t), 0xa5a5a5a5);
+        for (uint32_t i = 0; i < kNumPages; i++) {
+            socket.write(page.data(), 1);
+        }
+
+        // The queries and the barrier (which the destructor also calls) must agree with reserve_bytes.
+        EXPECT_TRUE(socket.has_space(kPageSize));
+        socket.barrier(1000);
     }
-
-    // The queries and the barrier (which the destructor also calls) must agree with reserve_bytes.
-    EXPECT_TRUE(socket.has_space(kPageSize));
-    socket.barrier(1000);
 
     mesh_device->close();
 }
@@ -213,34 +216,37 @@ TEST_F(MockDeviceAPIFixture, D2HSocketReadsDoNotDeadlockOnMock) {
     constexpr uint32_t kNumPages = 32;  // 8x the FIFO, so the ring must wrap repeatedly
 
     const distributed::MeshCoreCoord sender_core{distributed::MeshCoordinate(0, 0), CoreCoord(0, 0)};
-    distributed::D2HSocket socket(mesh_device, sender_core, kFifoSize);
-    socket.set_page_size(kPageSize);
+    // Scoped: the socket owns device buffers, so it must be destroyed before the mesh it borrows.
+    {
+        distributed::D2HSocket socket(mesh_device, sender_core, kFifoSize);
+        socket.set_page_size(kPageSize);
 
-    std::vector<uint32_t> page(kPageSize / sizeof(uint32_t), 0);
-    for (uint32_t i = 0; i < kNumPages; i++) {
+        std::vector<uint32_t> page(kPageSize / sizeof(uint32_t), 0);
+        for (uint32_t i = 0; i < kNumPages; i++) {
+            socket.read(page.data(), 1, /*notify_sender=*/true);
+        }
+
+        // Availability is scoped to the blocking read that asked for it, so between calls the socket
+        // reports drained. A permanently full FIFO would instead livelock the drain loops below.
+        EXPECT_FALSE(socket.has_data(kPageSize));
+        EXPECT_EQ(socket.pages_available(), 0u);
+
+        // The two idiomatic drain loops must terminate rather than spin.
+        uint32_t drained = 0;
+        while (socket.has_data(kPageSize)) {
+            socket.read(page.data(), 1, /*notify_sender=*/true);
+            ASSERT_LT(++drained, kNumPages) << "has_data() drain loop is not terminating on mock";
+        }
+        uint32_t discard_rounds = 0;
+        while (socket.discard_pending_pages() > 0) {
+            ASSERT_LT(++discard_rounds, kNumPages) << "discard_pending_pages() drain loop is not terminating on mock";
+        }
+
+        // A barrier must settle, and a read after it must still be satisfiable.
+        socket.barrier(1000);
         socket.read(page.data(), 1, /*notify_sender=*/true);
+        socket.barrier(1000);
     }
-
-    // Availability is scoped to the blocking read that asked for it, so between calls the socket
-    // reports drained. A permanently full FIFO would instead livelock the drain loops below.
-    EXPECT_FALSE(socket.has_data(kPageSize));
-    EXPECT_EQ(socket.pages_available(), 0u);
-
-    // The two idiomatic drain loops must terminate rather than spin.
-    uint32_t drained = 0;
-    while (socket.has_data(kPageSize)) {
-        socket.read(page.data(), 1, /*notify_sender=*/true);
-        ASSERT_LT(++drained, kNumPages) << "has_data() drain loop is not terminating on mock";
-    }
-    uint32_t discard_rounds = 0;
-    while (socket.discard_pending_pages() > 0) {
-        ASSERT_LT(++discard_rounds, kNumPages) << "discard_pending_pages() drain loop is not terminating on mock";
-    }
-
-    // A barrier must settle, and a read after it must still be satisfiable.
-    socket.barrier(1000);
-    socket.read(page.data(), 1, /*notify_sender=*/true);
-    socket.barrier(1000);
 
     mesh_device->close();
 }

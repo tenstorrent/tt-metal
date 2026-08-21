@@ -244,7 +244,7 @@ private:
 
     // Mock owner only: alias bytes_acked_ptr_ to bytes_sent_ so the FIFO reads as drained.
     // Connectors remain context-free and do not use this path.
-    void apply_mock_self_ack(const MeshDevice& mesh_device);
+    void enable_mock_flow_control(const MeshDevice& mesh_device);
 
     void reserve_bytes(uint32_t num_bytes);
     void push_bytes(uint32_t num_bytes);

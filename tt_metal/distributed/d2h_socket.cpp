@@ -333,7 +333,7 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     const SocketSenderSize sender_size;
     bytes_acked_device_offset_ = sender_size.md_size_bytes;
 
-    apply_mock_self_feed(*mesh_device);
+    enable_mock_flow_control(*mesh_device);
 }
 
 D2HSocket::D2HSocket(
@@ -439,8 +439,8 @@ void D2HSocket::set_page_size(uint32_t page_size) {
 
         while (bytes_recv < bytes_adjustment) {
             // On mock, synthesize the wrap padding that bytes_acked_ consumes below.
-            if (mock_self_feed_) {
-                mock_grant(bytes_adjustment);
+            if (mock_flow_control_enabled_) {
+                simulate_device_sent(bytes_adjustment);
             }
             volatile uint32_t bytes_sent_value = using_hugepage_ ? *hugepage_bytes_sent_host_ptr_ : bytes_sent_ptr_[0];
             bytes_recv = bytes_sent_value - bytes_acked_;
@@ -480,8 +480,8 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
     while (bytes_recv < num_bytes) {
         // On mock, synthesize exactly the wrap-adjusted bytes this read needs.
-        if (mock_self_feed_) {
-            mock_grant(num_bytes);
+        if (mock_flow_control_enabled_) {
+            simulate_device_sent(num_bytes);
         }
         advance_d2h_simulator_socket_device(mesh_device_, sender_core_.device_coord);
         if (using_hugepage_) {
@@ -499,18 +499,18 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
     }
 }
 
-void D2HSocket::apply_mock_self_feed(const MeshDevice& mesh_device) {
-    // Emule executes the sender, so only Mock needs a synthetic feed.
+void D2HSocket::enable_mock_flow_control(const MeshDevice& mesh_device) {
+    // Emule executes the sender, so only Mock needs simulated sends.
     if (MetalContext::instance(extract_context_id(&mesh_device)).get_cluster().get_target_device_type() !=
         tt::TargetDevice::Mock) {
         return;
     }
-    // Grants are observed through bytes_sent_ptr_, so mock must remain on the pinned path.
+    // Simulated sends are observed through bytes_sent_ptr_, so mock must stay on the pinned path.
     TT_FATAL(!using_hugepage_, "Mock D2H sockets must use the pinned path, not the hugepage fallback.");
 
-    // Grant only blocking waits. Consuming a grant restores sent == acked, so reads complete while
-    // non-blocking availability checks and drain APIs continue to report an empty socket.
-    mock_self_feed_ = true;
+    // Simulate sends only for blocking waits. Consuming one restores sent == acked, so reads
+    // complete while non-blocking checks and drain APIs continue to report an empty socket.
+    mock_flow_control_enabled_ = true;
     bytes_sent_ptr_ = &mock_bytes_sent_;
     mock_bytes_sent_ = bytes_acked_;
 }
