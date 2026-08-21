@@ -575,17 +575,16 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             if min_bounded_cols is not None:
                 num_blocks = max(num_blocks, min_bounded_cols)
             if page_table.shape[1] < num_blocks:
-                pad = torch.full(
+                pad = torch.zeros(
                     (page_table.shape[0], num_blocks - page_table.shape[1]),
-                    -1,
                     dtype=torch.int32,
                 )
                 page_table = torch.cat([page_table, pad], dim=1)
             page_table = page_table[:, :num_blocks]
             if trace_enabled and page_table.shape[1] < num_blocks:
-                padding = torch.ones(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32) * -1
+                padding = torch.zeros(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32)
                 page_table = torch.cat([page_table, padding], dim=1)
-            padded_page_table = torch.ones(batch_dim, page_table.shape[1], dtype=torch.int32) * -1
+            padded_page_table = torch.zeros(batch_dim, page_table.shape[1], dtype=torch.int32)
             assert user_id is not None
             for i, user in enumerate(user_id):
                 padded_page_table[user, :] = page_table[i, :]
@@ -608,7 +607,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         if min_bounded_cols is not None:
             num_blocks = max(num_blocks, min_bounded_cols)
         if page_table.shape[1] < num_blocks:
-            padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
+            padding = torch.zeros(1, num_blocks - page_table.shape[1], dtype=torch.int32)
             page_table = torch.cat([page_table, padding], dim=1)
         return page_table[:, :num_blocks]
 
@@ -1551,7 +1550,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         Decode warmup captures Metal traces against persistent buffers sized
         at max batch. Prefill often passes B=1 or B=31; padding here makes
         the first allocation (and every subsequent copy) match that width so
-        we never grow/orphan trace addresses. Unused rows are filled with -1.
+        we never grow/orphan trace addresses. Unused rows are filled with 0
+        (vLLM null block).
         """
         if not page_tables_per_layer:
             return page_tables_per_layer
@@ -1565,7 +1565,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             if int(pt2.shape[0]) >= max_b:
                 out.append(pt2)
                 continue
-            padded = torch.full((max_b, int(pt2.shape[1])), -1, dtype=torch.int32)
+            padded = torch.zeros((max_b, int(pt2.shape[1])), dtype=torch.int32)
             padded[: pt2.shape[0], :] = pt2.to(dtype=torch.int32)
             out.append(padded)
         return out

@@ -1499,7 +1499,7 @@ class Gemma4Model:
 
     @staticmethod
     def _pad_page_table_host_to_shape(pt_host, target_b, target_w):
-        """Pad a host page table with -1 up to ``(target_b, target_w)``."""
+        """Pad a host page table with 0 up to ``(target_b, target_w)``."""
         pt_host = pt_host if pt_host.dim() > 1 else pt_host.unsqueeze(0)
         host_b, host_w = int(pt_host.shape[0]), int(pt_host.shape[-1])
         if host_b == target_b and host_w == target_w:
@@ -1507,7 +1507,7 @@ class Gemma4Model:
         if host_b > target_b or host_w > target_w:
             # Caller should have grown the device buffer already.
             return pt_host[:target_b, :target_w].contiguous()
-        out = torch.full((target_b, target_w), -1, dtype=torch.int32)
+        out = torch.zeros((target_b, target_w), dtype=torch.int32)
         out[:host_b, :host_w] = pt_host.to(dtype=torch.int32)
         return out
 
@@ -2129,8 +2129,7 @@ class Gemma4Model:
             # ``rot_mat_idxs`` is Gemma4's int32 cache/SDPA position buffer (vLLM
             # pads inactive decode rows with -1). Without skip_negative, those
             # rows leave the skip sentinel (-1→0→1…) and paged_update can touch
-            # real KV despite page_table=-1 padding — concurrent decode then
-            # thought-loops while B=1 stays clean.
+            # KV. Page-table pad is 0 (null block); skip is the position sentinel.
             if not self._tt_vllm_always_refresh_decode_trace_inputs:
                 if current_pos is not None:
                     ttnn.plus_one(current_pos, skip_negative_entries=True)

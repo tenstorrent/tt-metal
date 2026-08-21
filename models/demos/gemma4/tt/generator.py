@@ -334,9 +334,8 @@ class ChunkedPrefillPageTableGuardMixin:
         """True last-token index; lm_head tile-aligns separately in the model.
 
         Always pass the real index so unbounded ``paged_fill_cache`` can cap at
-        ``valid_seq_len = last+1`` and skip power-of-2 pad rows (vLLM / eager
-        pad page-table columns with 0 → writing pad KV into physical block 0
-        causes the ~9k/16k garbage cliff on TP=8 12B).
+        ``valid_seq_len = last+1`` and skip power-of-2 pad rows. Extra page-table
+        columns pad with 0 (vLLM null block). Decode skip is position -1.
         """
         return int(last_token_idx)
 
@@ -826,13 +825,13 @@ class ChunkedPrefillPageTableGuardMixin:
         if page_table_user.shape[1] > needed_blocks:
             page_table_user = page_table_user[:, :needed_blocks]
         num_padding_blocks = needed_blocks - page_table_user.shape[1]
-        # Pad with -1 (skip), never 0 (physical block 0). Same invariant as the
-        # eager multi-chunk path — zeros let pad KV clobber the prompt prefix.
+        # Extra columns pad with 0 (vLLM null block). Fill skip is valid_seq_len,
+        # not page-table -1.
         if num_padding_blocks > 0:
             page_table_user_padded = torch.cat(
                 [
                     page_table_user,
-                    torch.full((1, num_padding_blocks), -1, dtype=torch.int32),
+                    torch.zeros((1, num_padding_blocks), dtype=torch.int32),
                 ],
                 dim=-1,
             )
@@ -931,9 +930,8 @@ class ChunkedPrefillPageTableGuardMixin:
             page_table_user = chunk_source_page_table[user_id : user_id + 1, :]
             # Cap page-table width to the *real* (unpadded) sequence so pad
             # tokens in the last power-of-2 chunk cannot address real blocks.
-            # Extra columns required by the padded chunk grid use -1 (skip),
-            # never 0 (physical block 0) — zeros clobber the prompt prefix
-            # (#51186 LB 12B ~9k garbage cliff).
+            # Extra columns required by the padded chunk grid use 0 (vLLM null
+            # block). Fill skip is valid_seq_len, not page-table -1.
             real_seq_len = int(last_token_idx) + 1
             needed_blocks = num_blocks_in_seq(real_seq_len, block_size)
             chunk_grid_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size)
@@ -944,7 +942,7 @@ class ChunkedPrefillPageTableGuardMixin:
                 page_table_user_padded = torch.cat(
                     [
                         page_table_user,
-                        torch.full((1, num_padding_blocks), -1, dtype=torch.int32),
+                        torch.zeros((1, num_padding_blocks), dtype=torch.int32),
                     ],
                     dim=-1,
                 )
@@ -969,18 +967,18 @@ class ChunkedPrefillPageTableGuardMixin:
                     chunk_tokens = torch.nn.functional.pad(chunk_tokens, (0, chunk_size - chunk_tokens.shape[-1]))
 
                 chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
-                # Continuation chunks must see real block IDs. All -1 means the
-                # source table was truncated to the first scheduler chunk width
-                # (vLLM APC / #51186) — fill would skip and full-attn KV for
-                # tokens past that point would be empty.
+                # Continuation chunks must see real block IDs (>0). All 0 / empty
+                # means the source table was truncated to the first scheduler
+                # chunk width (vLLM APC / #51186) — fill would only touch the
+                # null block and full-attn KV past that point would be empty.
                 if chunk_start > 0 and chunk_page_table.numel() > 0:
-                    n_valid = int((chunk_page_table >= 0).sum().item())
+                    n_valid = int((chunk_page_table > 0).sum().item())
                     if n_valid == 0:
                         logger.warning(
-                            "Gemma4 APC chunk_page_table all -1 at chunk_start={} "
-                            "(page_table_cols={} needed≈{} block_size={}). "
-                            "Continuation KV will not be written — check "
-                            "_get_prefill_user_page_table full-prompt width.",
+                            "Gemma4 APC chunk_page_table has no real block ids "
+                            "at chunk_start={} (page_table_cols={} needed≈{} "
+                            "block_size={}). Continuation KV will not be written "
+                            "— check _get_prefill_user_page_table full-prompt width.",
                             chunk_start,
                             int(page_table_user_padded.shape[1]),
                             needed_blocks,
