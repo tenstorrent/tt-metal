@@ -7,8 +7,8 @@ that issue are not addressed here.
 | | |
 |---|---|
 | Kernels changed | `ckernel_sfpu_sqrt_custom.h` and `ckernel_sfpu_trigonometry.h`, Wormhole B0 and Blackhole |
-| Silicon | Wormhole n300 |
-| Blackhole | compile-verified; not run on BH silicon |
+| Silicon | Wormhole n300 and Blackhole p100a |
+| Performance | measured on Wormhole n300 only |
 | Quasar | unchanged — still carries the pre-fix kernel |
 | SFPI | 7.69.0 (the pinned version) |
 
@@ -140,6 +140,8 @@ because math is the bottleneck for these ops.
 
 ## 5. Verification
 
+### Wormhole n300
+
 Suite results, `test_eltwise_unary_sfpu_edges` restricted to `SqrtCustom`, `Erfinv`, `Asin`, `Acos`:
 
 | | Branch | Branch point |
@@ -156,11 +158,43 @@ divergence, and the marker would otherwise absorb a return to NaN. It runs on
 lets a NaN back out to L1. Confirmed non-vacuous: it passes on this branch and fails with
 `sqrt_custom(+inf) returned nan` against the branch point.
 
-## 6. Scope and follow-ups
+### Blackhole p100a
 
-Blackhole is compile-verified only. The `Erfinv(±1)` xfail is therefore kept on Blackhole until a
-BH silicon run replaces it — `_EDGE_BLACKHOLE_UNVERIFIED_DIVERGENCES` in `test_sfpu_unary.py`. An
-XPASS there is the expected outcome and is the signal to drop the entry.
+The BH kernel is no longer compile-verified only. Full `test_sfpu_unary.py` on p100a silicon,
+before and after dropping `_EDGE_BLACKHOLE_UNVERIFIED_DIVERGENCES`:
+
+| `test_sfpu_unary.py` (whole file) | Result |
+|---|---|
+| With the BH-unverified table still in place | 5025 passed, 1601 skipped, 19 xfailed, **2 xpassed**, 0 failed |
+| After dropping it (current) | **5027 passed**, 1601 skipped, 19 xfailed, 0 xpassed, 0 failed |
+
+The two XPASSes in the first run are the `Erfinv(±1)` fp32-dest cells, which is the outcome
+`_EDGE_BLACKHOLE_UNVERIFIED_REASON` was written to predict: the `sqrt_custom(+inf)` fix repairs
+`erfinv(±1)` on Blackhole exactly as it does on Wormhole. That table and its arch-gated marker are
+removed accordingly, so `Erfinv` now carries no divergence entry on either architecture and those
+two cells are ordinary passes — the +2 between the rows above is exactly them.
+
+Per-op, after the removal:
+
+| | Selection | Result |
+|---|---|---|
+| `SqrtCustom` | `test_eltwise_unary_sfpu_edges` | 2 passed, 3 skipped, 3 xfailed (the `-inf` residual) |
+| `Erfinv` | `test_eltwise_unary_sfpu_edges` | 5 passed, 3 skipped, 0 xfailed |
+| `Asin`, `Acos`, `Asinh`, `Acosh` | whole file | 308 passed, 60 skipped, 0 failed |
+
+The `SqrtCustom` `-inf` xfails behave as on Wormhole — same count, same reason, no unexpected
+pass. The `Asin`/`Acos` row exercises the `GUARD_NON_FINITE=false` opt-out on BH silicon.
+
+`test_sqrt_custom_infinity_regression` passes on BH silicon, and is non-vacuous there: with
+`GUARD_NON_FINITE` defaulted to `false` in the BH kernel — which reduces it to the pre-fix
+`v_if(val != 0.0f)` — the same test fails with `sqrt_custom(+inf) returned nan`. Blackhole
+therefore exhibited the defect for the same reason Wormhole did, and the guard repairs it.
+Confirmed against the include path the LLK suite actually builds with,
+`-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu`.
+
+Performance is still measured on Wormhole only; §4 has not been re-run on Blackhole.
+
+## 6. Scope and follow-ups
 
 Worth filing separately:
 
