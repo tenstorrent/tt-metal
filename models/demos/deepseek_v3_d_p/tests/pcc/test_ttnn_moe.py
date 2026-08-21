@@ -934,11 +934,11 @@ def test_kimi_k3_moe(
 ):
     """Kimi-K3 MoE: 896 experts / top-16 with the LatentMoE projections around the routed side.
 
-    The routed experts run the checkpoint's SiTU-GLU on device
-    (``RoutedExpertActivation.SituGlu``, #51351), matched by a SiTU torch reference. The SHARED
-    expert stays on SiLU on both sides: the SiTU kernel is the routed-expert op's, and nothing
-    implements it at the shared expert's 6144 width, so holding both sides to SiLU there keeps
-    this a test of the dataflow rather than of a gap the device cannot close.
+    Both expert kinds run the checkpoint's SiTU-GLU on device, each matched by a SiTU torch
+    reference: the routed side through the fused kernel (``RoutedExpertActivation.SituGlu``), the
+    shared side through TtSharedExpert's composed softcap/sigmoid/multiply. This is also the only
+    test that reaches that composed path's sub_core_grids branch -- the shared expert runs on a
+    sub-device here, overlapped with the dispatch, which test_shared_expert does not set up.
 
     One deliberate limit remains from the bring-up scope:
 

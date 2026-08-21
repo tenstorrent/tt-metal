@@ -100,9 +100,8 @@ class KimiK3Adapter(MLAPrefillAdapter):
     def reference_moe_cls(self):
         """K3's MoE block: DeepSeek-V3's, wrapped in the shared low-rank latent projection pair.
 
-        The block applies one activation to routed and shared experts alike, which now matches the
-        device: ``run_reference_moe`` builds it with hidden_act="situ" for both halves (#51351,
-        #53625). Its ``shared_hidden_act`` override stays for Wormhole, which has no SiTU at all.
+        The block applies one activation to routed and shared experts alike, which matches the
+        device: ``run_reference_moe`` builds it with hidden_act="situ" for both halves.
         """
         from models.demos.deepseek_v3_d_p.reference.kimi_k3.modeling_kimi_moe import KimiSparseMoeBlock
 
