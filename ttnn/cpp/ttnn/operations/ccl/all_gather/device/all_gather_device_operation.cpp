@@ -230,7 +230,7 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
     // Heuristics to pick the kernel algorithm.
     // Multicast supports all Fabric topologies, unicast only supports effectively-1D topologies.
-    // Unicast is empirically found to be faster for large tensors.
+    // Where both apply, the winner is empirical and arch-specific -- see the per-arch rules below.
     bool use_unicast = false;
     if (args.is_true_2d()) {
         // Unicast algorithm currently does not support true Fabric 2D topologies
@@ -246,29 +246,65 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         const uint64_t in_page = input_tensor.tensor_spec().compute_page_size_bytes();
         const uint64_t out_page = args.output_spec.compute_page_size_bytes();
         const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
-        // Bytes crossing one link of the gathered axis (the same axis and links the unicast factory uses).
-        // Both rules below are in bytes per link, so they carry to link counts other than the ones they
-        // were tuned on. Both were also fitted to tile, the common layout, whose crossover sits a little
-        // above row-major's.
+        // Bytes crossing one link: the whole gathered output, not just this device's share -- so these
+        // thresholds are NOT comparable with the factories', which count one device's share. Traffic on a
+        // link really does grow with both counts, so dividing by links and scaling by devices is the right
+        // shape; what is untested is whether the crossover stays at a fixed number of bytes as the device
+        // count changes, since every sweep ran on 8 devices. Blackhole was fitted on tile only, Wormhole
+        // on tile and row-major.
         const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
         const uint64_t per_link_bytes =
             input_tensor.physical_volume() * input_tensor.element_size() * args.num_devices / num_links;
 
+        // Chunks this device contributes per row of the output -- the same stripe the factories walk,
+        // derived the same way, so the threshold below is in the units the kernels see. Specs here vs
+        // buffers there is the same number (a buffer is allocated with page_size =
+        // spec.compute_page_size_bytes()), and the output has no buffer yet anyway.
+        const auto& padded_shape = input_tensor.padded_shape();
+        const auto tile_spec =
+            input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+        uint64_t pages_per_stripe = 1;
+        for (int32_t i = args.dim_from_end; i < 0; i++) {
+            uint64_t extent;
+            if (i == -1) {
+                extent = input_tensor.layout() == Layout::TILE
+                             ? padded_shape[i] / tile_spec.get_width()
+                             : (padded_shape[i] * input_tensor.element_size()) / in_page;
+            } else if (input_tensor.layout() == Layout::TILE && i == -2) {
+                extent = padded_shape[i] / tile_spec.get_height();
+            } else {
+                extent = padded_shape[i];
+            }
+            pages_per_stripe *= extent;
+        }
+        const uint64_t stripe_chunks = pages_per_stripe * (in_page > out_page ? in_page / out_page : 1);
+
         switch (input_tensor.device()->arch()) {
             case tt::ARCH::WORMHOLE_B0: {
-                // Sweep result. Multicast is never beaten on a line, so only a ring ever switches. There the
-                // ceiling grows with page size, since a bigger page fills a fabric packet and that is what
-                // unicast needs to pay off. The boundary errs toward unicast: multicast's edge before it is
-                // much smaller than unicast's after it.
-                use_unicast = is_ring && per_link_bytes >= std::min<uint64_t>(1'200'000, 600 * txn);
+                // Sweep result (T3000, both factories tuned; tile and row-major, 64 B..4 KB pages,
+                // 8 KB..200 MB per link).
+                // A ring always uses multicast: it won every ring measured, by 5-20% on big tensors and
+                // more on small ones. Unicast has to re-read and re-send the data at each of the N/2
+                // hops, while a multicast packet is copied onward by the fabric.
+                // A line uses unicast only when the tensor is big and its stripe is short. Unicast's
+                // relay splits the sending across devices, which helps once the link is the bottleneck.
+                // A long stripe cancels that out, because it gives multicast long runs to send instead.
+                //
+                // Size matters far more than stripe. Drop the size test and small tensors pick unicast
+                // and run up to 71% slower. Drop the stripe test and 5 of the 17 big line shapes
+                // measured pick unicast and run 0.5-2.2% slower.
+                // TODO: is up to 2.2% worth the stripe walk above? If not, keep the size test alone. i.e.:
+                //    use_unicast = !is_ring && per_link_bytes >= 3MB && stripe_chunks < 64
+                //                              ^^^^^^^^^^^^^^ dominant   ^^^^^^^^^^^^ ≤2.2% refinement
+                use_unicast = !is_ring && per_link_bytes >= 3'000'000 && stripe_chunks < 64;
                 break;
             }
             case tt::ARCH::BLACKHOLE: {
-                // Coefficients below are from a factory-vs-factory sweep, not first principles. Multicast
-                // wins only at small volumes and its edge there is much smaller than unicast's at scale, so
-                // the boundary errs toward unicast. The ceiling grows with page size for the same reason as
-                // on Wormhole, and sits higher on a line, whose unicast relay moves more data per link than
-                // a ring's.
+                // Coefficients from a factory-vs-factory sweep, not first principles. Multicast wins only
+                // at small volumes, and by less than unicast wins at scale, so the boundary errs toward
+                // unicast. The ceiling grows with page size -- a bigger page fills a fabric packet, which is
+                // what unicast needs to pay off -- and sits higher on a line, whose unicast relay moves more
+                // data per link than a ring's.
                 uint64_t mcast_ceiling;
                 if (is_ring) {
                     mcast_ceiling = std::min<uint64_t>(650'000, 300 * txn);
