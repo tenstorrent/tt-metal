@@ -107,20 +107,33 @@ void kernel_main() {
     u::ComputeBlock bias = u::noc_load<1>(bias_storage, bias_acc, 0).wait();
 #endif
 
-#if defined(MM_ACC_L1)
+#if defined(MM_SINGLE_SHOT)
+    // Straight through store(), with no accumulation buffer -- and so no rt*ct <= 8
+    // limit, because the strategy walks the output in row bands instead. This is the path
+    // a fused attention takes, and its shape limits differ from the accumulating one's,
+    // which is the whole reason the sweep has to be able to reach it.
+    static_assert(MM_K_BLOCKS == 1, "the single-shot path is one k-block by definition");
+#elif defined(MM_ACC_L1)
     // L1: the packer sums into acc_storage, so DST only ever holds one block's
     // product and a per-step chain sees that contribution alone.
     u::Accumulator<Out, u::AccumulatorMode::L1> acc(acc_storage, out_storage);
+    acc.clear();
 #else
     u::Accumulator<Out, u::AccumulatorMode::Dst> acc(acc_storage, out_storage);
-#endif
     acc.clear();
+#endif
 
     for (uint32_t k = 0; k < MM_K_BLOCKS; ++k) {
         const bool finish = (k == MM_K_BLOCKS - 1);
 
         u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, k).wait();
         u::ComputeBlock b = u::noc_load<1>(in1_storage, in1, k).wait();
+
+#if defined(MM_SINGLE_SHOT)
+        (void)finish;
+        u::Block result = out_storage.store(MM_FUSION(a, b));
+        u::noc_store<0>(std::move(result), out, 0);
+#else
 
 #if defined(MM_RELU_EPILOGUE)
         // finish-only: relu once, on the completed accumulator
@@ -141,5 +154,6 @@ void kernel_main() {
         if (finish) {
             u::noc_store<0>(std::move(result), out, 0);
         }
+#endif
     }
 }
