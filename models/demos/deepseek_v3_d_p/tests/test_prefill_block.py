@@ -1054,7 +1054,7 @@ def test_glm_prefill_block(
             2,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1064,7 +1064,16 @@ def test_glm_prefill_block(
 @pytest.mark.parametrize("num_iterations", [1], ids=["iter1"])
 @pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 bring-up targets Blackhole")
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
+# [False, True] as the DeepSeek and Kimi block rows above, not [False]. The random-weight PCC rows
+# check the DATAFLOW -- device against an hf_model layer built from the same draw -- which is a real
+# check but says nothing about the weight path: per-tensor fp8 dequant, the stacked+fused expert
+# split, the zero router bias. Those only appear with the checkpoint loaded.
+#
+# Before this, Mistral had no real-weight ACCURACY gate at block level at all: every pretrained row
+# in test_prefill_transformer.py is pcc_validation=False (smoke), so the only real-weight accuracy
+# signal in the model was the 36-layer chunked run against a golden trace -- far too expensive to be
+# the first thing that tells you the weight path broke. This is the cheap gate that catches it.
+@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 def test_mistral4_prefill_block(
     variant,
     config_only,

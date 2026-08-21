@@ -1269,7 +1269,7 @@ def test_glm_prefill_transformer(
             2,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
         # TP=1 probe for the PP=4 x (8,1) proposal. A PP stage is SP=8 x TP=1; (32,1) is the closest
         # shape reachable without an 8-chip TT_VISIBLE_DEVICES carve, and it is CI-listed for
