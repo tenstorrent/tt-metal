@@ -1060,3 +1060,78 @@
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
+
+- name: "Blaze - Mistral4 Prefill Block"
+  cmd: |
+    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603/
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/Mistral-Small-4-119B-Cache/prefill_ttnn
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_mistral4_prefill_block -vvv --tb=short
+    '
+  test_type: mistral4_prefill_block
+  test_group: module
+  skus:
+    bh_sc1:
+      # dense 41 s + moe 147 s locally, random weights, seq 5120.
+      timeout: 20
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
+# NOTE on the margin: the reference here runs the model's real softmax router while the device gate
+# runs sigmoid (moe_grouped_topk.cpp TT_THROWs on anything else). Locally the reference_output check
+# passes at 0.972469 against a 0.971 threshold -- a +0.0015 margin, i.e. noise. A red run here is
+# more likely to mean "seed moved" than "regression", and a green run does NOT validate the routing
+# rule. See mistral4_bringup/test_wiring/FINDINGS.md F0.
+- name: "Blaze - Mistral4 MoE"
+  cmd: |
+    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603/
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/Mistral-Small-4-119B-Cache/prefill_ttnn
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_mistral4_moe -vvv --tb=short
+    '
+  test_type: mistral4_moe
+  test_group: module
+  skus:
+    bh_sc1:
+      # 98 s locally; ~13 GB host RAM for the fp32 expert weights.
+      timeout: 20
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
+# Smoke (forward completes, no host reference) only. The PCC cases are KNOWN-FAILING and are
+# deliberately NOT wired here, because the failure is a real model gap rather than a flake and a
+# permanently-red nightly entry only teaches people to ignore this pipeline. Measured locally:
+#
+#   embed 1.000000 | layer_0 0.975813 | layer_1 0.942922 | layer_2 0.906779
+#   layer_3 0.870295 | layer_4 0.834688 | norm 0.834414 | lm_head 0.769880    (threshold 0.99)
+#
+# embed is exact and layer_0/layer_1 reproduce bit-identically across the 2- and 5-layer runs, so
+# this is deterministic: the softmax-vs-sigmoid router substitution costs a steady ~0.0355 PCC per
+# layer. Over 36 layers that is model-breaking. Enable the line below once moe_grouped_topk.cpp
+# supports a softmax score_func and Mistral4Small119BConfig declares SCORE_FUNC = "softmax":
+#
+#   python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_mistral4_prefill_transformer -k "pcc-random" -vvv --tb=short
+- name: "Blaze - Mistral4 Prefill Transformer Smoke"
+  cmd: |
+    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603/
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/Mistral-Small-4-119B-Cache/prefill_ttnn
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_mistral4_prefill_transformer -k "smoke-random" -vvv --tb=short
+    '
+  test_type: mistral4_prefill_transformer
+  test_group: module
+  skus:
+    bh_sc1:
+      # 2-layer smoke 92 s locally; the 5-layer smoke case is also selected by this -k.
+      timeout: 25
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
