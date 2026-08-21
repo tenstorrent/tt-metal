@@ -59,6 +59,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     extract_layer_state_dict,
     get_4d_causal_mask,
     load_and_compute_layer_by_layer,
+    reference_kvpe_for_layer,
     tokenize_prompt_to_isl,
 )
 
@@ -292,7 +293,7 @@ def run_model(
             )
             with torch.no_grad():
                 layer_out = hf_model.layers[layer_idx](torch_input, **layer_kwargs)
-                torch_output = layer_out[0]
+                torch_output = layer_out[0] if isinstance(layer_out, (tuple, list)) else layer_out
             logger.info(f"Torch reference output shape: {torch_output.shape}")
             if ref_cache is not None:
                 ref_kvpe = reference_kvpe_for_layer(
