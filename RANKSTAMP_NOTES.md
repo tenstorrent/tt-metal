@@ -135,3 +135,34 @@ UInt32-format CBs corrupt under pack_tile<true>, #53466).
   topk_strip_rank_tags(idst). topk_merge gains runtime rank_base (explicitly forwarded).
 - quasar: _topk_strip_rank_tags_ no-op stub (unreachable; mode static_asserted off).
 - Fresh-JIT ttnn smoke post-change: 24 passed.
+
+## C3 scoping findings
+- The multicore W<65536 gate (topk_device_operation.cpp select_program_factory) is a GENERAL
+  bitonic-network restriction for ALL modes, not a stable-specific one — the design report's
+  "lift the multicore <65536 stable restriction for the new mode" premise is wrong. NOT lifting
+  it: wide stable stays single-core, which is exactly where the rank-stamp fast path lands.
+- CORRECTNESS HOLE the design missed: single-core insertion with output_tiles>1 (K>32) runs a
+  CASCADE — the loser tile of level p-1 feeds level p. A displaced old element (lower true
+  index) can meet a newer accumulator element (higher true index) at level p; position-based
+  ranks then break the tie the wrong way. Disjoint-ordered-ranges holds ONLY for output_tiles==1
+  (fresh chunk vs single accumulator tile). GATE single-core rank-stamped to Ktiles==1 (k<=32);
+  K>32 wide stable keeps the comparator. Multicore's merge tree has no cascade — its K<=64
+  precondition analysis stands.
+- SECOND multicore subtlety: topk_local's process_iteration rebuilds with base direction
+  !largest_param where largest_param = !direction_init (per-core FLIP), while the m=0 runs come
+  from the unflipped local sort. On a flipped core, m>=1 merges see the LEFT run in the MIRROR
+  direction -> the dual stamp would need a runtime mirror bit ((m_iter>0) && direction_init),
+  plus the final core's own direction base — the "4 combinations" generalization the design
+  reserved for ttnn.sort. DECISION: C3 gates rank-stamped to the SINGLE-CORE factory only
+  (no flip, no cascade at Ktiles==1); multicore u32-prealloc stable keeps the repaired
+  comparator; multicore enablement = documented follow-on with the mirror-bit design above.
+
+## C3 (single-core gate) run log
+- Gate: stable && !fp32 && 32-bit index CBs && Ktiles==1. Value intermediates -> Float32 raw
+  transport + UnpackToDest; TOPK_RANK_STAMPED_STABLE define; kernel stamps before every
+  topk_local_sort, network runs unstable+tracking, strip folded into the final value
+  transpose_and_pack.
+- Path-fires proof: TOPK_RANK_STAMPED_STABLE present in 2 JIT'd topk kernel builds
+  (W=65536 largest/smallest) after fresh cache clear.
+- Silicon: stable_index_parity 24p (incl. W=65536 wide_u32 both directions through the NEW path);
+  full reduce/test_topk.py 235p/8s/80xf; adversarial 30p; data_movement/test_sort.py 128p.
