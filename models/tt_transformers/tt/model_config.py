@@ -823,11 +823,18 @@ class ModelArgs:
                 # was on the degenerate 9x-tiled synthetic clip only; see N150_PERF_SHEET.md backlog 4c.
                 # QWEN3ASR_LOSSLESS=1 skips all of these precision hops for a JA-quality baseline.
                 if os.environ.get("QWEN3ASR_LOSSLESS") != "1":
+                    # Attention weights (WQKV+WO, the last BF16 matmuls) also drop to BFP8. A/B
+                    # 2026-08-21: 67.0 -> 67.7 / 64.2 -> 65.7 tok/s, EN byte-identical and JA
+                    # byte-identical on real clips (j0/j1). Default on; QWEN3ASR_ATTN_BFP8=0 disables.
+                    attn_bfp8 = os.environ.get("QWEN3ASR_ATTN_BFP8") != "0"
                     for conf in self.optimizations.decoder_optimizations.values():
                         conf.op_fidelity_settings[OpGroup.LI_FF2] = MathFidelitySetting.LOFI
                         conf.op_fidelity_settings[OpGroup.LI_FF1_FF3] = MathFidelitySetting.LOFI
                         conf.op_fidelity_settings[OpGroup.SDPA_DECODE] = MathFidelitySetting.HIFI2
                         conf.tensor_dtype_settings[TensorGroup.KV_CACHE] = PrecisionSetting.BFP8
+                        if attn_bfp8:
+                            conf.tensor_dtype_settings[TensorGroup.WQKV] = PrecisionSetting.BFP8
+                            conf.tensor_dtype_settings[TensorGroup.WO] = PrecisionSetting.BFP8
 
             # ============================================================================
             # Compute kernels Configs
