@@ -33,11 +33,13 @@ DEEP = ENABLED and os.environ.get("DIFFVAE_BLOCK_PROF", "") not in ("", "0")
 
 ATTENTION, SDPA, ALLGATHER, MLP = "attention", "sdpa", "allgather", "mlp"
 CONTEXT_INJECT, RESHAPE, UPSAMPLE = "context-inject", "reshape+permute", "upsample"
+PROJ, NORM_ROPE = "projection", "norm+rope"
 HOST_XFER, HOST_COMPUTE, SETUP = "host-transfer", "host-compute", "setup"
 
 _MAX_DEPTH = 64
-_WIDTH = 100
+_WIDTH = 104
 _LABEL_W = 56
+_CAT_W = 16
 _ROOTS: deque = deque(maxlen=8)
 _LOCK = threading.Lock()
 _local = threading.local()
@@ -177,7 +179,13 @@ def _rows(label, nodes, root_ms, parent_ms, prefix="", is_last=True, depth=0, ma
     if any("unclosed" in n.flags for n in nodes):
         marks += "  (never closed)"  # named, because the label was set at open
     connector = "" if depth == 0 else ("└─ " if is_last else "├─ ")
-    out.append((f"{prefix}{connector}{label}{marks}", incl, _pct(incl, parent_ms), _pct(incl, root_ms), len(nodes)))
+    # The category is what the roll-up charges this node's SELF time to; "-" means uncategorised, i.e.
+    # it lands in the roll-up's "other" row. Pooled siblings share a call site, so the first node's
+    # category speaks for all of them.
+    cat = nodes[0].category or "-"
+    out.append(
+        (f"{prefix}{connector}{label}{marks}", incl, _pct(incl, parent_ms), _pct(incl, root_ms), len(nodes), cat)
+    )
     if depth >= max_depth:
         return out
     self_ms = max(incl - kids_ms, 0.0)
@@ -191,8 +199,10 @@ def _rows(label, nodes, root_ms, parent_ms, prefix="", is_last=True, depth=0, ma
         last = i == len(groups) - 1 and self_ms < 0.5
         _rows(lbl, ns, root_ms, incl, child_prefix, last, depth + 1, max_depth, out)
     if groups and self_ms >= 0.5:
+        # The remainder is the parent's own self time, so it carries the parent's category -- this row
+        # is exactly what that category's roll-up entry is made of.
         out.append(
-            (f"{child_prefix}└─ · other (unattributed)", self_ms, _pct(self_ms, incl), _pct(self_ms, root_ms), 0)
+            (f"{child_prefix}└─ · other (unattributed)", self_ms, _pct(self_ms, incl), _pct(self_ms, root_ms), 0, cat)
         )
     return out
 
@@ -226,10 +236,10 @@ def render_tree(root: Node, *, title: str, measured_ms: float | None = None) -> 
         head,
         "absolute totals inflated by one synchronize_device per span open/close",
         "-" * _WIDTH,
-        f"{'label':<{_LABEL_W}}{'ms':>10}{'%par':>8}{'%tot':>8}{'n':>5}",
+        f"{'label':<{_LABEL_W}}{'ms':>10}{'%par':>8}{'%tot':>8}{'n':>5}  {'category':<{_CAT_W}}",
     ]
-    for lbl, ms, par, tot, n in _rows(root.label, [root], root.incl_ms, root.incl_ms, max_depth=max_depth):
-        out.append(f"{lbl:<{_LABEL_W}}{ms:>10.1f}{par:>7.1f}%{tot:>7.1f}%{(n or ''):>5}")
+    for lbl, ms, par, tot, n, cat in _rows(root.label, [root], root.incl_ms, root.incl_ms, max_depth=max_depth):
+        out.append(f"{lbl:<{_LABEL_W}}{ms:>10.1f}{par:>7.1f}%{tot:>7.1f}%{(n or ''):>5}  {cat:<{_CAT_W}}".rstrip())
     return "\n".join(out)
 
 

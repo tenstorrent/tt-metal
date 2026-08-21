@@ -909,6 +909,13 @@ def _pick_block(t_full: int, h_full: int, w_local: int, kmax: int = 11, gna: boo
     return best[1] if best else None
 
 
+def _deep_prof(mesh, key: str, *, category: str | None = None):
+    """_sp_w_prof, but only under DIFFVAE_BLOCK_PROF -- see decode_tree.DEEP."""
+    if not decode_tree.DEEP:
+        return contextlib.nullcontext()
+    return _sp_w_prof(mesh, key, category=category)
+
+
 def neighborhood_attention_3d_op_sp_w_sharded(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
@@ -1096,11 +1103,13 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     with _sp_w_prof(mesh, "kv-allgather", category=decode_tree.ALLGATHER):
         tk = gathered(k)
         tv = gathered(v)
-    tq = to_seq(q, w_local)
+    with _deep_prof(mesh, "q-to-seq", category=decode_tree.RESHAPE):
+        tq = to_seq(q, w_local)
     if op_block is not None:
         from .block_permute import to_block_order_tt
 
-        tq = to_block_order_tt(tq, (w_local, h_full, t_full), op_block)  # W-outer op order -> block order
+        with _deep_prof(mesh, "q-block-permute", category=decode_tree.RESHAPE):
+            tq = to_block_order_tt(tq, (w_local, h_full, t_full), op_block)  # W-outer op order -> block order
 
     # Block mode: the offset tensor carries the per-device global-W origin (shard*w_local) for the box;
     # strided mode: the per-device global token position (shard*seq_local).
@@ -1127,7 +1136,8 @@ def neighborhood_attention_3d_op_sp_w_sharded(
                 return ttnn.reshape(x, (batch, heads, w_full * h_full, t_full * head_dim))
             return ttnn.reshape(x, (batch, heads, w_full * t_full, h_full * head_dim))
 
-        tk, tv = wrow(tk), wrow(tv)
+        with _deep_prof(mesh, "kv-wrow (retile gathered K/V)", category=decode_tree.RESHAPE):
+            tk, tv = wrow(tk), wrow(tv)
         grid_dev = mesh.compute_with_storage_grid_size()
         # Larger q_chunk = fewer chunks = the per-chunk fixed overhead (mask-gen + reader/compute setup)
         # amortizes over more queries. The box grows with q_chunk (its k-tiles are streamed, so L1 is
@@ -1182,20 +1192,23 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     if op_block is not None:
         from .block_permute import from_block_order_tt
 
-        attended = from_block_order_tt(attended, (w_local, h_full, t_full), op_block)
+        with _deep_prof(mesh, "unblock-permute", category=decode_tree.RESHAPE):
+            attended = from_block_order_tt(attended, (w_local, h_full, t_full), op_block)
 
     if flat_seq:
         # Straight to (tokens, NH*HD): one permute puts T,H,W back in order and heads next to
         # head_dim, so the caller's out-projection reads the result as a view.
-        attended = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
-        if t_inner:
-            attended = ttnn.reshape(attended, (heads, w_local, h_full, t_full, head_dim))
-            attended = ttnn.permute(attended, (3, 2, 1, 0, 4))  # (T, H, W_local, NH, HD)
-        else:
-            attended = ttnn.reshape(attended, (heads, w_local, t_full, h_full, head_dim))
-            attended = ttnn.permute(attended, (2, 3, 1, 0, 4))  # (T, H, W_local, NH, HD)
-        flat = ttnn.reshape(attended, (t_full * h_full * w_local, heads * head_dim))
-        return ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
+        with _deep_prof(mesh, "attn-unflatten", category=decode_tree.RESHAPE):
+            attended = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
+            if t_inner:
+                attended = ttnn.reshape(attended, (heads, w_local, h_full, t_full, head_dim))
+                attended = ttnn.permute(attended, (3, 2, 1, 0, 4))  # (T, H, W_local, NH, HD)
+            else:
+                attended = ttnn.reshape(attended, (heads, w_local, t_full, h_full, head_dim))
+                attended = ttnn.permute(attended, (2, 3, 1, 0, 4))  # (T, H, W_local, NH, HD)
+            flat = ttnn.reshape(attended, (t_full * h_full * w_local, heads * head_dim))
+            tiled = ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
+        return tiled
 
     # (B, NH, seq_local, HD) -> W-outer volume -> (B, T, H, W_local, width), sharded. The un-flatten
     # must mirror to_seq's axis order: (w,h,t) when t_inner, else (w,t,h).

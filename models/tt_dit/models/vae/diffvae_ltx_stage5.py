@@ -94,6 +94,17 @@ def stage_time_end(mesh_device, handle):
     logger.info(f"[stage-timing] {handle.label:34s} {ms:9.1f} ms")
 
 
+def deep_prof(mesh_device, key: str, *, category: str | None = None):
+    """block_prof, but only under DIFFVAE_BLOCK_PROF.
+
+    These split regions inside one attention call, so they are numerous and individually small
+    against the two syncs each one costs. Off unless somebody is chasing exactly this.
+    """
+    if not decode_tree.DEEP:
+        return contextlib.nullcontext()
+    return block_prof(mesh_device, key, category=category)
+
+
 #: Accumulates within-block time by region (attn / mlp / ...) across every block+band, so a single
 #: diff-step run reports where the diff-block stack actually goes. Reset per step, reported at its end.
 _BLOCK_PROF: dict[str, float] = {}
@@ -830,7 +841,8 @@ class _NeighborhoodAttention3D(Module):
         # and RoPE temporaries is what exhausts DRAM at full resolution -- which is also why the
         # fused path slices its packed output a lane at a time rather than all three up front.
         if self.fused_qkv:
-            packed = self.qkv(y)
+            with deep_prof(self.mesh_device, "qkv-proj", category=decode_tree.PROJ):
+                packed = self.qkv(y)
             width = self.heads_local * cfg.head_dim
 
             def lane(index: int) -> ttnn.Tensor:
@@ -840,10 +852,11 @@ class _NeighborhoodAttention3D(Module):
                     ttnn.deallocate(part)
                 return out
 
-            q = prep(self._rope(self._normed(self.q_norm, lane(0), scale=self.scale), tables))
-            k = prep(self._rope(self._normed(self.k_norm, lane(1)), tables))
-            v = prep(lane(2))
-            ttnn.deallocate(packed)
+            with deep_prof(self.mesh_device, "qkv-lanes: slice+norm+rope", category=decode_tree.NORM_ROPE):
+                q = prep(self._rope(self._normed(self.q_norm, lane(0), scale=self.scale), tables))
+                k = prep(self._rope(self._normed(self.k_norm, lane(1)), tables))
+                v = prep(lane(2))
+                ttnn.deallocate(packed)
         else:
             q = prep(
                 self._rope(
@@ -881,11 +894,12 @@ class _NeighborhoodAttention3D(Module):
         for tensor in (q, k, v):
             ttnn.deallocate(tensor)
 
-        flat = _reshape_retiled(out, (1, grid.batch, sites_local, cfg.dim))
-        if flat is not out:
-            ttnn.deallocate(out)
-        projected = self.proj(flat)
-        ttnn.deallocate(flat)
+        with deep_prof(self.mesh_device, "out-proj", category=decode_tree.PROJ):
+            flat = _reshape_retiled(out, (1, grid.batch, sites_local, cfg.dim))
+            if flat is not out:
+                ttnn.deallocate(out)
+            projected = self.proj(flat)
+            ttnn.deallocate(flat)
         return projected
 
 

@@ -173,3 +173,20 @@ def test_render_reports_the_remainder_and_reconciles():
     assert "· other (unattributed)" in text  # attention's 60 ms that kv-allgather does not explain
     assert "CATEGORY ROLL-UP" in text
     assert "test-measured 199 ms" in text
+
+
+def test_rows_carry_the_category_the_rollup_charges_them_to():
+    """The tree names labels, the roll-up names categories; the column is what joins the two views."""
+    root = dt.open_span("decode", root=True)
+    attn = dt.open_span("attention", category=dt.ATTENTION)
+    kv = dt.open_span("kv-allgather", category=dt.ALLGATHER)
+    _close(kv, 30.0)
+    _close(attn, 100.0)
+    _close(root, 120.0)
+
+    by_label = {lbl.strip(): cat for lbl, _, _, _, _, cat in dt._rows("decode", [dt.roots()[-1]], 120.0, 120.0)}
+    assert by_label["decode"] == "-"  # uncategorised -> the roll-up's "other" row
+    assert by_label["├─ attention"] == dt.ATTENTION
+    assert by_label["│  ├─ kv-allgather"] == dt.ALLGATHER
+    # the remainder row carries its PARENT's category, because that is where its ms are charged
+    assert by_label["│  └─ · other (unattributed)"] == dt.ATTENTION
