@@ -35,7 +35,7 @@ _MPI_RANK = int(os.environ["OMPI_COMM_WORLD_RANK"])
 import ttnn  # noqa: E402
 from transformers import AutoTokenizer  # noqa: E402
 
-from utils.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
+from grpo_remote_rollout.utils.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
 # Skipped pending BH bring-up: after ``push_weights``, one batch slot on one
 # submesh produces a different completion than the others despite identical
@@ -72,9 +72,9 @@ def _ttml_side() -> None:
     from ttml.common.config import get_model_config
 
     from _completer_utils import close_device, load_device_config, open_device
-    from utils.mpi_rollout import MPIRolloutClient
-    from utils.weight_bridge import HostWeightBridge
-    from utils.llama_grpo_completer import LlamaCompletionCtx, LlamaCompleterRemoteRollout
+    from grpo_remote_rollout.utils.mpi_rollout import MPIRolloutClient
+    from grpo_remote_rollout.utils.weight_bridge import HostWeightBridge
+    from grpo_remote_rollout.utils.llama_grpo_completer import LlamaCompletionCtx, LlamaCompleterRemoteRollout
 
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     autograd_ctx.initialize_distributed_context(*sys.argv)
@@ -148,10 +148,10 @@ def _ttml_side() -> None:
 
 def _ttt_side() -> None:
     """Host one TttGenerationWorker over four [1, 1] submeshes + MPIRolloutServer."""
-    from utils.mpi_rollout import MPIRolloutServer
-    from utils.weight_bridge import HostWeightBridge
-    from utils.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
-    from utils.ttt_generation_worker import TttGenerationWorker
+    from grpo_remote_rollout.utils.mpi_rollout import MPIRolloutServer
+    from grpo_remote_rollout.utils.weight_bridge import HostWeightBridge
+    from grpo_remote_rollout.utils.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
+    from grpo_remote_rollout.utils.ttt_generation_worker import TttGenerationWorker
 
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()

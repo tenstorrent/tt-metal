@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+import ttnn
 
 from _completer_utils import as_update_input, generate_one, open_completer, to_torch_2d
 
@@ -21,6 +22,8 @@ OVERWRITE_VALUE = 0.0
 
 @pytest.fixture(scope="module")
 def completer():
+    if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.P100:
+        pytest.skip("Currently not supported on P100; see https://github.com/tenstorrent/tt-metal/issues/54621")
     with open_completer(dummy_weights=False) as c:
         yield c
 
