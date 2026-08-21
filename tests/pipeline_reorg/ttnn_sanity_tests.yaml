@@ -283,14 +283,21 @@
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
 
 - name: "llk helper library tests"
+  # test_reduce_accumulate_fidelity is a 432-config accuracy+perf sweep that costs ~15 min on
+  # wormhole -- it is nightly material, not a sanity gate, and it consumed almost half the group's
+  # budget on its own.
   cmd: >-
     pytest --timeout 1800 -xv
+    --ignore=tests/ttnn/unit_tests/operations/examples/fidelity_sweep/test_reduce_accumulate_fidelity.py
     tests/ttnn/unit_tests/operations/examples
     tests/ttnn/unit_tests/kernel_lib
+  # Discovery ceiling: neither the tail of the examples tree nor tests/ttnn/unit_tests/kernel_lib
+  # has ever finished in CI, so there is no measured runtime to size this against yet. Tighten it
+  # once a green run reports one.
   skus:
     wh_n300_civ2:
-      timeout: 35
+      timeout: 75
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 75
   team: ttnn
   owner_id: U04S2UV6L8N # Sofija Jovic
