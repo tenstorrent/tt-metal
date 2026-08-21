@@ -694,60 +694,109 @@ def _pack_sparse_frame_mask(allow):
     return words
 
 
-@pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
-@pytest.mark.parametrize("add_last_frame", [False, True], ids=["window", "window_plus_last"])
-def test_exp_ring_joint_attention_sparse_frames_accuracy(add_last_frame, reset_seeds):
-    """Frame-block-sparse exp ring joint SDPA: one frame per SP shard, each query frame attends a
-    centered window of key frames (optionally plus the last frame). Exercises the sparse_frame_mask
-    skip path end-to-end through the fused all-gather against a masked torch reference.
+def _build_sparse_allow(nf, pattern):
+    """Build an [nf, nf] uint8 frame allow-table for a named pattern. Every pattern keeps at least one
+    attended K frame per Q frame (required by the op's sparse validation)."""
+    allow = torch.zeros(nf, nf, dtype=torch.uint8)
+    if pattern == "full":
+        allow[:] = 1  # every frame attends every frame -> must match the dense result
+    elif pattern == "diagonal":
+        allow[torch.arange(nf), torch.arange(nf)] = 1  # self-only -> last work iter is 0 on every device
+    elif pattern == "causal":
+        for q in range(nf):
+            allow[q, : q + 1] = 1  # frame q attends 0..q -> per-device work counts vary
+    elif pattern in ("window", "window_plus_last"):
+        half = 1  # centered window of 3
+        for q in range(nf):
+            allow[q, max(0, q - half) : min(nf, q + half + 1)] = 1
+            if pattern == "window_plus_last":
+                allow[q, nf - 1] = 1
+    else:
+        raise ValueError(f"unknown sparse pattern {pattern}")
+    return allow
 
-    Uses one frame per shard (nf == sp_size), so nf_padded == nf_real and the frame count is already
-    ring-aligned — the simplest shape that still routes every ring iteration through the mask.
+
+def _sparse_frames_shape(sp_size, tp_size, is_galaxy):
+    """Core-filling shape for the sparse-frames tests: num_q_chunks == sdpa_cols and NH_local == grid
+    rows so total_q_chunks == num_sdpa_cores (the exp op needs every core, incl. the trailing MUX-writer
+    columns, to hold a q_chunk or the fused all-gather never runs). One frame per SP shard."""
+    sdpa_cols = GALAXY_SDPA_COLS if is_galaxy else NON_GALAXY_SDPA_COLS  # == sdpa_grid.x
+    q_chunk = 256  # Sq=Sk=8 tiles -> streaming-compute path (see use_streaming_compute in the factory)
+    n_local = sdpa_cols * q_chunk  # num_q_chunks == sdpa_cols exactly fills the grid columns
+    nf = sp_size  # one frame per shard (frame R == device R's local shard == whole local shard)
+    return dict(
+        b=1,
+        nh=HEADS_PER_DEVICE * tp_size,  # NH_local == sdpa_grid.y fills the rows
+        total_seq=sp_size * n_local,
+        q_chunk=q_chunk,
+        tokens_per_frame=n_local,
+        nf=nf,
+    )
+
+
+@pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize(
+    "pattern",
+    ["window", "window_plus_last", "diagonal", "causal", "full"],
+    ids=["window", "window_plus_last", "diagonal", "causal", "full"],
+)
+def test_exp_ring_joint_attention_sparse_frames_accuracy(pattern, reset_seeds):
+    """Frame-block-sparse exp ring joint SDPA against a masked torch reference, one frame per SP shard.
+    Patterns stress different parts of the sparse machinery:
+      - window / window_plus_last: centered window (edge frames drain output before the last ring iter)
+      - diagonal: self-only -> last work iter 0 on every device (max stress on the early output drain)
+      - causal: asymmetric, per-device work counts differ
+      - full: no actual sparsity -> must reproduce the dense result (sparse path is transparent)
     """
     num_devices = detect_devices_without_opening()
     sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
-    is_galaxy = arch_type.startswith("galaxy")
+    shape = _sparse_frames_shape(sp_size, tp_size, arch_type.startswith("galaxy"))
+    nf = shape["nf"]
 
-    # The exp op fuses the all-gather into the per-q_chunk loop and places the MUX fabric-writer cores
-    # in the last grid columns. The gather therefore only runs on cores that hold a q_chunk, so the op
-    # only produces correct results when EVERY sdpa core has work: total_q_chunks == num_sdpa_cores,
-    # i.e. num_q_chunks == sdpa_grid.x AND B*NH == sdpa_grid.y. (A small shape leaves the MUX columns
-    # idle -> no gather -> garbage K/V on every device.) So we mirror the tuned dense config's exact
-    # core fill, but impose a one-frame-per-shard block structure on top.
-    sdpa_cols = GALAXY_SDPA_COLS if is_galaxy else NON_GALAXY_SDPA_COLS  # == sdpa_grid.x
-    q_chunk = 256  # Sq=Sk=8 tiles -> streaming-compute path (see use_streaming_compute in the factory)
-    num_q_chunks = sdpa_cols
-    n_local = num_q_chunks * q_chunk  # per-device tokens; num_q_chunks q chunks exactly fill the columns
-    nf = sp_size  # one frame per shard (frame R == device R's local shard)
-    tokens_per_frame = n_local  # each device holds exactly one frame (== its whole local shard)
-    window = 3
-    b, nh, d = 1, HEADS_PER_DEVICE * tp_size, HEAD_DIM  # NH_local == sdpa_grid.y fills the rows
-    total_seq = sp_size * n_local
-
-    # Centered window: frame q attends [q-window//2, q+window//2] (clamped), optionally the last frame.
-    allow = torch.zeros(nf, nf, dtype=torch.uint8)
-    half = window // 2
-    for q in range(nf):
-        allow[q, max(0, q - half) : min(nf, q + half + 1)] = 1
-        if add_last_frame:
-            allow[q, nf - 1] = 1
+    allow = _build_sparse_allow(nf, pattern)
     sparse_frame_mask = _pack_sparse_frame_mask(allow)
-
     logger.info(
-        f"[sparse-frames exp ring joint] nf={nf} tokens_per_frame={tokens_per_frame} "
-        f"window={window} add_last={add_last_frame}"
+        f"[sparse-frames exp ring joint] pattern={pattern} nf={nf} "
+        f"tokens_per_frame={shape['tokens_per_frame']} attended_pairs={int(allow.sum())}/{nf * nf}"
     )
     run_exp_ring_joint_sdpa_nightly(
-        b,
-        nh,
-        total_seq,
-        d,
-        q_chunk,  # q_chunk_size (Sq=8)
-        q_chunk,  # k_chunk_size (Sk=8)
+        shape["b"],
+        shape["nh"],
+        shape["total_seq"],
+        HEAD_DIM,
+        shape["q_chunk"],  # q_chunk_size (Sq=8)
+        shape["q_chunk"],  # k_chunk_size (Sk=8)
         ttnn.bfloat16,
-        tokens_per_frame=tokens_per_frame,
+        tokens_per_frame=shape["tokens_per_frame"],
         num_frames_padded=nf,
         sparse_frame_mask=sparse_frame_mask,
+        sparse_allow=allow,
+    )
+
+
+@pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize("pattern", ["window", "diagonal"], ids=["window", "diagonal"])
+def test_exp_ring_joint_attention_sparse_frames_determinism(pattern, reset_seeds):
+    """Run the sparse-frames config several times with identical inputs and require every dispatch to
+    be bitwise-equal. Guards the new sparse CB-timing paths (drain, early output drain, per-direction
+    bitmap) against races that a single-shot accuracy check can miss."""
+    num_devices = detect_devices_without_opening()
+    sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
+    shape = _sparse_frames_shape(sp_size, tp_size, arch_type.startswith("galaxy"))
+    nf = shape["nf"]
+    allow = _build_sparse_allow(nf, pattern)
+    run_exp_ring_joint_sdpa_nightly(
+        shape["b"],
+        shape["nh"],
+        shape["total_seq"],
+        HEAD_DIM,
+        shape["q_chunk"],
+        shape["q_chunk"],
+        ttnn.bfloat16,
+        num_iterations=4,  # harness checks bitwise-equal across dispatches
+        tokens_per_frame=shape["tokens_per_frame"],
+        num_frames_padded=nf,
+        sparse_frame_mask=_pack_sparse_frame_mask(allow),
         sparse_allow=allow,
     )
 
