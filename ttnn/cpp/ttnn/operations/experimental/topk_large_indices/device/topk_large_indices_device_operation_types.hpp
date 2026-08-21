@@ -33,6 +33,25 @@ struct operation_attributes_t {
     // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
     // validated on cache hit) so a serving loop growing valid_length reuses one program.
     std::optional<uint32_t> valid_length{};
+    // INTERNAL (not exposed through the public API): override the column-parallel slice count P
+    // (tree cores splitting each row). Single row: the classic column-parallel tree. Multiple
+    // rows: the multi-rectangle variant — one P-core tree per rectangle, rows split contiguously
+    // over as many rectangles as tile the worker grid, all concurrent (the cost model can also
+    // auto-select this form when it models a win; the override bypasses the model and pins an
+    // exact P — the hybrid wrapper's remainder window sets it to a searched-width-modeled P).
+    // Values outside [2, 128] or above the row's chunk count are loud errors; P is clamped only
+    // against the physical core grid (with a warning). Changes the program structure, so it is
+    // part of the program hash. nullopt = the built-in cost model.
+    std::optional<uint32_t> num_slices{};
+    // Composite-internal row window [row_start, row_start + row_count): the op reads only these
+    // input rows and emits a row_count-row output. Set by the hybrid wrapper (ttnn::experimental::
+    // topk_large_indices) to run row-parallel full waves and a multi-rectangle remainder wave as
+    // two launches over one un-sliced input; not exposed through the public bindings. Requires the
+    // canonical [1.., R, W] shape (leading dims 1). Runtime-only for the program itself (rows are
+    // runtime args); the effective row count feeds the derived split config, whose hashed fields
+    // already capture any structural difference.
+    std::optional<uint32_t> row_start{};
+    std::optional<uint32_t> row_count{};
 };
 
 struct tensor_args_t {
