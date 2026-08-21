@@ -108,7 +108,12 @@ class LayerNorm(LightweightModule):
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.HiFi4,
                     math_approx_mode=False,
-                    fp32_dest_acc_en=False,
+                    # fp32 accumulation is not optional here: from block 9 the vision tower's hidden
+                    # states carry massive activations (9B: absmax 354 against an rms of 0.65), and
+                    # this norm reduces the mean and the variance over all 1152 of them. In a bf16
+                    # dest the outlier swamps the running sum and the ordinary channels stop
+                    # contributing. Worth +0.005 PCC at full depth on the 9B with real weights.
+                    fp32_dest_acc_en=True,
                     packer_l1_acc=False,
                 ),
                 # The consuming matmul may want its input 0 in L1 and cannot move it itself, so

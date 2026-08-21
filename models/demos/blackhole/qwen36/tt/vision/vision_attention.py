@@ -122,6 +122,16 @@ class VisionAttention(LightweightModule):
         self.kv_cache_dtype = self.decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
         )
+        # The out-projection writes straight into the residual stream, so unlike the LLM's attention
+        # it must NOT fall back to bfloat8_b. From block 9 on, this tower's hidden states carry
+        # MASSIVE ACTIVATIONS -- on the 9B, absmax 354 against an rms of 0.65 -- and a bfloat8_b tile
+        # shares one exponent across 16 channels, so the outlier's group gets a quantization step of
+        # ~2.8 and every ordinary channel sitting in that group rounds to zero. That is a property of
+        # the trained weights, which is why the config-init reference in tests/test_vision_tower_pcc.py
+        # cannot see it: measured at full depth against the fp32 HF reference with REAL weights,
+        # 0.96875 -> 0.98412 (9B/N300), for +0.6 ms on a 790 ms tower.
+        # A preset that sets ACTIVATION explicitly still wins.
+        self.attn_out_dtype = self.activation_dtype or ttnn.bfloat16
         # NOTE: qkv/wo/SDPA fidelity deliberately no longer comes from `decoders_optimizations`
         # (LI_QKV_PREFILL / LI_O_PREFILL / SDPA_PREFILL), whose `accuracy` preset is HiFi4 -- worthless
         # on bfloat8_b operands and half the throughput. `vision_mm_plan` / `vision_sdpa_plan` pick it.
@@ -411,7 +421,7 @@ class VisionAttention(LightweightModule):
             n=self.hidden_size,
             in0_dtype=attn_output_11SH.dtype,
             in1_dtype=self.wo.dtype,
-            out_dtype=self.activation_dtype or ttnn.bfloat8_b,
+            out_dtype=self.attn_out_dtype,
         )
         if wo_plan.chunk != seq_len:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // wo_plan.chunk, wo_plan.chunk, -1])
@@ -421,7 +431,7 @@ class VisionAttention(LightweightModule):
             attn_output_11SH,
             self.wo,
             compute_kernel_config=wo_plan.compute_kernel_config,
-            dtype=self.activation_dtype or ttnn.bfloat8_b,
+            dtype=self.attn_out_dtype,
             memory_config=wo_plan.memory_config,
             program_config=wo_plan.program_config,
         )
