@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/rtoptions.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -26,8 +27,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    auto mesh_device = devices_[0];
-
     if (!MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
                      "the Compute kernels."
@@ -37,16 +36,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     const experimental::NodeCoord node{0, 0};
-    // Command queue lets us submit work (execute programs and read/write buffers) to the device.
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    // Prepare a workload and a device coordinate range that spans the mesh.
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     std::vector<uint32_t> init_values(16, 0);
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, l1_address, init_values);
+    slow_dispatch::WriteToL1(this->device(), node, l1_address, init_values);
 
     const experimental::KernelSpecName COMPUTE_KERNEL{"risc_math"};
 
@@ -74,7 +68,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
@@ -83,12 +77,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     }};
     experimental::SetProgramRunArgs(program, params);
 
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
+    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> actual_values(16, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        mesh_device->get_devices()[0], node, l1_address, 16 * sizeof(uint32_t), actual_values);
+    slow_dispatch::ReadFromL1(this->device(), node, l1_address, 16 * sizeof(uint32_t), actual_values);
 
     const std::vector<uint32_t> expected_values = {4, 6, 5, 9, 8, 10, 9, 13, 12, 14, 13, 17, 16, 18, 17, 21};
 
@@ -103,8 +95,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    auto mesh_device = devices_[0];
-
     if (!MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
                      "the Compute kernels."
@@ -114,16 +104,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     const experimental::NodeCoord node{0, 0};
-    // Command queue lets us submit work (execute programs and read/write buffers) to the device.
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    // Prepare a workload and a device coordinate range that spans the mesh.
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     std::vector<uint32_t> init_values(4, 0);
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, l1_address, init_values);
+    slow_dispatch::WriteToL1(this->device(), node, l1_address, init_values);
 
     const experimental::KernelSpecName COMPUTE_KERNEL{"risc_math"};
 
@@ -151,7 +136,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
@@ -160,12 +145,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     }};
     experimental::SetProgramRunArgs(program, params);
 
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
+    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> actual_values(4, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        mesh_device->get_devices()[0], node, l1_address, 4 * sizeof(uint32_t), actual_values);
+    slow_dispatch::ReadFromL1(this->device(), node, l1_address, 4 * sizeof(uint32_t), actual_values);
 
     const std::vector<uint32_t> expected_values = {4, 6, 5, 9};
 
@@ -213,5 +196,5 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
         .work_units = {main_wu},
     };
 
-    ASSERT_THROW(experimental::MakeProgramFromSpec(*devices_[0], spec), std::runtime_error);
+    ASSERT_THROW(experimental::MakeProgramFromSpec(this->device(), spec), std::runtime_error);
 }

@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -26,9 +27,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
-    auto mesh_device = devices_[0];
-
     const uint32_t address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const uint32_t value = 0x12345678;
@@ -44,12 +42,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     const experimental::NodeCoord node{0, 0};
-    tt_metal::detail::WriteToDeviceL1(dev, node, address, outputs);
-    // Command queue lets us submit work (execute programs and read/write buffers) to the device.
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    // Prepare a workload and a device coordinate range that spans the mesh.
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    slow_dispatch::WriteToL1(this->device(), node, address, outputs);
     const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
 
     experimental::KernelSpec dm_kernel_spec{
@@ -77,7 +70,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
@@ -89,9 +82,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication."
               << std::endl;
 
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, address, 4, outputs);
+    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    slow_dispatch::ReadFromL1(this->device(), node, address, 4, outputs);
 
     ASSERT_EQ(outputs[0], value) << "Got the value " << std::hex << outputs[0] << " instead of " << value;
 }

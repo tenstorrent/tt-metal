@@ -20,6 +20,7 @@
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using std::vector;
 using namespace tt;
@@ -273,12 +274,9 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
 // This needs to be a separate test because we don't have a way of querying the correct compute grid size
 // when running a multi-neo emu/sim build. Otherwise its the same test with batch split across nodes.
 TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
-    auto& mesh_device = *devices_[0];
-    if (mesh_device.compute_with_storage_grid_size().x < 2) {
+    if (this->device().compute_with_storage_grid_size().x < 2) {
         GTEST_SKIP() << "This test requires at least 2 worker nodes.";
     }
-
-    IDevice* dev = mesh_device.get_devices()[0];
 
     BmmParams p;
     p.Mt = 2; p.Kt = 2; p.Nt = 2;
@@ -286,7 +284,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     p.B_per_core = 1;   // each core computes exactly one batch
     p.num_threads = 2;
 
-    auto tensors = create_bmm_tensors(mesh_device, p);
+    auto tensors = create_bmm_tensors(this->device(), p);
     const uint32_t bytesA = p.single_tile_size * p.Mt * p.Kt * p.B_total;
     const uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
 
@@ -296,7 +294,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
 
     // QuasarMeshDeviceSingleCardFixture only opens Quasar devices, so implicit sync is always on.
     auto spec = build_bmm_program_spec(p, tensors, node_range, /*use_implicit_sync=*/true);
-    auto program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    auto program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     constexpr uint32_t do_bcast = 0;
     // node0 handles batch 0, node1 handles batch 1 (batch_start = node index)
@@ -330,15 +328,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
 
     auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
-    // MeshTensor doesn't yet expose slow-dispatch read/write APIs, so route through the
-    // underlying reference buffer to populate / read back DRAM.
-    detail::WriteToBuffer(*tensors.src0.mesh_buffer().get_reference_buffer(), src0_vec);
-    detail::WriteToBuffer(*tensors.src1.mesh_buffer().get_reference_buffer(), src1_vec);
+    // MeshTensor doesn't yet expose slow-dispatch read/write APIs; use unit-mesh MeshBuffer helpers.
+    slow_dispatch::WriteToBuffer(tensors.src0.mesh_buffer(), src0_vec);
+    slow_dispatch::WriteToBuffer(tensors.src1.mesh_buffer(), src1_vec);
 
-    detail::LaunchProgram(dev, program, true);
+    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(*tensors.dst.mesh_buffer().get_reference_buffer(), result_vec);
+    slow_dispatch::ReadFromBuffer(tensors.dst.mesh_buffer(), result_vec);
 
     int argfail = -1;
     bool pass = validate_bmm_result(p, src0_vec, src1_vec, result_vec, &argfail);
