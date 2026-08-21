@@ -133,6 +133,22 @@ def test_topk_large_indices_random_bfloat16_ties_return_distinct_indices(device)
     assert_equal(actual_values.sort(dim=-1).values, ref_values.sort(dim=-1).values)
 
 
+def test_topk_large_indices_stable_classic_chunk_skip_keeps_late_winners(device):
+    # k=64 snaps to a 512-wide LLK window; 32768 elements force the classic
+    # body and exercise chunk-skip after stable rank stamps have reached the
+    # resident threshold word. Late winners also require the custom SFPU max
+    # fold to observe ordinary values after the preceding top-k phase.
+    n, k = 32768, 64
+    torch_input = torch.zeros((1, n), dtype=torch.bfloat16)
+    first_winner = n - 96
+    torch_input[0, first_winner:] = 2.0
+
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, stable=True)
+
+    expected = torch.arange(first_winner, first_winner + k, dtype=torch.int64).unsqueeze(0)
+    _assert_indices(tt_indices, expected, [1, k])
+
+
 @pytest.mark.parametrize(
     "shape,k",
     [
@@ -318,6 +334,29 @@ def test_topk_large_indices_program_cache_per_engine_regime(device):
         _assert_index_metadata(tt_indices, [2, k])
         # ... and repeat calls of the same shape stay cached.
         assert device.num_program_cache_entries() == row_parallel_entries + 1
+    finally:
+        device.disable_and_clear_program_cache()
+
+
+def test_topk_large_indices_hybrid_uses_single_rectangle_for_one_row_remainder(device):
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    rows, n, k = num_cores + 1, 32768, 512
+    torch_input = _make_large_index_input(num_rows=rows, n=n, k=k)
+    tt_input = _to_device(torch_input, device)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        entries_before = device.num_program_cache_entries()
+        tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k)
+        ttnn.synchronize_device(device)
+
+        # The hybrid composite compiles a row-parallel program for the full
+        # wave and a one-rectangle column-parallel program for the last row.
+        # The pre-fix single-launch fallback adds only one program.
+        assert device.num_program_cache_entries() >= entries_before + 2
+        _assert_topk_matches_torch(torch_input, tt_indices, k)
     finally:
         device.disable_and_clear_program_cache()
 

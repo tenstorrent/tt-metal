@@ -312,9 +312,11 @@ void kernel_main() {
 
     compute_kernel_hw_startup(input_cb, indices_cb);
     pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
+#if !defined(FUSED_SEGMENTED) && !defined(FUSED_E2E)
     if constexpr (kChunkSkipEnable) {
         skip::chunk_skip_configure();
     }
+#endif
 
     CircularBuffer input_cb_obj(input_cb);
     CircularBuffer indices_cb_obj(indices_cb);

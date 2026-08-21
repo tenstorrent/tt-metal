@@ -351,7 +351,8 @@ std::optional<HybridSplit> hybrid_row_split(
     const uint32_t r1 = cores * (waves - 1);
     const uint32_t r2 = rows - r1;
     // Split only when the remainder genuinely takes (and wins on) the
-    // multi-rectangle path; otherwise the extra launch + concat is pure cost.
+    // column-parallel path; a one-row remainder intentionally uses the
+    // supported single-rectangle tree.
     // Model on the SEARCHED width (valid_length when set), not the buffer's
     // logical width: preallocated-buffer callers (the DSA indexer grows
     // valid_length across prefill inside a fixed 1M buffer) otherwise get a
@@ -373,7 +374,7 @@ std::optional<HybridSplit> hybrid_row_split(
     // rebalancing from valid_length is the follow-up that recovers the gap.
     const auto cfg = operations::experimental::topk_large_indices::program::compute_column_split_config(
         k, searched, r2, grid, std::nullopt, /*allow_multi_row=*/true);
-    if (!cfg.enabled || cfg.num_rects < 2) {
+    if (!cfg.enabled) {
         return std::nullopt;
     }
     // The remainder launch passes cfg.num_slices explicitly to pin the P

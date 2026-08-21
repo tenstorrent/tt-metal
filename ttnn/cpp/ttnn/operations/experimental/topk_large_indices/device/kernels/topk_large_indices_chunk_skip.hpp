@@ -43,9 +43,10 @@
 // the output. Conversely a skipped element is < T <= v_k and belongs to no
 // exact top-k set. Boundary ties (chunk_max == T) are NOT skipped, so tie
 // candidates at v_k always enter the merge; tie *membership* is resolved by
-// the same deterministic merge order as before among the entrants. Skip
-// decisions are pure functions of the input data, so results remain
-// deterministic for a fixed input (stable=false tie semantics, as shipped).
+// the selected deterministic tie policy (stable mode uses ascending global
+// index, non-stable mode uses the established merge order). Skip decisions
+// are pure functions of the input data, so results remain deterministic for
+// a fixed input.
 //
 // DECISION MACHINERY (silicon-validated components)
 // -------------------------------------------------
@@ -69,10 +70,11 @@
 //   the same sync also orders the preceding rebuild's stores, so the
 //   threshold read needs no extra sync.
 // * The compare runs on the MATH RISC in sign-magnitude (== IEEE float)
-//   order via a monotone bit transform. Values are bit-exact bf16<<16
-//   payloads end to end (the value words move through sort/merge with
-//   bit-exact 32-bit ops), and the bf16 datapath admits no NaNs (canonical-
-//   ized to inf on ingest), so sign-magnitude order is total and correct.
+//   order via a monotone bit transform. Value payloads occupy the high bf16
+//   bits end to end; stable mode may use the low 16 bits for its rank stamp,
+//   which is masked from the threshold before comparison. The bf16 datapath
+//   admits no NaNs (canonicalized to inf on ingest), so sign-magnitude order
+//   is total and correct.
 // * Cross-TRISC propagation: MATH -> UNPACK through the T1->T0 hardware
 //   mailbox (ckernel::mailbox_write / blocking mailbox_read). NOTE: this op's
 //   copy path ALREADY uses the same T1->T0 FIFO -- topk_xl_copy's
@@ -205,6 +207,11 @@ inline void chunk_maxfold() {
     constexpr uint32_t tiles = (K + 1023) / 1024;
     constexpr uint32_t num_loads = tiles * 32;
 
+    // The preceding classic top-k phase enables LaneConfig index tracking.
+    // This custom SFPU call bypasses the normal unary init, so clear that
+    // state before using LREG4/LREG5 as ordinary max-fold scratch registers.
+    sfpu::_init_sfpu_config_reg();
+
     // ADDR_MOD_6: the load walk (advance 2 u10 units per SFPLOAD, the
     // 4-row/32-datum coverage stride). ADDR_MOD_0: no movement (store).
     addr_mod_t{
@@ -294,7 +301,9 @@ inline bool chunk_skip_decide(uint32_t slot1) {
     ckernel::tensix_sync();
     volatile uint32_t* mm = reinterpret_cast<volatile uint32_t*>(RISCV_DEST_START_ADDR);
     const uint32_t max_bits = mm[(slot1 + tiles) * 64 * 16];
-    const uint32_t thr_bits = mm[threshold_word];
+    // Stable-tie mode stamps the sequential rank in the low 16 bits of the
+    // resident value word. The skip predicate compares values only.
+    const uint32_t thr_bits = mm[threshold_word] & 0xFFFF0000u;
     const bool skip = sm_key(max_bits) < sm_key(thr_bits);
 #ifdef CHUNK_SKIP_DEBUG
     DPRINT("CSD max {} thr {} skip {}\n", max_bits, thr_bits, skip ? 1u : 0u);
