@@ -31,7 +31,7 @@ Wormhole rows are from CI (cold-start TTFT, including one-time program compile).
 | 31B     | QB2 | 1×4 | 22.68 | 22.68 | 1060 [^bh-perf] | measured |
 
 [^ttft]: CI TTFT is cold-start, including one-time device program compile.
-[^bh-perf]: Steady-state metal demo decode (batch-1 @ ISL=4k) from `isl_sweep_logs/defaults_scoreboard` (LoudBox) and `isl_sweep_logs/full_matrix_20260722` (QB2 / single-chip P150 aliased as N150 in that sweep). Long-context decode is lower (e.g. ~26–27 tok/s for 31B / P150x8 @ 128k; ~13–15 tok/s for 12B / P150 @ 128k–256k bounded).
+[^bh-perf]: Steady-state metal demo decode (batch-1 @ ISL=4k), measured via `tests/e2e/test_isl_sweep.py` (QB2 / single-chip P150 aliased as N150 in that sweep). Long-context decode is lower (e.g. ~26–27 tok/s for 31B / P150x8 @ 128k; ~13–15 tok/s for 12B / P150 @ 128k–256k bounded).
 
 E4B on N300 (1×2) is currently disabled in CI due to reduced N300 runner availability — see the Code Support Matrix below. Galaxy e2e entries are temporarily disabled (fabric / ethernet bring-up hang).
 
@@ -41,21 +41,16 @@ The table below comes from **`models/demos/gemma4/tests/e2e/test_isl_sweep.py`**
 
 Measurements are on **Wormhole B0 T3K / LoudBox, `MESH_DEVICE=T3K` or `1x8`, TP=8**, at branch defaults (on-device sampling, `enable_trace=True`, paged attention, greedy `temperature=0` / `top_p=0.08`). Use **warm** TTFT — traces and program cache primed by a preceding run — so rows stay comparable to each other and are *not* mixed with the cold-start CI TTFT in the table above.
 
-**Run the full sweep** (every bucket twice: run 1 = warmup, run 2 = measured; writes CSV/compare under `isl_sweep_logs/`):
+**Run every bucket:**
 
 ```bash
 export HF_MODEL=google/gemma-4-31B-it   # 12B: see "12B checkpoint layout" below — the hub id will not load
 export MESH_DEVICE=T3K                  # or 1x8 on T3K
-./models/demos/gemma4/scripts/run_text_demo_v2_isl_sweep.sh
-```
-
-Or run all buckets once via pytest (no scripted warmup/measured pairing):
-
-```bash
-export HF_MODEL=google/gemma-4-31B-it
-export MESH_DEVICE=T3K
 pytest models/demos/gemma4/tests/e2e/test_isl_sweep.py -s --timeout=3600 -k "not ci-1"
 ```
+
+Run it twice for numbers comparable to the table below — the first pass primes traces and the program
+cache, so only the second is warm.
 
 **Run one row:**
 
@@ -77,6 +72,10 @@ Sweep results, 12B and 31B:
 | `long-context-128k` |  128k |  1 |  28925.7 | 38.01 |  61584.4 | 58.15 |
 | `long-context-256k` |  256k |  1 | 105341.0 | 55.33 | 241697.9 | 80.08 |
 
+`tok/s/user` is `1000 / ms-per-tok`, and aggregate `tok/s` is that times batch — both omitted as arithmetic.
+
+[^t3k-b32]: 31B `batch-32` needs the batch-32 L1 fix (host batched extract + auto chunk-span warmup) — without it the row fails on a circular-buffer clash rather than running slowly.
+
 
 ## Code Support Matrix
 
@@ -96,7 +95,7 @@ Legend: 🟢 fully supported · 🟡 supported with known issues / limitations �
 [^gemma4-12b-wh]: 12B on Wormhole N150 is short-context only (does not fit long-context KV).
 [^gemma4-12b-t3k]: 12B on Wormhole T3K (1×8) runs the full demo and unit suite, and is gated in CI (`wh_llmbox` unit tier 1, `wh_llmbox_perf` e2e tier 2) including the teacher-forced token/logit e2e that both 12B and 31B now run. A handful of `pcc_thresholds` nodes sit below the 0.99 default — fewer than 31B's on the same mesh — because 12B was Blackhole-only until this branch and its WH numerics were never gated. The one place 12B is genuinely behind 31B is `test_full_model[wormhole_b0-1x8]` at 0.935 against 31B's 0.98. Note that `GEMMA4_ATTN_WEIGHT_DTYPE=bf16` lifts several of those single-node PCCs but measures **worse** accumulated end to end, so do not read it as the fix (see `GEMMA4_PRECISION_OVERRIDE`). Per-ISL perf: see [Per-ISL performance on Wormhole T3K](#per-isl-performance-on-wormhole-t3k).
 [^gemma4-p150]: Single Blackhole P150 — **E2B / E4B fully supported through HF 256k** with default multi-chunk prefill (4096), unbounded KV (`tests/e2e/test_isl_sweep.py -k long-context-{4k,…,256k}`). CI: `bh_p150` e2e for E2B/E4B.
-[^gemma4-p150-12b]: Single Blackhole P150 — **12B through full ISL 256k** with auto **bounded sliding + chunked prefill (4096)** above 32k (unbounded KV OOMs). Measured PASS + coherent gen at 64k/128k/256k (`isl_sweep_logs/full_matrix`). CI short-demo e2e on `bh_p150`; long-context via `MESH_DEVICE=P150 … tests/e2e/test_isl_sweep.py -k long-context-256k` (reports TTFT + decode tok/s). Prefill at 256k is slow (~6 min TTFT).
+[^gemma4-p150-12b]: Single Blackhole P150 — **12B through full ISL 256k** with auto **bounded sliding + chunked prefill (4096)** above 32k (unbounded KV OOMs). Measured PASS + coherent gen at 64k/128k/256k. CI short-demo e2e on `bh_p150`; long-context via `MESH_DEVICE=P150 … tests/e2e/test_isl_sweep.py -k long-context-256k` (reports TTFT + decode tok/s). Prefill at 256k is slow (~6 min TTFT).
 [^gemma4-lc]: Long-context via `models/demos/gemma4/tests/e2e/test_isl_sweep.py` (`-k long-context-{4k,32k,64k,128k,256k}`) — reports **TTFT and decode tok/s** (long-context `text_demo.py` only logs TTFT). Same `GEMMA4_LONG_CONTEXT_POLICY` in both demos. **Coherence target on QB2 + LoudBox for 12B and 31B: 4k–128k** (256k may allocate; 31B/26B quality not a target). QB2 — E2B/E4B unbounded through 256k; 12B/26B-A4B unbounded through 128k, bounded(+chunked) at 256k; 31B bounded from 64k (chunk=2048 at ≥128k). LoudBox / P150x8 — E2B/E4B/12B unbounded through 256k; **31B/26B-A4B auto-bounded at 128k** with chunk=2048. Defaults: `GEMMA4_HOST_SAMPLE=0` (on-device sampling; set `=1` to force host sampling); do not set `GEMMA4_DEMO_SINGLE_CHUNK=1`.
 [^galaxy]: Galaxy (4×8) is not wired for Gemma4 yet; BH Galaxy e2e is disabled pending fabric / ethernet bring-up.
 
@@ -310,7 +309,7 @@ Every performance change on this path ships behind a switch, so any one of them 
 | `GEMMA4_DEMO_SINGLE_CHUNK` | off | **Leave off.** Known "la la / lapped" collapse on long ISL. |
 | `GEMMA4_PREFILL_TRACE_MAX_SEQ` | 4096 | Above this, prefill trace is off and decode stays traced. |
 | `GEMMA4_CHUNKED_PREFILL_TRACE` | auto | Trace multi-chunk prefill on long unbounded demos. |
-| `GEMMA4_WARMUP_CHUNK_SPANS` | off | Warm the *row spans* chunked batched prefill lands on. Traces are keyed on row span, not user count, so without this every chunk past the first compiles its trace inside the measured prefill. Opt-in until a deterministic gate for per-slot state leaks exists. |
+| `GEMMA4_WARMUP_CHUNK_SPANS` | `all` for 31B at batch ≥ 32, else off | Warm the *row spans* chunked batched prefill lands on. Traces are keyed on row span, not user count, so without this every chunk past the first compiles its trace inside the measured prefill. 31B batch-32 auto-enables `all` because at row span ≥ 16 the in-band capture collides with L1 CBs on WH T3K — there the warmup is a correctness prerequisite, not a perf option. Any explicit value (including `0`) suppresses the auto path; the run logs which way it went. `1` warms only the first chunk boundary. |
 | `GEMMA4_TRACE_REGION_SIZE` | 192 MB (WH) / 256 MB (BH) | Must cover the **cumulative** size of every captured trace, not the largest one. |
 
 ### Sampling
