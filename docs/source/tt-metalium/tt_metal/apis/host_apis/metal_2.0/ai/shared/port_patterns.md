@@ -231,6 +231,19 @@ The `#ifdef` runs at the preprocessor stage, before the C++ compiler sees the co
 
 **Future direction — `#ifdef` is a temporary scaffold.** Metal 2.0 work to NTTP-ify all CTAs will let the entire kernel body be template-instantiated on the CTA values, at which point `if constexpr` discarded branches truly skip non-dependent name lookup, and the `#ifdef` scaffolding is retired in favor of `if constexpr (do_scale) { use dfb::name; }`. That work is in flight and will soon supersede this pattern. Until NTTP CTAs land, `#ifdef`-gated conditional bindings are the recommended pattern for Metal 2.0 today.
 
+> **Correction (verified on g++ and clang, 2026-08-20).** The paragraph above is only half-right:
+> **NTTP-ifying the CTAs is not, on its own, enough to retire this `#ifdef`.** A missing `dfb::name` is
+> a **non-dependent qualified-id**, and `if constexpr` does **not** skip non-dependent name lookup —
+> not even in a fully NTTP-templated kernel body: `if constexpr (do_scale) { … dfb::cb_scaled … }`
+> still fails to *parse* when the host omitted the binding (confirmed on both compilers). So a `#ifdef`
+> guarding a conditionally-bound token stays until the framework emits the token unconditionally —
+> **unbound DFB accessors, [issue #52179](https://github.com/tenstorrent/tt-metal/issues/52179)** —
+> which is not yet in the tree. Adopting the template syntax
+> ([PR #46623](https://github.com/tenstorrent/tt-metal/pull/46623)) post-port is still worthwhile for
+> the named-args signature, and lets a *pure* compile-time flag (one whose branches name only
+> always-present symbols) use `if constexpr` — but it does **not** convert a conditional-resource
+> `#ifdef`. See the post-port [named-kernel-args pass](../post_port/style/named_kernel_args.md).
+
 ---
 
 ## Pattern: Aliased DFBs (legacy aliased CBs)

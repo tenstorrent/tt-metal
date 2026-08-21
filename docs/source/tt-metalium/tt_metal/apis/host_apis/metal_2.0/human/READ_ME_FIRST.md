@@ -156,6 +156,7 @@ This phase of the port applies the style changes stepwise, each as a separate co
 
 Multiple style fixups are planned, but currently available is:
  - Convert sync-free DFBs to `Scratchpad` or `LocalTensorAccessor`
+ - Convert kernels to explicit (named) args and recover `if constexpr` from `#ifdef` (the [named-kernel-args pass](../ai/post_port/style/named_kernel_args.md); larger than the others — best run on its own, with a confirmation stop for scope and tests)
 
 **Use a fresh Claude** (Opus 1M with Max effort) session for post-port style fixups to maximize available context window. Do not attempt to re-use the same Claude who performed the main port.
 
@@ -168,6 +169,7 @@ Procedure:  docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/post_po
             Read this first, in full. It is the procedure; the recipes below are the content.
 
 Passes:     1. docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/post_port/style/sync_free_dfbs.md
+            2. docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/post_port/style/named_kernel_args.md
 
 Op:         ttnn/cpp/ttnn/operations/<family>/<op>
 Sentinels:  <the tests that must pass before and after — the same set for every pass>
