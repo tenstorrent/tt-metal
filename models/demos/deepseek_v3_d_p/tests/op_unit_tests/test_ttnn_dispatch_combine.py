@@ -473,22 +473,6 @@ def _ci_unsupported_param_combos_dispatch_combine(**params):
     return False
 
 
-def _ci_unsupported_param_combos_dispatch_combine_overflow(**params):
-    on_ci = params["on_ci"]
-
-    if not on_ci:
-        return False
-    return True
-
-
-def _ci_unsupported_param_combos_dispatch_combine_top4(**params):
-    on_ci = params["on_ci"]
-
-    if not on_ci:
-        return False
-    return True
-
-
 @pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_dispatch_combine)
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
@@ -596,7 +580,6 @@ def test_ttnn_dispatch_combine(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("overflow_mode", ["cut_short_last", "omit_last"])
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_dispatch_combine_overflow)
 def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overflow_mode):
     """Verify dispatch/combine does not hang when the flat dispatch buffer overflows.
 
@@ -764,7 +747,6 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
 )
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_dispatch_combine_top4)
 def test_ttnn_dispatch_combine_top4(
     mesh_device, device_params, num_links, dispatched_buffer_layout, is_ci_env, is_ci_v2_env
 ):
