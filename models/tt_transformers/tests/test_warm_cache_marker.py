@@ -51,14 +51,18 @@ class _FakeArgs:
         self.dummy_weights = False
         self.is_mixture_of_experts = False
         self.mesh_device = SimpleNamespace(shape=mesh_shape)
-        # Everything _weight_cache_build_variant reads:
+        # Everything _weight_cache_build_variant reads. get_tensor_dtype deliberately lives on
+        # self.optimizations (a DecodersPrecision in production), NOT on the args object: the
+        # variant helper shipped calling self.get_tensor_dtype and threw AttributeError on every
+        # model, and a stub that put the method on the args would have kept agreeing with that
+        # bug. Mirror the production shape so the stub can only pass against correct code.
         self.prefetcher = None
         self.max_batch_size = 1
         self.use_fused_all_gather_matmul = False
         self.use_hf_rope = False
-
-    def get_tensor_dtype(self, decoder_id, tensor, prefetcher=False):
-        return "DataType.BFLOAT8_B"
+        self.optimizations = SimpleNamespace(
+            get_tensor_dtype=lambda decoder_id, tensor, prefetcher=False: "DataType.BFLOAT8_B"
+        )
 
     def weight_cache_path(self, dtype):
         return self._cache_dir
@@ -373,7 +377,7 @@ def test_modelargs_variant_error_disables_skip(tmp_path):
     def _boom(decoder_id, tensor, prefetcher=False):
         raise RuntimeError("precision config unavailable")
 
-    args.get_tensor_dtype = _boom
+    args.optimizations = SimpleNamespace(get_tensor_dtype=_boom)
     variant = args._weight_cache_build_variant()
     assert variant.get("unverifiable") is True
     args.mark_weight_cache_complete(DTYPE, SAMPLE_SD)
