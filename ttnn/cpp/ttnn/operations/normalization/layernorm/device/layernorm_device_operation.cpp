@@ -23,6 +23,17 @@ LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_pro
     return LayerNormMultiCoreProgramFactory{};
 }
 
+ttsl::hash::hash_t LayerNormDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    std::optional<tt::tt_metal::DeviceAddr> lowest_occupied_l1;
+    if (!tensor_args.input.is_sharded()) {
+        const auto* device = tensor_args.input.device();
+        lowest_occupied_l1 = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
+    }
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<LayerNormDeviceOperation>, operation_attributes, tensor_args, lowest_occupied_l1);
+}
+
 void LayerNormDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.input;

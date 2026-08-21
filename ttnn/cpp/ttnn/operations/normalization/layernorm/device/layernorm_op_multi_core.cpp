@@ -70,7 +70,7 @@ bool buffers_can_fit_in_L1(
     sum += im2_size;
     sum += recip_size;
     sum += in_rm_size;
-    return sum < l1_size * 0.95;
+    return sum < usable_l1_bytes;
 }
 
 // Kernel identities within the ProgramSpec.
@@ -371,7 +371,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         im2_t * single_tile_size,
         reciprocal_buffer_size_bytes,
         in_rm_size + out_rm_size,
-        a.device()->l1_size_per_core());
+        usable_cb_l1_bytes);
     // For input_is_row_major we also allow large_tensor_needed (same L1 logic applies).
     // use_row_major_kernel (row-major gamma/beta) still skips large_tensor check as before.
     if (!use_row_major_kernel || input_is_row_major) {
@@ -470,7 +470,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
             im2_t * single_tile_size,
             reciprocal_CB_size_bytes,
             in_rm_size + out_rm_size,
-            a.device()->l1_size_per_core());
+            usable_cb_l1_bytes);
         if (read_ahead_input_fits) {
             in0_t = read_ahead_in0_t;
             in1_t = read_ahead_in1_t;

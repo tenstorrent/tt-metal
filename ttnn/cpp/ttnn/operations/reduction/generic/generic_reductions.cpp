@@ -394,8 +394,7 @@ static Tensor std_var_impl(
     std::uint64_t divisor = correction ? (reduced_volume - 1) : reduced_volume;
     TT_FATAL(divisor > 0, "Reduction is performed on too few elements, yielding divisor of {}", divisor);
 
-    // Numerically stable statistics reduction: FP32 uses an SFPU two-pass algorithm by default;
-    // lower-precision inputs use Welford.
+    // Numerically stable statistics reductions use an SFPU two-pass algorithm for all supported input dtypes.
     bool single_h = (dim.size() == 1 && dim[0] == rank - 2);
     bool single_w = (dim.size() == 1 && dim[0] == rank - 1);
 

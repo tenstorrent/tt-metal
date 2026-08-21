@@ -92,6 +92,14 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // sqrt value straddles a bf16 rounding boundary).
     bool narrow_scratch_to_bf16 = !is_std && dst_cb_data_format == tt::DataFormat::Float16_b;
 
+    const tt::DataFormat w_scratch_cb_data_format =
+        (fp32_dest_acc_en && !narrow_scratch_to_bf16) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const std::uint32_t w_scratch_single_tile_size = tt::tile_size(w_scratch_cb_data_format);
+    const std::uint32_t partial_single_tile_size = tt::tile_size(tt::DataFormat::Float32);
+    const tt::DataFormat combined_cb_data_format =
+        narrow_scratch_to_bf16 ? tt::DataFormat::Float16_b : tt::DataFormat::Float32;
+    const std::uint32_t combined_single_tile_size = tt::tile_size(combined_cb_data_format);
+
     tt_metal::IDevice* device = tensor_arg.device();
 
     // Work division:
@@ -181,9 +189,19 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         num_work_units_per_core_group_1 > 1 || num_work_units_per_core_group_2 > 1;
     const std::uint32_t two_pass_l1_replay_min_tiles = multiple_work_units_per_core ? 8 : 24;
     const std::uint32_t two_pass_l1_replay_tiles = reduce_w ? Wt : Ht;
-    const bool two_pass_l1_replay =
-        two_pass_l1_replay_tiles >= two_pass_l1_replay_min_tiles &&
-        static_cast<std::uint64_t>(two_pass_l1_replay_tiles) * input_single_tile_size <= two_pass_l1_replay_max_bytes;
+    const std::uint64_t replay_input_size =
+        static_cast<std::uint64_t>(two_pass_l1_replay_tiles) * input_single_tile_size;
+    std::uint64_t replay_cb_footprint = replay_input_size + scalar_single_tile_size + 2 * dst_single_tile_size;
+    replay_cb_footprint += reduce_w ? w_scratch_single_tile_size : 0;
+    replay_cb_footprint += reduce_hw ? 4 * partial_single_tile_size + combined_single_tile_size : 0;
+
+    const auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
+    const auto cb_l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const std::uint64_t available_cb_l1_bytes = lowest_occupied_l1 > cb_l1_base ? lowest_occupied_l1 - cb_l1_base : 0;
+    const std::uint64_t usable_cb_l1_bytes = available_cb_l1_bytes * 95 / 100;
+    const bool two_pass_l1_replay = two_pass_l1_replay_tiles >= two_pass_l1_replay_min_tiles &&
+                                    replay_input_size <= two_pass_l1_replay_max_bytes &&
+                                    replay_cb_footprint < usable_cb_l1_bytes;
 
     ProgramDescriptor desc;
 
@@ -235,16 +253,13 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         // Float32 only when the DST register is fp32 and we are not narrowing the scratch
         // to the output dtype (variance output to bf16 -- see narrow_scratch_to_bf16 above);
         // bf16 otherwise.
-        tt::DataFormat scratch_cb_data_format =
-            (fp32_dest_acc_en && !narrow_scratch_to_bf16) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-        uint32_t scratch_single_tile_size = tt::tile_size(scratch_cb_data_format);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = scratch_single_tile_size,
+            .total_size = w_scratch_single_tile_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(scratch_cb_index),
-                .data_format = scratch_cb_data_format,
-                .page_size = scratch_single_tile_size,
+                .buffer_index = static_cast<std::uint8_t>(scratch_cb_index),
+                .data_format = w_scratch_cb_data_format,
+                .page_size = w_scratch_single_tile_size,
             }}},
         });
     }
@@ -267,7 +282,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     if (reduce_hw) {
         CBIndex partial_cb_index = CBIndex::c_21;
         tt::DataFormat partial_cb_data_format = tt::DataFormat::Float32;
-        std::uint32_t partial_single_tile_size = tt::tile_size(partial_cb_data_format);
         // Reserve space for 4 tiles to enable double buffering (since compute kernel packs 2 tiles at a time).
         desc.cbs.push_back(CBDescriptor{
             .total_size = 4 * partial_single_tile_size,
@@ -287,9 +301,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         // hardware is required for BFLOAT8_B conversion).
         // Float32 unless we can safely narrow to bf16.
         CBIndex combined_cb_index = CBIndex::c_22;
-        tt::DataFormat combined_cb_data_format =
-            narrow_scratch_to_bf16 ? tt::DataFormat::Float16_b : tt::DataFormat::Float32;
-        uint32_t combined_single_tile_size = tt::tile_size(combined_cb_data_format);
         desc.cbs.push_back(CBDescriptor{
             .total_size = combined_single_tile_size,
             .core_ranges = all_cores,

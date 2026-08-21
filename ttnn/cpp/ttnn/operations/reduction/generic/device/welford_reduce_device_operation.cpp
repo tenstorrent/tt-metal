@@ -19,6 +19,14 @@ WelfordReduceDeviceOperation::program_factory_t WelfordReduceDeviceOperation::se
     return WelfordReduceDeviceOperation::WelfordReduceProgramFactory{};
 }
 
+ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto* device = tensor_args.device();
+    const auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<WelfordReduceDeviceOperation>, operation_attributes, tensor_args, lowest_occupied_l1);
+}
+
 void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(

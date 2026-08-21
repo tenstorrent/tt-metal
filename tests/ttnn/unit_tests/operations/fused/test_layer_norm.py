@@ -8,6 +8,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 pytestmark = pytest.mark.use_module_device
@@ -463,6 +464,74 @@ def test_l1_interleaved(device, use_welford, dtype):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
+
+
+@run_for_blackhole("The near-capacity allocation is calibrated for Blackhole L1")
+def test_l1_interleaved_near_capacity(device):
+    torch.manual_seed(20260731)
+    device.enable_program_cache()
+
+    h, w = 32, 2048
+    torch_input = torch.rand((h, w), dtype=torch.float32)
+    torch_residual = torch.rand((h, w), dtype=torch.float32)
+    torch_weight = torch.rand((w,), dtype=torch.float32)
+    torch_bias = torch.rand((w,), dtype=torch.float32)
+    torch_output = torch.nn.functional.layer_norm(
+        torch_input + torch_residual,
+        normalized_shape=[w],
+        weight=torch_weight,
+        bias=torch_bias,
+    )
+
+    def to_interleaved_l1(tensor):
+        return ttnn.from_torch(
+            tensor,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+    def run_layer_norm():
+        inputs = (
+            to_interleaved_l1(torch_input),
+            to_interleaved_l1(torch_residual),
+            to_interleaved_l1(torch_weight),
+            to_interleaved_l1(torch_bias),
+            create_recip_tensor(device, w, True),
+        )
+        output = ttnn.layer_norm(
+            inputs[0],
+            residual_input_tensor=inputs[1],
+            weight=inputs[2],
+            bias=inputs[3],
+            program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+            recip_tensor=inputs[4],
+        )
+        return output, inputs
+
+    warm_output, warm_inputs = run_layer_norm()
+    ttnn.synchronize_device(device)
+    warm_output.deallocate(force=True)
+    for tensor in warm_inputs:
+        tensor.deallocate(force=True)
+
+    # Warm the empty-L1 program first, then require a distinct large-tensor
+    # program after the allocator span contracts. Occupying 650 KiB/core leaves
+    # room for the block-streamed path, but not full-row residual replay.
+    grid = device.compute_with_storage_grid_size()
+    pressure_tiles = (650 * 1024 * grid.x * grid.y + 2047) // 2048
+    l1_pressure = ttnn.allocate_tensor_on_device(
+        ttnn.Shape((1, 1, 32, pressure_tiles * 32)),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    output, _ = run_layer_norm()
+
+    assert_output_accuracy(torch_output, ttnn.to_torch(output), use_welford=True)
+    assert l1_pressure.is_allocated()
 
 
 @pytest.mark.parametrize("dim_a", [24, 2048, 3072, 4096])

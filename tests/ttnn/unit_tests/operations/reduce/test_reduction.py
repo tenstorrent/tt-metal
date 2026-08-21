@@ -172,6 +172,58 @@ def test_var_fp32_large_reduction_translation_stability(device, shape, dim):
     torch.testing.assert_close(actual, torch_ref, rtol=1e-3, atol=1e-3, check_dtype=False)
 
 
+def test_std_var_fp32_w_l1_replay_respects_occupied_l1(device):
+    if not is_blackhole():
+        pytest.skip("The near-capacity allocation is calibrated for Blackhole L1")
+
+    device.enable_program_cache()
+    torch.manual_seed(20260731)
+    # W=4096 is the largest FP32 row admitted by this branch's 512 KiB replay cap.
+    torch_input = (torch.randn((1, 1, 32, 4096), dtype=torch.float32) + 1e4).contiguous()
+    warm_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    for ttnn_op in (ttnn.var, ttnn.std):
+        warm_output = ttnn_op(warm_input, dim=-1, keepdim=True, correction=True)
+        ttnn.synchronize_device(device)
+        warm_output.deallocate(force=True)
+    warm_input.deallocate(force=True)
+
+    # Reuse the same operation keys after allocator state changes. Without the
+    # occupied-L1 cache discriminator, this resurrects the replay programs.
+    # Occupying 800 KiB/core leaves room for streaming, but not 512 KiB row replay.
+    grid = device.compute_with_storage_grid_size()
+    pressure_tiles = (800 * 1024 * grid.x * grid.y + 2047) // 2048
+    l1_pressure = ttnn.allocate_tensor_on_device(
+        ttnn.Shape((1, 1, 32, pressure_tiles * 32)),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
+        reference = torch_op(torch_input.to(torch.float64), dim=-1, keepdim=True, correction=1)
+        actual = ttnn.to_torch(ttnn.from_device(ttnn_op(tt_input, dim=-1, keepdim=True, correction=True)))
+
+        assert torch.isfinite(actual).all()
+        torch.testing.assert_close(actual, reference, rtol=1e-3, atol=1e-3, check_dtype=False)
+
+    assert l1_pressure.is_allocated()
+
+
 # Regression test for FP32 variance precision with a non-unity scalar
 # AND the reduction dimension crosses a tile boundary (Wt>1).
 # Unlike test_var_fp32_translation_invariance above, which tests whether inputs preserve

@@ -511,15 +511,19 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         total += in2_CB_size + in3_CB_size + in2_CB_size;
         total += gamma.has_value() ? in5_CB_size : 0;
         total += beta.has_value() ? in6_CB_size : 0;
-        total += input_mask.has_value() ? in_mask_CB_size : 0;
+        // The writer synthesises this CB when an input mask is not supplied.
+        total += in_mask_CB_size;
         total += reader_repack_output ? repack_CB_size : 0;
         total += x_size + xmm_size + xmm2_size + xmm3_size;
         total += ex_partial_CB_size + ex_global_CB_size + ex2pe_CB_size + reciprocal_CB_size;
         return total;
     };
+    const auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
+    const auto cb_l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const std::uint64_t available_cb_l1_bytes = lowest_occupied_l1 > cb_l1_base ? lowest_occupied_l1 - cb_l1_base : 0;
+    const std::uint64_t usable_l1_bytes = available_cb_l1_bytes * 95 / 100;
     const std::uint32_t replay_input_size_group_1 = block_ht_group_1 * per_core_Nt * in_single_tile_size;
     const std::uint32_t replay_input_size_group_2 = block_ht_group_2 * per_core_Nt * in_single_tile_size;
-    const std::uint64_t usable_l1_bytes = static_cast<std::uint64_t>(device->l1_size_per_core()) * 95 / 100;
     const bool l1_replay_enabled = std::getenv("TTNN_GROUPNORM_DISABLE_L1_REPLAY") == nullptr;
     const bool sfpu_two_pass_l1_replay_group_1 = sfpu_two_pass && l1_replay_enabled &&
                                                  cb_usage_with_input(

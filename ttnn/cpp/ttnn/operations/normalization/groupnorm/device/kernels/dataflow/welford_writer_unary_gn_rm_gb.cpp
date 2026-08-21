@@ -149,15 +149,16 @@ void kernel_main() {
 #endif
     for (uint32_t i = 0; i < num_groups_per_core; ++i) {
 #if defined(MASK_SYNTHESIZE)
-        // Write face 0 row 0 + face 1 row 0 of each of the block_w mask tiles
-        // for this group directly — no DRAM read.
-        tt::tt_metal::groupnorm::synthesize_group_mask_tiles_bf16(
+        // The two-pass compute path multiplies this mask as a full tile rather
+        // than broadcasting row 0, so initialise every row.
+        tt::tt_metal::groupnorm::synthesize_group_mask_tiles_full_bf16(
             l1_write_addr_input_mask,
             mask_row_offset,
             num_channels_per_group,
             block_w,
             input_mask_single_tile_size_bytes,
             MASK_TILE_W,
+            tt::constants::TILE_HEIGHT,
             tt::tt_metal::groupnorm::BF16_ONE,
             tt::tt_metal::groupnorm::BF16_ZERO);
         mask_row_offset =
