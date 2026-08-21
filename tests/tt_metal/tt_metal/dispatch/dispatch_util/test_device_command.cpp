@@ -14,8 +14,35 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "tt_metal/impl/program/program_command_sequence.hpp"
 
 namespace tt::tt_metal {
+
+TEST(DeviceCommandTest, ProgramConfigCommandsRetainPrefetchEntryBoundaries) {
+    constexpr uint32_t max_prefetch_command_size = 131072;
+    constexpr std::array<uint32_t, 4> command_sizes = {70016, 60000, 60000, 29056};
+
+    EXPECT_TRUE(dispatch_write_packed_large_requires_new_command(
+        /*current_subcommand_count=*/2,
+        /*current_data_size_bytes=*/120000,
+        /*next_data_size_bytes=*/99072,
+        /*l1_alignment=*/16,
+        max_prefetch_command_size));
+    EXPECT_LE(dispatch_write_packed_large_size_bytes(1, 99072), max_prefetch_command_size);
+
+    ProgramCommandSequence command_sequence;
+    for (uint32_t command_size : command_sizes) {
+        ASSERT_LE(command_size, max_prefetch_command_size);
+        command_sequence.program_config_buffer_command_sequences.emplace_back(command_size);
+    }
+
+    EXPECT_EQ(command_sequence.get_program_config_buffer_size(), 219072);
+    EXPECT_GT(command_sequence.get_program_config_buffer_size(), max_prefetch_command_size);
+    EXPECT_EQ(
+        command_sequence.get_one_shot_fetch_size(
+            /*stall_first=*/false, /*stall_before_program=*/false, /*send_binary=*/false),
+        command_sequence.get_program_config_buffer_size());
+}
 
 TEST(DeviceCommandTest, AddDispatchWait) {
     DeviceCommandCalculator calculator;

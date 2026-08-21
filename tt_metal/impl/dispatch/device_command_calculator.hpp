@@ -351,4 +351,27 @@ private:
         tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
     uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
 };
+
+inline uint32_t dispatch_write_packed_large_size_bytes(uint32_t num_subcommands, uint32_t data_size_bytes) {
+    DeviceCommandCalculator calculator;
+    calculator.add_dispatch_write_packed_large(num_subcommands, data_size_bytes);
+    return calculator.write_offset_bytes();
+}
+
+inline bool dispatch_write_packed_large_requires_new_command(
+    uint32_t current_subcommand_count,
+    uint32_t current_data_size_bytes,
+    uint32_t next_data_size_bytes,
+    uint32_t l1_alignment,
+    uint32_t max_prefetch_command_size) {
+    if (current_subcommand_count == 0) {
+        return false;
+    }
+    if (current_subcommand_count >= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS) {
+        return true;
+    }
+    const uint32_t prospective_data_size = tt::align(current_data_size_bytes, l1_alignment) + next_data_size_bytes;
+    return dispatch_write_packed_large_size_bytes(current_subcommand_count + 1, prospective_data_size) >
+           max_prefetch_command_size;
+}
 }  // namespace tt::tt_metal
