@@ -50,8 +50,25 @@ using AsicPosition = tt::tt_metal::ASICPosition;
 // Required only when using pinning constraints
 using AsicPositionMap = std::map<tt::tt_metal::AsicID, AsicPosition>;
 
-// MGD many-to-many pinning group (same type as MeshGraphDescriptor::get_pinnings()).
+// MGD many-to-many pinning group (same type as MeshGraphDescriptor::get_pinnings() values).
 using PinningConstraint = ::tt::tt_fabric::AsicPinningGroup;
+
+// Pinning groups keyed by local mesh id (same shape as MeshGraphDescriptor::get_pinnings()).
+using PinningsByMesh = std::map<::tt::tt_fabric::MeshId, std::vector<PinningConstraint>>;
+
+inline void merge_pinnings_by_mesh(PinningsByMesh& dest, const std::vector<PinningConstraint>& groups) {
+    for (const auto& group : groups) {
+        if (!group.fabric_nodes.empty()) {
+            dest[group.fabric_nodes.front().mesh_id].push_back(group);
+        }
+    }
+}
+
+inline PinningsByMesh pinnings_by_mesh_from_groups(const std::vector<PinningConstraint>& groups) {
+    PinningsByMesh by_mesh;
+    merge_pinnings_by_mesh(by_mesh, groups);
+    return by_mesh;
+}
 
 // Galaxy corner pinnings for a single mesh, ensuring QSFP links align with the fabric mesh corner nodes
 // and the mesh is not folded. Pins all four logical corners to the four tray corners (with hard_pin_node_0
@@ -437,7 +454,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
-    const std::optional<std::vector<PinningConstraint>>& pinnings = std::nullopt);
+    const std::optional<PinningsByMesh>& pinnings = std::nullopt);
 
 /**
  * @brief Build a physical multi-mesh adjacency graph from physical system descriptor and physical grouping descriptor
@@ -450,15 +467,15 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
  * @param physical_grouping_descriptor Reference to the physical grouping descriptor containing mesh grouping
  * information
  * @param mesh_graph_descriptor Reference to the mesh graph descriptor containing logical mesh topology
- * @param pinnings Optional fabric-node pinning constraints used to restrict logical-to-physical mesh placement
- * during multi-shape physical graph construction
+ * @param pinnings Optional pinning groups keyed by local mesh id (MeshGraphDescriptor::get_pinnings(),
+ * plus any caller-merged galaxy corner pins) used during PGD<->MGD matching and placement
  * @return PhysicalMultiMeshGraph containing mesh-level graph and internal mesh nodes
  */
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
-    const std::optional<std::vector<PinningConstraint>>& pinnings = std::nullopt);
+    const std::optional<PinningsByMesh>& pinnings = std::nullopt);
 
 /**
  * @brief Build a physical multi-mesh adjacency graph using multiple MGDs (one PSD, one PGD)
@@ -474,7 +491,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const std::vector<tt::tt_fabric::MeshGraphDescriptor>& mesh_graph_descriptors,
-    const std::vector<std::optional<std::vector<PinningConstraint>>>& per_mgd_pinnings = {});
+    const std::vector<std::optional<PinningsByMesh>>& per_mgd_pinnings = {});
 
 /**
  * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor

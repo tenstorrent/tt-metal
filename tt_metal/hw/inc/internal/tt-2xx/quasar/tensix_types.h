@@ -301,10 +301,4 @@ typedef union {
     buffer_descriptor_t f;
 } buffer_descriptor_u;
 
-typedef struct {
-    buffer_descriptor_u buf_desc;
-    std::uint32_t buf_desc_id;
-    DataFormat reg_data_format;
-} tdma_descriptor_t;
-
 #endif

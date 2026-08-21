@@ -144,20 +144,14 @@ void kernel_main() {
     constexpr bool up_split = (reader_mcasts_up != 0) && (reader_reads_up == 0);
 
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
-    // cb_in0_down_full stays sized to the compile-time MAX per-core M: the down
-    // matmul keeps a full ring and MAC-skips rows >= the runtime per_core_M, so
-    // the reader pushes the full block (filling only per_core_M runtime rows via
-    // the activated mcast; the rest are MAC-skipped downstream).
+    // cb_in0_down_full stays sized to the compile-time MAX per-core M and the reader
+    // pushes that full block, filling only the first per_core_M (runtime) rows via
+    // the activated mcast. The down matmul never MACs the rest, so their contents
+    // are irrelevant — the full-size push just keeps the CB counts compile-time.
     constexpr uint32_t d_in0_block_num_tiles = per_core_M_max * in0_block_w_d;
     constexpr uint32_t d_in1_block_num_tiles = per_core_N_d * in0_block_w_d;
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
-    // The compute down-matmul tail-skips the last block's padding K-tiles when
-    // the down-K padding is confined to that block (padding < in0_block_w_d);
-    // then that weight is never read, so the reader can skip zeroing it (below).
-    // Derived from the same constants as the compute's d_last_block_w, so the two
-    // always agree. When false the matmul reads those rows and the fill stays.
-    constexpr bool down_k_tail_skip = (K_down_tiles_padded - K_down_tiles) < in0_block_w_d;
 
     constexpr uint32_t x_accessor_offset = 31;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
@@ -350,8 +344,10 @@ void kernel_main() {
     // Read this core's N-column slice of the (1, N) biases ONCE (constant across
     // chunks; the compute kernel wait_fronts without popping). Bias is a single
     // tile-row tensor, so the DRAM page index == tile column. Phantom columns
-    // (col >= actual N) are zero-filled — their output columns are dropped by
-    // the writer / are already zero.
+    // (col >= actual N) are zero-filled: unlike the per-K-block weight reads this
+    // runs ONCE, so the fill is free, and it keeps the bias add from turning a
+    // phantom column into Inf/NaN. Those columns are discarded either way — the
+    // gate/up ones by the down phase's K bound, the down ones by the writer.
     {
         const uint32_t gbias_tb = get_tile_size(cb_gate_bias);
         cb_gate_bias_obj.reserve_back(per_core_N_gu);
@@ -602,6 +598,11 @@ void kernel_main() {
                     for (uint32_t n = 0; n < per_core_N_gu; ++n) {
                         const uint32_t row = kb * in0_block_w_gu + k;
                         const uint32_t col = my_nt_gu * per_core_N_gu + n;
+                        // N-OOB hidden padding column (col >= N_gate_tiles_full == down's
+                        // K_down_tiles) is left UNWRITTEN: its gate output lands on a down
+                        // K position the down matmul never reduces (see the compute's
+                        // real_k_tiles bound), so the stale L1 is dropped. Mirrors the
+                        // down-weight K-OOB skip below.
                         if (col < N_gate_tiles_full) {
                             const uint32_t tile_idx = row * N_gate_tiles_full + col;
                             noc_read.async_read(
@@ -610,20 +611,6 @@ void kernel_main() {
                                 gate_tile_bytes,
                                 {.page_id = tile_idx},
                                 {});
-                        } else {
-                            // N-OOB hidden padding column (col >= N_gate_tiles_full ==
-                            // down's K_down_tiles). Its garbage gate output feeds the down
-                            // matmul's K reduction, so keep it zero UNLESS the compute
-                            // tail-skips the last down block's padding (down_k_tail_skip) —
-                            // then down never reduces this column and the garbage is dropped.
-                            // Mirrors the down-weight K-OOB fill below.
-                            if constexpr (!down_k_tail_skip) {
-                                volatile tt_l1_ptr uint64_t* p =
-                                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_gate);
-                                for (uint32_t i = 0; i < gate_tile_bytes / 8; ++i) {
-                                    p[i] = 0;
-                                }
-                            }
                         }
                         l1_w_gate += gate_tile_bytes;
                     }
@@ -641,20 +628,12 @@ void kernel_main() {
                         for (uint32_t n = 0; n < per_core_N_gu; ++n) {
                             const uint32_t row = kb * in0_block_w_gu + k;
                             const uint32_t col = my_nt_gu * per_core_N_gu + n;
+                            // N-OOB hidden padding column left unwritten: same rationale as
+                            // the gate read above.
                             if (col < N_gate_tiles_full) {
                                 const uint32_t tile_idx = row * N_gate_tiles_full + col;
                                 noc_read.async_read(
                                     up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
-                            } else {
-                                // N-OOB hidden padding column: same rationale as the gate read
-                                // above — kept zero only when the down matmul still reduces it.
-                                if constexpr (!down_k_tail_skip) {
-                                    volatile tt_l1_ptr uint64_t* p =
-                                        reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
-                                    for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
-                                        p[i] = 0;
-                                    }
-                                }
                             }
                             l1_w_up += up_tile_bytes;
                         }
@@ -799,24 +778,18 @@ void kernel_main() {
                     for (uint32_t n = 0; n < per_core_N_d; ++n) {
                         const uint32_t row = kb * in0_block_w_d + k;
                         const uint32_t col = my_nt_d * per_core_N_d + n;
+                        // Both OOB directions are left UNWRITTEN.
+                        //   * K-OOB (row >= K_down_tiles, reduction dim): the compute bounds
+                        //     its K-loop by real_k_tiles, so these are never reduced. Were
+                        //     they reduced, stale L1 decoding to Inf would NaN every valid
+                        //     output column — the bound is what makes the skip safe.
+                        //   * N-OOB (col >= N_down_tiles_full, free dim): the output column
+                        //     is dropped by the writer's col guard.
                         if (row < K_down_tiles && col < N_down_tiles_full) {
                             const uint32_t tile_idx = row * N_down_tiles_full + col;
                             noc_read.async_read(
                                 down_acc, CoreLocalMem<uint32_t>(l1_w), down_tile_bytes, {.page_id = tile_idx}, {});
-                        } else if (row >= K_down_tiles) {
-                            // K-OOB (reduction dim): the matmul may still read these, so keep
-                            // them zero — 0 * (stale/Inf weight) would NaN a valid output col.
-                            // Skipped when the compute tail-skips the last block's padding
-                            // (down_k_tail_skip) — then these tiles are never read.
-                            if constexpr (!down_k_tail_skip) {
-                                volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
-                                for (uint32_t i = 0; i < down_tile_bytes / 8; ++i) {
-                                    p[i] = 0;
-                                }
-                            }
                         }
-                        // N-OOB (col >= N_down_tiles_full): output column is dropped by the
-                        // writer's col guard (free dim), so stale L1 is harmless — skip the fill.
                         l1_w += down_tile_bytes;
                     }
                 }

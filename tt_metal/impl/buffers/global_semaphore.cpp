@@ -106,6 +106,15 @@ void GlobalSemaphoreImpl::setup_buffer(
 namespace experimental {
 // Forge backdoor API.
 GlobalSemaphore CreateGlobalSemaphore(
+    distributed::MeshDevice& device,
+    const CoreRangeSet& cores,
+    std::optional<uint32_t> initial_value,
+    BufferType buffer_type,
+    uint64_t address) {
+    return GlobalSemaphore(GlobalSemaphoreImpl(&device, cores, initial_value, buffer_type, address));
+}
+
+GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device,
     const CoreRangeSet& cores,
     std::optional<uint32_t> initial_value,
@@ -116,6 +125,10 @@ GlobalSemaphore CreateGlobalSemaphore(
 }  // namespace experimental
 
 // GlobalSemaphore implementation
+
+GlobalSemaphore::GlobalSemaphore(
+    distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) :
+    GlobalSemaphore(GlobalSemaphoreImpl(&device, std::move(cores), initial_value, buffer_type)) {}
 
 GlobalSemaphore::GlobalSemaphore(
     IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) :
