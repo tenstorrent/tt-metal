@@ -14,12 +14,6 @@ name: 🗓️ LLK ttsim Weekly
 #   - weekly cron at 02:00 UTC every Friday
 on:
   workflow_dispatch:
-    inputs:
-      workers:
-        description: "xdist workers per run"
-        required: false
-        default: "10"
-        type: string
   schedule:
     # Fridays at 02:00 UTC. GitHub evaluates cron in UTC (note: scheduled
     # runs can lag by a few minutes during peak load — don't rely on
@@ -45,11 +39,6 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
-      # Defaults on workflow_call inputs are only used when the caller omits
-      # them entirely. On workflow_dispatch inputs are strings, so cast them
-      # to the numbers the reusable workflow expects; on schedule they are
-      # empty and the `|| 'N'` fallback kicks in.
-      workers: ${{ fromJSON(inputs.workers || '10') }}
 
   ttsim-digest:
     name: "📊 Weekly ttsim digest"

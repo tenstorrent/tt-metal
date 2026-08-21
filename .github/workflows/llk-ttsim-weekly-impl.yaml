@@ -22,11 +22,6 @@ on:
         type: string
         default: "ALL_SKUS_IN_TESTS"
         description: "Comma-separated SKUs (see .github/sku_config.yaml), or ALL_SKUS_IN_TESTS"
-      workers:
-        required: false
-        type: number
-        default: 10
-        description: "xdist workers per run"
       ref:
         required: false
         type: string
@@ -181,9 +176,7 @@ jobs:
         env:
           CHIP_ARCH: ${{ steps.arch.outputs.name }}
         run: |
-          ${{ matrix.test-group.cmd }} \
-            --architecture ${{ steps.arch.outputs.name }} \
-            --workers ${{ inputs.workers }}
+          ${{ matrix.test-group.cmd }} --architecture ${{ steps.arch.outputs.name }}
 
       # Rename the timestamped outputs to stable per-arch names so the artifact has predictable
       # filenames (the script writes ttsim_<timestamp>.{xml,html} plus latest.* symlinks, which
