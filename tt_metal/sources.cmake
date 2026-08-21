@@ -213,6 +213,7 @@ set(JITAPI_FILES
     impl/dispatch/kernels/telemetry.hpp
     impl/dispatch/kernels/cq_telemetry_dispatch_subordinate.hpp
     impl/dispatch/kernels/realtime_profiler.hpp
+    impl/dispatch/kernels/realtime_profiler_protocol.hpp
     impl/dispatch/kernels/cq_realtime_profiler_dispatch_subordinate.hpp
     impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp
     soc_descriptors/blackhole_140_arch.yaml
