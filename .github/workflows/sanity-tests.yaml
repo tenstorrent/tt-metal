@@ -319,8 +319,8 @@ jobs:
           wh_skus=()
           bh_skus=()
           sim_skus=()
-          # wh-skus / bh-skus are per-arch lists: pass these to an impl whose tests yaml
-          # only ever defines SKUs of that one architecture (t3000-sanity-tests, umd-sanity-tests).
+          # wh-skus / bh-skus are per-arch lists: pass these to an impl when this pipeline
+          # must restrict a multi-architecture tests YAML to one architecture (umd-sanity-tests).
           # sanity-skus is the union of every enabled arch's list below: pass this to an impl
           # whose tests yaml spans multiple architectures in one file (ttnn-sanity-tests,
           # ops-sanity-tests, blackhole-multi-card-fast-sanity-tests). prepare_test_matrix.py
