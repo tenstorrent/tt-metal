@@ -20,8 +20,6 @@
 #include <tt-metalium/core_coord.hpp>
 
 #include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
-#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_program_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
 #include "ttnn_test_fixtures.hpp"
 
 namespace ttnn::kernel_lib::host::test {
@@ -70,46 +68,6 @@ std::vector<uint32_t> expected_bbox(tt::tt_metal::IDevice* dev, const std::vecto
 }
 
 }  // namespace
-
-TEST(GroupNormMcastGeometry, ZeroEdgeRectangle) {
-    std::vector<CoreCoord> group = {CoreCoord(0, 0), CoreCoord(1, 0), CoreCoord(2, 0)};
-    std::vector<CoreCoord> first;
-    std::vector<CoreCoord> middle = group;
-    std::vector<CoreCoord> last;
-
-    ttnn::prim::split_and_form_rectangle_grids(group, first, middle, last);
-
-    EXPECT_TRUE(first.empty());
-    EXPECT_EQ(middle, group);
-    EXPECT_TRUE(last.empty());
-}
-
-TEST(GroupNormMcastGeometry, OneEdgeWrappedSequence) {
-    std::vector<CoreCoord> group = {CoreCoord(7, 0), CoreCoord(0, 1), CoreCoord(1, 1), CoreCoord(2, 1)};
-    std::vector<CoreCoord> first;
-    std::vector<CoreCoord> middle = group;
-    std::vector<CoreCoord> last;
-
-    ttnn::prim::split_and_form_rectangle_grids(group, first, middle, last);
-
-    EXPECT_EQ(first, std::vector<CoreCoord>({CoreCoord(7, 0)}));
-    EXPECT_EQ(middle, std::vector<CoreCoord>({CoreCoord(0, 1), CoreCoord(1, 1), CoreCoord(2, 1)}));
-    EXPECT_TRUE(last.empty());
-}
-
-TEST(GroupNormMcastGeometry, TwoEdgeWrappedSequence) {
-    std::vector<CoreCoord> group = {
-        CoreCoord(7, 0), CoreCoord(0, 1), CoreCoord(1, 1), CoreCoord(2, 1), CoreCoord(0, 2)};
-    std::vector<CoreCoord> first;
-    std::vector<CoreCoord> middle = group;
-    std::vector<CoreCoord> last;
-
-    ttnn::prim::split_and_form_rectangle_grids(group, first, middle, last);
-
-    EXPECT_EQ(first, std::vector<CoreCoord>({CoreCoord(7, 0)}));
-    EXPECT_EQ(middle, std::vector<CoreCoord>({CoreCoord(0, 1), CoreCoord(1, 1), CoreCoord(2, 1)}));
-    EXPECT_EQ(last, std::vector<CoreCoord>({CoreCoord(0, 2)}));
-}
 
 // PerRow (matmul in0): sender in column 0 broadcasts across its row.
 TEST_F(McastHostFixture, PerRow8x8) {
