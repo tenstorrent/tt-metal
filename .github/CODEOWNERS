@@ -582,7 +582,6 @@ models/experimental/bevformer/ @mbezuljTT @ddjekicTT
 models/experimental/efficientdetd0 @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/functional_unet @esmalTT @uaydonat
-models/experimental/grok @yieldthought @uaydonat
 models/experimental/llama32_1b_quasar @tenstorrent/metalium-developers-mmfusedreduce
 models/experimental/mobileNetV3 @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/experimental/openpdn_mnist @tenstorrent/cse-developer-ttnn
