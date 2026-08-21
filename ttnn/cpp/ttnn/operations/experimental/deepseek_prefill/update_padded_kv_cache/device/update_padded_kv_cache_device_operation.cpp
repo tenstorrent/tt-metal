@@ -136,7 +136,8 @@ void validate_runtime_args(
     // UINT32, ROW_MAJOR, single-element, non-sharded) here, so a malformed tensor fails host-side with a
     // clear message instead of a hard-to-debug device-side read. Values stay off the host dispatch path.
     if (tensor_args.slot_idx.has_value()) {
-        auto validate_meta = [&cache](const Tensor& meta, const char* name) {
+        const auto& meta_memory_config = tensor_args.slot_idx->memory_config();
+        auto validate_meta = [&cache, &meta_memory_config](const Tensor& meta, const char* name) {
             TT_FATAL(meta.storage_type() == StorageType::DEVICE, "metadata tensor {} must be on device", name);
             TT_FATAL(meta.dtype() == DataType::UINT32, "metadata tensor {} must be UINT32", name);
             TT_FATAL(meta.layout() == Layout::ROW_MAJOR, "metadata tensor {} must be ROW_MAJOR", name);
@@ -149,6 +150,16 @@ void validate_runtime_args(
             // The writer resolves meta.buffer()->address() against cache.device(); a tensor on a
             // different mesh device would bake the wrong address and fail obscurely downstream.
             TT_FATAL(meta.device() == cache.device(), "metadata tensor {} must be on the same device as cache", name);
+            // create_descriptor emits a single TensorAccessorArgs built from slot_idx and the writer uses
+            // it for every metadata read, so a tensor carrying a different memory config would have its
+            // address resolved through the wrong bank table.
+            TT_FATAL(
+                meta.memory_config() == meta_memory_config,
+                "metadata tensor {} must share slot_idx's memory config because one TensorAccessor serves "
+                "every metadata read (got buffer types {} and {})",
+                name,
+                meta.memory_config().buffer_type(),
+                meta_memory_config.buffer_type());
         };
         validate_meta(tensor_args.slot_idx.value(), "slot_idx");
         validate_meta(tensor_args.kv_actual_global.value(), "kv_actual_global");
@@ -324,7 +335,11 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         input.memory_config(),
         input.padded_shape(),
         cache.memory_config(),
-        cache.padded_shape());
+        cache.padded_shape(),
+        // On the metadata path the writer bakes a TensorAccessorArgs built from slot_idx into its
+        // compile-time args, so the bank table it selects cannot be refreshed on a cache hit. Only the
+        // config is keyed, never the value; kv_actual_global is pinned to match by validate_runtime_args.
+        tensor_args.slot_idx.has_value() ? tensor_args.slot_idx->memory_config() : MemoryConfig{});
 }
 
 tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(
