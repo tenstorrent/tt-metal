@@ -1595,6 +1595,54 @@ only the MATMUL share of a score tile -- about 0.27us of the 0.685 -- because ex
 and the row-sum matmul still run on all sk tiles. Call it 9% of the kernel for a change to
 the banded path, against 24% for the q-loop.
 
+### The q-loop: built, correct, and the prediction was wrong
+
+One launch is now one head -- a query-chunk loop around the key-chunk loop, with the
+causal walk in the kernel so query chunk i visits only `k_offset + (i+1)*sq` key tiles and
+never touches a chunk wholly above the diagonal. Verified against the FULL S x S reference
+rather than one query chunk, which is a stronger check than the old shape allowed, and
+`num_q=1` reproduces the old behaviour exactly.
+
+The predicted ~24% did not appear:
+
+| | per-q-chunk launches | q-loop |
+|---|---|---|
+| sq=8 | 178.5 us | **172.7 us** (-3.3%) |
+| sq=4 | 182.8 us | 197.4 us (WORSE) |
+| sq=2 | 222.4 us | 338.2 us (much worse) |
+
+The prediction also said the optimum would invert to sq=2. It did the opposite, and the
+reason is that the fixed cost was attributed to the wrong thing. Holding sq and the key
+range constant -- so the score-tile count is identical at 192 -- and varying only the chunk
+width:
+
+| | k-chunks | score tiles | total |
+|---|---|---|---|
+| sk=8 | 3 | 192 | 172.7 us |
+| sk=4 | 6 | 192 | 204.4 us |
+| sk=2 | 12 | 192 | 281.0 us |
+
+**12.0 us of fixed cost per K-CHUNK**, with score work held exactly constant. The earlier
+fit of "13.1us per q-chunk" matched its three points just as well, because in those plans
+the two counts moved together; the q-loop is what separated them, and it separated them
+the wrong way for the hypothesis. Causally the k-chunk count grows as n(n+1)/2 while
+q-chunks grow as n, so finer query chunks multiply the dominant cost quadratically.
+
+**So the diagonal waste is not reachable by chunking in either dimension.** That is now
+measured twice, and the second time with the launch overhead removed, which was the only
+remaining excuse. The waste is 22% and sk is already at its ceiling (the banded matmul
+needs one row band to fit DST, so sk <= 8).
+
+What the q-loop is still worth keeping for: 3.3% at the best shape, and it removes the
+"N launches versus one program" asymmetry that has qualified every ttnn comparison here.
+GQA and multi-core both need it.
+
+**The new target is that 12.0 us.** At sq=8/sk=8 with 3 k-chunks it is ~36us of 172.7 --
+21% -- and it is fixed per chunk regardless of block size, so it is setup, not arithmetic:
+per-pass fixed costs (~0.217us x ~10 passes) plus the strategy inits, of which the biggest
+suspects are the four matmul_block_inits a chunk now runs and the per-band init the fused
+mask forces after every addend.
+
 ### What to test next
 
 Ordered by expected value, with what each result would actually mean. Six candidates are
