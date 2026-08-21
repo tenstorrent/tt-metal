@@ -559,22 +559,6 @@ _EDGE_KNOWN_DIVERGENCES = {
     ),
 }
 
-# Only the fp32-dest cells could ever show the erfinv(+/-1) divergence, so those are the only
-# ones listed. Drop this table after a BH silicon run -- see _EDGE_BLACKHOLE_UNVERIFIED_REASON.
-_EDGE_BLACKHOLE_UNVERIFIED_DIVERGENCES = {
-    MathOperation.Erfinv: (
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
-    ),
-}
-
-_EDGE_BLACKHOLE_UNVERIFIED_REASON = (
-    "erfinv(+/-1) is repaired by the sqrt_custom(+inf) fix, verified on Wormhole silicon. "
-    "Blackhole is compile-verified only, so this cell keeps the pre-fix non-strict xfail "
-    "until a BH silicon run replaces it. An XPASS here is the expected outcome and is the "
-    "signal to drop the entry."
-)
-
 
 # The cat-B divergences, derived rather than listed: each op diverges on exactly the
 # combinations that *deliver* the probe it diverges on, so the sets stay right when the format
@@ -761,15 +745,6 @@ def test_eltwise_unary_sfpu_edges(
     if diverges_here and (specials or mathop not in _CAT_B_DERIVED_DIVERGENCES):
         request.node.add_marker(
             pytest.mark.xfail(reason=_EDGE_DIVERGENCE_REASON[mathop], strict=False)
-        )
-
-    if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE and (
-        formats.input_format,
-        formats.output_format,
-        dest_acc,
-    ) in _EDGE_BLACKHOLE_UNVERIFIED_DIVERGENCES.get(mathop, ()):
-        request.node.add_marker(
-            pytest.mark.xfail(reason=_EDGE_BLACKHOLE_UNVERIFIED_REASON, strict=False)
         )
 
     spec_A = edge_spec(
