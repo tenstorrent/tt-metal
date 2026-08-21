@@ -57,10 +57,20 @@ typecast. This branch still reads ``prefill_ccl_tuning()`` (so there is one knob
 runs at wpl=4 -- that value is the 9B's, chosen there on its own measurements, and is deliberately
 NOT re-tuned for the 27B because at TP=8 it makes no difference either way.
 
+``prefill_gather_dtype`` is BOTH a constructor arg and a ``forward`` arg, which looks redundant and
+is not. ff_norm's narrowing is a property of the norm (its output only ever feeds the MLP), so it is
+set once at construction. attention_norm's is a property of the CALL: on a GDN layer the narrowing is
+only legal when that chunk's depthwise conv takes the native ttnn.conv1d path, and which path it
+takes depends on the call's ``valid_len``. Same object, different answer per chunk -- see the gate in
+``layer.py``'s ``forward``. MEASURED there: 1,144 -> 698us on the 27B GDN layer at seq 2048, landing
+within 5us of ff_norm's already-bf8 gather at the same shape (693us), which is this collective's
+floor.
+
 The mirrored branches are a few lines of upstream logic each. ``_check_upstream_shape()`` asserts the
 upstream branches still look the way these mirrors assume, so drift fails loudly rather than silently
 running a stale duplicate.
 """
+
 import inspect
 
 import ttnn
@@ -77,6 +87,10 @@ _UPSTREAM_ANCHORS = (
     "if self.args.is_distributed_norm(mode) and self.enable_all_gather:",
 )
 _checked = False
+
+# Sentinel for "no per-call override -- use whatever the constructor was given".
+# Distinct from None, which is a REAL value here (None == "do not narrow, keep the norm's dtype").
+_KEEP = object()
 
 
 def _check_upstream_shape():
@@ -107,16 +121,30 @@ class PrefillTunedDistributedNorm(DistributedNorm):
 
     def __init__(self, *args, prefill_gather_dtype=None, **kwargs):
         super().__init__(*args, **kwargs)
-        # Narrow the POST-norm prefill gather to this dtype before sending it (see _forward_distributed).
-        # None keeps the norm's own dtype, which is what every caller but ff_norm passes.
+        # DEFAULT narrowing for the POST-norm prefill gather (see _forward_distributed). None keeps
+        # the norm's own dtype. Per-CALL overrides go through forward(prefill_gather_dtype=...);
+        # this is only the fallback for callers that don't pass one.
         self.prefill_gather_dtype = prefill_gather_dtype
 
-    def forward(self, x, mode: Mode, norm_config=None):
+    def forward(self, x, mode: Mode, norm_config=None, prefill_gather_dtype=_KEEP):
+        """prefill_gather_dtype: per-call override of the constructor's narrowing (``None`` = don't
+        narrow). It is a forward argument and not just constructor state because for attention_norm
+        the decision is per CALL, not per instance: on a GDN layer the gathered activation may or may
+        not reach the depthwise MAC FIR (which forbids bf8 -- see layer.py), and which it is depends
+        on this call's ``valid_len``. Same norm object, different answer per chunk.
+
+        Only the POST-norm (distributed-norm) gather can honour it: that gather sends the norm's
+        OUTPUT, so the dtype is a norm kwarg and the narrowing is free. On the PRE-norm branch the
+        gather happens before the norm, so there is no in-op hook and the argument is ignored --
+        which is safe rather than silent-wrong, because the two branches are mutually exclusive by
+        model (see the module docstring) and only the post-norm one has callers that pass this.
+        """
         if mode == Mode.DECODE or self.TG or not self.args.is_multichip:
             return super().forward(x, mode, norm_config=norm_config)
 
+        gather_dtype = self.prefill_gather_dtype if prefill_gather_dtype is _KEEP else prefill_gather_dtype
         if self.args.is_distributed_norm(mode):
-            return self._forward_distributed(x, mode, norm_config)
+            return self._forward_distributed(x, mode, norm_config, gather_dtype)
 
         _check_upstream_shape()
         chunks_per_sync, num_workers_per_link = tpc.prefill_ccl_tuning()
@@ -139,7 +167,7 @@ class PrefillTunedDistributedNorm(DistributedNorm):
         # does is gated on is_distributed_norm(mode), which is False on this branch by construction.
         return self.norm(x, mode=mode, in_sharded=False, out_sharded=False, norm_config=norm_config)
 
-    def _forward_distributed(self, x, mode: Mode, norm_config):
+    def _forward_distributed(self, x, mode: Mode, norm_config, gather_dtype):
         """Mirror of upstream's is_distributed_norm branch: norm on the shard, then gather the result.
 
         Upstream reaches the same gather with hardcoded chunks_per_sync=10 / num_workers_per_link=2.
@@ -169,8 +197,8 @@ class PrefillTunedDistributedNorm(DistributedNorm):
         # i.e. a 5th-decimal REGRESSION. Taken anyway because it is far below the bfp4 gate/up
         # weights that set this MLP's error budget, and it buys a whole op -- but do not repeat the
         # "one less rounding step" reasoning elsewhere without measuring it.
-        if self.prefill_gather_dtype is not None and self.enable_all_gather:
-            norm_config = {**(norm_config or {}), "distributed_output_dtype": self.prefill_gather_dtype}
+        if gather_dtype is not None and self.enable_all_gather:
+            norm_config = {**(norm_config or {}), "distributed_output_dtype": gather_dtype}
 
         x = self.norm(x, mode=mode, in_sharded=False, out_sharded=False, norm_config=norm_config)
         if not self.enable_all_gather:
