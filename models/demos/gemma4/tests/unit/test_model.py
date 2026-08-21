@@ -19,6 +19,7 @@ from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from ...tests.test_factory import (
     TestFactory,
     compare_tensors,
+    from_pretrained_gemma4_causal_lm,
     get_pcc_threshold,
     load_real_model_substate,
     num_layers_for_full_attention_group,
@@ -432,7 +433,7 @@ def test_full_model(mesh_device, reset_seeds, request):
     import os
 
     import torch.nn.functional as F
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
     from models.demos.gemma4.tt.common import create_tt_model
 
@@ -452,7 +453,7 @@ def test_full_model(mesh_device, reset_seeds, request):
 
     # ── HF reference ─────────────────────────────────────────────────
     logger.info(f"Loading HF reference model from {model_path}...")
-    hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
+    hf_model = from_pretrained_gemma4_causal_lm(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
     hf_model.eval()
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
@@ -594,7 +595,7 @@ def test_full_model_decode(mesh_device, reset_seeds, request):
     import os
 
     import torch.nn.functional as F
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
     from models.demos.gemma4.tt.common import create_tt_model
 
@@ -610,7 +611,7 @@ def test_full_model_decode(mesh_device, reset_seeds, request):
 
     # ── HF reference: prefill, then one decode step ──────────────────────
     logger.info(f"Loading HF reference from {model_path}...")
-    hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
+    hf_model = from_pretrained_gemma4_causal_lm(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
     hf_model.eval()
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
