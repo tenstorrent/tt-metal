@@ -35,32 +35,32 @@ on:
       # All default true. If every HW SKU box is unchecked, the HW matrix is skipped
       # (CPU-only tests still respect their own toggle above).
       run-wh_n300_civ2:
-        description: "Run HW tests on wh_n300_civ2 (WH N300). Uncheck to skip; all SKU boxes default on."
+        description: "Run on wh_n300_civ2."
         required: false
         default: true
         type: boolean
       run-wh_llmbox_civ2:
-        description: "Run HW tests on wh_llmbox_civ2 (T3K). Uncheck to skip; all SKU boxes default on."
+        description: "Run on wh_llmbox_civ2."
         required: false
         default: true
         type: boolean
       run-wh_galaxy:
-        description: "Run HW tests on wh_galaxy (6U). Uncheck to skip; all SKU boxes default on."
+        description: "Run on wh_galaxy."
         required: false
         default: true
         type: boolean
       run-bh_loudbox:
-        description: "Run HW tests on bh_loudbox. Uncheck to skip; all SKU boxes default on."
+        description: "Run on bh_loudbox."
         required: false
         default: true
         type: boolean
       run-bh_p300:
-        description: "Run HW tests on bh_p300. Uncheck to skip; all SKU boxes default on."
+        description: "Run on bh_p300."
         required: false
         default: true
         type: boolean
       run-bh_quietbox_2:
-        description: "Run HW tests on bh_quietbox_2. Uncheck to skip; all SKU boxes default on."
+        description: "Run on bh_quietbox_2."
         required: false
         default: true
         type: boolean
