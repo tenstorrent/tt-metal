@@ -208,7 +208,7 @@ enum class ReduceWithinTile { Collapse, Skip };
  *
  *         constexpr uint32_t HALF = N / 2;              // N = tiles to sum; N must be EVEN
  *         ckl::eltwise_chain(
- *             ckl::EltwiseShape::tiles(HALF),
+ *             ckl::IterationShape::tiles(HALF),
  *             ckl::BinaryFpu<
  *                 ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
  *                 ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block,
