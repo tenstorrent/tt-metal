@@ -610,13 +610,10 @@ def test_exp_with_base_ceiling_is_currently_unreachable():
 def test_hardtanh_golden_matches_the_clamp_golden():
     """Hardtanh's golden must stay Clamp's golden -- pin the identity.
 
-    The harness binds both ops to metal kernels that are the same max-then-min SFPSWAP
-    composition (`calculate_clamp` chains the unary_max_min bodies; `calculate_hardtanh`
-    is `sfpi::clamp`, i.e. `min(max(val, lower), upper)` over the same SFPSWAP min/max),
-    so one golden -- sfpu_clamp -- models both by construction. This pins the two golden
-    methods to each other: if either is ever remodelled independently (say _hardtanh to
-    IEEE torch semantics), the divergence surfaces here instead of as a silent split
-    between two ops whose kernels still agree.
+    Both ops bind metal kernels that are the same SFPSWAP max-then-min composition
+    (calculate_clamp's unary_max_min chain; calculate_hardtanh's sfpi::clamp), so one
+    golden -- sfpu_clamp -- models both. If either golden is ever remodelled
+    independently, the divergence surfaces here.
     """
     from helpers.golden_generators import UnarySFPUGolden
 
@@ -638,9 +635,8 @@ def test_hardtanh_golden_matches_the_clamp_golden():
         want = float(golden._clamp(x, low, high))
         got = float(golden._hardtanh(x, low, high))
         assert got == want or (got != got and want != want), (
-            f"hardtanh({x}) golden gives {got} but the clamp golden gives {want}. Both ops "
-            "bind the same SFPU max/min composition, so their goldens must move together; "
-            "if the kernels have genuinely diverged, split the goldens and retire this pin."
+            f"hardtanh({x}) golden gives {got} but the clamp golden gives {want}; "
+            "the two goldens must move together while both ops bind the same composition."
         )
 
 

@@ -33,6 +33,7 @@
 #include "llk_sfpu/ckernel_sfpu_bitwise_not.h"
 #include "llk_sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h"
 #include "llk_sfpu/ckernel_sfpu_cbrt.h"
+#include "llk_sfpu/ckernel_sfpu_clamp.h"
 // Metal comparison-to-zero / unary-int-compare kernels (calculate_comp,
 // calculate_comp_int, calculate_comp_uint16, calculate_eqz_uint32,
 // calculate_nez_uint32, calculate_comp_unary_int + their *_init). Distinct from
@@ -49,11 +50,13 @@
 #include "llk_sfpu/ckernel_sfpu_gcd.h"
 #include "llk_sfpu/ckernel_sfpu_hardmish.h"
 #include "llk_sfpu/ckernel_sfpu_hardshrink.h"
+#include "llk_sfpu/ckernel_sfpu_hardtanh.h"
 #include "llk_sfpu/ckernel_sfpu_i1.h"
 #include "llk_sfpu/ckernel_sfpu_identity.h"
 #include "llk_sfpu/ckernel_sfpu_isclose.h"
 #include "llk_sfpu/ckernel_sfpu_lcm.h"
 #include "llk_sfpu/ckernel_sfpu_lgamma.h"
+#include "llk_sfpu/ckernel_sfpu_log.h"
 #include "llk_sfpu/ckernel_sfpu_logical_not.h"
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"
 #include "llk_sfpu/ckernel_sfpu_mask.h"
@@ -67,6 +70,7 @@
 #include "llk_sfpu/ckernel_sfpu_sigmoid_appx.h"
 #include "llk_sfpu/ckernel_sfpu_sign.h"
 #include "llk_sfpu/ckernel_sfpu_signbit.h"
+#include "llk_sfpu/ckernel_sfpu_silu.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt_custom.h"
 #include "llk_sfpu/ckernel_sfpu_tanh_derivative.h"
@@ -102,16 +106,6 @@
 #include "llk_sfpu/ckernel_sfpu_tanhshrink.h"
 #include "llk_sfpu/ckernel_sfpu_trigonometry.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
-// clamp/hardtanh/log/silu: production (ttnn -> compute API *_tile) uses the
-// metal implementations, NOT the same-named legacy tt-llk kernels, so the
-// harness binds the metal headers for them (issue #53912). abs made the same
-// dispatch switch, but its metal header was already included above -- only its
-// legacy include was dropped. The tt-llk tanh_derivative header stays: it
-// backs the explicit legacy-variant SfpuType::tanh_derivative_lut row.
-#include "llk_sfpu/ckernel_sfpu_clamp.h"
-#include "llk_sfpu/ckernel_sfpu_hardtanh.h"
-#include "llk_sfpu/ckernel_sfpu_log.h"
-#include "llk_sfpu/ckernel_sfpu_silu.h"
 #include "sfpu/ckernel_sfpu_add_int.h"
 #include "sfpu/ckernel_sfpu_comp.h"
 #include "sfpu/ckernel_sfpu_expm1_cw.h"
@@ -599,15 +593,14 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::log || OPERATION == SfpuType::log_with_base)
     {
-        // Production log_tile_init: metal log_init seeds vConstFloatPrgm0-2 with the
-        // constants the metal calculate_log polynomial reads (fp32/bf16 sets differ
-        // by dest-accum mode, so the flag must be forwarded).
+        // log_init seeds the vConstFloatPrgm0-2 constants calculate_log reads; the
+        // fp32/bf16 sets differ by dest-accum mode, so the flag must be forwarded.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(log_init<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::silu)
     {
-        // Production silu_tile_init: silu_init routes to sigmoid_init<false>, which
-        // seeds the reciprocal's vConstFloatPrgm0 that calculate_silu depends on.
+        // silu_init routes to sigmoid_init<false>, seeding the reciprocal's
+        // vConstFloatPrgm0 that calculate_silu depends on.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(silu_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::log1p)
@@ -664,9 +657,8 @@ void call_unary_sfpu_operation_init()
         // llk_math_sfpu_init_once() above, plus a dest RWC counter reset), so route them through
         // the bare `unused` init. The reason each op is safe to route this way varies:
         //   - floor/ceil/trunc/frac/round/relu_max/relu_min/hardtanh/clamp: their production/metal
-        //     <op>_init() (rounding_op_tile_init, relu_max_tile_init, relu_min_tile_init,
-        //     hardtanh_init, clamp_init) genuinely reduces to math::reset_counters, so the bare
-        //     init here matches production behavior.
+        //     <op>_init() genuinely reduces to math::reset_counters, so the bare init here
+        //     matches production behavior.
         //   - add1/identity/cast_fp32_to_fp16a/tanh_derivative/sqrt_custom/rsqrt_compat/expm1_cw: the
         //     OPERATION-keyed bare init has no delegate branch.
         //   - lrelu: no linkable definition in this test build, since only the tt-llk common
@@ -746,9 +738,8 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     // calculate_comp_unary_int. Shared with the golden (golden_generators.py:
     // _unary_comp_int_scalar); the two sides must move together.
     constexpr int UNARY_COMP_INT_SCALAR = 5;
-    // Clamp/Hardtanh bounds, fp32-encoded as the metal kernels take them. Shared with
-    // the golden (sfpu_dispatch_constants.py: CLAMP_MIN / CLAMP_MAX); the two sides
-    // must move together.
+    // Clamp/Hardtanh fp32-encoded bounds. Shared with the golden
+    // (sfpu_dispatch_constants.py: CLAMP_MIN / CLAMP_MAX); the two sides must move together.
     constexpr std::uint32_t CLAMP_MIN_FP32 = 0xBF800000u; // -1.0f
     constexpr std::uint32_t CLAMP_MAX_FP32 = 0x3F800000u; //  1.0f
 
