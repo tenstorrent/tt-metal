@@ -111,7 +111,7 @@
       "date": "2026-08-21",
       "note": "groupnorm sub-tile group corruption, fixed by PR #53858"
     },
-    "53874": "fix opened by repo-assist this run (addcdiv_bw missing output_mem_config), verified no existing PR via search_pull_requests",
+    "53874": "fixed by #53899 (not repo-assist); repo-assist's own #53898 closed as superseded",
     "53890": "fix in open PR #53891 (reporter kinginu, ttnn.where composite fallback)",
     "53862": "fix in open PR #53863 (reporter kinginu, is_odd 3-dispatch perf)"
   },
@@ -168,10 +168,19 @@
     }
   },
   "stale_pr_nudges": {
-    "34933": "2026-08-13: author nudge (behind main, doc capitalization fix)",
-    "21584": "2026-08-18: /codeowners re-ping (past cooldown from 2026-08-13)",
+    "34933": {
+      "last_ping": "2026-08-21",
+      "type": "author_checkin"
+    },
+    "21584": {
+      "last_ping": "2026-08-21",
+      "type": "codeowners"
+    },
     "45516": "2026-08-12: author nudge (behind main, no reviews yet)",
-    "49658": "2026-08-18: /codeowners re-ping (past cooldown from 2026-08-12)",
+    "49658": {
+      "last_ping": "2026-08-21",
+      "type": "codeowners"
+    },
     "46419": "2026-08-19: author nudge (approved but blocked mergeable_state, stale ~5wk, checked_state)",
     "50131": "2026-08-19: author nudge (behind main, stale since 2026-07-20, Zero Flags HAL attempt)",
     "30797": "2026-08-20: author nudge (unresolved reviewer question from philei-tt re: zero-init padding assumptions, ~4mo stale)",
@@ -209,5 +218,26 @@
       "date": "2026-08-21",
       "note": "GPT-OSS prefill LayerAck race condition"
     }
-  }
+  },
+  "issues_commented": {
+    "53922": {
+      "commented": "2026-08-21",
+      "labeled": [
+        "bug"
+      ],
+      "note": "confirmed root cause vs current main; fix has open perf tradeoff, left for maintainer"
+    }
+  },
+  "run_history": [
+    {
+      "run_id": "32481846320",
+      "date": "2026-08-21",
+      "actions": [
+        "labeled+commented #53922 (bug)",
+        "codeowners re-ping #21584, #49658",
+        "author check-in #34933",
+        "monthly summary #51865 updated"
+      ]
+    }
+  ]
 }
