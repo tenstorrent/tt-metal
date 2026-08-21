@@ -50,6 +50,10 @@ void kernel_main() {
     const uint32_t NC = get_arg_val<uint32_t>(11);
     const uint32_t HV = get_arg_val<uint32_t>(12);
     const uint32_t Hk = get_arg_val<uint32_t>(13);
+    // Work-item stride: 1 for a contiguous slice (phased prep), NP for the fused NP>1 producer
+    // split, where producer p of head h owns the interleaved chunks c = p, p+NP, ... (wi stays the
+    // flat h*NC + c, so every DRAM index below is unchanged).
+    const uint32_t wi_stride = get_arg_val<uint32_t>(14);
 
     // Mixed precision: q/k/v are bf16; g/beta and the constants are fp32.
     const uint32_t tb_io = get_tile_size(cb_q);
@@ -134,7 +138,7 @@ void kernel_main() {
     };
 
     for (uint32_t i = 0; i < wi_count; i++) {
-        const uint32_t hc = wi_start + i;  // flat (head, chunk) index
+        const uint32_t hc = wi_start + i * wi_stride;  // flat (head, chunk) index
         if constexpr (QK_FLAT) {
             read_qk_flat(q_acc, cb_q, hc);
             read_qk_flat(k_acc, cb_k, hc);

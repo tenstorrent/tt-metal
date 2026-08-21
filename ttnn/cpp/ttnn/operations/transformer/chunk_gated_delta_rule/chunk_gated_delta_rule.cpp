@@ -275,9 +275,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
         /*default_l1_acc=*/false);
 
     // Path selection. Three device implementations, same math:
-    //   fused  — ONE program: per head a producer core runs prep and NoC-writes the 7
+    //   fused  — ONE program: per head NP producer cores run prep and NoC-write the 7
     //            intermediates straight into a receiver core's CBs (zero DRAM intermediates).
-    //            Needs 2 cores/head.
+    //            Needs (1+NP) cores/head; NP defaults to 1, QWEN_GDN_NP opts into the F3a
+    //            round-robin producer split (read inside the prim at attrs construction, hashed).
     //   phased — prep -> (7 fp32 DRAM tensors) -> scan, two prims. The bit-exact reference.
     //   mono   — the original single-kernel op, 1 core/head (benchmark/debug only).
     // Precedence: QWEN_GDN_PATH=fused|phased|mono if set; else the legacy QWEN_GDN_PHASED
