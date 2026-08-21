@@ -888,11 +888,13 @@ class MOE_GATE_NORMALIZE_PARAMS(TemplateParameter):
 
     eps_bits: int = 0x00000000  # 0.0f
     scale_bits: int = 0x3F800000  # 1.0f
+    extra_scale_bits: int = 0x3F800000  # 1.0f, identity for the do_extra_scale path
 
     def convert_to_cpp(self) -> str:
         lines = [
             f"constexpr std::uint32_t MOE_GATE_EPS_BITS = {self.eps_bits}u;",
             f"constexpr std::uint32_t MOE_GATE_SCALE_BITS = {self.scale_bits}u;",
+            f"constexpr std::uint32_t MOE_GATE_EXTRA_SCALE_BITS = {self.extra_scale_bits}u;",
         ]
         return "\n".join(lines)
 
