@@ -11,11 +11,10 @@ LayerNorm (weight + bias) for the XTTS-v2 GPT, with two execution paths:
   the hidden dim across `shard_height` cores, for single-tile-height (batch=1 decode) inputs.
   Adapted from `models/tt_transformers/tt/multimodal/llama_layernorm.py::TtLayerNorm`.
 
-The interleaved decode LayerNorm on `[1,1,1024]` runs effectively single-core; sharding the
-reduction across 32 cores cut the traced decode step from ~12.4 to ~11.1 ms/token (~11%)
-over the 62 LayerNorms per token, at equal PCC. The sharded weights are built lazily on the
-first sharded call (before trace capture, so they are trace-safe), so a core that only ever
-runs interleaved never allocates them.
+The interleaved decode LayerNorm on `[1,1,1024]` runs effectively single-core, and there are 62
+LayerNorms per decode token, so sharding the reduction is worth it at equal PCC. The sharded
+weights are built lazily on the first sharded call (before trace capture, so they are trace-safe),
+so a core that only ever runs interleaved never allocates them.
 """
 
 import ttnn
