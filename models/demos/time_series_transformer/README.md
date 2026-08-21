@@ -318,4 +318,8 @@ HuggingFace, not accuracy on a multivariate benchmark.
 - Exactly one trace is live at a time. A new `batch * num_parallel_samples` releases the
   previous capture and pays a fresh one (~0.2 s). Holding several live traces is what makes
   tt-metal warn that later allocations may be corrupted, so the recapture is deliberate.
+- Nothing allocates on device while a trace is live. Mean mode runs its encoder inside the
+  trace and so reuses one capture across forecasts; the stepped sampling path runs the encoder
+  eagerly, so it releases the trace first and recaptures (~13 ms of a ~110 ms forecast). The
+  suite runs with no allocator warnings, which is what makes the timings above trustworthy.
 - Perf numbers are sensitive to host CPU load, since the model is dispatch-bound.

@@ -193,6 +193,18 @@ previous capture and takes a fresh one (~0.2 s). Keeping several live is what ma
 warn that subsequently allocated buffers may be corrupted once a trace executes, which would
 invalidate any measurement taken afterwards.
 
+The same rule applies to anything that allocates *between* replays, and the stepped path had two
+such sites. `TracedDecodeRunner.prepare` handed the encoder output over with `ttnn.copy`, which
+allocates a device temporary; it now stages through the host, once per forecast, at no measurable
+cost. The eager encoder itself allocates too, so on the stepped path the trace is released before
+it runs and recaptured afterwards -- ~13 ms against a ~110 ms Student's t sampling forecast. Mean
+mode pays neither, because its encoder runs inside the trace. The full suite now runs with zero
+allocator warnings:
+
+```
+pytest models/demos/time_series_transformer/ -q   # 100 passed, 0 "unsafe ... active trace"
+```
+
 Folding the encoder into the same trace is worth a further ~3 ms: it is only ~90 ops, but run
 eagerly they each pay host dispatch. What crosses the host boundary per forecast is now three
 buffer uploads and one readback.

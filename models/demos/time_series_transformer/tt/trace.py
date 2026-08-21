@@ -80,8 +80,20 @@ class TracedDecodeRunner:
         ttnn.synchronize_device(self.device)
 
     def prepare(self, encoder_hidden_states: ttnn.Tensor) -> None:
-        """Point the trace at this rollout's encoder output, keeping the buffer address."""
-        ttnn.copy(encoder_hidden_states, self.encoder_hidden)
+        """Point the trace at this rollout's encoder output, keeping the buffer address.
+
+        The copy goes via the host rather than through ``ttnn.copy``: that op allocates a
+        device temporary, and allocating while a trace is live is exactly what the metal
+        allocator warns about. The tensor is (rows, context_length, d_model) and the round
+        trip happens once per forecast, not once per step, so it does not show up in the
+        latency numbers.
+        """
+        host_tensor = ttnn.from_torch(
+            to_torch(encoder_hidden_states).reshape(tuple(self.encoder_hidden.shape)).contiguous(),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        ttnn.copy_host_to_device_tensor(host_tensor, self.encoder_hidden)
 
     def step(self, position: int, decoder_inputs: torch.Tensor) -> list[torch.Tensor]:
         """Run the window and return the distribution parameters at ``position``."""

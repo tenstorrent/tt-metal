@@ -136,11 +136,15 @@ class TestTraceEquivalence:
         assert float(relative.max()) < 1e-3
 
     @pytest.mark.parametrize("mode", ["mean", "sample"])
-    def test_trace_is_reused_across_calls(self, device, config, hf_state, hf_model, mode):
-        """A second call at the same shape must not recapture.
+    def test_trace_reuse_matches_the_path(self, device, config, hf_state, hf_model, mode):
+        """Mean mode reuses its trace across calls; the stepped path deliberately recaptures.
 
-        Mean mode runs the whole rollout from one trace and so registers a rollout runner;
-        sampling still steps through the decoder and registers a per-step runner.
+        Mean mode runs the whole rollout -- encoder included -- from one trace, so a second
+        call at the same shape replays it untouched. Student's t sampling cannot close on
+        device (the draw needs a host Gamma variate), so it steps through the decoder and runs
+        the encoder eagerly once per forecast. tt-metal warns about anything allocated while a
+        trace is live, so the trace is released before the encoder runs and recaptured after:
+        measured at ~13 ms against a ~110 ms forecast, in exchange for a clean run.
         """
         inputs = make_inputs(hf_model.config, batch=1)
         expected_kind = "rollout_mean" if mode == "mean" else "decode"
@@ -151,7 +155,11 @@ class TestTraceEquivalence:
 
             before = model._trace_runner
             model.generate(num_parallel_samples=1, mode=mode, **inputs)
-            assert model._trace_runner is before, "generate recaptured a trace for a known shape"
+            assert model._trace_key == (expected_kind, 1), "the second call changed trace kind or shape"
+            if mode == "mean":
+                assert model._trace_runner is before, "the rollout trace must be reused across calls"
+            else:
+                assert model._trace_runner is not before, "the stepped path recaptures after the eager encoder"
 
 
 @pytest.mark.models_performance_bare_metal

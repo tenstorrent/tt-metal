@@ -244,6 +244,13 @@ class TimeSeriesTransformer:
             forecast = repeated_loc + repeated_scale * predictions
             return self._shape_forecast(forecast, batch=past_values.shape[0], samples=samples)
 
+        # The stepped path runs the encoder eagerly, once per forecast, and tt-metal warns
+        # about any allocation made while a trace is live. Releasing first means the encoder
+        # allocates against a clean device and the trace is recaptured afterwards; measured,
+        # the recapture costs ~13 ms against a ~110 ms sampling forecast. The rollout path
+        # does not pay this at all -- it runs the encoder inside its own trace.
+        if config.use_trace:
+            self.release_traces()
         encoder_hidden = self.encode(network_inputs.transformer_inputs)
         repeated_encoder_hidden = (
             ttnn.repeat_interleave(encoder_hidden, repeats=samples, dim=0) if samples > 1 else encoder_hidden
