@@ -281,8 +281,14 @@ class ChunkedPrefillPageTableGuardMixin:
         if scratch is None or scratch.shape[0] < rows or scratch.shape[1] < cols:
             scratch = torch.full((rows, cols), -1, dtype=torch.int32)
             self._chunk_pt_scratch = scratch
-        # View may be wider than needed; callers use [:, :cols].
-        return scratch[:rows, :cols]
+        # The buffer only grows, so a later narrower request gets a view whose
+        # row stride is the old width. That is contiguous while rows == 1 (torch
+        # ignores the stride of a size-1 dim) -- which every caller here is, since
+        # the page table is sliced to one user -- but a batched caller would hand
+        # ``copy_host_to_device_tensor`` a strided tensor. Materialize instead of
+        # relying on that.
+        view = scratch[:rows, :cols]
+        return view if view.is_contiguous() else view.contiguous()
 
     def _fill_chunk_page_table(
         self,

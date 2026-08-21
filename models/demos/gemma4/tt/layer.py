@@ -105,7 +105,10 @@ def _prefill_park_l1_interleaved_only(tensor):
         return tensor
     try:
         buf = tensor.memory_config().buffer_type
-    except Exception:
+    except (AttributeError, RuntimeError):
+        # Not a device tensor (or ttnn declined to report a layout) -- leave it
+        # where it is. Narrow on purpose: a real failure inside
+        # ``to_memory_config`` below must surface, not read as "keep in L1".
         return tensor
     if buf != ttnn.BufferType.L1 or tensor.is_sharded():
         return tensor
