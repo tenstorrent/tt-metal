@@ -365,8 +365,9 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, NIGHTLY_SdpaReduceC) {
     // std::vector<bool> do_eltwise = {false, true};
 
     // Test both implementations
+    // The reduce_c variant is gone with the op whose compute_common.hpp its kernel included; the
+    // reduce_block_max_row pair below covers the same reduction against kernel_lib alone.
     std::vector<std::pair<std::string, std::string>> kernel_variants = {
-        {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_c/compute.cpp", "reduce_c"},
         {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_block_max_row/compute.cpp", "reduce_block_max_row"}};
 
     for (const auto& [kernel_path, kernel_name] : kernel_variants) {
