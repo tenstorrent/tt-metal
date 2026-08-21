@@ -32,7 +32,7 @@ trace are warm.
 
 | Metric | Target | Measured |
 |---|---:|---:|
-| Single-sequence latency (batch 1) | < 50 ms | **17.5 ms** (mean of 30, p95 18.3) |
+| Single-sequence latency (batch 1) | < 50 ms | **17.5 ms** (mean of 30, p95 18.3, accuracy profile) |
 | Throughput (best over batch sweep) | >= 100 seq/s | **335.0 seq/s** |
 | 100 samples, one series | < 1 s | **0.383 s** |
 
@@ -372,6 +372,12 @@ Batch 1, float32 accuracy profile, idle host (load average < 1), after warm-up:
 |---|---:|---:|---:|---:|---:|---:|
 | Per-call latency | 200 | 17.66 ms | 17.64 ms | 0.73 ms | 16.58 ms | 18.78 ms |
 | As gated (mean of 5 calls) | 30 | 17.52 ms | 17.44 ms | 0.50 ms | 16.98 ms | 18.31 ms |
+
+The profile that wins this gate is the accuracy one. The performance profile is faster in
+throughput but *slower* at batch 1 -- 24.7 ms mean against 17.5 ms, measured the same way --
+because bfloat16 conversion and the SDPA kernel (head_dim padded 13 -> 32) cost more than they
+save on a single row. It pays at batch, not at batch 1, so the latency and throughput rows of
+this report deliberately come from different profiles.
 
 Against the 50 ms Stage 1 gate this is a 2.7x margin at p95. Against the 20 ms Stage 3 stretch
 it clears on 199 of 200 individual calls and 30 of 30 gate-style measurements.

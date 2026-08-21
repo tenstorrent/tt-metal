@@ -13,6 +13,7 @@ Each test holds at most one traced model at a time (see :func:`traced_model`). K
 alive and replaying them alternately wedges the device.
 """
 
+import statistics
 import time
 from contextlib import contextmanager
 from dataclasses import replace
@@ -28,6 +29,7 @@ from models.demos.time_series_transformer.reference.torch_reference import (
     make_inputs,
 )
 from models.demos.time_series_transformer.tests.perf.perf_common import (
+    LATENCY_SAMPLE_CALLS,
     STRETCH_BATCH,
     STRETCH_CONTEXT,
     STRETCH_LATENCY_MS,
@@ -37,6 +39,7 @@ from models.demos.time_series_transformer.tests.perf.perf_common import (
     TARGET_LATENCY_MS,
     TARGET_SAMPLE_SECONDS,
     TARGET_THROUGHPUT,
+    WARMUP_ITERATIONS,
     build_model,
     run_benchmark,
 )
@@ -377,3 +380,42 @@ class TestPipelining:
         share = device_ms / total * 100
         logger.info(f"forecast {total:.2f} ms, single traced dispatch {device_ms:.2f} ms ({share:.0f}% of it)")
         assert device_ms <= total * 1.05, "trace replay cannot exceed the forecast it is part of"
+
+
+@pytest.mark.models_performance_bare_metal
+class TestLatencyDistribution:
+    """The published p95 is enforced, not just observed.
+
+    PERF.md quotes a batch-1 p95 alongside the mean. A mean on its own hides a long tail, and
+    the tail is what a serving path actually feels, so this times every call separately and
+    gates the 95th percentile rather than the average.
+
+    It runs the accuracy profile, which is the one the latency claim refers to. The
+    performance profile is *slower* at batch 1 -- 24.7 ms against 17.5 ms -- because the
+    bfloat16 conversions and the SDPA kernel (head_dim padded 13 -> 32) cost more than they
+    save on a single row. It earns its name at batch, not at batch 1.
+    """
+
+    def test_p95_latency_meets_the_stretch_target(self, device, config, hf_state, hf_model):
+        inputs = make_inputs(hf_model.config, batch=1)
+
+        with traced_model(device, config, hf_state) as model:
+            for _ in range(WARMUP_ITERATIONS):
+                model.generate(num_parallel_samples=1, mode="mean", **inputs)
+
+            timings = []
+            for _ in range(LATENCY_SAMPLE_CALLS):
+                start = time.perf_counter()
+                model.generate(num_parallel_samples=1, mode="mean", **inputs)
+                timings.append((time.perf_counter() - start) * 1e3)
+
+        ordered = sorted(timings)
+        # Nearest-rank percentile: the smallest value at or above 95% of the samples.
+        p95 = ordered[-max(1, round(len(ordered) * 0.05))]
+        mean = statistics.fmean(ordered)
+        logger.info(
+            f"batch-1 latency over {len(ordered)} calls: mean {mean:.2f} ms, "
+            f"median {statistics.median(ordered):.2f} ms, p95 {p95:.2f} ms, max {ordered[-1]:.2f} ms"
+        )
+
+        assert p95 < STRETCH_LATENCY_MS, f"p95 latency {p95:.2f} ms exceeds the {STRETCH_LATENCY_MS} ms target"

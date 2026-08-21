@@ -28,6 +28,9 @@ STRETCH_SAMPLE_COUNT = 1000
 STRETCH_SAMPLE_SECONDS = 2.0
 STRETCH_BATCH = 256  # "100+ time series in batch"
 STRETCH_CONTEXT = 2048
+# PERF.md quotes a batch-1 p95, so it is measured over this many timed calls and asserted.
+# A mean alone hides a long tail, which is exactly what a serving path would feel.
+LATENCY_SAMPLE_CALLS = 30
 
 
 WARMUP_ITERATIONS = 2
@@ -100,6 +103,7 @@ __all__ = [
     "MEASURE_ITERATIONS",
     "STRETCH_BATCH",
     "STRETCH_CONTEXT",
+    "LATENCY_SAMPLE_CALLS",
     "STRETCH_LATENCY_MS",
     "STRETCH_SAMPLE_COUNT",
     "STRETCH_SAMPLE_SECONDS",
