@@ -129,6 +129,7 @@ TensorSpecRelaxations = ttnn._ttnn.program_spec.TensorSpecRelaxations
 TensorParameter = ttnn._ttnn.program_spec.TensorParameter
 DFBAdvancedOptions = ttnn._ttnn.program_spec.DFBAdvancedOptions
 DataflowBufferSpec = ttnn._ttnn.program_spec.DataflowBufferSpec
+dfb_spec_from_sharded_tensor = ttnn._ttnn.program_spec.dfb_spec_from_sharded_tensor
 SemaphoreSpec = ttnn._ttnn.program_spec.SemaphoreSpec
 ScratchpadSpec = ttnn._ttnn.program_spec.ScratchpadSpec
 DataMovementGen1Config = ttnn._ttnn.program_spec.DataMovementGen1Config
