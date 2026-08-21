@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Build-time shaping of API reference pages.
 
 This replaces what ``api_style.js`` used to do in every visitor's browser. The
@@ -36,7 +40,7 @@ def _split_at_node(children: list[nodes.Node]):
     """Sphinx builds ``Parameters`` entries with the separator as its own node."""
     for index, child in enumerate(children):
         if _is_separator(child):
-            return children[:index], children[index + 1:]
+            return children[:index], children[index + 1 :]
     return None
 
 
@@ -52,12 +56,11 @@ def _split_inside_text(children: list[nodes.Node]):
             position = text.find(marker)
             if position == -1:
                 continue
-            before, after = text[:position], text[position + len(marker):]
+            before, after = text[:position], text[position + len(marker) :]
             head = children[:index]
             if before.strip():
                 head = head + [nodes.Text(before)]
-            tail = ([nodes.Text(after)] if after.strip() else []) + \
-                children[index + 1:]
+            tail = ([nodes.Text(after)] if after.strip() else []) + children[index + 1 :]
             return head, tail
     return None
 
@@ -135,12 +138,8 @@ def _shape_param_tables(doctree: nodes.document) -> int:
                 name_cell, desc_cell = cells[0], cells[1]
 
                 paragraph = nodes.paragraph(classes=["tt-api-param-row"])
-                paragraph += nodes.inline(
-                    "", "", *_detached(name_cell), classes=["tt-api-param-name"]
-                )
-                paragraph += nodes.inline(
-                    "", "", *_detached(desc_cell), classes=["tt-api-param-desc"]
-                )
+                paragraph += nodes.inline("", "", *_detached(name_cell), classes=["tt-api-param-name"])
+                paragraph += nodes.inline("", "", *_detached(desc_cell), classes=["tt-api-param-desc"])
                 container += paragraph
                 count += 1
 
@@ -188,9 +187,7 @@ def _shape_autosummary(doctree: nodes.document) -> int:
             card += name
 
             if len(cells) > 1 and cells[1].astext().strip():
-                card += nodes.paragraph(
-                    "", "", *_detached(cells[1]), classes=["tt-api-card-desc"]
-                )
+                card += nodes.paragraph("", "", *_detached(cells[1]), classes=["tt-api-card-desc"])
 
             cards += card
             count += 1

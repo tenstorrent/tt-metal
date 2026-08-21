@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Guards the contract between tt_theme.css and the HTML the docs build emits.
 
 Two failures are worth catching before a release:
@@ -54,8 +58,7 @@ DESIGN_SELECTORS = [
 def page(tmp_path_factory) -> LH.HtmlElement:
     out = tmp_path_factory.mktemp("html")
     result = subprocess.run(
-        [sys.executable, "-m", "sphinx", "-q", "-E", "-b", "html",
-         str(FIXTURE), str(out)],
+        [sys.executable, "-m", "sphinx", "-q", "-E", "-b", "html", str(FIXTURE), str(out)],
         capture_output=True,
         text=True,
     )
@@ -96,21 +99,17 @@ def _select(doc, selector: str):
 @pytest.mark.parametrize("selector", DESIGN_SELECTORS)
 def test_stylesheet_still_matches_the_markup(page, selector):
     assert _select(page, selector), (
-        f"{selector!r} matches nothing in the built page: the stylesheet and "
-        f"the generated HTML have drifted apart."
+        f"{selector!r} matches nothing in the built page: the stylesheet and " f"the generated HTML have drifted apart."
     )
 
 
 def _hiding_selectors() -> list[str]:
-    rules = tinycss2.parse_stylesheet(
-        STYLESHEET.read_text(), skip_whitespace=True, skip_comments=True
-    )
+    rules = tinycss2.parse_stylesheet(STYLESHEET.read_text(), skip_whitespace=True, skip_comments=True)
     out = []
     for rule in rules:
         if rule.type != "qualified-rule":
             continue
-        if not re.search(r"display\s*:\s*none",
-                         tinycss2.serialize(rule.content)):
+        if not re.search(r"display\s*:\s*none", tinycss2.serialize(rule.content)):
             continue
         for selector in tinycss2.serialize(rule.prelude).split(","):
             selector = selector.strip()
@@ -124,20 +123,17 @@ def test_no_rule_hides_documented_content(page):
     roots = page.cssselect("[role=main]") or page.cssselect(".rst-content")
 
     def inside_article(element) -> bool:
-        return any(element is root or root in element.iterancestors()
-                   for root in roots)
+        return any(element is root or root in element.iterancestors() for root in roots)
 
     def carries_prose(element) -> bool:
         return len("".join(element.itertext()).split()) >= 5
 
     offenders = {}
     for selector in _hiding_selectors():
-        hidden = [e for e in _select(page, selector)
-                  if inside_article(e) and carries_prose(e)]
+        hidden = [e for e in _select(page, selector) if inside_article(e) and carries_prose(e)]
         if hidden:
             offenders[selector] = len(hidden)
 
     assert not offenders, (
-        "these rules hide documented content, and nothing in the build puts "
-        f"it back: {offenders}. See #53397."
+        "these rules hide documented content, and nothing in the build puts " f"it back: {offenders}. See #53397."
     )

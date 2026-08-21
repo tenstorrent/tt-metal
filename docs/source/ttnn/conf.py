@@ -120,9 +120,7 @@ html_show_sourcelink = False
 # rather than a hand-written DOM pass. The selector adds the signature box to
 # the extension's default of code blocks; the exclusions keep the theme's
 # permalink glyph and the >>> prompts out of what lands on the clipboard.
-copybutton_selector = (
-    "div.highlight pre, .rst-content dl.py > dt.sig, .rst-content dl.cpp > dt.sig"
-)
+copybutton_selector = "div.highlight pre, .rst-content dl.py > dt.sig, .rst-content dl.cpp > dt.sig"
 copybutton_exclude = ".linenos, .gp, .headerlink"
 copybutton_prompt_text = r">>> |\.\.\. "
 copybutton_prompt_is_regexp = True

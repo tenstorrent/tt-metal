@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Minimal Sphinx project exercising every API markup shape the theme styles.
 
 It deliberately does not import ttnn: the point is to pin the *shape* of the
@@ -23,9 +27,7 @@ extensions = [
 ]
 
 # Kept in step with docs/source/*/conf.py.
-copybutton_selector = (
-    "div.highlight pre, .rst-content dl.py > dt.sig, .rst-content dl.cpp > dt.sig"
-)
+copybutton_selector = "div.highlight pre, .rst-content dl.py > dt.sig, .rst-content dl.cpp > dt.sig"
 copybutton_exclude = ".linenos, .gp, .headerlink"
 copybutton_prompt_text = r">>> |\.\.\. "
 copybutton_prompt_is_regexp = True

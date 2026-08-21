@@ -1,9 +1,14 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Minimal stand-in for the ttnn module, shaped to produce the same HTML
 that docs.tenstorrent.com emits for ttnn.remainder."""
 
 
-def remainder(input_tensor_a, input_tensor_b, *, memory_config=None, dtype=None,
-              output_tensor=None, activations=None, queue_id=0):
+def remainder(
+    input_tensor_a, input_tensor_b, *, memory_config=None, dtype=None, output_tensor=None, activations=None, queue_id=0
+):
     r"""Performs remainder on :attr:`input_tensor_a` and :attr:`input_tensor_b`.
 
     Args:
