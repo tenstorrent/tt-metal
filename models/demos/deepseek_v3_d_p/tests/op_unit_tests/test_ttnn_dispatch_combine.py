@@ -422,7 +422,7 @@ SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh(
         (8, 4): ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         (4, 2): ttnn.FabricConfig.FABRIC_2D,  # 8-chip proxy
         (2, 2): ttnn.FabricConfig.FABRIC_2D,  # 4-chip proxy
-        (2, 1): ttnn.FabricConfig.FABRIC_1D,
+        (2, 1): ttnn.FabricConfig.FABRIC_1D_RING,
     },
 )
 
