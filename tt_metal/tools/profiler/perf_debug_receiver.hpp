@@ -58,6 +58,10 @@ namespace perf_debug {
 // The only consumer-facing use is the raw path below, which exists solely for the built-in Tracy
 // sink (its timeline encodes nesting through start/end interleaving, which pairing destroys).
 enum class PerfDebugRawRecType : uint32_t {
+    // A COMPLETE zone from the device's atomic-zone path (PP_ZONE_ATOMIC): ts is the END and `duration`
+    // is set, so start = ts - duration and no pairing is required. Value 0 because the 3-bit type field
+    // has 1..7 spoken for; nothing constructs a raw record without naming its type explicitly.
+    Zone = 0,
     ZoneStart = 1,
     ZoneEnd = 2,
     ZoneTotal = 3,
@@ -80,7 +84,10 @@ struct PerfDebugRawRec {
     uint32_t id;  // full 27-bit structural zone id
     PerfDebugRawRecMeta meta;
     uint32_t prog;
+    uint32_t duration;  // type == Zone only: cycles, with ts being the END. 0 otherwise.
 };
+// Still 24 B: duration lands in the tail padding the 8-byte alignment already cost us, so the complete-zone
+// record is free on this wire.
 static_assert(sizeof(PerfDebugRawRec) == 24);
 static_assert(std::is_trivially_copyable_v<PerfDebugRawRec>);
 

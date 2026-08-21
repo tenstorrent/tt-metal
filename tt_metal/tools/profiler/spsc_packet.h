@@ -38,6 +38,13 @@
  * its logical marker kind to these codes explicitly (see ppfmt in kernel_profiler.hpp). */
 #define PP_ZONE_START 0u
 #define PP_ZONE_END 1u
+/* 3-word COMPLETE zone: w0 = type|id27, w1 = END timer_low, w2 = duration in cycles. Anchored on the END,
+ * not the start, because records leave the producer in COMPLETION order: ends are monotonic per lane, so
+ * the STICKY_TIMER contract (one timer_hi covers everything after it) holds unchanged, while starts are
+ * not monotonic and would break it. The host recovers start = full_end - duration. A duration that does
+ * not fit 32 bits (>~3.2 s at 1.35 GHz) is emitted as a legacy START/END pair instead, so this word never
+ * needs a wider field. */
+#define PP_ZONE_ATOMIC 2u
 /* STICKY_META (LEGACY / synthetic bench path only): combined sticky carrying BOTH timer_hi(low27) and
  * prog_id(payload32) in one packet. Emitted by the throwaway producer_common.h stand-in. The REAL
  * kernel_profiler path does NOT use this -- it splits identity into three separate stickies below
@@ -181,6 +188,7 @@ static inline int pp_is_event(uint32_t w0) { return pp_type(w0) == PP_EVENT; }
 static inline uint32_t pp_point_id(uint32_t w0) { return pp_low27(w0); }
 static inline uint32_t pp_data_size(uint32_t w2) { return (w2 >> PP_DATA_SIZE_SHIFT) & PP_DATA_SIZE_MASK; }
 static inline int pp_is_zone_total(uint32_t w0) { return pp_type(w0) == PP_ZONE_TOTAL; }
+static inline int pp_is_zone_atomic(uint32_t w0) { return pp_type(w0) == PP_ZONE_ATOMIC; }
 
 /* Wire length (32-bit words) of a real-path packet: SRC/TIMER/PROG are 1 word (identity/timer_hi/host-id
  * fit in low27, no payload); zone markers, EVENT, PROG_EXT and META are 2; DATA is 3 + payload, and its length lives in
@@ -194,6 +202,9 @@ static inline uint32_t pp_packet_words(uint32_t w0, uint32_t w2) {
     }
     if (t == PP_DATA) {
         return 3u + pp_data_size(w2);  // word0 + timer_low + size word + payload (self-describing)
+    }
+    if (t == PP_ZONE_ATOMIC) {
+        return 3u;  // word0 + end timer_low + duration
     }
     return 2u;  // zone markers, PP_EVENT, STICKY_PROG_EXT, STICKY_META
 }

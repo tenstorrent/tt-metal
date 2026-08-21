@@ -196,6 +196,7 @@ struct ppfmt {
     // made ZONE_TOTAL and TS_DATA_16B collide with unrelated types on this wire.
     static constexpr uint32_t T_ZONE_START = 0u;        // PP_ZONE_START
     static constexpr uint32_t T_ZONE_END = 1u;          // PP_ZONE_END
+    static constexpr uint32_t T_ZONE_ATOMIC = 2u;       // PP_ZONE_ATOMIC (3 words: type|id, end_low, duration)
     static constexpr uint32_t T_STICKY_PROG = 8u;       // PP_STICKY_PROG
     static constexpr uint32_t T_STICKY_PROG_EXT = 14u;  // PP_STICKY_PROG_EXT
     static constexpr uint32_t T_STICKY_TIMER = 9u;      // PP_STICKY_TIMER
@@ -240,15 +241,19 @@ static constexpr uint32_t SPSC_MARKER_WORDS = 2;
 // backend definition file needn't change; constant-folds to a per-RISC .bss word.
 [[maybe_unused]] static uint32_t g_prev_timer_hi = 0xFFFFFFFFu;
 
-// Tear-free 64-bit wall-clock read: HIGH and LOW are separate registers, so a tick between them would
-// pair an old high with a new (wrapped-small) low -> a timestamp ~2^32 too small = a backwards jump. Re-read
-// HIGH after LOW and retry if it moved, so (hi, lo) is always one consistent snapshot.
+// Cached drainer head. HEAD only ever advances, so a stale copy is a CONSERVATIVE credit: while
+// (wIndex - cache) still leaves room the L1 load is skipped entirely, and a refresh is amortized over
+// most of a ring instead of paid per marker.
+[[maybe_unused]] static uint32_t g_head_cache = 0;
+
+// Reading LOW latches HIGH (c_tensix_core.h; Quasar names the register WALL_CLOCK_H_LATCHED), so
+// LOW-then-HIGH is one coherent 64-bit snapshot in exactly two loads -- no tear is possible and no retry
+// loop is needed. The ORDER is load-bearing: HIGH read on its own returns the latch from whenever LOW was
+// last read, which is arbitrarily stale.
 inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_t& lo) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    do {
-        hi = p_reg[WALL_CLOCK_HIGH_INDEX];
-        lo = p_reg[WALL_CLOCK_LOW_INDEX];
-    } while (hi != p_reg[WALL_CLOCK_HIGH_INDEX]);
+    lo = p_reg[WALL_CLOCK_LOW_INDEX];
+    hi = p_reg[WALL_CLOCK_HIGH_INDEX];
 }
 
 // ---- The stall reserve ------------------------------------------------------------------------------
@@ -302,11 +307,19 @@ struct profileScopeStall {
 // marker AND this zone's own closing half, then let the destructor close it. The zone therefore nests
 // inside the caller's elongated zone exactly as before, but it is now measured the ordinary way: START is
 // timestamped when the stall begins and END when it ends, each from its own clock read.
+inline void publish_tail();
+
 __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
+    // Expose anything the atomic path has written but not yet published BEFORE blocking: those words are
+    // invisible to the drainer, so waiting on it to consume them would never end.
+    publish_tail();
     // Ground truth for the knee, straight from the producer. The stall ZONE below still goes into the ring
     // for timeline use, but this counter is what the host reads when it wants the count without decoding --
     // it cannot be lost downstream, and it costs one L1 store on a path that was already blocked.
     if constexpr (myRiscID < SPSC_STALL_COUNT_MAX) {
+        if (profiler_control_buffer[SPSC_STALL_FIRST_ITER] == 0) {
+            profiler_control_buffer[SPSC_STALL_FIRST_ITER] = profiler_control_buffer[SPSC_LOOP_ITER] + 1;
+        }
         profiler_control_buffer[SPSC_STALL_COUNT_0 + myRiscID]++;
     }
     profileScopeStall stall;
@@ -318,16 +331,23 @@ __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
     while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_USABLE - nwords - STALL_ZONE_HALF_WORDS)) {
         invalidate_l1_cache();  // re-read the drainer-updated head (and the terminate flag)
         if (profiler_control_buffer[PROFILER_TERMINATE]) {
+            g_head_cache = profiler_control_buffer[HEAD_INDEX];
             return;  // teardown: stop waiting on a dead ring; the destructor still closes the zone
         }
     }
+    g_head_cache = profiler_control_buffer[HEAD_INDEX];
 }
 
-// Fast path stays inline (just the room check); the full-ring path is out-of-line above. Note the bound is
-// RING_USABLE, not RING_CAPACITY: the difference is the stall reserve, which ordinary markers may never
-// touch.
+// Fast path stays inline (just the credit check); the full-ring path is out-of-line above. Note the bound
+// is RING_USABLE, not RING_CAPACITY: the difference is the stall reserve, which ordinary markers may never
+// touch. The cached head is tried first and only refreshed when it says we are out of room, so the common
+// case costs no L1 load at all.
 inline __attribute__((always_inline)) void ring_ensure_room(uint32_t nwords) {
-    if ((wIndex - profiler_control_buffer[HEAD_INDEX]) <= (RING_USABLE - nwords)) {
+    if ((wIndex - g_head_cache) <= (RING_USABLE - nwords)) {
+        return;
+    }
+    g_head_cache = profiler_control_buffer[HEAD_INDEX];
+    if ((wIndex - g_head_cache) <= (RING_USABLE - nwords)) {
         return;
     }
     ring_ensure_room_slow(nwords);
@@ -372,6 +392,81 @@ inline __attribute__((always_inline)) void mark_time(uint32_t timer_id, ZoneKind
     }
     ring_write_word(ppfmt::zone_w0(timer_id, kind));  // word0: zone type | 27-bit structural zone id
     ring_write_word(lo);                              // word1: timer_low
+    publish_tail();
+}
+
+// The >2^32-cycle (~3.2 s at 1.35 GHz) zone: too long for the duration word, so it degrades to a legacy
+// split pair. BOTH halves need an explicit STICKY_TIMER -- the start's epoch left g_prev_timer_hi long ago
+// -- and the host's pairing path takes it from there. Out-of-line because inlining this cold body at every
+// zone site costs measurable cycles in code layout alone, on a path taken essentially never.
+__attribute__((noinline)) void mark_zone_wide(uint32_t timer_id, uint64_t start, uint32_t hi, uint32_t lo) {
+    ring_ensure_room(2 * SPSC_MARKER_WORDS + 2);
+    const uint32_t start_hi = static_cast<uint32_t>(start >> 32);
+    if (start_hi != g_prev_timer_hi) {
+        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, start_hi));
+    }
+    ring_write_word(ppfmt::zone_w0(timer_id, ZoneKind::Start));
+    ring_write_word(static_cast<uint32_t>(start));
+    ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));
+    g_prev_timer_hi = hi;
+    ring_write_word(ppfmt::zone_w0(timer_id, ZoneKind::End));
+    ring_write_word(lo);
+    publish_tail();
+}
+
+// Emit one COMPLETE zone -- {type|id27, end_low, duration} -- 3 words and one ring transaction where the
+// split pair costs 4 words and two. The entire emit runs AFTER the end timestamp is read, so none of it
+// lands inside the measured window; that, not the word count, is why this is cheaper to instrument with.
+// See PP_ZONE_ATOMIC in spsc_packet.h for why the record is anchored on the END.
+//
+// Unlike mark_time there is deliberately NO room check before the clock read: the credit was reserved by
+// the previous batch boundary (below), which is what lets the common path run straight through. The
+// backwards-jump hazard mark_time guards against does not arise here, because a stall inside
+// ring_ensure_room can only happen at a boundary, never between this zone's start and end.
+// Everything cold about an atomic zone, in ONE out-of-line body: the >2^32 duration, the STICKY_TIMER the
+// wall clock's high half needs when it ticks, and the record straddling the ring wrap. All three are rare,
+// and this emit is inlined at every zone site in the binary -- ~83 of them per RISC in a fused kernel --
+// so inlining their tests and bodies is paid in kernel TEXT, which is a scarcer budget here than cycles
+// (the kernel config ringbuffer is a hard host-side limit at launch).
+__attribute__((noinline)) void mark_zone_atomic_slow(uint32_t timer_id, uint64_t start, uint32_t hi, uint32_t lo) {
+    const uint64_t d = ((static_cast<uint64_t>(hi) << 32) | lo) - start;
+    if (d >> 32) {
+        mark_zone_wide(timer_id, start, hi, lo);
+        return;
+    }
+    if (hi != g_prev_timer_hi) {
+        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));
+        g_prev_timer_hi = hi;
+    }
+    ring_write_word(ppfmt::w0(ppfmt::T_ZONE_ATOMIC, timer_id & ppfmt::LOW27_MASK));
+    ring_write_word(lo);
+    ring_write_word(static_cast<uint32_t>(d));
+    publish_tail();
+}
+
+inline __attribute__((always_inline)) void mark_zone_atomic(uint32_t timer_id, uint64_t start) {
+    static_assert((RING_CAPACITY & (RING_CAPACITY - 1u)) == 0, "the burst store masks wIndex");
+    // Room BEFORE the end-clock read, for the reason mark_time gives: securing room can BLOCK and emit the
+    // PRODUCER-STALL zone, and a timestamp taken before that would land in the ring after the (later)
+    // stall zone -- a backwards jump on this lane. Only 4 words are asked for, the record plus a possible
+    // sticky, so the stall threshold stays where the split-pair path had it; reserving a whole batch's
+    // worth instead cost 29 words of a 506-word ring and measurably RAISED stalls.
+    ring_ensure_room(4);
+    uint32_t hi, lo;
+    read_wall_clock(hi, lo);
+    const uint64_t end = (static_cast<uint64_t>(hi) << 32) | lo;
+    const uint32_t idx = wIndex & (RING_CAPACITY - 1u);
+    // One test covers all three cold cases, so the common path branches once and the whole cold body is a
+    // single call rather than three inlined tails.
+    if (((end - start) >> 32) || hi != g_prev_timer_hi || idx > RING_CAPACITY - 3u) [[unlikely]] {
+        mark_zone_atomic_slow(timer_id, start, hi, lo);
+        return;
+    }
+    volatile tt_l1_ptr uint32_t* q = &profiler_data_buffer[myRiscID].data[idx];
+    q[0] = ppfmt::w0(ppfmt::T_ZONE_ATOMIC, timer_id & ppfmt::LOW27_MASK);
+    q[1] = lo;
+    q[2] = static_cast<uint32_t>(end - start);
+    wIndex += 3;
     publish_tail();
 }
 
@@ -513,8 +608,16 @@ inline __attribute__((always_inline)) void flush_to_dram_if_full(uint32_t additi
 
 template <uint32_t timer_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
 struct profileScope {
-    inline __attribute__((always_inline)) profileScope() { mark_time(timer_id); }
-    inline __attribute__((always_inline)) ~profileScope() { mark_time(timer_id, ZoneKind::End); }
+    // Complete-zone emission: opening the zone is a bare clock read and the start rides this scope object,
+    // so ring storage scales with live NESTING depth rather than zone count (sequential zones reuse the
+    // same stack slot) and one 3-word record goes out at close. Wire contract: mark_zone_atomic.
+    uint64_t start;
+    inline __attribute__((always_inline)) profileScope() {
+        uint32_t hi, lo;
+        read_wall_clock(hi, lo);
+        start = (static_cast<uint64_t>(hi) << 32) | lo;
+    }
+    inline __attribute__((always_inline)) ~profileScope() { mark_zone_atomic(timer_id, start); }
 };
 
 // FW-wrapper scope (what DeviceZoneScopedMainN used to be, via profileScopeGuaranteed<hash,0>).

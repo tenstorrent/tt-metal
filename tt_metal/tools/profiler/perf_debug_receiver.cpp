@@ -246,10 +246,14 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     uint64_t min_ts = s.min_zone_ts, max_ts = s.max_zone_ts;
     uint64_t* const last_ts = s.last_zone_ts.data();
 
-    auto emit = [&](uint32_t lane, uint32_t type, uint32_t zone_id, uint64_t ts, uint32_t prog) {
+    auto emit = [&](uint32_t lane, uint32_t type, uint32_t zone_id, uint64_t ts, uint32_t prog, uint32_t duration) {
         PerfDebugRawRecType rt = PerfDebugRawRecType::ZoneTotal;
-        if (type != PP_ZONE_TOTAL) {
+        if (type == PP_ZONE_ATOMIC) {
+            rt = PerfDebugRawRecType::Zone;
+        } else if (type != PP_ZONE_TOTAL) {
             rt = type == PP_ZONE_START ? PerfDebugRawRecType::ZoneStart : PerfDebugRawRecType::ZoneEnd;
+        }
+        if (type != PP_ZONE_TOTAL) {
             zone_markers++;
             // PRODUCER-STALL, matched by ELF-resolved NAME via the id table: a producer RISC blocked on
             // a FULL ring. STALL_ONLY mode only -- on a normal run this per-marker probe is redundant
@@ -267,7 +271,7 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
             max_ts = ts;
         }
         if (sink) {
-            w.emit_store(pos++, PerfDebugRawRec{ts, zone_id, {0, lane, dev, rt}, prog});
+            w.emit_store(pos++, PerfDebugRawRec{ts, zone_id, {0, lane, dev, rt}, prog, duration});
         }
     };
     auto emit_data = [&](uint32_t lane,
