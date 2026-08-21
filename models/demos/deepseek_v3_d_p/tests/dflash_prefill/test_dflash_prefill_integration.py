@@ -38,10 +38,11 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_to_halfsplit_perm
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_dflash_kv_cache, init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
@@ -69,18 +70,14 @@ MAX_RANDOM_LAYERS = 12
 )
 @pytest.mark.parametrize("n_routed_experts, gate_fallback_mode", [(384, GateComputeMode.DEVICE)], ids=["e384_device"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
-            },
+            torus_xy_device_params(fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -98,7 +95,6 @@ def test_dflash_prefill_integration(
     n_routed_experts,
     gate_fallback_mode,
     num_links,
-    topology,
     use_pretrained,
     temperature,
     tokenizer,
@@ -107,6 +103,7 @@ def test_dflash_prefill_integration(
     drafter_state_dict,
     hf_context_kv,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])[1]
     if not use_pretrained and num_layers > MAX_RANDOM_LAYERS:
         pytest.skip(
             f"random verifier at {num_layers} layers materializes the whole Kimi model in host RAM "
