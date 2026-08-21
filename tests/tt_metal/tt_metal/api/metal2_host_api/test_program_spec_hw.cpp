@@ -20,6 +20,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -90,10 +91,15 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     // -------------------------------------------------------
     // Create DRAM buffers (single-page so all data is on one bank)
     // -------------------------------------------------------
-    InterleavedBufferConfig dram_config{
-        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
-    auto input_buffer = CreateBuffer(dram_config);
-    auto output_buffer = CreateBuffer(dram_config);
+    auto input_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = total_bytes},
+        {.page_size = total_bytes, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+    auto output_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = total_bytes},
+        {.page_size = total_bytes, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+    auto& cq = mesh_device->mesh_command_queue();
 
     // -------------------------------------------------------
     // Build ProgramSpec
@@ -167,7 +173,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     for (size_t i = 0; i < input_data.size(); i++) {
         input_data[i] = static_cast<uint32_t>(i);
     }
-    detail::WriteToBuffer(input_buffer, input_data);
+    distributed::EnqueueWriteMeshBuffer(cq, input_buffer, input_data, /*blocking=*/true);
 
     // -------------------------------------------------------
     // Dispatch
@@ -178,7 +184,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     // Verify
     // -------------------------------------------------------
     std::vector<uint32_t> output_data;
-    detail::ReadFromBuffer(output_buffer, output_data);
+    distributed::EnqueueReadMeshBuffer(cq, output_data, output_buffer, /*blocking=*/true);
 
     ASSERT_EQ(output_data.size(), input_data.size());
     EXPECT_EQ(output_data, input_data);
@@ -227,10 +233,15 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 
     const NodeCoord node{0, 0};
 
-    InterleavedBufferConfig dram_config{
-        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
-    auto input_buffer = CreateBuffer(dram_config);
-    auto output_buffer = CreateBuffer(dram_config);
+    auto input_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = total_bytes},
+        {.page_size = total_bytes, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+    auto output_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = total_bytes},
+        {.page_size = total_bytes, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+    auto& cq = mesh_device->mesh_command_queue();
 
     ProgramSpec spec;
     spec.name = "named_args_loopback";
@@ -308,12 +319,12 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     for (size_t i = 0; i < input_data.size(); i++) {
         input_data[i] = static_cast<uint32_t>(i);
     }
-    detail::WriteToBuffer(input_buffer, input_data);
+    distributed::EnqueueWriteMeshBuffer(cq, input_buffer, input_data, /*blocking=*/true);
 
     detail::LaunchProgram(device, program);
 
     std::vector<uint32_t> output_data;
-    detail::ReadFromBuffer(output_buffer, output_data);
+    distributed::EnqueueReadMeshBuffer(cq, output_data, output_buffer, /*blocking=*/true);
 
     ASSERT_EQ(output_data.size(), input_data.size());
     EXPECT_EQ(output_data, input_data);
@@ -421,10 +432,15 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
 
     const NodeCoord node{0, 0};
 
-    InterleavedBufferConfig dram_config{
-        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
-    auto input_buffer = CreateBuffer(dram_config);
-    auto output_buffer = CreateBuffer(dram_config);
+    auto input_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = total_bytes},
+        {.page_size = total_bytes, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+    auto output_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = total_bytes},
+        {.page_size = total_bytes, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+    auto& cq = mesh_device->mesh_command_queue();
 
     ProgramSpec spec;
     spec.name = "tt_kernel_named_args_loopback";
@@ -474,12 +490,12 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
     for (size_t i = 0; i < input_data.size(); i++) {
         input_data[i] = static_cast<uint32_t>(i);
     }
-    detail::WriteToBuffer(input_buffer, input_data);
+    distributed::EnqueueWriteMeshBuffer(cq, input_buffer, input_data, /*blocking=*/true);
 
     detail::LaunchProgram(device, program);
 
     std::vector<uint32_t> output_data;
-    detail::ReadFromBuffer(output_buffer, output_data);
+    distributed::EnqueueReadMeshBuffer(cq, output_data, output_buffer, /*blocking=*/true);
 
     ASSERT_EQ(output_data.size(), input_data.size());
     EXPECT_EQ(output_data, input_data);
@@ -1017,9 +1033,11 @@ TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
     constexpr uint32_t kVararg1Upd = 0xD4D4FFFFu;
 
     // Output buffer holds one DFB entry (single page → single bank).
-    InterleavedBufferConfig dram_config{
-        .device = device, .size = entry_size, .page_size = entry_size, .buffer_type = BufferType::DRAM};
-    auto output_buffer = CreateBuffer(dram_config);
+    auto output_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = entry_size},
+        {.page_size = entry_size, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+    auto& cq = mesh_device->mesh_command_queue();
 
     // Input tensor for the tensor-binding section (interleaved DRAM; only its base address is read here).
     auto tensor_layout = TensorLayout(
@@ -1119,7 +1137,7 @@ void kernel_main() {
     auto launch_and_read = [&]() {
         detail::LaunchProgram(device, program);
         std::vector<uint32_t> out;
-        detail::ReadFromBuffer(output_buffer, out);
+        distributed::EnqueueReadMeshBuffer(cq, out, output_buffer, /*blocking=*/true);
         EXPECT_GE(out.size(), 7u);
         out.resize(7);
         return out;
@@ -1226,9 +1244,11 @@ TEST_F(ProgramSpecHWTest, ScratchpadBaseReDeliveredAfterDfbResize) {
     const NodeCoord node{0, 0};
 
     // Output buffer holds one DFB entry (single page → single bank).
-    InterleavedBufferConfig dram_config{
-        .device = device, .size = entry_size, .page_size = entry_size, .buffer_type = BufferType::DRAM};
-    auto output_buffer = CreateBuffer(dram_config);
+    auto output_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = entry_size},
+        {.page_size = entry_size, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+    auto& cq = mesh_device->mesh_command_queue();
 
     ProgramSpec spec;
     spec.name = "scratchpad_base_redelivered_after_dfb_resize";
@@ -1309,7 +1329,7 @@ void kernel_main() {
         detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> out;
-        detail::ReadFromBuffer(output_buffer, out);
+        distributed::EnqueueReadMeshBuffer(cq, out, output_buffer, /*blocking=*/true);
         EXPECT_FALSE(out.empty());
         const uint32_t base = out.empty() ? 0u : out[0];
         EXPECT_NE(base, 0u) << "Kernel reported a 0 scratchpad base address (token not delivered?)";
