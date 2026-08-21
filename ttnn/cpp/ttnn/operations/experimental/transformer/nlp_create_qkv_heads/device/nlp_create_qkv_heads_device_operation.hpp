@@ -24,6 +24,7 @@ struct NlpCreateHeadsDeviceOperation {
         uint32_t num_kv_heads;
         uint32_t head_dim;
         bool transpose_k_heads;
+        bool kv_tied;
         MemoryConfig output_mem_config;
     };
 
@@ -95,6 +96,7 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
     std::optional<uint32_t> num_kv_heads,
     uint32_t head_dim,
     bool transpose_k_heads,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors);
+    bool kv_tied = false,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt);
 }  // namespace ttnn::prim

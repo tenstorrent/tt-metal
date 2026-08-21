@@ -4406,6 +4406,71 @@ TEST_F(ProgramSpecTestGen1, DifferentCompileTimeVarargCountProducesDifferentKern
 }
 
 // ============================================================================
+// Compile-time varargs with kernel asserts enabled
+// ============================================================================
+//
+// get_compile_time_vararg(idx) is constexpr AND bounds-checked, and those two properties collide
+// with how ASSERT is defined. The lightweight-assert flavor expands to inline asm ("ebreak");
+// inline assembly is unconditionally not allowed in a constexpr function in C++17.
+// These tests ensure that this caveat is properly handled. The assertion-on environment is
+// simulated in a lightweight (and hacky) way by defining the assertion-enable macro manually.
+
+TEST_F(ProgramSpecTestGen1, InRangeCompileTimeVarargCompilesWithAssertsEnabled) {
+    NodeCoord node{0, 0};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.compiler_options.defines = {{"LIGHTWEIGHT_KERNEL_ASSERTS", "1"}, {"FORCE_WATCHER_OFF", "1"}};
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    // Constant-evaluated: proves the accessor is still usable in a constant expression while the
+    // out-of-range path carries a (non-constexpr) assert.
+    static_assert(get_compile_time_vararg(0) == 0xCAFEBABEu);
+    static_assert(get_compile_time_vararg(2) == 0x11112222u);
+    // Runtime-evaluated: the index is not a constant expression, so this is the path that actually
+    // emits the bounds check and the ebreak.
+    volatile uint32_t idx = 1;
+    volatile uint32_t sink = get_compile_time_vararg(idx);
+    (void)sink;
+}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = {0xCAFEBABEu, 0xDEADBEEFu, 0x11112222u};
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_in_range_asserts_on";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// Out-of-range index in a constant expression, asserts on: must still fail the build. Constant
+// evaluation reaches the non-constexpr out-of-range report, which is not a constant expression --
+// so this is a clean build failure rather than a read past kernel_compile_time_args.
+TEST_F(ProgramSpecTestGen1, OutOfRangeCompileTimeVarargFailsToCompileWithAssertsEnabled) {
+    NodeCoord node{0, 0};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.compiler_options.defines = {{"LIGHTWEIGHT_KERNEL_ASSERTS", "1"}, {"FORCE_WATCHER_OFF", "1"}};
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    // Only 1 vararg is baked, so index 1 is out of range. Should not compile.
+    static_assert(get_compile_time_vararg(1) == 0u);
+}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = {0xCAFEBABEu};
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_oob_asserts_on";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    // MakeProgramFromSpec compiles; the OOB constant evaluation must fail that build.
+    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+// ============================================================================
 // Kernel hash sensitivity to TensorParameter spec
 // ============================================================================
 //

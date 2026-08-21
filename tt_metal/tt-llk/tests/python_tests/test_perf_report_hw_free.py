@@ -28,7 +28,14 @@ from helpers.perf.core import (
     combine_perf_reports,
     postprocess_tile_loop,
 )
-from helpers.perf.schema import MARKER, MEAN, STD, assert_unique_columns, stat_column
+from helpers.perf.schema import (
+    MARKER,
+    MEAN,
+    STD,
+    PerfSchemaError,
+    assert_unique_columns,
+    stat_column,
+)
 from helpers.perf.wide_schema import DB_SCHEMA, DROPPED_COLUMNS, OUTPUT_SCHEMA
 from helpers.profiler import Profiler, ProfilerData, _stats_l1_to_l1
 from helpers.test_config import BuildMode, TestConfig
@@ -45,7 +52,8 @@ def _fake_formats():
         unpack_A_dst="Float16_b",
         unpack_B_dst="Float16_b",
         output_format="Float16_b",
-        sfpu_math="Float16_b",
+        sfpu_src="Float16_b",
+        sfpu_dst="Float16_b",
     )
     return [fmt]
 
@@ -335,6 +343,40 @@ def test_run_single_run_drops_empty_std(monkeypatch):
     assert stat_column("MATH_ISOLATE", STD) not in frame.columns
 
 
+def test_run_rejects_empty_stats_for_requested_run_type(monkeypatch):
+    monkeypatch.setitem(
+        Profiler.STATS_FUNCTION,
+        PerfRunType.MATH_ISOLATE,
+        lambda data: pd.DataFrame(),
+    )
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError,
+        match="no timing statistics for requested run type MATH_ISOLATE",
+    ):
+        _run_hw_free(monkeypatch, [PerfRunType.MATH_ISOLATE], run_count=1)
+
+
+def test_run_rejects_negative_mean_timing(monkeypatch):
+    mean_column = stat_column("MATH_ISOLATE", MEAN)
+    monkeypatch.setitem(
+        Profiler.STATS_FUNCTION,
+        PerfRunType.MATH_ISOLATE,
+        lambda data: pd.DataFrame(
+            {
+                MARKER: ["INIT", "TILE_LOOP"],
+                mean_column: [-1.0, -2.0],
+            }
+        ),
+    )
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError,
+        match="negative mean timing values.*MATH_ISOLATE",
+    ):
+        _run_hw_free(monkeypatch, [PerfRunType.MATH_ISOLATE], run_count=1)
+
+
 def test_postprocess_tile_loop_derives_per_tile_from_raw():
     # Public per-tile derivation used downstream on the RAW (Parquet/CSV) table.
     raw = pd.DataFrame(
@@ -399,3 +441,34 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     assert set(df["arch"]) == {"wormhole"}
     assert set(df["commit_sha"]) == {"testsha"}
     assert set(df["pipeline"]) == {"nightly"}
+
+
+def test_combine_perf_reports_raises_on_unknown_parquet_columns(tmp_path, monkeypatch):
+    # Schema drift must fail the session, not drop columns and continue. CSV is
+    # already written by the time Parquet conversion runs.
+    workers = tmp_path / "workers"
+    workers.mkdir()
+    root = tmp_path / "root"
+    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", workers)
+    monkeypatch.setattr(TestConfig, "LLK_ROOT", root)
+    monkeypatch.setenv("CHIP_ARCH", "wormhole")
+    monkeypatch.setenv("GITHUB_SHA", "testsha")
+    monkeypatch.setenv("GITHUB_RUN_ID", "testrun")
+
+    pd.DataFrame(
+        {
+            "marker": ["INIT", "TILE_LOOP"],
+            "tile_cnt": [4, 4],
+            "loop_factor": [1, 1],
+            stat_column("MATH_ISOLATE", MEAN): [10.0, 20.0],
+            "made_up_col": [1, 2],
+        }
+    ).to_csv(workers / "perf_x.gw0.csv", index=False)
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        PerfSchemaError, match="made_up_col"
+    ):
+        combine_perf_reports()
+
+    assert (root / "perf_data" / "perf_x" / "perf_x.csv").exists()
+    assert not (root / "perf_data" / "testrun.parquet").exists()

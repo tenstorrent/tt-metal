@@ -739,13 +739,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         program_descriptor.cbs.push_back(std::move(cb19_desc));
     }
 
-    // CB 24: Intermediate 0. Holds x - E[x] in layernorm.cpp / layernorm_welford.cpp, which need it
-    // for every case except RMS norm without fused pre-add (there x - E[x] aliases cb_in), and
-    // serves as the gamma/beta fusion buffer in layernorm_large_tensor_welford.cpp.
-    // layernorm_large_tensor.cpp keeps x - E[x] in DST instead, so on the large-tensor path the CB
-    // is only needed by the welford kernel.
-    const bool cb_xmm_needed = (!rms_norm || fuse_pre_add) && (!large_tensor_needed || use_welford_and_not_rms_norm);
-    if (cb_xmm_needed) {
+    // CB 24: Intermediate 0
+    if (!rms_norm || fuse_pre_add || large_tensor_needed) {
         program_descriptor.cbs.push_back(
             make_cb_descriptor(im0_t * single_tile_size, tt::CBIndex::c_24, cb_data_format, single_tile_size));
     }
@@ -808,10 +803,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         // When welford_fp32_alias is active, register c_29 as a second buffer index on the
         // same SRAM with UnpackToDestFp32 mode so transpose_tile preserves full FP32 into
         // DEST.
-        // layernorm_large_tensor.cpp keeps the post-add result in DST instead, so on the
-        // large-tensor path the CB is only needed by the welford kernel.
-        const bool cb_x_needed = !rms_norm && (!large_tensor_needed || use_welford_and_not_rms_norm);
-        if (cb_x_needed) {
+        if (!rms_norm) {
             auto cb23_desc =
                 make_cb_descriptor(im6_t * single_tile_size, tt::CBIndex::c_23, cb_data_format, single_tile_size);
             if (welford_fp32_alias) {

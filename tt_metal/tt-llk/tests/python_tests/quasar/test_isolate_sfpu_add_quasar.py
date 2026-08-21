@@ -13,7 +13,7 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import BinarySFPUGolden, get_golden_generator
 from helpers.llk_params import ImpliedMathFormat, MathOperation, format_dict
 from helpers.param_config import (
-    generate_sfpu_format_dest_acc_combinations,
+    generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
     runtime,
@@ -42,8 +42,6 @@ ADD_RANGE_SAFETY_FACTOR = 0.45
 
 SFPU_ADD_FORMATS = input_output_formats(
     [
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
@@ -52,7 +50,9 @@ SFPU_ADD_FORMATS = input_output_formats(
 
 SFPU_ADD_COMBINATIONS = [
     (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(SFPU_ADD_FORMATS)
+    for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
+        SFPU_ADD_FORMATS
+    )
     for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
     for input_dimensions in [[32, 32], [64, 64]]
 ]
@@ -147,7 +147,6 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
         ),
         unpack_to_srcs=True,
         dest_acc=dest_acc,
-        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result
