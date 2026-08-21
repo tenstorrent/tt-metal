@@ -97,7 +97,7 @@ pytest models/experimental/xtts_v2/tests/
 # Individual blocks
 pytest models/experimental/xtts_v2/tests/test_cond_pcc.py       # Block 1
 pytest models/experimental/xtts_v2/tests/test_speaker_pcc.py    # Block 2
-pytest models/experimental/xtts_v2/tests/test_gpt_trace_pcc.py  # Block 3 (traced decode)
+pytest models/experimental/xtts_v2/tests/test_gpt_decode_pcc.py # Block 3 (traced decode)
 pytest models/experimental/xtts_v2/tests/test_hifigan_pcc.py    # Block 4
 ```
 
