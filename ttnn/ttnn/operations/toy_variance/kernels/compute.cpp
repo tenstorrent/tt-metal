@@ -55,7 +55,7 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
 
     constexpr auto reduce_block_shape = ckl::ReduceInputBlockShape::of(Ht, BLOCK_SIZE, /*NC=*/1);
-    constexpr auto bin_block_shape = ckl::EltwiseShape::of(Ht, BLOCK_SIZE);
+    constexpr auto bin_block_shape = ckl::IterationShape::of(Ht, BLOCK_SIZE);
 
     // For non-tile-aligned W: select the partial scaler tile (idx 1) on the
     // last W-tile. Only the LAST block holds that tile, so the partial scaler
@@ -82,8 +82,8 @@ void kernel_main() {
     //   square_in_place : cb_centered^2           → cb_centered (in-place)
     //   reduce<>        : mean(cb_centered)       → cb_variance (accumulating)
     //
-    // cb_mean must persist across all blocks of pass 2 → B policy = WaitUpfrontNoPop.
-    // cb_in is per-tile streamed by the reader → A policy = WaitAndPopPerTile.
+    // cb_mean must persist across all blocks of pass 2 → B waits Upfront, never pops.
+    // cb_in is per-tile streamed by the reader → A waits and pops per tile.
     for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
         // sub<COL>: cb_in − cb_mean → cb_centered.
         //   A (cb_in)   : per-tile wait/pop; each tile sits at the CB front, so Scalar idx.
@@ -91,9 +91,9 @@ void kernel_main() {
         //                 by the chain — popped manually after pass 2. COL broadcast.
         ckl::sub<
             ckl::input(cb_in, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::OperandKind::Scalar),
-            ckl::input(cb_mean, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Col),
-            ckl::output(cb_centered),
-            ckl::BroadcastDim::Col>(bin_block_shape);
+            ckl::input(
+                cb_mean, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Col),
+            ckl::output(cb_centered)>(bin_block_shape);
 
         // square_in_place: cb_centered² → cb_centered (in-place, per-tile streaming).
         ckl::square<ckl::input(cb_centered), ckl::output(cb_centered)>(bin_block_shape);
@@ -128,13 +128,13 @@ void kernel_main() {
             block_scaler);
     }
 
-    // cb_mean was held across pass 2 with WaitUpfrontNoPop — release it now.
+    // cb_mean was held across pass 2 (Upfront wait, no pop) — release it now.
     cb_pop_front(cb_mean, Ht);
 
     // ---------- Drain cb_variance → cb_out ----------
     // Per-tile streaming copy with input + output format reconfig (chain owns
     // wait/pop on cb_variance and reserve/push on cb_out).
-    ckl::copy<ckl::input(cb_variance), ckl::output(cb_out)>(ckl::EltwiseShape::tiles(Ht));
+    ckl::copy<ckl::input(cb_variance), ckl::output(cb_out)>(ckl::IterationShape::tiles(Ht));
 
     cb_pop_front(cb_scaler, HAS_PARTIAL_W ? 2 : 1);
 }
