@@ -5585,7 +5585,14 @@ def _load_perf_target_inputs() -> dict | None:
             _spec = _ilu.spec_from_file_location("cc_run_ptin", str(Path(__file__).parent / "run.py"))
             _run = _ilu.module_from_spec(_spec)
             _spec.loader.exec_module(_run)
-            _run._emit_perf_target_inputs(_MODEL_ROOT, _MODEL_ROOT, None, _MANIFEST)
+            # HAND IT THE MODEL ID. Setup calls this with a real hint; this path passed None, so
+            # _resolve_model_id had only the demo dir to go on and `blocks` -- which needs the HF
+            # config behind that id -- could not be rebuilt at all. run.py already owns the lookup.
+            try:
+                _mid_hint = _run._model_id_for_facts(_MODEL_ROOT) or None
+            except Exception:  # noqa: BLE001
+                _mid_hint = None
+            _run._emit_perf_target_inputs(_MODEL_ROOT, _MODEL_ROOT, _mid_hint, _MANIFEST)
             facts = json.loads((_MODEL_ROOT / "perf_target_inputs.json").read_text())
         except Exception:  # noqa: BLE001
             return None

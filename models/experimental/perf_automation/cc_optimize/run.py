@@ -5431,6 +5431,30 @@ def _emit_perf_target_inputs(model_root, demo_dir, model_id_hint, manifest) -> N
                 for k in ("weight_bytes", "total_params", "active_params")
                 if (_prev.get(k) or 0) > 0 and not (facts.get(k) or 0) > 0
             ]
+            # THE STRUCTURAL FACTS ARE CARRIED FORWARD, NOT GUARDED BY REFUSAL.
+            #
+            # `blocks` and `stage_roots` say WHICH TOWER each stage runs, and neither is produced
+            # here: blocks needs a resolvable model id, and stage_roots is merged in from discovery
+            # (_merge_model_facts) by a different code path entirely. So every successful write of
+            # this file dropped them, and the guard above could not notice -- it checks the three
+            # divisor keys, which the rebuild DOES produce, so `_lost` came back empty and the write
+            # went through.
+            #
+            # Measured on run 13, 2026-08-21: a git_revert after a no-gain attempt deleted this file,
+            # perf_mcp rebuilt it, and the multi-tower shape became a flat one -- layers 32 from the
+            # audio tower beside hidden_size 3072 from the language model. Every stage then fell back
+            # to that flat geometry and to total_params, so the audio encoder was priced with the
+            # language model's 3.611B instead of its own 0.637B: 5.7x the real work, and the report
+            # showed encode at 321% of a 702 TFLOPS peak, which is not a thing that can happen.
+            #
+            # Refusing the write would be wrong here -- the refresh exists so geometry keys can land,
+            # and a legitimately updated weight_bytes must not be blocked by a key this producer was
+            # never going to emit. Carrying the old value forward keeps both. Timeline for the
+            # record: the guard is from 2026-08-09 and has never changed; blocks and stage_roots were
+            # added on 2026-08-17 without widening it.
+            for _k in ("blocks", "stage_roots"):
+                if _prev.get(_k) and not facts.get(_k):
+                    facts[_k] = _prev[_k]
             if _lost:
                 print(
                     "  [optimize/cc] NOT refreshing perf_target_inputs.json: the new facts drop %s "

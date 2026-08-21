@@ -25,9 +25,38 @@ _ts_spec.loader.exec_module(_tmpstate)
 state_dir = _tmpstate.state_dir
 
 
-_LEVEL_COLS = ("grid", "fidelity", "dtype", "shard", "host", "tt-lang", "cpp")
+# THE LADDER HAS EIGHT RUNGS AND THIS SHOWED SIX OF THEM.
+#
+# perf_mcp._RUNG_PRIORITY is the climb order -- grid, fidelity, dtype, shard, host, structural,
+# tt-lang, cpp -- and `structural` had no column here. _HOST_KINDS folded it into `host`, so an
+# ALGORITHMIC RESTRUCTURE and a trace/dispatch fix rendered as the same lever: run 13 shows
+# ReshapeView and TilizeWithValPadding with a host win, and the ledger records both as structural.
+# `tp-fracture`, which the ladder also mints, fell through to the anonymous `other` bucket, and so
+# did every one of the specific structural levers the gates hand out (structural-conv,
+# structural-fold, structural-order, kv-cache/structural-decode). Four different levers, one
+# indistinguishable column.
+#
+# So structural is its own column, and the specific gate kinds resolve to it rather than to `other`.
+# `host` keeps trace/2-CQ/dispatch work, which is what it always meant.
+_LEVEL_COLS = ("grid", "fidelity", "dtype", "shard", "host", "structural", "tp-fracture", "tt-lang", "cpp")
 _ALL_COLS = _LEVEL_COLS + ("other",)  # "other" holds unclassifiable levers; rendered only when used
-_HOST_KINDS = {"trace", "structural", "fusion", "fuse", "gather", "sparse", "cache", "kv-cache"}
+_HOST_KINDS = {"trace", "fusion", "fuse", "cache"}
+# Every lever the gates mint is a structural one; they are named for WHICH restructure, so a report
+# can tell a conv-weight prep from a KV-cache from a fold. Kept beside _HOST_KINDS because the two
+# together decide the column, and splitting them is how `structural` ended up inside `host`.
+_STRUCTURAL_KINDS = {
+    "structural",
+    "structural-conv",
+    "structural-fold",
+    "structural-order",
+    "structural-decode",
+    "conv-prep",
+    "fold",
+    "order",
+    "kv-cache",
+    "gather",
+    "sparse",
+}
 
 _REPORT_NAME = "RUN_REPORT.md"
 
@@ -168,6 +197,9 @@ _LEVEL_SEMANTICS = (
     "dtype = weight or activation precision (bf16/bf8_b/bf4_b); "
     "shard = memory sharding, L1 pinning, memory-config changes; "
     "host = host-side or dispatch-side work, tracing, fusion, caching; "
+    "structural = an algorithmic restructure (KV-cache, gather, conv weight prep, folding repeats, "
+    "reordering a projection against a slice); "
+    "tp-fracture = the weights fractured across chips; "
     "tt-lang = custom kernel authored in the tt-lang DSL; "
     "cpp = custom C++ Metalium kernel"
 )
@@ -192,6 +224,8 @@ def _level_of(kind: str) -> str:
     k = _normalise_kind(kind)
     if k in _LEVEL_COLS and k != "host":
         return k
+    if k in _STRUCTURAL_KINDS:
+        return "structural"
     if k in _HOST_KINDS or k == "host":
         return "host"
     return "other"
