@@ -244,8 +244,6 @@ std::vector<Tensor> sort(
     const bool stable,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::tuple<Tensor&, Tensor&>> optional_output_tensors) {
-    TT_FATAL(!stable, "ttnn::sort: stable=True is not yet implemented.");
-
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
     const auto rank = input_tensor.logical_shape().rank();
 

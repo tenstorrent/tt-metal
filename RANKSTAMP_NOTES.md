@@ -214,3 +214,25 @@ network-only 7x instruction ratio).
 - WH silicon validation: mirror is knob-diff-verified + ttsim-functional only (no WH device here).
 - ttsim gap worth filing upstream: SFPSWAP with LREG4..7 operands under ENABLE_DEST_INDEX
   (comparator-stable mode unsimulatable).
+
+## C5: ttnn.sort stable=True end-to-end (comparator-stable network, all three factories)
+- Engine choice: the repaired index-aware comparator everywhere. Fused-key/rank-stamp for sort
+  would need the full memo redesign (Float32 fused transport through every merge-stage CB
+  round-trip + the 4-combination direction bookkeeping D2 deferred); the comparator needs NO
+  transport or factory-CB changes and is silicon-validated. Perf headroom stays a follow-on.
+- LLK precondition: _bitonic_topk_merge's STABLE tie polarity followed compile-time top_min —
+  correct only for global-direction callers (the documented 6d49857e9e2 contract). sort's merge
+  network alternates per block with top_min=false. Fixed by switching the merge tie swap to the
+  runtime wrapper phases_steps/rebuild already use (top_min keeps the value operand order; the
+  index swap follows topk_stable_descending_mode). Behavior-identical for every existing caller.
+- Kernel wiring: stable templated through sort_Wt_tiles_row_to_bitonic_sequence + every
+  topk_local_sort/topk_merge site in all three compute kernels; polarity programmed ONCE from
+  the global order (descending / !ascending), never per-core or per-block. CrossCore factory
+  gains the previously missing 'stable' named CT arg; 'stable' rides the default reflection
+  program hash as a SortParams member (cache-alternation test proves it).
+- Validation (BH p150a silicon, fresh JIT): 48 new stable cells green (repro, negative ties,
+  +-0, +-Inf vs padding sentinels, all-equal, RM, dim=-2, fp32, uint16, W=65536 u32-index;
+  factories: single-core W<=2048, CrossCore W=4096/8192, MultiCore W=65536 + uint16);
+  test_sort.py 176p; reduce/test_topk.py 246p/8s/80xf and adversarial 30p unchanged.
+- WH: compile-mirrored only (same knob-diff discipline as F3/C1); LLK harness not rerun in this
+  session (pytest plugin env unavailable); the merge edit compiles under sfpi via ttnn JIT.
