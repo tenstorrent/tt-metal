@@ -1096,6 +1096,113 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCopyShortInitSpecMatchesLegacy) {
 }
 
 // ============================================================================
+// pack_rows: the id-free (2.0) pack_rows kernel must produce output bit-for-bit identical to the legacy CB-id
+// pack_rows kernel on the same input (differential equivalence; reuses run_fp8_typecast). Per tile: copy
+// c_0 -> DST[0], then row-pack the full tile (num_rows=64, row-major) DST -> c_16. The two kernels differ ONLY
+// in the row-pack call (legacy CB-id pack_rows vs experimental::pack_rows); hw_startup / copy_tile /
+// pack_rows_init / pack_rows_uninit are legacy CB-id(-free) in BOTH kernels, isolating the row pack. Per-tile
+// 1->1 (default cb_depth_tiles=1, nothing kept resident); num_rows=64 writes the whole output tile so no
+// uninitialized bytes can differ between the two runs.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixPackRowsSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 64;
+    auto src_vec = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+
+    auto legacy = run_fp8_typecast(
+        mesh_device,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_rows_legacy.cpp");
+    auto spec = run_fp8_typecast(
+        mesh_device,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_rows_2_0.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Pack-untilize-DEST: the id-free (2.0) pack_untilize_dest kernel must produce output bit-for-bit identical
+// to the legacy CB-id pack_untilize_dest kernel on the same input (differential equivalence; reuses the
+// single-core classic-CB harness run_fp8_typecast). Per tile: copy c_0 -> DST, then pack_untilize_dest packs
+// straight out of DEST -> c_16. The two kernels differ ONLY in the pack_untilize_dest[_init] calls.
+// block_ct_dim = full_ct_dim = block_rt_dim = 1, so N input tiles -> N output tiles (writer drains num_tiles).
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeDestSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 64;
+    auto src_vec = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+
+    auto legacy = run_fp8_typecast(
+        mesh_device,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_dest_legacy.cpp");
+    auto spec = run_fp8_typecast(
+        mesh_device,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_dest_2_0.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Reduce custom (SDPA block MAX-row): the id-free (2.0) reduce_block_max_row kernel must produce output
+// bit-for-bit identical to the legacy CB-id reduce_block_max_row kernel on the same inputs (differential
+// equivalence; reuses run_binary_add: c_0 data, c_1 scaler -> c_16). Both reduce a block of num_tiles data
+// tiles (per-row MAX across the block) into DST[0], then pack the single reduced tile. The kernels differ ONLY
+// in the reduce_block_max_row init/op/uninit (id-free LLKOperand vs CB-id); hw_startup + pack_tile stay legacy
+// CB-id in both. The whole block is unpacked at once, so the CBs must be num_tiles deep (cb_depth_tiles=num_tiles)
+// and the op collapses the block to ONE output tile (out_tiles=1).
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixReduceCustomSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 4;  // block_ct_dim = 4
+    auto data = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto scaler = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/2, /*seed=*/7, /*offset=*/-1.0f);
+
+    auto legacy = run_binary_add(
+        mesh_device,
+        data,
+        scaler,
+        num_tiles,
+        "tests/tt_metal/tt_metal/test_kernels/compute/reduce_custom_legacy.cpp",
+        /*compute_defines=*/{},
+        /*cb_depth_tiles=*/num_tiles,
+        /*out_tiles=*/1);  // block MAX-row collapses the block to ONE output tile
+    auto spec = run_binary_add(
+        mesh_device,
+        data,
+        scaler,
+        num_tiles,
+        "tests/tt_metal/tt_metal/test_kernels/compute/reduce_custom_2_0.cpp",
+        /*compute_defines=*/{},
+        /*cb_depth_tiles=*/num_tiles,
+        /*out_tiles=*/1);
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
 // Pack-untilize with a block-float (Bfp8_b) INPUT and block_ct_dim = 4 (> 1). This is the block>1 guard for
 // the block-float stride fix. The id-free pack_untilize reads column tile c of the block at
 // in.l1_address + c * tile_stride_words(Bfp8_b, shape) (internal/llk_descriptor.h). tile_stride_words returns the

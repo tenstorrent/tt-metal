@@ -97,6 +97,34 @@ ALWI void pack_block(
     }
 }
 
+// clang-format off
+/**
+ * Experimental id-free row pack. Packs a run of row-major rows (each 16 datums) from one DST tile to the
+ * absolute L1 address in the output LLKOperand, in row-major (untilized) order -- the id-free successor to the
+ * CB-id pack_rows(idst, ocb, output_index). The number of rows is configured beforehand by the (already
+ * format-free / id-free) pack_rows_init(num_rows); this op needs only the DST tile index and the runtime write
+ * address (out.l1_address, from the address seam -- e.g. cb_write_address(ocb, output_index)). Formats/geometry
+ * were programmed at compute_kernel_hw_startup / pack_init; the row-pack HW path consumes no data format, so the
+ * output LLKOperand supplies only the write address and the compile-time shape (for the legal-shape guard). No id.
+ *
+ * Pair with pack_rows_init / pack_rows_uninit (the CB-id-free legacy calls; both take no CB) exactly as the
+ * legacy pack_rows does. Absolute (out-of-order) addressing: no internal fifo pointer is advanced, so the caller
+ * supplies the correct per-output-region address each call.
+ *
+ * | Param Type | Name  | Description                                              | Type        | Valid Range                          | Required |
+ * |------------|-------|----------------------------------------------------------|-------------|--------------------------------------|----------|
+ * | Template   | Format| Output buffer L1 data format (deduced from LLKOperand)   | DataFormat  |                                      | True     |
+ * | Template   | Shape | Output tile geometry (deduced from LLKOperand)          | TensorShape |                                      | True     |
+ * | Function   | out   | The output L1 operand (format+shape+write address)      | LLKOperand  |                                      | True     |
+ * | Function   | idst  | Index of the tile in the DST register to pack rows from | uint32_t    | 0 to 15                              | True     |
+ */
+// clang-format on
+template <DataFormat Format, TensorShape Shape>
+ALWI void pack_rows(LLKOperand<Format, Shape> out, std::uint32_t idst) {
+    static_assert(is_legal_tile_shape(Shape), "pack_rows: illegal output tile shape.");
+    PACK((llk_pack_rows<LLKOperand<Format, Shape>::descriptor>(idst, out.l1_address)));
+}
+
 #endif  // ARCH_BLACKHOLE
 
 }  // namespace experimental

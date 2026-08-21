@@ -149,6 +149,104 @@ ALWI void pack_untilize_block(
 
 // clang-format off
 /**
+ * Experimental id-free pack-untilize DEST init (PACK thread only). Use this when the tiles to untilize are
+ * ALREADY resident in the DEST register (placed by copy_tile/reduce_tile/etc.), so UNPACK and MATH are NOT
+ * configured for a CB -> DEST datacopy here (contrast pack_untilize_init, which configures all three threads).
+ * Takes only the OUTPUT LLKOperand (data format + tile geometry as NTTPs) instead of a CB id; the packer
+ * register format is derived INSIDE the LLK from OUT. Mirrors the legacy pack_untilize_dest_init PACK path:
+ * (re)configure BH DEST remap, program the packer output format, program the untilize MOP/strides, then the
+ * untilize dest-offset registers. Pair with pack_untilize_dest / pack_untilize_uninit.
+ *
+ * | Param Type | Name          | Description                                       | Type       | Valid Range               | Required              |
+ * |------------|---------------|---------------------------------------------------|------------|---------------------------|-----------------------|
+ * | Template   | block_ct_dim  | Width of a single block in tiles                  | uint32_t   | 1 to max (DEST size)      | False (default = 8)   |
+ * | Template   | full_ct_dim   | Width of a full input in tiles                    | uint32_t   | Divisible by block_ct_dim | False                 |
+ * | Template   | diagonal      | Diagonal packing (unused on Blackhole; must be false) | bool   | false                     | False                 |
+ * | Template   | narrow_row    | Whether the provided input is narrow              | bool       | true/false                | False                 |
+ * | Template   | row_num_datums| Number of datums per row                          | uint32_t   | >= 1                      | False                 |
+ * | Template   | dense         | Packs two 2-face tiles in a single 4-face region  | bool       | true/false                | False (default false) |
+ * | Function   | out           | Output operand (row-major destination; format+geometry) | LLKOperand |                     | True                  |
+ */
+// clang-format on
+template <
+    std::uint32_t block_ct_dim = 8,
+    std::uint32_t full_ct_dim = block_ct_dim,
+    bool diagonal = false,
+    bool narrow_row = false,
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    bool dense = false,
+    DataFormat OutFormat,
+    TensorShape OutShape>
+ALWI void pack_untilize_dest_init(LLKOperand<OutFormat, OutShape> /*out*/) {
+    static_assert(diagonal == false, "pack_untilize_dest_init: diagonal is only supported on WH.");
+    static_assert(is_legal_tile_shape(OutShape), "pack_untilize_dest_init: illegal output tile shape.");
+    MATH((llk_math_reconfig_remap(true /*remap_enable*/)));
+    PACK((llk_pack_reconfig_data_format<LLKOperand<OutFormat, OutShape>::descriptor, DST_ACCUM_MODE>()));
+    PACK((llk_pack_untilize_init<
+          LLKOperand<OutFormat, OutShape>::descriptor,
+          DST_ACCUM_MODE,
+          block_ct_dim,
+          full_ct_dim,
+          narrow_row,
+          row_num_datums,
+          dense>()));
+    PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false /*diagonal*/>()));
+}
+
+// clang-format off
+/**
+ * Experimental id-free pack-untilize of a block whose source is the DEST register (not a CB). Packs
+ * (untilizes) block_rt_dim tile-rows that are ALREADY in DEST out to the row-major output at out.l1_address.
+ * There is NO input LLKOperand: the source is DEST (selected by tile_dst_ct_offset / tile_dst_rt_offset).
+ * The caller owns DEST synchronization (tile_regs_acquire/commit/wait/release) and any CB flow control. The
+ * per-tile-row output stride is derived from the OUTPUT descriptor (tile_stride_words == one tile's L1 size;
+ * see the addressing note on pack_untilize_block). Pair with pack_untilize_dest_init.
+ *
+ * | Param Type | Name               | Description                                                    | Type       | Valid Range                             | Required              |
+ * |------------|--------------------|----------------------------------------------------------------|------------|-----------------------------------------|-----------------------|
+ * | Template   | block_ct_dim       | Width of a single block in tiles                               | uint32_t   | 1 to max (DEST size)                    | False (default = 8)   |
+ * | Template   | full_ct_dim        | Width of a full input in tiles                                 | uint32_t   | Divisible by block_ct_dim               | False                 |
+ * | Template   | diagonal           | Diagonal packing (unused on Blackhole; must be false)          | bool       | false                                   | False                 |
+ * | Template   | narrow_row         | Whether the provided input is narrow                           | bool       | true/false                              | False                 |
+ * | Template   | row_num_datums     | Number of datums per row                                        | uint32_t   | >= 1                                    | False                 |
+ * | Template   | tile_dst_ct_offset | Compile-time offset of the tile index in DEST from which to pack | uint32_t | 0 to 7 (0 to 3 if fp32 dest enabled)    | False (default = 0)   |
+ * | Template   | dense              | Packs two 2-face tiles in a single 4-face region               | bool       | true/false                              | False (default false) |
+ * | Function   | out                | Output operand (first row-major output tile address)          | LLKOperand |                                         | True                  |
+ * | Function   | block_rt_dim       | Height of the block in tiles (rows to pack)                    | uint32_t   | >= 1                                    | False (default = 1)   |
+ * | Function   | block_c_index      | Block column index (used when full_ct_dim > block_ct_dim)      | uint32_t   | >= 0                                    | False (default = 0)   |
+ * | Function   | tile_dst_rt_offset | Runtime offset of the tile index in DEST from which to pack    | uint32_t   | 0 to 7 (0 to 3 if fp32 dest enabled)    | False (default = 0)   |
+ */
+// clang-format on
+template <
+    std::uint32_t block_ct_dim = 8,
+    std::uint32_t full_ct_dim = block_ct_dim,
+    bool diagonal = false,
+    bool narrow_row = false,
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    std::uint32_t tile_dst_ct_offset = 0,
+    bool dense = false,
+    DataFormat OutFormat,
+    TensorShape OutShape>
+ALWI void pack_untilize_dest(
+    LLKOperand<OutFormat, OutShape> out,
+    std::uint32_t block_rt_dim = 1,
+    std::uint32_t block_c_index = 0,
+    std::uint32_t tile_dst_rt_offset = 0) {
+    static_assert(diagonal == false, "pack_untilize_dest: diagonal is only supported on WH.");
+    static_assert(is_legal_tile_shape(OutShape), "pack_untilize_dest: illegal output tile shape.");
+    PACK((llk_pack_untilize<
+          LLKOperand<OutFormat, OutShape>::descriptor,
+          DST_ACCUM_MODE,
+          block_ct_dim,
+          full_ct_dim,
+          narrow_row,
+          row_num_datums,
+          tile_dst_ct_offset,
+          dense>(block_rt_dim, out.l1_address, block_c_index, tile_dst_rt_offset)));
+}
+
+// clang-format off
+/**
  * Experimental id-free pack-untilize uninit. Restores the packer Z stride (via the output descriptor's
  * register format) and resets the packer to Default mode so a subsequent op can reprogram it. Mirrors the
  * legacy pack_untilize_uninit (BH path).

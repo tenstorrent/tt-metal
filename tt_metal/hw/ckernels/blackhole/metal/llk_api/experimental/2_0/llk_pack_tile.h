@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include "llk_pack_tile_api.h"  // legacy CB-id API + unified llk_pack_init_impl / llk_pack_impl
+#include "llk_pack_rows_api.h"  // legacy CB-id row pack + raw _llk_pack_rows_ / get_pack_dest_max_tiles
 #include "data_format_derive.h"
 #include "api/compute/experimental/2_0/internal/llk_descriptor.h"
 
@@ -74,6 +75,21 @@ template <
     PackMode pack_mode = PackMode::Default>
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t base_ptr) {
     llk_pack_impl<is_fp32_dest_acc_en, pack_mode>(tile_index, base_ptr);
+}
+
+// Id-free row pack: packs the configured number of rows (set via the CB-id llk_pack_rows_init, which is
+// format-free) from DST[dst_index] to the absolute L1 address base_ptr in row-major order. The DESC NTTP
+// disambiguates this overload from the CB-id llk_pack_rows (same runtime arg count) and carries the output
+// L1 format/geometry -- but the row-pack HW path needs NO format register (formats were programmed at
+// hw_startup/pack_init), so DESC is not read here. Mirrors the CB-id llk_pack_rows minus the CB->address
+// resolution (base_ptr is supplied absolute, e.g. cb_write_address) and the CB-array format debug assert
+// (not reproducible id-free), keeping the retained DST-capacity bound check.
+template <ckernel::experimental::LLKMemDescriptor DESC>
+inline void llk_pack_rows(std::uint32_t dst_index, std::uint32_t base_ptr) {
+    LLK_ASSERT(
+        (dst_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "Dst tile exceeds packer destination capacity for the configured W-stride.");
+    _llk_pack_rows_(dst_index, base_ptr);
 }
 
 // Id-free packer data-format reconfigure: reprogram the packer's src/dst format registers + tile geometry
