@@ -576,21 +576,9 @@
     bh_quietbox_2:
       timeout: 15
       tier: 1
-    # 12B was Blackhole-only until now, so its Wormhole numerics were never
-    # gated: the pcc_thresholds rows for this model carried `blackhole-...`
-    # keys with no `wormhole_b0` twin, and a WH-only miss (bounded-vs-unbounded
-    # sliding decode at cache1500, 0.975838 against the 0.99 default) sat
-    # undetected until it was measured locally. Tier 1 to match the
-    # bh_quietbox_2 leg above.
-    #
-    # timeout 27 from a measured 23m14s: full suite on WH T3K 1x8 (CI=true, so
-    # one mesh shape), 201 passed / 105 skipped / 42 deselected, exit 0. Sized
-    # to the 28m of free models unit_tier1 wh_llmbox budget (61 total, 33 used)
-    # — do not raise without bumping .github/time_budget.yaml, or
-    # load-test-matrix fails the way f562aa60493 did.
     wh_llmbox:
       timeout: 27
-      tier: 1
+      tier: 2
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
