@@ -761,11 +761,10 @@ ALWI void topk_local_sort(
  * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool     | true, false                                           | False    |
  * | rank_stamped    | Re-stamp both runs' rank tags and merge with the unstable network          | bool     | true, false                                           | False    |
- * | rank_base       | Rank offset of this call's run positions (32*t for a K=64 split call)      | uint32_t | 0 to 32                                               | False    |
  */
 // clang-format on
 template <bool idir = false, bool stable_sort = false, bool fused = false, bool rank_stamped = false>
-ALWI void topk_merge(uint32_t idst, int m_iter, int k, uint32_t rank_base = 0) {
+ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -774,9 +773,7 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k, uint32_t rank_base = 0) {
         idst,
         VectorMode::RC_custom,
         m_iter,
-        k,
-        rank_base /* passed explicitly (not defaulted at the LLK): the SFPU wrapper forwards
-                     through a callable, where default arguments do not apply */));
+        k));
 }
 
 // topK rebuild

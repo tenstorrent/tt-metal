@@ -304,10 +304,11 @@ inline void _topk_defuse_tile_(const int num_tiles)
 //   * before every compare inside the merge: rank = position within the
 //     k-run; the LEFT run (always sorted in the global direction and always
 //     the lower global-index range in the classic merge tree) takes
-//     [rank_base, rank_base + min(k, 32)), the RIGHT (mirror-direction) run is
-//     complemented through 2K-1 into the disjoint upper range. Folded into
-//     `_bitonic_topk_merge<..., RANK_STAMPED>`; `rank_base` = 32*t for the
-//     per-tile split calls of a K=64 merge, else 0.
+//     [0, min(k, 32)) -- every in-tree merge is a single call per tile pair,
+//     so the left-run base is always 0 (a K=64 split-call variant would need
+//     a per-call rank base plumbed back in) -- the RIGHT (mirror-direction)
+//     run is complemented through 2K-1 into the disjoint upper range. Folded
+//     into `_bitonic_topk_merge<..., RANK_STAMPED>`.
 //   * rebuild needs nothing: it inherits distinct, correctly tie-ordered
 //     tags from the preceding merge (value tiles travel as raw 32-bit words
 //     through Float32-format CBs, exactly like fused packed keys).
@@ -1107,7 +1108,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT = false, bool FUSED = false, bool RANK_STAMPED = false>
-inline void _bitonic_topk_merge(const int m_iter, const int k, const std::uint32_t rank_base = 0)
+inline void _bitonic_topk_merge(const int m_iter, const int k)
 {
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
     topk_uint16_clear_value_tiles_high_bits();
@@ -1139,7 +1140,6 @@ inline void _bitonic_topk_merge(const int m_iter, const int k, const std::uint32
         _sfpu_load_config32_(p_sfpu::LREG11, 0xFFFF, 0x0000); // lo16 clear mask (SFPAND -- no loads mid-stamp)
         const std::uint32_t rank_span = 2 * static_cast<std::uint32_t>(k) - 1;
         _sfpu_load_config32_(p_sfpu::LREG13, rank_span >> 16, rank_span & 0xFFFF); // right-run complement (2K-1)
-        _sfpu_load_config32_(p_sfpu::LREG14, rank_base >> 16, rank_base & 0xFFFF); // K=64 split-call rank base
     }
 
     std::uint32_t dst_addr_offset = 0;
@@ -1173,12 +1173,12 @@ inline void _bitonic_topk_merge(const int m_iter, const int k, const std::uint32
                         // here to the swap, ALU-only writes to LREG0..3 (TEN-2932).
                         if (ii == 0)
                         {
-                            // Fresh per-pair rank iota: rank = rank_base + 4*ii + (j>>3)
-                            // (each load covers 4 consecutive run positions per lane
-                            // group; LTILEID = 2*j).
+                            // Fresh per-pair rank iota: rank = 4*ii + (j>>3) (each load
+                            // covers 4 consecutive run positions per lane group;
+                            // LTILEID = 2*j). Left-run base is 0 for every in-tree
+                            // caller -- one merge call per tile pair.
                             TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG2, 0);
                             TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG2, 1);
-                            TTI_SFPIADD(0, p_sfpu::LREG14, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
                         }
                         // largest = !top_min: complement the lanes whose sign matches the
                         // kept extreme, exactly as the fused-key conditioning does.
