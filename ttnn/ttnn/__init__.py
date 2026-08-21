@@ -315,6 +315,7 @@ from ttnn.types import (
     TensorParameter,
     DFBAdvancedOptions,
     DataflowBufferSpec,
+    dfb_spec_from_sharded_tensor,
     SemaphoreSpec,
     ScratchpadSpec,
     DataMovementGen1Config,
