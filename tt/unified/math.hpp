@@ -603,24 +603,33 @@ struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Tr, Chain>> {
 
     template <typename Operand>
     auto bias(const Operand& operand) const {
-        // A fused bias needs the whole output block in ONE acquire, and this is where that
-        // can be said. A bias is applied by reading the finished total back out of a buffer
-        // and broadcast-adding to it -- metal's add_tiles_bcast_* take both operands from
-        // buffers and neither from DST -- so there is no in-place form to band, and
-        // run_banded consequently has no bias handling at all. Without this assert a
-        // single-shot store(matmul(a, b).bias(v)) over 8 output tiles took the banded path
-        // and dropped the bias silently.
+        // NOTE ON LAYOUT: the bias operand's row must be REPLICATED down all 32 rows of
+        // each of its tiles, not left in row 0 with the rest zeroed.
         //
-        // Nothing is lost by rejecting it here: the accumulating path already refused the
-        // same shape, so this only moves the error to the call site and covers the
-        // single-shot case too. Lifting it means banding the bias pass, which is the same
-        // work as banding a reload.
-        static_assert(
-            geometry::out_subblock_num_tiles <= kMaxDstTiles,
-            "a fused bias needs the matmul's whole output block in one acquire, and this one "
-            "exceeds the 8-tile DST budget. Split the output into subblocks of at most 8 "
-            "tiles, or add the bias as a separate pass afterwards. Note that an UNBIASED "
-            "single-shot matmul has no such limit -- it walks row bands.");
+        // Two of the three paths add the bias with an FPU dest-reuse add, straight into the
+        // subblock the matmul just produced. That op is elementwise and does no
+        // broadcasting, so it reads every row. The alternative -- add_tiles_bcast_rows,
+        // which broadcasts row 0 in hardware -- takes BOTH operands from buffers and
+        // neither from DST, so it cannot run inside the matmul's acquire and needs the
+        // total packed out to a buffer first. That is a whole extra pass, and it is why
+        // only L1 mode still uses it: L1 has to copy the total out anyway, so the pass is
+        // already paid for. See kBiasFolded in Strategy<FPUFusion>::run for the numbers.
+        //
+        // Replication costs nothing at runtime -- the bias is ct tiles either way, so DRAM,
+        // L1 and the NOC transfer are all unchanged, and only the contents of rows 1..31
+        // differ -- and it is correct for the broadcast form too, which reads row 0 and
+        // finds the same value there.
+        //
+        // What it costs is a failure mode. A caller that leaves rows 1..31 zeroed gets the
+        // bias applied to one output row in 32, and because L1 mode still uses the
+        // broadcast form it gets the RIGHT answer there and the wrong one in Dst and
+        // single-shot. This is not hypothetical: introducing the fold broke
+        // test_unified_matmul_transpose, which built its bias the old way, at 0.37 relative
+        // error. Both bias-building tests now replicate.
+        //
+        // There is no output-size limit. All three paths walk the output in subblocks and
+        // apply the bias per subblock, so a bias no longer constrains the block shape.
+        // This assert used to reject rt*ct > 8.
         // A bias is one row broadcast down the output block, so its shape is fixed by
         // the geometry. This was a runtime ASSERT on the page count, which could only
         // fire in an asserts-enabled build and only once the kernel ran.
@@ -1497,8 +1506,6 @@ struct Strategy<FPUFusion> {
         using G = typename Node::geometry;
         using Chain = typename Node::chain;
         constexpr uint32_t kTranspose = G::transpose;
-        // No bias handling, and none needed: bias() static_asserts that the output fits one
-        // acquire, so a biased matmul never reaches this path.
         constexpr DstSubblock kSub = dst_subblock(G::rt_dim, G::ct_dim);
         constexpr uint32_t kSubTiles = kSub.tiles();
         constexpr uint32_t kTotalTiles = G::out_subblock_num_tiles;
@@ -1546,6 +1553,17 @@ struct Strategy<FPUFusion> {
                             node.addend_cb, block_tile_index(r0, c0, t, kSub.cols, G::ct_dim), t);
                     }
                     // Put the matmul's own programming back for the next subblock.
+                    ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
+                }
+
+                // A bias, folded the same way. This path has no accumulation buffer and so
+                // no second pass available to it -- folding is the only way it can bias at
+                // all, and having it is what lets bias() stop refusing large output blocks.
+                if (node.bias_cb != kNoBias) {
+                    AddOp::fpu_reuse_init<true>(node.bias_cb);
+                    for (uint32_t t = 0; t < kSubTiles; ++t) {
+                        AddOp::fpu_reuse_apply<true>(node.bias_cb, c0 + t % kSub.cols, t);
+                    }
                     ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
                 }
 
@@ -1601,9 +1619,39 @@ struct Strategy<FPUFusion> {
         // plus a pack-sync init, and calling it a second time mid-kernel hangs the device.
         ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
 
-        // A fused bias needs the total in a buffer to add against, so when there is one the
-        // finishing pack goes to acc_cb and bias_finish carries it to out_cb.
-        const bool via_bias = finish && node.bias_cb != kNoBias;
+        // Two ways to apply a fused bias, kept side by side only long enough to measure:
+        //
+        //   folded (default) -- one FPU dest-reuse add per output tile, inside the same
+        //       acquire as the matmul. Needs the bias tile's row REPLICATED down the tile,
+        //       because a dest-reuse add is elementwise and does no broadcasting. Costs
+        //       nothing extra in L1 or on the NOC: the bias is ct tiles either way, and
+        //       only the contents of rows 1..31 differ.
+        //
+        //   two-pass -- pack the total to acc_cb, then a second pass reads it back and
+        //       uses add_tiles_bcast_rows, which broadcasts row 0 in hardware but takes
+        //       BOTH operands from buffers and so cannot run in the matmul's acquire.
+        //
+        // A replicated bias is correct for both, which is how they were compared.
+        //
+        // Which one wins depends on the mode, and measured at 2x4 kt=2 it is not close:
+        //
+        //   Dst  folded 5.76us, two-pass 6.36us -- the fold saves a whole pass, because Dst
+        //        mode would otherwise pack the total to acc_cb purely to have something for
+        //        the bias pass to read back.
+        //   L1   folded 6.59us, two-pass 6.31us -- the fold LOSES. L1 mode has to copy the
+        //        total out of acc_cb anyway, and the two-pass form rides along in that copy
+        //        for free, so folding pays for the bias on top of a pass that still runs.
+        //
+        // So Dst folds and L1 does not. The same split held at every shape measured, from
+        // 1x1 to 4x2 kt=8 kb=4: +0.5 to +0.6us for Dst, -0.13 to -0.38us for L1.
+        //
+        // The condition is the mode alone and not the subblock count, which was worth
+        // checking, since the fold pays per subblock (an init and a reuse pass each) while
+        // the two-pass form pays once for the whole block. Measured in Dst mode at 1, 2, 4
+        // and 8 subblocks the fold still wins by 0.60, 0.12, 0.31 and 0.42us -- it does not
+        // decay as the subblocks multiply.
+        constexpr bool kBiasFolded = (Mode == AccumulatorMode::Dst);
+        const bool via_bias = !kBiasFolded && finish && node.bias_cb != kNoBias;
 
         for (uint32_t r0 = 0; r0 < G::rt_dim; r0 += kSub.rows) {
             for (uint32_t c0 = 0; c0 < G::ct_dim; c0 += kSub.cols) {
@@ -1656,6 +1704,28 @@ struct Strategy<FPUFusion> {
                     ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
                 }
 
+                // The bias, on the finishing call only -- it applies to the total, not to
+                // every k-block. Bias tile for output column c is c, so within a subblock
+                // that is its column offset plus its own position across: the same tile
+                // re-read once per row of the subblock.
+                //
+                // Before the chain, so a chain wrapping a biased matmul sees the bias --
+                // store(relu(matmul(a, b).bias(v))) is relu(A@B + v). The two-pass form
+                // gets the same ordering by applying the bias inside bias_finish, ahead
+                // of the epilogue there.
+                if constexpr (kBiasFolded) {
+                    if (finish && node.bias_cb != kNoBias) {
+                        AddOp::fpu_reuse_init<true>(node.bias_cb);
+                        for (uint32_t t = 0; t < kSubTiles; ++t) {
+                            AddOp::fpu_reuse_apply<true>(node.bias_cb, c0 + t % kSub.cols, t);
+                        }
+                        // The reuse op reprogrammed the math unit, so put the matmul's own
+                        // programming back for the next subblock.
+                        ckernel::matmul_block_init(
+                            node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
+                    }
+                }
+
                 if constexpr (!Chain::empty) {
                     for (uint32_t t = 0; t < kSubTiles; ++t) {
                         Chain::apply_in_place(t);
@@ -1669,7 +1739,7 @@ struct Strategy<FPUFusion> {
                 // A@B without the bias -- relu(relu(A@B) + v) instead of relu(A@B + v).
                 if constexpr (Mode == AccumulatorMode::Dst) {
                     if constexpr (!EpilogueChain::empty) {
-                        if (finish && node.bias_cb == kNoBias) {
+                        if (finish && (kBiasFolded || node.bias_cb == kNoBias)) {
                             for (uint32_t t = 0; t < kSubTiles; ++t) {
                                 EpilogueChain::apply_in_place(t);
                             }
@@ -1719,7 +1789,7 @@ struct Strategy<FPUFusion> {
             if (!finish) {
                 cb_wait_front(acc_cb, kAccTiles);
                 cb_pop_front(acc_cb, kAccTiles);
-            } else if (node.bias_cb != kNoBias) {
+            } else if (!kBiasFolded && node.bias_cb != kNoBias) {
                 // The copy-out below, with the bias folded into it -- same wait,
                 // same pop, same pack, one op different.
                 bias_finish(node, acc_cb, out_cb, EpilogueChain{});

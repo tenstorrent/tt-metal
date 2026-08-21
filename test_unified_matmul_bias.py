@@ -37,14 +37,21 @@ def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0):
     a = torch.cat(a_blocks, dim=2)
     b = torch.cat(b_blocks, dim=2)
 
-    # One row of bias per output column, held as ct tiles. add_tiles_bcast_rows
-    # reads row 0 of each tile and broadcasts it down, so only row 0 is meaningful;
-    # the rest is zeroed so a wrong row shows up as zeros rather than noise.
+    # One row of bias per output column, held as ct tiles -- REPLICATED down all 32 rows
+    # of each tile. The folded path adds the bias with an FPU dest-reuse add, which is
+    # elementwise and does no broadcasting, so it needs every row to carry the value. The
+    # two-pass path reads row 0 and broadcasts it in hardware, and row 0 is unchanged, so
+    # replication is correct for both and the two are directly comparable.
+    #
+    # This does cost a diagnostic: rows 1..31 used to be zeroed so that a broadcast that
+    # failed showed up as zeros rather than noise. With every row equal, a broken row
+    # broadcast is invisible -- which is fine for the folded path, since it does not
+    # broadcast at all, but it means the two-pass path's broadcast is no longer covered.
     # Deliberately larger than a typical A@B entry, so applying it the wrong number
     # of times -- or before a relu instead of after -- is unmistakable.
     bias_row = ((torch.rand([ct * TILE]) - 0.5) * 4.0).to(torch.bfloat16)
     bias = torch.zeros([1, 1, TILE, ct * TILE], dtype=torch.bfloat16)
-    bias[0, 0, 0, :] = bias_row
+    bias[0, 0, :, :] = bias_row
 
     dram = ttnn.DRAM_MEMORY_CONFIG
     ta = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
@@ -88,6 +95,7 @@ def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0):
                 ("MM_BIAS", "1"),
             ]
             + ([("MM_ACC_L1", "1")] if mode == "l1" else [])
+            + ([("MM_SINGLE_SHOT", "1")] if mode == "single" else [])
             + ([("MM_RELU_EPILOGUE", "1")] if relu == "epilogue" else [])
         ),
     )
@@ -122,7 +130,7 @@ def main(argv=None):
     p.add_argument("--kt", type=int, default=2)
     p.add_argument("--k-blocks", type=int, default=1, help=">1 is what catches bias applied per block")
     p.add_argument("--relu", choices=["epilogue"], default=None)
-    p.add_argument("--mode", choices=["dst", "l1"], default="dst")
+    p.add_argument("--mode", choices=["dst", "l1", "single"], default="dst")
     p.add_argument("--pcc", type=float, default=0.99)
     p.add_argument("--atol", type=float, default=0.2, help="PCC alone tolerates a systematic offset")
     args = p.parse_args(argv)
