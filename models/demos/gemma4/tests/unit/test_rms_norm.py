@@ -12,7 +12,7 @@ are exercised at the magnitudes the model actually runs at.
 
     pytest -k "1x1"   # single card
     pytest -k "1x8"   # T3K (RMSNorm is replicated, no TP sharding)
-    HF_MODEL=google/gemma-4-31B-it pytest .../test_rms_norm.py -k real_weights
+    HF_MODEL=google/gemma-4-31B-it pytest models/demos/gemma4/tests/unit/test_rms_norm.py -k real_weights
 """
 
 import pytest

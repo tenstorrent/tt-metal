@@ -618,18 +618,14 @@ def test_demo_text(
     # Sample on device by default, whenever the model exposes a sampling module
     # (TP>1 and a vocab shard <=64K); models without one fall back to host.
     #
-    # This defaulted to host sampling because device sample + decode Metal Trace
-    # could allocate mid-trace and corrupt tokens. Measured on 1x8 WH / 31B,
-    # greedy: device sampling is token-for-token identical to host sampling at
-    # both context lengths -- 4 batch-1 runs (2 host, 2 device) share one md5 and
-    # the long-context-128k pair shares another -- including the exact 128K
-    # configuration where the historical shard-truncation corruption ("lapped" ->
-    # "la", then repetition) showed up.
-    #
     # Host sampling all-gathers the full 262K-vocab logits and reads 16 MB to CPU
-    # every token; skipping that is a solid tok/s win at both batch-1 and 128K.
-    # GEMMA4_HOST_SAMPLE=1 restores the host path if the trace hazard ever
-    # resurfaces on another config.
+    # every token, which is why the device path is the default. It was NOT the
+    # original default: device sample inside the decode Metal Trace can allocate
+    # mid-trace and corrupt tokens, which is how the shard-truncation collapse
+    # ("lapped" -> "la", then repetition) used to show up at 128K. Both paths are
+    # now verified token-for-token identical on that configuration, so the default
+    # flipped; GEMMA4_HOST_SAMPLE=1 restores the host path if the trace hazard
+    # ever resurfaces on another config.
     force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
     can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
     device_sampling_params = build_device_sampling_params(sampling_params, can_sample=can_sample)

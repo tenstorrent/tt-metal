@@ -29,7 +29,7 @@ the trained values exercise the bf16 cast at real dynamic range.
 
     pytest -k "1x1"   # single card (TP=1, no all-gather)
     pytest -k "1x8"   # T3K (TP=8, column-parallel + all-gather)
-    HF_MODEL=google/gemma-4-31B-it pytest .../test_embedding.py -k real_weights
+    HF_MODEL=google/gemma-4-31B-it pytest models/demos/gemma4/tests/unit/test_embedding.py -k real_weights
 """
 
 import pytest

@@ -362,16 +362,15 @@ class SharedMLP:
         gate = ttnn.slice(gate_up, [0, 0, 0, shard], [1, 1, s, 2 * shard], memory_config=geglu_mc)
         gate_up.deallocate(True)
 
-        # NOTE: in PREFILL this GeGLU intermediate stays in DRAM. Keeping it in
-        # L1 (so down_proj reads its input from L1) was measured and rejected
-        # there: the gain on down_proj sat inside the run-to-run noise band, while
-        # the intermediate is [seq, intermediate_size/tp] — at tp=1/tp=2 that is
-        # 4-8x wider than tp=8 and OOMs L1 at seq=4096.
-        # DECODE is the opposite case and does use L1 (see _gate_up_linear):
-        # seq is one tile, so the whole group is 344 KB, and the win is not the
-        # down_proj read but the gate_up WRITE, by not pushing its output through
-        # DRAM. ``geglu_mc`` inherits
-        # whichever the matmul picked, so neither case is hard-coded here.
+        # NOTE: in PREFILL this GeGLU intermediate stays in DRAM. Do NOT move it
+        # to L1 to give down_proj an L1 in0: the intermediate is
+        # [seq, intermediate_size/tp], and at tp=1/tp=2 that is 4-8x wider than
+        # tp=8 and OOMs L1 at seq=4096.
+        # DECODE is the opposite case and does use L1 (see _gate_up_linear): seq
+        # is one tile, so the whole group is 344 KB, and what L1 buys there is the
+        # gate_up WRITE — its output never goes through DRAM — not the down_proj
+        # read. ``geglu_mc`` inherits whichever the matmul picked, so neither case
+        # is hard-coded here.
         # Fuse gelu(gate)*up into one BinaryNg: GELU param 1.0 == fast tanh approx.
         hidden = ttnn.mul(
             gate,

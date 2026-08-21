@@ -45,6 +45,7 @@ from transformers.cache_utils import DynamicCache
 from ...tests.test_factory import get_pcc_threshold, parametrize_mesh_with_fabric, uses_ci_config_only_checkpoint
 from .decoder_pcc_common import (
     DECODE_STEPS,
+    KV_PCC_REQUIRED,
     PCC_BATCH_SIZE,
     build_decoder_pcc_context,
     check_pcc,
@@ -61,11 +62,6 @@ pytestmark = pytest.mark.skipif(
     uses_ci_config_only_checkpoint(),
     reason="Decoder PCC needs the checkpoint's real weights; HF_MODEL is a config-only stub",
 )
-
-# KV-cache readback threshold. The cache stores bf16 while HF keeps fp32, so an
-# exact match is not on the table; anything below this is a wrong row, not
-# rounding.
-KV_PCC_REQUIRED = 0.99
 
 
 def _run_multistep_decode(mesh_device, request, *, layer_type: str, prefill_len: int, bounded: bool = False) -> None:

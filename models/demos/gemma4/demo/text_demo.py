@@ -683,8 +683,8 @@ def _run_generation_via_generator(
             batch_size=batch_size,
         )
 
-    # Device sample by default — see text_demo_v2 for the measurement that flipped
-    # this default (GEMMA4_HOST_SAMPLE=1 restores the host path).
+    # Device sample by default — see text_demo_v2 for why this is the default
+    # (GEMMA4_HOST_SAMPLE=1 restores the host path).
     force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
     can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
     # Generator long-context path is greedy-only today.
