@@ -243,10 +243,19 @@ def _device_params():
         # CCL all_gather allocates semaphores in L1_SMALL when this is > 0.
         "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
     }
-    if is_blackhole():
-        params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", 256_000_000))
-    else:
-        params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", 30_000_000))
+    # ``trace_region_size`` must cover the CUMULATIVE size of every captured
+    # trace, not the largest one (the limit is hit at the last end_trace_capture,
+    # usually decode). Batched demos add B=2/4 prefill traces plus a larger decode
+    # graph; WH 96 MB is not enough for 31B batch-8/32. BH stays at 256 MB.
+    #
+    # Do NOT lower the WH value back to 30 MB. That was the pre-35e0798bdee
+    # default and it fails at end_trace_capture with "Creating trace buffers of
+    # size N ... but only 30000000B is allocated for trace region" -- 35e0798bdee
+    # raised it to 64 MB, 6473437bb9c to 96 MB for auto traced multi-chunk
+    # prefill, and d5292dd1b31 to 192 MB for batched prefill. 2736fc46354 (a
+    # model-load fix) reverted all three by accident; restored here.
+    default_trace_region = 256_000_000 if is_blackhole() else 192_000_000
+    params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
 
     pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
     if pkt_env is None:

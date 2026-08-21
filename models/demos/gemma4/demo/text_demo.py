@@ -12,6 +12,15 @@ prefill cutovers on QB2 (P150x4 / P300x2) and P150x8. Overrides:
 ``GEMMA4_BOUNDED_SLIDING``, ``GEMMA4_GEN_PREFILL_CHUNK``, ``GEMMA4_DEMO_SINGLE_CHUNK``,
 ``GEMMA4_MAX_SEQ_LEN``, ``GEMMA4_MAX_NEW_TOKENS``.
 
+On that Generator path decode token reads are also pipelined one step deep
+(``GEMMA4_DECODE_PIPELINE=1``, default; ported from ``text_demo_v2.py``): the
+sampled token's DMA overlaps the next decode submit instead of blocking it.
+Requires on-device sampling and a captured decode trace, so the device owns the
+token buffer between steps. ``GEMMA4_DECODE_PIPELINE=0`` restores the blocking
+loop. The hand-rolled ``run_generation`` loop instead binds the sampler's output
+straight to the trace's token input (``GEMMA4_DEMO_TOKEN_FEEDBACK``), which
+removes the same host round trip a different way.
+
 Usage:
     pytest models/demos/gemma4/demo/text_demo.py -v --timeout=600
 
@@ -233,6 +242,13 @@ def _host_sample_greedy(logits):
     if logits.dim() == 3:
         logits = logits[:, -1, :]
     return logits.argmax(dim=-1, keepdim=True)
+
+
+# Tokens detokenized for the per-step progress line. The line keeps at most 97
+# characters, and a token averages ~4, so this tail always covers it while making
+# the decode-loop detokenize O(1) per step instead of O(tokens generated).
+# Same constant and reasoning as text_demo_v2._LOG_TAIL_TOKENS.
+_LOG_TAIL_TOKENS = 48
 
 
 def load_demo_prompt(target_bucket, instruct=True):
@@ -725,35 +741,112 @@ def _run_generation_via_generator(
         device_sampling=device_sampling_params is not None,
         enable_trace=enable_decode_trace,
     )
-    logger.info(f"Starting decode loop... (device_pos_on_device: {device_tracks_pos})")
+
+    # Pipelined token readback (ported from text_demo_v2): submit step j+1 before
+    # syncing step j's token. Only possible with device sampling AND tracing --
+    # the sampled token is written straight into the trace's token input buffer,
+    # so the next submit needs nothing from host (Generator._decode_forward_trace_text
+    # leaves reset_inputs False once decode is steady). Note the extra
+    # ``enable_decode_trace`` term: ``_decode_forward_no_trace_text`` always
+    # consumes the host ``tokens`` argument, and in the pipelined loop ``out_tok``
+    # is never refreshed on host, so pipelining an untraced decode would feed the
+    # same stale token every step. GEMMA4_DECODE_PIPELINE=0 restores the blocking
+    # loop.
+    pipeline_reads = (
+        device_sampling_params is not None
+        and enable_decode_trace
+        and os.environ.get("GEMMA4_DECODE_PIPELINE", "1").lower() in ("1", "true", "yes")
+    )
+    pending = []
+
+    def _fold_tokens(toks):
+        """Fold one step's sampled tokens into ``all_outputs``."""
+        toks = toks.long().view(batch_size, -1)
+        for user in range(batch_size):
+            tok = int(toks[user, 0])
+            if tok not in tokenizer.stop_tokens:
+                all_outputs[user].append(tok)
+
+    def _consume_tokens(host_out, read_events):
+        """Wait for one pipelined read, then fold its tokens into the output."""
+        for event in read_events:
+            ttnn.event_synchronize(event)
+        toks, _ = generator.process_decode_output_host(host_out, is_tokens=True)
+        _fold_tokens(toks)
+
+    def _log_decode_progress():
+        if is_ci_env:
+            return
+        for user in range(batch_size):
+            # Detokenize only the tail that survives the clamp below. Decoding the
+            # whole generated slice is O(generated) host work per token -- quadratic
+            # over a run -- to print a line that keeps 97 characters. Called after
+            # ``profiler.end``, so it is outside the timed window; the tail bound
+            # still matters because it is per-step host work on the decode thread.
+            generated = all_outputs[user][prefill_lens[user] :]
+            text = tokenizer.decode(generated[-_LOG_TAIL_TOKENS:])
+            if len(generated) > _LOG_TAIL_TOKENS or len(text) > 100:
+                text = "..." + text[-97:]
+            logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
+
+    logger.info(
+        "Starting decode loop... (pipelined token reads: {}, device_pos_on_device: {})",
+        pipeline_reads,
+        device_tracks_pos,
+    )
     profiler.start("inference_decode")
     while iteration < max_new_tokens:
-        profiler.start(f"inference_decode_time_{iteration}")
-        decode_out, _ = generator.decode_forward(
+        # One timer per loop pass, closed at the bottom. In the pipelined path a
+        # pass is "submit step j, then sync step j-1", so the window still measures
+        # one token of steady-state wall time. Ending it right after the submit
+        # would time the enqueue only and report a fictitious tok/s.
+        step = iteration
+        profiler.start(f"inference_decode_time_{step}")
+        decode_out = generator.decode_forward(
             out_tok,
             current_pos,
             enable_trace=enable_decode_trace,
             page_table=page_table,
             kv_cache=tt_kv_cache,
             sampling_params=device_sampling_params,
+            read_from_device=not pipeline_reads,
         )
-        if device_sampling_params is not None:
-            out_tok = decode_out.long().view(batch_size, 1)
+
+        if pipeline_reads:
+            # Start the DMA and record an event; do NOT wait on it. The device
+            # already holds the token it needs for the next step.
+            host_out, read_events = generator.read_decode_output(decode_out, async_read=True)
+            pending.append((host_out, read_events))
         else:
-            out_tok = _host_sample_greedy(decode_out)
-        profiler.end(f"inference_decode_time_{iteration}")
+            decode_out, _ = decode_out
+            if device_sampling_params is not None:
+                out_tok = decode_out.long().view(batch_size, 1)
+            else:
+                out_tok = _host_sample_greedy(decode_out)
+
         if not device_tracks_pos:
             current_pos += 1
-        for user in range(batch_size):
-            tok = int(out_tok[user, 0].item())
-            if tok not in tokenizer.stop_tokens:
-                all_outputs[user].append(tok)
-        if not is_ci_env:
-            for user in range(batch_size):
-                text = tokenizer.decode(all_outputs[user][prefill_lens[user] :])
-                text = ("..." + text[-97:]) if len(text) > 100 else text
-                logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
         iteration += 1
+
+        consumed = False
+        if pipeline_reads:
+            # One step of slack: the read issued last iteration has had a full
+            # decode submit to land, so this sync is off the critical path.
+            if len(pending) > 1:
+                _consume_tokens(*pending.pop(0))
+                consumed = True
+        else:
+            _fold_tokens(out_tok)
+            consumed = True
+
+        profiler.end(f"inference_decode_time_{step}")
+        if consumed:
+            _log_decode_progress()
+
+    # Drain the in-flight reads so the emitted text holds every submitted step.
+    for entry in pending:
+        _consume_tokens(*entry)
+    pending.clear()
     profiler.end("inference_decode")
     profiler.end("run")
 
@@ -990,26 +1083,19 @@ def run_generation(
         get_last_token = prompt_len - 1
 
         def _build_prefill_embeds():
-            """Build a fresh ttnn embeds tensor for ttnn_prefill_forward.
+            """Fresh tile-laid embeds for ``ttnn_prefill_forward``.
 
-            The model deallocates intermediate hidden_states tensors as it
-            walks layers (memory pressure on long prompts), which frees the
-            input embeds buffer too. Rebuild before each prefill call so the
-            warmup pass and the measured pass each see a live tensor.
-            Pattern matches tt_transformers' generator.prefill_forward_text,
-            which receives torch tokens and re-tokenizes/re-embeds internally
-            each call.
+            Delegates to ``prepare_inputs_prefill`` so token layout, in-kernel
+            tilize, and ``_reshape_prefill_embeds`` stay aligned with the
+            Generator / vLLM paths. Rebuild before each prefill call: the model
+            deallocates intermediate hidden_states as it walks layers (memory
+            pressure on long prompts), which frees the input embeds buffer too.
             """
-            tokens_tt = ttnn.from_torch(
-                input_ids_padded.unsqueeze(0).to(torch.int32),
-                device=mesh_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.uint32,
-                mesh_mapper=replicate,
+            embeds, _, _, _, _, _ = model.prepare_inputs_prefill(
+                input_ids_padded.unsqueeze(0),
+                page_table=page_table_tt,
             )
-            e = model.embed_tokens(tokens_tt)
-            e = ttnn.reshape(e, (1, 1, padded_len, model_args.hidden_size))
-            return ttnn.to_layout(e, ttnn.TILE_LAYOUT)
+            return embeds
 
         # ── Warmup prefill (compile cost, untimed for TTFT) ─────────────
         logger.info("Prefill warmup (compiling)...")
