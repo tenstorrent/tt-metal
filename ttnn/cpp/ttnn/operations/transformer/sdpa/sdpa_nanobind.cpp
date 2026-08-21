@@ -305,7 +305,9 @@ void bind_sdpa(nb::module_& mod) {
 
     const auto* const doc =
         R"doc(
-        Causal scaled dot product attention. This API mimics the PyTorch API of the same name.
+        Causal scaled dot product attention. This API mirrors the PyTorch API of the same name, with one
+        difference: `is_causal` defaults to `true` here where PyTorch defaults to `false`, and `is_causal` and
+        `attn_mask` are mutually exclusive. Pass `is_causal=False` when supplying `attn_mask`.
         The implementation is FlashAttention-2."
 
         Accepts a `SDPAProgramConfig` which specifies the grid size and chunk tiles in the Q and K sequence lengths. The op parallelizes over `b`, `nqh`, and Q's `s` dimension.

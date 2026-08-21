@@ -392,9 +392,11 @@ An end-to-end example of the prefill attention module is in the [attention.py](.
      - `q`: Query tensor of shape `(1, n_q_heads, seqlen, head_dim)`.
      - `k`: Key tensor of shape `(1, n_kv_heads, cache_len, head_dim)`.
      - `v`: Value tensor of shape `(1, n_kv_heads, cache_len, head_dim)`.
-     - `attn_mask`: Defaults to `None`. [b x 1 x cache_len x seqlen]. Head broadcasting is implied.
-     - `is_causal`: bool, defaults to `true`. Whether to apply causal masking.
+     - `attn_mask`: Defaults to `None`. Shape `(1, n_q_heads or 1, seqlen, cache_len)`. Dim 1 may be `1` to broadcast across heads; dims 2 and 3 must match Q's and K's sequence lengths exactly. Must be on device, `TILE_LAYOUT`, in DRAM, and `bfloat16`, `bfloat8_b` or `bfloat4_b`.
+     - `is_causal`: bool, defaults to `true`. Whether to apply causal masking. Mutually exclusive with `attn_mask` and with `sliding_window_size`. Since the default is `true`, passing `attn_mask` without also setting `is_causal=False` raises.
      - `scale`: float, defaults to `None`.
+     - `sliding_window_size`: int, defaults to `None`. With `is_causal=True`, attends only to the last `sliding_window_size` tokens; with `is_causal=False`, to a window centred on the current position. Generated on device, so it cannot be combined with `attn_mask`.
+     - `cu_window_seqlens`: Defaults to `None`. 1D `int32`/`uint32` ROW_MAJOR tensor of cumulative window boundaries, giving block-diagonal attention with the mask built on device. Non-causal, and mutually exclusive with `attn_mask`, `is_causal` and `sliding_window_size`.
      - `program_config`: Defaults to `None`.
      - `compute_kernel_config`: Defaults to `None`.
 
@@ -473,10 +475,11 @@ An end-to-end example of the decode attention module is in the [attention.py](..
      - `k`: Key tensor of shape `(1, bsz, cache_len, head_dim)`.
      - `v`: Value tensor of shape `(1, bsz, cache_len, head_dim)`.
      - `is_causal`: Bool, defaults to `true`. Whether to apply causal masking.
-     - `attn_mask`: Optional attention mask tensor. Defaults to `None` and only used if `is_causal=False`.
+     - `attn_mask`: Defaults to `None`, and only valid with `is_causal=False`. Dim 2 must match `q`'s dim 2 — the padded per-device head count, not a sequence length — and dim 3 must match `k`'s `cache_len`. `cache_len` must also be a multiple of `k_chunk_size`, which defaults to the largest power-of-two divisor of the sequence length unless `program_config` overrides it. For a reference construction, see the `tt_xattn_mask` reshape in [models/tt_transformers/tt/multimodal/llama_vision_model.py](../../models/tt_transformers/tt/multimodal/llama_vision_model.py), which passes the head dim padded to 32.
      - `cur_pos`: (Required for is_causal=True) List of current positions in the sequence for each batch. Defaults to `None`. Must be provided if `cur_pos_tensor` is not provided.
      - `cur_pos_tensor`: (Required for is_causal=True) Optional current position tensor. Defaults to `None`. Must be provided if `cur_pos` is not provided.
      - `scale`: Optional scale factor. Defaults to `None`.
+     - `sliding_window_size`: int, defaults to `None`. Restricts attention to the last `sliding_window_size` tokens, generated on device.
      - `program_config`: Optional program configuration. Defaults to `None`.
      - `compute_kernel_config`: Optional compute kernel configuration. Defaults to `None`.
      - `memory_config`: Optional memory configuration for output tensor. Defaults to `None`.
@@ -487,7 +490,7 @@ An end-to-end example of the decode attention module is in the [attention.py](..
      ```
    - For non-causal attention, `attn_mask` must be provided. An example is in the cross attention case in visual language models. For example:
      ```python
-     attn_output = ttnn.transformer.paged_scaled_dot_product_at tention_decode(Q, K, V, attn_mask=mask, is_causal=False)
+     attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(Q, K, V, attn_mask=mask, is_causal=False)
      ```
 
 6. **Output Reshape and Output Matmul**
