@@ -20,6 +20,10 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 )
 from loguru import logger
 
+# Module-scoped device: these tests all run with the default device config, so the device is
+# opened once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def create_tt_tensors(cpu_grad, cpu_weight, cpu_exp_avg, cpu_exp_avg_sq, cpu_max_exp_avg_sq, amsgrad, dtype, device):
     def create_tt_tensor(tensor: torch.Tensor, dtype, device):

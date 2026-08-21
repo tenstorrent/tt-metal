@@ -22,6 +22,10 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 )
 from models.common.utility_functions import skip_for_blackhole
 
+# Module-scoped device: these tests all run with the default device config, so the device is
+# opened once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def torch_layer_norm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
     normalized_shape = input.shape[-normalized_dims:]

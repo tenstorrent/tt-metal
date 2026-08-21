@@ -19,6 +19,10 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     to_ttnn,
 )
 
+# Module-scoped device: these tests all run with the default device config, so the device is
+# opened once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def create_tt_tensor(tensor: torch.Tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
     return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
