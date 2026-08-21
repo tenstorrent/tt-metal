@@ -34,7 +34,7 @@ def timestep_features(
 
 
 # TODO: Use ttml.ops.unary.gelu once it takes a variant (bmijanovicTT)
-# Issue: #
+# Issue: #53776
 # ttml hardcodes the exact erf form, so tanh is only reachable through raw ttnn.
 def _gelu_tanh_nograd(x):
     """ttml's gelu is the exact erf form, so route to the tanh kernel."""
@@ -63,15 +63,13 @@ class WanConditioning(AbstractModuleBase):
 
         init = config.weight_init()
         self.time_embedder = _ProjectionMLP(config.freq_dim, config.dim, ttml.ops.unary.silu, init)
-        self.time_proj = LinearLayer(
-            config.dim, _MOD_CHUNKS * config.dim, True, weight_init=ttml.init.normal(0.0, 0.02)
-        )
+        self.time_proj = LinearLayer(config.dim, _MOD_CHUNKS * config.dim, True, weight_init=init)
         self.text_embedder = _ProjectionMLP(config.text_dim, config.dim, _gelu_tanh_nograd, init)
 
     def forward(self, timesteps, text_embed):
         """(timestep_proj (B,1,6,dim), temb (B,1,1,dim), prompt (B,1,L,dim))."""
         ctx = ttml.autograd.AutoContext.get_instance()
-        previous_mode = ttml.autograd.GradMode.ENABLED
+        previous_mode = ctx.get_gradient_mode()
         ctx.set_gradient_mode(ttml.autograd.GradMode.DISABLED)
         try:
             features = timestep_features(timesteps, self.freq_dim)

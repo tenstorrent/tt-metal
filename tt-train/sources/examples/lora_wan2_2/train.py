@@ -17,10 +17,12 @@ from ttml.datasets import InMemoryDataloader
 from ttml.models.wan2_2 import (
     WanConfig,
     WanTransformer3D,
+    assert_conv3d_patch_embed_is_frozen,
     build_rope_params,
     load_expert_from_safetensors,
     patchify,
     patchify_output_order,
+    to_ndhwc,
 )
 
 from pipeline_config import SUBFOLDER, Config
@@ -32,8 +34,9 @@ from utils.lora_targets import resolve as resolve_lora_targets
 from timing import fmt, phase, record
 
 
-def _to_ttml(arr: np.ndarray, dtype=ttnn.bfloat16, mapper=None):
-    return ttml.autograd.Tensor.from_numpy(np.ascontiguousarray(arr, dtype=np.float32), ttnn.Layout.TILE, dtype, mapper)
+def _to_ttml(arr: np.ndarray, dtype=ttnn.bfloat16, mapper=None, layout=ttnn.Layout.TILE):
+    """Tokens go up tiled; the conv3d patch embed needs its latent row-major instead."""
+    return ttml.autograd.Tensor.from_numpy(np.ascontiguousarray(arr, dtype=np.float32), layout, dtype, mapper)
 
 
 def _loss_value(loss) -> float:
@@ -90,6 +93,14 @@ def build_lora_expert(role: str, cfg: Config) -> ttml.modules.LoraModel:
         n = init_lora_A_gaussian(lora_model, cfg.LORA_RANK, cfg.MESH_SHAPE, seed=cfg.SEED)
         print(f"[lora] {role}: re-initialized {n} lora_A ~ N(0, 1/{cfg.LORA_RANK})")
 
+    if cfg.CONV3D_PATCH_EMBED:
+        # Here, not in train(): LoraModel exposes no accessor for the module it wraps, so this
+        # is the only scope holding the WanTransformer3D. After wrapping, so the frozen check
+        # sees the injected adapters; the wrapper's forward delegates, so enabling still takes.
+        assert_conv3d_patch_embed_is_frozen(model)
+        model.enable_conv3d_patch_embed()
+        print(f"[lora] {role}: patch embed via ttnn conv3d over the raw latent (no host patchify)")
+
     all_params = lora_model.parameters()
     trainable = {name: p for name, p in all_params.items() if "lora" in name}
     print(f"[lora] {role}: {len(trainable)} LoRA params trainable, {len(all_params) - len(trainable)} frozen")
@@ -131,7 +142,10 @@ def flow_matching_step(
     rng: np.random.Generator,
     fixed_noise: np.ndarray | None = None,
     dp_mapper=None,
+    use_conv3d: bool = False,
 ):
+    """`use_conv3d` is passed, not read off `model`: LoraModel does not forward attribute
+    lookups to the WanTransformer3D it wraps."""
     x0 = np.asarray(batch["latent"], dtype=np.float32)
     noise = (
         rng.standard_normal(x0.shape, dtype=np.float32)
@@ -141,8 +155,13 @@ def flow_matching_step(
     x_t = (1.0 - t) * x0 + t * noise
     target = noise - x0
 
-    tokens = patchify(x_t, patch_size)
+    # Target is always host-patchified: proj_out emits tokens either way, so only the input
+    # side changes with conv3d.
     target_tokens = patchify_output_order(target, patch_size)
+    if use_conv3d:
+        inputs = _to_ttml(to_ndhwc(x_t), mapper=dp_mapper, layout=ttnn.Layout.ROW_MAJOR)
+    else:
+        inputs = _to_ttml(patchify(x_t, patch_size), mapper=dp_mapper)
 
     text_embed = np.asarray(batch["text_embed"], dtype=np.float32)
     text_embed = text_embed.reshape(text_embed.shape[0], 1, *text_embed.shape[-2:])
@@ -151,7 +170,7 @@ def flow_matching_step(
     # WanConditioning, and expert routing is a per-step decision.
     timesteps = [t * 1000.0]
 
-    pred = model(_to_ttml(tokens, mapper=dp_mapper), timesteps, _to_ttml(text_embed, mapper=dp_mapper), rope_params)
+    pred = model(inputs, timesteps, _to_ttml(text_embed, mapper=dp_mapper), rope_params)
     return ttml.ops.loss.mse_loss(pred, _to_ttml(target_tokens, mapper=dp_mapper), reduce=ttml.ops.ReduceType.MEAN)
 
 
@@ -169,7 +188,18 @@ def validation_loss(experts, val_loader, cfg: Config, ctx, rope_params, patch_si
             noise = g.standard_normal(batch["latent"].shape, dtype=np.float32)
             model = _route(t, experts, cfg)
             losses.append(
-                _loss_value(flow_matching_step(model, batch, t, rope_params, patch_size, g, fixed_noise=noise))
+                _loss_value(
+                    flow_matching_step(
+                        model,
+                        batch,
+                        t,
+                        rope_params,
+                        patch_size,
+                        g,
+                        fixed_noise=noise,
+                        use_conv3d=cfg.CONV3D_PATCH_EMBED,
+                    )
+                )
             )
             ctx.reset_graph()
     finally:
@@ -194,6 +224,10 @@ def train(cfg: Config) -> None:
     all_idx = sorted(m["idx"] for m in metadata)
     if len(all_idx) <= cfg.VAL_HOLDOUT:
         raise RuntimeError(f"need > {cfg.VAL_HOLDOUT} samples; got {len(all_idx)}")
+    # Must be > 0: all_idx[-0:] is the whole list and all_idx[:-0] is empty, which would
+    # silently hold out everything and train on nothing.
+    if cfg.VAL_HOLDOUT <= 0:
+        raise ValueError(f"VAL_HOLDOUT must be >= 1, got {cfg.VAL_HOLDOUT}")
     val_idx, train_idx = all_idx[-cfg.VAL_HOLDOUT :], all_idx[: -cfg.VAL_HOLDOUT]
     print(f"[train] {len(train_idx)} train / {len(val_idx)} val | experts={cfg.TRAIN_EXPERTS}")
 
@@ -213,7 +247,9 @@ def train(cfg: Config) -> None:
         embeds = TextEmbeds(cfg.CACHE_DIR)
         train_ds = LatentEmbedDataset(cfg.CACHE_DIR, train_idx)
         val_ds = LatentEmbedDataset(cfg.CACHE_DIR, val_idx)
-    train_collate = make_collate_fn(embeds, cfg.TEXT_DROP_PROB, cfg.SEED)
+    # Offset by RESUME_STEP like the loader seed, so a resumed run does not replay the
+    # first chunk's caption-drop sequence.
+    train_collate = make_collate_fn(embeds, cfg.TEXT_DROP_PROB, cfg.SEED + cfg.RESUME_STEP)
     val_collate = make_collate_fn(embeds, 0.0, cfg.SEED + 1)
 
     # BATCH is per device; dp rows carry distinct samples. Validation stays replicated and
@@ -291,7 +327,16 @@ def train(cfg: Config) -> None:
 
         t = _sample_timestep(cfg, lo, hi, rng)
         model = _route(t, experts, cfg)
-        loss = flow_matching_step(model, batch, t, rope_params, patch_size, rng, dp_mapper=dp_mapper)
+        loss = flow_matching_step(
+            model,
+            batch,
+            t,
+            rope_params,
+            patch_size,
+            rng,
+            dp_mapper=dp_mapper,
+            use_conv3d=cfg.CONV3D_PATCH_EMBED,
+        )
         accum_loss += _loss_value(loss)
         accum_n += 1
 

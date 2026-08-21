@@ -35,6 +35,9 @@ class Config:
     DTYPE: str = "bfloat16"
     VAE_DTYPE: str = "bfloat16"
     GRADIENT_CHECKPOINTING: bool = True
+    # Patch-embed the raw latent with ttnn.experimental.conv3d instead of host patchify plus
+    # a Linear. Frozen either way -- there is no conv3d backward.
+    CONV3D_PATCH_EMBED: bool = False
 
     DATASET_ID: str = "showlab/OmniConsistency"
     STYLE: str = "LEGO"
@@ -165,6 +168,12 @@ class Config:
             raise ValueError(f"INFER_FRAMES must be 1 or 4k+1, got {self.INFER_FRAMES}")
         if self.BATCH < 1:
             raise ValueError(f"BATCH must be >= 1, got {self.BATCH}")
+        # VAE spatial stride 8 * patch 2. Checked here so a bad resolution fails in a second
+        # rather than deep inside WanEncoder, after the VAE build; precompute._validate_res
+        # re-checks it against the real VAE config in case the stride ever differs.
+        for label, value in (("TRAIN_H", self.TRAIN_H), ("TRAIN_W", self.TRAIN_W)):
+            if value % 16 != 0:
+                raise ValueError(f"{label} must be a multiple of 16, got {value}")
 
     def asdict(self) -> dict:
         d = asdict(self)

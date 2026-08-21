@@ -521,3 +521,58 @@ def test_replicated_lora_gradients_agree_across_tp(mesh):
         checked += 1
 
     assert checked, "no column-parallel lora_A parameters were found to check"
+
+
+def test_conv3d_patch_embed_works_on_a_mesh(mesh):
+    """The conv3d patch embed reads and prepares its weight correctly across 4x8 devices.
+
+    patch_embed is replicated on every chip, so a bare to_numpy() raises "Can't get a single
+    buffer ...". Single-device tests miss that, and miss whether prepare_conv3d_weights and
+    the op itself tolerate a mesh at all.
+    """
+    from ttml.models.wan2_2 import (
+        WanConfig,
+        WanTransformer3D,
+        build_rope_params,
+        patch_features,
+        to_ndhwc,
+    )
+
+    config = WanConfig(
+        dim=64,
+        ffn_dim=128,
+        num_layers=1,
+        num_heads=2,
+        patch_size=(1, 2, 2),
+        in_channels=16,  # must be a multiple of the conv3d C_in alignment
+        out_channels=16,
+        text_dim=64,
+        freq_dim=32,
+        rope_max_seq_len=128,
+        use_tp=False,
+    )
+    model = WanTransformer3D(config)
+    model.enable_conv3d_patch_embed()
+    assert model.uses_conv3d_patch_embed
+
+    latent_shape = (1, config.in_channels, 1, 8, 8)
+    rng = np.random.default_rng(0)
+    latent = (rng.standard_normal(latent_shape) * 0.5).astype(np.float32)
+    text = (rng.standard_normal((1, 1, 8, config.text_dim)) * 0.5).astype(np.float32)
+    rope = build_rope_params(
+        head_dim=config.head_dim,
+        patch_size=config.patch_size,
+        latent_shape=latent_shape,
+        max_seq_len=config.rope_max_seq_len,
+    )
+
+    context = ttml.autograd.AutoContext.get_instance()
+    context.set_gradient_mode(ttml.autograd.GradMode.DISABLED)
+    try:
+        ndhwc = ttml.autograd.Tensor.from_numpy(to_ndhwc(latent), ttnn.Layout.ROW_MAJOR, ttnn.bfloat16)
+        txt = ttml.autograd.Tensor.from_numpy(np.ascontiguousarray(text), ttnn.Layout.TILE, ttnn.bfloat16)
+        out = model(ndhwc, [500.0], txt, rope)
+    finally:
+        context.set_gradient_mode(ttml.autograd.GradMode.ENABLED)
+
+    assert tuple(out.shape()) == (1, 1, 16, patch_features(config.out_channels, config.patch_size))
