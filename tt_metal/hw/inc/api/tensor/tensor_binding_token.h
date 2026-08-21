@@ -46,10 +46,10 @@ struct TensorBindingToken {
     static constexpr args_t args{};
     static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
 
-    constexpr TensorBindingToken(LLKMetadata llk) noexcept : llk_metadata_(llk) {}
+    constexpr TensorBindingToken(binding_details::LLKMetadata llk) noexcept : llk_metadata_(llk) {}
 
 private:
-    LLKMetadata llk_metadata_;
+    binding_details::LLKMetadata llk_metadata_;
 };
 
 // NullTensorBindingToken: the "this name is not bound" result of a binding lookup.
