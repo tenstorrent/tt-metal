@@ -7,6 +7,7 @@ import os
 import shutil
 import struct
 import subprocess
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, fields
@@ -80,6 +81,8 @@ from .test_variant_parameters import (
 )
 from .utils import create_directories, run_shell_command
 
+TEMP_DIR = Path(tempfile.gettempdir())
+
 
 class ProfilerBuild(Enum):
     Yes = "true"
@@ -125,9 +128,10 @@ class TestConfig:
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
-    # Artefact directories. Prefer GHA RUNNER_TEMP (disk) over /tmp (often tmpfs)
-    # so compile artefacts do not accumulate in RAM and OOM the runner (exit 137).
-    DEFAULT_ARTEFACTS_PATH: ClassVar[Path] = Path("/tmp/tt-llk-build")
+    # Artefact directories. Prefer GHA RUNNER_TEMP (disk) over the system temp
+    # directory (often tmpfs) so compile artefacts do not accumulate in RAM and
+    # OOM the runner (exit 137).
+    DEFAULT_ARTEFACTS_PATH: ClassVar[Path] = TEMP_DIR / "tt-llk-build"
     ARTEFACTS_DIR: ClassVar[Path]
     SHARED_DIR: ClassVar[str]
     SHARED_OBJ_DIR: ClassVar[str]
@@ -374,7 +378,7 @@ class TestConfig:
 
     @staticmethod
     def resolve_artefacts_path() -> Path:
-        """Build artefact root: $RUNNER_TEMP/tt-llk-build in GHA, else /tmp/tt-llk-build."""
+        """Use $RUNNER_TEMP/tt-llk-build in GHA, else the system temp directory."""
         runner_temp = os.environ.get("RUNNER_TEMP")
         if runner_temp:
             return Path(runner_temp) / "tt-llk-build"
@@ -895,7 +899,7 @@ class TestConfig:
                 )
 
     def collect_hash(self):
-        lock_file = Path("/tmp/tt-llk-build-print.lock")
+        lock_file = TEMP_DIR / "tt-llk-build-print.lock"
         lock_file.touch(exist_ok=True)
 
         with open(lock_file, "w") as lock:
@@ -990,7 +994,7 @@ class TestConfig:
 
         shared_obj_dir = TestConfig.SHARED_OBJ_DIR
         shared_elf_dir = TestConfig.SHARED_ELF_DIR
-        lock_file = "/tmp/tt-llk-build-shared.lock"
+        lock_file = TEMP_DIR / "tt-llk-build-shared.lock"
 
         done_marker = shared_obj_dir / ".shared_complete"
 
