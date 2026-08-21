@@ -314,7 +314,6 @@ models:
   stress:
     wh_galaxy_perf: 500
   e2e:
-    wh_llmbox: 198
     bh_p150b_civ2: 8
     bh_p300: 20
     bh_loudbox: 193
@@ -347,7 +346,7 @@ models:
     wh_llmbox: 70
     wh_galaxy_perf: 10
   unit_tier1:
-    wh_llmbox: 61
+    wh_llmbox: 193
     wh_n150: 110
     wh_galaxy: 235
     wh_galaxy_perf: 45
