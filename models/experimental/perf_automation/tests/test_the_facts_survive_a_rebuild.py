@@ -27,14 +27,18 @@ def _fn(path, name):
 
 def test_a_rebuild_carries_the_structural_facts_forward():
     body = _fn(_PA / "cc_optimize" / "run.py", "_emit_perf_target_inputs")
-    assert 'for _k in ("blocks", "stage_roots")' in body, "a rebuild still drops the multi-tower facts"
+    # anchored on the PROPERTY: the literal tuple is now the named ARCH_KEYS constant, shared with
+    # the mirror so the two cannot list different keys.
+    assert "for _k in ARCH_KEYS" in body, "a rebuild still drops the multi-tower facts"
+    src = (_PA / "cc_optimize" / "run.py").read_text()
+    assert 'ARCH_KEYS = ("blocks", "stage_roots")' in src
     assert "facts[_k] = _prev[_k]" in body
 
 
 def test_it_carries_forward_rather_than_refusing_the_write():
     """Refusing would block a legitimate geometry refresh over a key this producer never emits."""
     body = _fn(_PA / "cc_optimize" / "run.py", "_emit_perf_target_inputs")
-    i = body.index('for _k in ("blocks", "stage_roots")')
+    i = body.index("for _k in ARCH_KEYS")
     assert "return" not in body[i : i + 200], "the carry-forward turned into a refusal"
 
 
@@ -56,5 +60,5 @@ def test_a_single_tower_model_is_unaffected():
     """It writes the flat shape legitimately -- which is why this hid for four days. Carrying
     forward only fires when the OLD file had a key the new facts lack."""
     body = _fn(_PA / "cc_optimize" / "run.py", "_emit_perf_target_inputs")
-    i = body.index('for _k in ("blocks", "stage_roots")')
+    i = body.index("for _k in ARCH_KEYS")
     assert "if _prev.get(_k) and not facts.get(_k)" in body[i : i + 200]

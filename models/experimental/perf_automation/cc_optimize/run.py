@@ -1947,6 +1947,9 @@ def _publish_stage_roots(seq, model_root, node) -> dict:
         _roots = stage_roots(seq, model_root, _model_id_for_facts(model_root), node)
         if _roots:
             _merge_model_facts(model_root, {"stage_roots": _roots})
+            # discovery is the ONLY writer of stage_roots; mirror it here or it is lost on the
+            # first revert with no path back (the emitter never produces it).
+            _mirror_arch_facts({"stage_roots": _roots})
             print("  [optimize/cc] stage subtrees: %s" % _roots, flush=True)
         return _roots or {}
     except Exception:  # noqa: BLE001 -- a missing mapping is the old behaviour, not a failure
@@ -5371,6 +5374,81 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     return facts
 
 
+ARCH_MIRROR_NAME = "model_blocks.json"
+ARCH_KEYS = ("blocks", "stage_roots")
+
+
+def _mirror_arch_facts(facts: dict) -> None:
+    """Keep the ARCHITECTURE MAP somewhere git_revert cannot delete.
+
+    WHAT GETS LOST AND WHY. perf_target_inputs.json is untracked and lives in the model directory,
+    and git_revert calls gitio.remove_new_untracked -- which deletes untracked files created since
+    the checkpoint. That is deliberate and correct: `git checkout <sha> -- <path>` only rewrites
+    TRACKED files, so a lever that CREATED a kernel module would otherwise survive every revert. The
+    facts file looks exactly like such a file, so every rejected attempt deletes it.
+
+    Most of it heals. The flat keys are re-derived from the checkpoint by the rebuild, and the census
+    is re-measured by the next full-pipeline run. Two do NOT: `blocks` needs a resolvable model id,
+    and `stage_roots` is never written here at all -- discovery merges it in once, and nothing
+    re-runs that. So after the first revert a stage can no longer find its own tower.
+
+    Measured on Voxtral run 16: with both gone, _stage_block("encode") returned None and the compute
+    roof fell back to the flat total_params -- 3.611B, the LANGUAGE model's per-token read set --
+    for an audio encoder that holds 0.662B. Encode was charged 5.5x its work and read 46% of a
+    ceiling it was really at ~8% of. Decode looked fine only by coincidence: total_params IS its
+    read set, so the fallback happened to be its right answer.
+
+    SAFE TO CACHE WITHOUT EXPIRY, unlike the census. These are ARCHITECTURE -- which towers exist,
+    how deep, how many params -- read from the checkpoint. A dtype or grid knob changes the bytes on
+    device; it cannot change how many towers the model has. The census is deliberately NOT mirrored
+    here for exactly that reason: it must be re-measured, and a cached one would go stale the first
+    time a precision knob lands.
+
+    The same home and the same reasoning as summary._mirror_report: outside git so no revert can
+    reach it, outside the worktree so no reboot can take it, keyed per model.
+    """
+    try:
+        from cc_optimize.tmpstate import state_dir
+    except Exception:  # noqa: BLE001
+        try:
+            from .tmpstate import state_dir
+        except Exception:  # noqa: BLE001
+            return
+    try:
+        import os as _os
+
+        if not (_os.environ.get("PERF_MCP_STATE_DIR") or "").strip():
+            return  # without --persist state_dir() is the temp dir this exists to escape
+        keep = {k: facts[k] for k in ARCH_KEYS if facts.get(k)}
+        if not keep:
+            return
+        d = state_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        prev = {}
+        try:
+            prev = json.loads((d / ARCH_MIRROR_NAME).read_text())
+        except Exception:  # noqa: BLE001
+            prev = {}
+        merged = {**(prev if isinstance(prev, dict) else {}), **keep}
+        (d / ARCH_MIRROR_NAME).write_text(json.dumps(merged, indent=2) + "\n")
+    except Exception:  # noqa: BLE001 -- a mirror that cannot be written must never cost the write
+        pass
+
+
+def read_arch_mirror() -> dict:
+    """The mirrored architecture map, or {}. See _mirror_arch_facts."""
+    try:
+        try:
+            from cc_optimize.tmpstate import state_dir
+        except Exception:  # noqa: BLE001
+            from .tmpstate import state_dir
+
+        d = json.loads((state_dir() / ARCH_MIRROR_NAME).read_text())
+        return {k: v for k, v in d.items() if k in ARCH_KEYS and v} if isinstance(d, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _emit_perf_target_inputs(model_root, demo_dir, model_id_hint, manifest) -> None:
     """Write perf_target_inputs.json into the model root so the decode ceiling can be computed.
 
@@ -5404,6 +5482,21 @@ def _emit_perf_target_inputs(model_root, demo_dir, model_id_hint, manifest) -> N
         facts = _perf_target_inputs(demo_dir, model_id_hint, manifest)
         if not facts:
             return
+        # THE CARRY-FORWARD BELOW READS THE PREVIOUS FILE, AND A REVERT DELETES IT.
+        # gitio.remove_new_untracked removes untracked files created since the checkpoint, and this
+        # file is one -- so the common case is not "overwritten with less" but "gone entirely", and
+        # then there is no _prev to carry anything forward from. The mirror survives that, because it
+        # lives outside the model directory the revert scans. Restored BEFORE the guards below so a
+        # recovered value counts as present.
+        # Best-effort, like the mirror write: a mirror that cannot be READ must never cost the
+        # facts write it exists to protect. Without this guard a raising read aborted the emit
+        # entirely -- worse than the loss it repairs.
+        try:
+            for _k, _v in (read_arch_mirror() or {}).items():
+                if _v and not facts.get(_k):
+                    facts[_k] = _v
+        except Exception:  # noqa: BLE001
+            pass
         if out.exists():
             try:
                 _prev = json.loads(out.read_text())
@@ -5452,7 +5545,7 @@ def _emit_perf_target_inputs(model_root, demo_dir, model_id_hint, manifest) -> N
             # never going to emit. Carrying the old value forward keeps both. Timeline for the
             # record: the guard is from 2026-08-09 and has never changed; blocks and stage_roots were
             # added on 2026-08-17 without widening it.
-            for _k in ("blocks", "stage_roots"):
+            for _k in ARCH_KEYS:
                 if _prev.get(_k) and not facts.get(_k):
                     facts[_k] = _prev[_k]
             if _lost:
@@ -5464,6 +5557,7 @@ def _emit_perf_target_inputs(model_root, demo_dir, model_id_hint, manifest) -> N
                 )
                 return
         out.write_text(json.dumps(facts, indent=2) + "\n")
+        _mirror_arch_facts(facts)
         # ANCHOR IT IN THE LEDGER TOO. The file lives in the model directory, which the optimize loop
         # reverts between attempts -- it was rolled back twice in one run, each time restoring a
         # different vintage. The ledger is keyed, append-only and outside that directory, so the
