@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Proves up()/down() stay atomic under real multi-DM contention. Three shapes, one per
-// -D mode: every thread up()s a shared count, one consumer drains many producers, and
-// many concurrent consumers run under a watchdog. The host picks the scope, so the same
-// source runs under any mechanism. Quasar-only.
+// Proves up()/down() stay atomic under real multi-DM contention. Four shapes, one per
+// -D mode: every thread up()s a shared count, one consumer drains many producers, many
+// concurrent consumers run under a watchdog, and every thread bumps through the
+// self-targeted remote-up form. The host picks the scope, so the same source runs under
+// any mechanism. Quasar-only.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -35,16 +36,24 @@ void kernel_main() {
     asm volatile("csrr %0, mhartid" : "=r"(hart));
     const bool is_lowest = (hart == 2);
 
+    // Every wait below polls under this cap, so a starved wait ends in a wrong reported
+    // count (which the host fails on) instead of hanging the test binary. It is a
+    // iteration count that is ~100x any healthy wait.
+    constexpr uint32_t kSpinCap = 1u << 20;
+
     // The mechanism comes from the host's scope table
     Semaphore work(sem::counter);
 
 #if defined(MODE_PRODUCER_CONSUMER)
     if (is_lowest) {
-        // One consumer drains every producer increment; the drain only finishes
-        // if decrements stay atomic against the concurrent increments.
+        // One consumer drains every producer increment.
         const uint32_t total = (num_threads - 1) * increment_times;
-        for (uint32_t i = 0; i < total; i++) {
-            work.down(1);
+        uint32_t drained = 0;
+        for (uint32_t spin = 0; drained < total && spin < kSpinCap; spin++) {
+            if (work.value() >= 1) {
+                work.down(1);
+                drained++;
+            }
         }
         report(report_addr, work.value());  // expect 0
     } else {
@@ -66,12 +75,13 @@ void kernel_main() {
         for (uint32_t i = 0; i < total; i++) {
             work.up(1);
         }
-        done.wait_min(num_consumers);
+        for (uint32_t spin = 0; done.value() < num_consumers && spin < kSpinCap; spin++) {
+        }
         report(report_addr, work.value());  // expect exactly 0
     } else if (hart == 3) {
         // Watchdog: sample until every consumer has finished, latch the max observed value.
         uint32_t max_seen = 0;
-        while (done.value() < num_consumers) {
+        for (uint32_t spin = 0; done.value() < num_consumers && spin < kSpinCap; spin++) {
             const uint32_t v = work.value();
             if (v > max_seen) {
                 max_seen = v;
@@ -79,10 +89,34 @@ void kernel_main() {
         }
         report_value(report_addr + 64u, max_seen);
     } else {
-        for (uint32_t i = 0; i < increment_times; i++) {
-            work.down(1);
+        // Poll for a credit before each down(1).
+        uint32_t drained = 0;
+        for (uint32_t spin = 0; drained < increment_times && spin < kSpinCap; spin++) {
+            if (work.value() >= 1) {
+                work.down(1);
+                drained++;
+            }
         }
         done.up(1);
+    }
+#elif defined(MODE_SELF_NOC_UP)
+    // The WH/BH pattern: bump the local semaphore through the remote-up form aimed
+    // at this node's own coordinates. On a cached semaphore it must be served by the local
+    // AMO (a NoC atomic must never touch the cached pool) and keep exact counts.
+    Semaphore done(sem::done);
+    Noc noc;
+    const uint32_t self_noc_x = get_arg(args::self_noc_x);
+    const uint32_t self_noc_y = get_arg(args::self_noc_y);
+    for (uint32_t i = 0; i < increment_times; i++) {
+        work.up(noc, self_noc_x, self_noc_y, 1);
+    }
+    noc.async_atomic_barrier();
+    done.up(1);
+    if (is_lowest) {
+        // Barrier: every thread finished its up() loop (bounded, see kSpinCap).
+        for (uint32_t spin = 0; done.value() < num_threads && spin < kSpinCap; spin++) {
+        }
+        report(report_addr, work.value());
     }
 #else  // MODE_CONCURRENT_UP
     Semaphore done(sem::done);
@@ -91,7 +125,8 @@ void kernel_main() {
     }
     done.up(1);
     if (is_lowest) {
-        done.wait_min(num_threads);         // barrier: every thread finished its up() loop
+        for (uint32_t spin = 0; done.value() < num_threads && spin < kSpinCap; spin++) {
+        }
         report(report_addr, work.value());  // expect num_threads * increment_times
     }
 #endif

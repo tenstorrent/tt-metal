@@ -28,7 +28,10 @@ void kernel_main() {
     const uint32_t expected = get_arg(args::expected);
 
     Semaphore counter(sem::counter);
-    counter.wait_min(expected);
+    // Bounded wait for the sender's increments.
+    constexpr uint32_t kSpinCap = 1u << 20;
+    for (uint32_t spin = 0; counter.value() < expected && spin < kSpinCap; spin++) {
+    }
 
     volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
     report[0] = static_cast<uint32_t>(sem_scope_of(sem::counter));
