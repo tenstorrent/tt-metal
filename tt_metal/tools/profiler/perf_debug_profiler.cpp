@@ -258,11 +258,17 @@ bool role_split() {
 // This now sizes the HAL's DRAM PROFILER region too (perf_debug_dram_region_bytes_per_risc above), so it is
 // read before any device is opened. Lowering it lowers DRAM held per bank one-for-one; 12 MiB is enough for a
 // 5,000-zone/RISC capture and 64 MiB buys ~16-17k zones/RISC of runway (FINDINGS §N+39).
+//
+// Default 128: the kimi_k2 1000-iteration fused loop measured a worst-case transient backlog of 174 MiB of
+// 37%-full frames on one ring -- ~100 MiB at the ship-threshold's >=50% fill -- and a 64 MiB ring FILLING is
+// what turned a backlog into 71k producer stalls (fillers block on ring room, sweeps stretch, every ring on
+// the device overflows). 128 covers that transient with margin at 1 GiB of reserved DRAM across 8 banks; a
+// 2 GiB reserve was verified allocation-safe on that same workload.
 uint32_t role_ring_mb() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_ROLE_RING_MB");
-        const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 64u;
-        return n == 0 ? 64u : n;
+        const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 128u;
+        return n == 0 ? 128u : n;
     }();
     return v;
 }
@@ -352,12 +358,14 @@ constexpr uint32_t kHsHead = 0, kHsTail = 16, kHsProbeF = 32, kHsProbeM = 48, kH
 // sweeps. Every sweep inside an active window is now instrumented instead.
 bool drisc_zones() {
     static const bool v = [] {
-        // NOC_FOOTPRINT IMPLIES ZONES. The per-sweep NoC series rides the self-zone marker stream, so
-        // footprint-without-zones yields the out[] totals and the log block but NO plots -- a silently
-        // half-working configuration. Asking for the footprint therefore turns self-profiling on too.
-        // An explicit falsy DRISC_ZONES still wins, so the combination remains expressible.
+        // NOC_FOOTPRINT IMPLIES ZONES -- but only when the per-sweep series exists to ride the self-zone
+        // stream, i.e. with CV-first off (the kernel forces the series off under CV-first: the maximal
+        // build measured 396 B over the code region). Under CV-first the footprint is its out[] totals,
+        // which need no zones. An explicit falsy DRISC_ZONES still wins either way.
         const char* z = std::getenv("TT_METAL_PERF_DEBUG_DRISC_ZONES");
-        if ((z == nullptr || *z == '\0') && env_flag("TT_METAL_PERF_DEBUG_NOC_FOOTPRINT")) {
+        const char* cf = std::getenv("TT_METAL_PERF_DEBUG_CV_FIRST");
+        const bool cv_on = (cf == nullptr || *cf == '\0') ? true : env_flag("TT_METAL_PERF_DEBUG_CV_FIRST");
+        if ((z == nullptr || *z == '\0') && env_flag("TT_METAL_PERF_DEBUG_NOC_FOOTPRINT") && !cv_on) {
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] NOC_FOOTPRINT implies DRISC_ZONES (the per-sweep NoC series rides the "
@@ -528,6 +536,55 @@ uint32_t gap_max_cycles() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_GAP_MAX");
         return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 200000u;
+    }();
+    return v;
+}
+
+// TT_METAL_PERF_DEBUG_SHIP_MIN_PCT: a FILLER defers staging a live core until its span holds at least this
+// percent of live capacity (kNumRisc * ring words), unless a ring is half full (serviced regardless) or the
+// core aged out. 0 disables (ship every live core every sweep, the old behaviour).
+//
+// Why 50 is the default: a frame costs the mover a fixed 10,560 B DRAM read + PCIe push whatever it
+// carries, and on the kimi_k2 fused loop shipping every live core every sweep produced ~37%-full frames at
+// ~11 GB/s of raw slots against the two movers' ~12 GB/s. The 64 MiB DRAM ring absorbed that deficit for
+// ~250 iterations, filled, and every producer on the device then stalled for the rest of the run (71k
+// stalls). Deferring until a span is worth its fixed cost removes the deficit at the source; the
+// predictive valve keeps service latency for a hot lane at one sweep.
+//
+// 65 was tried and REGRESSED (35 stalls vs 0 at 50 on the same workload): it cut frames only ~10% and
+// barely moved the host-ack-driven ring spike (98.8% -> 91.7% of 128 MiB), while letting worker rings
+// ride ~380 words higher before shipping -- and a core whose emission is concentrated in one or two
+// lanes can NEVER reach a whole-span threshold that high, so it lives on the peak valve with less slack.
+// The ring-spike problem belongs to the packed-ring change, not to this knob.
+uint32_t ship_min_pct() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_SHIP_MIN_PCT");
+        const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 50u;
+        return n > 100 ? 100u : n;
+    }();
+    return v;
+}
+
+// TT_METAL_PERF_DEBUG_CV_FIRST (default on; a falsy value disables): a FILLER reads only each core's
+// ring TAILS (32 B) per sweep and bulk-reads spans for the cores it is shipping, instead of reading
+// every core's whole 10,496 B span every sweep -- and a cheap sweep means the inter-sweep gap stays
+// small, which is what closes the burst-onset service race. Coexists with DRISC self-zones: the tails
+// staging lives in the self frame's structurally-dead ring 1..4 space. Needs the ship threshold, which
+// the tails scan feeds.
+bool cv_first() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_CV_FIRST");
+        const bool want = (s == nullptr || *s == '\0') ? true : env_flag("TT_METAL_PERF_DEBUG_CV_FIRST");
+        if (!want) {
+            return false;
+        }
+        if (ship_min_pct() == 0) {
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] CV_FIRST needs the ship threshold (SHIP_MIN_PCT != 0); disabling CV-first");
+            return false;
+        }
+        return true;
     }();
     return v;
 }
@@ -1979,7 +2036,15 @@ bool PerfDebugProfiler::boot_device(
                 noc_footprint(),
                 // arg 38: the sync event. Gated on zones being on as well, because it rides the self-zone ring
                 // and the kernel static_asserts that pairing -- passing 1 with zones off would not build.
-                (sync_event_count() != 0 && self_frames_base != 0) ? 1u : 0u};
+                (sync_event_count() != 0 && self_frames_base != 0) ? 1u : 0u,
+                // arg 39: FILLER ship threshold (percent of live span capacity); movers never read it.
+                ship_min_pct(),
+                // arg 40: CV-first sweeps (fillers only; needs the spare staging slot, see cv_first()).
+                cv_first() ? 1u : 0u};
+            TT_FATAL(
+                !cv_first() || my_cores * 32u <= 4u * kernel_profiler::PROFILER_L1_BUFFER_SIZE,
+                "CV-first tails staging ({} cores x 32 B) does not fit the self slot's dead ring space",
+                my_cores);
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
                 tensix_drain
@@ -2627,21 +2692,31 @@ void PerfDebugProfiler::stop() {
             // the bottleneck at all -- the host consumer is.
             const uint64_t c_read = u64(10), c_proc = u64(12), c_res = u64(14), c_wr = u64(16), c_bar = u64(18);
             const uint64_t c_idle = u64(21), c_busy = u64(23);
-            const uint64_t acct = c_read + c_proc + c_res + c_wr + c_bar;
+            const uint64_t c_pace = u64(136);
+            const uint64_t acct = c_read + c_proc + c_res + c_wr + c_bar + c_pace;
             auto pct = [cyc](uint64_t v) {
                 return cyc ? (100.0 * static_cast<double>(v) / static_cast<double>(cyc)) : 0.0;
             };
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] DRISC phases of {:.1f} ms: read {:.1f}% | proc {:.1f}% | "
-                "reserve(credit-wait) {:.1f}% | write {:.1f}% | wr-barrier {:.1f}% | unaccounted {:.1f}%",
+                "reserve(credit-wait) {:.1f}% | write {:.1f}% | wr-barrier {:.1f}% | pace {:.1f}% | "
+                "unaccounted {:.1f}%",
                 cyc / kCycPerUs / 1000.0,
                 pct(c_read),
                 pct(c_proc),
                 pct(c_res),
                 pct(c_wr),
                 pct(c_bar),
+                pct(c_pace),
                 pct(cyc > acct ? cyc - acct : 0));
+            if (res[170] != 0 || res[171] != 0) {
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] DRISC ship threshold: {} core visits deferred, {} ships forced by age",
+                    res[170],
+                    res[171]);
+            }
             // proc sub-split. `proc` is the biggest busy-sweep phase, and it is two unrelated things:
             // a LOCAL scan of the staged control vectors, and a per-live-core 20 B NoC head write-back
             // (up to one issue per core per sweep). This drainer is issue-bound, so which half dominates
@@ -3052,6 +3127,12 @@ void PerfDebugProfiler::verify_completeness(DeviceCtx& ctx, uint32_t device_inde
     uint64_t total = 0, worst = 0, cores_hit = 0;
     uint64_t stranded_words = 0, stranded_lanes = 0, checked_lanes = 0;
     uint32_t worst_lane = 0, worst_lane_words = 0;
+    uint32_t earliest_iter = 0;
+    uint64_t risc_total[kNRisc] = {};
+    struct CoreStall {
+        uint32_t count, vx, vy, first_iter;
+    };
+    std::vector<CoreStall> stalled_cores;
     // WORKER cores only. With DRISC self-profiling on, core_virt also holds the drainer cores, and a DRAM
     // core has no producer and no stall counters -- reading the TENSIX profiler address on one returns
     // whatever is at that offset in DRISC L1.
@@ -3066,10 +3147,20 @@ void PerfDebugProfiler::verify_completeness(DeviceCtx& ctx, uint32_t device_inde
         uint64_t core_total = 0;
         for (uint32_t r = 0; r < kernel_profiler::SPSC_STALL_COUNT_MAX; r++) {
             core_total += cv[kernel_profiler::SPSC_STALL_COUNT_0 + r];
+            if (r < kNRisc) {
+                risc_total[r] += cv[kernel_profiler::SPSC_STALL_COUNT_0 + r];
+            }
         }
         total += core_total;
         worst = std::max(worst, core_total);
         cores_hit += (core_total != 0) ? 1 : 0;
+        const uint32_t first = cv[kernel_profiler::SPSC_STALL_FIRST_ITER];
+        if (first != 0 && (earliest_iter == 0 || first < earliest_iter)) {
+            earliest_iter = first;
+        }
+        if (core_total != 0) {
+            stalled_cores.push_back({static_cast<uint32_t>(core_total), vx, vy, first});
+        }
         if (heads.empty()) {
             continue;
         }
@@ -3088,15 +3179,49 @@ void PerfDebugProfiler::verify_completeness(DeviceCtx& ctx, uint32_t device_inde
             }
         }
     }
-    log_info(
-        tt::LogMetal,
-        "[perf-debug profiler] Device {}: L1 STALL COUNTERS -- {} producer stalls across {} of {} cores "
-        "(worst core {}) [0 = the capture did not perturb the workload]",
-        ctx.chip_id,
-        total,
-        cores_hit,
-        n_stall_cores,
-        worst);
+    if (earliest_iter == 0) {
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] Device {}: L1 STALL COUNTERS -- {} producer stalls across {} of {} cores "
+            "(worst core {}) ; first this-kernel stall: none [0 stall-count = capture did not perturb]",
+            ctx.chip_id,
+            total,
+            cores_hit,
+            n_stall_cores,
+            worst);
+    } else {
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] Device {}: L1 STALL COUNTERS -- {} producer stalls across {} of {} cores "
+            "(worst core {}) ; first this-kernel stall at on-device loop iteration {} (1-based)",
+            ctx.chip_id,
+            total,
+            cores_hit,
+            n_stall_cores,
+            worst,
+            earliest_iter);
+    }
+    if (total != 0) {
+        std::sort(stalled_cores.begin(), stalled_cores.end(), [](const CoreStall& a, const CoreStall& b) {
+            return a.count > b.count;
+        });
+        std::string top;
+        for (size_t i = 0; i < std::min<size_t>(8, stalled_cores.size()); i++) {
+            const auto& c = stalled_cores[i];
+            top += fmt::format("{}({},{})={}@it{}", i != 0 ? " " : "", c.vx, c.vy, c.count, c.first_iter);
+        }
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] Device {}: stall breakdown by RISC -- BR {} | NC {} | T0 {} | T1 {} | T2 {}; "
+            "top cores (virt x,y)=count@first-iter: {}",
+            ctx.chip_id,
+            risc_total[0],
+            risc_total[1],
+            risc_total[2],
+            risc_total[3],
+            risc_total[4],
+            top);
+    }
     if (heads.empty()) {
         return;
     }

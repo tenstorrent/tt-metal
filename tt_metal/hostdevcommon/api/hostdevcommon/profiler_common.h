@@ -202,14 +202,14 @@ enum SpscControlBuffer {
 // differently (a stale counter, a short read, an overlapping handshake). Was 64 and exactly full; the DRISC
 // self-profiling counters need out[64..87], and the NoC-footprint counters out[88..119].
 //
-// WHY 144 IS FREE, and why it must not be raised carelessly. This block lives inside the drain kernel's
+// WHY 208 IS FREE, and why it must not be raised further. This block lives inside the drain kernel's
 // `kMiscBytes` budget in perf_debug_profiler.cpp, which is 1024 B holding done(64) + stop(64) + results +
-// handshake(64). At 96 words that was 576 B of 1024, i.e. 448 B of slack, and 144 words spends 192 of it
-// (768 B total). Nothing else moves: `kMiscBytes` is unchanged, so `fixed` is unchanged, so the number of
-// STAGING SLOTS the same L1 can hold is unchanged -- which matters because nstage is 7 by a margin of well
-// under one slot, and losing one would silently drop a mover's max batch 7 -> 6. Raising this past ~208
-// words WOULD grow kMiscBytes and cost a staging slot. Check that arithmetic, not just this constant.
-static constexpr std::uint32_t SPSC_DRAIN_RESULT_WORDS = 144;
+// handshake(64). 208 words is 832 B, so done + stop + results + handshake = exactly 1024. Nothing else
+// moves: `kMiscBytes` is unchanged, so `fixed` is unchanged, so the number of STAGING SLOTS the same L1 can
+// hold is unchanged -- which matters because nstage is 7 by a margin of well under one slot, and losing one
+// would silently drop a mover's max batch 7 -> 6. This is the CEILING: one more word overlaps the handshake
+// block unless kMiscBytes grows, which costs a staging slot. Check that arithmetic, not just this constant.
+static constexpr std::uint32_t SPSC_DRAIN_RESULT_WORDS = 208;
 
 // ---- DRAINER-AUTHORED zones (DRISC self-profiling) --------------------------------------------------
 //

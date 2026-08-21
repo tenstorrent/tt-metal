@@ -500,6 +500,69 @@ void kernel_main() {
     // Observe-to-stamp is ~5 instructions (fence, load, branch, 2 latching register reads) = O(10 ns).
     // DEFAULT OFF: a parked drainer is not draining, so the host only ever fires this after the workload.
     constexpr uint32_t kSyncEvent = get_compile_time_arg_val(38);
+    // PER-CORE SHIP THRESHOLD (compile arg 39; 0 = off, ship every live core every sweep as before).
+    //
+    // Why it exists: a frame costs the DOWNSTREAM pipe (DRAM-ring slot, the mover's fixed 10,560 B DRAM
+    // read, PCIe, host decode) the same whether it carries 200 live words or 2,000. On the kimi_k2 fused
+    // loop the fillers staged ~37%-full frames at ~11 GB/s of raw slots against the two movers' ~12 GB/s --
+    // no headroom, so the 64 MiB DRAM ring filled after ~250 iterations and every later sweep blocked in
+    // the ring-room wait, stretching sweeps to 100-777 us and stalling all 130 cores' producers for the
+    // rest of the run. Deferring a core until its span is WORTH a frame is what removes that deficit at the
+    // source; it also cuts host bytes the same way the pacing controller's fill target does, but per core,
+    // so a sparse core never forces the choice between spraying frames and delaying a hot one.
+    //
+    // A core ships when ANY of these holds; otherwise its heads are left alone and it is re-read next sweep:
+    //   live >= kShipMinWords                  -- the frame is full enough to be worth its fixed cost
+    //   peak + growth >= kShipSafeWords        -- PREDICTIVE valve: growth is this core's hottest-ring
+    //                                             delta since the previous visit, so this asks "does the
+    //                                             ring survive one more service interval at the rate just
+    //                                             observed". A fixed half-ring valve measurably did NOT:
+    //                                             at burst onset the first visit reads peak ~240 (under
+    //                                             any safe fixed valve) yet the ring blows through 506
+    //                                             before the next visit -- first stalls landed at loop
+    //                                             iteration 3 on 7 of 8 chips.
+    //   age  >= kShipMaxAgeSweeps              -- bounded staleness for trickling cores
+    //   stop seen                              -- the sweep-to-empty contract ships everything
+    constexpr uint32_t kShipMinPct = get_compile_time_arg_val(39);
+    constexpr uint32_t kShipSafeWords = (3u * kernel_profiler::PROFILER_L1_VECTOR_SIZE) / 4u;
+    constexpr uint32_t kShipMaxAgeSweeps = 512u;
+    constexpr uint32_t kShipMinWords = (kLiveWords * kShipMinPct) / 100u;
+    // CV-FIRST (compile arg 40; 0 = off, sweep by whole-span reads as before). A FILLER's sweep becomes two
+    // phases: read only each core's ring-progress words (128 B: heads at words 0..4, tails at 24..28), make
+    // the ship decision from those, and bulk-read spans ONLY for the cores being shipped. The progress read
+    // is a HINT -- the span read still re-reads the control vector and remains the authoritative snapshot,
+    // so the wire format, head write-back and every consistency argument are untouched.
+    //
+    // What it buys, measured on the kimi_k2 loop: a sweep's read bill drops from num_cores x 10,496 B
+    // (~8 GB/s of NoC reads per chip at the pace ceiling, all sweeps, workload included) to num_cores x
+    // 128 B plus only the spans actually shipped -- and because sweeping is then cheap, the inter-sweep gap
+    // can stay small, which closes the burst-onset service race the 148 us gap left open (the last ~1.2k
+    // stalls after the ship threshold and predictive valve).
+    constexpr uint32_t kCvFirst = get_compile_time_arg_val(40);
+    // TAILS ONLY: the decision needs each ring's tail (delta against the local head mirror); heads are
+    // needed once, for seeding, and an unseeded core is simply shipped on first sight so the span read
+    // seeds it exactly as before. One 32 B read per core instead of the whole control vector.
+    constexpr uint32_t kCvReadBytes = 32;
+    constexpr uint32_t kCvReadSrcOff = kernel_profiler::SPSC_RING_TAIL_0 * 4u;
+    // Idle backoff ceiling for the CV-first filler (~20 us). The fill-driven controller is not used: with
+    // per-core ship decisions its byte-economy job is done elsewhere, and its 148 us ceiling was the service
+    // race. Collapse on work, creep when idle -- the mover's policy, with a filler-sized ceiling.
+    constexpr uint32_t kCvIdleGapMax = 27000;
+    static_assert(
+        kCvFirst == 0 || kShipMinPct != 0, "CV-first exists to feed the per-core ship decision; enable both");
+    static_assert(
+        kCvFirst == 0 || kSelfZones != 0 || 2u * kGenSlots < kNStage,
+        "CV staging needs a slot past the 2-generation pipeline (kNStage must be odd when self-zones are off)");
+    // The tails land in the ring-1 area of the slot past the pipeline. With self-zones ON that slot holds
+    // the self FRAME, and this placement is still safe: only the self frame's ring 0 is ever live, so its
+    // ring 1..4 storage (8 KiB) is written by nobody and never ships -- the pack skips empty rings, and a
+    // filler's raw stage of the self slot carries these bytes only as dead DRAM-ring padding. That shared
+    // dead space is what lets CV-first and drainer self-profiling coexist.
+    constexpr uint32_t kCvSlot = kSelfZones != 0 ? kNStage : 2u * kGenSlots;
+    constexpr uint32_t kCvBase = kStageBase + kCvSlot * kSlotBytes + (kPrefix + kCtrlWords + kRingWords) * 4u;
+    static_assert(
+        kCvFirst == 0 || kCvReadBytes * kMaxCores <= 4u * kRingWords * 4u,
+        "CV tails staging must fit the self slot's dead ring space");
     // PER-SWEEP SERIES (the plot source), separate from the out[] totals above and currently FORCED OFF.
     //
     // 1 = also ship a per-sweep PP_DATA sample (the plot source) on top of the out[] totals. It FITS, but only
@@ -517,7 +580,11 @@ void kernel_main() {
     //
     // 36 B of headroom is not much. Before adding anything here, re-measure -- and prefer restructuring data
     // over hinting at the inliner, which is the one lesson this whole exercise supports.
-    constexpr uint32_t kNocFpSeries = 1;
+    //
+    // OFF under CV-first: zones + footprint + the CV-first sweep measured 396 B over the region (11,660 vs
+    // 11,264). The series is the marginal piece and the out[] byte totals answer the traffic questions
+    // without it; plots require a CV_FIRST=0 run.
+    constexpr uint32_t kNocFpSeries = kCvFirst != 0 ? 0u : 1u;
     constexpr bool kSelfPhases = kSelfZones != 0 && kSelfDetail != 0;
     // The self frame lives in staging slot kNStage -- one PAST every slot the drain pipeline can touch. The
     // host reserves it by passing (nstage - 1) as kNStage when this is on, so DRISC L1 does not grow and the
@@ -731,9 +798,16 @@ void kernel_main() {
 
     static uint32_t head_mirror[kMaxCores * kNumRisc];
     static uint8_t seeded[kMaxCores];
+    static uint16_t ship_age[kMaxCores];
+    static uint16_t ship_prev_peak[kMaxCores];
+    static uint8_t ship_list[kMaxCores];  // CV-first: this sweep's ship set, dense core indices
     for (uint32_t i = 0; i < kMaxCores; i++) {
         seeded[i] = 0;
+        ship_age[i] = 0;
+        ship_prev_peak[i] = 0;
     }
+    uint32_t ship_deferred = 0;  // core visits left unstaged by the ship threshold
+    uint32_t ship_aged = 0;      // ships forced by kShipMaxAgeSweeps
 
     uint64_t total_words = 0;
     uint32_t pages = 0;
@@ -755,6 +829,13 @@ void kernel_main() {
     uint32_t gap = kGapCycles;
     uint32_t overflows = 0;
     uint32_t hb_slot = 0;
+    // SATURATION BYPASS for CV-first: when (nearly) every core ships every sweep the tails pass decides
+    // nothing, so skip it and sweep the old full-span way -- saturated throughput pays zero CV overhead.
+    // Hysteresis on a 1/8-of-cores slack: enter when at least 7/8 of the grid made the ship set, leave when
+    // the authoritative scan sees more than 1/8 below threshold (idle cores count, so a sparse phase exits
+    // immediately). The slack cores ship early while bypassed (bounded frame overhead), never late.
+    bool cv_bypass = false;
+    uint32_t cv_below = 0;
 
     // ---- per-phase instrumentation (see the header: this is what found the copy) ----
     uint64_t c_read = 0;     // bulk span reads: issue + barrier
@@ -778,6 +859,7 @@ void kernel_main() {
     // fill time, and the worst is ~2.5x the mean (105-143 us vs ~46 us) -- averages cannot say why.
     uint32_t ws_read = 0, ws_proc = 0, ws_rsv = 0, ws_wr = 0, ws_bar = 0;
     uint32_t max_reserve = 0;
+    uint64_t c_pace = 0;
     // Set when a bounded write barrier expires: egress is dead, so STOP SHIPPING for good.
     // Never means "continue anyway" -- staging reuse depends on that barrier having flushed.
     bool egress_dead = false;
@@ -1699,6 +1781,96 @@ void kernel_main() {
                 bool have_pend = false;
                 bool gen_shipped[2] = {false, false};
 
+                // ---- CV-FIRST phases 0+1: gather every core's ring tails, decide the ship set ----
+                //
+                // The decision here is the SAME arithmetic process_batch runs (tail deltas against the one
+                // shared head mirror), from a 32 B read instead of a 10,496 B one. It is a hint with
+                // one-sweep staleness -- the predictive valve's growth term is what makes that staleness
+                // safe -- and the span read below re-derives everything from its own snapshot, so a stale
+                // hint can only delay a ship, never corrupt one. An unseeded core ships unconditionally
+                // (its heads arrive with the span, seeding it exactly as before).
+                uint32_t n_ship = 0;
+                if constexpr (kCvFirst != 0) {
+                    if (cv_bypass && cv_below > num_cores / 8u) {
+                        cv_bypass = false;
+                    }
+                    cv_below = 0;
+                    if (cv_bypass) {
+                        for (uint32_t c = 0; c < num_cores; c++) {
+                            ship_list[c] = static_cast<uint8_t>(c);
+                        }
+                        n_ship = num_cores;
+                    } else {
+                        const uint64_t t_cv0 = get_timestamp();
+                        {
+                            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ, SelfMarkPhase> z_cv(
+                                self_mark_phase);
+                            for (uint32_t i = 0; i < num_cores; i++) {
+                                const uint32_t xy = coords[i];
+                                CoreLocalMem<uint32_t> dst(kCvBase + i * kCvReadBytes);
+                                noc.async_read<NocOptions::DEFAULT, kCvReadBytes>(
+                                    src,
+                                    dst,
+                                    kCvReadBytes,
+                                    {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src + kCvReadSrcOff},
+                                    {});
+                            }
+                            noc.async_read_barrier();
+                        }
+                        const uint64_t t_cv1 = get_timestamp();
+                        c_read += t_cv1 - t_cv0;
+                        for (uint32_t c = 0; c < num_cores; c++) {
+                            if (!seeded[c]) {
+                                ship_list[n_ship++] = static_cast<uint8_t>(c);
+                                continue;
+                            }
+                            const tt_l1_ptr uint32_t* tails =
+                                reinterpret_cast<const tt_l1_ptr uint32_t*>(kCvBase + c * kCvReadBytes);
+                            uint32_t* mine = &head_mirror[c * kNumRisc];
+                            uint32_t live = 0, peak = 0;
+                            for (uint32_t r = 0; r < kNumRisc; r++) {
+                                uint32_t d = tails[r] - mine[r];
+                                if (d > kRingWords) {
+                                    d = kRingWords;  // counted as an overflow by the authoritative scan, not here
+                                }
+                                live += d;
+                                if (d > peak) {
+                                    peak = d;
+                                }
+                            }
+                            if (peak > max_occ) {
+                                max_occ = peak;
+                            }
+                            if (peak > sweep_max_run) {
+                                sweep_max_run = peak;
+                            }
+                            if (live == 0) {
+                                continue;
+                            }
+                            const uint32_t growth = peak - ship_prev_peak[c];
+                            if (stop_seen_at == 0 && live < kShipMinWords && peak + growth < kShipSafeWords &&
+                                ship_age[c] < kShipMaxAgeSweeps) {
+                                ship_prev_peak[c] = static_cast<uint16_t>(peak);
+                                ship_age[c]++;
+                                ship_deferred++;
+                                continue;
+                            }
+                            if (ship_age[c] >= kShipMaxAgeSweeps) {
+                                ship_aged++;
+                            }
+                            ship_age[c] = 0;
+                            ship_prev_peak[c] = 0;
+                            ship_list[n_ship++] = static_cast<uint8_t>(c);
+                        }
+                        c_proc += get_timestamp() - t_cv1;
+                        if (n_ship + num_cores / 8u >= num_cores) {
+                            cv_bypass = true;
+                        }
+                    }
+                }
+                // With CV-first the pipeline walks the ship set; without it, every core as before.
+                const uint32_t n_poll = kCvFirst != 0 ? n_ship : num_cores;
+
                 auto process_batch = [&](uint32_t base_c, uint32_t n, uint32_t g) {
                     const uint64_t t_p0 = get_timestamp();
                     // c_self joins the nested term because self_publish RESTORES c_reserve/c_write (see there), so
@@ -1719,7 +1891,7 @@ void kernel_main() {
                     const uint32_t frames_at_p0 = frames;
                     uint32_t run_start = 0, run_len = 0;
                     for (uint32_t i = 0; i < n; i++) {
-                        const uint32_t c = base_c + i;
+                        const uint32_t c = kCvFirst != 0 ? ship_list[base_c + i] : base_c + i;
                         const uint32_t sl = g * kGenSlots + i;
                         const uint32_t slot = kStageBase + sl * kSlotBytes;
                         // NON-volatile on purpose. This control vector is in STAGING -- a snapshot the bulk read
@@ -1794,10 +1966,35 @@ void kernel_main() {
                             sweep_max_run = peak;
                         }
                         const uint32_t live = r0 + r1 + r2 + r3 + r4;
+                        if constexpr (kCvFirst != 0) {
+                            cv_below += live < kShipMinWords ? 1u : 0u;
+                        }
                         if (live == 0) {
                             emit_run(run_start, run_len);
                             run_len = 0;
                             continue;
+                        }
+                        // Under CV-first the ship decision was already made in phase 1; a listed core ships
+                        // unconditionally from this authoritative snapshot.
+                        if constexpr (kShipMinPct != 0 && kCvFirst == 0) {
+                            // Defer a core not worth a frame yet: heads untouched, span re-read next sweep.
+                            // The snapshot in staging is discarded, so nothing is lost -- only not yet
+                            // shipped. Deferral never advances the heads, so peak IS the occupancy since
+                            // the last ship and (peak - prev_peak) is exactly one service interval's growth.
+                            const uint32_t growth = peak - ship_prev_peak[c];
+                            if (stop_seen_at == 0 && live < kShipMinWords && peak + growth < kShipSafeWords) {
+                                if (ship_age[c] < kShipMaxAgeSweeps) {
+                                    ship_prev_peak[c] = static_cast<uint16_t>(peak);
+                                    ship_age[c]++;
+                                    ship_deferred++;
+                                    emit_run(run_start, run_len);
+                                    run_len = 0;
+                                    continue;
+                                }
+                                ship_aged++;
+                            }
+                            ship_age[c] = 0;
+                            ship_prev_peak[c] = 0;
                         }
                         if (run_len == 0) {
                             run_start = sl;
@@ -1869,8 +2066,8 @@ void kernel_main() {
                     // subtracts the children.
                 };
 
-                for (uint32_t base_c = 0; base_c < num_cores; base_c += kGenSlots) {
-                    const uint32_t n = (num_cores - base_c) < kGenSlots ? (num_cores - base_c) : kGenSlots;
+                for (uint32_t base_c = 0; base_c < n_poll; base_c += kGenSlots) {
+                    const uint32_t n = (n_poll - base_c) < kGenSlots ? (n_poll - base_c) : kGenSlots;
 
                     // This generation's previous ship must have landed before its slots are refilled.
                     if (gen_shipped[gen]) {
@@ -1900,7 +2097,7 @@ void kernel_main() {
                         kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ, SelfMarkPhase> z_issue(
                             self_mark_phase);
                         for (uint32_t i = 0; i < n; i++) {
-                            const uint32_t xy = coords[base_c + i];
+                            const uint32_t xy = coords[kCvFirst != 0 ? ship_list[base_c + i] : base_c + i];
                             CoreLocalMem<uint32_t> dst(kStageBase + (gen * kGenSlots + i) * kSlotBytes + kPrefix * 4u);
                             if constexpr (kReadSplit == 2) {
                                 // SPLIT WITHIN THE CORE: both NoCs carry half of the SAME span. Alternating whole
@@ -2055,7 +2252,21 @@ void kernel_main() {
         // A MOVER is excluded: it has no worker grid, so sweep_max_run and total_words are permanently 0 and
         // the controller would read "spans arriving 0% full", creep the gap to its 200,000-cycle ceiling and
         // sleep ~148 us between pushes -- pacing the consumer instead of the producer, which is backwards.
-        if constexpr (kFillPct != 0 && kRole != kRoleMover) {
+        // A CV-FIRST filler does not run the fill controller at all: the per-core ship decision already
+        // owns byte economy, sweeping is cheap (128 B/core), and the controller's 148 us ceiling was
+        // exactly the service race the last stalls came from. Collapse on work, creep when idle.
+        if constexpr (kCvFirst != 0 && kRole != kRoleMover) {
+            if (frames != frames_at_sweep_start) {
+                gap = 0;
+            } else {
+                uint32_t inc = gap >> 1;
+                if (inc < 256u) {
+                    inc = 256u;
+                }
+                gap = (gap + inc > kCvIdleGapMax) ? kCvIdleGapMax : gap + inc;
+            }
+        }
+        if constexpr (kCvFirst == 0 && kFillPct != 0 && kRole != kRoleMover) {
             // THREE-LEVEL RESPONSE. The first version collapsed the gap to 0 whenever the single hottest
             // core crossed 3/4, which at 120 cores fires nearly every sweep -- so the gap never held and
             // pacing did nothing at low producer rates (delay 125: gap stuck ~1,200 of a 20,000 ceiling,
@@ -2141,10 +2352,14 @@ void kernel_main() {
         // unreadable. A MOVER is excluded from the controller (see below), so its gap stays 0 and this zone
         // never appears on a mover row: the absence IS the answer to "is the mover being paced".
         if (gap != 0) {
-            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_PACE, SelfMarkNow> z_pace(self_mark_now);
-            const uint64_t until = get_timestamp() + gap;
-            while (get_timestamp() < until) {
+            const uint64_t t_g0 = get_timestamp();
+            {
+                kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_PACE, SelfMarkNow> z_pace(self_mark_now);
+                const uint64_t until = t_g0 + gap;
+                while (get_timestamp() < until) {
+                }
             }
+            c_pace += get_timestamp() - t_g0;
         }
         // The window's LAST sweep has to flush, or its zones sit in the ring until the next window -- or
         // forever. Done after the gap so PACE rides in the same frame as the SWEEP it follows.
@@ -2323,6 +2538,10 @@ void kernel_main() {
     out[132] = sync_spin_cyc;
     out[133] = stop_sweeps;
     out[134] = static_cast<uint32_t>(total_words - words_at_stop);
+    out[136] = static_cast<uint32_t>(c_pace & 0xFFFFFFFFu);
+    out[137] = static_cast<uint32_t>(c_pace >> 32);
+    out[170] = ship_deferred;
+    out[171] = ship_aged;
     // ---- NoC FOOTPRINT counters (0 on the default path) --------------------------------------------------
     //
     // TWO BLOCKS, NEVER BLENDED. `life` covers every sweep this drain loop ran; `win` covers the workload
@@ -2381,8 +2600,8 @@ void kernel_main() {
         out[129] = NOC_WORD_BYTES;         // the byte scale, from the header -- host never hardcodes it
     }
     static_assert(
-        kernel_profiler::SPSC_DRAIN_RESULT_WORDS >= 136,
-        "the results block must hold the self-profiling, NoC-footprint and stop-drain counters");
+        kernel_profiler::SPSC_DRAIN_RESULT_WORDS >= 172,
+        "the results block must hold the self-profiling, NoC-footprint, stop-drain and histogram counters");
 
     *phase = kPhaseExit;
     // Only hand the socket back if the consumer was still alive. update_socket_config() talks to the same
