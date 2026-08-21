@@ -1855,7 +1855,69 @@ def _stage_roots_from_generated(secs: dict, perf_test, model_root=None) -> dict:
     return out
 
 
-def _model_block_facts(model_root, model_id: str = "", cfg: dict | None = None) -> dict:
+def _last_baseline_profile() -> dict:
+    """The most recent baseline profile this run wrote, or {}. Best-effort.
+
+    observed_gathered_numels needs a profile, and _perf_target_inputs is not handed one -- it runs
+    from the checkpoint. The baseline is written BEFORE the facts (run 17: profiled at line 117,
+    facts emitted at line 144), so by the time this is asked there normally IS one on disk. Read it
+    rather than thread a parameter through three layers that have no other use for it.
+
+    Absent is the ordinary pre-baseline case, not an error: the caller falls back to the name rule.
+    """
+    try:
+        _root = Path(__file__).resolve().parent.parent / "runs"
+        _cands = sorted(_root.glob("*/profiles/baseline_profile.json"), key=lambda q: q.stat().st_mtime)
+        if not _cands:
+            return {}
+        return json.loads(_cands[-1].read_text()) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def observed_gathered_numels(profile) -> list:
+    """Element counts of the tensors the DEVICE actually gathered, from the profile. [] when unknown.
+
+    WHAT THE HARDWARE DID, NOT WHAT A NAME SUGGESTS. The compute floor must exclude tensors that are
+    INDEXED rather than multiplied, and the rule for finding them was a name list --
+    embed_tokens|wte|word_embeddings|token_embedding -- which fails silently on a model that calls
+    its table something else, over-charging that tower exactly as voxtral's prefill was.
+
+    The profile already answers it by observation: ops classified `embedding` are gathers, and each
+    carries the operand shape it read. Voxtral's baseline shows EmbeddingsDeviceOperation on
+    131072x3072 and on 640x128 -- 402,653,184 and 81,920 elements, gathered, measured.
+
+    SHAPE CANNOT SAY *WHICH* TENSOR, AND DOES NOT NEED TO. embed_tokens and lm_head are both
+    131072x3072 on this model, so the shape is ambiguous by construction. But the question is how
+    many parameters are multiplied, not which object was read: ONE gather was observed, so ONE
+    tensor of that size is excluded and the head stays counted. Each distinct observed size is
+    subtracted once, never per matching tensor.
+
+    Returns element counts, so the caller can match them against the checkpoint's own numels without
+    depending on how a shape happens to be formatted.
+    """
+    out = []
+    try:
+        for b in (profile or {}).get("buckets") or []:
+            if str((b or {}).get("id") or "").lower() != "embedding":
+                continue
+            for o in b.get("top_ops") or []:
+                _sh = str(o.get("shape") or "")
+                # "1x1 @ 131072x3072" -- the operand is the side after the @, which is the table
+                _rhs = _sh.split("@")[-1].strip() if "@" in _sh else ""
+                dims = [int(x) for x in _rhs.split("x") if x.strip().isdigit()]
+                if len(dims) >= 2:
+                    n = 1
+                    for d in dims:
+                        n *= d
+                    if n > 0 and n not in out:
+                        out.append(n)
+    except Exception:  # noqa: BLE001 -- no observation is the name rule's cue, not a failure
+        return []
+    return out
+
+
+def _model_block_facts(model_root, model_id: str = "", cfg: dict | None = None, profile=None) -> dict:
     """{root: geometry} for every block the model declares. {} when nothing can be established.
 
     THE JOIN IS DEPTH, so nothing is recognised by name. Three independent sources each report a
@@ -1924,14 +1986,35 @@ def _model_block_facts(model_root, model_id: str = "", cfg: dict | None = None) 
                 from agent.model_bytes import _LOOKUP_ONLY as _LO
             except Exception:  # noqa: BLE001
                 _LO = None
+            # OBSERVED GATHERS FIRST, THE NAME LIST ONLY AS A FALLBACK.
+            #
+            # A name list cannot recognise a table a model calls something new, and fails SILENTLY --
+            # that tower is then over-charged exactly as voxtral's prefill was. A gather is an op the
+            # device RAN, so the profile answers it by observation whatever the tensor is called.
+            #
+            # ONE OBSERVED SIZE EXCLUDES ONE TENSOR. embed_tokens and lm_head are both 131072x3072
+            # here, so a shape cannot say which was gathered -- and does not need to. The question is
+            # how many parameters are MULTIPLIED: one gather was seen, so one tensor of that size is
+            # excluded and the head stays counted. Matching every tensor of that size would silently
+            # drop lm_head too, which is an error in the dangerous direction.
+            _obs = list(observed_gathered_numels(profile) or [])
             _pp: dict = {}
             _lk: dict = {}
-            for _t in _checkpoint_tensor_sections(snap or model_root):
-                _numel, _sec = _t[0], _t[1]
-                _pp[str(_sec)] = _pp.get(str(_sec), 0) + int(_numel)
-                _nm = str(_t[2]) if len(_t) > 2 else ""
-                if _LO is not None and _nm and _LO.search(_nm):
-                    _lk[str(_sec)] = _lk.get(str(_sec), 0) + int(_numel)
+            _rows = list(_checkpoint_tensor_sections(snap or model_root))
+            for _t in _rows:
+                _pp[str(_t[1])] = _pp.get(str(_t[1]), 0) + int(_t[0])
+            for _n in _obs:
+                for _t in _rows:
+                    if int(_t[0]) == int(_n):
+                        _lk[str(_t[1])] = _lk.get(str(_t[1]), 0) + int(_n)
+                        break
+            if not _lk and _LO is not None:
+                # No observation: the pre-baseline emitter call, or a window that ran no gather.
+                # The name rule keeps a ceiling alive from the first second.
+                for _t in _rows:
+                    _nm = str(_t[2]) if len(_t) > 2 else ""
+                    if _nm and _LO.search(_nm):
+                        _lk[str(_t[1])] = _lk.get(str(_t[1]), 0) + int(_t[0])
             for _root, _geo in out.items():
                 if _pp.get(_root):
                     _geo["params"] = int(_pp[_root])
@@ -5377,7 +5460,7 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     # number the checkpoint's sections, the config's sub-dicts and the probe's stacks all agree on,
     # so a stage reaches its own geometry by structure -- stage -> root -> depth -> geometry -- with
     # nothing recognised by name.
-    _blocks = _model_block_facts(demo_dir, mid or "", cfg)
+    _blocks = _model_block_facts(demo_dir, mid or "", cfg, profile=_last_baseline_profile())
     if _blocks:
         facts["blocks"] = _blocks
     # THE FLAT KEYS SURVIVE FOR EXACTLY ONE SHAPE: a model with a single block, where "the model's
