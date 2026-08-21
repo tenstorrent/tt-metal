@@ -14,6 +14,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include "generate_rank_bindings_helpers.hpp"
+#include "mesh_pinning_file.hpp"
 
 namespace {
 
@@ -263,4 +264,62 @@ TEST(GenerateRankBindingsHelpersTest, AllWritersProduceThreeFilesInTempDir) {
         ++n;
     }
     EXPECT_EQ(n, 3);
+}
+
+// ---------------------------------------------------------------------------
+// Mesh pinning file (optional Phase 1 host pinning input)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::filesystem::path write_pinning_file(const std::filesystem::path& dir, const std::string& contents) {
+    const auto path = dir / "pinned_meshes.yaml";
+    std::ofstream out(path);
+    out << contents;
+    out.close();
+    return path;
+}
+
+}  // namespace
+
+TEST(MeshPinningFileTest, ParsesMeshToHostMappings) {
+    const auto dir = make_temp_dir("pin_global");
+    const auto path = write_pinning_file(dir, R"(mesh_pinnings:
+  - mesh_id: 0
+    host: host-A
+    TT_VISIBLE_DEVICES: "0,1,2,3"
+  - mesh_id: 3
+    host: host-B
+)");
+
+    const auto pinnings = parse_mesh_pinning_file(path.string());
+    ASSERT_EQ(pinnings.size(), 2u);
+    EXPECT_EQ(pinnings[0].mesh_id, 0);
+    EXPECT_EQ(pinnings[0].host, "host-A");
+    ASSERT_TRUE(pinnings[0].tt_visible_devices.has_value());
+    EXPECT_EQ(pinnings[0].tt_visible_devices.value(), "0,1,2,3");
+    EXPECT_EQ(pinnings[1].mesh_id, 3);
+    EXPECT_EQ(pinnings[1].host, "host-B");
+    EXPECT_FALSE(pinnings[1].tt_visible_devices.has_value());
+
+    const auto empty_path = write_pinning_file(dir, "mesh_pinnings: []\n");
+    EXPECT_TRUE(parse_mesh_pinning_file(empty_path.string()).empty());
+}
+
+TEST(MeshPinningFileTest, RejectsInvalidDocuments) {
+    const std::vector<std::string> invalid_documents = {
+        "pinnings:\n  - mesh_id: 0\n    host: host-A\n",
+        "mesh_pinnings: {}\n",
+        "mesh_pinnings:\n  - mesh_id: 0\n    host: host-A\n    slot: 1\n",
+        "mesh_pinnings:\n  - mesh_id: 0\n",
+        "mesh_pinnings:\n  - host: h\n",
+        "mesh_pinnings:\n  - mesh_id: -1\n    host: h\n",
+        "mesh_pinnings:\n  - mesh_id: 1\n    host: hA\n  - mesh_id: 1\n    host: hB\n",
+    };
+
+    for (std::size_t i = 0; i < invalid_documents.size(); ++i) {
+        const auto dir = make_temp_dir("pin_invalid_" + std::to_string(i));
+        const auto path = write_pinning_file(dir, invalid_documents[i]);
+        EXPECT_THROW(parse_mesh_pinning_file(path.string()), std::runtime_error) << "case " << i;
+    }
 }
