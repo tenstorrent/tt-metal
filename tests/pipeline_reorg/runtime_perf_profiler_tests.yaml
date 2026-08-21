@@ -53,7 +53,9 @@
   cmd: |
     export TT_METAL_DEVICE_PROFILER=1
     export TRACY_NO_INVARIANT_CHECK=1
+    export PYTHONPATH="${TT_METAL_HOME}/tools:${PYTHONPATH}"
     pytest -svv tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter Directed --verbose-log
+  profiler_logs_path: /work/generated/profiler/.logs
   skus:
     wh_n300_perf:
       timeout: 20
