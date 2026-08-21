@@ -15,9 +15,8 @@ Each ``type: assistant`` entry carries a ``message.usage`` object with
 
 This script sums those fields across the main jsonl plus every subagent
 transcript (``<sessionId>/subagents/agent-*.jsonl`` — stored flat, one file per
-agent regardless of spawn depth), optionally filtered to entries whose
-``timestamp`` falls in the ``--since`` .. ``--until`` window, and applies
-per-model Anthropic pricing to compute ``cost_usd``.
+agent regardless of spawn depth), optionally filtered to entries after
+``--since``, and applies per-model Anthropic pricing to compute ``cost_usd``.
 
 Interactive codegen runs (the orchestrator inside ``claude``) have no
 ``cli_output.json`` to read from — this script is the live source of truth
@@ -214,7 +213,6 @@ def _discover_session(preferred_pid: str | None) -> tuple[str, Path, Path] | Non
 def _collect(
     jsonl_path: Path,
     since_dt: datetime | None,
-    until_dt: datetime | None,
     override_model: str | None,
     by_req: dict,
     noreq: list,
@@ -246,13 +244,10 @@ def _collect(
             usage = msg.get("usage")
             if not usage:
                 continue
-            if since_dt is not None or until_dt is not None:
+            if since_dt is not None:
                 ts = _parse_ts(d.get("timestamp"))
-                if ts is not None:
-                    if since_dt is not None and ts < since_dt:
-                        continue
-                    if until_dt is not None and ts > until_dt:
-                        continue
+                if ts is not None and ts < since_dt:
+                    continue
             split = usage.get("cache_creation")
             if not isinstance(split, dict):
                 split = {}  # None, or an unexpected scalar — never let .get() throw
@@ -313,7 +308,6 @@ def _otel_cost(
     sink_path: str | None,
     session_id: str | None,
     since_dt: datetime | None,
-    until_dt: datetime | None,
 ) -> float | None:
     """Add up this session's cost from the OTEL receiver's sink file.
 
@@ -321,16 +315,17 @@ def _otel_cost(
     Each line is an increment, so the session's total is simply their sum. This is
     Claude Code's own cost — it includes the subagent and background spend the
     transcripts miss — so it wins over the token estimate. Returns None when there's
-    no sink, no session, or no matching line (the caller then keeps the estimate).
-    If since/until are given, only lines inside that time window are counted.
+    no sink, no session, no matching line, or a zero total (the caller then keeps the
+    estimate). If since is given, only lines at or after it are counted.
     """
     if not sink_path or not session_id:
         return None
     p = Path(sink_path)
     if not p.exists():
         return None
-    lo = since_dt.timestamp() * 1e9 if since_dt else None
-    hi = until_dt.timestamp() * 1e9 if until_dt else None
+    # Integer nanoseconds: ts is an integer-nanos string, so compare int-to-int and
+    # avoid float64 rounding (ns values ~1.7e18 exceed float's exact-integer range).
+    lo = int(since_dt.timestamp()) * 1_000_000_000 if since_dt else None
     total = 0.0
     hit = False
     with p.open(errors="ignore") as fh:
@@ -342,21 +337,20 @@ def _otel_cost(
             if r.get("session_id") != session_id:
                 continue
             ts = r.get("ts")
-            if ts is not None and (lo is not None or hi is not None):
+            if lo is not None and ts is not None:
                 try:
-                    tsn = float(ts)
+                    tsn = int(ts)
                 except (TypeError, ValueError):
                     tsn = None
-                if tsn is not None:
-                    if lo is not None and tsn < lo:
-                        continue
-                    if hi is not None and tsn > hi:
-                        continue
+                if tsn is not None and tsn < lo:
+                    continue
             c = r.get("cost_usd")
             if isinstance(c, (int, float)):
                 total += float(c)
                 hit = True
-    return total if hit else None
+    # Require a positive total: matched-but-all-zero datapoints shouldn't override a
+    # non-zero token estimate with $0.00 — fall back to the estimate instead.
+    return total if hit and total > 0 else None
 
 
 def _patch_run_json(log_dir: Path, totals: dict) -> None:
@@ -394,12 +388,6 @@ def main(argv: list[str] | None = None) -> int:
         "--since",
         default=None,
         help="ISO 8601 start; only usage after this is counted.",
-    )
-    ap.add_argument(
-        "--until",
-        default=None,
-        help="ISO 8601 end; only usage at or before this is counted (optional "
-        "upper bound, symmetric with --since).",
     )
     ap.add_argument(
         "--model",
@@ -453,7 +441,6 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     since_dt = _parse_ts(args.since) if args.since else None
-    until_dt = _parse_ts(args.until) if args.until else None
 
     session_id = args.session_id or os.environ.get("CLAUDE_CODE_SESSION_ID")
     found_by_id = _find_by_session_id(session_id) if session_id else None
@@ -515,10 +502,10 @@ def main(argv: list[str] | None = None) -> int:
     # is counted as usage.
     by_req: dict = {}
     noreq: list = []
-    _collect(main_jsonl, since_dt, until_dt, args.model, by_req, noreq)
+    _collect(main_jsonl, since_dt, args.model, by_req, noreq)
     if subs_dir.is_dir():
         for sub in sorted(subs_dir.glob("agent-*.jsonl")):
-            _collect(sub, since_dt, until_dt, args.model, by_req, noreq)
+            _collect(sub, since_dt, args.model, by_req, noreq)
 
     inp = out = cr = cc = 0
     cost = 0.0
@@ -547,7 +534,7 @@ def main(argv: list[str] | None = None) -> int:
     # Use a real cost if we have one, otherwise fall back to the token estimate.
     # Order: OTEL telemetry first (works for interactive runs), then a headless
     # run's cli_output.json. The token counts stay as summed either way (info only).
-    otel = _otel_cost(args.otel_sink, discovered_sid, since_dt, until_dt)
+    otel = _otel_cost(args.otel_sink, discovered_sid, since_dt)
     if otel is not None:
         totals["cost_usd"] = round(otel, 6)
     elif args.log_dir:
