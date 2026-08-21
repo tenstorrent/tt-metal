@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
 from tqdm import tqdm
 
@@ -145,6 +147,8 @@ class Transformer(LightweightModule):
         lm_dtype = dtype
         if prefetcher is None and not args.is_galaxy and args.num_devices == 1:
             lm_dtype = ttnn.bfloat8_b
+        if os.environ.get("QWEN3ASR_LOSSLESS") == "1":  # measurement-only JA baseline
+            lm_dtype = dtype
         self.lm_head = LMHead(
             args=args,
             mesh_device=mesh_device,

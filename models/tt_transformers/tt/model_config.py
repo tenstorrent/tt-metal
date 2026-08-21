@@ -818,10 +818,16 @@ class ModelArgs:
                     self.lm_head_core_grid, self.prefetcher
                 )
                 # FF2 LoFi: 60.8 -> 61.4; FF1+FF3 LoFi: 61.4 -> 61.9; SDPA HiFi2: 62.1 -> 62.2.
-                for conf in self.optimizations.decoder_optimizations.values():
-                    conf.op_fidelity_settings[OpGroup.LI_FF2] = MathFidelitySetting.LOFI
-                    conf.op_fidelity_settings[OpGroup.LI_FF1_FF3] = MathFidelitySetting.LOFI
-                    conf.op_fidelity_settings[OpGroup.SDPA_DECODE] = MathFidelitySetting.HIFI2
+                # BFP8 KV cache: 62.2 -> 65.0/67.0 tok/s, EN byte-identical, and JA byte-identical to the
+                # BF16 stack on real clips (n150_opt ja_clean j0-j3, 2026-08-21). The earlier JA rejection
+                # was on the degenerate 9x-tiled synthetic clip only; see N150_PERF_SHEET.md backlog 4c.
+                # QWEN3ASR_LOSSLESS=1 skips all of these precision hops for a JA-quality baseline.
+                if os.environ.get("QWEN3ASR_LOSSLESS") != "1":
+                    for conf in self.optimizations.decoder_optimizations.values():
+                        conf.op_fidelity_settings[OpGroup.LI_FF2] = MathFidelitySetting.LOFI
+                        conf.op_fidelity_settings[OpGroup.LI_FF1_FF3] = MathFidelitySetting.LOFI
+                        conf.op_fidelity_settings[OpGroup.SDPA_DECODE] = MathFidelitySetting.HIFI2
+                        conf.tensor_dtype_settings[TensorGroup.KV_CACHE] = PrecisionSetting.BFP8
 
             # ============================================================================
             # Compute kernels Configs
@@ -1630,6 +1636,8 @@ class ModelArgs:
         else:
             # n150 1.7B decode: SDPA exp_approx. A/B 61.9 -> 62.1 tok/s, EN byte-id, JA Japanese+CJK.
             n150_asr = self.num_devices == 1 and not self.is_galaxy and self.dim == 2048 and self.hidden_dim == 6144
+            if os.environ.get("QWEN3ASR_LOSSLESS") == "1":  # measurement-only JA baseline
+                n150_asr = False
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=n150_asr,
