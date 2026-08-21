@@ -325,7 +325,9 @@ models:
     bh_sc1: 140
     bh_sc4: 120
   e2e_tier2:
-    wh_llmbox_perf: 266
+    # +10 for Gemma-4-12B e2e on T3K (wh_llmbox_perf, same 10m as 31B).
+    # Prior sum was 259/266; 266 would fail load-test-matrix.
+    wh_llmbox_perf: 276
     wh_n150: 41
     wh_n300: 6
     bh_p150: 26

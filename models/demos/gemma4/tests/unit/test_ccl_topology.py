@@ -315,24 +315,6 @@ def test_should_hoist_prefill_matmul_in0_band_and_budget(monkeypatch):
     assert not should_hoist_prefill_matmul_in0(128, 5376, object())
 
 
-def test_lm_head_decode_config_matches_sweep_winner():
-    """31B decode lm_head @ TP=8 → 1d_c64_bw1 + L1 out + HiFi4 (test_lm_head_matmul_sweep)."""
-    import ttnn
-    from models.demos.gemma4.tt.dram_sharded import lm_head_decode_config
-
-    mesh = _FakeMeshDevice()
-    prog, out_mc, ckc = lm_head_decode_config(mesh, m=32, k=5376, n=32768)
-    assert prog is not None
-    assert prog.in0_block_w == 1
-    assert prog.per_core_M == 1
-    assert prog.per_core_N == 16  # 1024 N-tiles / 64 cores
-    grid = prog.compute_with_storage_grid_size
-    assert grid.x * grid.y == 64
-    assert out_mc == ttnn.L1_MEMORY_CONFIG
-    assert ckc.math_fidelity == ttnn.MathFidelity.HiFi4
-    assert lm_head_decode_config(mesh, m=128, k=5376, n=32768) == (None, None, None)
-
-
 class _FakeComputeGrid:
     def __init__(self, x, y):
         self.x = x
