@@ -51,7 +51,7 @@
     bh_p150b_civ2_viommu:
       timeout: 8
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: runtime
+  team: ttnn
 
 - name: Realtime profiler suite
   cmd: run_realtime_profiler_test

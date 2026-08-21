@@ -25,7 +25,7 @@
     wh_llmbox:
       timeout: 10
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: runtime
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
 - name: T3000 multi-host tracy smoke
   cmd: run_multi_host_tracy_smoke
@@ -49,7 +49,7 @@
     wh_llmbox:
       timeout: 8
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: runtime
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
 - name: T3000 process_ops_logs
   cmd: run_process_ops_logs_test
@@ -57,7 +57,7 @@
     wh_llmbox:
       timeout: 5
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: runtime
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
 - name: T3000 tracy wasm gui HTTP integration
   cmd: run_tracy_wasm_gui_http_integration
