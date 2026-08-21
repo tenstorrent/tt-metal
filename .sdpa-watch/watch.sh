@@ -235,8 +235,16 @@ SLACK_URL=""
 if [[ -f "$SLACK_WEBHOOK_FILE" ]]; then
   SLACK_URL="$(cat "$SLACK_WEBHOOK_FILE")"
 fi
-if [[ -z "$SLACK_URL" && "$DRY_RUN" != "1" ]]; then
-  log "FATAL: $SLACK_WEBHOOK_FILE missing or empty (run with DRY_RUN=1 to test without Slack)"
+SLACK_BOT_TOKEN=""
+if [[ -n "${SLACK_BOT_TOKEN_FILE:-}" && -f "$SLACK_BOT_TOKEN_FILE" ]]; then
+  SLACK_BOT_TOKEN="$(tr -d '[:space:]' < "$SLACK_BOT_TOKEN_FILE")"
+fi
+if [[ -n "$SLACK_BOT_TOKEN" && -n "${SLACK_CHANNEL_ID:-}" ]]; then
+  log "slack: bot-API mode — edit-in-place digest in $SLACK_CHANNEL_ID"
+elif [[ -n "$SLACK_URL" ]]; then
+  log "slack: webhook mode — new message per tick (no bot token/channel configured)"
+elif [[ "$DRY_RUN" != "1" ]]; then
+  log "FATAL: no Slack credentials — need $SLACK_BOT_TOKEN_FILE + SLACK_CHANNEL_ID, or $SLACK_WEBHOOK_FILE (run with DRY_RUN=1 to test without Slack)"
   exit 1
 fi
 
@@ -444,14 +452,43 @@ if [[ ${#success_names[@]} -gt 0 ]]; then
   success_line="✅ $joined"
 fi
 
+# ---------- status fingerprint & tick history (bot-API mode) ----------
+# Fingerprint = digest content minus timestamps. Same fingerprint as the last
+# posted message → same status → chat.update that message in place, appending
+# this tick's time to the "checked:" history line. Different fingerprint →
+# post a brand-new message (so status CHANGES still notify) with a fresh tick
+# list. History lives in state.json under _slack.
+fingerprint=$(printf '%s\n' "$success_line" "${failure_blocks[@]+"${failure_blocks[@]}"}" \
+              | sha256sum | awk '{print $1}')
+
+slack_mode="webhook"
+[[ -n "$SLACK_BOT_TOKEN" && -n "${SLACK_CHANNEL_ID:-}" ]] && slack_mode="bot"
+
+msg_ts=""
+ticks_json="[]"
+if [[ "$slack_mode" == "bot" ]]; then
+  same=$(jq -r --arg ch "$SLACK_CHANNEL_ID" --arg fp "$fingerprint" \
+         '(._slack.channel // "") == $ch and (._slack.fingerprint // "") == $fp' "$STATE")
+  if [[ "$same" == "true" ]]; then
+    msg_ts=$(jq -r '._slack.ts // ""' "$STATE")
+    ticks_json=$(jq -c '._slack.ticks // []' "$STATE")
+  fi
+  # Append this tick; keep the last 48 so a week-long steady state can't
+  # blow past Slack's 3000-char section limit.
+  ticks_json=$(jq -c --arg t "$ts_human" '(. + [$t]) | .[-48:]' <<<"$ticks_json")
+fi
+ticks_line=$(jq -r 'if length > 1 then "checked: " + join("  ·  ") else "" end' <<<"$ticks_json")
+
 payload=$(jq -nc \
   --arg title "$title" \
   --arg succ "$success_line" \
+  --arg ticks "$ticks_line" \
   --args \
   '{
      text: $title,
      blocks: (
        [{type: "header", text: {type: "plain_text", text: $title, emoji: true}}]
+       + (if $ticks != "" then [{type: "context", elements: [{type: "mrkdwn", text: $ticks}]}] else [] end)
        + (if $succ != "" then [{type: "section", text: {type: "mrkdwn", text: $succ}}] else [] end)
        + ($ARGS.positional | map([{type: "divider"},
                                   {type: "section", text: {type: "mrkdwn", text: .}}]) | add // [])
@@ -470,6 +507,42 @@ if [[ "$DRY_RUN" == "1" ]]; then
     printf '%s\n' "$b"
   done
   echo "================================================================"
+elif [[ "$slack_mode" == "bot" ]]; then
+  # Same status as the standing message → chat.update it (tick appended).
+  # Different status / no standing message / update failed → chat.postMessage
+  # a fresh one. Either way persist {ts, fingerprint, ticks} under _slack.
+  if [[ -n "$msg_ts" ]]; then
+    resp=$(printf '%s' "$payload" \
+           | jq -c --arg ch "$SLACK_CHANNEL_ID" --arg ts "$msg_ts" '. + {channel: $ch, ts: $ts}' \
+           | curl -sS -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                  -H 'Content-Type: application/json; charset=utf-8' \
+                  --data @- https://slack.com/api/chat.update)
+    if [[ "$(jq -r '.ok // false' <<<"$resp")" == "true" ]]; then
+      log "same status — updated Slack digest ts=$msg_ts (tick $(jq 'length' <<<"$ticks_json"), ${#payload} chars JSON)"
+    else
+      log "WARN: chat.update failed ($(jq -r '.error // "unparseable"' <<<"$resp")) — posting fresh digest"
+      msg_ts=""
+    fi
+  fi
+  if [[ -z "$msg_ts" ]]; then
+    resp=$(printf '%s' "$payload" \
+           | jq -c --arg ch "$SLACK_CHANNEL_ID" '. + {channel: $ch}' \
+           | curl -sS -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                  -H 'Content-Type: application/json; charset=utf-8' \
+                  --data @- https://slack.com/api/chat.postMessage)
+    if [[ "$(jq -r '.ok // false' <<<"$resp")" == "true" ]]; then
+      msg_ts=$(jq -r '.ts' <<<"$resp")
+      log "status changed/new — posted Slack digest ts=$msg_ts (${#payload} chars JSON)"
+    else
+      log "WARN: chat.postMessage failed: $resp"
+    fi
+  fi
+  if [[ -n "$msg_ts" ]]; then
+    jq --arg ch "$SLACK_CHANNEL_ID" --arg ts "$msg_ts" --arg fp "$fingerprint" \
+       --argjson ticks "$ticks_json" \
+       '._slack = {channel: $ch, ts: $ts, fingerprint: $fp, ticks: $ticks}' \
+       "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+  fi
 else
   resp=$(printf '%s' "$payload" \
          | curl -sS -X POST -H 'Content-Type: application/json' --data @- "$SLACK_URL")

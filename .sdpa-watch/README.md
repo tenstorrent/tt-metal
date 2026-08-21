@@ -9,6 +9,20 @@ SDPA-related failures and posts a digest to Slack on a cron schedule.
 
 Currently watches 9 pipelines (see `config.sh`). Cron currently fires every hour.
 
+> **2026-08-21 — edit-in-place digest (Slack bot API).** When
+> `~/.sdpa-watch/slack_bot_token` (xoxb, scope `chat:write`) and
+> `SLACK_CHANNEL_ID` (in `config.sh`) are present, the watcher posts via
+> `chat.postMessage`/`chat.update` instead of the webhook. A fingerprint of the
+> digest content (minus timestamps) decides per tick: **same status** → the
+> standing message is edited in place and the tick time is appended to a
+> `checked: …` line (last 48 kept); **changed status** → a brand-new message is
+> posted (notifies the channel) and the tick list restarts. State lives in
+> `state.json` under `_slack` (`channel`, `ts`, `fingerprint`, `ticks`).
+> `#sdpa-watch` is a **private** channel (ID `C0B72MVR88G`), so the `sdpawatch`
+> bot must remain a member (`/invite @sdpawatch`) — without membership the API
+> returns `channel_not_found`. If the token file is missing, the watcher falls
+> back to the legacy webhook (new message every tick).
+
 > **2026-08-14:** `blackhole-sanity-tests.yaml` was retired upstream (PR #48943, "Pipeline
 > reorg: Migrate Blackhole Sanity into sanity-tests") and its jobs folded into
 > `sanity-tests.yaml`, so the separate *Blackhole Sanity* entry was dropped and its
@@ -37,11 +51,11 @@ cd /localdev/skrstic/tt-metal
 git add .sdpa-watch/agent_prompt.txt && git commit -m "sdpa-watch: <what changed>" && git push
 ```
 
-Never copy secrets or state to the repo (`oauth_token`, `slack_webhook`, `state.json`, `watch.log`) — those are runtime-only by design. To confirm nothing drifted, diff the two dirs:
+Never copy secrets or state to the repo (`oauth_token`, `slack_webhook`, `slack_bot_token`, `state.json`, `watch.log`) — those are runtime-only by design. To confirm nothing drifted, diff the two dirs:
 
 ```bash
 diff -qr ~/.sdpa-watch /localdev/skrstic/tt-metal/.sdpa-watch \
-  | grep -v -E 'oauth_token|slack_webhook|state.json|watch.log|\.credentials'
+  | grep -v -E 'oauth_token|slack_webhook|slack_bot_token|state.json|watch.log|\.credentials'
 ```
 
 ---
@@ -229,7 +243,8 @@ Edit `MODEL=` in `config.sh`:
 | `~/.sdpa-watch/agent_prompt.txt` | Global LLM policy. |
 | `~/.sdpa-watch/state.json` | Per-pipeline cache. |
 | `~/.sdpa-watch/oauth_token` | Long-lived Claude OAuth token from `claude setup-token` (chmod 600); exported as `CLAUDE_CODE_OAUTH_TOKEN`. |
-| `~/.sdpa-watch/slack_webhook` | Slack webhook URL (chmod 600). |
+| `~/.sdpa-watch/slack_webhook` | Slack webhook URL (chmod 600). Fallback path only since 2026-08-21. |
+| `~/.sdpa-watch/slack_bot_token` | Slack bot token `xoxb-…` (chmod 600), scope `chat:write` — enables the edit-in-place digest. Pair with `SLACK_CHANNEL_ID` in `config.sh`. |
 | `~/.sdpa-watch/watch.log` | Append-only tick log. |
 | `~/.sdpa-watch/agent_errors.log` | Stderr from `claude -p` (only useful on agent errors). |
 | `~/.sdpa-watch/SETUP.md` | Setup history, rebuild-from-scratch, design notes. |
