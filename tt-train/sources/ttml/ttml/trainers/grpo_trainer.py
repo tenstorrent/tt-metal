@@ -767,8 +767,15 @@ class GRPOTrainer:
                     min_completion_len = 0
                     max_completion_len = 0
 
-<<<<<<< HEAD
-                step_metrics = {
+                # Fire on_step_end every optimizer step so per-step callbacks
+                # (e.g. WeightSyncCallback) are not gated by logging_steps.
+                # Build the mutable per-step metrics dict on ``self`` so
+                # callbacks can inject additional columns (e.g. an eval
+                # callback writing ``trainer.metrics["eval_similarity"]``).
+                # Merges in the previous step's per-callback timings so
+                # ``GRPOMonitor`` records each callback's ``on_step_end``
+                # cost in the CSV row after it ran.
+                self.metrics = {
                     "reward_mean": mean_reward,
                     "reward_std": float(rewards_np.std()),
                     "mean_completion_len": mean_completion_len,
@@ -776,49 +783,25 @@ class GRPOTrainer:
                     "max_completion_len": max_completion_len,
                     "lr": base_lr * warmup_factor,
                     "step_time_s": step_time_s,
-                    "step_time_and_previous_callbacks_s": time.perf_counter() - step_t0,
                     "generation_time_s": generation_time_s_for_step,
+                    **self._prev_callback_times,
                 }
+                if grpo_cfg.log_completions and grpo_cfg.num_completions_to_print > 0:
+                    k = grpo_cfg.num_completions_to_print
+                    self.metrics["prompts"] = prompts_strs[:k]
+                    self.metrics["completions"] = completions_strs[:k]
+                    self.metrics["rewards"] = list(rewards[:k])
+
+                # Time each callback's ``on_step_end`` in place. Cleared
+                # at the top of the loop so old entries don't linger if
+                # the callback list changed mid-run. Safe to mutate mid-
+                # loop because callbacks read ``self.metrics`` (built
+                # above), never ``self._prev_callback_times``.
+                self._prev_callback_times = {}
                 for cb in self.callbacks:
-                    cb.on_step_end(self, num_steps, **step_metrics)
-=======
-                if grpo_cfg.logging_steps > 0 and num_steps % grpo_cfg.logging_steps == 0:
-                    # Build the mutable per-step metrics dict on ``self`` so
-                    # callbacks can inject additional columns (e.g. an eval
-                    # callback writing ``trainer.metrics["eval_similarity"]``).
-                    # Merges in the previous step's per-callback timings so
-                    # ``GRPOMonitor`` records each callback's ``on_step_end``
-                    # cost in the CSV row after it ran.
-                    self.metrics = {
-                        "reward_mean": mean_reward,
-                        "reward_std": float(rewards_np.std()),
-                        "mean_completion_len": mean_completion_len,
-                        "min_completion_len": min_completion_len,
-                        "max_completion_len": max_completion_len,
-                        "lr": base_lr * warmup_factor,
-                        "step_time_s": step_time_s,
-                        "generation_time_s": generation_time_s_for_step,
-                        **self._prev_callback_times,
-                    }
-                    if grpo_cfg.log_completions and grpo_cfg.num_completions_to_print > 0:
-                        k = grpo_cfg.num_completions_to_print
-                        self.metrics["prompts"] = prompts_strs[:k]
-                        self.metrics["completions"] = completions_strs[:k]
-                        self.metrics["rewards"] = list(rewards[:k])
-
-                    # Time each callback's ``on_step_end`` in place. Cleared
-                    # at the top of the loop so old entries don't linger if
-                    # the callback list changed mid-run. Safe to mutate mid-
-                    # loop because callbacks read ``self.metrics`` (built
-                    # above), never ``self._prev_callback_times``.
-                    self._prev_callback_times = {}
-                    for cb in self.callbacks:
-                        cb_t0 = time.perf_counter()
-                        cb.on_step_end(self, num_steps, **self.metrics)
-                        self._prev_callback_times[f"{type(cb).__name__}_time_s"] = time.perf_counter() - cb_t0
-
-                step_t0 = time.perf_counter()
->>>>>>> 7684a0258ec (tt-train/grpo: move logging into framework, add report_to / log_completions)
+                    cb_t0 = time.perf_counter()
+                    cb.on_step_end(self, num_steps, **self.metrics)
+                    self._prev_callback_times[f"{type(cb).__name__}_time_s"] = time.perf_counter() - cb_t0
 
                 if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
                     ckpt_dir = os.path.join(grpo_cfg.output_dir, "checkpoints", f"grpo_step_{num_steps}")

@@ -61,6 +61,10 @@ class GRPOMonitor(TrainerCallback):
         self._report_to = config.report_to
         self._log_completions = config.log_completions
         self._num_completions_to_print = config.num_completions_to_print
+        # Trainer fires on_step_end every optimizer step (WeightSyncCallback
+        # must not be logging-gated). The monitor self-gates so logging_steps
+        # still controls CSV / console / wandb cadence.
+        self._logging_steps = config.logging_steps
 
         self._csv_path = os.path.join(self._output_dir, "grpo_metrics.csv") if self._output_dir else None
         # Frozen list of CSV columns; populated in ``on_train_begin`` so we can
@@ -106,6 +110,8 @@ class GRPOMonitor(TrainerCallback):
                 self._wandb_active = True
 
     def on_step_end(self, trainer: Any, step: int, *args: Any, **kwargs: Any) -> None:
+        if self._logging_steps <= 0 or step % self._logging_steps != 0:
+            return
         # Read the mutable metrics dict the trainer exposes rather than kwargs
         # so callbacks earlier in the list can inject additional columns (e.g.
         # an EvalCallback writing ``trainer.metrics["eval_similarity"]``). The
