@@ -107,28 +107,33 @@ jobs:
           cd tests
           ./setup_testing_env.sh
           cd ..
-      - name: Set CHIP_ARCH for logs and artifacts
+      - name: Set CHIP_ARCH and the run tag
         shell: bash
         env:
           RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
         run: |
           RUN_LABEL="${RUN_ON_LABELS%% *}"
           if [[ "$RUN_LABEL" =~ N150 ]]; then
-            echo "CHIP_ARCH=wormhole" >> "$GITHUB_ENV"
+            CHIP_ARCH=wormhole
           elif [[ "$RUN_LABEL" =~ P150 ]]; then
-            echo "CHIP_ARCH=blackhole" >> "$GITHUB_ENV"
+            CHIP_ARCH=blackhole
           else
-            echo "CHIP_ARCH=unknown" >> "$GITHUB_ENV"
+            CHIP_ARCH=unknown
           fi
+          echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
+          # One name for everything this shard produces: the report directory
+          # perf_data/runs/<tag> and the published Parquet. Must be unique per
+          # job, because pytest-split divides by test item rather than by
+          # module, so one module's variants land in several shards and their
+          # reports would collide the moment the artefacts are brought together.
+          # It carries the workflow run id, so it is also unique across nights --
+          # which matters once these files are archived into one directory.
+          # Exported here rather than scoped to a single step: the publish step
+          # names its output from the same tag, and two naming schemes drift.
+          echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
       - name: Run tests
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
-        env:
-          # Names this shard's report directory, perf_data/runs/<tag>. Must be
-          # unique per job: pytest-split divides by test item, not by module, so
-          # the same module's variants land in several shards and their reports
-          # would collide the moment the artefacts are unzipped together.
-          PERF_RUN_TAG: ${{ github.run_id }}-${{ env.CHIP_ARCH }}-${{ strategy.job-index }}
         run: |
           ${{ matrix.test-group.cmd }}
 
@@ -146,7 +151,7 @@ jobs:
           # perf_data would sweep every retained run into one batch.
           python3 -m helpers.perf.publish_run \
             --csv-dir ../../perf_data/latest \
-            --out ../../perf_data/run-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.parquet \
+            --out ../../perf_data/llk-perf-${{ env.PERF_RUN_TAG }}.parquet \
             --arch ${{ env.CHIP_ARCH }}
 
       - name: Zip performance data
