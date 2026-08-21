@@ -510,7 +510,14 @@ static vector<std::uint32_t> run_binary_add(
     const std::map<std::string, std::string>& compute_defines = {},
     // CB depth in tiles (default 1). Block kernels that keep >1 tile resident (wait_front(BLOCK)) must pass a
     // depth >= their block size, else a 1-tile CB deadlocks. reader_binary/writer_unary stream 1 tile at a time.
-    std::uint32_t cb_depth_tiles = 1) {
+    std::uint32_t cb_depth_tiles = 1,
+    // Number of OUTPUT tiles the compute produces / the writer drains from c_16. 0 (default) means num_tiles
+    // (elementwise: N in -> N out). Reducing ops collapse the block to fewer outputs (reduce_block: N -> 1);
+    // they must pass out_tiles explicitly, else writer_unary over-reads c_16 and the device deadlocks.
+    std::uint32_t out_tiles = 0) {
+    if (out_tiles == 0) {
+        out_tiles = num_tiles;
+    }
     IDevice* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
@@ -518,17 +525,17 @@ static vector<std::uint32_t> run_binary_add(
     const tt::DataFormat fmt = tt::DataFormat::Float16_b;
     std::uint32_t tile_bytes = tt::tile_size(fmt);
 
-    auto make_dram = [&]() {
+    auto make_dram = [&](std::uint32_t ntiles) {
         InterleavedBufferConfig cfg{
             .device = dev,
-            .size = num_tiles * tile_bytes,
-            .page_size = num_tiles * tile_bytes,
+            .size = ntiles * tile_bytes,
+            .page_size = ntiles * tile_bytes,
             .buffer_type = BufferType::DRAM};
         return CreateBuffer(cfg);
     };
-    auto src0_buffer = make_dram();
-    auto src1_buffer = make_dram();
-    auto dst_buffer = make_dram();
+    auto src0_buffer = make_dram(num_tiles);
+    auto src1_buffer = make_dram(num_tiles);
+    auto dst_buffer = make_dram(out_tiles);
 
     auto make_cb = [&](tt::CBIndex idx) {
         CircularBufferConfig cb_cfg =
@@ -560,7 +567,7 @@ static vector<std::uint32_t> run_binary_add(
     detail::WriteToBuffer(src0_buffer, src0_vec);
     detail::WriteToBuffer(src1_buffer, src1_vec);
     SetRuntimeArgs(program, reader, core, {src0_buffer->address(), 0, src1_buffer->address(), 0, num_tiles});
-    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles});
+    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, out_tiles});
     // Legacy eltwise_binary.cpp reads runtime args {per_core_block_cnt, per_core_block_size, acc_to_dst};
     // the id-free kernel reads only the compile-time num_tiles and ignores these (harmless). One tile/block.
     SetRuntimeArgs(program, compute, core, {num_tiles, 1, 0});
@@ -964,6 +971,126 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixReduceMaxSpecMatchesLegacy) {
         mesh_device, data, scaler, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/reduce_max_legacy.cpp");
     auto spec = run_binary_add(
         mesh_device, data, scaler, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/reduce_max_2_0.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Reduce (REDUCE_COL SUM): extends reduce differential coverage to ReduceDim::REDUCE_COL. id-free (2.0) output
+// must bit-match a minimal legacy COL kernel on the same inputs (reuses run_binary_add: c_0 data, c_1 scaler ->
+// c_16). REDUCE_COL has NO operand swap (the legacy swap is REDUCE_ROW non-MAX only), so the id-free path
+// (no swap) matches directly with both operands Float16_b.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixReduceColSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 1;
+    auto data = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto scaler = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/2, /*seed=*/7, /*offset=*/-1.0f);
+
+    auto legacy = run_binary_add(
+        mesh_device, data, scaler, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/reduce_col_legacy.cpp");
+    auto spec = run_binary_add(
+        mesh_device, data, scaler, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/reduce_col_2_0.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Reduce block (REDUCE_SCALAR SUM): the id-free (2.0) reduce_block kernel must produce output bit-for-bit
+// identical to the legacy kernel that loops legacy reduce_tile, on the same inputs (differential equivalence;
+// reuses run_binary_add). Both reduce a block of num_tiles data tiles (each with scaler tile 0) accumulating
+// into DST[0], then pack the single reduced tile to c_16. The kernels differ ONLY in the reduce call, isolating
+// reduce_block. wait_front(num_tiles) keeps the whole block resident, so the CBs must be num_tiles deep (a
+// 1-deep CB would deadlock) -- pass cb_depth_tiles=num_tiles.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixReduceBlockSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 4;  // block of 4
+    auto data = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto scaler = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/2, /*seed=*/7, /*offset=*/-1.0f);
+
+    auto legacy = run_binary_add(
+        mesh_device,
+        data,
+        scaler,
+        num_tiles,
+        "tests/tt_metal/tt_metal/test_kernels/compute/reduce_block_legacy.cpp",
+        /*compute_defines=*/{},
+        /*cb_depth_tiles=*/num_tiles,
+        /*out_tiles=*/1);  // reduce_block collapses the block to ONE output tile
+    auto spec = run_binary_add(
+        mesh_device,
+        data,
+        scaler,
+        num_tiles,
+        "tests/tt_metal/tt_metal/test_kernels/compute/reduce_block_2_0.cpp",
+        /*compute_defines=*/{},
+        /*cb_depth_tiles=*/num_tiles,
+        /*out_tiles=*/1);
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Binary dest-reuse ADD: the id-free (2.0) reuse-dest kernel must produce output bit-for-bit identical to the
+// legacy CB-id reuse-dest kernel on the same two inputs (differential equivalence; reuses run_binary_add).
+// Both seed DST[0] with A (c_0) via legacy copy_tile, then fold B (c_1) in via add_reuse_dest_tiles<DEST_TO_SRCA>
+// (DST -> SrcA, c_1 -> SrcB) => A + B, then pack. The kernels differ ONLY in the reuse-dest init + op (CB-id
+// vs id-free LLKOperand); copy_tile / pack_tile / hw_startup stay legacy CB-id in BOTH.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixBinaryReuseDestSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 64;
+    auto src0 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto src1 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/7, /*offset=*/-10.0f);
+
+    auto legacy = run_binary_add(
+        mesh_device,
+        src0,
+        src1,
+        num_tiles,
+        "tests/tt_metal/tt_metal/test_kernels/compute/binary_reuse_dest_legacy.cpp");
+    auto spec = run_binary_add(
+        mesh_device, src0, src1, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/binary_reuse_dest_2_0.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Copy short-init: the id-free (2.0) copy_tile_to_dst_init_short kernel must produce output bit-for-bit
+// identical to the legacy CB-id short-init kernel on the same input (differential equivalence; reuses the
+// single-core classic-CB harness run_fp8_typecast). Per tile: short-re-init the copy source, copy c_0 -> DST,
+// pack -> c_16. The two kernels differ ONLY in the copy_tile_to_dst_init_short call (legacy vs experimental::),
+// isolating the change.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixCopyShortInitSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 64;
+    auto src_vec = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+
+    auto legacy = run_fp8_typecast(
+        mesh_device,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/copy_short_init_legacy.cpp");
+    auto spec = run_fp8_typecast(
+        mesh_device,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/copy_short_init_2_0.cpp");
 
     EXPECT_EQ(legacy, spec);
 }

@@ -85,6 +85,37 @@ ALWI void reduce_tile(
 
 // clang-format off
 /**
+ * Reduce a block of `ntiles` consecutive data tiles (each combined with the scaler tile) accumulating into
+ * DST[idst]. Block/loop form of reduce_tile: reduces data tiles start_itile .. start_itile+ntiles-1 into the
+ * SAME DST slot (the reduction accumulates across the block), matching a caller that loops reduce_tile.
+ * Reuses the existing 2.0 reduce_tile per tile; per-tile source addressing is inherited from reduce_tile
+ * (itile advances by tile_stride_words internally). Pair with reduce_init. DST must be acquired.
+ *
+ * | Template | reduce_type   | SUM / AVG / MAX                                 | PoolType   | | True |
+ * | Template | reduce_dim    | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR        | ReduceDim  | | True |
+ * | Function | data / scaler | Input operands                                 | LLKOperand | | True |
+ * | Function | start_itile   | Index of the first data tile within `data`     | uint32_t   | | True |
+ * | Function | itile_scaler  | Tile index within `scaler`                      | uint32_t   | | True |
+ * | Function | idst          | DST register index accumulating the result     | uint32_t   | 0 to 15 | True |
+ * | Function | ntiles        | Number of consecutive data tiles to reduce     | uint32_t   | | True |
+ */
+// clang-format on
+template <PoolType reduce_type, ReduceDim reduce_dim, DataFormat DF, TensorShape DS, DataFormat SF, TensorShape SS>
+ALWI void reduce_block(
+    LLKOperand<DF, DS> data,
+    LLKOperand<SF, SS> scaler,
+    std::uint32_t start_itile,
+    std::uint32_t itile_scaler,
+    std::uint32_t idst,
+    std::uint32_t ntiles) {
+    static_assert(is_legal_tile_shape(DS), "reduce_block: illegal data tile shape.");
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        reduce_tile<reduce_type, reduce_dim>(data, scaler, start_itile + i, itile_scaler, idst);
+    }
+}
+
+// clang-format off
+/**
  * Reduce uninit: reset the MATH reduce state and clear the packer edge mask back to default.
  */
 // clang-format on

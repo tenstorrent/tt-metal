@@ -14,6 +14,7 @@
 
 #ifdef TRISC_UNPACK
 #include "experimental/2_0/llk_unpack_AB.h"
+#include "experimental/2_0/llk_unpack_A.h"  // dest-reuse path unpacks a single operand (A-only)
 #endif
 
 namespace ckernel {
@@ -345,6 +346,212 @@ ALWI void mul_block(
             0,
             start_idst + i);
     }
+}
+
+// =====================================================================================================================
+// Dest-reuse (accumulation) binary ops: one operand is taken from the DST register instead of a second L1
+// buffer. This is the id-free successor to the legacy CB-id binary_reuse_dest API (the deprecated
+// binary_dest_reuse_tiles[_init] path is NOT ported). Only the L1 operand becomes an LLKOperand; the reused
+// operand IS the DST register, selected at runtime by dst_tile_index, so it carries no LLKOperand. The
+// EltwiseBinaryType and EltwiseBinaryReuseDestType template params are preserved exactly as legacy. Because
+// only a single operand is unpacked, this path uses llk_unpack_A (not llk_unpack_AB). BH accumulates the
+// unpacked operand into DST at the unpacker (acc_to_dest = true), mirroring the legacy detail path.
+// =====================================================================================================================
+
+namespace detail {
+// clang-format off
+/**
+ * (detail) Single source of truth for the id-free dest-reuse INIT. One source operand comes from DST, so only
+ * the single L1 operand `in` is unpacked (llk_unpack_A). reuse_dest picks which source register the DST tile is
+ * loaded into. compute_kernel_hw_startup(a, b, out) must already have programmed the formats.
+ *
+ * | Param Type | Name                | Description                                        | Type                       | Valid Range | Required |
+ * |------------|---------------------|----------------------------------------------------|----------------------------|-------------|----------|
+ * | Template   | eltwise_binary_type | ELWADD / ELWSUB / ELWMUL                            | EltwiseBinaryType          | N/A         | True     |
+ * | Template   | reuse_dest          | Which source register the DST operand loads into    | EltwiseBinaryReuseDestType | non-NONE    | True     |
+ * | Function   | in                  | The single L1 operand (drives geometry + address)   | LLKOperand                 | N/A         | True     |
+ */
+// clang-format on
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    EltwiseBinaryReuseDestType reuse_dest,
+    DataFormat Format,
+    TensorShape Shape>
+ALWI void binary_reuse_dest_init(LLKOperand<Format, Shape> /*in*/) {
+    static_assert(is_legal_tile_shape(Shape), "binary_reuse_dest_init: illegal tile shape for the L1 operand.");
+    // BH: accumulate the unpacked operand into DST at the unpacker (acc_to_dest = true), matching legacy.
+    UNPACK((llk_unpack_A_init<
+            LLKOperand<Format, Shape>::descriptor,
+            DST_ACCUM_MODE,
+            BroadcastType::NONE,
+            true /*acc_to_dest*/,
+            reuse_dest>()));
+    MATH((llk_math_eltwise_binary_init<
+          LLKOperand<Format, Shape>::descriptor,
+          eltwise_binary_type,
+          BroadcastType::NONE,
+          MATH_FIDELITY,
+          reuse_dest>(0 /*acc_to_dest*/)));
+}
+
+// clang-format off
+/**
+ * (detail) Single source of truth for the id-free dest-reuse EXECUTE. The DST[dst_tile_index] tile is loaded
+ * into SrcA (DEST_TO_SRCA) or SrcB (DEST_TO_SRCB); the op runs on SrcA & SrcB and writes back to
+ * DST[dst_tile_index]. Assumes a prior op populated DST[dst_tile_index], else it reads zeroes.
+ *
+ * | Param Type | Name                | Description                                          | Type                       | Valid Range | Required |
+ * |------------|---------------------|------------------------------------------------------|----------------------------|-------------|----------|
+ * | Template   | eltwise_binary_type | ELWADD / ELWSUB / ELWMUL                              | EltwiseBinaryType          | N/A         | True     |
+ * | Template   | reuse_dest          | Which source register the DST operand loads into      | EltwiseBinaryReuseDestType | non-NONE    | True     |
+ * | Function   | in                  | The single L1 operand (base address + geometry)       | LLKOperand                 | N/A         | True     |
+ * | Function   | in_tile_index       | Tile index within the L1 operand                      | uint32_t                   | N/A         | True     |
+ * | Function   | dst_tile_index      | DST tile used as the other operand and as the result  | uint32_t                   | < DST size  | True     |
+ */
+// clang-format on
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    EltwiseBinaryReuseDestType reuse_dest,
+    DataFormat Format,
+    TensorShape Shape>
+ALWI void binary_reuse_dest_tiles(
+    LLKOperand<Format, Shape> in, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
+    static_assert(is_legal_tile_shape(Shape), "binary_reuse_dest_tiles: illegal tile shape for the L1 operand.");
+    UNPACK((llk_unpack_A<
+            LLKOperand<Format, Shape>::descriptor,
+            DST_ACCUM_MODE,
+            BroadcastType::NONE,
+            true /*acc_to_dest*/,
+            reuse_dest>(tile_address(in, in_tile_index))));
+    MATH((llk_math_eltwise_binary<
+          LLKOperand<Format, Shape>::descriptor,
+          eltwise_binary_type,
+          BroadcastType::NONE,
+          DST_ACCUM_MODE,
+          MATH_FIDELITY,
+          reuse_dest>(dst_tile_index, true /*clear_fp32_dst_acc*/)));
+}
+}  // namespace detail
+
+// clang-format off
+/**
+ * Paired init for dest-reuse element-wise addition (add_reuse_dest_tiles<reuse_dest>). One addend is taken
+ * from the DST register, so only the single L1 operand is unpacked; reuse_dest selects which source register
+ * the DST tile loads into:
+ *   - DEST_TO_SRCA: DST -> SrcA, in -> SrcB   (result = DST + in)
+ *   - DEST_TO_SRCB: DST -> SrcB, in -> SrcA   (result = in + DST)
+ * Pair with add_reuse_dest_tiles. compute_kernel_hw_startup(a, b, out) must already have run.
+ *
+ * | Param Type | Name       | Description                                                       | Type                       | Valid Range | Required |
+ * |------------|------------|-------------------------------------------------------------------|----------------------------|-------------|----------|
+ * | Template   | reuse_dest | Which source register the DST operand is loaded into (non-NONE)   | EltwiseBinaryReuseDestType | N/A         | True     |
+ * | Function   | in         | L1 operand unpacked into the source register not fed by DST        | LLKOperand                 | N/A         | True     |
+ */
+// clang-format on
+template <EltwiseBinaryReuseDestType reuse_dest, DataFormat Format, TensorShape Shape>
+ALWI void add_reuse_dest_init(LLKOperand<Format, Shape> in) {
+    static_assert(
+        reuse_dest != EltwiseBinaryReuseDestType::NONE,
+        "reuse_dest must be DEST_TO_SRCA or DEST_TO_SRCB; for the two-operand op call add_init(a).");
+    detail::binary_reuse_dest_init<EltwiseBinaryType::ELWADD, reuse_dest>(in);
+}
+
+// clang-format off
+/**
+ * Paired init for dest-reuse element-wise subtraction (sub_reuse_dest_tiles<reuse_dest>). See
+ * add_reuse_dest_init; DEST_TO_SRCA gives DST - in, DEST_TO_SRCB gives in - DST.
+ *
+ * | Param Type | Name       | Description                                                       | Type                       | Valid Range | Required |
+ * |------------|------------|-------------------------------------------------------------------|----------------------------|-------------|----------|
+ * | Template   | reuse_dest | Which source register the DST operand is loaded into (non-NONE)   | EltwiseBinaryReuseDestType | N/A         | True     |
+ * | Function   | in         | L1 operand unpacked into the source register not fed by DST        | LLKOperand                 | N/A         | True     |
+ */
+// clang-format on
+template <EltwiseBinaryReuseDestType reuse_dest, DataFormat Format, TensorShape Shape>
+ALWI void sub_reuse_dest_init(LLKOperand<Format, Shape> in) {
+    static_assert(
+        reuse_dest != EltwiseBinaryReuseDestType::NONE,
+        "reuse_dest must be DEST_TO_SRCA or DEST_TO_SRCB; for the two-operand op call sub_init(a).");
+    detail::binary_reuse_dest_init<EltwiseBinaryType::ELWSUB, reuse_dest>(in);
+}
+
+// clang-format off
+/**
+ * Paired init for dest-reuse element-wise multiplication (mul_reuse_dest_tiles<reuse_dest>). See
+ * add_reuse_dest_init; result = DST * in (DEST_TO_SRCA) or in * DST (DEST_TO_SRCB).
+ *
+ * | Param Type | Name       | Description                                                       | Type                       | Valid Range | Required |
+ * |------------|------------|-------------------------------------------------------------------|----------------------------|-------------|----------|
+ * | Template   | reuse_dest | Which source register the DST operand is loaded into (non-NONE)   | EltwiseBinaryReuseDestType | N/A         | True     |
+ * | Function   | in         | L1 operand unpacked into the source register not fed by DST        | LLKOperand                 | N/A         | True     |
+ */
+// clang-format on
+template <EltwiseBinaryReuseDestType reuse_dest, DataFormat Format, TensorShape Shape>
+ALWI void mul_reuse_dest_init(LLKOperand<Format, Shape> in) {
+    static_assert(
+        reuse_dest != EltwiseBinaryReuseDestType::NONE,
+        "reuse_dest must be DEST_TO_SRCA or DEST_TO_SRCB; for the two-operand op call mul_init(a).");
+    detail::binary_reuse_dest_init<EltwiseBinaryType::ELWMUL, reuse_dest>(in);
+}
+
+// clang-format off
+/**
+ * Dest-reuse element-wise add: C = DST[dst_tile_index] + in, where one operand is the tile already in DST and
+ * the other is unpacked from the L1 operand `in`. reuse_dest selects which source register the DST tile loads
+ * into (DEST_TO_SRCA: DST->SrcA, in->SrcB; DEST_TO_SRCB: DST->SrcB, in->SrcA). Assumes a prior op populated
+ * DST[dst_tile_index], else it reads zeroes. Pair with add_reuse_dest_init<reuse_dest>. The DST register must
+ * be acquired.
+ *
+ * | Param Type | Name           | Description                                                        | Type                       | Valid Range | Required |
+ * |------------|----------------|-------------------------------------------------------------------|----------------------------|-------------|----------|
+ * | Template   | reuse_dest     | Which source register the DST operand is loaded into (non-NONE)    | EltwiseBinaryReuseDestType | N/A         | True     |
+ * | Function   | in             | L1 operand unpacked into the source register not fed by DST         | LLKOperand                 | N/A         | True     |
+ * | Function   | in_tile_index  | Index of the tile within the L1 operand                            | uint32_t                   | N/A         | True     |
+ * | Function   | dst_tile_index | DST tile used as the other operand and as the result               | uint32_t                   | < DST size  | True     |
+ */
+// clang-format on
+template <EltwiseBinaryReuseDestType reuse_dest, DataFormat Format, TensorShape Shape>
+ALWI void add_reuse_dest_tiles(
+    LLKOperand<Format, Shape> in, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
+    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWADD, reuse_dest>(in, in_tile_index, dst_tile_index);
+}
+
+// clang-format off
+/**
+ * Dest-reuse element-wise subtract: C = DST[dst_tile_index] - in (DEST_TO_SRCA) or in - DST (DEST_TO_SRCB).
+ * See add_reuse_dest_tiles; pair with sub_reuse_dest_init<reuse_dest>.
+ *
+ * | Param Type | Name           | Description                                                        | Type                       | Valid Range | Required |
+ * |------------|----------------|-------------------------------------------------------------------|----------------------------|-------------|----------|
+ * | Template   | reuse_dest     | Which source register the DST operand is loaded into (non-NONE)    | EltwiseBinaryReuseDestType | N/A         | True     |
+ * | Function   | in             | L1 operand unpacked into the source register not fed by DST         | LLKOperand                 | N/A         | True     |
+ * | Function   | in_tile_index  | Index of the tile within the L1 operand                            | uint32_t                   | N/A         | True     |
+ * | Function   | dst_tile_index | DST tile used as the other operand and as the result               | uint32_t                   | < DST size  | True     |
+ */
+// clang-format on
+template <EltwiseBinaryReuseDestType reuse_dest, DataFormat Format, TensorShape Shape>
+ALWI void sub_reuse_dest_tiles(
+    LLKOperand<Format, Shape> in, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
+    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWSUB, reuse_dest>(in, in_tile_index, dst_tile_index);
+}
+
+// clang-format off
+/**
+ * Dest-reuse element-wise multiply: C = DST[dst_tile_index] * in (DEST_TO_SRCA) or in * DST (DEST_TO_SRCB).
+ * See add_reuse_dest_tiles; pair with mul_reuse_dest_init<reuse_dest>.
+ *
+ * | Param Type | Name           | Description                                                        | Type                       | Valid Range | Required |
+ * |------------|----------------|-------------------------------------------------------------------|----------------------------|-------------|----------|
+ * | Template   | reuse_dest     | Which source register the DST operand is loaded into (non-NONE)    | EltwiseBinaryReuseDestType | N/A         | True     |
+ * | Function   | in             | L1 operand unpacked into the source register not fed by DST         | LLKOperand                 | N/A         | True     |
+ * | Function   | in_tile_index  | Index of the tile within the L1 operand                            | uint32_t                   | N/A         | True     |
+ * | Function   | dst_tile_index | DST tile used as the other operand and as the result               | uint32_t                   | < DST size  | True     |
+ */
+// clang-format on
+template <EltwiseBinaryReuseDestType reuse_dest, DataFormat Format, TensorShape Shape>
+ALWI void mul_reuse_dest_tiles(
+    LLKOperand<Format, Shape> in, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
+    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWMUL, reuse_dest>(in, in_tile_index, dst_tile_index);
 }
 
 #endif  // ARCH_BLACKHOLE

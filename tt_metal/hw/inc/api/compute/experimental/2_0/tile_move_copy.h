@@ -53,6 +53,39 @@ ALWI void copy_tile_init(LLKOperand<Format, Shape> /*src*/) {
 
 // clang-format off
 /**
+ * Experimental id-free datacopy short re-init. Lighter-weight re-init variant of copy_tile_init used to
+ * (re)point the copy source mid-kernel: it reprograms the unpacker + math datacopy for the operand's format
+ * WITHOUT touching the packer dst-offset registers (those come from compute_kernel_hw_startup). Mirrors the
+ * legacy ckernel::copy_tile_to_dst_init_short (on Blackhole the legacy copy_tile_init is exactly this short
+ * form). Takes an LLKOperand whose data format + tile geometry are NTTPs (deduced from the argument); the
+ * register format is derived INSIDE the LLK. No CB id, no register format on the API surface. Reuses the same
+ * id-free LLK init cores as copy_tile_init.
+ *
+ * | Template | Format | Buffer L1 data format (deduced from the LLKOperand argument) | DataFormat  |  | True |
+ * | Template | Shape  | Tile geometry (deduced from the LLKOperand argument)         | TensorShape |  | True |
+ */
+// clang-format on
+template <DataFormat Format, TensorShape Shape>
+ALWI void copy_tile_to_dst_init_short(LLKOperand<Format, Shape> /*src*/) {
+    static_assert(
+        is_legal_tile_shape(Shape),
+        "copy_tile_to_dst_init_short: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
+    UNPACK((llk_unpack_A_init<
+            LLKOperand<Format, Shape>::descriptor,
+            DST_ACCUM_MODE,
+            BroadcastType::NONE,
+            false,
+            EltwiseBinaryReuseDestType::NONE,
+            UnpackToDestEn>()));
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          LLKOperand<Format, Shape>::descriptor,
+          DataCopyType::A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE>()));
+}
+
+// clang-format off
+/**
  * Experimental id-free datacopy. Copies one tile from the L1 region described by the LLKOperand into DST.
  * Compile-time "what" = the LLKOperand NTTPs (Format + Shape, fold/DCE); runtime "where" = src.l1_address
  * (from the address seam). No CB id, no register format on the API.
