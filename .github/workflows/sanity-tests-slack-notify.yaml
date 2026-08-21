@@ -187,39 +187,56 @@ jobs:
             const currentHeadSha = process.env.CURRENT_HEAD_SHA;
 
             // ==================== BASELINE LOOKUP (edge detection) ====================
-            // Deliberately NOT a scan over "the N most recent runs": that trusts a
-            // recency-sorted listWorkflowRuns page to be a complete, current window,
-            // which is not guaranteed. The API can transiently serve a stale or
-            // misaligned page, silently resolving "the previous push run" to the
-            // wrong page's first entry with no signal that anything went wrong.
-            // That is exactly what happened on 2026-08-21: a page that should have
-            // reached back ~2 days instead bottomed out 9 days early, and the old
-            // walk-back confidently diffed against a 9-day-old baseline, blaming
-            // 250 commits and pinging 89 people in one Slack message.
-            //
-            // Instead, do what a human does (edge detection): walk the git commit
-            // graph one parent at a time (main is linear via merge queue) and fetch
-            // each parent's run by exact head_sha -- an indexed point lookup keyed
-            // by the sha we ask for, not by position in a list. A stale index can
-            // make this MISS (empty result -> hop onward, or abstain loudly at the
-            // hop cap); it can never hand back the wrong commit's run.
+            // Find the previous meaningful run by walking the commit graph (main is
+            // linear via merge queue) and resolving each parent commit's run by
+            // exact head_sha -- a point lookup keyed by the sha we ask for. "The
+            // previous run" is never derived from a recency-sorted listWorkflowRuns
+            // page: such a page is not guaranteed to be a complete or current
+            // window, and a wrong page is indistinguishable from a right one. A
+            // lagging index can make a point lookup MISS, but never return the
+            // wrong commit's run; misses are retried and then abstained on, never
+            // guessed at.
             //
             // Per parent commit:
-            //  - no push run at all -> a merge-queue batch tip covered it, or brief
-            //    index lag; hop to ITS parent (the commit stays in the blame range).
-            //  - still in progress (e.g. mid auto-retry-attempt) -> the true
-            //    completion order is ambiguous; abstain rather than misattribute.
-            //    A later red commit's own event re-runs this edge detection.
-            //  - cancelled/skipped -> no real red/green signal; hop onward so it
-            //    can't permanently swallow a break.
-            //  - success -> fresh green->red transition; use it as the diff baseline.
+            //  - run not found after retries -> cannot distinguish "no run exists"
+            //    from "run exists but not yet indexed"; a hidden failed/running run
+            //    would make any hop a false green->red edge with misattributed
+            //    blame, so abstain and leave it to a human.
+            //  - still in progress (e.g. mid auto-retry-attempt) -> completion
+            //    order is ambiguous; abstain. A later red commit's own event
+            //    re-runs this edge detection.
+            //  - cancelled/skipped -> an OBSERVED run that carries no red/green
+            //    signal; hop to the next parent so it can't swallow a break.
+            //  - success -> fresh green->red transition; use as the diff baseline.
             //  - failure (or any other bad terminal conclusion) -> main was already
             //    red before us; stay silent to avoid repeat/duplicate pings.
-            //
-            // MAX_PARENT_HOPS also bounds blast radius by construction: the culprit
-            // diff can never exceed this many commits, so a mass ping like the
-            // 2026-08-21 one is structurally impossible here.
-            const MAX_PARENT_HOPS = 30;
+            const MAX_PARENT_HOPS = 30;   // bounds how far back the baseline may be
+            const MAX_MENTIONS = 15;      // bounds distinct @-mentions in one message (enforced below)
+            const LOOKUP_ATTEMPTS = 3;
+            const LOOKUP_RETRY_DELAY_MS = 15000;
+
+            // head_sha is an exact-match filter (requires the full 40-char sha);
+            // the event/branch filters exclude the merge_group run of the same
+            // sha. If the same sha were ever pushed twice, [0] is the most recent.
+            const findPushRun = async (headSha) => {
+              for (let attempt = 1; attempt <= LOOKUP_ATTEMPTS; attempt++) {
+                const { data: runsResp } = await github.rest.actions.listWorkflowRuns({
+                  owner,
+                  repo,
+                  workflow_id: 'sanity-tests.yaml',
+                  head_sha: headSha,
+                  branch: 'main',
+                  event: 'push',
+                  per_page: 5,
+                });
+                if (runsResp.workflow_runs.length > 0) return runsResp.workflow_runs[0];
+                if (attempt < LOOKUP_ATTEMPTS) {
+                  core.info(`No "Sanity tests" push run indexed for ${headSha} yet (attempt ${attempt}/${LOOKUP_ATTEMPTS}); retrying in ${LOOKUP_RETRY_DELAY_MS / 1000}s.`);
+                  await new Promise((resolve) => setTimeout(resolve, LOOKUP_RETRY_DELAY_MS));
+                }
+              }
+              return null;
+            };
 
             let sha = currentHeadSha;
             let baseline = null;
@@ -233,25 +250,13 @@ jobs:
                 return;
               }
 
-              // head_sha is an exact-match filter (full 40-char sha; partial shas
-              // match nothing). The event/branch filters exclude the merge_group
-              // run of the same sha. At most one push run per sha in practice; if
-              // the same sha were ever pushed twice, [0] is the most recent.
-              const { data: runsResp } = await github.rest.actions.listWorkflowRuns({
-                owner,
-                repo,
-                workflow_id: 'sanity-tests.yaml',
-                head_sha: parentSha,
-                branch: 'main',
-                event: 'push',
-                per_page: 5,
-              });
-              const run = runsResp.workflow_runs[0];
+              const run = await findPushRun(parentSha);
 
               if (!run) {
-                core.info(`No "Sanity tests" push run for parent ${parentSha} (merge-queue batch or index lag); hopping to its parent.`);
-                sha = parentSha;
-                continue;
+                core.warning(`No "Sanity tests" push run found for parent ${parentSha} after ${LOOKUP_ATTEMPTS} attempts. ` +
+                  `"Never ran" is indistinguishable from "ran but not yet indexed", so hopping past it could fabricate a green->red edge. Abstaining (needs a human look).`);
+                core.setOutput('should_notify', 'false');
+                return;
               }
               if (run.status !== 'completed') {
                 core.info(`Run #${run.run_number} for parent ${parentSha} is still ${run.status}; completion order is ambiguous. Abstaining.`);
@@ -264,9 +269,6 @@ jobs:
                 continue;
               }
               if (run.conclusion === 'success') {
-                // Log the happy path too: the old code assigned its baseline
-                // silently, which made the 2026-08-21 incident needlessly hard to
-                // reconstruct from logs.
                 core.info(`Baseline: run #${run.run_number} (${parentSha}), ${hop + 1} commit(s) back from ${currentHeadSha}.`);
                 baseline = run;
                 break;
@@ -337,12 +339,29 @@ jobs:
             }
 
             core.info(`Found ${entries.length} culprit entr${entries.length === 1 ? 'y' : 'ies'} between baseline run #${baseline.run_number} (${baseline.head_sha}) and ${currentHeadSha}`);
+
+            // One commit can be associated with multiple PRs, so MAX_PARENT_HOPS
+            // alone does not bound how many people one message mentions. Above
+            // MAX_MENTIONS distinct authors, send a summary without @-mentions
+            // instead of a mass ping.
+            const logins = [...new Set(entries.map(e => e.authorLogin).filter(l => l !== null))].sort();
+            if (logins.length > MAX_MENTIONS) {
+              const compareUrl = `${context.serverUrl}/${owner}/${repo}/compare/${baseline.head_sha}...${currentHeadSha}`;
+              core.warning(`${logins.length} distinct authors exceeds MAX_MENTIONS (${MAX_MENTIONS}); sending a summary-only notice without @-mentions.`);
+              core.setOutput('mention_cap_exceeded', 'true');
+              core.setOutput('summary_line',
+                `${entries.length} PRs/commits from ${logins.length} authors landed since the last green run -- too many to @-mention individually: <${compareUrl}|full comparison>`);
+              core.setOutput('entries', JSON.stringify([]));
+              core.setOutput('logins_json', JSON.stringify([]));
+              return;
+            }
+
+            core.setOutput('mention_cap_exceeded', 'false');
             core.setOutput('entries', JSON.stringify(entries));
-            core.setOutput('logins_json',
-              JSON.stringify([...new Set(entries.map(e => e.authorLogin).filter(l => l !== null))].sort()));
+            core.setOutput('logins_json', JSON.stringify(logins));
 
       - name: Checkout resolve-slack-mentions action
-        if: steps.culprits.outputs.should_notify == 'true'
+        if: steps.culprits.outputs.should_notify == 'true' && steps.culprits.outputs.mention_cap_exceeded != 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 5
         with:
@@ -351,7 +370,7 @@ jobs:
 
       - name: Resolve Slack mentions for culprits
         id: mentions
-        if: steps.culprits.outputs.should_notify == 'true'
+        if: steps.culprits.outputs.should_notify == 'true' && steps.culprits.outputs.mention_cap_exceeded != 'true'
         uses: ./.github/actions/resolve-slack-mentions
         with:
           github-logins: ${{ steps.culprits.outputs.logins_json }}
@@ -369,13 +388,22 @@ jobs:
           MENTIONS_JSON: ${{ steps.mentions.outputs.mentions-json }}
           FAILING_RUN_URL: ${{ steps.context.outputs.html_url }}
           PREV_RUN_URL: ${{ steps.culprits.outputs.prev_run_url }}
+          MENTION_CAP_EXCEEDED: ${{ steps.culprits.outputs.mention_cap_exceeded }}
+          SUMMARY_LINE: ${{ steps.culprits.outputs.summary_line }}
         run: |
           set -euo pipefail
 
-          LINES=$(echo "$ENTRIES_JSON" | jq -r --argjson mentions "$MENTIONS_JSON" '
-            .[] | (if .authorLogin != null then ($mentions[.authorLogin] // ("@" + .authorLogin)) else "(unknown author)" end) as $who
-            | "\($who) <\(.url)|\(if .type == "pr" then "#\(.number) - \(.title)" else .title end)> broke sanity."
-          ')
+          if [ "$MENTION_CAP_EXCEEDED" = "true" ]; then
+            # Too many distinct authors for individual @-mentions (see the
+            # culprits step); post its pre-built summary line instead. The
+            # mentions step was skipped, so MENTIONS_JSON is empty here.
+            LINES="$SUMMARY_LINE"
+          else
+            LINES=$(echo "$ENTRIES_JSON" | jq -r --argjson mentions "$MENTIONS_JSON" '
+              .[] | (if .authorLogin != null then ($mentions[.authorLogin] // ("@" + .authorLogin)) else "(unknown author)" end) as $who
+              | "\($who) <\(.url)|\(if .type == "pr" then "#\(.number) - \(.title)" else .title end)> broke sanity."
+            ')
+          fi
 
           TEXT="${LINES}"$'\n'"Failing run on that commit: ${FAILING_RUN_URL}"$'\n'"Previous passing run: ${PREV_RUN_URL}"$'\n'"Please fix."
 
