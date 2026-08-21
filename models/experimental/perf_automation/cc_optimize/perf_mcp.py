@@ -2679,6 +2679,52 @@ def _run_full_pipeline_ms():
         except (ValueError, TypeError):
             pass
     env.pop("TT_METAL_DEVICE_PROFILER", None)
+    # AND THE DEPTH CAP, WHICH THIS GATE HAS BEEN INHERITING BY ACCIDENT.
+    #
+    # The comment above says this runs the whole pipeline at FULL depth, and it does not. `env` is a
+    # copy of os.environ, the MCP config hands this process TT_PERF_STACK<i>_LAYERS=2 as LOOSE
+    # variables beside the PERF_MCP_PROFILE_ENV json that is the intended channel, and the generated
+    # perf test reads exactly those names and passes them to build_pipeline. So the gate has been
+    # timing a 2-layer model while reporting it as the whole one.
+    #
+    # THE CAP IS FOR TRACY, AND TRACY IS OFF HERE. An uncapped tracy capture overflows the 12000
+    # marker buffer, which is why the profiling runs are capped and must stay capped. This path pops
+    # TT_METAL_DEVICE_PROFILER one line above: it is trace_replay, a stopwatch that prints three
+    # numbers, and no buffer can overflow. The cap has no purpose here and never did.
+    #
+    # Measured on Voxtral, 2026-08-21: the gate reported 2.47 ms/token where a full-depth capture
+    # recorded 55.68 tok/s (17.96 ms). The roofline then compared that 2-layer time against a
+    # 62-layer ceiling and printed decode at 539% of peak -- and, worse, every win was banked against
+    # a 7x-optimistic proxy of the model that actually ships.
+    #
+    # Names come from layer_depth, which owns the spelling, and from the stages the MODEL declared --
+    # not a hardcoded list, so a model with other stack names is covered too.
+    try:
+        from agent.layer_depth import stack_layers_var, stage_layers_var
+        from agent.stack_knob_repair import stage_names as _stage_names
+
+        _depth_vars = {"TT_PERF_LAYERS"}
+        for _s in _stage_names(_MODEL_ROOT) or []:
+            _depth_vars.add(stage_layers_var(_s))
+        # HOW MANY STACKS IS THE MODEL'S ANSWER, not a number picked here. _declared_stack_count
+        # reads it from the checkpoint; 0 means unreadable, and then the stage names above are the
+        # only spelling we can offer.
+        from agent.layer_depth import _declared_stack_count
+
+        for _i in range(max(0, int(_declared_stack_count(_MODEL_ROOT) or 0))):
+            _depth_vars.add(stack_layers_var(_i))
+        for _v in (os.environ.get("PERF_MCP_DEPTH_VARS") or "").split(","):
+            if _v.strip():
+                _depth_vars.add(_v.strip())
+    except Exception:  # noqa: BLE001 -- a name we cannot derive is one we cannot strip; the cap stays
+        _depth_vars = {"TT_PERF_LAYERS"}
+    _dropped = sorted(k for k in _depth_vars if env.pop(k, None) is not None)
+    if _dropped:
+        print(
+            "  [full-pipeline-gate] measuring at FULL depth: dropped the profiling depth cap (%s)"
+            % ", ".join(_dropped),
+            flush=True,
+        )
     # -p depth_guard: this gate asks for ALL layers by removing the cap, and a perf test can fill
     # it back in at import via setdefault. The guard drops it again before the test body builds.
     cmd = [sys.executable, "-m", "pytest", "-p", _DEPTH_GUARD, "-o", "timeout=0", "-s", node]
