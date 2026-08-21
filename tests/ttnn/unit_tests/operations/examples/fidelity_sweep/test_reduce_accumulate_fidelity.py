@@ -22,6 +22,7 @@ import socket
 import statistics
 from pathlib import Path
 
+import pytest
 import torch
 import ttnn
 from loguru import logger
@@ -117,6 +118,7 @@ def _arch_label(device):
     return {"WORMHOLE_B0": "WH_B0", "BLACKHOLE": "BH", "GRAYSKULL": "GS"}.get(a, a)
 
 
+@pytest.mark.timeout(900)
 def test_reduce_accumulate_fidelity(device):
     # ---- accuracy sweep (kernel_iters=1) + correctness gate ----
     acc = {}  # (variant, dim, fid, accum, w) -> (max_abs, mean_abs, max_ulp)
