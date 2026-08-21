@@ -79,6 +79,8 @@
   skus:
     wh_n150_civ2:
       timeout: 40
+    wh_n300_civ2:
+      timeout: 40
     bh_p150b_civ2:
       timeout: 40
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
