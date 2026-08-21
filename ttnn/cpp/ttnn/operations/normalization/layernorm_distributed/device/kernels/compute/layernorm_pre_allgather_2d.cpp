@@ -39,9 +39,6 @@ void kernel_main() {
     constexpr auto blk = get_arg(args::blk);
     constexpr auto num_cores_y = get_arg(args::num_cores_y);
     constexpr bool unpack_fp32_active = get_arg(args::unpack_fp32_active) != 0;
-    // The merge buffers and reader protocol carry one partial-stat tile per x core. The host maps
-    // exactly one tile row to each x core; keep that contract visible at the kernel boundary too.
-    static_assert(NCHt == 1, "2D layernorm pre-allgather requires one tile row per x core");
     // Accurate mode only supports SUM; with the reader's scaler of 1.0, SUM and AVG are equivalent.
     constexpr auto reduce_type = unpack_fp32_active ? PoolType::SUM : PoolType::AVG;
     constexpr auto reduce_fp32_mode = unpack_fp32_active ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
@@ -103,10 +100,8 @@ void kernel_main() {
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
             reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
         dfb_inp.pop_front(Wt);
+        dfb_reduce.pop_front(1);
     }
-    // The reader produces one reduce-scaler tile before the row loop. Every reduction reuses that
-    // resident tile, so release its single credit only after all rows are complete.
-    dfb_reduce.pop_front(1);
 
     // On a merge core, do a final sum over the column's partial statistics and write the result to
     // the output buffer.

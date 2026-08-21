@@ -151,3 +151,59 @@ def test_unclassified_element_rejected(device, expect_error):
     with expect_error(Exception, UNCLASSIFIED_MSG):
         ttnn.generic_op([tt_in, tt_out], program)
     logger.debug("tag-less chain element correctly rejected at compile time")
+
+
+# =============================================================================
+# Shared CB lifecycle and shared-PRNG ownership are compile-time-only contracts.
+# =============================================================================
+SHARED_CB_LIFECYCLE_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/shared_cb_lifecycle.cpp"
+SHARED_CB_LIFECYCLE_MSG = "staged CB window shares its front"
+PRNG_SEED_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/prng_seed.cpp"
+PRNG_SEED_MSG = "one shared hardware PRNG"
+
+
+def _expect_chain_compile_rejection(device, kernel, compile_time_args, message, with_input):
+    num_tiles = compile_time_args[0]
+    dt = ttnn.bfloat16
+    shape = [1, 1, 32, 32 * num_tiles]
+    core_grid = lib.single_core_grid()
+    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    cbs = [lib.cb_descriptor(16, dt, 2, core_grid)]
+    inputs = [tt_out]
+    if with_input:
+        _, tt_in = lib.make_input(shape, dt, device, seed=191)
+        cbs.insert(0, lib.cb_descriptor(0, dt, 2, core_grid))
+        inputs.insert(0, tt_in)
+        reader = lib.build_reader_kernel([tt_in], num_tiles, core_grid)
+    else:
+        reader = None
+    writer = lib.build_writer_1out_kernel(tt_out, num_tiles, core_grid)
+    compute = lib.build_compute_kernel(kernel, compile_time_args, core_grid)
+    kernels = [writer, compute] if reader is None else [reader, writer, compute]
+    program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+
+    return inputs, program, message
+
+
+def test_shared_cb_staged_window_rejected_owner_first(device, expect_error):
+    inputs, program, message = _expect_chain_compile_rejection(
+        device, SHARED_CB_LIFECYCLE_KERNEL, [2, 1], SHARED_CB_LIFECYCLE_MSG, with_input=True
+    )
+    with expect_error(Exception, message):
+        ttnn.generic_op(inputs, program)
+
+
+def test_shared_cb_staged_window_rejected_peer_first(device, expect_error):
+    inputs, program, message = _expect_chain_compile_rejection(
+        device, SHARED_CB_LIFECYCLE_KERNEL, [2, 0], SHARED_CB_LIFECYCLE_MSG, with_input=True
+    )
+    with expect_error(Exception, message):
+        ttnn.generic_op(inputs, program)
+
+
+def test_multiple_prng_seeders_rejected(device, expect_error):
+    inputs, program, message = _expect_chain_compile_rejection(
+        device, PRNG_SEED_KERNEL, [2], PRNG_SEED_MSG, with_input=True
+    )
+    with expect_error(Exception, message):
+        ttnn.generic_op(inputs, program)

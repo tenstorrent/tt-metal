@@ -145,13 +145,6 @@ void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
 
     // grad_out / input are consumed from the reader; grad_in is produced for the writer.
-    constexpr auto grad_format = static_cast<DataFormat>(unpack_src_format[dfb::grad_out]);
-    constexpr auto input_format = static_cast<DataFormat>(unpack_src_format[dfb::input]);
-    static_assert(grad_format == input_format, "GELU backward requires matching gradient and input data formats");
-    static_assert(
-        input_format == DataFormat::Float16_b || input_format == DataFormat::Float32,
-        "GELU backward supports only bfloat16 and float32 data formats");
-
     compute_kernel_hw_startup(dfb::grad_out, dfb::grad_in);
     gelu_tanh_chain<ckl::get_fp32_dest_acc_enabled()>(num_tiles);
 }

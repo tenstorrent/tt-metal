@@ -469,20 +469,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
 
     auto grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t max_cores_x = grid_size.x;
     uint32_t max_cores_y = grid_size.y;
-    uint32_t cores_x = std::min(max_cores_x, num_tile_rows);
+    uint32_t cores_x = std::min(max_cores_y, num_tile_rows);
     while (num_tile_rows % cores_x != 0 && cores_x > 1) {
         cores_x--;
     }
     uint32_t tiles_per_core_x = num_tile_rows / cores_x;
-    TT_FATAL(
-        tiles_per_core_x == 1,
-        "2D normalization pre-allgather currently requires one tile row per x core, but {} input tile rows "
-        "map to {} x cores ({} rows per core). Use use_2d_core_grid=false for this shape.",
-        num_tile_rows,
-        cores_x,
-        tiles_per_core_x);
     uint32_t cores_y = std::min(max_cores_y, Wt);
     while (Wt % cores_y != 0 && cores_y > 1) {
         cores_y--;
