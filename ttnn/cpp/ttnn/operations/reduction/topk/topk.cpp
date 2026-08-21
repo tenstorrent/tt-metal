@@ -263,14 +263,10 @@ constexpr uint32_t large_k_route_k_multiple = 16;
 // Lifting it is a separate, perf-validated change.
 constexpr uint32_t large_k_route_max_width = 1u << 19;
 
-// KEEP IN SYNC (reciprocal of the mirror's note): models/common/sampling/_utils.py
-// mirrors this predicate as topk_would_route_to_large_indices, so production
-// sampling call sites can pre-relax their arguments (and shapes) to the routed
-// form. Any change to this predicate or to the routing constants above must
-// update that mirror -- and its parity test,
-// models/common/tests/test_sampling.py::test_topk_route_mirror_parity -- in the
-// same PR. Mirror drift is fail-safe (a stale mirror only misses the
-// optimization, never changes results), but it silently forfeits the win.
+// Python sampling queries this exact predicate through the nanobind helper
+// ttnn._sampling_topk_would_route_to_large_indices before relaxing its call
+// shape. Keep that helper wired to this implementation so policy changes
+// cannot drift.
 bool should_route_to_topk_large_indices(
     const Tensor& transformed_tensor,
     const uint32_t k,
@@ -396,6 +392,24 @@ std::vector<Tensor> run_topk_large_indices_route(const Tensor& transformed_tenso
 }  // namespace
 
 }  // namespace ttnn::operations::reduction::topk
+
+namespace ttnn::operations::reduction::topk::detail {
+
+bool sampling_topk_would_route_to_large_indices(const Tensor& input_tensor, const uint32_t k) {
+    TT_FATAL(is_device_tensor(input_tensor), "Sampling top-k route query requires an on-device tensor");
+    return CMAKE_UNIQUE_NAMESPACE::should_route_to_topk_large_indices(
+        input_tensor,
+        k,
+        /*largest=*/true,
+        /*stable=*/false,
+        /*is_dim_last_idx=*/true,
+        /*has_user_indices_tensor=*/false,
+        /*has_preallocated_outputs=*/false,
+        /*has_sub_core_grids=*/false,
+        /*user_memory_config=*/std::nullopt);
+}
+
+}  // namespace ttnn::operations::reduction::topk::detail
 
 namespace ttnn {
 

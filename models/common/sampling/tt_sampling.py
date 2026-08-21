@@ -903,14 +903,13 @@ class TTSampling(LightweightModule):
 
         # The single-device split below exists only because the stock top-k factories cap
         # out near 64K columns. When ttnn.topk would take the Blackhole topk_large_indices
-        # composite for the FULL row (topk_would_route_to_large_indices mirrors
-        # should_route_to_topk_large_indices in topk.cpp; KEEP IN SYNC), one call replaces
-        # the split/per-chunk-topk/offset-add/concat pipeline and its indices are already
-        # global vocab positions. Calls the model constrained to a sub-grid never relax.
+        # composite for the FULL row, the authoritative C++ route query lets one call
+        # replace the split/per-chunk-topk/offset-add/concat pipeline; its indices are
+        # already global vocab positions. Calls constrained to a sub-grid never relax.
         route_full_row = (
             self.multi_step_reduction
             and self.sub_core_grid_topk is None
-            and topk_would_route_to_large_indices(x_bf16, self._num_vocab_splits * self.max_top_k, self.mesh_device)
+            and topk_would_route_to_large_indices(x_bf16, self._num_vocab_splits * self.max_top_k)
         )
         if route_full_row:
             # stable dropped for the same reason as the chunked path below:
@@ -934,17 +933,16 @@ class TTSampling(LightweightModule):
             topk_values_list = []
             topk_indices_list = []
 
-            # Drop stable=True ONLY when ttnn.topk would take the Blackhole
-            # topk_large_indices composite for these halves once it is absent
-            # (topk_would_route_to_large_indices mirrors
-            # should_route_to_topk_large_indices in topk.cpp; KEEP IN SYNC).
+            # Drop stable=True ONLY when the authoritative C++ route query says
+            # ttnn.topk will take the Blackhole topk_large_indices composite for
+            # these halves once the custom arguments are absent.
             # stable is best-effort/broken anyway (tenstorrent/tt-metal#33492);
             # _adjust_values_for_tiebreak is what actually guarantees the greedy
             # pick after the gather, regardless of per-device tie order. Calls
             # that would not route keep today's arguments bit-for-bit, and a
             # call the model constrained to a sub-grid is never relaxed.
             use_routed_topk = self.sub_core_grid_topk is None and topk_would_route_to_large_indices(
-                x_bf16_list[0], self.max_top_k, self.mesh_device
+                x_bf16_list[0], self.max_top_k
             )
 
             for i in range(len(x_bf16_list)):
@@ -989,12 +987,12 @@ class TTSampling(LightweightModule):
                     sub_core_grids=self.sub_core_grids,
                 )
             # Perform local top-k on each device. Drop stable=True ONLY when the
-            # relaxed call would take the Blackhole topk_large_indices composite
-            # (mirror of topk.cpp's predicate; KEEP IN SYNC) -- stable is
+            # authoritative C++ route query says the relaxed call will take the
+            # Blackhole topk_large_indices composite -- stable is
             # best-effort/broken anyway (#33492) and _adjust_values_for_tiebreak
             # guarantees the greedy pick. Sub-grid-constrained calls never relax.
             use_routed_topk = self.sub_core_grid_topk is None and topk_would_route_to_large_indices(
-                x_bf16, self.max_top_k, self.mesh_device
+                x_bf16, self.max_top_k
             )
             topk_values, topk_indices = ttnn.topk(
                 x_bf16,

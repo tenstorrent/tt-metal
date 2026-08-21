@@ -1278,11 +1278,12 @@ def test_ttsampling_duplicate_request_seeds_sample_diverse_tokens(mesh_device):
         ((1, 1, 32, 1 << 20), 96, False),
     ],
 )
-def test_topk_route_mirror_parity(mesh_device, shape, k, expected):
-    """The _utils.py routing-predicate mirror must track the MERGED topk.cpp
-    predicate (#53464: k_multiple=16, max_width=1<<19, no MoE-gate arm), not
-    any in-flight revision of it. Each cell distinguishes a merged constant
-    from a known stale value, so any re-drift flips at least one assertion."""
+def test_topk_authoritative_route_decision(mesh_device, shape, k, expected):
+    """Exercise the C++ route policy used by both top-k and sampling.
+
+    The cells pin important merged-policy boundaries (#53464: k_multiple=16,
+    max_width=1<<19, no MoE-gate arm) without duplicating that policy in Python.
+    """
     from models.common.sampling._utils import topk_would_route_to_large_indices
 
     x = ttnn.from_torch(
@@ -1292,7 +1293,7 @@ def test_topk_route_mirror_parity(mesh_device, shape, k, expected):
     # so every cell's expectation collapses to False there (still asserted --
     # this doubles as off-BH never-routes coverage).
     expected_here = expected and ttnn.device.is_blackhole(mesh_device)
-    assert topk_would_route_to_large_indices(x, k, mesh_device) is expected_here
+    assert topk_would_route_to_large_indices(x, k) is expected_here
     ttnn.deallocate(x)
 
 
@@ -1404,7 +1405,7 @@ def test_ttsampling_routed_full_row_topk_end_to_end(vocab_size, mesh_device):
     logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
     # The exact gate the forward pass evaluates: this parametrization must route.
     assert topk_would_route_to_large_indices(
-        logits_tt, sampler._num_vocab_splits * sampler.max_top_k, mesh_device
+        logits_tt, sampler._num_vocab_splits * sampler.max_top_k
     ), "test premise broken: this cell no longer routes -- update the parametrization"
 
     logits_bf16 = ttnn.to_torch(logits_tt).float().reshape(batch_size, vocab_size)
