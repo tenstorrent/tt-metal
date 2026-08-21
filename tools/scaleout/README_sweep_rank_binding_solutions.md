@@ -257,31 +257,6 @@ the index) — the report already carries `host_set` per solution to support thi
 
 ---
 
-## Edge cases / decisions
-
-- **Empty / zero-solution index** → nothing to sweep; exit non-zero with a clear message.
-- **Missing rank_bindings.yaml/rankfile in a solution dir** → mark that solution `skipped` (with reason), continue.
-- **Per-solution timeout** → kill the launch, mark `timeout`, keep going (unless `--stop-on-failure`).
-- **`--dry-run`** → print each solution's fully-built `mpirun` argv; run nothing.
-- **Placeholder-free command** → run verbatim under each solution's bindings.
-- **Truncated index (`truncated: true`)** → sweep still runs; the report echoes `truncated` so a partial sweep is never mistaken for exhaustive.
-- **Log capture** → per-solution `sweep_run.log` inside the solution dir, referenced from the report (keeps everything co-located with the bindings).
-
----
-
-## Testing plan
-
-- **Unit (no MPI):** placeholder expansion, index filtering (`--select`/`--limit`),
-  report generation, exit-code aggregation, `--dry-run` argv construction — using a
-  fabricated `solutions_index.yaml` + fake solution dirs. Lives beside the existing
-  ttrun tests (`tests/ttnn/distributed/`).
-- **Mock end-to-end (CPU):** generate a small multi-solution set on a mock cluster
-  (e.g. single-pod MGD on the SC20 mock → 5 distinct-host-set solutions), sweep
-  `true` across them, assert `summary.passed == found` and one `sweep_run.log` per
-  solution. Reuses the CPU-only mock recipe from
-  `tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh`.
-
----
 
 ## Example usage
 
@@ -304,11 +279,3 @@ python3 tools/scaleout/sweep_rank_binding_solutions.py \
   -m <mgd> --hosts nodeA,nodeB,nodeC,nodeD --limit 3 --dry-run -- ./my_app
 ```
 
----
-
-## Open questions (for review)
-
-1. **Entry-point name** — `tt-sweep-solutions`? Or keep it script-only under `tools/scaleout/`?
-2. **Report format** — YAML (above) vs JSON vs both. Leaning YAML to match the rest of the scaleout tooling.
-3. **Generate-mode coupling** — should Phase 0 shell out to `tt-run --mesh-graph-descriptor ... --all-solutions` once that flag is threaded through tt-run, instead of calling `generate_rank_bindings` directly? (tt-run does not forward `--all-solutions` today.)
-4. **Disjoint-host-set parallelism** — worth a v2 `--jobs`, or leave sequential-only?
