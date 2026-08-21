@@ -1139,16 +1139,26 @@ def test_topk_stable_index_parity_wide_u32(W, k, largest, device):
 
 @pytest.mark.parametrize("largest", (True, False))
 def test_topk_stable_wide_tie_saturation(largest, device):
-    """Tie-heavy rank-stamped coverage at W=65536: rows built from six distinct levels
-    (negative and positive), so several exact-tie groups land inside the top-k, one group
-    straddles the k=32 cut in each direction, and every tie must break by ascending
-    original index across the full 2048-tile insertion pipeline (accumulator vs incoming
-    chunk at every step). Strict torch-stable parity on values and indices."""
+    """Tie-heavy rank-stamped coverage at W=65536: rows bulk-filled from the two middle
+    levels (+-0.5), plus 12 scattered occurrences each of +-2.0 and +-1.0 at strided
+    columns. In each direction the top-32 therefore spans THREE exact-tie groups —
+    two extreme groups (12 elements each) entirely inside the top-k, and the k=32 cut
+    landing inside the third (dominant ~32k-element) group — so every tie must break by
+    ascending original index across the full 2048-tile insertion pipeline (accumulator
+    vs incoming chunk at every step). Strict torch-stable parity on values and indices."""
     torch.manual_seed(5)
     W, k = 65536, 32
     shape = [1, 1, 32, W]
-    levels = torch.tensor([-2.0, -1.0, -0.5, 0.5, 1.0, 2.0], dtype=torch.bfloat16)
-    input = levels[torch.randint(0, 6, shape)]
+    levels = torch.tensor([-0.5, 0.5], dtype=torch.bfloat16)
+    input = levels[torch.randint(0, 2, shape)]
+    # 48 distinct strided columns (1291 * 47 < W, so no modular collisions), interleaved
+    # across the four extreme levels -> 12 scattered occurrences each, spanning many
+    # insertion chunks. Same columns in every row; ties still break per-row by index.
+    extreme_cols = torch.arange(48) * 1291
+    input[..., extreme_cols[0::4]] = 2.0
+    input[..., extreme_cols[1::4]] = 1.0
+    input[..., extreme_cols[2::4]] = -2.0
+    input[..., extreme_cols[3::4]] = -1.0
     golden_values, order = _stable_topk_golden(input, k, largest)
 
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
