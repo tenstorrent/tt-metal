@@ -35,39 +35,31 @@ sfpi_inline sfpi::vFloat sfpu_sqrt_custom_newton(sfpi::vFloat val) {
 //
 // GUARD_NON_FINITE excludes non-finite input from the iteration. Leave it on unless the call
 // site can prove no lane ever reaches here with a 255 exponent -- see the guard comment below
-// for what it costs and why it exists.
+// for why it exists.
 template <bool APPROXIMATION_MODE, int NEWTON_ITERATIONS = 2, bool GUARD_NON_FINITE = true>
 sfpi_inline sfpi::vFloat sfpu_sqrt_custom(sfpi::vFloat in) {
     sfpi::vFloat val = in;
     sfpi::vFloat out = val;
-    // Zero and the non-finite inputs all pass `val` straight through, which is already the
-    // answer for +/-0 and +inf. Non-finite has to be excluded because the seed above is
-    // ~5.2e-20 for +inf; squaring it underflows to a denormal, SFPMAD flushes that to +0,
-    // and the next multiply is 0 * -inf = NaN -- so sqrt_custom(+inf) was NaN, and every
-    // consumer inherited it (erfinv(+/-1)). See issue #52930.
+    // Skipped lanes pass `val` through, already the answer for +/-0 and +inf. Non-finite needs
+    // excluding because the +inf seed (~5.2e-20) squares to a denormal, SFPMAD flushes it to +0,
+    // and 0 * -inf = NaN: sqrt_custom(+inf) was NaN and consumers inherited it (erfinv(+/-1)).
     //
-    // Tested on the biased exponent field rather than a compare against infinity because
-    // SFPSETCC's float compare is specified only for inputs that are not NaN
-    // (VectorUnit.md), and this predicate has to be evaluated on a possible NaN. SFPI's `&&`
-    // is SFPXBOOL(AND) and does not short-circuit, so the `val != 0.0f` compare is still
-    // emitted for NaN lanes -- that is safe, not merely tolerated: AND is monotone and
-    // exexp(NaN) == 255 makes the second conjunct false, so the conjunction is false for
-    // those lanes whatever the unspecified compare returned, and NaN passes through.
+    // Exponent test rather than a compare against inf: SFPSETCC's float compare is unspecified
+    // for NaN (VectorUnit.md), and `&&` is SFPXBOOL(AND), so `val != 0.0f` is still evaluated on
+    // NaN lanes. That is safe -- exexp(NaN) == 255 falsifies the other conjunct and AND is
+    // monotone, so NaN passes through whatever the compare returned.
     //
-    // -inf is a known residual: it passes through as -inf where IEEE and the golden give
-    // NaN. Synthesising a NaN for negative input is deliberately not done here -- erfinv's
-    // NR undershoot drives `tmp + intermediate_result` (ckernel_sfpu_erfinv.h:40)
-    // non-positive for small in-domain x, so a negative-to-NaN guard would turn ordinary
-    // inputs such as erfinv(1e-6) into NaN. Tracked under issue #52930; needs its own fix.
+    // Residual: -inf passes through where IEEE and the golden give NaN. No negative-to-NaN guard,
+    // because erfinv's NR undershoot makes `tmp + intermediate_result` (ckernel_sfpu_erfinv.h:40)
+    // non-positive for small in-domain x, which would turn erfinv(1e-6) into NaN.
     if constexpr (GUARD_NON_FINITE) {
         v_if(val != 0.0f && sfpi::exexp(val, sfpi::ExponentMode::Biased) != 255) {
             out = sfpu_sqrt_custom_newton<NEWTON_ITERATIONS>(val);
         }
         v_endif;
     } else {
-        // The guard costs 3 SFPU instructions per vector iteration (SFPEXEXP, SFPIADD,
-        // SFPSETCC) = +96 cycles/tile. Only opt out where the argument provably cannot be
-        // non-finite on any lane whose result is committed.
+        // Only opt out where the argument provably cannot be non-finite on any lane whose result
+        // is committed.
         v_if(val != 0.0f) { out = sfpu_sqrt_custom_newton<NEWTON_ITERATIONS>(val); }
         v_endif;
     }

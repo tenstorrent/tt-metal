@@ -547,18 +547,6 @@ _EDGE_SWEEP_OPS = sorted(
 #   (0x7F000000) where the golden gives inf, on all 8 combinations, while plain Rsqrt over
 #   the same probe does *not* diverge — two implementations of one function disagreeing at
 #   their shared pole. Nothing in the ISA prescribes either answer.
-#
-# CLOSED:
-#
-#   Erfinv at ±1 returned NaN, not a saturated finite, and it was wrong on all 8
-#   combinations rather than the two the issue scoped it to — the other six narrowed that
-#   NaN to ±inf on the way out and so agreed with the golden by accident. Semantic, not
-#   tolerance-shaped. Root-caused to sfpu_sqrt_custom, not to erfinv: for +inf its
-#   fast-inverse-sqrt seed squares to a denormal, SFPMAD flushes that to +0, and the next
-#   multiply is 0 * -inf = NaN. Fixed by excluding non-finite input from the iteration, so
-#   sqrt_custom(+inf) = +inf and every consumer inherits the repair. The guard is defaulted
-#   on and opted out of only by asin/acos, whose argument is provably in [0, 0.5]; see
-#   ckernel_sfpu_sqrt_custom.h and https://github.com/tenstorrent/tt-metal/issues/52930.
 _EDGE_KNOWN_DIVERGENCES = {
     MathOperation.Sign: (
         (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
@@ -580,14 +568,8 @@ _EDGE_KNOWN_DIVERGENCES = {
     ),
 }
 
-# Erfinv's +/-1 divergence is closed by the sqrt_custom(+inf) fix, and that is measured on
-# Wormhole silicon. Blackhole was compile-verified only -- no BH hardware on the host the fix
-# was developed on -- so its two fp32-dest cells (the only ones that could ever show the
-# divergence, and the only ones _skip_bh_unless_fp32 lets through at dest_acc=Yes) keep the
-# previous non-strict cover until a BH run exists. Without this, a still-diverging BH turns a
-# tolerant xfail into a bare nightly assertion failure. Delete this table once BH has run
-# test_eltwise_unary_sfpu_edges for Erfinv on silicon -- it is a placeholder for a missing
-# measurement, not a recorded one.
+# Only the fp32-dest cells could ever show the erfinv(+/-1) divergence, so those are the only
+# ones listed. Drop this table after a BH silicon run -- see _EDGE_BLACKHOLE_UNVERIFIED_REASON.
 _EDGE_BLACKHOLE_UNVERIFIED_DIVERGENCES = {
     MathOperation.Erfinv: (
         (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.Yes),
