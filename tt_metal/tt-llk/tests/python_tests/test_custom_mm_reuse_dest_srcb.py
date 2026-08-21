@@ -60,8 +60,10 @@ def _tile(t, dims, fmt, face_r_dim=16):
 
 @blackhole_only
 @pytest.mark.xfail(
-    reason="fused custom_mm -> custom_mm_reuse_dest_srcb chain unvalidated at "
-    "runtime here (no Blackhole card); compile + golden only",
+    reason="Fails on real BH: the fused custom_mm -> custom_mm_reuse_dest_srcb chain "
+    "(DEST bank sharing + producer/consumer cross-thread sync) needs the compute-kernel "
+    "framework flow-control this bare LLK driver does not reproduce. Non-strict so a real "
+    "fix surfaces as XPASS. Clean assert-fail (not a wedge), so xfail is safe here.",
     strict=False,
 )
 # NOTE: a single-axis @parametrize(formats=...) passes formats as a 1-tuple
