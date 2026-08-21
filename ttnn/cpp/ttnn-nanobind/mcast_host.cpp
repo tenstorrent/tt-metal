@@ -130,7 +130,7 @@ void py_module(nb::module_& mod) {
             "compile_time_args",
             &kh::Mcast1D::compile_time_args,
             nb::arg("pre_handshake") = std::optional<bool>{},
-            R"doc(Uniform mcast config for the reader CT list: [active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags] (flags bit0=pre_handshake, bit1=data-ready signal). Pass pre_handshake to override the flags bit for this emission (one semantic mcast, per-kernel handshake).)doc")
+            R"doc(Uniform mcast config for the reader CT list: [active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags, rotating_span] (flags bit0=pre_handshake, bit1=data-ready signal; rotating_span is 0 unless rotating_sender). Six words, matching the kernel-side McastArgs<CT_BASE, RT_BASE>. Pass pre_handshake to override the flags bit for this emission (one semantic mcast, per-kernel handshake).)doc")
         .def(
             "runtime_args",
             &kh::Mcast1D::runtime_args,
@@ -185,7 +185,7 @@ void py_module(nb::module_& mod) {
             "compile_time_args",
             &kh::Mcast2D::compile_time_args,
             nb::arg("pre_handshake") = std::optional<bool>{},
-            R"doc(Uniform mcast config for the reader CT list: [active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags] (flags bit0=pre_handshake, bit1=data-ready signal). Pass pre_handshake to override the flags bit for this emission (one semantic mcast, per-kernel handshake).)doc")
+            R"doc(Uniform mcast config for the reader CT list: [active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags, rotating_span] (flags bit0=pre_handshake, bit1=data-ready signal; rotating_span is 0 unless rotating_sender). Six words, matching the kernel-side McastArgs<CT_BASE, RT_BASE>. Pass pre_handshake to override the flags bit for this emission (one semantic mcast, per-kernel handshake).)doc")
         .def(
             "runtime_args",
             &kh::Mcast2D::runtime_args,
