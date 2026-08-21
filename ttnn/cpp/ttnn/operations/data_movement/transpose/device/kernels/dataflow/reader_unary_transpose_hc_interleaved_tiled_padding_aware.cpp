@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_unary_transpose_hc_interleaved_tiled_padding_aware_metal2.cpp. Ops ported to Metal 2.0 bind the fork;
+// this file serves the consumers still on the legacy API. Until the last of them
+// migrates and this file is retired, changes here likely belong in the fork too.
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"

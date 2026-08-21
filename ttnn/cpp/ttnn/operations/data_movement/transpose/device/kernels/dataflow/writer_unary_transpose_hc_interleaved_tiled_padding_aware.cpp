@@ -8,27 +8,24 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Retrieve arguments
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_tile_idx = get_arg_val<uint32_t>(1);
-    uint32_t end_tile_idx = get_arg_val<uint32_t>(2);
-    uint32_t start_padding_tile_idx = get_arg_val<uint32_t>(3);
-    uint32_t end_padding_tile_idx = get_arg_val<uint32_t>(4);
+    uint32_t start_tile_idx = get_arg(args::start_tile_idx);
+    uint32_t end_tile_idx = get_arg(args::end_tile_idx);
+    uint32_t start_padding_tile_idx = get_arg(args::start_padding_tile_idx);
+    uint32_t end_padding_tile_idx = get_arg(args::end_padding_tile_idx);
 
     // Compile-time constants
-    constexpr uint32_t element_size = get_compile_time_arg_val(0);
-    constexpr uint32_t dfb_id_out0 = get_compile_time_arg_val(1);
-    constexpr uint32_t C = get_compile_time_arg_val(2);
-    constexpr uint32_t H = get_compile_time_arg_val(3);
-    constexpr uint32_t W = get_compile_time_arg_val(4);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(5);
-    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(6);
-    constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(7);
-    constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(8);
-    constexpr bool needs_padding = get_compile_time_arg_val(9) == 1;
-    constexpr auto dst_args = TensorAccessorArgs<10>();
+    constexpr uint32_t element_size = get_arg(args::element_size);
+    constexpr uint32_t C = get_arg(args::C);
+    constexpr uint32_t H = get_arg(args::H);
+    constexpr uint32_t W = get_arg(args::W);
+    constexpr uint32_t TILE_HEIGHT = get_arg(args::tile_height);
+    constexpr uint32_t TILE_WIDTH = get_arg(args::tile_width);
+    constexpr uint32_t FACE_HEIGHT = get_arg(args::face_height);
+    constexpr uint32_t FACE_WIDTH = get_arg(args::face_width);
 
     // Derived compile-time constants
     constexpr uint32_t TILE_HW = TILE_HEIGHT * TILE_WIDTH;
@@ -46,11 +43,15 @@ void kernel_main() {
     constexpr uint32_t SUBTILE_LINE_BYTES = FACE_WIDTH * element_size;
 
     // Initialize address generator
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-    DataflowBuffer dfb(dfb_id_out0);
-    DataflowBuffer dfb_padding(tt::CBIndex::c_1);
+    DataflowBuffer dfb(dfb::out);
+#ifdef NEEDS_PADDING
+    // Padding DFB is bound (and this construction compiled) only when the host emits
+    // NEEDS_PADDING alongside the conditional DFBBinding — see the factory.
+    DataflowBuffer dfb_padding(dfb::padding);
+#endif
 
     // Calculate actual data height in the last tile
     constexpr uint32_t H_last_tile = H - (H_t - 1) * TILE_HEIGHT;
@@ -162,44 +163,44 @@ void kernel_main() {
     }
 
     // add padding
-    if constexpr (needs_padding) {
-        dfb_padding.wait_front(1);
+#ifdef NEEDS_PADDING
+    dfb_padding.wait_front(1);
 
-        uint32_t l1_read_ptr = dfb_padding.get_read_ptr();
+    uint32_t l1_read_ptr = dfb_padding.get_read_ptr();
 
-        constexpr uint32_t c_t = C_t - 1;
-        constexpr uint8_t C_in_tile = C % TILE_HEIGHT;
-        constexpr uint8_t face_c_start = C_in_tile / FACE_HEIGHT;
+    constexpr uint32_t c_t = C_t - 1;
+    constexpr uint8_t C_in_tile = C % TILE_HEIGHT;
+    constexpr uint8_t face_c_start = C_in_tile / FACE_HEIGHT;
 
-        for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
-            // Map tile_idx to (n, h, w_t)
-            uint32_t n = tile_idx / (H * W_t);
-            uint32_t remainder1 = tile_idx % (H * W_t);
-            uint32_t h = remainder1 / W_t;
-            uint32_t w_t = remainder1 % W_t;
+    for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
+        // Map tile_idx to (n, h, w_t)
+        uint32_t n = tile_idx / (H * W_t);
+        uint32_t remainder1 = tile_idx % (H * W_t);
+        uint32_t h = remainder1 / W_t;
+        uint32_t w_t = remainder1 % W_t;
 
-            // Calculate linear_idx of padded tile inside output tensor buffer
-            uint32_t linear_idx = n * H * C_t * W_t + h * C_t * W_t + c_t * W_t + w_t;
+        // Calculate linear_idx of padded tile inside output tensor buffer
+        uint32_t linear_idx = n * H * C_t * W_t + h * C_t * W_t + c_t * W_t + w_t;
 
-            for (uint8_t face_c = face_c_start; face_c < NUM_FACES_H; ++face_c) {
-                // Offset to the start of the current face along the channel dimension/height of the tile
-                uint32_t face_c_offset = face_c * NUM_FACES_W * face_height_width;
+        for (uint8_t face_c = face_c_start; face_c < NUM_FACES_H; ++face_c) {
+            // Offset to the start of the current face along the channel dimension/height of the tile
+            uint32_t face_c_offset = face_c * NUM_FACES_W * face_height_width;
 
-                // Sub-tile/face line where our padded data starts
-                uint8_t sub_tile_line_start = face_c == face_c_start ? C_in_tile % FACE_HEIGHT : 0;
+            // Sub-tile/face line where our padded data starts
+            uint8_t sub_tile_line_start = face_c == face_c_start ? C_in_tile % FACE_HEIGHT : 0;
 
-                for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
-                    // Offset to the start of the current face along the width of the tile
-                    uint32_t face_w_offset = face_w * face_height_width;
-                    uint32_t offset = (face_c_offset + face_w_offset + sub_tile_line_start * FACE_WIDTH) * element_size;
-                    uint32_t write_size = SUBTILE_LINE_BYTES * (FACE_HEIGHT - sub_tile_line_start);
-                    CoreLocalMem<uint32_t> pad_src(l1_read_ptr);
-                    noc.async_write(
-                        pad_src, s, write_size, {.offset_bytes = 0}, {.page_id = linear_idx, .offset_bytes = offset});
-                }
+            for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
+                // Offset to the start of the current face along the width of the tile
+                uint32_t face_w_offset = face_w * face_height_width;
+                uint32_t offset = (face_c_offset + face_w_offset + sub_tile_line_start * FACE_WIDTH) * element_size;
+                uint32_t write_size = SUBTILE_LINE_BYTES * (FACE_HEIGHT - sub_tile_line_start);
+                CoreLocalMem<uint32_t> pad_src(l1_read_ptr);
+                noc.async_write(
+                    pad_src, s, write_size, {.offset_bytes = 0}, {.page_id = linear_idx, .offset_bytes = offset});
             }
         }
-        noc.async_write_barrier();
-        dfb_padding.pop_front(1);
     }
+    noc.async_write_barrier();
+    dfb_padding.pop_front(1);
+#endif
 }

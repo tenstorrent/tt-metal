@@ -7,31 +7,35 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
 namespace {
 
+const DFBSpecName HCT_SRC0_DFB{"hct_src0"};
+const DFBSpecName HCT_SCRATCH_DFB{"hct_scratch"};
+const TensorParamName HCT_INPUT{"hct_input"};
+const TensorParamName HCT_OUTPUT{"hct_output"};
+const KernelSpecName HCT_READER{"hct_reader"};
+const KernelSpecName HCT_WRITER{"hct_writer"};
+
 void emit_runtime_args_hc_tiled(
-    KernelDescriptor& reader_desc,
-    KernelDescriptor& writer_desc,
+    KernelRunArgs& reader_run,
+    KernelRunArgs& writer_run,
     const Tensor& input_tensor,
-    Tensor& output_tensor,
-    uint32_t num_cores,
     const CoreRangeSet& all_cores,
     const CoreRangeSet& core_group_1,
     uint32_t num_tiles_per_core_group_1,
     const CoreRangeSet& core_group_2,
     uint32_t num_tiles_per_core_group_2) {
-    auto* input_buffer = input_tensor.buffer();
-    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1];
@@ -45,9 +49,6 @@ void emit_runtime_args_hc_tiled(
     uint32_t CtWt = Ct * Wt;
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
-    reader_desc.runtime_args.reserve(num_cores);
-    writer_desc.runtime_args.reserve(num_cores);
-
     uint32_t num_tiles_read = 0;
     for (const auto& core : cores) {
         uint32_t num_tiles_per_core;
@@ -63,24 +64,25 @@ void emit_runtime_args_hc_tiled(
         uint32_t h = num_tiles_read / CtWt % H;
         uint32_t ct = num_tiles_read / Wt % Ct;
 
-        reader_desc.emplace_runtime_args(
+        AddRuntimeArgsForNode(
+            reader_run.runtime_arg_values,
             core,
-            {input_buffer,
-             Wt,
-             H,
-             Ct,
-             HW_bytes,
-             CHW_bytes,
-             num_tiles_read,
-             num_tiles_per_core,
-             num_tiles_read / CtHWt * CHW_bytes,
-             h,
-             h / TILE_HEIGHT * Wt,
-             ct,
-             ct * TILE_HEIGHT * HW_bytes,
-             num_tiles_read % Wt});
+            {{"WT", Wt},
+             {"H", H},
+             {"CT", Ct},
+             {"HW_bytes", HW_bytes},
+             {"CHW_bytes", CHW_bytes},
+             {"start_id", num_tiles_read},
+             {"num_tiles", num_tiles_per_core},
+             {"batch_addr", num_tiles_read / CtHWt * CHW_bytes},
+             {"h", h},
+             {"htWT", h / TILE_HEIGHT * Wt},
+             {"ct", ct},
+             {"ctoffs", ct * TILE_HEIGHT * HW_bytes},
+             {"wt", num_tiles_read % Wt}});
 
-        writer_desc.emplace_runtime_args(core, {output_buffer, num_tiles_per_core, num_tiles_read});
+        AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values, core, {{"num_pages", num_tiles_per_core}, {"start_id", num_tiles_read}});
 
         num_tiles_read += num_tiles_per_core;
     }
@@ -88,7 +90,7 @@ void emit_runtime_args_hc_tiled(
 
 }  // namespace
 
-tt::tt_metal::ProgramDescriptor TransposeHCTiledProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_program_artifacts(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
 
@@ -97,8 +99,6 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledProgramFactory::create_descripto
 
     uint32_t sub_tile_line_bytes = 16 * input_tensor.element_size();
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / TILE_HW;
-
-    ProgramDescriptor desc;
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -117,88 +117,119 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledProgramFactory::create_descripto
     Buffer* dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    uint32_t src0_cb_index = 0;
-    // check if we need to allocate a scratch buffer
     // The kernel reads several 16 element face lines (32B for BFLOAT16) from different input tiles to form a single
-    // output tile, one output tile at a time Each face line is 32 bytes, so if our minimum read alignment is greater
-    // than that (64B for Blackhole) then we will have reads from unaligned face-lines into differently aligned
-    // destination face-lines
-    // TODO: noc_async_write only require 16B alignment for both DRAM and L1 for Blackhole, so instead of reading in
-    // face-lines from C tiles to form a single tile, we can load a single tile and then write out its face-lines to C
-    // tiles
+    // output tile. Each face line is 32 bytes, so if our minimum read alignment is greater than that (64B for
+    // Blackhole) we need a scratch buffer to stage from the nearest aligned address.
     uint32_t alignment = dst_buffer->alignment();
     bool misaligned = alignment > sub_tile_line_bytes;
 
-    uint32_t num_input_tiles = 2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_tiles * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-    });
+    // ---- ProgramSpec ----
+    ProgramSpec spec;
+    spec.name = "transpose_hc_tiled";
 
-    // need some scratch memory here - if we need data from a misaligned address then we need to read from the
-    // nearest aligned address and then copy the data to the correct location
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = HCT_INPUT, .spec = input_tensor.tensor_spec()},
+        TensorParameter{.unique_id = HCT_OUTPUT, .spec = output_tensor.tensor_spec()},
+    };
+
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = HCT_SRC0_DFB,
+        .entry_size = single_tile_size,
+        .num_entries = 2,
+        .data_format_metadata = cb_data_format,
+    });
     if (misaligned) {
-        uint32_t src1_cb_index = 1;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = alignment,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(src1_cb_index),
-                .data_format = cb_data_format,
-                .page_size = alignment,
-            }}},
+        // Scratch staging buffer: touched only by the reader (base-pointer access via
+        // get_write_ptr, no cross-kernel FIFO) → self-loop DFB, bound only when misaligned.
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = HCT_SCRATCH_DFB,
+            .entry_size = alignment,
+            .num_entries = 1,
+            .data_format_metadata = cb_data_format,
         });
     }
 
-    Buffer* src0_buffer = input_tensor.buffer();
-    std::vector<uint32_t> reader_compile_time_args;
-    reader_compile_time_args.reserve(3);
-    reader_compile_time_args.push_back(sub_tile_line_bytes);
-    reader_compile_time_args.push_back(cb_data_format == tt::DataFormat::Float32 ? 1 : 0);
-    reader_compile_time_args.push_back(alignment);
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    KernelSpec::CompilerOptions::Defines scratch_defines;
+    if (misaligned) {
+        scratch_defines.emplace("TRANSPOSE_HC_SCRATCH", "1");
+    }
 
-    std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    Group<DFBBinding> reader_dfb = {
+        DFBBinding{.dfb_spec_name = HCT_SRC0_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER}};
+    if (misaligned) {
+        reader_dfb.push_back(DFBBinding{
+            .dfb_spec_name = HCT_SCRATCH_DFB, .accessor_name = "scratch", .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_dfb.push_back(DFBBinding{
+            .dfb_spec_name = HCT_SCRATCH_DFB, .accessor_name = "scratch", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-        "reader_unary_transpose_hc_interleaved_partitioned.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
+    KernelSpec reader{
+        .unique_id = HCT_READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+            "reader_unary_transpose_hc_interleaved_partitioned.cpp",
+        .compiler_options = {.defines = scratch_defines},
+        .dfb_bindings = reader_dfb,
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = HCT_INPUT, .accessor_name = "src"}},
+        .compile_time_args =
+            {{"SUBTILE_LINE_BYTES", sub_tile_line_bytes},
+             {"FLOAT32_DTYPE", cb_data_format == tt::DataFormat::Float32 ? 1u : 0u},
+             {"ALIGNMENT", alignment}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"WT",
+                  "H",
+                  "CT",
+                  "HW_bytes",
+                  "CHW_bytes",
+                  "start_id",
+                  "num_tiles",
+                  "batch_addr",
+                  "h",
+                  "htWT",
+                  "ct",
+                  "ctoffs",
+                  "wt"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    // Borrowed writer: bound from the Metal 2.0 fork that lives beside its legacy original under
+    // eltwise/unary (the legacy source still serves ~45 unmigrated binders). The fork's binding
+    // names are this factory's constraint, not the reverse.
+    KernelSpec writer{
+        .unique_id = HCT_WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+            "writer_unary_interleaved_start_id_metal2.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = HCT_SRC0_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = HCT_OUTPUT, .accessor_name = "dst"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
 
+    spec.kernels = {reader, writer};
+    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {HCT_READER, HCT_WRITER}, .target_nodes = all_cores}};
+
+    // ---- ProgramRunArgs ----
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run{.kernel = HCT_READER};
+    KernelRunArgs writer_run{.kernel = HCT_WRITER};
     emit_runtime_args_hc_tiled(
-        reader_desc,
-        writer_desc,
+        reader_run,
+        writer_run,
         input_tensor,
-        output_tensor,
-        num_cores,
         all_cores,
         core_group_1,
         num_tiles_per_core_group_1,
         core_group_2,
         num_tiles_per_core_group_2);
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    run_args.kernel_run_args = {reader_run, writer_run};
+    run_args.tensor_args.emplace(HCT_INPUT, TensorArgument{input_tensor.mesh_tensor()});
+    run_args.tensor_args.emplace(HCT_OUTPUT, TensorArgument{output_tensor.mesh_tensor()});
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim
