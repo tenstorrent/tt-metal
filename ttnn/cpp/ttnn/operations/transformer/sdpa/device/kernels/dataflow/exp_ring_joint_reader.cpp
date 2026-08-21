@@ -51,22 +51,21 @@ void kernel_main() {
     const uint32_t joint_q_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_k_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t q_per_core = global_q_end - global_q_start;
+    // Head-serial passes: this core owns flat Q chunks q_base + p * q_stride for p in [0, q_count),
+    // i.e. one chunk of head (p * grid_rows + my_row) per pass. See the program factory.
+    const uint32_t q_base = get_arg_val<uint32_t>(argidx++);
+    const uint32_t q_stride = get_arg_val<uint32_t>(argidx++);
+    const uint32_t q_count = get_arg_val<uint32_t>(argidx++);
 
     const uint32_t is_chain_participant = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_injector = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink = get_arg_val<uint32_t>(argidx++);
-    const uint32_t chain_batch = get_arg_val<uint32_t>(argidx++);
-    const uint32_t chain_head = get_arg_val<uint32_t>(argidx++);
-    const uint32_t chain_q_chunk_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t chain_q_chunk_count = get_arg_val<uint32_t>(argidx++);
+    argidx += 4;  // skip chain batch/head/chunk_start/count (unused)
     const uint32_t prev_physical_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t prev_physical_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t next_physical_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t next_physical_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
+    argidx++;  // skip next_core_q_chunks (unused)
     const uint32_t mcast_num_dests = get_arg_val<uint32_t>(argidx++);
     const uint32_t mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
 
@@ -91,6 +90,9 @@ void kernel_main() {
     const uint32_t receiver_semaphore_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 1);
     const uint32_t valid_semaphore_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 2);
     constexpr bool mcast_enabled = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 3) == 1;
+    // Streamed Q (host fallback when resident Q does not fit L1): cb_q_in holds one chunk, so each
+    // pass's Q is re-read every ring iteration and compute pops it at the end of the pass.
+    constexpr bool stream_q = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 4) == 1;
 
     // Receiver flips this to INVALID before each wait; initialize so the first iteration sees it as VALID.
     Semaphore<>(valid_semaphore_id).set(VALID);
@@ -142,9 +144,11 @@ void kernel_main() {
     const uint32_t last_active_ring_iter =
         find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
 
-    // Tracks whether Q has been pushed for q_per_core == 1 optimization.
-    // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
-    bool q_pushed = false;
+    // Number of Q chunks already pushed to cb_q_in. Q is identical across ring iterations; with
+    // resident Q each pass reads its head's chunk exactly once (on the first active ring iteration)
+    // and all q_count chunks stay resident until compute pops them after the last pass of the last
+    // iteration. With streamed Q (stream_q) every pass re-reads its chunk every active iteration.
+    uint32_t q_chunks_pushed = 0;
 
     uint32_t chunks_signaled_by_remote = 0;
 
@@ -167,14 +171,18 @@ void kernel_main() {
         const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
 
         const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
-        const bool mux_forward_this_iter = is_mux_writer && !is_last_ring_iter;
 
-        uint32_t KV_chunks_processed_in_iter = 0;
         if (!ring_iter_does_work) {
             continue;
         }
 
-        for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+        // Passes are serial within a ring iteration: pass p attends head (p * rows + my_row) against
+        // this iteration's K/V shard. Every core of a row runs the same number of passes in the same
+        // order, which is what keeps the row's K/V CB pointers in lockstep for the mcast.
+        for (uint32_t pass = 0; pass < q_count; ++pass) {
+            const uint32_t global_q_chunk = q_base + pass * q_stride;
+            // Counted per pass: compute drains its phase-alignment padding per pass too.
+            uint32_t KV_chunks_processed_in_iter = 0;
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
@@ -195,15 +203,14 @@ void kernel_main() {
                 q_end_seq_tile = local_padded_Nt;
             }
 
-            // Chain forwarding conditions are k_chunk-invariant — compute once before the KV loop
-            const uint32_t q_iter_local = global_q_chunk - global_q_start;
-            const bool should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
-                                        (q_iter_local < next_core_q_chunks);
-            const bool should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+            // Every chunk this core owns is on its row's chain, so participation alone decides.
+            const bool should_forward = is_chain_participant && !is_sink;
+            const bool should_receive = is_chain_participant && !is_injector;
 
-            // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
-            // fronted in the CB, so we only need to read it once on the first active ring iteration.
-            const bool need_q_read = (q_per_core > 1) || !q_pushed;
+            // Resident Q: read this pass's chunk exactly once, on the first active ring iteration.
+            // Streamed Q: read it every pass, every active iteration (the reserve blocks until
+            // compute's pass-end pop frees the single slot — a bounded stall, never a deadlock).
+            const bool need_q_read = stream_q || (q_chunks_pushed <= pass);
 
             for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
                 /**
@@ -357,7 +364,7 @@ void kernel_main() {
                             false /*transpose*/
                         );
                     }
-                    q_pushed = true;
+                    q_chunks_pushed++;
                 }
 
                 // V: get data into CB buffer
@@ -438,22 +445,26 @@ void kernel_main() {
                     ASSERT(cb_v.get_write_ptr() == cb_v_writer.get_write_ptr());
                 }
             }
-        }
 
-        if (KV_chunks_processed_in_iter % 2 == 0) {
-            CircularBuffer cb_k(cb_k_in);
-            CircularBuffer cb_v(cb_v_in);
-            cb_k.reserve_back(k_chunk_tiles);
-            cb_v.reserve_back(k_chunk_tiles);
-            cb_k.push_back(k_chunk_tiles);
-            cb_v.push_back(k_chunk_tiles);
-            if (is_mux_writer) {
-                CircularBuffer cb_k_writer(cb_k_writer_in);
-                CircularBuffer cb_v_writer(cb_v_writer_in);
-                cb_k_writer.reserve_back(k_chunk_tiles);
-                cb_v_writer.reserve_back(v_chunk_tiles);
-                cb_k_writer.push_back(k_chunk_tiles);
-                cb_v_writer.push_back(v_chunk_tiles);
+            // Phase-alignment padding, per pass. Compute pads once per pass (one sdpa_ring_v2 call
+            // per pass, each ending in dummy_kv_chunks_for_phase_alignment), so the reader must pad
+            // at the same granularity or the K/V CB phases diverge. The exchange is core-local:
+            // reserve/push on our own CBs, no fetch and no mcast.
+            if (KV_chunks_processed_in_iter % 2 == 0) {
+                CircularBuffer cb_k(cb_k_in);
+                CircularBuffer cb_v(cb_v_in);
+                cb_k.reserve_back(k_chunk_tiles);
+                cb_v.reserve_back(k_chunk_tiles);
+                cb_k.push_back(k_chunk_tiles);
+                cb_v.push_back(k_chunk_tiles);
+                if (is_mux_writer) {
+                    CircularBuffer cb_k_writer(cb_k_writer_in);
+                    CircularBuffer cb_v_writer(cb_v_writer_in);
+                    cb_k_writer.reserve_back(k_chunk_tiles);
+                    cb_v_writer.reserve_back(v_chunk_tiles);
+                    cb_k_writer.push_back(k_chunk_tiles);
+                    cb_v_writer.push_back(v_chunk_tiles);
+                }
             }
         }
     }

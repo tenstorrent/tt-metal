@@ -326,40 +326,54 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "num_sdpa_cores: {}", num_sdpa_cores);
 
     /**
-     * This parallelization scheme is efficient because it divides the global work,
-     * the total number of Q chunks across all batches and heads, evenly across the cores.
-     *
+     * Head-serial passes. Each core row hosts P = ceil(B*NH / rows) heads, processed as serial
+     * passes within every ring iteration: pass p of row y owns head (p*rows + y), and core (x,y)
+     * owns that head's Q chunk x. Per pass the pipeline is exactly the single-head pipeline, so
+     * each core still holds exactly one Q chunk *per pass* (P chunks resident, read once) and one
+     * flash-attention accumulator state per pass (kept in the L1 state FIFO, see cb_prev_out).
      */
-    const uint32_t all_heads_num_q_chunks = B * NH * num_q_chunks;
-    const uint32_t max_q_per_core = tt::div_up(all_heads_num_q_chunks, num_sdpa_cores);
+    const uint32_t rows = sdpa_grid.y;
+    const uint32_t num_passes = tt::div_up(B * NH, rows);
 
-    // Exp ring joint SDPA constraints: single Q-chunk per core, one head per row.
+    // L1-bound: ~1272 KiB of CBs at P=2; P=3 does not fit. See exp_more_heads_per_row.md §5.
+    constexpr uint32_t kMaxPasses = 2;
+    // Exactly one Q chunk per column: a head's chunks must fill its row. Fewer chunks than columns
+    // would idle the trailing columns, and the last two SDPA columns are the fabric MUX clients that
+    // perform the K/V all-gather — an idle MUX column means that link never forwards its shard.
     TT_FATAL(
-        max_q_per_core == 1,
-        "Exp ring joint SDPA requires exactly 1 Q-chunk per core. Got max_q_per_core={} "
-        "(total_q_chunks={}, num_sdpa_cores={}). Increase grid size or reduce sequence length.",
-        max_q_per_core,
-        all_heads_num_q_chunks,
-        num_sdpa_cores);
-    TT_FATAL(
-        num_q_chunks <= sdpa_grid.x,
-        "Exp ring joint SDPA requires one head per row (all Q-chunks of a head on the same row). "
-        "Got num_q_chunks={} but grid has only {} columns.",
+        num_q_chunks == sdpa_grid.x,
+        "Exp ring joint SDPA requires exactly one Q-chunk per SDPA column (a head's chunks fill its "
+        "row, and the last two columns must be active to drive the all-gather). Got num_q_chunks={} "
+        "with {} columns. Adjust q_chunk_size so ceil(local_padded_N / q_chunk_size) == {}.",
         num_q_chunks,
+        sdpa_grid.x,
         sdpa_grid.x);
     TT_FATAL(
-        B * NH <= sdpa_grid.y,
-        "Exp ring joint SDPA requires one head per row. "
-        "Got B*NH={} but grid has only {} rows.",
+        num_passes <= kMaxPasses,
+        "Exp ring joint SDPA supports at most {} heads per core row. "
+        "Got B*NH={} with {} rows (P={}).",
+        kMaxPasses,
         B * NH,
-        sdpa_grid.y);
+        rows,
+        num_passes);
 
-    const uint32_t q_buffer_factor = (max_q_per_core > 1) ? 2 : 1;
+    log_debug(tt::LogOp, "num_passes (heads per row): {}", num_passes);
 
-    log_debug(tt::LogOp, "max_q_per_core: {}", max_q_per_core);
+    // Depth of the L1 state FIFO (c_6 max / c_11 sum / c_7 partial-out), in entries.
+    //
+    // A pass pops its own entry at its FIRST K chunk (the merge consumes `prev`) and pushes the
+    // updated entry at its LAST K chunk, so num_passes entries are enough as long as a pass has at
+    // least two K chunks: the pop has already freed the slot the push needs. A pass with exactly one
+    // K chunk is the only case that reserves `cur` before popping `prev` (sdpa_inner_loop_step
+    // reserves the new entry up front), which would deadlock at full depth — so give that case one
+    // spare entry. The last active ring iteration is the only one that can be partial, and it
+    // normalizes into cb_out instead of pushing to the FIFO, so it never needs the spare.
+    const uint32_t state_fifo_entries = num_passes + (num_local_k_chunks <= 1 ? 1 : 0);
+    log_debug(tt::LogOp, "state_fifo_entries: {}", state_fifo_entries);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
+    // Q holds one chunk per pass; all of them stay resident for the whole op (read once).
+    uint32_t q_tiles = num_passes * Sq_chunk_t * DHt;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
     uint32_t v_tiles = Sk_chunk_t * DHt * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -408,8 +422,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
     // Streaming: shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp). Safe here
-    // because max_q_per_core == 1 is TT_FATAL-enforced above, so Phase-2's save_to_staging
-    // branch (pack at offset qktv_h*vDHt into a 2*qktv_h*vDHt buffer) never fires.
+    // because every pass runs with q_per_core == 1 (one Q chunk per pass, head-serial), so
+    // Phase-2's save_to_staging branch (pack at offset qktv_h*vDHt into a 2*qktv_h*vDHt buffer)
+    // never fires — cross-ring-iteration state lives in the L1 state FIFO instead.
     if (use_streaming_compute) {
         out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, DHt);
         TT_FATAL(
@@ -524,6 +539,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     reader_compile_time_args.push_back(receiver_semaphore_id);
     reader_compile_time_args.push_back(valid_semaphore_id);
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder (patched after chain construction)
+    reader_compile_time_args.push_back(0);  // stream_q placeholder (patched after CB sizing)
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -585,6 +601,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         static_cast<std::uint32_t>(use_streaming_compute),
         global_n_partial_col,
         joint_l_partial_col,
+        0,  // stream_q placeholder (patched after CB sizing)
     };
 
     std::map<std::string, std::string> defines;
@@ -632,7 +649,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
     const auto sdpa_grid_set = CoreRangeSet(sdpa_grid_range);
 
-    // Q input
+    // Q input. NOTE: sized for resident Q here; the streamed-Q fallback below (search stream_q)
+    // patches desc.cbs[0].total_size down to one chunk when the resident total does not fit L1.
     desc.cbs.push_back(CBDescriptor{
         .total_size = q_tiles * q_tile_size,
         .core_ranges = sdpa_grid_set,
@@ -710,9 +728,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         }}},
     });
 
-    // stats input
+    // Running-max half of the L1 state FIFO (num_passes + 1 entries; see cb_prev_out below).
     desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * im_tile_size,
+        .total_size = state_fifo_entries * statistics_tiles * im_tile_size,
         .core_ranges = sdpa_grid_set,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
@@ -721,14 +739,25 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         }}},
     });
 
-    // previous block output as input
+    // Partial-output half of the L1 state FIFO.
+    //
+    // Head-serial passes keep one flash-attention accumulator state (max + sum + partial out) per
+    // pass live across all ring iterations. The three state CBs (c_6 max, c_11 sum, c_7 out) are
+    // used as FIFOs: a pass pops its own state at its first K chunk and pushes the updated state at
+    // its last K chunk, so the fixed cyclic pass order keeps each pass's state at the front when it
+    // runs. See state_fifo_entries above for the depth derivation. Sizing stays an exact multiple of
+    // the per-entry tile count so no entry straddles the ring-buffer wrap — intra-entry reads index
+    // tiles relative to the CB front.
+    //
+    // Format is im_df (not out_df): these tiles are accumulator intermediates shared with the
+    // c_25/c_26 scratch halves, not DRAM-formatted output.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = out_im_tiles * out_tile_size,
+        .total_size = state_fifo_entries * out_im_tiles * im_tile_size,
         .core_ranges = sdpa_grid_set,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
-            .data_format = out_df,
-            .page_size = out_tile_size,
+            .data_format = im_df,
+            .page_size = im_tile_size,
         }}},
     });
 
@@ -867,22 +896,13 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         });
     }
 
-    // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
-    // cb_sum_out (c_10) = compute pushes sum for writer to save to DRAM.
-    // cb_sum_in (c_11) = writer pushes restored sum from DRAM for compute to read.
+    // c_10 (cb_sum_out) belongs to the multi-Q DRAM round-trip, which head-serial passes never
+    // take (every pass runs with q_per_core == 1); it is NOT allocated — the kernel's cb_sum_out
+    // index is only touched in the staging branch, which is dead at q_per_core == 1.
+    // c_11 (cb_sum_in) is the running-sum half of the L1 state FIFO — see cb_prev_out (c_7).
     if (use_streaming_compute) {
         desc.cbs.push_back(CBDescriptor{
-            .total_size = statistics_tiles * stats_tile_size,
-            .core_ranges = sdpa_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_10),
-                .data_format = stats_df,
-                .page_size = stats_tile_size,
-            }}},
-        });
-
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = statistics_tiles * stats_tile_size,
+            .total_size = state_fifo_entries * statistics_tiles * stats_tile_size,
             .core_ranges = sdpa_grid_set,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_11),
@@ -891,6 +911,42 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             }}},
         });
     }
+
+    // Streamed-Q fallback: if the CBs do not fit L1 with all num_passes Q chunks resident, keep
+    // only one chunk resident; the reader then re-reads each pass's Q every ring iteration and
+    // compute pops it at the end of the pass. Buys back (num_passes - 1) * Sq_chunk_t * DHt tiles,
+    // which at H3 15s (q=320, k=384, P=2) is the difference between fitting and not.
+    // See exp_more_heads_per_row.md §9.
+    // CBs must end below the lowest live L1 buffer (validate_circular_buffer_region enforces
+    // exactly this). In the pipeline, global semaphores and persistent buffers occupy the top of
+    // L1, so budgeting against the raw L1 size over-promises and the program clashes at allocate.
+    const auto lowest_l1_buffer = mesh_device->lowest_occupied_compute_l1_address();
+    const uint32_t cb_space_top = lowest_l1_buffer.has_value() ? static_cast<uint32_t>(lowest_l1_buffer.value())
+                                                               : mesh_device->l1_size_per_core();
+    const uint32_t usable_l1 =
+        cb_space_top - mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    uint64_t total_cb_bytes = 0;
+    for (const auto& cb : desc.cbs) {
+        total_cb_bytes += cb.total_size;
+    }
+    const bool stream_q = (num_passes > 1) && (total_cb_bytes > usable_l1);
+    if (stream_q) {
+        total_cb_bytes -= desc.cbs[0].total_size;
+        desc.cbs[0].total_size = Sq_chunk_t * DHt * q_tile_size;  // c_0 is the first CB pushed
+        total_cb_bytes += desc.cbs[0].total_size;
+    }
+    TT_FATAL(
+        total_cb_bytes <= usable_l1,
+        "Exp ring joint SDPA CBs need {} B but only {} B of L1 are usable at this chunk shape "
+        "(q_chunk={}, k_chunk={}, passes={}); reduce k_chunk_size.",
+        total_cb_bytes,
+        usable_l1,
+        q_chunk_size,
+        k_chunk_size,
+        num_passes);
+    log_debug(tt::LogOp, "stream_q: {}", stream_q);
+    reader_compile_time_args[sem_args_offset + 4] = stream_q ? 1 : 0;
+    compute_compile_time_args[29] = stream_q ? 1 : 0;
 
     auto* const q_buf = input_tensor_q.buffer();
     auto* const k_buf = input_tensor_k.buffer();
@@ -905,7 +961,13 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     auto* const stats_buf = stats_output_tensor.buffer();
 
     /**
-     * Build chain selection for store-and-forward across cores per (batch, head).
+     * Build per-row store-and-forward chains.
+     *
+     * Head-serial passes place num_passes heads on every row, and every pass of a row runs on the
+     * same cores (logical x in [0, num_q_chunks)), so a row has ONE chain shared by all its passes.
+     * One injector per row is required, not merely convenient: each MUX writer pre-configures a
+     * single fabric atomic-inc destination for the whole op (see exp_ring_joint_writer.cpp), so
+     * every pass of a row must signal the same injector core.
      */
     struct CoreHeadWork {
         uint32_t batch = 0;
@@ -917,20 +979,20 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     struct CoreWork {
         CoreCoord logical_core;
         CoreCoord physical_core;
-        uint32_t global_q_start = 0;
-        uint32_t global_q_count = 0;
-        std::vector<CoreHeadWork> head_work;
-    };
-
-    struct HeadSegmentRef {
-        uint32_t core_idx = 0;
-        uint32_t head_work_index = 0;
+        // Q work descriptor: this core owns flat chunks q_base + p * q_stride for p in [0, q_count).
+        uint32_t q_base = 0;
+        uint32_t q_stride = 0;
+        uint32_t q_count = 0;
+        std::vector<CoreHeadWork> head_work;  // one entry per pass, in pass order
     };
 
     struct CoreChainInfo {
         bool participates = false;
         bool is_injector = false;
         bool is_sink = false;
+        // Pass-0 (batch, head) and chunk range. The kernels no longer compare chunks against these:
+        // row-aligned scheduling makes every chunk a core owns part of its row's chain. Kept so the
+        // reader RT-arg layout is unchanged.
         uint32_t batch = 0;
         uint32_t head = 0;
         uint32_t q_chunk_start = 0;
@@ -945,17 +1007,51 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     std::vector<CoreWork> core_work(num_sdpa_cores);
     std::vector<CoreChainInfo> core_chain_info(num_sdpa_cores);
     const uint32_t total_heads = B * NH;
-    std::vector<std::vector<HeadSegmentRef>> head_segments(total_heads);
 
-    // Evenly distribute flat global q chunks across cores
-    const uint32_t total_q_chunks = B * NH * num_q_chunks;
-    const uint32_t base_chunks_per_core = (num_sdpa_cores == 0) ? 0 : (total_q_chunks / num_sdpa_cores);
-    const uint32_t extra_chunks = (num_sdpa_cores == 0) ? 0 : (total_q_chunks % num_sdpa_cores);
+    /**
+     * Row-aligned work assignment. The flat chunk encoding is unchanged:
+     *     flat = (batch * NH + head) * num_q_chunks + q_chunk
+     * Pass p of core (x, y) owns head (p * rows + y), chunk x, i.e.
+     *     flat = (p * rows + y) * num_q_chunks + x = q_base + p * q_stride
+     * with q_base = y * num_q_chunks + x and q_stride = rows * num_q_chunks.
+     *
+     * Two properties the kernels rely on:
+     *   - q_chunk = flat % num_q_chunks = x for every pass, so mask selection and output slicing
+     *     are pass-independent;
+     *   - when total_heads % rows != 0 an entire row idles the final pass, so all cores of a row
+     *     always run the same number of passes (required for K/V CB pointer lockstep under mcast).
+     */
+    const uint32_t q_stride = rows * num_q_chunks;
+    for (uint32_t i = 0; i < num_sdpa_cores; ++i) {
+        const CoreCoord core = {i % sdpa_grid.x, i / sdpa_grid.x};
+        auto& work = core_work.at(i);
+        work.logical_core = core;
+        work.physical_core = device->worker_core_from_logical_core(core);
+        work.q_base = core.y * num_q_chunks + core.x;
+        work.q_stride = q_stride;
+        work.q_count = 0;
+        if (core.x >= num_q_chunks) {
+            continue;  // idle column: owns no Q chunk and never touches the K/V CBs
+        }
+        for (uint32_t p = 0; p < num_passes; ++p) {
+            const uint32_t head_id = p * rows + core.y;
+            if (head_id >= total_heads) {
+                break;
+            }
+            work.q_count++;
+            work.head_work.push_back(CoreHeadWork{
+                .batch = head_id / NH,
+                .head = head_id % NH,
+                .q_chunk_start = core.x,
+                .q_chunk_count = 1,
+            });
+        }
+    }
 
     log_debug(
         tt::LogOp,
         "[ExpRingJointSDPA] grid={}x{}={} cores, B={}, NH={}, num_q_chunks={}({} local+{} joint), "
-        "base_chunks_per_core={} (+{} extras)",
+        "passes_per_row={}, q_stride={}",
         sdpa_grid.x,
         sdpa_grid.y,
         num_sdpa_cores,
@@ -964,96 +1060,29 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         num_q_chunks,
         num_local_q_chunks,
         num_joint_q_chunks,
-        base_chunks_per_core,
-        extra_chunks);
-    uint32_t next_global_chunk = 0;
+        num_passes,
+        q_stride);
 
-    auto decode_flat_chunk = [&](uint32_t flat_chunk_index) {
-        const uint32_t head_span = num_q_chunks;
-        const uint32_t head_index = head_span == 0 ? 0 : (flat_chunk_index / head_span);
-        const uint32_t q_chunk = head_span == 0 ? 0 : (flat_chunk_index % head_span);
-        const uint32_t batch = (NH == 0) ? 0 : (head_index / NH);
-        const uint32_t head = (NH == 0) ? 0 : (head_index % NH);
-        return std::tuple<uint32_t, uint32_t, uint32_t>{batch, head, q_chunk};
-    };
-
-    for (uint32_t i = 0; i < num_sdpa_cores; ++i) {
-        CoreCoord core = {i % sdpa_grid.x, i / sdpa_grid.x};
-        uint32_t chunk_count = base_chunks_per_core + ((i < extra_chunks) ? 1 : 0);
-        if (next_global_chunk >= total_q_chunks) {
-            chunk_count = 0;
-        } else if (chunk_count > total_q_chunks - next_global_chunk) {
-            chunk_count = total_q_chunks - next_global_chunk;
-        }
-
-        auto& work = core_work.at(i);
-        work.logical_core = core;
-        work.physical_core = device->worker_core_from_logical_core(core);
-        work.global_q_start = next_global_chunk;
-        work.global_q_count = chunk_count;
-
-        uint32_t remaining = chunk_count;
-        uint32_t flat_chunk = next_global_chunk;
-        while (remaining > 0) {
-            auto [batch_idx, head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
-            uint32_t chunk_capacity_in_head = num_q_chunks - q_chunk_idx;
-            uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
-
-            work.head_work.push_back(CoreHeadWork{
-                .batch = batch_idx,
-                .head = head_idx,
-                .q_chunk_start = q_chunk_idx,
-                .q_chunk_count = chunk_take,
-            });
-
-            if (!head_segments.empty()) {
-                uint32_t head_id = (batch_idx * NH) + head_idx;
-                if (head_id < head_segments.size()) {
-                    head_segments[head_id].push_back(HeadSegmentRef{
-                        .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
-                }
-            }
-
-            remaining -= chunk_take;
-            flat_chunk += chunk_take;
-        }
-
-        next_global_chunk += chunk_count;
-    }
-
-    // Construct chains: for each head that spans >= 2 cores, pick first core
-    // with single head segment as injector. Linear forward traversal only —
-    // no wrap-around (wrapping back would pull in straddling cores whose
-    // q_iter_local is inflated by prior-head work, causing deadlock).
-    // Injector reselection for DRAM channel spreading is deferred to the
-    // mcast eligibility pass below.
-    for (auto& segments : head_segments) {
-        if (segments.size() < 2) {
-            continue;
-        }
-
-        std::optional<std::size_t> chain_start_idx;
-        for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
-            const auto& seg = segments.at(idx);
-            const auto& work = core_work.at(seg.core_idx);
-            if (work.global_q_count == 0) {
+    // One chain per row, over that row's participating cores in ascending logical x (which is
+    // ascending physical x within a row). Injector is refined below for DRAM channel spreading.
+    std::vector<std::vector<uint32_t>> row_chain_cores(rows);
+    for (uint32_t y = 0; y < rows; ++y) {
+        auto& chain_cores = row_chain_cores[y];
+        for (uint32_t x = 0; x < sdpa_grid.x; ++x) {
+            const uint32_t core_idx = y * sdpa_grid.x + x;
+            if (core_work.at(core_idx).q_count == 0) {
                 continue;
             }
-            if (work.head_work.size() == 1) {
-                chain_start_idx = idx;
-                break;
-            }
+            chain_cores.push_back(core_idx);
         }
 
-        if (!chain_start_idx.has_value()) {
-            continue;
+        if (chain_cores.size() < 2) {
+            continue;  // a single-core row needs no store-and-forward
         }
 
-        const std::size_t start = chain_start_idx.value();
-        for (std::size_t idx = start; idx < segments.size(); ++idx) {
-            const auto& seg = segments.at(idx);
-            const uint32_t core_idx = seg.core_idx;
-            const auto& hw = core_work.at(core_idx).head_work.at(seg.head_work_index);
+        for (std::size_t idx = 0; idx < chain_cores.size(); ++idx) {
+            const uint32_t core_idx = chain_cores[idx];
+            const auto& hw = core_work.at(core_idx).head_work.at(0);
             auto& chain = core_chain_info.at(core_idx);
 
             chain.participates = true;
@@ -1061,56 +1090,38 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             chain.head = hw.head;
             chain.q_chunk_start = hw.q_chunk_start;
             chain.q_chunk_count = hw.q_chunk_count;
+            chain.is_injector = (idx == 0);
+            chain.is_sink = (idx + 1 == chain_cores.size());
 
-            if (idx == start) {
-                chain.is_injector = true;
+            if (idx > 0) {
+                chain.prev_physical = core_work.at(chain_cores[idx - 1]).physical_core;
             }
-            if (idx == segments.size() - 1) {
-                chain.is_sink = true;
-            }
-
-            if (idx > start) {
-                const uint32_t prev_core_idx = segments.at(idx - 1).core_idx;
-                chain.prev_physical = core_work.at(prev_core_idx).physical_core;
-            }
-            if (idx + 1 < segments.size()) {
-                const uint32_t next_core_idx = segments.at(idx + 1).core_idx;
+            if (idx + 1 < chain_cores.size()) {
+                const uint32_t next_core_idx = chain_cores[idx + 1];
                 chain.next_physical = core_work.at(next_core_idx).physical_core;
-                const auto& next_hw = core_work.at(next_core_idx).head_work.at(segments.at(idx + 1).head_work_index);
-                chain.next_core_q_chunks = next_hw.q_chunk_count;
+                chain.next_core_q_chunks = core_work.at(next_core_idx).head_work.at(0).q_chunk_count;
             }
         }
     }
 
-    // Log chain summary
     {
         uint32_t num_chains = 0;
-        std::vector<uint32_t> chain_len_counts(num_sdpa_cores + 1, 0);
-        for (uint32_t hi = 0; hi < total_heads; ++hi) {
-            const auto& segs = head_segments[hi];
-            const uint32_t batch_id = hi / NH, head_id = hi % NH;
-            uint32_t chain_len = 0;
-            for (const auto& seg : segs) {
-                const auto& ci = core_chain_info[seg.core_idx];
-                if (ci.participates && ci.batch == batch_id && ci.head == head_id) {
-                    chain_len++;
-                }
-            }
-            if (chain_len >= 2) {
-                num_chains++;
-                chain_len_counts[chain_len]++;
-            }
-        }
         std::string hist_str;
-        for (uint32_t len = 2; len <= num_sdpa_cores; ++len) {
-            if (chain_len_counts[len] > 0) {
-                hist_str += std::to_string(chain_len_counts[len]) + "x" + std::to_string(len) + "-core ";
+        for (uint32_t y = 0; y < rows; ++y) {
+            if (row_chain_cores[y].size() >= 2) {
+                num_chains++;
+                hist_str += std::to_string(row_chain_cores[y].size()) + " ";
             }
         }
-        log_debug(tt::LogOp, "[ExpRingJointSDPA] {} chains ({})", num_chains, hist_str.empty() ? "none" : hist_str);
+        log_debug(
+            tt::LogOp,
+            "[ExpRingJointSDPA] {} row chains (lengths: {})",
+            num_chains,
+            hist_str.empty() ? "none" : hist_str);
     }
 
-    // Third pass: Check multicast eligibility and configure mcast for eligible chains
+    // Multicast eligibility, evaluated per row. All-or-nothing: mcast is mandatory for this op, so
+    // a single ineligible row is a hard error below rather than a per-row fallback.
     uint32_t mcast_chains = 0;
     {
         struct McastCandidate {
@@ -1118,50 +1129,35 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             uint32_t ref_q_chunks;
         };
         std::vector<McastCandidate> candidates;
-        candidates.reserve(head_segments.size());
+        candidates.reserve(rows);
         bool all_eligible = true;
 
-        for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
-            const auto& segments = head_segments[head_id];
-            if (segments.size() < 2) {
+        for (uint32_t y = 0; y < rows && all_eligible; ++y) {
+            const auto& chain_cores = row_chain_cores[y];
+            if (chain_cores.size() < 2) {
                 continue;
             }
 
-            std::vector<uint32_t> chain_core_indices;
-            chain_core_indices.reserve(segments.size());
-            for (const auto& seg : segments) {
-                if (seg.core_idx < core_chain_info.size() && core_chain_info[seg.core_idx].participates &&
-                    core_chain_info[seg.core_idx].batch == (head_id / NH) &&
-                    core_chain_info[seg.core_idx].head == (head_id % NH)) {
-                    chain_core_indices.push_back(seg.core_idx);
-                }
-            }
-
-            if (chain_core_indices.size() < 2) {
-                continue;
-            }
-
-            // Eligibility condition 1: All physical cores share the same Y coordinate
-            const uint32_t ref_y = core_work[chain_core_indices[0]].physical_core.y;
+            // Condition 1: all physical cores share the same Y coordinate.
+            const uint32_t ref_y = core_work[chain_cores[0]].physical_core.y;
             bool same_row = true;
-            for (size_t ci = 1; ci < chain_core_indices.size(); ++ci) {
-                if (core_work[chain_core_indices[ci]].physical_core.y != ref_y) {
+            for (std::size_t ci = 1; ci < chain_cores.size(); ++ci) {
+                if (core_work[chain_cores[ci]].physical_core.y != ref_y) {
                     same_row = false;
                     break;
                 }
             }
-
             if (!same_row) {
                 all_eligible = false;
-                log_debug(tt::LogOp, "Head {}: mcast ineligible - cores span multiple rows", head_id);
+                log_debug(tt::LogOp, "Row {}: mcast ineligible - cores span multiple physical rows", y);
                 break;
             }
 
-            // Eligibility condition 2: no non-chain worker cores inside the mcast rectangle.
-            uint32_t min_x = core_work[chain_core_indices[0]].physical_core.x;
+            // Condition 2: no non-chain worker core inside the mcast rectangle.
+            uint32_t min_x = core_work[chain_cores[0]].physical_core.x;
             uint32_t max_x = min_x;
-            for (const auto& ci : chain_core_indices) {
-                uint32_t x = core_work[ci].physical_core.x;
+            for (const auto& ci : chain_cores) {
+                const uint32_t x = core_work[ci].physical_core.x;
                 min_x = std::min(min_x, x);
                 max_x = std::max(max_x, x);
             }
@@ -1169,57 +1165,47 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             bool has_gap = false;
             for (uint32_t ci = 0; ci < num_sdpa_cores; ++ci) {
                 const auto& phys = core_work[ci].physical_core;
-                if (phys.y == ref_y && phys.x >= min_x && phys.x <= max_x) {
-                    bool in_chain = false;
-                    for (const auto& chain_ci : chain_core_indices) {
-                        if (chain_ci == ci) {
-                            in_chain = true;
-                            break;
-                        }
-                    }
-                    if (!in_chain) {
-                        has_gap = true;
-                        break;
-                    }
+                if (phys.y != ref_y || phys.x < min_x || phys.x > max_x) {
+                    continue;
+                }
+                if (std::find(chain_cores.begin(), chain_cores.end(), ci) == chain_cores.end()) {
+                    has_gap = true;
+                    break;
                 }
             }
-
             if (has_gap) {
                 all_eligible = false;
-                log_debug(
-                    tt::LogOp, "Head {}: mcast ineligible - non-chain worker core inside mcast rectangle", head_id);
+                log_debug(tt::LogOp, "Row {}: mcast ineligible - non-chain worker core inside mcast rectangle", y);
                 break;
             }
 
-            // Eligibility condition 3: All chain cores must have the same q_chunk_count.
-            const uint32_t ref_q_chunks = core_chain_info[chain_core_indices[0]].q_chunk_count;
+            // Condition 3: uniform per-core chunk count (one chunk per pass, so always uniform).
+            const uint32_t ref_q_chunks = core_chain_info[chain_cores[0]].q_chunk_count;
             bool uniform_q_mcast = true;
-            for (size_t ci = 1; ci < chain_core_indices.size(); ++ci) {
-                if (core_chain_info[chain_core_indices[ci]].q_chunk_count != ref_q_chunks) {
+            for (std::size_t ci = 1; ci < chain_cores.size(); ++ci) {
+                if (core_chain_info[chain_cores[ci]].q_chunk_count != ref_q_chunks) {
                     uniform_q_mcast = false;
                     break;
                 }
             }
-
             if (!uniform_q_mcast) {
                 all_eligible = false;
-                log_debug(tt::LogOp, "Head {}: mcast ineligible - mixed q_chunk_counts", head_id);
+                log_debug(tt::LogOp, "Row {}: mcast ineligible - mixed q_chunk_counts", y);
                 break;
             }
 
-            candidates.push_back(McastCandidate{std::move(chain_core_indices), ref_q_chunks});
+            candidates.push_back(McastCandidate{chain_cores, ref_q_chunks});
         }
 
         if (all_eligible && !candidates.empty()) {
             mcast_chains = candidates.size();
-            // Track injector physical X columns for DRAM channel spreading
+            // Track injector physical X columns for DRAM channel spreading across rows.
             std::vector<uint32_t> injector_phys_x;
             injector_phys_x.reserve(candidates.size());
             for (const auto& cand : candidates) {
                 const uint32_t chain_size = cand.core_indices.size();
                 const uint32_t num_receivers = chain_size - 1;
 
-                // Find current injector
                 uint32_t injector_idx = cand.core_indices[0];
                 for (const auto& ci : cand.core_indices) {
                     if (core_chain_info[ci].is_injector) {
@@ -1228,8 +1214,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
                     }
                 }
 
-                // Reselect injector for DRAM channel spreading: pick the core
-                // whose physical X is furthest from all previously chosen injectors.
+                // Reselect injector for DRAM channel spreading: pick the core whose physical X is
+                // furthest from all previously chosen injectors.
                 {
                     uint32_t best_idx = injector_idx;
                     uint32_t best_dist = 0;
@@ -1237,7 +1223,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
                         const uint32_t phys_x = core_work[ci].physical_core.x;
                         uint32_t min_dist = UINT32_MAX;
                         for (uint32_t ix : injector_phys_x) {
-                            uint32_t d = (phys_x > ix) ? (phys_x - ix) : (ix - phys_x);
+                            const uint32_t d = (phys_x > ix) ? (phys_x - ix) : (ix - phys_x);
                             min_dist = std::min(min_dist, d);
                         }
                         if (min_dist > best_dist) {
@@ -1246,7 +1232,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
                         }
                     }
                     if (best_idx != injector_idx) {
-                        // Clear old injector, set new one
                         core_chain_info[injector_idx].is_injector = false;
                         core_chain_info[injector_idx].is_sink = true;
                         core_chain_info[best_idx].is_injector = true;
@@ -1258,8 +1243,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
                 uint32_t min_x = core_work[cand.core_indices[0]].physical_core.x;
                 uint32_t max_x = min_x;
-                for (size_t ci = 1; ci < cand.core_indices.size(); ++ci) {
-                    uint32_t x = core_work[cand.core_indices[ci]].physical_core.x;
+                for (std::size_t ci = 1; ci < cand.core_indices.size(); ++ci) {
+                    const uint32_t x = core_work[cand.core_indices[ci]].physical_core.x;
                     min_x = std::min(min_x, x);
                     max_x = std::max(max_x, x);
                 }
@@ -1291,7 +1276,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
                 log_debug(
                     tt::LogOp,
-                    "Head: mcast enabled - {} receivers, injector core {} (phys_x={}), num_dests={} -> rect "
+                    "Row mcast enabled - {} receivers, injector core {} (phys_x={}), num_dests={} -> rect "
                     "({},{}) to ({},{})",
                     num_receivers,
                     injector_idx,
@@ -1306,7 +1291,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
         log_debug(
             tt::LogOp,
-            "Multicast eligibility: {}/{} chains using mcast (all-or-nothing)",
+            "Multicast eligibility: {}/{} row chains using mcast (all-or-nothing)",
             mcast_chains,
             static_cast<uint32_t>(candidates.size()));
     }
@@ -1336,12 +1321,13 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // Update mcast_enabled compile-time arg now that chain construction is complete
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
 
-    // Map (batch * NH + head) -> injector physical coordinates for MUX writer signaling
-    std::unordered_map<uint32_t, CoreCoord> injector_physical_by_head;
+    // Map core row -> injector physical coordinates for MUX writer signaling. Per row (not per
+    // head) because all passes of a row share one injector — the MUX writer bakes a single
+    // atomic-inc destination for the whole op.
+    std::vector<std::optional<CoreCoord>> injector_physical_by_row(rows);
     for (uint32_t ci = 0; ci < num_sdpa_cores; ++ci) {
         if (core_chain_info[ci].is_injector) {
-            uint32_t head_key = core_chain_info[ci].batch * NH + core_chain_info[ci].head;
-            injector_physical_by_head[head_key] = core_work[ci].physical_core;
+            injector_physical_by_row.at(core_work[ci].logical_core.y) = core_work[ci].physical_core;
         }
     }
 
@@ -1472,10 +1458,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     for (uint32_t i = 0; i < num_sdpa_cores; ++i) {
         CoreCoord core = {i % sdpa_grid.x, i / sdpa_grid.x};
 
-        // Prefer the computed even distribution above for chain construction
+        // Row-aligned head-serial work descriptor: chunks q_base + p*q_stride, p in [0, q_count).
         const auto& work = core_work.at(i);
-        uint32_t global_q_start = work.global_q_start;
-        uint32_t global_q_end = work.global_q_start + work.global_q_count;
 
         // Direction: top half of rows = backward (0), bottom half = forward (1)
         const uint32_t direction = (core.y < args.num_workers_per_link) ? 0 : 1;
@@ -1483,8 +1467,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         // log the above
         log_debug(tt::LogOp, "core: {}", i);
         log_debug(tt::LogOp, "x={},y={}", core.x, core.y);
-        log_debug(tt::LogOp, "global_q_start: {}", global_q_start);
-        log_debug(tt::LogOp, "global_q_end: {}", global_q_end);
+        log_debug(tt::LogOp, "q_base={}, q_stride={}, q_count={}", work.q_base, work.q_stride, work.q_count);
 
         KernelDescriptor::RTArgList reader_args;
         reader_args.push_back(q_buf);
@@ -1495,21 +1478,23 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         reader_args.push_back(joint_q_buf);
         reader_args.push_back(joint_k_buf);
         reader_args.push_back(joint_v_buf);
-        reader_args.push_back(global_q_start);
-        reader_args.push_back(global_q_end);
+        reader_args.push_back(work.q_base);
+        reader_args.push_back(work.q_stride);
+        reader_args.push_back(work.q_count);
         // Append chain runtime args for store-and-forward
         const auto& chain = core_chain_info.at(i);
 
         log_debug(
             tt::LogOp,
-            "core logical=({},{})->phys=({},{}), q=[{},{}), chain={{part:{}, inj:{}, sink:{}, "
+            "core logical=({},{})->phys=({},{}), q_base={} stride={} count={}, chain={{part:{}, inj:{}, sink:{}, "
             "b:{}, h:{}, q_start:{}, q_cnt:{}, next_cnt:{}}}",
             core.x,
             core.y,
             core_work.at(i).physical_core.x,
             core_work.at(i).physical_core.y,
-            global_q_start,
-            global_q_end,
+            work.q_base,
+            work.q_stride,
+            work.q_count,
             chain.participates,
             chain.is_injector,
             chain.is_sink,
@@ -1576,8 +1561,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         // Zero-seq when no joint; address unused at runtime (L=0 => no joint writes).
         writer_args.push_back(joint_out_buf);
         writer_args.push_back(stats_buf);
-        writer_args.push_back(global_q_start);
-        writer_args.push_back(global_q_end);
+        writer_args.push_back(work.q_base);
+        writer_args.push_back(work.q_stride);
+        writer_args.push_back(work.q_count);
         writer_args.push_back(static_cast<uint32_t>(args.ring_size));
         writer_args.push_back(device_index);
         writer_args.push_back(direction);
@@ -1649,30 +1635,18 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
                                           // dispatch via
                                           // ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments
 
-                // Find the injector core for this MUX writer's (batch, head)
-                const auto& mux_head_work = core_work.at(i).head_work;
-                CoreCoord injector_physical = {0, 0};
-                if (mux_head_work.empty()) {
-                    log_warning(
-                        tt::LogOp,
-                        "MUX writer core ({},{}) has no head_work; cannot determine injector",
-                        core.x,
-                        core.y);
-                } else {
-                    uint32_t head_key = mux_head_work[0].batch * NH + mux_head_work[0].head;
-                    auto it = injector_physical_by_head.find(head_key);
-                    if (it != injector_physical_by_head.end()) {
-                        injector_physical = it->second;
-                    } else {
-                        log_warning(
-                            tt::LogOp,
-                            "MUX writer core ({},{}) batch={} head={}: no injector found in chain info",
-                            core.x,
-                            core.y,
-                            mux_head_work[0].batch,
-                            mux_head_work[0].head);
-                    }
-                }
+                // The injector this MUX writer signals is its own row's injector: all passes of a
+                // row share one injector, and this atomic-inc destination is baked once for the
+                // whole op. A participating row without an injector is a host bug, not a runtime
+                // condition, so fail loudly instead of signaling core (0,0).
+                const auto& row_injector = injector_physical_by_row.at(core.y);
+                TT_FATAL(
+                    row_injector.has_value(),
+                    "MUX writer core ({},{}) has no injector for row {}: chain construction is inconsistent.",
+                    core.x,
+                    core.y,
+                    core.y);
+                const CoreCoord injector_physical = row_injector.value();
                 writer_args.push_back(static_cast<uint32_t>(injector_physical.x));
                 writer_args.push_back(static_cast<uint32_t>(injector_physical.y));
                 writer_args.push_back(args.num_links);  // num_muxes_in_direction
@@ -1689,8 +1663,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
         // Compute args
         KernelDescriptor::RTArgList compute_args;
-        compute_args.push_back(global_q_start);
-        compute_args.push_back(global_q_end);
+        compute_args.push_back(work.q_base);
+        compute_args.push_back(work.q_stride);
+        compute_args.push_back(work.q_count);
         compute_args.push_back(static_cast<uint32_t>(args.ring_size));
         compute_args.push_back(device_index);
         compute_args.push_back(direction);
