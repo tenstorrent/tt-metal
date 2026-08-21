@@ -73,7 +73,7 @@ def test_decode_timing(*, mesh_device, backends, latent_hw):
 )
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
 @pytest.mark.parametrize("latent_hw", [(16, 16), (34, 60)], ids=["s16", "s34x60"])
-def test_decode_wsp_timing(*, mesh_device, latent_hw):
+def test_decode_wsp_timing(*, mesh_device, latent_hw, decode_tree):
     if not CHECKPOINT.exists():
         pytest.skip(f"missing {CHECKPOINT}")
     from models.tt_dit.parallel.manager import CCLManager
