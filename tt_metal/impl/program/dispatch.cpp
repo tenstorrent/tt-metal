@@ -1350,8 +1350,8 @@ public:
 
     // Write unicast semaphore commands to the device command sequence.
     void assemble_unicast_commands(
-        const MetalContext& metal_ctx,
-        HostMemDeviceCommand& device_command_sequence,
+        MetalContext& metal_ctx,
+        std::vector<HostMemDeviceCommand>& device_command_sequences,
         ProgramImpl& program,
         const CommandConstants& constants) const {
         // Unicast Semaphore Cmd
@@ -1359,6 +1359,16 @@ public:
         for (const auto& cmds : unicast_semaphore_cmds) {
             uint32_t curr_sub_cmd_idx = 0;
             for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : cmds.payload) {
+                DeviceCommandCalculator calculator(metal_ctx);
+                calculator.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+                    num_sub_cmds_in_cmd, cmds.size, constants.packed_write_max_unicast_sub_cmds);
+                TT_FATAL(
+                    calculator.write_offset_bytes() <= constants.max_prefetch_command_size,
+                    "A unicast semaphore command is {} B, exceeding the {} B prefetcher command limit",
+                    calculator.write_offset_bytes(),
+                    constants.max_prefetch_command_size);
+                device_command_sequences.emplace_back(metal_ctx, calculator.write_offset_bytes());
+                HostMemDeviceCommand& device_command_sequence = device_command_sequences.back();
                 uint32_t sem_addr = cmds.dst + program.get_program_config(index).sem_offset;
                 device_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
                     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS,
@@ -1377,6 +1387,7 @@ public:
                     RecordDispatchData(
                         program.get_context_id(), program.get_id(), DISPATCH_DATA_SEMAPHORE, data_and_size.second);
                 }
+                TT_ASSERT(device_command_sequence.size_bytes() == device_command_sequence.write_offset_bytes());
             }
         }
     }
@@ -2001,8 +2012,12 @@ public:
     // batched transfers.  This is done by combining adjacent or nearly adjacent
     // transfers into a single command and linking transfers to the same CoreRanges.
     void construct_commands(
-        const MetalContext& metal_ctx, BatchedTransfers& batched_transfers, DeviceCommandCalculator& calculator) {
+        const MetalContext& metal_ctx,
+        BatchedTransfers& batched_transfers,
+        DeviceCommandCalculator& calculator,
+        uint32_t max_prefetch_command_size) {
         const auto& hal = metal_ctx.hal();
+        uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
         uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
         // Optimize transfers by combining adjacent or nearly adjacent transfers.
         for (auto& transfer_set : batched_transfers) {
@@ -2025,10 +2040,31 @@ public:
         // Generate WritePackedLargeSubCmds from the transfers.
         for (auto& transfer_set : batched_transfers) {
             for (auto& [start, transfer_vector] : transfer_set.second) {
-                if (batched_dispatch_subcmds.empty() ||
-                    batched_dispatch_subcmds.back().size() >= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS) {
+                TT_ASSERT(start == transfer_vector.front().start);
+                const uint32_t transfer_size = static_cast<uint32_t>(transfer_vector.back().end() - start);
+                const uint32_t current_subcommand_count =
+                    batched_dispatch_subcmds.empty() ? 0
+                                                     : static_cast<uint32_t>(batched_dispatch_subcmds.back().size());
+                const uint32_t current_data_size = batched_cmd_data.empty() || batched_cmd_data.back().empty()
+                                                       ? 0
+                                                       : static_cast<uint32_t>(batched_cmd_data.back().back().end());
+                if (batched_dispatch_subcmds.empty() || dispatch_write_packed_large_requires_new_command(
+                                                            current_subcommand_count,
+                                                            current_data_size,
+                                                            transfer_size,
+                                                            pcie_alignment,
+                                                            l1_alignment,
+                                                            max_prefetch_command_size)) {
                     batched_dispatch_subcmds.emplace_back();
                     batched_cmd_data.emplace_back();
+                    const uint32_t single_transfer_command_size =
+                        dispatch_write_packed_large_size_bytes(1, transfer_size, pcie_alignment, l1_alignment);
+                    TT_FATAL(
+                        single_transfer_command_size <= max_prefetch_command_size,
+                        "A single program-configuration transfer produces a {} B prefetcher command, exceeding the "
+                        "{} B limit",
+                        single_transfer_command_size,
+                        max_prefetch_command_size);
                 }
                 if (!batched_dispatch_subcmds.back().empty()) {
                     auto& last_transfer = batched_dispatch_subcmds.back().back();
@@ -2036,14 +2072,12 @@ public:
                         last_transfer.flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
                     }
                 }
-                TT_ASSERT(start == transfer_vector.front().start);
-                size_t size = transfer_vector.back().end() - start;
-                TT_ASSERT(size > 0);
-                TT_ASSERT(size - 1 <= std::numeric_limits<uint16_t>::max());
+                TT_ASSERT(transfer_size > 0);
+                TT_ASSERT(transfer_size - 1 <= std::numeric_limits<uint16_t>::max());
                 batched_dispatch_subcmds.back().emplace_back(CQDispatchWritePackedLargeSubCmd{
                     .noc_xy_addr = transfer_set.first.first,
                     .addr = start,
-                    .length_minus1 = (uint16_t)(size - 1),
+                    .length_minus1 = static_cast<uint16_t>(transfer_size - 1),
                     .num_mcast_dests = static_cast<uint8_t>(transfer_set.first.second),
                     .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE});
 
@@ -2060,19 +2094,28 @@ public:
             }
         }
         for (size_t i = 0; i < batched_dispatch_subcmds.size(); i++) {
-            calculator.add_dispatch_write_packed_large(
-                batched_dispatch_subcmds[i].size(),
-                batched_cmd_data[i].back().end() - batched_cmd_data[i].front().start);
+            const uint32_t subcommand_count = static_cast<uint32_t>(batched_dispatch_subcmds[i].size());
+            const uint32_t command_data_size =
+                static_cast<uint32_t>(batched_cmd_data[i].back().end() - batched_cmd_data[i].front().start);
+            const uint32_t command_size = dispatch_write_packed_large_size_bytes(
+                subcommand_count, command_data_size, pcie_alignment, l1_alignment);
+            TT_FATAL(
+                command_size <= max_prefetch_command_size,
+                "Program-configuration command {} is {} B, exceeding the {} B prefetcher command limit",
+                i,
+                command_size,
+                max_prefetch_command_size);
+            calculator.add_dispatch_write_packed_large(subcommand_count, command_data_size);
 
             batched_dispatch_subcmds[i].back().flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
         }
     }
 
-    // Assemble the batched transfer commands into the device command sequence.
+    // Preserve each size-bounded transfer command as an independent fetch queue entry.
     void assemble_commands(
-        const MetalContext& metal_ctx,
+        MetalContext& metal_ctx,
         ProgramCommandSequence& program_command_sequence,
-        HostMemDeviceCommand& device_command_sequence,
+        std::vector<HostMemDeviceCommand>& device_command_sequences,
         DispatchWriteOffsets write_offset = DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE) {
         const auto& hal = metal_ctx.hal();
         uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
@@ -2081,8 +2124,11 @@ public:
         // Byte offset to skip count word when watcher enabled. Uses sizeof(uint32_t) instead of 1
         // because transfer.data and data_collection_location are byte pointers (uint8_t*)
         uint32_t count_word_byte_offset = is_watcher_assert_enabled(metal_ctx) ? sizeof(uint32_t) : 0;
+        device_command_sequences.reserve(device_command_sequences.size() + batched_dispatch_subcmds.size());
         // Write out batched semaphore + CB multicast transfers.
         for (uint32_t i = 0; i < batched_dispatch_subcmds.size(); ++i) {
+            device_command_sequences.emplace_back(metal_ctx, command_size_bytes(i, metal_ctx));
+            HostMemDeviceCommand& device_command_sequence = device_command_sequences.back();
             auto& cmd_data = batched_cmd_data[i];
             size_t last_end = cmd_data.front().start;
             std::vector<ttsl::Span<const uint8_t>> batched_data;
@@ -2173,7 +2219,18 @@ public:
                 j++;
                 last_end = transfer.end();
             }
+            TT_ASSERT(device_command_sequence.size_bytes() == device_command_sequence.write_offset_bytes());
         }
+    }
+
+    uint32_t command_count() const { return static_cast<uint32_t>(batched_dispatch_subcmds.size()); }
+
+    uint32_t command_size_bytes(uint32_t command_index, MetalContext& metal_ctx) const {
+        DeviceCommandCalculator calculator(metal_ctx);
+        const auto& command_data = batched_cmd_data.at(command_index);
+        calculator.add_dispatch_write_packed_large(
+            batched_dispatch_subcmds.at(command_index).size(), command_data.back().end() - command_data.front().start);
+        return calculator.write_offset_bytes();
     }
 
 private:
@@ -2543,26 +2600,31 @@ void assemble_device_commands(
         metal_ctx, mesh_device, constants, program, batched_transfers, absolute_cross_node_config_transfers);
 
     BatchedTransferGenerator batched_transfer_generator;
-    batched_transfer_generator.construct_commands(metal_ctx, batched_transfers, program_config_buffer_calculator);
+    batched_transfer_generator.construct_commands(
+        metal_ctx, batched_transfers, program_config_buffer_calculator, constants.max_prefetch_command_size);
     BatchedTransferGenerator absolute_cross_node_config_generator;
     absolute_cross_node_config_generator.construct_commands(
-        metal_ctx, absolute_cross_node_config_transfers, program_config_buffer_calculator);
+        metal_ctx,
+        absolute_cross_node_config_transfers,
+        program_config_buffer_calculator,
+        constants.max_prefetch_command_size);
 
-    program_command_sequence.program_config_buffer_command_sequence =
-        HostMemDeviceCommand(metal_ctx, program_config_buffer_calculator.write_offset_bytes());
+    program_command_sequence.program_config_buffer_command_sequences.clear();
+    program_command_sequence.program_config_buffer_command_sequences.reserve(
+        batched_transfer_generator.command_count() + absolute_cross_node_config_generator.command_count());
     batched_transfer_generator.assemble_commands(
-        metal_ctx, program_command_sequence, program_command_sequence.program_config_buffer_command_sequence);
+        metal_ctx, program_command_sequence, program_command_sequence.program_config_buffer_command_sequences);
     absolute_cross_node_config_generator.assemble_commands(
         metal_ctx,
         program_command_sequence,
-        program_command_sequence.program_config_buffer_command_sequence,
+        program_command_sequence.program_config_buffer_command_sequences,
         DISPATCH_WRITE_OFFSET_ZERO);
     semaphore_command_generator.assemble_unicast_commands(
-        metal_ctx, program_command_sequence.program_config_buffer_command_sequence, program, constants);
+        metal_ctx, program_command_sequence.program_config_buffer_command_sequences, program, constants);
     // Ensure that we use the correct amount of space for each command sequence
     TT_ASSERT(
-        program_command_sequence.program_config_buffer_command_sequence.size_bytes() ==
-        program_command_sequence.program_config_buffer_command_sequence.write_offset_bytes());
+        program_command_sequence.get_program_config_buffer_size() ==
+        program_config_buffer_calculator.write_offset_bytes());
 
     // Assemble binary
     const auto& program_transfer_info = program.get_program_transfer_info();
@@ -2657,7 +2719,11 @@ void assemble_device_commands(
         log_trace(
             tt::LogDispatch,
             "Program Config Buffer:    {} bytes",
-            program_command_sequence.program_config_buffer_command_sequence.size_bytes());
+            program_command_sequence.get_program_config_buffer_size());
+        log_trace(
+            tt::LogDispatch,
+            "Program Config Commands:  {} commands",
+            program_command_sequence.program_config_buffer_command_sequences.size());
         log_trace(
             tt::LogDispatch,
             "Program Binary:           {} bytes",
@@ -2671,7 +2737,7 @@ void assemble_device_commands(
             "Go Signal:                {} bytes",
             program_command_sequence.go_msg_command_sequence.size_bytes());
         uint32_t total_size = program_command_sequence.preamble_command_sequence.size_bytes() + total_rta_size +
-                              program_command_sequence.program_config_buffer_command_sequence.size_bytes() +
+                              program_command_sequence.get_program_config_buffer_size() +
                               program_command_sequence.program_binary_command_sequence.size_bytes() +
                               program_command_sequence.launch_msg_command_sequence.size_bytes() +
                               program_command_sequence.go_msg_command_sequence.size_bytes();
@@ -3301,10 +3367,11 @@ void write_program_command_sequence(
         write_data_to_cq(cmds.data(), cmds.size_bytes());
     }
 
-    // Write the program config buffer
-    write_data_to_cq(
-        program_command_sequence.program_config_buffer_command_sequence.data(),
-        program_command_sequence.program_config_buffer_command_sequence.size_bytes());
+    // Keep the generated command boundaries when one-shot mode is unavailable; each command fits one fetch entry.
+    program_command_sequence.visit_program_config_buffer_commands(
+        [&write_data_to_cq](const HostMemDeviceCommand& commands) {
+            write_data_to_cq(commands.data(), commands.size_bytes());
+        });
 
     // Need to stall before writing the program binary?
     if (stall_before_program) {

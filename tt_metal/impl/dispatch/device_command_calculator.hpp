@@ -22,6 +22,12 @@ class DeviceCommandCalculator {
 public:
     explicit DeviceCommandCalculator(MetalContext& ctx);
 
+    DeviceCommandCalculator(uint32_t pcie_alignment, uint32_t l1_alignment) :
+        pcie_alignment(pcie_alignment), l1_alignment(l1_alignment) {
+        TT_ASSERT(pcie_alignment > 0);
+        TT_ASSERT(l1_alignment > 0);
+    }
+
     uint32_t write_offset_bytes() const { return this->cmd_write_offsetB; }
 
     void add_dispatch_wait() {
@@ -354,4 +360,30 @@ private:
     uint32_t pcie_alignment = 0;
     uint32_t l1_alignment = 0;
 };
+
+inline uint32_t dispatch_write_packed_large_size_bytes(
+    uint32_t num_subcommands, uint32_t data_size_bytes, uint32_t pcie_alignment, uint32_t l1_alignment) {
+    DeviceCommandCalculator calculator(pcie_alignment, l1_alignment);
+    calculator.add_dispatch_write_packed_large(num_subcommands, data_size_bytes);
+    return calculator.write_offset_bytes();
+}
+
+inline bool dispatch_write_packed_large_requires_new_command(
+    uint32_t current_subcommand_count,
+    uint32_t current_data_size_bytes,
+    uint32_t next_data_size_bytes,
+    uint32_t pcie_alignment,
+    uint32_t l1_alignment,
+    uint32_t max_prefetch_command_size) {
+    if (current_subcommand_count == 0) {
+        return false;
+    }
+    if (current_subcommand_count >= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS) {
+        return true;
+    }
+    const uint32_t prospective_data_size = tt::align(current_data_size_bytes, l1_alignment) + next_data_size_bytes;
+    return dispatch_write_packed_large_size_bytes(
+               current_subcommand_count + 1, prospective_data_size, pcie_alignment, l1_alignment) >
+           max_prefetch_command_size;
+}
 }  // namespace tt::tt_metal
