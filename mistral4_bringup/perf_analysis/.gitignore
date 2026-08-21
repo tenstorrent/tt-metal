@@ -1,0 +1,7 @@
+# The repo root .gitignore blanket-ignores *.csv. The tt-perf-report summaries below are
+# small and are the perf evidence, so re-include them (last matching rule wins).
+!*.csv
+
+# ...except the raw Tracy per-op capture, which exceeds pre-commit's 500 KB ceiling.
+# It is committed gzipped alongside instead.
+mistral4_mla_seq5k_ops.csv

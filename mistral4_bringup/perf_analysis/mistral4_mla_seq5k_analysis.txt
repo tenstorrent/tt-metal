@@ -1,0 +1,75 @@
+Source: mistral4_bringup/perf_analysis/mistral4_mla_seq5k_ops.csv
+Rows: 1,090
+Operation types: {'tt_dnn_device': 1088, 'signpost': 2}
+Devices: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23', '24', '25', '26', '27', '28', '29', '30', '31']
+Trace replay sessions: {}
+No replay session or signposted window found; analyzing the full CSV
+Measured rows: 1,088
+
+Kernel-duration sum per device:
+  device  0: 1.243 ms
+  device  1: 1.128 ms
+  device  2: 1.259 ms
+  device  3: 1.263 ms
+  device  4: 0.991 ms
+  device  5: 1.243 ms
+  device  6: 1.067 ms
+  device  7: 1.241 ms
+  device  8: 1.512 ms
+  device  9: 1.397 ms
+  device 10: 1.346 ms
+  device 11: 1.219 ms
+  device 12: 1.740 ms
+  device 13: 1.451 ms
+  device 14: 1.308 ms
+  device 15: 1.371 ms
+  device 16: 1.984 ms
+  device 17: 1.538 ms
+  device 18: 1.291 ms
+  device 19: 1.230 ms
+  device 20: 1.573 ms
+  device 21: 1.657 ms
+  device 22: 1.361 ms
+  device 23: 1.190 ms
+  device 24: 1.512 ms
+  device 25: 1.094 ms
+  device 26: 1.238 ms
+  device 27: 1.063 ms
+  device 28: 1.242 ms
+  device 29: 1.177 ms
+  device 30: 1.162 ms
+  device 31: 1.076 ms
+
+Operation contributions (maximum per-device sum):
+  RingJointSDPADeviceOperation                   1.006 ms   50.7%  rows=32
+  ReduceScatterMinimalAsyncDeviceOperation       0.342 ms   17.2%  rows=64
+  HighBwAllGatherDeviceOperation                 0.253 ms   12.8%  rows=64
+  MatmulDeviceOperation                          0.227 ms   11.5%  rows=192
+  LayerNormDeviceOperation                       0.025 ms    1.3%  rows=64
+  ConcatDeviceOperation                          0.023 ms    1.1%  rows=64
+  TilizeDeviceOperation                          0.022 ms    1.1%  rows=128
+  RotaryEmbeddingLlamaDeviceOperation            0.022 ms    1.1%  rows=64
+  SliceDeviceOperation                           0.016 ms    0.8%  rows=128
+  NlpCreateHeadsDeviceOperation                  0.016 ms    0.8%  rows=32
+  NLPConcatHeadsDeviceOperation                  0.016 ms    0.8%  rows=32
+  TypecastDeviceOperation                        0.008 ms    0.4%  rows=128
+  FastReduceNCDeviceOperation                    0.007 ms    0.3%  rows=32
+  UpdateKVCacheOperation                         0.005 ms    0.2%  rows=32
+  GenericOpDeviceOperation                       0.002 ms    0.1%  rows=32
+
+Longest individual device operations:
+  device 16  RingJointSDPADeviceOperation               1.006 ms  call=31760
+  device 20  RingJointSDPADeviceOperation               0.927 ms  call=31764
+  device  8  RingJointSDPADeviceOperation               0.926 ms  call=31752
+  device 12  RingJointSDPADeviceOperation               0.926 ms  call=31756
+  device 21  RingJointSDPADeviceOperation               0.855 ms  call=31765
+  device 17  RingJointSDPADeviceOperation               0.823 ms  call=31761
+  device 13  RingJointSDPADeviceOperation               0.812 ms  call=31757
+  device  9  RingJointSDPADeviceOperation               0.812 ms  call=31753
+  device 10  RingJointSDPADeviceOperation               0.698 ms  call=31754
+  device 14  RingJointSDPADeviceOperation               0.698 ms  call=31758
+  device 18  RingJointSDPADeviceOperation               0.698 ms  call=31762
+  device 22  RingJointSDPADeviceOperation               0.697 ms  call=31766
+  device 15  RingJointSDPADeviceOperation               0.612 ms  call=31759
+  device 19  RingJointSDPADeviceOperation               0.582 ms  call=31763
+  device 23  RingJointSDPADeviceOperation               0.582 ms  call=31767
