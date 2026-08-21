@@ -632,7 +632,10 @@ def _golden_function_reglu(input_tensor_a, dim=-1, *args, **kwargs):
     split_size = golden_input.size(-1) // 2
     split_tensors = torch.split(golden_input, split_size_or_sections=[split_size, split_size], dim=dim)
     tensA, tensB = split_tensors[0], split_tensors[1]
-    return tensA * torch.nn.functional.relu(tensB)
+    result = tensA * torch.nn.functional.relu(tensB)
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        return integer_golden.restore_unsigned(result, input_tensor_a.dtype)
+    return result
 
 
 ttnn.attach_golden_function(ttnn.reglu, golden_function=_golden_function_reglu)
@@ -815,70 +818,6 @@ def register_ttl_activation_function_glu(name, ttl_activation_function, param):
 
         output_tensor = ttnn.reshape(output_tensor, ttnn.Shape(glu_shape))
         return output_tensor
-
-
-def _golden_function_glu(input_tensor_a, dim=-1, *args, **kwargs):
-    import torch
-
-    # Comparison-mode calls may omit optional dimensions just like the public operation.
-    # Keep the host reference default aligned with the device implementation.
-    return torch.nn.functional.glu(input_tensor_a, dim)
-
-
-ttnn.attach_golden_function(ttnn.glu, golden_function=_golden_function_glu)
-
-
-def _golden_function_reglu(input_tensor_a, dim=-1, *args, **kwargs):
-    import torch
-
-    assert isinstance(dim, int), "dim must be an integer"
-    assert dim in [-1, 3], "dim must be -1 or 3"
-
-    # Torch does not implement ReLU for uint16/uint32, so widen only the host reference.
-    # The default dimension also matches the public fused activation operation.
-    golden_input = (
-        input_tensor_a.to(torch.int64) if input_tensor_a.dtype in (torch.uint16, torch.uint32) else input_tensor_a
-    )
-    split_size = golden_input.size(-1) // 2
-    split_tensors = torch.split(golden_input, split_size_or_sections=[split_size, split_size], dim=dim)
-    tensA, tensB = split_tensors[0], split_tensors[1]
-    return tensA * torch.nn.functional.relu(tensB)
-
-
-ttnn.attach_golden_function(ttnn.reglu, golden_function=_golden_function_reglu)
-
-
-def _golden_function_geglu(input_tensor_a, dim=-1, *args, **kwargs):
-    import torch
-
-    # Match the C++ default when comparison mode receives no dim argument.
-    assert isinstance(dim, int), "dim must be an integer"
-    assert dim in [-1, 3], "dim must be -1 or 3"
-
-    split_size = input_tensor_a.size(-1) // 2
-    split_tensors = torch.split(input_tensor_a, split_size_or_sections=[split_size, split_size], dim=dim)
-    tensA, tensB = split_tensors[0], split_tensors[1]
-
-    return tensA * torch.nn.functional.gelu(tensB)
-
-
-ttnn.attach_golden_function(ttnn.geglu, golden_function=_golden_function_geglu)
-
-
-def _golden_function_swiglu(input_tensor_a, dim=-1, *args, **kwargs):
-    import torch
-
-    assert isinstance(dim, int), "dim must be an integer"
-    assert dim in [-1, 3], "dim must be -1 or 3"
-
-    split_size = input_tensor_a.size(-1) // 2
-    split_tensors = torch.split(input_tensor_a, split_size_or_sections=[split_size, split_size], dim=dim)
-    tensA, tensB = split_tensors[0], split_tensors[1]
-
-    return tensA * torch.nn.functional.silu(tensB)
-
-
-ttnn.attach_golden_function(ttnn.swiglu, golden_function=_golden_function_swiglu)
 
 
 def _golden_function_normalize_global(input_tensor_a, *args, **kwargs):

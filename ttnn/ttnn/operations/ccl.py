@@ -234,11 +234,9 @@ def _golden_function_all_to_all_combine(
     import torch
 
     expert_mapping = expert_mapping_tensor[0, 0].bool()
-    num_devices = expert_mapping.shape[-1]
-    if expert_metadata_tensor.shape[0] == num_devices:
-        expert_metadata = expert_metadata_tensor[0].long()
-    else:
-        expert_metadata = expert_metadata_tensor[:, 0].long()
+    # Metadata is replicated on its leading mesh-device axis. Select one complete
+    # [batch, sequence, selected_experts] copy without dropping the batch axis.
+    expert_metadata = expert_metadata_tensor[0].long()
 
     batch, sequence, selected_experts = expert_metadata.shape
     output = torch.zeros(
@@ -271,19 +269,92 @@ def _golden_function_all_to_all_combine(
 ttnn.attach_golden_function(ttnn.all_to_all_combine, golden_function=_golden_function_all_to_all_combine)
 
 
+def _preprocess_reduce_to_root_golden_inputs(function_args, function_kwargs):
+    function_args = list(function_args)
+    function_kwargs = dict(function_kwargs)
+    input_names = ("input_tensor_l", "input_tensor_s", "input_tensor_m")
+    mesh_shape = None
+
+    for index, input_name in enumerate(input_names):
+        input_tensor = function_args[index] if index < len(function_args) else function_kwargs[input_name]
+        if mesh_shape is None:
+            mesh_shape = tuple(input_tensor.device().shape)
+        input_tensors = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(input_tensor)]
+        if index < len(function_args):
+            function_args[index] = input_tensors
+        else:
+            function_kwargs[input_name] = input_tensors
+
+    function_kwargs["_golden_mesh_shape"] = mesh_shape
+    return tuple(function_args), function_kwargs
+
+
 def _golden_function_reduce_to_root(
-    input_tensor_l,
-    input_tensor_s,
-    input_tensor_m,
+    input_tensors_l,
+    input_tensors_s,
+    input_tensors_m,
     root_coord,
     *args,
+    scale_fp32=1.0,
+    _golden_mesh_shape=None,
     **kwargs,
 ):
-    # Non-root outputs are implementation-owned, so retain the three host state tensors.
-    return input_tensor_l, input_tensor_s, input_tensor_m
+    import torch
+
+    if _golden_mesh_shape is None:
+        return None
+    if len(input_tensors_l) != 4 or len(input_tensors_s) != 4 or len(input_tensors_m) != 4:
+        raise ValueError("reduce_to_root golden requires the operation's fixed four-device topology")
+
+    tile_width = 32
+    num_cores = input_tensors_s[0].shape[-1] // tile_width
+    if num_cores == 0 or input_tensors_s[0].shape[-1] % tile_width != 0:
+        raise ValueError("reduce_to_root golden requires tile-aligned S state")
+
+    states = []
+    for tensor_l, tensor_s, tensor_m in zip(input_tensors_l, input_tensors_s, input_tensors_m):
+        if tensor_s.shape != tensor_m.shape or tensor_l.shape[-1] % num_cores != 0:
+            raise ValueError("reduce_to_root golden received incompatible L, S, and M state shapes")
+        l_core_width = tensor_l.shape[-1] // num_cores
+        states.append(
+            (
+                tensor_l.reshape(*tensor_l.shape[:-1], num_cores, l_core_width),
+                tensor_s.reshape(*tensor_s.shape[:-1], num_cores, tile_width),
+                tensor_m.reshape(*tensor_m.shape[:-1], num_cores, tile_width),
+            )
+        )
+
+    def reduce_states(state_a, state_b):
+        tensor_l_a, tensor_s_a, tensor_m_a = state_a
+        tensor_l_b, tensor_s_b, tensor_m_b = state_b
+        tensor_m = torch.maximum(tensor_m_a, tensor_m_b)
+        scale_a = torch.exp((tensor_m_a - tensor_m) * scale_fp32)
+        scale_b = torch.exp((tensor_m_b - tensor_m) * scale_fp32)
+        tensor_s = tensor_s_a * scale_a + tensor_s_b * scale_b
+        l_core_width = tensor_l_a.shape[-1]
+        tensor_l = tensor_l_a * scale_a[..., :1].expand(*scale_a.shape[:-1], l_core_width)
+        tensor_l += tensor_l_b * scale_b[..., :1].expand(*scale_b.shape[:-1], l_core_width)
+        return tensor_l, tensor_s, tensor_m
+
+    left_reduction = reduce_states(states[0], states[1])
+    right_reduction = reduce_states(states[3], states[2])
+    tensor_l, tensor_s, tensor_m = reduce_states(right_reduction, left_reduction)
+    tensor_l = tensor_l / tensor_s[..., :1].expand(*tensor_l.shape)
+
+    output_l = tensor_l.reshape(input_tensors_l[0].shape)
+    output_s = tensor_s.reshape(input_tensors_s[0].shape)
+    output_m = tensor_m.reshape(input_tensors_m[0].shape)
+    root_index = _mesh_coordinate_to_index(root_coord, _golden_mesh_shape)
+    for output in (output_l, output_s, output_m):
+        output._ttnn_mesh_index = root_index
+    return output_l, output_s, output_m
 
 
-ttnn.attach_golden_function(ttnn.reduce_to_root, golden_function=_golden_function_reduce_to_root)
+ttnn.attach_golden_function(
+    ttnn.reduce_to_root,
+    golden_function=_golden_function_reduce_to_root,
+    preprocess_golden_function_inputs=_preprocess_reduce_to_root_golden_inputs,
+)
 
 
 def _golden_function_moe(

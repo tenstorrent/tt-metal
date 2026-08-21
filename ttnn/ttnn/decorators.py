@@ -70,7 +70,9 @@ def compare_tensors_using_pcc(
         if pcc_is_degenerate:
             if golden_output.dtype != torch_output.dtype:
                 torch_output = torch_output.to(golden_output.dtype)
-            matches = bool(torch.allclose(golden_output, torch_output, rtol=1e-5, atol=1e-4, equal_nan=True))
+            matches = golden_output.shape == torch_output.shape and bool(
+                torch.allclose(golden_output, torch_output, rtol=1e-5, atol=1e-4, equal_nan=True)
+            )
             actual_pcc = 1.0 if matches else 0.0
         else:
             matches, actual_pcc = comp_pcc(golden_output, torch_output, desired_pcc)
@@ -270,6 +272,11 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
                 ttnn_tensor = ttnn.from_device(ttnn_tensor)
             ttnn_tensor = ttnn.to_dtype(ttnn_tensor, ttnn.float32)
         return ttnn.to_torch(ttnn_tensor, **kwargs)
+
+    mesh_index = getattr(golden_tensor, "_ttnn_mesh_index", None)
+    if mesh_index is not None:
+        device_tensors = ttnn.get_device_tensors(tensor)
+        return convert_ttnn_to_torch(device_tensors[mesh_index])
 
     try:
         topology = tensor.tensor_topology()
@@ -910,6 +917,19 @@ class Operation:
                     global_golden_function_args_and_kwargs = preprocess_global_golden_function_inputs(
                         function_args, function_kwargs
                     )
+                    if (
+                        local_golden_function_args_and_kwargs is not None
+                        and global_golden_function_args_and_kwargs is not None
+                    ):
+                        _, local_golden_function_kwargs = local_golden_function_args_and_kwargs
+                        _, global_golden_function_kwargs = global_golden_function_args_and_kwargs
+                        global_golden_function_kwargs.update(
+                            {
+                                key: value
+                                for key, value in local_golden_function_kwargs.items()
+                                if key.startswith("_ttnn_")
+                            }
+                        )
 
                 function_return_value = function(*function_args, **function_kwargs)
 

@@ -59,6 +59,8 @@ def _golden_function(input_shape: ttnn.Shape, dtype=None, *_, **__):
 
     # The TTNN API permits dtype, layout, device, and memory config as positional arguments.
     # Torch only needs the requested dtype, so absorb the remaining allocation-only arguments.
+    if isinstance(input_shape, ttnn.Shape):
+        input_shape = tuple(input_shape)
     torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else None
     return torch.ones(input_shape, dtype=torch_dtype)
 

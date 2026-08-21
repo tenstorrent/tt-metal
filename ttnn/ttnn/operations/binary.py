@@ -261,12 +261,35 @@ def _golden_function_assign(input_tensor_a, input_tensor_b=None, *args, **kwargs
 ttnn.attach_golden_function(ttnn.assign, golden_function=_golden_function_assign)
 
 
-def _golden_function_broadcast(input_tensor, sender_coord, *args, **kwargs):
-    # Host comparison has no mesh communication context, so preserve the tensor values.
-    return input_tensor
+def _preprocess_broadcast_golden_inputs(function_args, function_kwargs):
+    input_tensor = function_args[0] if function_args else function_kwargs["input_tensor"]
+    input_tensors = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(input_tensor)]
+
+    function_args = list(function_args)
+    function_kwargs = dict(function_kwargs)
+    if function_args:
+        function_args[0] = input_tensors
+    else:
+        function_kwargs["input_tensor"] = input_tensors
+    function_kwargs["_golden_mesh_shape"] = tuple(input_tensor.device().shape)
+    return tuple(function_args), function_kwargs
 
 
-ttnn.attach_golden_function(ttnn.broadcast, golden_function=_golden_function_broadcast)
+def _golden_function_broadcast(input_tensors, sender_coord, *args, _golden_mesh_shape=None, **kwargs):
+    if _golden_mesh_shape is None:
+        return None
+
+    sender_index = 0
+    for coordinate, dimension in zip(sender_coord, _golden_mesh_shape):
+        sender_index = sender_index * dimension + int(coordinate)
+    return input_tensors[sender_index]
+
+
+ttnn.attach_golden_function(
+    ttnn.broadcast,
+    golden_function=_golden_function_broadcast,
+    preprocess_golden_function_inputs=_preprocess_broadcast_golden_inputs,
+)
 
 
 def _golden_function(a, b, *args, **kwargs):
