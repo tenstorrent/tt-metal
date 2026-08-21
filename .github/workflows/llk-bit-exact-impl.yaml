@@ -22,11 +22,10 @@ permissions:
 
 env:
   LLK_PATH: tt_metal/tt-llk
-  # Default ttnop sweep: unpack+math, sync sites.
+  # Default ttnop sweep: unpack+math, sync sites; 45 delay counts sampled from 1-100.
   TTNOP_THREADS: unpack,math
   TTNOP_SITE_MODE: sync
-  # TTNOP_DELAYS: 1-100 # TEMP restore
-  TTNOP_DELAYS: 1,5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,100 # TEMP: 20-count grid
+  TTNOP_DELAYS: 1,4,6,10,13,18,19,27,28,33,34,36,37,39,40,41,43,46,47,50,52,54,56,57,59,61,62,63,65,66,69,72,73,75,76,78,80,83,86,90,91,93,96,97,98
   # Watchdog (ttnop/supervise.py). Spelled out rather than left to the defaults
   # so the knobs are visible next to the sweep's own.
   # One worker silent mid-case for this long means the device stopped answering
