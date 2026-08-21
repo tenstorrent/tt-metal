@@ -1,0 +1,6 @@
+# Runtime artifacts that can land inside models/demos/gemma4/.
+
+# ISL perf sweep output (tests/e2e/test_isl_sweep.py). The CSVs are ignored at
+# root; the directory and the compare/scoreboard files written beside them are
+# not.
+isl_sweep_logs/
