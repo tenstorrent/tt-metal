@@ -197,9 +197,24 @@ The same rule applies to anything that allocates *between* replays, and the step
 such sites. `TracedDecodeRunner.prepare` handed the encoder output over with `ttnn.copy`, which
 allocates a device temporary; it now stages through the host, once per forecast, at no measurable
 cost. The eager encoder itself allocates too, so on the stepped path the trace is released before
-it runs and recaptured afterwards -- ~13 ms against a ~110 ms Student's t sampling forecast. Mean
-mode pays neither, because its encoder runs inside the trace. The full suite now runs with zero
-allocator warnings:
+it runs and recaptured afterwards. Mean mode pays neither, because its encoder runs inside the
+trace.
+
+That recapture grows with the row count while the per-step dispatch it saves does not, so the
+stepped path stops tracing above `stepped_trace_max_rows` (64). Student's t sampling, one series,
+bfloat16 + SDPA, best of three:
+
+| Rows | Traced | Untraced | Ratio |
+|-----:|-------:|---------:|------:|
+| 4    | 70.8 ms | 173.9 ms | 0.41x |
+| 16   | 95.9 ms | 177.0 ms | 0.54x |
+| 64   | 191.9 ms | 193.5 ms | 0.99x |
+| 256  | 523.8 ms | 349.4 ms | 1.50x |
+| 1000 | 1832.8 ms | 1195.6 ms | 1.53x |
+
+The crossover sits almost exactly at 64 rows, which is where the threshold is set. Net effect on
+the Stage 3 target: 1000 samples went from 1.68 s to **1.165 s**, against a 2 s gate. The full
+suite now runs with zero allocator warnings:
 
 ```
 pytest models/demos/time_series_transformer/ -q   # 100 passed, 0 "unsafe ... active trace"

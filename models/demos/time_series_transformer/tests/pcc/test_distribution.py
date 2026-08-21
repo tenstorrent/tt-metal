@@ -223,3 +223,49 @@ class TestDeviceSampling:
             assert float(output.std(dim=1).mean()) > 0.0, "device draws must actually vary"
         finally:
             model.release_traces()
+
+
+class TestEndToEndLoss:
+    """NLL computed from the TT forward pass, not from the reference hidden state.
+
+    ``TestMoments.test_nll_within_tolerance`` feeds the HuggingFace decoder output through the
+    TT head, so it gates the projection and the domain map alone. These drive the whole TT
+    stack -- encoder, decoder and head -- so accumulated device error lands in the number, and
+    apply the future observed mask the way HuggingFace's training loss does.
+    """
+
+    @staticmethod
+    def build(device, config, hf_state):
+        model = TimeSeriesTransformer(config, device=device)
+        result = model.load_hf_state_dict(hf_state, strict=True)
+        assert not result["missing_keys"]
+        return model
+
+    def test_nll_from_tt_forward_matches_reference(self, device, config, hf_state, goldens):
+        model = self.build(device, config, hf_state)
+        output = model.forward(future_values=goldens.future_values, **goldens.inputs)
+
+        actual = float(model.negative_log_likelihood(output, goldens.future_values))
+        expected = float(goldens.nll.mean())
+
+        error = relative_error(expected, actual)
+        assert error < NLL_TOLERANCE, f"end-to-end NLL {actual:.4f} vs reference {expected:.4f} -- {error * 100:.2f}%"
+
+    def test_observed_mask_weights_the_loss(self, device, config, hf_state, goldens):
+        """A masked step must contribute nothing -- the loss is the mean over kept steps."""
+        model = self.build(device, config, hf_state)
+        output = model.forward(future_values=goldens.future_values, **goldens.inputs)
+
+        keep = config.prediction_length // 2
+        mask = torch.ones_like(goldens.future_values)
+        mask[:, keep:] = 0.0
+
+        masked = float(model.negative_log_likelihood(output, goldens.future_values, future_observed_mask=mask))
+        unmasked = float(model.negative_log_likelihood(output, goldens.future_values))
+        assert masked != pytest.approx(unmasked), "the future observed mask had no effect on the loss"
+
+        # Recompute the same quantity directly from the TT distribution over the kept steps.
+        parameters = [to_torch(p) for p in output.distribution_parameters]
+        distribution = model.distribution_head.torch_distribution(parameters, loc=output.loc, scale=output.scale)
+        per_step = -distribution.log_prob(goldens.future_values)
+        assert masked == pytest.approx(float(per_step[:, :keep].mean()), rel=1e-4)

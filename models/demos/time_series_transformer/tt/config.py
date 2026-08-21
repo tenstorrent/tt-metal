@@ -76,6 +76,12 @@ class TimeSeriesTransformerConfig:
     # because composing the reduction costs six dispatches instead of one.
     use_exact_softmax: bool = False
     use_kv_cache: bool = True
+    # The stepped sampling path re-runs the encoder eagerly every forecast, and the encoder
+    # must not allocate against a live trace, so keeping the trace costs a recapture per call.
+    # That recapture grows with the row count while the per-step dispatch it saves does not,
+    # so above this many rows the same forecast is faster with no trace at all. Measured on
+    # N300 (bfloat16 + SDPA): 0.41x at 4 rows, 0.54x at 16, 0.99x at 64, 1.53x at 1000.
+    stepped_trace_max_rows: int = 64
     use_program_cache: bool = True
     use_trace: bool = False
 

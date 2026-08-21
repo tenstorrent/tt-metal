@@ -245,18 +245,21 @@ class TimeSeriesTransformer:
             return self._shape_forecast(forecast, batch=past_values.shape[0], samples=samples)
 
         # The stepped path runs the encoder eagerly, once per forecast, and tt-metal warns
-        # about any allocation made while a trace is live. Releasing first means the encoder
-        # allocates against a clean device and the trace is recaptured afterwards; measured,
-        # the recapture costs ~13 ms against a ~110 ms sampling forecast. The rollout path
-        # does not pay this at all -- it runs the encoder inside its own trace.
+        # about any allocation made while a trace is live -- a trace's intermediates are freed
+        # after capture but still written on replay, so that warning is a real hazard, not
+        # noise. Releasing first means the encoder allocates against a clean device. Past
+        # config.stepped_trace_max_rows the recapture that costs is worse than the dispatch it
+        # saves, so the forecast simply runs untraced. The rollout path pays none of this: its
+        # encoder runs inside its own trace.
         if config.use_trace:
             self.release_traces()
+        use_stepped_trace = config.use_trace and rows <= config.stepped_trace_max_rows
         encoder_hidden = self.encode(network_inputs.transformer_inputs)
         repeated_encoder_hidden = (
             ttnn.repeat_interleave(encoder_hidden, repeats=samples, dim=0) if samples > 1 else encoder_hidden
         )
 
-        runner = self._traced("decode", rows) if config.use_trace else None
+        runner = self._traced("decode", rows) if use_stepped_trace else None
         if runner is not None:
             runner.prepare(repeated_encoder_hidden)
             caches = None

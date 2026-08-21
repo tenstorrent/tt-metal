@@ -207,8 +207,8 @@ class TestScalingLimits:
         """1000 trajectories for one series in under 2 s.
 
         Only the performance profile clears this. At 1000 rows the cost is device throughput
-        at width, not host overhead -- float32 takes 3.43 s, bfloat16 with the flash kernel
-        1.77 s.
+        at width, not host overhead, so the stepped path drops its trace here (see
+        ``stepped_trace_max_rows``): traced it measures 1.83 s, untraced 1.20 s.
         """
         inputs = make_inputs(hf_model.config, batch=1)
         with traced_model(device, config, hf_state, profile="performance") as model:
