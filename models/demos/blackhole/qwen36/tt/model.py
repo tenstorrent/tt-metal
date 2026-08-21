@@ -747,9 +747,12 @@ class Qwen36Model:
         T = len(prompt_ids)
         T_pad = max(128, _math.ceil(T / 128) * 128)
         padded = prompt_ids + [0] * (T_pad - T)
-        if is_blackhole():
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        if not tpc.wh_9b_n300(self.args):
             # Blackhole executes the pre-migration statements verbatim (see e83017ce0ec):
-            # full-logits readback here, argmax on host. return_token is never passed.
+            # full-logits readback here, argmax on host. return_token is never passed. T3K/N150
+            # land here too now -- confirmed not needed on T3K (Wormhole gating audit, item 11).
             logits = self.prefill_tp(torch.tensor([padded], dtype=torch.long), valid_len=T)
             nxt = int(torch.argmax(logits).item())
             out = [nxt]
@@ -916,10 +919,14 @@ class Qwen36Model:
                 page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
             )
 
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
         for layer_idx, layer in enumerate(self.layers):
             # GDN chunk length drives the chunk-seq kernel's L1-resident output relayout; cap it on
-            # Wormhole (see _GDN_MASKED_SEG). Chunking is exact — state carries between chunks.
-            _gdn_cs = chunk_size if is_blackhole() else min(chunk_size, self._GDN_MASKED_SEG)
+            # N300 (see _GDN_MASKED_SEG, measured single-device). Chunking is exact — state
+            # carries between chunks. Narrowed from is_blackhole() — confirmed not needed on T3K,
+            # whose higher TP splits Nv further (Wormhole gating audit, item 12).
+            _gdn_cs = chunk_size if not tpc.wh_9b_n300(self.args) else min(chunk_size, self._GDN_MASKED_SEG)
             layer_chunk_size = attn_chunk_size if layer.is_full_attention else _gdn_cs
 
             chunks_out = []
@@ -3394,8 +3401,10 @@ class Qwen36Model:
         # the traced forward, i.e. "TT_FATAL: Writes are not supported during trace capture".
         # Today that is masked by the warmup forward happening to run first; matching the sizes
         # makes it correct by construction instead of by luck.
-        if is_blackhole():
-            # BH keeps the original host-computed, host-packed cos/sin: unchanged flow.
+        if not tpc.wh_9b_n300(self.args):
+            # BH and T3K/N150 keep the original host-computed, host-packed cos/sin: unchanged
+            # flow. Narrowed from is_blackhole() -- confirmed not needed on T3K (Wormhole gating
+            # audit, item 11).
             from models.demos.blackhole.qwen36.tt.generator_interface import pack_rope_host
 
             if self.num_devices > 1:
@@ -3451,7 +3460,11 @@ class Qwen36Model:
 
         on_device_logits=True: return the raw vocab-sharded shard for the on-device sampler.
         """
-        if is_blackhole():
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        if not tpc.wh_9b_n300(self.args):
+            # T3K/N150 land here too now -- confirmed not needed on T3K (Wormhole gating audit,
+            # item 11).
             from models.demos.blackhole.qwen36.tt.generator_interface import unpack_rope
 
             cos, sin = unpack_rope(rot_mat_idxs)

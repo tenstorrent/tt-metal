@@ -21,6 +21,7 @@ the shared function exactly as before -- this file changes nothing there.
 """
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     _recurrent_read_query_program_config,
     l2_norm_ttnn,
@@ -240,10 +241,24 @@ def recurrent_gated_delta_rule_decode_wh(
     return o, h
 
 
-def recurrent_gated_delta_rule_decode_dispatch(*args, **kwargs):
-    """Blackhole -> the shared upstream function, byte-for-byte unchanged. Wormhole -> the variant
-    above. Same is_blackhole()-gated dispatch shape as conv_fir_wh.causal_conv1d_fir_dispatch, so
-    gdn/tp.py's call sites don't need their own branching."""
-    if is_blackhole():
+def recurrent_gated_delta_rule_decode_dispatch(*args, model_args=None, **kwargs):
+    """Blackhole -> the shared upstream function, byte-for-byte unchanged. wh_9b_n300 -> the
+    variant above. Same model_args-gated dispatch shape as
+    conv_fir_wh.causal_conv1d_fir_dispatch, so gdn/tp.py's call sites don't need their own
+    branching.
+
+    model_args: the caller's ModelArgs (gdn/tp.py passes self.args), used to scope the fork to
+    wh_9b_n300. None (default, for any caller that hasn't been updated) falls back to the
+    previous is_blackhole()-only decision.
+
+    DELIBERATE narrowing (Wormhole gating audit, item 1): this used to be is_blackhole()-gated
+    (Wormhole-wide), so T3K and N150 got the WH variant too. Narrowed to wh_9b_n300 on purpose --
+    the WH variant is bit-identical to upstream when high_precision=False and a measured
+    ~15-20us/step win when True (q's dead-weight fp32 promotion skipped; see this file's module
+    docstring), so T3K/N150 falling back to upstream is a pure perf regression there, not a
+    correctness one. Accepted per explicit instruction -- don't revert this to is_blackhole()
+    without re-measuring on T3K/N150."""
+    _use_wh = tpc.wh_9b_n300(model_args) if model_args is not None else (not is_blackhole())
+    if not _use_wh:
         return _recurrent_gated_delta_rule_decode_upstream(*args, **kwargs)
     return recurrent_gated_delta_rule_decode_wh(*args, **kwargs)
