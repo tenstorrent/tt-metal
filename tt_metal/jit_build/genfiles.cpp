@@ -355,6 +355,17 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
             << crta_layout.vararg_section_offset << " + idx); }\n";
+    // Address of a vararg, for helpers that need the ARG BLOCK ITSELF to be the storage rather than
+    // a copy of it. A helper handed a pointer it does not own (dataflow_kernel_lib::ReceiverPipe is
+    // the case in hand) outlives any stack array a caller builds, so the only safe backing is the
+    // L1 arg block, which lives for the whole kernel. Same baked offset as get_vararg, so the same
+    // 0-based index names the same word.
+    content << "FORCE_INLINE const uint32_t* get_vararg_addr(uint32_t idx) { return reinterpret_cast<const "
+               "uint32_t*>(get_arg_addr("
+            << named_rta_words << " + idx)); }\n"
+            << "FORCE_INLINE const uint32_t* get_common_vararg_addr(uint32_t idx) { return reinterpret_cast<const "
+               "uint32_t*>(get_common_arg_addr("
+            << crta_layout.vararg_section_offset << " + idx)); }\n";
 
     // Compile-time vararg helpers — always emitted (separate from RTA/CRTA varargs).
     // Three accessors:
