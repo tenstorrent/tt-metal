@@ -25,11 +25,10 @@ _CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and torus-y-8x1 and pad0' --wr
 _CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0' --wrapper-invocation"
 
 
-# The four baselines below were all measured at seq_len_per_chip=3200. The rows now run
-# ISL_TOKENS_PER_CHIP (640), and device time does not scale with ISL -- fixed dispatch overhead, CCL
-# latency floors and expert-loop tails all stay put -- so the numbers describe a workload that no
-# longer exists. They are kept as history and the assertions are disabled until someone re-measures
-# on the gating box (Galaxy 8x4 for the two _galaxy tests, LoudBox 8x1 + 2x4 for the proxy pair).
+# Device time does not scale with ISL -- fixed dispatch overhead, CCL latency floors and expert-loop
+# tails all stay put -- so these values cannot be rescaled, only re-measured: Galaxy 8x4 for the two
+# _galaxy tests, LoudBox 8x1 + 2x4 for the proxy pair (which feed one estimate and must be cut
+# together). They stay here as the reference point for that measurement.
 _ISL_REBASELINE_SKIP = pytest.mark.skip(
     reason="baseline measured at 3200 tokens/chip; rows now run 640/chip. Re-measure on the gating "
     "box, then drop this mark."

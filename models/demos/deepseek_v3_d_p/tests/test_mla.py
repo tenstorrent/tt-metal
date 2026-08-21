@@ -217,10 +217,9 @@ def run_model(
     mesh_shape = list(mesh_device.shape)
 
     # scale_down_sl runs the one prefill ISL: 640 tokens on every chip, so the global length follows
-    # the mesh. (The old form divided `seq_len` by a [32, 4] production mesh, which pinned 3200
-    # tokens/chip.) `max_sl` keeps the parametrized seq_len, which is the long-context leg.
-    # Note: under scale_down_sl the seq_len parametrize no longer varies the workload, so for
-    # test_ds_mla the seq128k and seq100k scaled cases run identical shapes.
+    # the mesh. `max_sl` keeps the parametrized seq_len, which is the long-context leg. Note that
+    # under scale_down_sl the seq_len parametrize no longer varies the workload, so test_ds_mla's
+    # seq128k and seq100k scaled cases run identical shapes.
     if scale_down_sl:
         seq_len = ISL_TOKENS_PER_CHIP * mesh_shape[sp_axis]
 

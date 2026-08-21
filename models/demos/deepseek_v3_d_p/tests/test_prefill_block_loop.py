@@ -94,8 +94,7 @@ def _ci_unsupported_param_combos(**params):
 @pytest.mark.parametrize(
     "isl_total",
     # One entry per SP factor the mesh list below covers, each carrying ISL_TOKENS_PER_CHIP on
-    # every chip: 640 x {1, 2, 4, 8}. Pick the one matching the mesh under test -- the old list sat
-    # at 3200 tokens/chip on every mesh.
+    # every chip: 640 x {1, 2, 4, 8}. Pick the one matching the mesh under test.
     [640, 1280, 2560, 5120],
     ids=["isl_640", "isl_1k28", "isl_2k56", "isl_5k"],
 )
