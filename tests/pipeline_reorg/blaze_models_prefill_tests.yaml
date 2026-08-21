@@ -342,7 +342,7 @@
   team: models
   sp_config: sc1
 
-- name: "GLM-5.2-744B MoE accuracy 12.5k + perf 25k"
+- name: "GLM-5.2-744B MoE accuracy + perf 5k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -385,13 +385,13 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T MoE accuracy 5k + perf 25k"
+- name: "Kimi-K2.6-1T MoE accuracy + perf 5k"
   fabric_profile: torus_xy
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "torus-xy-8x4 and (kimi-5k-pcc or kimi-25k-perf)" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "torus-xy-8x4 and (kimi-5k-pcc or kimi-5k-perf)" -vvv --tb=short
     '
   test_type: kimi_moe
   test_group: module
