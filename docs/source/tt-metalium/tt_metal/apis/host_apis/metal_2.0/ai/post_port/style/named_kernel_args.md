@@ -185,10 +185,27 @@ down. For **each kernel** in the factory you are converting, record in `METAL2_S
    the signature's arg names matching the registered names — conditional bindings, defines, and arg
    registration are all unchanged.
 
-Also confirm the **shared-kernel** status of each entry point: a kernel this op's *other*
-(unconverted) factories also bind cannot be converted in place — it forks, per
-[`pass_procedure.md`](../pass_procedure.md) scope rules and the port recipe's shared-kernel
-caution. Note it; do not edit a shared kernel to suit one factory.
+Also confirm the **shared-kernel** status of each entry point — a source that *another* factory
+binds, whether another factory of this op or, via an out-of-dir donor, another op. (Detect it: grep
+the kernel's source path across the tree and diff every binder's registered schema.) Whether it
+converts **in place** turns on its **format**, not merely that it is shared, because the conversion is
+host-transparent — kernel-only, the shim fetching the same registered schema
+([Rule 7](#rule-7--host-side-stays-minimal)):
+
+- **Already Metal 2.0** (reads `get_arg(args::…)`) → **convert it in place.** Every binder keeps
+  working with no host edit, *provided* (1) every binder registers the **identical** named-arg schema
+  for it (same names + CTA/RTA-CRTA kinds, no binder-specific extra or missing arg — else the
+  two-sided `check_name_sets` cannot hold for all of them: a cross-factory union → **hard stop**, or an
+  out-of-scope per-binding fork), and (2) the conversion needs **no host flag-promotion** (a
+  `#define`→CTA move would ripple into every binder's factory — no longer kernel-only). You are
+  changing a kernel *all* its consumers use, so the **sentinel set must cover every consumer**, and an
+  **out-of-dir** shared kernel crosses the op-directory limit — both make it a
+  [Step 3](#step-3--confirm-with-the-invoker) sign-off item. Never change a shared kernel's schema to
+  suit one factory; that breaks the others.
+- **Pre-Metal-2.0** (positional `get_arg_val`, or the hybrid `get_named_compile_time_arg_val`) → **do
+  not port it here.** Nothing is on `get_arg(args::…)` to restyle yet; porting it means the *base*
+  Metal 2.0 kernel-arg port, which rewrites the host↔kernel contract and ripples into every binder —
+  out of scope. Leave it legacy, report "needs the base port first."
 
 A kernel already in the explicit-args form with no convertible `#ifdef` is a legitimate
 **no-op** entry — record it and move on.
@@ -201,9 +218,11 @@ Stop. Present, and get explicit sign-off on:
   critical test is missing. A missed sentinel turns this whole pass into a silent false-green.
 - **The scope** — which factory or factories this run converts, and which are deferred.
 - **The `METAL2_STYLE_PLAN.md`** — in particular any flag you propose to promote to a CTA (a host
-  change), any kernel you found a **hard stop** (conditional args, or a non-`uint32_t` registered
-  arg), and any kernel only *partially* convertible (varargs, shared-kernel fork). These are the
-  decisions worth a human glance before you spend a build.
+  change), any kernel you found a **hard stop** (conditional args, a non-`uint32_t` registered arg, or
+  a pre-Metal-2.0 / differing-schema shared kernel), any kernel only *partially* convertible
+  (varargs), and any **shared kernel you propose to convert in place** — especially an out-of-dir
+  donor — together with the widened sentinel set that must now cover *every* consuming factory/op.
+  These are the decisions worth a human glance before you spend a build.
 
 This is the checkpoint that keeps a large structural pass from running off a wrong assumption. It
 is cheap for the invoker (a read) and it is where a scope or test-coverage error gets caught before
@@ -237,7 +256,12 @@ reading the log, one pytest at a time.
 
 Change nothing outside the factory and its kernels; the three scope limits of
 [`pass_procedure.md` Step 3](../pass_procedure.md#step-3--apply) hold in full, as does the ban on
-`experimental/quasar/` as evidence.
+`experimental/quasar/` as evidence — **with one gated exception:** an **already-Metal-2.0 shared
+kernel this factory binds may be converted in place even when it lives outside the op directory**,
+because the change is host-transparent ([Step 2](#step-2--study-and-plan)). That is not a general
+license to edit other ops — it applies only to a kernel *this* factory binds, only when it is already
+on `get_arg(args::…)`, and only with [Step 3](#step-3--confirm-with-the-invoker) sign-off and the
+sentinel set widened to every consumer.
 
 ### Step 5 — Re-verify
 
@@ -485,7 +509,7 @@ replaced) is edited, and it is reported as a repair per
 | Promoting a flag that gates a conditional resource | loses the `#define` the `#ifdef` still needs, and there's nothing to convert to anyway | Promote *only* pure-value flags (every gated name always present); leave the rest as `#define` + `#ifdef` ([Rule 3](#rule-3--flags)). |
 | Hand-written `kernel_main()` left in | collides with the generated shim | Delete it; the `TT_KERNEL` entry is the whole kernel. |
 | CRTA inferred from the kernel | wrong dispatch kind | The kernel can't see RTA vs CRTA; preserve the host split ([Rule 2](#rule-2--the-arg-name-contract)). |
-| Shared entry point converted in place | breaks the op's other (unported) factories | Fork per the shared-kernel caution; never edit a shared kernel to suit one factory. |
+| Shared entry point converted in place | fine if it's already Metal 2.0 *and* every binder registers the same schema — otherwise breaks a binder, or needs the base port | Already-Metal-2.0 + identical schema across binders → convert in place (host-transparent), with consumer-wide sentinels + [Step 3](#step-3--confirm-with-the-invoker) sign-off. Differing schema → cross-factory union hard stop ([Rule 5](#rule-5--conditional-args-are-a-hard-stop)). Pre-Metal-2.0 → leave (needs base port). Never change a shared kernel's schema for one factory. |
 | Always-binding a conditional DFB to dodge the `#ifdef` | wasted L1; the anti-pattern the basic recipe forbids | Keep the binding conditional; keep the `#ifdef`. The real fix is unbound accessors (#52179), not here. |
 
 ---
@@ -508,8 +532,13 @@ cannot cover it.** Specifically here:
 - A kernel reaches arguments through **varargs** (`get_vararg`), which have no signature spelling —
   convert the named args, leave the vararg reads manual, and report the kernel as **partially
   convertible**.
-- The transformation would require touching a **shared kernel** in place, or any file **outside
-  the op directory**.
+- The transformation would require touching a **pre-Metal-2.0** shared kernel (needs the base Metal
+  2.0 kernel-arg port first), or a shared kernel whose binders register **differing schemas**
+  (cross-factory union — [Rule 5](#rule-5--conditional-args-are-a-hard-stop)), or any file **outside
+  the op directory** that is *not* an already-Metal-2.0 kernel this factory binds. (An
+  already-Metal-2.0 shared kernel — in-dir, or an out-of-dir donor you bind — is convertible in place
+  with [Step 3](#step-3--confirm-with-the-invoker) sign-off and consumer-wide sentinels; see
+  [Step 2](#step-2--study-and-plan).)
 - Anything that pushes you toward changing *what the kernel computes or binds* rather than *how it
   spells its arguments and gates its branches*. This pass changes spelling and gating; if the
   behaviour has to move for the conversion to work, the kernel is doing something this recipe did
@@ -581,10 +610,15 @@ Three things this recipe did not warn about, worth carrying:
 
 - **A "factory" may be several factory *methods* in one file, and some kernels it binds are donor
   kernels *outside* the op directory.** `permute_tiled_program_factory.cpp` holds three methods, and
-  two of the tiled kernels are shared from `transpose/` and `eltwise/unary/`. Those out-of-dir donors
-  are untouchable by the scope rule ([Step 4](#step-4--apply)) and the shared-kernel caution — convert
-  the in-dir kernels, leave the donors. Expect a factory's bound-kernel list to include kernels you
-  must *not* edit.
+  the tiled kernels it binds include out-of-dir donors from `transpose/` (`transpose_wh_metal2.cpp`,
+  `reader_unary_transpose_hc_…_metal2.cpp`) and `eltwise/unary/`
+  (`writer_unary_interleaved_start_id_metal2.cpp`) — all **already Metal 2.0** (`void kernel_main()` +
+  `get_arg(args::…)`). Under the [shared-kernel rule](#step-2--study-and-plan) those are **convertible
+  in place** (host-transparent), but only as a deliberate cross-op action: Step 3 sign-off, sentinels
+  widened to transpose and unary, and only if every binder registers the same schema. This throwaway
+  run was scoped to the permute directory, so it **left the donors** — a real pass would either
+  convert them under that wider scope or defer them to the donor op's own run. Expect a factory's
+  bound-kernel list to include out-of-dir kernels whose conversion is a bigger, cross-op decision.
 - **An unused named CTA still must be listed as a template param** — the invariant reader registers
   `page_size`/`num_tiles` but never reads them, yet the two-sided `check_name_sets` forbids dropping
   them; they become harmless "dead" parameters ([Rule 1](#rule-1--the-signature)).

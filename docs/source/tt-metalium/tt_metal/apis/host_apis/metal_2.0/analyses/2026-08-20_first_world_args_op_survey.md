@@ -37,7 +37,10 @@ read-only subagent explorations (no builds, no tests, no device).
 - **Flags**: a *pure-value* flag (gates only always-present code) → promote to a `uint32_t` NTTP +
   `if constexpr`; a flag gating a **conditional resource** (a `dfb::`/`tensor::`/`sem::` token or arg
   provided only on some path) → **leave the `#ifdef`**.
-- **Conditional DFB/tensor/semaphore bindings** → the `#ifdef` stays. **Shared kernels** → fork.
+- **Conditional DFB/tensor/semaphore bindings** → the `#ifdef` stays. **Shared kernels**: an
+  already-Metal-2.0 one converts **in place** (the change is host-transparent) when every binder
+  registers the same schema — out-of-dir donors included, gated by sign-off + consumer-wide sentinels;
+  a pre-Metal-2.0 or differing-schema one is left (base port / cross-factory hard stop).
 
 An "outlier" below is anything outside this model, or a variation its rules / stops / pitfalls do not
 mention.
@@ -77,7 +80,10 @@ reference, not a target). **Everything else surveyed is pre-Metal-2.0 at the ker
   `NEEDS_Y_PADDING` (gates `dfb::cb_pad`, stays `#ifdef`) — the recipe's *per-flag* rule resolves it.
 - **Same source, multiple bindings, *same* arg-name set → convertible.** fold's `is_reader`
   dual-instance and cliff/full compute specs — one signature, multiple runtime bindings.
-- **Cross-op shared donor kernel → fork.** permute reuses a transpose reader.
+- **Cross-op shared donor kernel → convert in place (gated).** permute's tiled factory binds
+  already-Metal-2.0 donors from `transpose/` and `eltwise/unary/` (all `_metal2`, `get_arg(args::…)`);
+  under the refined shared-kernel rule these are convertible in place (host-transparent), gated by
+  Step 3 sign-off + cross-op sentinels. Only pre-Metal-2.0 or differing-schema donors are left.
 
 **No new recipe gap survives the filter.** The in-scope ops are all handled by the existing
 rules / stops.
