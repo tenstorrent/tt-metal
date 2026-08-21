@@ -160,6 +160,39 @@ tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopol
 
 }  // namespace
 
+TensorFlatbufferMetadata tensor_metadata_from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor) {
+    TT_FATAL(fb_tensor != nullptr, "Tensor flatbuffer pointer must not be null");
+    TT_FATAL(fb_tensor->tensor_spec() != nullptr, "Tensor spec is required for tensor");
+    TT_FATAL(fb_tensor->mesh_shape() != nullptr, "Mesh shape is required for tensor");
+    TT_FATAL(fb_tensor->shards() != nullptr, "Shards are required for tensor");
+
+    std::vector<TensorFlatbufferShard> shards;
+    shards.reserve(fb_tensor->shards()->size());
+    for (const auto* shard : *fb_tensor->shards()) {
+        TT_FATAL(shard != nullptr, "Tensor shard must not be null");
+        const auto* storage = shard->buffer_as<ttnn::flatbuffer::InlineFileStorage>();
+        TT_FATAL(storage != nullptr, "Only InlineFileStorage is supported in tensor serialization");
+        TT_FATAL(shard->mesh_coordinate() != nullptr, "Mesh coordinate is required for each shard");
+        shards.push_back(TensorFlatbufferShard{
+            .offset = storage->offset(),
+            .size = storage->size(),
+            .mesh_coordinate = from_flatbuffer(shard->mesh_coordinate()),
+        });
+    }
+
+    const auto mesh_shape = from_flatbuffer(fb_tensor->mesh_shape());
+    const auto* fb_topology = fb_tensor->tensor_topology();
+    auto topology = fb_topology != nullptr
+                        ? from_flatbuffer(fb_topology)
+                        : tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(mesh_shape);
+    return TensorFlatbufferMetadata{
+        .tensor_spec = ttnn::from_flatbuffer(fb_tensor->tensor_spec()),
+        .mesh_shape = mesh_shape,
+        .shards = std::move(shards),
+        .tensor_topology = std::move(topology),
+    };
+}
+
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<tt::tt_metal::HostBuffer>& buffers) {
     TT_FATAL(buffers.empty(), "Buffers vector must be empty");

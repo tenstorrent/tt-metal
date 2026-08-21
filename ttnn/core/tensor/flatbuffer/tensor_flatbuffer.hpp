@@ -14,6 +14,22 @@
 
 namespace ttnn {
 
+struct TensorFlatbufferShard {
+    uint64_t offset;
+    uint64_t size;
+    tt::tt_metal::distributed::MeshCoordinate mesh_coordinate;
+};
+
+struct TensorFlatbufferMetadata {
+    tt::tt_metal::TensorSpec tensor_spec;
+    tt::tt_metal::distributed::MeshShape mesh_shape;
+    std::vector<TensorFlatbufferShard> shards;
+    tt::tt_metal::TensorTopology tensor_topology;
+};
+
+// Decodes tensor metadata without accessing the payload.
+TensorFlatbufferMetadata tensor_metadata_from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor);
+
 // Converts FlatBuffer tensor to Tensor object, using inline file storage to offset into `tensor_data`.
 // The data is provided in `tensor_data` and `memory_pin` to load the tensor data lazily.
 //

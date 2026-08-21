@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace tt::tt_metal {
 
@@ -25,5 +26,13 @@ enum class DumpTensorMode : std::uint8_t {
 void dump_tensor_flatbuffer(
     const std::string& file_name, const Tensor& tensor, DumpTensorMode mode = DumpTensorMode::DISTRIBUTED_GATHER);
 Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device = nullptr);
+
+// Coalesces distributed BFLOAT4_B tensorbins into one host tensor concatenated along logical dimension 0.
+// Source payloads are copied shard-by-shard without materializing the individual input tensors.
+Tensor coalesce_tensorbins(const std::vector<std::string>& input_file_names);
+
+// Reinterprets the base of a coalesced device tensor using a compatible single-input host tensor spec.
+// The returned tensor shares ownership of the packed device allocation.
+Tensor alias_coalesced_tensor(const Tensor& packed_device_tensor, const Tensor& template_host_tensor);
 
 }  // namespace tt::tt_metal

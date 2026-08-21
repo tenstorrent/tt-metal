@@ -624,6 +624,52 @@ def dump_tensor(
     ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor, mode)
 
 
+@ttnn.register_python_operation(name="ttnn.coalesce_tensorbins")
+def coalesce_tensorbins(input_file_names: List[Union[str, pathlib.Path]]) -> ttnn.Tensor:
+    """
+    Coalesce BFLOAT4_B tensorbins into one distributed host tensor along dimension 0.
+
+    Each output shard contains exact copies of the corresponding input shard payloads in input order.
+    Input tensors are not decoded or collectively materialized, and no output file is written.
+
+    Args:
+        input_file_names (list[str | pathlib.Path]): Ordered input tensorbin paths.
+
+    Returns:
+        ttnn.Tensor: A distributed host tensor retaining the input topology and memory config.
+    """
+    if not input_file_names:
+        raise RuntimeError("coalesce_tensorbins requires at least one input file")
+
+    input_paths = [pathlib.Path(file_name) for file_name in input_file_names]
+    for input_path in input_paths:
+        _validate_file_extension(input_path)
+        if not input_path.exists():
+            raise RuntimeError(f"Unable to coalesce tensor from {input_path}. The file does not exist.")
+        if not input_path.is_file():
+            raise RuntimeError(f"Unable to coalesce tensor from {input_path}. The path is not a file.")
+
+    return ttnn._ttnn.tensor.coalesce_tensorbins([str(path) for path in input_paths])
+
+
+@ttnn.register_python_operation(name="ttnn.alias_coalesced_tensor")
+def alias_coalesced_tensor(packed_device_tensor: ttnn.Tensor, template_host_tensor: ttnn.Tensor) -> ttnn.Tensor:
+    """
+    Return a device alias at the base of a coalesced allocation using a single-input tensor spec.
+
+    The alias shares ownership of the full packed allocation, so it remains valid after the packed
+    tensor Python reference is released.
+
+    Args:
+        packed_device_tensor (ttnn.Tensor): Coalesced tensor resident on a mesh device.
+        template_host_tensor (ttnn.Tensor): Compatible single-input host tensor supplying the alias spec.
+
+    Returns:
+        ttnn.Tensor: Device tensor alias with the template shape and shard geometry.
+    """
+    return ttnn._ttnn.tensor.alias_coalesced_tensor(packed_device_tensor, template_host_tensor)
+
+
 @ttnn.register_python_operation(name="ttnn.as_tensor")
 def as_tensor(
     tensor: Union["torch.Tensor"],  # TODO: add support for numpy.ndarray and other tensor types

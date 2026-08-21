@@ -377,8 +377,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                const std::vector<int32_t>& dims,
                CoreRangeSet grid,
                ShardOrientation orientation) {
-                return self.sharded_across_dims_except(
-                    ttsl::Span<const int32_t>(dims), std::move(grid), orientation);
+                return self.sharded_across_dims_except(ttsl::Span<const int32_t>(dims), std::move(grid), orientation);
             },
             nb::arg("dims"),
             nb::arg("grid"),
@@ -677,6 +676,22 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("device") = nullptr,
             R"doc(
                 Load tensor to file using FlatBuffer format with inline file storage.
+            )doc")
+        .def(
+            "coalesce_tensorbins",
+            &coalesce_tensorbins,
+            nb::arg("input_file_names"),
+            nb::call_guard<nb::gil_scoped_release>(),
+            R"doc(
+                Coalesce BFLOAT4_B tensorbins into a distributed host tensor along dimension 0.
+            )doc")
+        .def(
+            "alias_coalesced_tensor",
+            &alias_coalesced_tensor,
+            nb::arg("packed_device_tensor"),
+            nb::arg("template_host_tensor"),
+            R"doc(
+                Alias the base of a packed device tensor with a compatible single-input host tensor spec.
             )doc");
 
     nb::class_<OverlappedTensorView>(m_tensor, "OverlappedTensor", R"doc(
