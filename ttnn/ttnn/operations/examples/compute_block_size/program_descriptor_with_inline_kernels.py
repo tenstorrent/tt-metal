@@ -117,8 +117,7 @@ void kernel_main() {
     constexpr auto untilize_rc = reconfig_on
                                      ? untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure
                                      : untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure;
-    constexpr auto add_rc = reconfig_on ? BinaryDataFormatReconfig::Input : BinaryDataFormatReconfig::None;
-    constexpr auto add_pack_rc = reconfig_on ? PackTileReconfig::Output : PackTileReconfig::None;
+    constexpr auto add_rc = reconfig_on ? DataFormatReconfig::Enabled : DataFormatReconfig::Disabled;
     constexpr auto mm_rc =
         reconfig_on ? matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT : matmul_config::DataFormatReconfig::NONE;
 
@@ -149,9 +148,10 @@ void kernel_main() {
                    tilize_config::WaitMode::WaitBlock, tilize_rc>(block_rows);
 
             // 3. interm = A + B (FPU eltwise add over the chunk's tiles).
-            add<cb_a_tiled, cb_b_tiled, cb_interm, BroadcastDim::None, InputLifecycle::Streaming,
-                InputLifecycle::Streaming, OutputLifecycle::Streaming, add_rc, add_pack_rc>(
-                EltwiseShape::tiles(block_ab_tiles));
+            add<input(cb_a_tiled, WaitPolicy::PerTile, PopPolicy::PerTile, add_rc),
+                input(cb_b_tiled, WaitPolicy::PerTile, PopPolicy::PerTile, add_rc),
+                output(cb_interm, ReservePolicy::PerTile, PushPolicy::PerTile, add_rc)>(
+                IterationShape::tiles(block_ab_tiles));
 
             // 4. mm_out = interm @ C. num_k_blocks == 1 (K fits in one block); retain C on the
             //    last (only) K-block so the next chunk's matmul reuses the same weights.
