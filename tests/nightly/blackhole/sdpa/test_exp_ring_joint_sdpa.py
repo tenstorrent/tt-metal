@@ -600,20 +600,6 @@ def run_exp_ring_joint_sdpa_nightly(
         mse = ((gt_out - tt_out_torch) ** 2).mean().item()
         logger.info(f"PCC: {out_pcc}, MSE: {mse:.2e}")
 
-        if tokens_per_frame is not None:
-            # Sparse triage: compare the TT output against BOTH the windowed reference (the real
-            # check) and the DENSE reference. If PCC-vs-dense ≈ 1.0, the frame mask isn't being
-            # applied (compute ran dense). If both PCCs are low AND |tt| >> |ref|, normalization is
-            # broken (unnormalized rows). Magnitudes bound attention output to the V range.
-            dense_gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False)[:, :, :total_seq, :]
-            _, pcc_vs_dense = comp_pcc(dense_gt, tt_out_torch, 0.0)
-            logger.info(
-                f"[sparse-triage] PCC(tt, windowed)={out_pcc} PCC(tt, dense)={pcc_vs_dense} "
-                f"|tt|max={tt_out_torch.abs().max().item():.3f} "
-                f"|windowed_ref|max={gt_out.abs().max().item():.3f} "
-                f"|dense_ref|max={dense_gt.abs().max().item():.3f}"
-            )
-
         assert out_pass, f"PCC {out_pcc} below threshold {pcc_threshold}"
         assert mse <= max_mse, f"MSE {mse:.2e} exceeds threshold {max_mse:.2e}"
 
