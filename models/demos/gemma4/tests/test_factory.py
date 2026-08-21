@@ -43,6 +43,33 @@ def _get_model_path():
 _HF_DEVICE_MAP_ENV = "GEMMA4_HF_DEVICE_MAP"
 
 
+def from_pretrained_gemma4_causal_lm(model_path, **kwargs):
+    """``from_pretrained`` that also loads the 12B unified multimodal release.
+
+    Local 12B trees often keep an adapted text ``config.json`` (so TT can read
+    ``text_config``) next to unified safetensors, with the original HF config
+    saved as ``config.json.unified``. ``AutoModelForCausalLM`` then instantiates
+    ``Gemma4ForConditionalGeneration`` and dies on the vision-tower shape
+    mismatch. Prefer the sidecar + ``Gemma4UnifiedForConditionalGeneration``
+    when present; otherwise use AutoModel (31B / CI NAS 12B).
+    """
+    from pathlib import Path
+
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    sidecar = Path(model_path) / "config.json.unified"
+    if sidecar.is_file():
+        config = AutoConfig.from_pretrained(sidecar, trust_remote_code=True)
+        try:
+            from transformers import Gemma4UnifiedForConditionalGeneration
+        except ImportError:
+            from transformers.models.gemma4_unified import Gemma4UnifiedForConditionalGeneration
+
+        logger.info("Loading HF reference via {} (unified sidecar)", sidecar.name)
+        return Gemma4UnifiedForConditionalGeneration.from_pretrained(model_path, config=config, **kwargs)
+    return AutoModelForCausalLM.from_pretrained(model_path, **kwargs)
+
+
 def load_hf_reference_model(model_path=None):
     """Load the full HF checkpoint used as the reference model.
 
@@ -50,8 +77,6 @@ def load_hf_reference_model(model_path=None):
     (default ``auto``); set that to ``cpu`` to force host. Caller owns the
     returned model and should ``del`` it when done -- these checkpoints are large.
     """
-    from transformers import AutoModelForCausalLM
-
     model_path = model_path or _get_model_path()
     device_map = os.environ.get(_HF_DEVICE_MAP_ENV, "auto")
     load_kwargs = {"torch_dtype": torch.bfloat16, "trust_remote_code": True}
@@ -61,7 +86,7 @@ def load_hf_reference_model(model_path=None):
     else:
         logger.warning("Loading HF reference model on CPU (set {}=auto for GPU)", _HF_DEVICE_MAP_ENV)
 
-    model = AutoModelForCausalLM.from_pretrained(model_path, **load_kwargs)
+    model = from_pretrained_gemma4_causal_lm(model_path, **load_kwargs)
     model.eval()
     return model
 
