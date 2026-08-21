@@ -59,12 +59,14 @@ def _write_state_wh(h, k_row, delta, beta_t, outer_bf8=False):
        the same broadcast cost as the first instead of a second full-size elementwise pass.
        MEASURED (WH, real shape): 484.1us vs 579.6us for scale-after (-16.5%).
 
-    5. ``outer_bf8`` (Wormhole 9B only -- see _decode_tile_opt in gdn/tp.py): write the outer
-       product's own output as bfloat8_b unless h is float32. WH decode h is bf16 (bf8 *state*
-       failed PCC), so this otherwise stays bf16 and pays a full-width BinaryNg write of [B,H,K,V]
-       at bf16; writing the increment as bf8 then adding into bf16 h cuts that write's bandwidth
-       without changing h's accumulation dtype. Default False keeps the original behaviour (bf8 only
-       when h itself is bf8) for the 27B."""
+    5. ``outer_bf8``: write the outer product's own output as bfloat8_b unless h is float32.
+       KEEP THIS FALSE -- it is wired False at the only call site and the default is False. It reads
+       like a free bandwidth win (the increment is rounded, h's accumulation dtype is untouched) but
+       it is not: h is bf16 on WH decode *because bf8 state failed PCC*, and rounding the increment
+       compounds over every decode step of every GDN layer. Enabled via tile_opt in dc854ee0cc6 it
+       cost ~0.04 of model-level logits PCC (0.99864 -> 0.95927 on
+       test_model_tp_decode_batched[B8], reaching 0.94561 by HEAD). Only h being bf8 already -- where
+       the increment is no coarser than the state -- justifies it."""
     B, H, V = h.shape[0], h.shape[1], h.shape[3]
     _L1 = ttnn.L1_MEMORY_CONFIG
 
@@ -201,7 +203,16 @@ def recurrent_gated_delta_rule_decode_wh(
     # Delta + state write (no re-decay). k_row feeds _write_state_wh directly (transposed there);
     # no intermediate [B,H,K] reshape needed since k_row had no other consumer after this point.
     delta = ttnn.subtract(v_t, v_read, memory_config=_L1)
-    h = _write_state_wh(h=h, k_row=k_row, delta=delta, beta_t=beta_t, outer_bf8=tile_opt)
+    # outer_bf8 is DELIBERATELY NOT tied to tile_opt: writing the recurrent-state increment at
+    # bf8 while h is bf16 is a real accuracy regression, not a free bandwidth win. It was bundled
+    # into tile_opt in dc854ee0cc6 and cost ~0.04 of model-level logits PCC -- bisected against
+    # the 2026-08-08 baseline: test_model_tp_decode_batched[B8] worst per-user PCC 0.99864 ->
+    # 0.95927 there, degrading further to 0.94561 by HEAD, and back to 0.99800 with this False.
+    # The state is accumulated every decode step across all GDN layers, so rounding the increment
+    # to bf8 compounds; the bf16 h dtype exists precisely because bf8 state failed PCC. Every
+    # other tile_opt optimisation (q's L2 fold, the [B,H,1,V] output layout, the a/b split and
+    # tile-native slices) is numerics-neutral and stays on.
+    h = _write_state_wh(h=h, k_row=k_row, delta=delta, beta_t=beta_t, outer_bf8=False)
 
     # o = q @ h. q_row was deliberately left at its incoming dtype above. Only cast it up when h is
     # fp32 (the high_precision path, where k/v/beta/g -- unlike q -- were already cast to fp32
