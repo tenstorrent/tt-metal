@@ -155,6 +155,25 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             args.slice_end.rank());
     }
     if (tensor_args.input.layout() == Layout::TILE) {
+        // Both tile factories derive their page sizes and tile counts from the architectural 32x32
+        // constants, and the tile is absent from compute_program_hash, so a non-standard tile would
+        // both compile a mis-sized program and alias onto a cached 32x32 one.
+        const auto tile = tensor_args.input.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+            "slice requires standard 32x32 tiles, got {}x{}",
+            tile.get_height(),
+            tile.get_width());
+        if (tensor_args.preallocated_output.has_value()) {
+            const auto out_tile = tensor_args.preallocated_output.value().tensor_spec().tile();
+            TT_FATAL(
+                out_tile == tile,
+                "The preallocated output tensor tile ({}x{}) must match the input tensor tile ({}x{})",
+                out_tile.get_height(),
+                out_tile.get_width(),
+                tile.get_height(),
+                tile.get_width());
+        }
         TT_FATAL(
             tensor_args.input.physical_volume() % TILE_HW == 0,
             "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",

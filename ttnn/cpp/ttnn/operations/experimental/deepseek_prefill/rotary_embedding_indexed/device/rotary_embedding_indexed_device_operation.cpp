@@ -73,6 +73,27 @@ void validate_runtime_args(
     // divisor/modulus to derive the boundary chip; a zero-height input chunk would divide by zero.
     TT_FATAL(chunk_local_t > 0, "input chunk seq dim ({}) must be at least one tile", input.padded_shape()[-2]);
 
+    // create_at sizes every DFB entry with tt::tile_size, derives its tile counts from the
+    // architectural 32x32 constants and passes TILE_HEIGHT as the tile_height compile arg, and the tile
+    // is absent from compute_program_hash. Runs on both paths so a non-standard tile is reported here
+    // rather than as a mis-sized program on a miss or a TensorSpec mismatch on a hit.
+    const auto require_standard_tile = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+            "rotary_embedding_indexed requires standard 32x32 tiles, but {} has a {}x{} tile",
+            name,
+            tile.get_height(),
+            tile.get_width());
+    };
+    require_standard_tile(input, "input");
+    require_standard_tile(cos, "cos");
+    require_standard_tile(tensor_args.sin, "sin");
+    require_standard_tile(tensor_args.trans_mat, "trans_mat");
+
     if (tensor_args.metadata.has_value()) {
         // Metadata path: kv_actual_global is read on-device from element [0] of the metadata tensor, so
         // its VALUE is the caller's responsibility. But the tensor is bound as tensor::metadata and read

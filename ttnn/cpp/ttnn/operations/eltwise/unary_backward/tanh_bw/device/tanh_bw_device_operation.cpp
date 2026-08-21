@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tanh_bw_device_operation.hpp"
+
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "tanh_bw_program_factory.hpp"
 
@@ -61,7 +64,26 @@ void TanhBwDeviceOperation::validate_on_program_cache_miss(
         "memory layout: `{}`",
         static_cast<int>(input_tensor.memory_config().memory_layout()));
 
+    // The factory sizes its circular buffers with tt::tile_size and splits work by
+    // physical_volume() / TILE_HW, and the tile is absent from compute_program_hash, so a
+    // non-standard tile would both compile a mis-sized program and alias onto a cached 32x32 one.
+    const auto require_standard_tile = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "TANH_BW operation requires standard 32x32 tiles, but {} has a {}x{} tile.",
+            name,
+            tile.get_height(),
+            tile.get_width());
+    };
+    require_standard_tile(input_tensor, "the input tensor");
+    require_standard_tile(tensor_args.grad_output, "the grad_output tensor");
+
     if (preallocated_input_grad.has_value()) {
+        require_standard_tile(preallocated_input_grad.value(), "the preallocated output tensor");
         const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
         const auto preallocated_output_shape = preallocated_input_grad.value().logical_shape();
         TT_FATAL(

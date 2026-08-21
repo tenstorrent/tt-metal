@@ -103,6 +103,25 @@ void validate_runtime_args(
         !(args.valid_global.has_value() && tensor_args.slot_idx.has_value()),
         "scalar valid_global cannot be combined with the metadata path; pass the valid_global TENSOR instead");
 
+    // create_descriptor's TILE branch derives its page size, Wt/input_Ht/cache_HtWt and the
+    // writer_tile_height compile arg from the architectural 32x32 constants, and the tile is absent
+    // from compute_program_hash. Checked here rather than in the miss validator so it also runs on the
+    // cache-hit path, where a non-standard tile would otherwise alias onto a cached 32x32 program.
+    const auto require_standard_tile = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+            "update_padded_kv_cache requires standard 32x32 tiles, but {} has a {}x{} tile",
+            name,
+            tile.get_height(),
+            tile.get_width());
+    };
+    require_standard_tile(cache, "cache");
+    require_standard_tile(tensor_args.input, "input");
+
     // Metadata-path invariant: the two per-request tensors are supplied together or not at all.
     // The path is selected on `slot_idx.has_value()`, but create_descriptor / override_runtime_arguments
     // dereference `kv_actual_global` unconditionally whenever slot_idx is set — a mismatched optional
