@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 
 namespace tt::tt_metal {
 
@@ -61,5 +62,26 @@ tt::tt_metal::ClusterType GetClusterType();
  * @return std::string Path to the serialized cluster descriptor file
  */
 std::string SerializeClusterDescriptor();
+
+/**
+ * @brief Translate a core coordinate between coordinate systems on one chip.
+ *
+ * Systems are named as in UMD's CoordSystem: "LOGICAL", "NOC0", "NOC1", "TRANSLATED".
+ * Strings rather than the enum so this header stays free of UMD includes.
+ *
+ * The mapping is per-chip, not a fixed offset: it depends on the harvesting
+ * configuration (Blackhole harvests tensix columns, Wormhole rows), so the delta
+ * between TRANSLATED and NOC0 differs between boards with different harvesting.
+ * Exposed mainly so host-side tooling can join data recorded in one space against
+ * data recorded in another -- e.g. NoC addresses captured on device are TRANSLATED,
+ * while the device profiler reports core coordinates in NOC0.
+ *
+ * @param device_id Chip to resolve the mapping for.
+ * @param x, y Coordinate in @p from_system.
+ * @param from_system, to_system Coordinate system names.
+ * @return The (x, y) pair in @p to_system.
+ */
+std::pair<uint32_t, uint32_t> TranslateCoreCoord(
+    int device_id, uint32_t x, uint32_t y, const std::string& from_system, const std::string& to_system);
 
 }  // namespace tt::tt_metal

@@ -713,7 +713,12 @@ void quick_push_if_linked(uint32_t cmd_buf, bool linked) {
 template <uint32_t timer_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
 struct profileScope {
     bool start_marked = false;
-    inline __attribute__((always_inline)) profileScope() {
+    bool rt_condition = true;
+    inline __attribute__((always_inline)) profileScope(bool rt_condition = true) {
+        this->rt_condition = rt_condition;
+        if (!this->rt_condition) {
+            return;
+        }
 #if defined(ARCH_QUASAR)
         // Quasar is L1-only for now, once the L1 buffer fills, markers are dropped.
         // The ~profileScope() writes the ZONE_END unconditionally, so the constructor reserves room
@@ -731,7 +736,7 @@ struct profileScope {
     }
 
     inline __attribute__((always_inline)) ~profileScope() {
-        if (start_marked) {
+        if (start_marked && this->rt_condition) {
             mark_time_at_index_inlined(wIndex, get_const_id(timer_id, ZONE_END));
             wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
             start_marked = false;
@@ -978,14 +983,15 @@ __attribute__((noinline)) void trace_only_init() {
 
 #include "noc_event_profiler.hpp"
 #include "perf_counters.hpp"
+#include "synchronization_event_profiler.hpp"
 
 // Not dispatch
 #if (!defined(DISPATCH_KERNEL))
 
-#define DeviceZoneScopedN(name)                                                \
+#define DeviceZoneScopedN(name, ...)                                           \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
+    kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>(__VA_ARGS__);
 
 #define DeviceTimestampedData(name, data)                                          \
     {                                                                              \
@@ -999,11 +1005,11 @@ __attribute__((noinline)) void trace_only_init() {
 // Dispatch and enabled
 #elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
 
-#define DeviceZoneScopedN(name)                                                          \
+#define DeviceZoneScopedN(name, ...)                                                     \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                         \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));           \
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
-        kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
+        kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>(__VA_ARGS__);
 
 #define DeviceTimestampedData(name, data)                                                            \
     {                                                                                                \
@@ -1017,7 +1023,7 @@ __attribute__((noinline)) void trace_only_init() {
 // Dispatch but disabled
 #else
 
-#define DeviceZoneScopedN(name) (void(sizeof(name)))
+#define DeviceZoneScopedN(name, ...) (void(sizeof(name)))
 
 #define DeviceTimestampedData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
 
@@ -1106,7 +1112,7 @@ __attribute__((noinline)) void trace_only_init() {
 
 #define DeviceZoneScopedMainChildN(name) (void(name))
 
-#define DeviceZoneScopedN(name) (void(name))
+#define DeviceZoneScopedN(name, ...) (void(name))
 
 #define DeviceZoneScopedSumN1(name) (void(name))
 
@@ -1129,6 +1135,23 @@ __attribute__((noinline)) void trace_only_init() {
 #define RECORD_NOC_EVENT_WITH_ID(type, local_addr, noc_id, addrgen, offset, num_bytes, vc, posted, noc)
 #define RECORD_NOC_EVENT(type, posted, noc)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
+
+// null macros when kernel profiling is disabled. Needed because the real
+// definitions live in synchronization_event_profiler.hpp, which is only included
+// from the PROFILE_KERNEL branch above -- so without these, cb_push_back /
+// cb_wait_front in dataflow_api.h and cb_api.h fail to compile in a non-profiled
+// build.
+#define RECORD_CB_PUSH_BACK(cb_id) (void(sizeof(cb_id)))
+#define RECORD_CB_WAIT_FRONT_START(cb_id) (void(sizeof(cb_id)))
+#define RECORD_CB_WAIT_FRONT_END(cb_id) (void(sizeof(cb_id)))
+
+// Same reasoning for the semaphore events: the noc_semaphore_* functions in
+// dataflow_api.h, the Semaphore class in noc_semaphore.h and the blaze cross-RISC
+// primitives all use these, and they must compile in a non-profiled build too.
+#define RECORD_SEMAPHORE_SET(semaphore_address) (void(sizeof(semaphore_address)))
+#define RECORD_SEMAPHORE_SET_REMOTE(semaphore_address) (void(sizeof(semaphore_address)))
+#define RECORD_SEMAPHORE_WAIT_START(semaphore_address) (void(sizeof(semaphore_address)))
+#define RECORD_SEMAPHORE_WAIT_END(semaphore_address) (void(sizeof(semaphore_address)))
 
 // null macros when noc debugging is disabled
 #define RECORD_SCOPED_LOCK_EVENT(event_type, locked_address_base, num_bytes)
