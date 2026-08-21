@@ -333,8 +333,8 @@ void MeshDeviceImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
 std::vector<size_t> MeshDeviceImpl::drain_pending_traceback_ids() {
     return AllocatorImpl::drain_pending_traceback_ids();
 }
-std::vector<size_t> MeshDeviceImpl::drain_retired_traceback_ids() {
-    return AllocatorImpl::drain_retired_traceback_ids();
+std::unordered_set<size_t> MeshDeviceImpl::get_all_unsafe_tracked_ids() {
+    return AllocatorImpl::get_all_unsafe_tracked_ids();
 }
 void MeshDeviceImpl::push_corruptible_allocation_scope() {
     AllocatorImpl::push_corruptible_allocation_scope(this->trace_allocators());
@@ -356,7 +356,7 @@ void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id) {
     device->impl().remove_unsafe_tracked_id(buffer_unique_id);
 }
 std::vector<size_t> drain_pending_traceback_ids() { return MeshDeviceImpl::drain_pending_traceback_ids(); }
-std::vector<size_t> drain_retired_traceback_ids() { return MeshDeviceImpl::drain_retired_traceback_ids(); }
+std::unordered_set<size_t> get_all_unsafe_tracked_ids() { return MeshDeviceImpl::get_all_unsafe_tracked_ids(); }
 void push_corruptible_allocation_scope(MeshDevice* device) { device->impl().push_corruptible_allocation_scope(); }
 void pop_corruptible_allocation_scope(MeshDevice* device) { device->impl().pop_corruptible_allocation_scope(); }
 

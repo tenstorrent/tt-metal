@@ -11,6 +11,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/indestructible.hpp>
 
 #include "impl/allocator/allocator.hpp"
 #include "llrt/rtoptions.hpp"
@@ -20,10 +21,19 @@ namespace tt::tt_metal {
 namespace {
 
 thread_local std::vector<size_t> pending_traceback_ids;
-thread_local std::vector<size_t> retired_traceback_ids;
 thread_local std::vector<std::unordered_set<const AllocatorImpl*>> corruptible_allocation_scope_stack;
 thread_local std::vector<std::string> allocation_context_stack;
 const std::string empty_context;
+
+struct TracebackAllocatorRegistry {
+    std::mutex mutex;
+    std::unordered_set<AllocatorImpl*> allocators;
+};
+
+TracebackAllocatorRegistry& traceback_allocator_registry() {
+    static ttsl::Indestructible<TracebackAllocatorRegistry> registry;
+    return registry.get();
+}
 
 }  // namespace
 
@@ -71,11 +81,6 @@ bool AllocatorImpl::in_corruptible_allocation_scope() const {
 
 void AllocatorImpl::clear_trace_allocation_state() {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (traceback_capture_enabled_) {
-        for (const auto& allocation : unsafe_allocation_contexts_) {
-            retired_traceback_ids.push_back(allocation.first);
-        }
-    }
     unsafe_allocation_contexts_.clear();
     unsafe_tracked_ids_by_manager_and_trace_.clear();
     active_traces_by_manager_.clear();
@@ -156,10 +161,7 @@ void AllocatorImpl::retire_buffer_if_unreferenced(size_t buffer_unique_id) {
         }
     }
 
-    const bool was_tracked = unsafe_allocation_contexts_.erase(buffer_unique_id) > 0;
-    if (was_tracked && traceback_capture_enabled_) {
-        retired_traceback_ids.push_back(buffer_unique_id);
-    }
+    unsafe_allocation_contexts_.erase(buffer_unique_id);
 }
 
 void AllocatorImpl::record_allocation_if_unsafe(Buffer* buffer) {
@@ -223,10 +225,7 @@ std::unordered_map<size_t, std::string> AllocatorImpl::get_unsafe_tracked_ids(
                 trace_buffers.second.erase(buffer_unique_id);
             }
         }
-        const bool was_tracked = unsafe_allocation_contexts_.erase(buffer_unique_id) > 0;
-        if (was_tracked && traceback_capture_enabled_) {
-            retired_traceback_ids.push_back(buffer_unique_id);
-        }
+        unsafe_allocation_contexts_.erase(buffer_unique_id);
     }
     return result;
 }
@@ -238,10 +237,7 @@ void AllocatorImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
             trace_buffers.second.erase(buffer_unique_id);
         }
     }
-    const bool was_tracked = unsafe_allocation_contexts_.erase(buffer_unique_id) > 0;
-    if (was_tracked && traceback_capture_enabled_) {
-        retired_traceback_ids.push_back(buffer_unique_id);
-    }
+    unsafe_allocation_contexts_.erase(buffer_unique_id);
 }
 
 std::vector<size_t> AllocatorImpl::drain_pending_traceback_ids() {
@@ -250,9 +246,28 @@ std::vector<size_t> AllocatorImpl::drain_pending_traceback_ids() {
     return result;
 }
 
-std::vector<size_t> AllocatorImpl::drain_retired_traceback_ids() {
-    std::vector<size_t> result;
-    result.swap(retired_traceback_ids);
+void AllocatorImpl::register_traceback_allocator(AllocatorImpl* allocator) {
+    auto& registry = traceback_allocator_registry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.allocators.insert(allocator);
+}
+
+void AllocatorImpl::unregister_traceback_allocator(AllocatorImpl* allocator) {
+    auto& registry = traceback_allocator_registry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.allocators.erase(allocator);
+}
+
+std::unordered_set<size_t> AllocatorImpl::get_all_unsafe_tracked_ids() {
+    std::unordered_set<size_t> result;
+    auto& registry = traceback_allocator_registry();
+    std::lock_guard<std::mutex> registry_lock(registry.mutex);
+    for (const auto* allocator : registry.allocators) {
+        std::lock_guard<std::mutex> allocator_lock(allocator->mutex_);
+        for (const auto& allocation : allocator->unsafe_allocation_contexts_) {
+            result.insert(allocation.first);
+        }
+    }
     return result;
 }
 

@@ -141,7 +141,9 @@ private:
         SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id);
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
     static std::vector<size_t> drain_pending_traceback_ids();
-    static std::vector<size_t> drain_retired_traceback_ids();
+    static std::unordered_set<size_t> get_all_unsafe_tracked_ids();
+    static void register_traceback_allocator(AllocatorImpl* allocator);
+    static void unregister_traceback_allocator(AllocatorImpl* allocator);
     void verify_safe_allocation() const;
     void record_allocation_if_unsafe(Buffer* buffer);
     void retire_buffer_if_unreferenced(size_t buffer_unique_id);

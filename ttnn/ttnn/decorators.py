@@ -523,14 +523,12 @@ if TRACE_ALLOC_DIAGNOSTICS:
 
     def _drain_traceback_ids(source="op_end", op_name=None):
         """Drain allocation IDs and capture their Python call stacks."""
-        from ttnn._ttnn.operations.trace import drain_pending_traceback_ids, drain_retired_traceback_ids
+        from ttnn._ttnn.operations.trace import drain_pending_traceback_ids
         from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
 
         pending = drain_pending_traceback_ids()
-        retired = set(drain_retired_traceback_ids())
-        for buf_id in retired:
-            UnsafeAllocationTracker._tracebacks.pop(buf_id, None)
-        pending = [buf_id for buf_id in pending if buf_id not in retired]
+        currently_unsafe = UnsafeAllocationTracker.reconcile_tracebacks()
+        pending = [buf_id for buf_id in pending if buf_id in currently_unsafe]
         if not pending:
             return
         import traceback as _tb
@@ -730,11 +728,12 @@ if TRACE_ALLOC_TRACKING:
             _drain_traceback_ids(source="op_start", op_name=self.python_fully_qualified_name)
             push_allocation_context(self.python_fully_qualified_name)
             try:
-                result = _untracked_fast_operation_call(self, *function_args, **function_kwargs)
-                _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
-                return result
+                return _untracked_fast_operation_call(self, *function_args, **function_kwargs)
             finally:
-                pop_allocation_context()
+                try:
+                    _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
+                finally:
+                    pop_allocation_context()
 
     else:
 
@@ -1054,11 +1053,12 @@ if TRACE_ALLOC_TRACKING:
             _drain_traceback_ids(source="op_start", op_name=self.python_fully_qualified_name)
             push_allocation_context(self.python_fully_qualified_name)
             try:
-                result = _untracked_operation_call(self, *function_args, **function_kwargs)
-                _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
-                return result
+                return _untracked_operation_call(self, *function_args, **function_kwargs)
             finally:
-                pop_allocation_context()
+                try:
+                    _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
+                finally:
+                    pop_allocation_context()
 
     else:
 
