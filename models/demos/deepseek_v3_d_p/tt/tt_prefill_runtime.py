@@ -807,6 +807,15 @@ class TtPrefillRuntime:
                     "layer-acks within a chunk. Drafter KV will not be migrated or PCC-checked."
                 )
 
+        # Dense row -> global layer map, so config 1 is published on the layer axis (see the builder).
+        index_layer_ids = None
+        if kv_caches.index is not None and getattr(self.hf_config, "indexer_types", None):
+            from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused
+
+            index_layer_ids = [
+                layer for layer in range(self.config.num_layers) if not indexer_layer_is_reused(self.hf_config, layer)
+            ]
+
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
             kvpe_cache=kv_caches.kvpe,
@@ -823,6 +832,7 @@ class TtPrefillRuntime:
             first_layer_idx=first_layer_idx,
             num_my_layers=num_my_layers,
             stage_layout=stage_layout,
+            index_layer_ids=index_layer_ids,
         )
 
     def read_slot_kv(self, kv_caches: MlaKvCaches, slot: int):

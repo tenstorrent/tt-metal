@@ -526,6 +526,8 @@ def _cache_plan(table, migrated_layers) -> list:
     Non-identity rows are dropped under PREFILL_MIGRATION_LAYERS: migrate() sends ONE layer number for
     the whole table and the engine replays it per config (``DcnSenderBackend::migrate_slot``), so a
     subset addresses ROW L of every cache. Arbitrary M-of-N needs a config field in ``MigrateSpec``.
+
+    Publishing on the LAYER axis makes row == layer identity, so a still-compacted cache is refused here.
     """
     from models.demos.common.prefill.runners import prefill_producer as producer
 
@@ -680,6 +682,9 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
         for cfg_id, selected, head_dim in dumpable:
             per_layer = [None] * producer.NUM_LAYERS
             for layer, row in sorted(selected.items()):
+                # A layer-axis cache is SPARSE: an unwritten row reads back 0 bytes, so leave it None.
+                if table.lookup(row, 0, slot_id, cfg_id).size_bytes == 0:
+                    continue
                 decoded_rows = []
                 for pos in range(0, read_len, tokens_per_block):
                     loc = table.lookup(row, pos, slot_id, cfg_id)  # keyed on this cache's own axis
