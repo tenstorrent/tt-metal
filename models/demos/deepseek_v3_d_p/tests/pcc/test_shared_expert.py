@@ -38,9 +38,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         # Worth its own case because every prior model has num_shared_experts == 1, so hidden_dim and
         # the shared intermediate coincided and 6144 was never exercised here.
         (3200, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SILU),
-        # ...and the same shape on the activation the K3 checkpoint actually uses (#53625). SiTU is
-        # the interesting case here precisely because 6144 is past ttnn.situ_glu's 3072 L1 cutoff,
-        # so this is the composed DRAM path, not the tuned one.
+        # ...and the same shape on the activation the K3 checkpoint actually uses. This builds
+        # TtSharedExpert without a sub-device, so it covers the ttnn.situ_glu delegate; the
+        # hand-composed sub_core_grids branch is only reachable through the MoE (test_ttnn_moe).
         (3200, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SITU),
     ],
     # Ids label seq_len_per_chip first, so the K3 cases keep the "3.2K" prefix they share with the

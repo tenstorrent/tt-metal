@@ -47,9 +47,15 @@ def situ_glu(
     softcap / sigmoid / multiply each do. sigmoid's ttnn defaults (ACCURATE, vector_mode RC) are
     the ones ``ttnn.situ_glu`` passes explicitly, so the two paths agree bit-for-bit.
 
-    Blackhole only, since ``ttnn.softcap`` is. Both inputs are freed as soon as they are dead:
-    ``ttnn.situ_glu``'s L1 fast path covers hidden <= 3072 only, so at the shared expert's 6144
-    and the dense FFN's 33792 every intermediate here is a full-size DRAM tensor.
+    Blackhole only, since ``ttnn.softcap`` is. Both inputs are freed as soon as they are dead.
+
+    The hand-composed branch leaves its three intermediates wherever ``gate_out`` lives, i.e. DRAM.
+    ``ttnn.situ_glu`` would place them in L1 instead below a 3072 hidden -- a bound on the per-chip
+    width, ``hidden_dim // TP``, not the model's, so the shared expert's 1536 at TP=4 clears it and
+    the width is not what keeps them in DRAM. What does is that these ops take ``sub_core_grids``
+    but no ``sub_device_id``: an interleaved-L1 tensor would come from the global allocator and
+    span banks the concurrently-dispatched MoE's sub-device is allocating from. Whether it can be
+    made safe is the open perf question here.
     """
     if sub_core_grids is None:
         activated = ttnn.situ_glu(gate_out, up_out, situ_beta, situ_linear_beta)
