@@ -15,6 +15,7 @@
 
 - name: Llama 3.1-8B unit tests
   cmd: |
+    export TT_METAL_WATCHER=15
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
     pytest --timeout 300 models/tt_transformers/tests/test_rms_norm.py
@@ -69,6 +70,7 @@
 
 - name: Llama 3.2-11B Vision unit tests
   cmd: |
+    export TT_METAL_WATCHER=15
     export HF_MODEL=meta-llama/Llama-3.2-11B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-11B-Vision-Instruct
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
@@ -83,6 +85,7 @@
 
 - name: Llama 3.2-90B-Vision unit tests
   cmd: |
+    export TT_METAL_WATCHER=15
     export HF_MODEL=meta-llama/Llama-3.2-90B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-90B-Vision-Instruct MESH_DEVICE=T3K
     pytest --timeout 900 models/tt_transformers/tests/test_decoder.py  # text module only
     pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py  # text module only
@@ -108,6 +111,7 @@
 
 - name: Llama 3.3-70B unit tests
   cmd: |
+    export TT_METAL_WATCHER=15
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
     pytest --timeout 900 models/tt_transformers/tests/test_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/test_rms_norm.py
@@ -582,6 +586,7 @@
 
 - name: Mixtral-8x7B unit tests
   cmd: |
+    export TT_METAL_WATCHER=15
     export HF_MODEL=mistralai/Mixtral-8x7B-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-v0.1
     pytest --timeout 300 models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py  # PREFILL-4096 layernorm first-compile can exceed 120s
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_mlp.py
