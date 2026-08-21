@@ -1114,6 +1114,7 @@ def sharded_decode_matmul(
     prefill_k,
     decode_out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     prefill_compute_cfg=None,
+    prefill_out_dtype=None,
 ):
     """DRAM-WIDTH_SHARDED weight matmul; branches on M (decode vs prefill).
 
@@ -1125,7 +1126,12 @@ def sharded_decode_matmul(
     prefill_compute_cfg: compute kernel config for the PREFILL branch only (defaults to compute_cfg).
     Exists because a prefill progcfg and its compute config are coupled — create_prefill_kpass1_
     matmul_program_config's blocking is only legal with fp32_dest_acc_en off — while decode keeps the
-    shared COMPUTE_HIFI2. Pass both together or neither."""
+    shared COMPUTE_HIFI2. Pass both together or neither.
+
+    prefill_out_dtype: output dtype for the PREFILL branch only. ttnn.linear defaults the output
+    dtype to in0's (matmul.cpp: ``dtype.value_or(input_tensor_a.dtype())``), so a caller that narrows
+    its ACTIVATION to bf8 silently narrows the matmul RESULT too. Pass this to pin the result where
+    that is not wanted -- the in0 saving is kept either way, since it is a read-side win."""
     seq = x.shape[-2]
     if seq <= TILE_SIZE:
         # Reshard act to L1 if needed; skip dealloc when x already sharded (GDN reuses x).
@@ -1148,6 +1154,7 @@ def sharded_decode_matmul(
         compute_kernel_config=prefill_compute_cfg or compute_cfg,
         program_config=pc,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        **({"dtype": prefill_out_dtype} if prefill_out_dtype is not None else {}),
     )
 
 

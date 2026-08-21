@@ -17,6 +17,7 @@ Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
 """
+
 import gc
 import os
 
@@ -466,11 +467,21 @@ def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, 
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-def test_gdn_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
+@pytest.mark.parametrize(
+    "in_dtype",
+    [pytest.param(ttnn.bfloat16, id="in_bf16"), pytest.param(ttnn.bfloat8_b, id="in_bf8")],
+)
+def test_gdn_tp_prefill(mesh_device, in_dtype, reset_seeds, ensure_gc, request):
     """Check that chunk-prefill and step-by-step decode agree on the same T=128 tokens.
 
     Both paths start from zero state. No hand-written reference — this is a
     self-consistency check between forward_prefill and forward_decode.
+
+    ``in_dtype`` is the PREFILL activation dtype only (decode always feeds bf16), which is what
+    makes this pair a measurement rather than a tautology: ``layer.py`` narrows attention_norm's
+    prefill gather to bf8 on GDN layers, so the in-proj sees a bf8 in0 in prefill and a bf16 one in
+    decode. The bf8 row therefore prices exactly that asymmetry against the same decode oracle.
+    Model-level TP tests cannot see it -- they compare two paths that carry the same quantisation.
     """
     os.environ.setdefault("HF_MODEL", model_path())
     T = 128
@@ -488,6 +499,8 @@ def test_gdn_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
 
     x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
     x_tt = _pf_in(mesh_device, args, x)  # K-sharded on BH (fused AGMM), full-width on WH
+    if in_dtype != x_tt.dtype:
+        x_tt = ttnn.typecast(x_tt, in_dtype)
     composer = tp_composer(mesh_device)
 
     # ---- Prefill ----
