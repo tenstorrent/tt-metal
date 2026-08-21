@@ -77,6 +77,40 @@ inline void llk_math_matmul_init(
 }
 
 /**
+ * @brief Restore the ALU SrcA/SrcB formats after a matmul that consumed MxFp4 (2x) operands.
+ *
+ * @param operandA: The input0 operand circular buffer (matches the matmul init call)
+ * @param operandB: The input1 operand circular buffer
+ *
+ * Undoes the MxFp4 -> MxFp4_2x_B deviation that @ref llk_math_matmul_init programmed into the ALU
+ * format registers, restoring the op-agnostic unpack_dst_format[] values so a following non-matmul
+ * op decodes its src registers correctly. Only acts when init deviated (an operand was MxFp4). Uses
+ * _configure_alu_formats_ directly for the same reason init does: the DataFormatConfigSet::DEFAULT
+ * latch (still truthful) makes _configure_default_alu_data_format_state_ early-return.
+ *
+ * @note Pair with @ref llk_unpack_AB_matmul_uninit (via mm_uninit); call before the next op when an
+ * MxFp4 matmul operand is reused by a non-matmul op in the same kernel.
+ */
+inline void llk_math_matmul_uninit(const std::uint32_t operandA, const std::uint32_t operandB) {
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
+    const bool deviated =
+        (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) ||
+        (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4);
+    if (!deviated) {
+        return;
+    }
+    // Same operand->src mapping as init: In0(operandA)->SrcB, In1(operandB)->SrcA. The table values
+    // (unpack_dst_format[]) are the op-agnostic formats (Float16_b for MxFp4).
+    const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operandA_id));
+    const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operandB_id));
+    const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
+                                      _is_src_fmt_int32_dest_compatible_(srcB_format) && DST_ACCUM_MODE;
+    _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
+        srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
+}
+
+/**
  * @brief Performs matrix multiply operation, where Input 0, Input 1 and Output are each 1 tile
  *
  * @param dst_index: Tile index into the destination register

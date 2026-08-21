@@ -64,6 +64,30 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
 }
 
 /**
+ * @brief Restore the ALU SrcA/SrcB formats after a column reduce that consumed an MxFp4 (2x) operand.
+ *
+ * @param operandA: The srcA (data) operand circular buffer (same as reduce init)
+ *
+ * Undoes the MxFp4 -> MxFp4_2x_B deviation that @ref llk_math_reduce_init programmed into the ALU
+ * format registers (column reduce only), restoring the op-agnostic unpack_dst_format[] values so a
+ * following op decodes its src registers correctly. Gates on MxFp4 (only column reduce deviated;
+ * others are a no-op). Uses _configure_alu_formats_ directly because the still-DEFAULT latch makes
+ * _configure_default_alu_data_format_state_ early-return. Pair with @ref llk_unpack_AB_reduce_uninit.
+ */
+inline void llk_math_reduce_uninit(const std::uint32_t operandA) {
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) != DataFormat::MxFp4) {
+        return;
+    }
+    // All reduce operands (MxFp4 data + scaler) map to Float16_b in unpack_dst_format[], so
+    // reprogramming both ALU srcs to operandA's table value is the correct restore.
+    const DataFormat table_fmt = static_cast<DataFormat>(unpack_dst_format[operandA_id]);
+    const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(table_fmt) && DST_ACCUM_MODE;
+    _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
+        table_fmt, table_fmt, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
+}
+
+/**
  * @brief Perform a reduce operation
  *
  * @tparam type: Type of reduce pool op, values = [MAX, SUM, AVG]

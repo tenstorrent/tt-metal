@@ -78,6 +78,35 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
 }
 
 /**
+ * @brief Undo the MxFp4 -> MxFp4_2x_B unpacker OUT_DATA_FORMAT override from @ref llk_unpack_AB_matmul_init.
+ *
+ * @param operandA: The input0 operand circular buffer (matches the matmul init call)
+ * @param operandB: The input1 operand circular buffer
+ *
+ * Restores each MxFp4 operand's unpacker OUT_DATA_FORMAT to the op-agnostic unpack_dst_format[]
+ * value (Float16_b), so a following NON-matmul op on the same MxFp4 buffer unpacks correctly. This
+ * explicit restore is required because the non-matmul unpack inits never reprogram OUT_DATA_FORMAT,
+ * and llk_unpack_reconfig_data_format is silently skipped for a same-format operand
+ * (should_reconfig_src_reg_df keys on the generated table, which never saw the 2x override).
+ *
+ * @note Call after all matmuls, before initializing the next op, whenever an MxFp4 matmul operand is
+ * reused by a non-matmul op in the same kernel. Pair with @ref llk_math_matmul_uninit (via mm_uninit).
+ * Same UNP mapping as init: In0(operandA)->SrcB->UNP_B, In1(operandB)->SrcA->UNP_A.
+ */
+inline void llk_unpack_AB_matmul_uninit(const std::uint32_t operandA, const std::uint32_t operandB) {
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
+    if (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4) {
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false>(
+            get_operand_src_format(operandB_id), unpack_dst_format[operandB_id]);
+    }
+    if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) {
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, false>(
+            get_operand_src_format(operandA_id), unpack_dst_format[operandA_id]);
+    }
+}
+
+/**
  *
  * @brief Performs unpack operation for matrix multiply such that:
  *

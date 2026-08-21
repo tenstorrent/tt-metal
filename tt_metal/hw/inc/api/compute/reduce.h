@@ -98,15 +98,21 @@ ALWI void reduce_init(
  */
 // clang-format on
 ALWI void reduce_uninit(std::uint32_t icb = 0) {
-#ifndef ARCH_QUASAR
-#ifdef ARCH_BLACKHOLE
+#ifdef ARCH_QUASAR
+    // (Quasar) A column reduce over an MxFp4 operand overrides that operand's unpacker OUT_DATA_FORMAT
+    // and ALU src format to MxFp4_2x_B in reduce_init, diverging from the op-agnostic
+    // unpack_dst_format[] table. That override persists (non-reduce inits never restore OUT_DATA_FORMAT,
+    // and reconfig_data_format is skipped for a same-format operand), so restore it here before the
+    // next op. No-op unless icb is an MxFp4 operand.
+    UNPACK((llk_unpack_AB_reduce_uninit(icb)));
+    MATH((llk_math_reduce_uninit(icb)));
+#elif defined(ARCH_BLACKHOLE)
     MATH((llk_math_reduce_uninit()));
 #else
     // Required because MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
     // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
     // See _llk_math_reduce_init_ for more details
     MATH((llk_math_reduce_uninit(icb)));
-#endif
 #endif
     PACK((llk_pack_reduce_mask_clear()));
 }

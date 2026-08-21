@@ -58,6 +58,26 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
 }
 
 /**
+ * @brief Undo the MxFp4 -> MxFp4_2x_B unpacker OUT_DATA_FORMAT override from @ref llk_unpack_AB_reduce_init.
+ *
+ * @param operandA: The srcA (data) operand circular buffer (same as reduce init)
+ *
+ * Restores SrcA's unpacker OUT_DATA_FORMAT to the op-agnostic unpack_dst_format[] value (Float16_b),
+ * so a following NON-reduce op on the same MxFp4 buffer unpacks correctly. Needed because non-reduce
+ * unpack inits never reprogram OUT_DATA_FORMAT and reconfig_data_format is silently skipped for a
+ * same-format operand. Only column reduce overrode it (SrcA -> UNP_A); restoring an operand that was
+ * never overridden just reprograms it to the same table value (harmless), so this gates on MxFp4 only
+ * and needs no reduce_dim template. Pair with the ALU restore in @ref llk_math_reduce_uninit.
+ */
+inline void llk_unpack_AB_reduce_uninit(const std::uint32_t operandA) {
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) {
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false>(
+            get_operand_src_format(operandA_id), unpack_dst_format[operandA_id]);
+    }
+}
+
+/**
  *
  * @brief Unpacks binary operands to SrcA & SrcB for reduce kernels
  *
