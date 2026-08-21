@@ -89,7 +89,8 @@ def test_tile_reorder_workload(device, method):
 
 
 @pytest.mark.models_device_performance_bare_metal
-def test_tile_reorder_device_perf():
+@pytest.mark.timeout(900)
+def test_tile_reorder_device_perf(silicon_arch_name, silicon_arch_wormhole_b0):
     """Measure device kernel duration for scatter vs relocate and assert the win.
 
     The result is a pure tile relocation; `relocate` moves each whole 2 KB tile,
