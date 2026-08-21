@@ -1564,28 +1564,76 @@ FORCE_INLINE void run_routing_without_noc_sync_coordinated_as_non_master(
 }
 void run_coordinated_context_switch_to_base_firmware(
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    // [#45872 DOORBELL PROBE] Path-independent retrain bracket around the whole context switch (covers both
-    // the 1-erisc direct path and the 2-erisc coordinated-master path, whichever this config uses).
-    // Snapshots the channel-0 free-slots doorbell (stream 22) BEFORE and AFTER recovery; on a real retrain
-    // (retrain counter advanced) emits both + the credit counters. LOST-DOORBELL SIGNATURE: fs22_after reads
-    // MAX (empty) while fs22_before was < MAX -> the reset re-initialized free-slots to full, discarding a
-    // pending sender->router decrement -> off-by-one -> end-of-run barrier hang. Read-only; ERISC0-only push.
-    const int32_t dbell_fs22_before = get_ptr_val(static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0]));
-    const uint32_t dbell_rc_before = fabric_get_retrain_count();
+    // [#45872] Runs on every context switch, including during a link down/recovery.
+    //   word[8]  RECV_CUM       = shadow counter the sender bumps per doorbell (arrivals; ground-truth "sent")
+    //   word[9]  RECV_WHILE_DOWN= arrivals during the down (RECV_CUM delta across the down window)
+    //   word[10] STOP_FLAG (16B-aligned @ 0x6F220) = 0 normally, raised to 1 at the up-edge so the senders HALT
+    //            after recovery, leaving a quiescent window with the during-down backlog still buffered.
+    //   word[12] FS22_MIN       = min of the router's LOCAL read of stream 22 while down (stayed 32)
+    // NEW -- DRAIN LATENCY (words 13/14): with senders halted, occupancy = RECV_CUM - TX must fall to <=0 as
+    // the router forwards the backlog. Measure HOW LONG: at the up-edge snapshot occupancy (word[13]
+    // DRAIN_START_OCC), then count context switches until occupancy first reaches <=0 (word[14] DRAIN_ITERS;
+    // 0xFFFFFFFF sentinel = never drained). TX is MEM_AERISC_TX_PKT_COUNT (word[1]). RECV_AT_DOWN is a static
+    // local. NOTE: this is context-switch units, not wall-clock; swap in eth_read_wall_clock for real time.
+    static bool dbell_was_down = false;
+    static bool stop_init = false;
+    static uint32_t recv_at_down = 0;
+    static bool drain_watching = false;
+    static bool drain_recorded = false;
+    static uint32_t drain_iters = 0;
+    if (!stop_init) {
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_AT_DOWN_ADDR) = 0u;  // word[10] STOP_FLAG = 0
+        stop_init = true;
+    }
+    const bool link_up_now = fabric_dbg_link_is_up();
+    const uint32_t recv_cum_now = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_CUM_ADDR);
+    const uint32_t tx_now = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR);
+    const uint32_t fs22_now =
+        static_cast<uint32_t>(get_ptr_val(static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0])));
+    if (!dbell_was_down && !link_up_now) {
+        dbell_was_down = true;
+        recv_at_down = recv_cum_now;
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_AT_DOWN_ADDR) = fs22_now;
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_MIN_ADDR) = fs22_now;
+    } else if (dbell_was_down) {
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_WHILE_DOWN_ADDR) = recv_cum_now - recv_at_down;
+        auto* fs_min = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_MIN_ADDR);
+        if (fs22_now < *fs_min) {
+            *fs_min = fs22_now;
+        }
+        if (link_up_now) {
+            dbell_was_down = false;
+            // raise the stop flag: halt senders now, leaving the backlog buffered so we can watch it drain
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_AT_DOWN_ADDR) = 1u;  // word[10] STOP_FLAG = 1
+            // arm the drain-latency watch
+            const int32_t occ_at_up = static_cast<int32_t>(recv_cum_now) - static_cast<int32_t>(tx_now);
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_LINK_DOWN_FLAG_ADDR) =
+                static_cast<uint32_t>(occ_at_up);  // word[13] DRAIN_START_OCC
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_NEUTRAL_MIN_ADDR) =
+                0xFFFFFFFFu;  // word[14] sentinel
+            drain_watching = true;
+            drain_recorded = false;
+            drain_iters = 0;
+        }
+    }
+
+    // DRAIN LATENCY: after the up-edge, count context switches until occupancy (RECV_CUM - TX) first hits <=0.
+    if (drain_watching && !drain_recorded) {
+        drain_iters++;
+        const int32_t occ = static_cast<int32_t>(recv_cum_now) - static_cast<int32_t>(tx_now);
+        if (occ <= 0) {
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_NEUTRAL_MIN_ADDR) =
+                drain_iters;  // word[14] DRAIN_ITERS
+            drain_recorded = true;
+        }
+    }
+
     if constexpr (NUM_ACTIVE_ERISCS == 1) {
         run_routing_without_noc_sync();
     } else {
         if constexpr (IS_RETRAIN_SYNC_MASTER()) {
             run_routing_without_noc_sync_coordinated_as_master(termination_signal_ptr);
         }
-    }
-    const uint32_t dbell_rc_after = fabric_get_retrain_count();
-    if (dbell_rc_after != dbell_rc_before) {
-        const int32_t dbell_fs22_after = get_ptr_val(static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0]));
-        fabric_dbg_ringbuf_push_marker(0x96000000u | (static_cast<uint32_t>(dbell_fs22_before) & 0xFFFF));
-        fabric_dbg_ringbuf_push_marker(0x97000000u | (static_cast<uint32_t>(dbell_fs22_after) & 0xFFFF));
-        fabric_dbg_ringbuf_push_marker(0x98000000u | (dbell_rc_after & 0xFFFF));
-        fabric_dbg_ringbuf_push_credits();
     }
 }
 template <typename LocalTelemetryT>

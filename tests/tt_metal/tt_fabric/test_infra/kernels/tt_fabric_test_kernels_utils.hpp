@@ -1525,6 +1525,23 @@ struct SenderKernelTrafficConfig {
     // Returns: true if packet was sent, false if blocked (no credits)
     template <bool BENCHMARK_MODE, bool STATEFUL_NOC = false>
     bool send_one_packet() {
+        // [#45872 STOP] After the retrain the ERISC raises a stop flag (router word[10] @ 0x6F220, 16B-aligned).
+        // Halt sending so a quiescent window forms with the during-down backlog still buffered -> then
+        // occupancy (RECV_CUM - TX) shows whether the router drains it on its own. Throttled every 256 sends;
+        // the flag is read into the payload buffer (overwritten by fill_data below), keeping the read aligned.
+        if ((num_packets_processed & 0xFFu) == 0u && payload_buffer_ != nullptr) {
+            auto* sconn = static_cast<EdmSenderT*>(connection_ptr_);
+            const uint8_t rnoc = get_fabric_worker_noc();
+            const uint32_t sc = payload_buffer_->get_physical_address();
+            noc_async_read(
+                get_noc_addr(sconn->edm_noc_x, sconn->edm_noc_y, 0x6F220u, rnoc), sc, sizeof(uint32_t), rnoc);
+            noc_async_read_barrier(rnoc);
+            invalidate_l1_cache();
+            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc) != 0u) {
+                num_packets_processed = metadata.num_packets;  // mark done -> outer send loop exits
+                return false;
+            }
+        }
         // STEP 1: Check credits BEFORE sending (non-benchmark mode only)
         if constexpr (!BENCHMARK_MODE) {
             if (!credit_manager_.has_credits_available(num_packets_processed)) {
@@ -1572,6 +1589,21 @@ struct SenderKernelTrafficConfig {
             credit_manager_.consume_credit();
         }
 
+        // [#45872 SENT vs RECEIVED] num_packets_processed is this sender's cumulative SENT doorbell count.
+        // Shadow-increment the router's ground-truth RECV_CUM counter (immune to the stale read / reset)
+        // at RESUME_PHASE_BASE+32 == 0x6F220 on the eth core this connection targets, so the ERISC can
+        // compare arrivals (cumulative + while-link-down) against what was sent. SENT is surfaced to the
+        // watcher ring throttled (tag 0x99, value = count>>16 so 16 bits span up to 4B).
+        {
+            auto* dbg_conn = static_cast<EdmSenderT*>(connection_ptr_);
+            // RECV_CUM = MEM_AERISC_RESUME_PHASE_BASE (== host kDbgSlotBase 0x6F1F8) + 32 (word[8]).
+            // MUST track that base -- changing MEM_AERISC_RESUME_PHASE_SIZE moves it.
+            constexpr uint32_t DBELL_RECV_CUM_ADDR = 0x6F1F8u + 32u;  // = 0x6F218
+            noc_semaphore_inc(get_noc_addr(dbg_conn->edm_noc_x, dbg_conn->edm_noc_y, DBELL_RECV_CUM_ADDR), 1);
+            if ((num_packets_processed & 0xFFFFFu) == 0u) {
+                sync_dbg_push(0x99, 0, (num_packets_processed >> 16) & 0xFFFF);
+            }
+        }
         num_packets_processed += 1;  // Always increment by 1
 
         return true;  // Packet sent successfully

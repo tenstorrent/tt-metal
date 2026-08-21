@@ -526,6 +526,34 @@ inline void fabric_dbg_set_recv_debug(
 constexpr uint32_t MEM_AERISC_RX_OCCUPANCY_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 32;
 constexpr uint32_t MEM_AERISC_RX_OCC_HIWATER_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 36;
 constexpr uint32_t MEM_AERISC_RX_WR_SENT_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 40;
+// [#45872 DOORBELL SENT-vs-RECEIVED] Reclaimed words 8-10 (RX-pipeline probe disabled above). The stream
+// HW applies a space-available doorbell (reg 270) silently -- no native received-count -- so the sender
+// worker bumps a SHADOW counter here (noc_semaphore_inc) alongside each real doorbell. That shadow is the
+// ground-truth "received/arrived" count, immune to the stale local read and the retrain reset.
+//   word[8] RECV_CUM       = cumulative doorbells that ARRIVED at this router (shadow, worker-incremented)
+//   word[9] RECV_WHILE_DOWN = doorbells that arrived while the link was DOWN/retraining (ERISC-gated delta)
+//   word[10] RECV_AT_DOWN  = shadow snapshot latched at the PCS down-edge (ERISC scratch for the delta)
+// Compare against the sender's own cumulative SENT (worker-side, pushed to the watcher ring, tag 0x99):
+//   SENT == RECV_CUM        -> every doorbell arrived (no in-transit loss)
+//   SENT >  RECV_CUM        -> doorbells sent but NOT received (dropped before the router)
+//   RECV_WHILE_DOWN > 0     -> doorbells DO arrive during the retrain (rules out "workers paused")
+constexpr uint32_t MEM_AERISC_DBELL_RECV_CUM_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 32;         // word[8]
+constexpr uint32_t MEM_AERISC_DBELL_RECV_WHILE_DOWN_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 36;  // word[9]
+constexpr uint32_t MEM_AERISC_DBELL_RECV_AT_DOWN_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 40;     // word[10]
+// [#45872] Does the STREAM REGISTER reflect the arriving doorbells during the down? The ERISC reads its own
+// channel-0 free-slots (stream 22, get_ptr_val) and records the value at the down-edge + the MIN while down.
+// Compare against RECV_WHILE_DOWN (word[9], ~30 arrivals): if FS22_AT_DOWN - FS22_MIN ~= 30, the register
+// reflected the decrements; if FS22_MIN stays == FS22_AT_DOWN (no drop), the arrivals are NOT reflected in
+// the register the router polls -> it can't see them -> the hang.
+constexpr uint32_t MEM_AERISC_DBELL_FS22_AT_DOWN_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 44;  // word[11]
+constexpr uint32_t MEM_AERISC_DBELL_FS22_MIN_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 48;      // word[12]
+// [#45872 NEUTRAL READ] word[13] LINK_DOWN_FLAG: ERISC sets =1 at the PCS down-edge, =0 at the up-edge, so a
+// bystander (neutral) core can gate its own measurement on the down window without reading PCS itself.
+// word[14] NEUTRAL_MIN: the min free-slots a NEUTRAL third core (sync worker) observes by reading this eth
+// core's stream 22 over the NoC WHILE the flag is set. Compare vs FS22_MIN (word[12], the router's LOCAL
+// read): both stay 32 -> decrements not applied; NEUTRAL_MIN drops but FS22_MIN stays 32 -> local read stale.
+constexpr uint32_t MEM_AERISC_DBELL_LINK_DOWN_FLAG_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 52;  // word[13]
+constexpr uint32_t MEM_AERISC_DBELL_NEUTRAL_MIN_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 56;     // word[14]
 constexpr uint32_t MEM_AERISC_RX_WR_FLUSH_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 44;
 constexpr uint32_t MEM_AERISC_RX_ACK_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 48;
 constexpr uint32_t MEM_AERISC_RX_FLUSHSTATE_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 52;
@@ -537,21 +565,8 @@ inline void fabric_dbg_set_recv_pipeline(
     [[maybe_unused]] uint32_t wr_flush,
     [[maybe_unused]] uint32_t ack,
     [[maybe_unused]] uint32_t flush_state) {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
-    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_OCCUPANCY_ADDR) = occupancy;
-    // High-water mark: a sampled occupancy can miss the peak, and "did it ever fill?" is the question.
-    volatile uint32_t* hiwater = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_OCC_HIWATER_ADDR);
-    if (occupancy > *hiwater) {
-        *hiwater = occupancy;
-    }
-    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_WR_SENT_ADDR) = wr_sent;
-    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_WR_FLUSH_ADDR) = wr_flush;
-    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_ACK_ADDR) = ack;
-    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_FLUSHSTATE_ADDR) = flush_state;
-    // Liveness: advances every receiver step regardless of traffic.
-    volatile uint32_t* hb = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_HEARTBEAT_ADDR);
-    *hb = *hb + 1;
-#endif
+    // [#45872] RX-pipeline occupancy probe DISABLED to reclaim words 8-10 for the doorbell-drop trajectory
+    // (MEM_AERISC_DBELL_* below). Restore the body to re-enable.
 }
 
 // [RESTORE-WINDOW PROBE] Did the hardware transmit anything between the link coming back up and the
