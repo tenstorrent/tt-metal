@@ -560,17 +560,39 @@ def mesh_device(request, silicon_arch_name, device_params):
     try:
         param = request.param
     except (ValueError, AttributeError):
-        # Get number of devices from the system mesh descriptor.
-        param = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+        # No explicit parametrization; fall back to the system mesh size resolved below.
+        param = None
+
+    # The mesh that open_mesh_device can actually allocate is bounded by the system mesh exposed
+    # by the control plane, which may be smaller than the number of physical chips. For example,
+    # fabric auto-discovery can downgrade the mesh (e.g. to 2x2) when ethernet/fabric links are
+    # missing or fail to train, even though get_num_devices() still reports all physical chips.
+    # Comparing only against get_num_devices() would let the test proceed and then crash inside
+    # open_mesh_device with a TT_FATAL; also accounting for the system mesh size lets us skip
+    # gracefully on such machines instead.
+    #
+    # Query the system mesh once. A failure here means control-plane / mesh-graph discovery itself
+    # errored (missing descriptor, untrained eth links, control-plane regression, ...). That is an
+    # infrastructure/software fault, not a capacity mismatch, so we must FAIL fixture setup instead
+    # of skipping: turning discovery errors into skips would let a broken machine report false-green
+    # CI with no device path exercised. The confirmed capacity-mismatch case is handled below via
+    # pytest.skip, once the system mesh size is known.
+    try:
+        system_mesh_size = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not query the system mesh descriptor (control-plane/mesh discovery failed): {e}"
+        ) from e
+
+    if param is None:
+        param = system_mesh_size
 
     if isinstance(param, tuple):
         grid_dims = param
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
         num_devices_requested = grid_dims[0] * grid_dims[1]
         available_num_devices = (
-            ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
-            if ttnn.using_distributed_env()
-            else ttnn.get_num_devices()
+            system_mesh_size if ttnn.using_distributed_env() else min(ttnn.get_num_devices(), system_mesh_size)
         )
         if (
             device_params.get("require_exact_physical_num_devices", False)
@@ -586,10 +608,12 @@ def mesh_device(request, silicon_arch_name, device_params):
             )
         mesh_shape = ttnn.MeshShape(*grid_dims)
     else:
-        if not ttnn.using_distributed_env() and param > ttnn.get_num_devices():
-            pytest.skip(
-                f"Requested more devices ({param}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
-            )
+        if not ttnn.using_distributed_env():
+            available_num_devices = min(ttnn.get_num_devices(), system_mesh_size)
+            if param > available_num_devices:
+                pytest.skip(
+                    f"Requested more devices ({param}) than available ({available_num_devices}). Test not applicable for machine"
+                )
         mesh_shape = ttnn.MeshShape(1, param)
 
     # Resolve trace_region_size against the SKU of the submesh actually opened.

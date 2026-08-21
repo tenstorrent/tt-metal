@@ -837,6 +837,19 @@ _FABRIC_INFRA_SIGNATURES = (
     "mapping_result.success",
     "inter-mesh mapping failed",
     "intra-mesh mapping failed",
+    # An ethernet core's firmware heartbeat never started or advanced, so topology discovery
+    # could not bring the cluster up. Raised by UMD as EthFirmwareHeartbeatError from
+    # topology_discovery.cpp (see third_party/umd/device/topology/topology_discovery_error.cpp):
+    #   Timed out waiting for ETH heartbeat on device ASIC ID: 159090777772799065,
+    #   ETH core e9-6 (NOC0) to advance. Stuck at 0xabcdfad8
+    # Same class as the mapping failures above -- it happens during DISCOVERY, before any op
+    # kernel runs -- and equally sticky: a dead ETH core does not restart within the job. Seen on
+    # scheduled lead-models run 32208327970 job mesh1x32_col_1d (runner OM1-01A03-STGWH03), where
+    # two vectors were booked as FAIL_ASSERT_EXCEPTION with this exact text before a later vector
+    # tripped a signature that WAS recognised and aborted the run -- so the same host fault
+    # produced both phantom failures and a correct NOT_RUN, purely by ordering.
+    # Matched on the invariant phrase, not on an ASIC ID or core coordinate, both of which vary.
+    "timed out waiting for eth heartbeat",
     # The host came up with fewer chips than the traced topology needs, so mesh open fails
     # before any kernel runs. Seen on main run 30681057227 job 91319472767 (runner g03glx03):
     #   TT_FATAL @ tt_metal/distributed/system_mesh.cpp:159: requested_size <= system_size
