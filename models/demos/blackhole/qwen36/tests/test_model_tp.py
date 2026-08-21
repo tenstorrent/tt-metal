@@ -455,6 +455,11 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     vocab = args.vocab_size
     prompts = [torch.randint(0, vocab, (T,)).tolist() for _ in range(B)]
     oracle_pf, oracle_rec, oracle_dec = [], [], [[] for _ in range(B)]
+    # Token actually fed at each oracle decode step, replayed into the batched path below so both
+    # sides consume IDENTICAL tokens. Without this each path follows its OWN argmax, and a single
+    # tie-flip (1e-4 numerics) makes the later-step PCC measure token divergence, not correctness --
+    # the ~0.52-0.65 decode1 artifact this file documents in test_model_tp_prefill_chunked_batched.
+    oracle_fed = [[] for _ in range(B)]
     for u in range(B):
         lg = omodel.prefill_traced_chunked(torch.tensor([prompts[u]], dtype=torch.long), opt, actual_len=T)
         ttnn.synchronize_device(mesh_device)
@@ -469,6 +474,7 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
         pos = T
         fed = int(torch.argmax(oracle_pf[u]))
         for _ in range(N_DEC):
+            oracle_fed[u].append(fed)
             dev = omodel.prepare_inputs_decode(
                 torch.tensor([[fed]], dtype=torch.int32), torch.tensor([pos], dtype=torch.int32), opt
             )
@@ -513,15 +519,15 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     ]
     batched_dec = [[] for _ in range(B)]
     pos = list(prompt_lens)
-    fed = [int(torch.argmax(batched_pf[u])) for u in range(B)]
-    for _ in range(N_DEC):
-        tokens_step = torch.tensor([[fed[u]] for u in range(B)], dtype=torch.int32)
+    # TEACHER-FORCED from the oracle's chain (oracle_fed above), matching what
+    # test_model_tp_decode_batched and test_model_tp_prefill_paged_slots already do.
+    for s in range(N_DEC):
+        tokens_step = torch.tensor([[oracle_fed[u][s]] for u in range(B)], dtype=torch.int32)
         dev = bmodel.prepare_inputs_decode(tokens_step, torch.tensor(pos, dtype=torch.int32), bpt)
         out, _ = bmodel.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
         ls = bmodel.process_output_decode(out, B)
         for u in range(B):
             batched_dec[u].append(ls[u, 0, :vocab].float())
-            fed[u] = int(torch.argmax(ls[u, 0, :vocab]))
         pos = [p + 1 for p in pos]
     bmodel.free_kv_caches()
     del bmodel
