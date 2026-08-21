@@ -994,3 +994,228 @@ def test_sort_row_major_multi_core_correctness(descending, device):
 
     ttnn_gathered = torch.gather(input_t, -1, ttnn.to_torch(ttnn_indices).to(torch.int64))
     assert_equal(torch_values, ttnn_gathered)
+
+
+# ---------------------------------------------------------------------------
+# stable=True (issue #33492)
+#
+# The stable contract is torch.sort(..., stable=True): equal values keep their
+# original (ascending-index) order in the output, in BOTH sort directions.
+# Assertions are EXACT (assert_equal on indices against the torch-stable
+# reference), never PCC: a stable sort that is "almost right" is wrong.
+#
+# Device-side value canonicalization folds -0.0 into +0.0 (torch compares
+# -0.0 == +0.0, so the tie CLASSES and therefore the index reference are
+# unaffected); value comparisons below normalize zero signs on both sides.
+# ---------------------------------------------------------------------------
+
+
+def _fold_zero_sign(t):
+    return torch.where(t == 0, torch.zeros_like(t), t)
+
+
+def _run_stable_sort_case(device, input_tensor, dim, descending, ttnn_dtype, layout=ttnn.Layout.TILE):
+    torch_values, torch_indices = torch.sort(input_tensor, dim=dim, descending=descending, stable=True)
+
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn_dtype, layout=layout, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending, stable=True)
+
+    assert list(ttnn_values.shape) == list(input_tensor.shape)
+    assert list(ttnn_indices.shape) == list(input_tensor.shape)
+
+    dev_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    dev_values = ttnn.to_torch(ttnn_values)
+
+    # Indices must exactly match the torch-stable reference (this subsumes the
+    # permutation property and the tie ordering in one check).
+    assert_equal(torch_indices, dev_indices)
+    # Values must match bit-exactly up to the -0.0 -> +0.0 fold.
+    if dev_values.dtype.is_floating_point:
+        assert_equal(_fold_zero_sign(torch_values), _fold_zero_sign(dev_values))
+    else:
+        assert_equal(torch_values, dev_values)
+
+
+def _tie_heavy_tensor(shape, levels, seed, dtype=torch.bfloat16):
+    """Random draw from a small set of exactly-representable levels: guarantees
+    massive tie groups spanning tile / 64-column / per-core partition boundaries."""
+    g = torch.Generator().manual_seed(seed)
+    choice = torch.randint(0, len(levels), shape, generator=g)
+    return torch.tensor(levels, dtype=dtype)[choice]
+
+
+@pytest.mark.parametrize(
+    "shape, dim, descending, stable",
+    [
+        ([32, 64], -1, False, True),
+        ([32, 64], -1, True, True),
+    ],
+)
+def test_sort_stable_issue33492_repro(shape, dim, descending, device, stable):
+    """Literal reproduction from issue #33492."""
+    torch.manual_seed(0)
+
+    torch_dtype = torch.bfloat16
+    input = torch.randn(shape, dtype=torch_dtype)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending, stable=stable)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending, stable=stable)
+
+    assert torch_sort_values.shape == ttnn_sort_values.shape
+    assert torch_sort_indices.shape == ttnn_sort_indices.shape
+
+    assert list(ttnn_sort_values.shape) == shape
+    assert list(ttnn_sort_indices.shape) == shape
+
+    assert_allclose(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+    if stable:
+        assert_allclose(
+            torch_sort_indices.to(torch.int64),
+            ttnn.to_torch(ttnn_sort_indices).to(torch.int64),
+        )
+
+
+# Widths route to all three program factories (BH p150a 13x10 grid = 130 cores;
+# CrossCore capacity = cores * min(128, max(Wt//cores, 2)) tiles):
+#   W=64    -> Wt=2    SingleRowSingleCore
+#   W=2048  -> Wt=64   SingleRowSingleCore (threshold boundary)
+#   W=4096  -> Wt=128  CrossCoreDataExchange
+#   W=8192  -> Wt=256  CrossCoreDataExchange (capacity boundary)
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("width", [64, 2048, 4096, 8192])
+@pytest.mark.parametrize(
+    "levels",
+    [
+        # Negative ties: the sign-magnitude SFPSWAP asymmetry killer.
+        [-3.5, -1.25, -1.25, 2.0],
+        # Mixed +-0: one tie class, folded on device, ordered by index.
+        [-1.0, -0.0, 0.0, 1.5],
+        # +-Inf ties (also collide with the composite's +-inf padding sentinels).
+        [float("-inf"), -2.0, 2.0, float("inf")],
+    ],
+    ids=["neg_ties", "signed_zero", "inf_ties"],
+)
+def test_sort_stable_tie_heavy(width, descending, levels, device):
+    input_tensor = _tie_heavy_tensor([32, width], levels, seed=width + int(descending))
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("width", [64, 4096])
+def test_sort_stable_all_equal(width, descending, device):
+    """Every element ties: output indices must be the identity permutation."""
+    input_tensor = torch.full([32, width], 1.25, dtype=torch.bfloat16)
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_padded_width(descending, device):
+    """W=96 pads to 128 with +-inf sentinels; tie levels include +-inf so real
+    infs tie with the padding and must still come out in index order."""
+    levels = [float("-inf"), -1.5, -1.5, 0.0, 1.5, float("inf")]
+    input_tensor = _tie_heavy_tensor([32, 96], levels, seed=7)
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_non_last_dim(descending, device):
+    """Composite transpose path: stable along dim=-2."""
+    levels = [-2.5, -0.5, -0.5, 0.5, 2.5]
+    input_tensor = _tie_heavy_tensor([1, 1, 64, 64], levels, seed=11)
+    _run_stable_sort_case(device, input_tensor, -2, descending, ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_row_major(descending, device):
+    levels = [-4.0, -1.0, -1.0, 0.0, 1.0]
+    input_tensor = _tie_heavy_tensor([1, 1, 32, 128], levels, seed=13)
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_wide_u32_index(descending, device):
+    """W=65536 >= the u16 index ceiling: UINT32 indices, 32-bit DEST, and (on a
+    grid whose core count does not divide Wt=2048) the SingleRowMultiCore DRAM
+    factory. Tie groups straddle every per-core partition boundary."""
+    levels = [-2.0, -1.0, -1.0, 0.0, 1.0, 3.0]
+    input_tensor = _tie_heavy_tensor([32, 65536], levels, seed=17)
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    assert ttnn_indices.dtype == ttnn.uint32
+    assert_equal(torch_indices, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("width", [64, 4096], ids=["single_core", "multi_core"])
+def test_sort_stable_float32(width, descending, device):
+    """FLOAT32 values (32-bit DEST + UINT32 indices), tie-heavy including a
+    mixed +-0.0 class."""
+    levels = [-3.25, -1.0, -0.0, 0.0, 0.0, 1.0]
+    input_tensor = _tie_heavy_tensor([32, width], levels, seed=19, dtype=torch.float32)
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.float32)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("width", [64, 4096], ids=["single_core", "multi_core"])
+def test_sort_stable_uint16(width, descending, device):
+    """UINT16 values (uint16-in-32-bit-DEST path; Wt>threshold routes to the
+    SingleRowMultiCore factory). Values deliberately include the padding
+    sentinels (0 and 65535): with stable sort the real elements' lower indices
+    order them ahead of the padding, so the sentinel collision is benign."""
+    g = torch.Generator().manual_seed(width + int(descending))
+    tie_levels = torch.tensor([0, 1, 1, 7, 300, 65535], dtype=torch.int32)
+    choice = torch.randint(0, len(tie_levels), [32, width], generator=g)
+    input_tensor = tie_levels[choice]
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    assert ttnn_indices.dtype == ttnn.uint32
+    assert_equal(torch_indices, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values).to(torch.int32))
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [32, 64],  # SingleRowSingleCore
+        [32, 4096],  # CrossCoreDataExchange
+    ],
+    ids=["single_core", "cross_core"],
+)
+def test_sort_stable_program_cache(shape, device):
+    """stable must enter the program hash: alternate stable/unstable on the
+    same shape and re-run the stable program from cache on fresh data. A hash
+    that ignores `stable` returns the unstable program on run 3."""
+    levels = [-1.5, -0.5, -0.5, 0.5, 1.5]
+
+    entries = []
+    for iteration, stable in enumerate([True, False, True, False]):
+        input_tensor = _tie_heavy_tensor(shape, levels, seed=100 + iteration)
+        torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=True, stable=True)
+
+        ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+        with device.cache_entries_counter.measure():
+            ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=True, stable=stable)
+
+        dev_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+        if stable:
+            assert_equal(torch_indices, dev_indices)
+            assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+        else:
+            # Unstable run: values still exact, indices a valid permutation of a correct sort.
+            assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+            gathered = torch.gather(input_tensor, -1, dev_indices)
+            assert_equal(torch_values, gathered)
+        ttnn.synchronize_device(device)
+        entries.append(device.cache_entries_counter.total)
+
+    device.disable_and_clear_program_cache()
+    # Two distinct programs total (stable and unstable), each compiled exactly once.
+    assert entries[-1] == 2, f"Expected 2 program cache entries (stable + unstable), found {entries[-1]}"
