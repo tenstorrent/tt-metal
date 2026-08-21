@@ -233,14 +233,12 @@ def _run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
 #
 # The scalar VALUE is a compile-time arg in the reduce program factories (bit-cast into the
 # reader's compile args on the W path, and into the Welford compute kernel's post-mul /
-# correction args), so every distinct value mints a fresh kernel binary per (op, shape, dim,
-# dtype) cell -- the scalar axis is a pure JIT-compile multiplier. Two values per part cover
-# every behavior class the previous three did: 1.0 (identity, and the scalar==1.0 dispatch
+# correction args), so every distinct value mints a fresh kernel binary. Two values per part
+# cover every behavior class the previous three did: 1.0 (identity, and the scalar==1.0 dispatch
 # boundary that keeps sum eligible for fast_reduce_nc -- kept in BOTH parts because that
 # dispatch depends on shape/dim), plus one non-identity representative: -2.0 (negative sign,
 # bf16-exact mantissa) on part 1 and 2.43 (positive, NOT exactly representable -- the
-# strictest rounding case) on part 2. The dropped {2.0, -2.43, 4.0} only re-ran the same
-# post-mul path with a different constant.
+# strictest rounding case) on part 2.
 #
 # Simple powers of two run with reduced set of dim parameters.
 @pytest.mark.parametrize("op, correction", OP_CORRECTION)
