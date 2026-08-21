@@ -537,6 +537,27 @@ struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Tr, Chain>> {
     // core types, and all it needs is the circular buffer behind one. Pass a
     // ComputeBlock held at KERNEL scope -- the bias is read by every finishing
     // block and must not be popped until the kernel ends. See unified_kernels.
+    // Add a WHOLE BLOCK to the product, in place, before it is packed.
+    //
+    // This is what removes a pass rather than shortening one. `store(matmul(q, k) + mask)`
+    // cannot fuse: the tree's operands are buffers, so the product has to be packed to L1
+    // and read back to be one. Here the product is already sitting in DST when the addend
+    // arrives, and binary_dest_reuse_tiles takes one operand from a buffer and the other
+    // from DST -- so the add costs one FPU instruction per output tile and no round trip.
+    //
+    // Distinct from bias(): a bias is one row broadcast down the block, this is a block of
+    // the same shape. The attention mask is the motivating case, where it turns
+    // matmul-then-add into just the matmul.
+    template <typename Operand>
+    auto plus(const Operand& operand) const {
+        static_assert(
+            same_shape_v<typename Operand::shape, typename geometry::out_shape>,
+            "a fused addend must have the matmul's OUTPUT shape -- for one row broadcast "
+            "down the block, that is bias(), not plus()");
+        MatmulNode<SA, SB, Tr, Chain> out{{}, in0_cb, in1_cb, bias_cb, operand.get_cb_id()};
+        return out;
+    }
+
     template <typename Operand>
     auto bias(const Operand& operand) const {
         // A bias is one row broadcast down the output block, so its shape is fixed by
@@ -550,13 +571,19 @@ struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Tr, Chain>> {
         // nothing to notice; more and the kernel and the geometry disagree about
         // the shape. Checked here rather than in the strategy because this is where
         // the operand's page count is still in hand.
-        MatmulNode<SA, SB, Tr, Chain> out{{}, in0_cb, in1_cb, operand.get_cb_id()};
+        // Carries addend_cb through: without it, .plus(m).bias(v) would drop the addend
+        // silently -- the fused add would just not happen, and the result would look
+        // like a plain biased matmul rather than like an error.
+        MatmulNode<SA, SB, Tr, Chain> out{{}, in0_cb, in1_cb, operand.get_cb_id(), addend_cb};
         return out;
     }
 
     uint32_t in0_cb;
     uint32_t in1_cb;
     uint32_t bias_cb = kNoBias;
+    // A whole block added to the product, distinct from bias_cb, which is one row
+    // broadcast. See plus() above.
+    uint32_t addend_cb = kNoBias;
 };
 
 // --- Reduction ---
@@ -1429,6 +1456,17 @@ struct Strategy<FPUFusion> {
                 in0_index += 1;
                 in1_index += G::in1_row_stride;
             }
+            // The addend is the whole block, so this band's slice of it starts at the
+            // band's first output tile; DST is indexed from zero within the band.
+            if (node.addend_cb != kNoBias) {
+                AddOp::fpu_reuse_init<true>(node.addend_cb);
+                for (uint32_t t = 0; t < kBandTiles; ++t) {
+                    AddOp::fpu_reuse_apply<true>(node.addend_cb, r0 * G::ct_dim + t, t);
+                }
+                // Put the matmul's own programming back for the next band.
+                ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, kBandRows, G::kt_dim);
+            }
+
             if constexpr (!Chain::empty) {
                 for (uint32_t t = 0; t < kBandTiles; ++t) {
                     Chain::apply_in_place(t);
@@ -1512,6 +1550,18 @@ struct Strategy<FPUFusion> {
                 G::kt_dim);
             in0_index += 1;
             in1_index += G::in1_row_stride;
+        }
+
+        // Before the chain, so matmul(a, b).plus(m).relu() is relu(A@B + m).
+        if (node.addend_cb != kNoBias) {
+            AddOp::fpu_reuse_init<true>(node.addend_cb);
+            for (uint32_t t = 0; t < kAccTiles; ++t) {
+                AddOp::fpu_reuse_apply<true>(node.addend_cb, t, t);
+            }
+            // The reuse op reprogrammed the math unit for an eltwise add, so anything
+            // matmul-shaped after this needs its own init back. The accumulating path
+            // re-inits at the top of every call, so only a later band would notice.
+            ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, G::rt_dim, G::kt_dim);
         }
 
         if constexpr (!Chain::empty) {

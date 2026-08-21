@@ -69,7 +69,7 @@ constexpr uint32_t kCbK = 1;
 constexpr uint32_t kCbV = 2;
 constexpr uint32_t kCbMask = 3;
 constexpr uint32_t kCbOne = 4;
-constexpr uint32_t kCbScores = 6;
+constexpr uint32_t kCbColOnes = 23;
 constexpr uint32_t kCbMasked = 8;
 constexpr uint32_t kCbRowMax = 9;
 constexpr uint32_t kCbProb = 10;
@@ -94,13 +94,15 @@ void kernel_main() {
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
+    constexpr auto colones_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
+    constexpr auto out_args = TensorAccessorArgs<colones_args.next_compile_time_args_offset()>();
 
     const uint32_t q_addr = get_arg_val<uint32_t>(0);
     const uint32_t k_addr = get_arg_val<uint32_t>(1);
     const uint32_t v_addr = get_arg_val<uint32_t>(2);
     const uint32_t mask_addr = get_arg_val<uint32_t>(3);
-    const uint32_t out_addr = get_arg_val<uint32_t>(4);
+    const uint32_t colones_addr = get_arg_val<uint32_t>(4);
+    const uint32_t out_addr = get_arg_val<uint32_t>(5);
 
     using Q = u::Shape<sq, dt>;
     using Kt = u::Shape<dt, sk>;
@@ -109,6 +111,17 @@ void kernel_main() {
     using Vec = u::reduce_shape<Scores, u::Axis::Cols>;  // Sq x 1
     using Out = u::Shape<sq, dt>;
     using One = u::Shape<1, 1>;
+    // A column of ones, sk tiles tall: matmul(p, this) IS the row sum, since summing a
+    // row is a matvec. Cheaper than reduce_sum along the same axis -- a reduction folds
+    // sk INPUT tiles per output tile through reduce_tile, where the matmul does sk MACs
+    // and the FPU is what that unit is for. ttnn's SDPA does the same thing and calls it
+    // matmul_reduce against a cb_col_identity.
+    //
+    // The ones sit in COLUMN 0 only, which keeps the result identical to what the
+    // reduction produced: column 0 carries the sum and the rest of the tile is zero.
+    // All-ones would put the sum in every column instead, and while nothing downstream
+    // reads those, `bcast<Cols>` taking column 0 is a contract worth not quietly changing.
+    using Kt1 = u::Shape<sk, 1>;
 
     u::matmul_init<Q, Kt>(kCbQ, kCbK, kCbOut);
 
@@ -117,7 +130,7 @@ void kernel_main() {
     u::Storage<V> v_storage(kCbV);
     u::Storage<Scores> mask_storage(kCbMask);
     u::Storage<One> one_storage(kCbOne);
-    u::Storage<Scores> scores_storage(kCbScores);
+    u::Storage<Kt1> colones_storage(kCbColOnes);
     u::Storage<Scores> masked_storage(kCbMasked);
     u::Storage<Vec> rowmax_storage(kCbRowMax);
     u::Storage<Scores> prob_storage(kCbProb);
@@ -136,11 +149,15 @@ void kernel_main() {
     const auto k_acc = TensorAccessor(k_args, k_addr);
     const auto v_acc = TensorAccessor(v_args, v_addr);
     const auto mask_acc = TensorAccessor(mask_args, mask_addr);
+    const auto colones_acc = TensorAccessor(colones_args, colones_addr);
     const auto out = TensorAccessor(out_args, out_addr);
 
     // Kernel scope: Q feeds every chunk's first matmul, and both constants are re-read by
     // every reduction and broadcast that folds them in.
     u::ComputeBlock one = u::fill_reduce_scaler<1>(one_storage, u::kReduceScalerOne);
+    // Read once and used by every chunk, like q. reduce_max keeps the scaler above:
+    // a maximum has no matmul form.
+    u::ComputeBlock col_ones = u::noc_load<1>(colones_storage, colones_acc, 0).wait();
     u::ComputeBlock q = u::noc_load<1>(q_storage, q_acc, 0).wait();
 
     // The running state. Declared here because here is how long it lives.
@@ -153,8 +170,11 @@ void kernel_main() {
         u::ComputeBlock v = u::noc_load<1>(v_storage, v_acc, j).wait();
         u::ComputeBlock mask = u::noc_load<1>(mask_storage, mask_acc, j).wait();
 
-        u::ComputeBlock s = scores_storage.store(u::matmul<u::TransposeB::Yes>(q, k));
-        u::ComputeBlock sm = masked_storage.store(s + mask);
+        // The mask rides along in the matmul: `plus` adds it to the product while that is
+        // still in DST, so what used to be a separate 8x8-tile pass over the scores -- read
+        // s, read mask, add, write sm -- is now one FPU instruction per output tile with no
+        // L1 round trip. The scores buffer is gone with it.
+        u::ComputeBlock sm = masked_storage.store(u::matmul<u::TransposeB::Yes>(q, k).plus(mask));
         u::ComputeBlock rm = rowmax_storage.store(u::reduce_max<u::Axis::Cols>(sm, one));
 
         if (j == 0) {
@@ -163,7 +183,7 @@ void kernel_main() {
             // that will carry it.
             m_slot = m_storage.store(u::copy(rm));
             u::ComputeBlock p = prob_storage.store((sm - u::bcast<u::Axis::Cols>(rm)).exp());
-            l_slot = l_storage.store(u::reduce_sum<u::Axis::Cols>(p, one));
+            l_slot = l_storage.store(u::matmul(p, col_ones));
             o_slot = o_storage.store(u::matmul(p, v));
         } else {
             u::ComputeBlock<Vec> m_prev = m_slot.release();
@@ -179,7 +199,7 @@ void kernel_main() {
 
             m_slot = m_storage.store(u::copy(m_now));
 
-            u::ComputeBlock rs = rowsum_storage.store(u::reduce_sum<u::Axis::Cols>(p, one));
+            u::ComputeBlock rs = rowsum_storage.store(u::matmul(p, col_ones));
 
             u::ComputeBlock<Vec> l_prev = l_slot.release();
             l_slot = l_storage.store(l_prev * c_old + rs);
