@@ -98,22 +98,22 @@ Run. Test ids are ``[wormhole_b0-<case>-<mesh>]``, e.g.
 (default: 512-token prefill, 500 max-new-tokens). Use ``--timeout=0``:
 
   HF_MODEL=google/gemma-4-31B-it MESH_DEVICE=1x8 GEMMA4_HF_DEVICE_MAP=auto \\
-    pytest models/demos/gemma4/tests/unit/test_teacher_forcing_e2e.py -k 1x8 -sv --timeout=0
+    pytest models/demos/gemma4/tests/e2e/test_teacher_forcing_e2e.py -k 1x8 -sv --timeout=0
 
   # 12B (same lengths / token-accuracy floors; logit-PCC floor is under gemma-4-12B-it)
   HF_MODEL=google/gemma-4-12B-it MESH_DEVICE=1x8 GEMMA4_HF_DEVICE_MAP=auto \\
-    pytest "models/demos/gemma4/tests/unit/test_teacher_forcing_e2e.py::test_teacher_forcing_e2e[wormhole_b0-prefill_512-max_new_tokens_500-1x8]" -sv --timeout=0
+    pytest "models/demos/gemma4/tests/e2e/test_teacher_forcing_e2e.py::test_teacher_forcing_e2e[wormhole_b0-prefill_512-max_new_tokens_500-1x8]" -sv --timeout=0
 
   # token accuracy only -- select by node id, NOT by ``-k``. The module filename
   # is itself a keyword, so ``-k test_teacher_forcing_e2e`` also matches every
   # test_e2e_logits_pcc case in this file.
-  pytest models/demos/gemma4/tests/unit/test_teacher_forcing_e2e.py::test_teacher_forcing_e2e -k 1x8 -sv --timeout=0
+  pytest models/demos/gemma4/tests/e2e/test_teacher_forcing_e2e.py::test_teacher_forcing_e2e -k 1x8 -sv --timeout=0
 
   # logit PCC only (this name is unique, so -k is safe)
-  pytest models/demos/gemma4/tests/unit/test_teacher_forcing_e2e.py -k "test_e2e_logits_pcc and 1x8" -sv --timeout=0
+  pytest models/demos/gemma4/tests/e2e/test_teacher_forcing_e2e.py -k "test_e2e_logits_pcc and 1x8" -sv --timeout=0
 
   # one exact case
-  pytest "models/demos/gemma4/tests/unit/test_teacher_forcing_e2e.py::test_teacher_forcing_e2e[wormhole_b0-prefill_512-max_new_tokens_500-1x8]" -sv --timeout=0
+  pytest "models/demos/gemma4/tests/e2e/test_teacher_forcing_e2e.py::test_teacher_forcing_e2e[wormhole_b0-prefill_512-max_new_tokens_500-1x8]" -sv --timeout=0
 """
 
 from __future__ import annotations
@@ -895,6 +895,8 @@ def _log_per_step_pcc(pccs, *, limit=8):
 def _prepare_teacher_forcing_run(prefill_len, max_new_tokens, mesh_device, request):
     """Shared setup for token-accuracy and logit-PCC teacher-forced e2e tests."""
     skip_if_config_only_checkpoint()
+    if math.prod(tuple(mesh_device.shape)) < 4:
+        pytest.skip("teacher-forcing e2e is a multi-chip CI gate (1x4/1x8)")
 
     max_prefill = request.config.getoption("--max-prefill")
     if prefill_len > max_prefill:
