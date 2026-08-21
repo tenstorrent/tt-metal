@@ -64,6 +64,21 @@ namespace unified {
 // not enable; raising it to 16 would require dst_full_sync_en.
 inline constexpr uint32_t kMaxDstTiles = 8;
 
+// Largest number of output ROWS whose tiles fit one acquire, and which divides the block
+// evenly so no band is short. Row bands rather than rectangles because a band covers
+// whole rows: its tiles stay contiguous in the output buffer, so consecutive packs land
+// where they should and nothing has to address a partial row. Returns 0 when even one row
+// is too wide, which is the case the caller has to reject.
+constexpr uint32_t dst_band_rows(uint32_t rt_dim, uint32_t ct_dim) {
+    uint32_t best = 0;
+    for (uint32_t rows = 1; rows <= rt_dim; ++rows) {
+        if (rt_dim % rows == 0 && rows * ct_dim <= kMaxDstTiles) {
+            best = rows;
+        }
+    }
+    return best;
+}
+
 // --- Leaves and ops ---
 
 // One tile out of a circular buffer, copied into a DST slot. The allocator picks
@@ -1351,7 +1366,84 @@ struct Strategy<FPUFusion> {
     // is never touched, so passing the destination for both is safe.
     template <typename Node>
     static void run(const Node& node, uint32_t cb_id, uint32_t /*num_tiles*/) {
-        run<AccumulatorMode::Dst>(node, /*acc_cb=*/cb_id, /*out_cb=*/cb_id, /*reload=*/false, /*finish=*/true);
+        using G = typename Node::geometry;
+        if constexpr (G::out_subblock_num_tiles <= kMaxDstTiles) {
+            run<AccumulatorMode::Dst>(node, /*acc_cb=*/cb_id, /*out_cb=*/cb_id, /*reload=*/false, /*finish=*/true);
+        } else {
+            // Too wide for one acquire, so walk it in row bands. Only the single-shot
+            // path does this: an accumulating matmul would have to band its reload and
+            // its bias the same way, and nothing needs that yet.
+            run_banded(node, cb_id);
+        }
+    }
+
+    // One matmul whose output block exceeds DST, emitted as row bands.
+    //
+    // This is what lifts the shape limit that head width used to impose. The PV matmul of
+    // a flash attention has output rt=sq by ct=dt, so a 256-wide head (dt=8) filled the
+    // whole 8-tile budget with ONE row of queries and pinned sq to 1 -- 32 query rows per
+    // launch, and 32 launches for a 1024-long prefill. Banding decouples sq from dt.
+    //
+    // The indexing follows what the unpacker does with the tile indices: operand A is
+    // walked as row*kt_dim + k and operand B as k*ct_dim + col, so a band starting at row
+    // r0 offsets A by r0*kt_dim and leaves B alone. The band's own rt_dim goes to
+    // matmul_block; kt_dim and ct_dim stay the true ones, because they are the strides.
+    template <typename Node>
+    static void run_banded(const Node& node, uint32_t out_cb) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        using G = typename Node::geometry;
+        using Chain = typename Node::chain;
+        constexpr uint32_t kTranspose = G::transpose;
+        constexpr uint32_t kBandRows = dst_band_rows(G::rt_dim, G::ct_dim);
+        static_assert(
+            kBandRows > 0,
+            "matmul output block is wider than the DST budget in a SINGLE row, so no row band "
+            "fits: ct_dim exceeds 8 tiles. Split the operand instead -- a column band would "
+            "have to address partial output rows, which the packer cannot do in order.");
+        constexpr uint32_t kBandTiles = kBandRows * G::ct_dim;
+        constexpr uint32_t kTotalTiles = G::out_subblock_num_tiles;
+
+        // All bands share their dimensions, and nothing between them touches the matmul
+        // state -- only packs and the register handshake -- so this programs once.
+        ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, kBandRows, G::kt_dim);
+
+        // One reserve and one push around the whole block. pack_block advances the
+        // buffer's write pointer itself and only cb_push_back resets it, so the bands
+        // land back to back exactly as the output's row-major order needs.
+        cb_reserve_back(out_cb, kTotalTiles);
+        for (uint32_t r0 = 0; r0 < G::rt_dim; r0 += kBandRows) {
+            ckernel::tile_regs_acquire();
+            uint32_t in0_index = r0 * G::kt_dim;
+            uint32_t in1_index = 0;
+            for (uint32_t k = 0; k < G::kt_dim; ++k) {
+                ckernel::matmul_block(
+                    node.in0_cb,
+                    node.in1_cb,
+                    in0_index,
+                    in1_index,
+                    /*idst=*/0,
+                    kTranspose,
+                    G::ct_dim,
+                    kBandRows,
+                    G::kt_dim);
+                in0_index += 1;
+                in1_index += G::in1_row_stride;
+            }
+            if constexpr (!Chain::empty) {
+                for (uint32_t t = 0; t < kBandTiles; ++t) {
+                    Chain::apply_in_place(t);
+                }
+            }
+            ckernel::tile_regs_commit();
+            ckernel::tile_regs_wait();
+            ckernel::pack_block(0, out_cb, kBandTiles);
+            ckernel::tile_regs_release();
+        }
+        cb_push_back(out_cb, kTotalTiles);
+#else
+        (void)node;
+        (void)out_cb;
+#endif
     }
 
     // `Node::chain` is the PER-STEP chain, run on every call; `EpilogueChain` runs
@@ -1370,8 +1462,10 @@ struct Strategy<FPUFusion> {
 
         static_assert(
             kAccTiles <= kMaxDstTiles,
-            "matmul rt_dim * ct_dim exceeds the per-acquire DST budget (8 tiles under half-sync). "
-            "Split the output block into subblocks of at most 8 tiles -- 4x4 is not a legal subblock, "
+            "matmul rt_dim * ct_dim exceeds the per-acquire DST budget (8 tiles under half-sync) on "
+            "an ACCUMULATING matmul, which is not banded -- the reload and the bias would have to be "
+            "banded with it. A single-shot store(matmul(a, b)) has no such limit; it walks row bands. "
+            "Otherwise split the output block into subblocks of at most 8 tiles -- 4x4 is not legal, "
             "4x2 / 2x4 / 8x1 / 1x8 are the largest that are.");
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         using Chain = typename Node::chain;
