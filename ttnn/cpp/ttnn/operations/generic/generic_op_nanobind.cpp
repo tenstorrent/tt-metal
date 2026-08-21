@@ -33,7 +33,9 @@ void bind_generic_operation(nb::module_& mod) {
 
         Args:
             io_tensors (List[ttnn.Tensor]): List of input tensors and output tensor(s). Output tensor(s) must be
-                pre-allocated and included as the last element(s) in the list.
+                pre-allocated and included as the last element(s) in the list. A single-element list is legal:
+                a program that reads no tensor (a generator) or reads and writes the same tensor (in-place)
+                passes just that tensor, and the last element is still the returned output.
             program_descriptor (ttnn.ProgramDescriptor or ttnn.MeshProgramDescriptor): Descriptor containing
                 kernel specifications, computational buffer configurations, semaphores, and other execution
                 parameters. Use ProgramDescriptor for SPMD mode (same program on all devices) or
