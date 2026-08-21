@@ -1722,10 +1722,11 @@ Dst through its reload, L1 through the push/pop that rewinds the write pointer. 
 already says that push/pop pair is load-bearing for correctness, and it is; it is also what
 costs.
 
-**The fix is to make the k-loop ONE pass: hold the partial in DST across calls.** Acquire
-once, matmul every k-block into the same DST slots, pack once at the end. That is precisely
-what `kb=1, kt=8` already does, and it is the fast case -- so the fix is to let a blocked K
-behave like an unblocked one.
+**The fix proposed here was to hold the partial in DST across calls, and it was the wrong
+fix.** `kb=1, kt=8` is the fast case, which is the right observation; the wrong conclusion
+was that a blocked K has to be made to behave like an unblocked one. It can just BE
+unblocked -- `kt_dim` has no DST limit. See "The k-loop was the mistake" below, which
+supersedes the rest of this section.
 
 Expected impact, taking the per-call cost down to the matmul issue itself (~0.05us):
 
@@ -1733,6 +1734,8 @@ Expected impact, taking the per-call cost down to the matmul issue itself (~0.05
 |---|---|---|---|---|
 | kb=4, 1x1 | 7.33 us | ~3.5 us | 2.47x | ~1.2x |
 | kb=8, 1x1 | 11.80 us | ~3.5 us | ~4x | ~1.2x |
+
+**That prediction was wrong. The section below has the built result and the real cause.**
 
 **Where this matters is not attention.** Flash's matmuls are single-shot, so it is untouched
 by this. What it touches is every projection and FFN matmul, where K is the hidden size --
@@ -1748,6 +1751,64 @@ interleaved into the loop would corrupt the partial silently. So the change is n
 arithmetic, it is the ownership -- the acquire and release move into the Accumulator, and the
 "nothing else may touch DST here" rule has to be expressed rather than assumed. It also does
 NOT lift hole 1: the partial living in DST still needs rt*ct <= 8.
+
+### The k-loop was the mistake, not the accumulator
+
+I built `AccumulatorMode::DstResident` to hold the partial in DST across k-blocks, measured
+14% instead of the ~4x predicted, and have reverted it. The abstraction was answering a
+question that should not have been asked, and the reason is worth recording because it
+invalidates the "fix" proposed in the section above.
+
+**`kt_dim` is not a DST dimension.** DST budgets the OUTPUT block -- `rt_dim * ct_dim`, which
+is what the strategy's `static_assert` checks. K never occupies a register: `matmul_block`
+walks its k-loop internally and accumulates every step into the same `idst` slots. So there
+is no DST reason to block K at all, and `MatmulGeometry` has never had a limit on `kt_dim`.
+Measured, one accumulate call, 1x1 output:
+
+| kt | K in elements | PCC | ours |
+|---|---|---|---|
+| 8 | 256 | 0.999969 | 3.40 us |
+| 32 | 1024 | 0.999843 | 8.20 us |
+| 64 | 2048 | 0.999575 | 14.50 us |
+| 128 | 4096 | 0.998927 | 27.16 us |
+| 256 | 8192 | 0.997457 | 52.49 us |
+
+K=8192 in a single call, correct. The PCC drift is ordinary bf16 accumulation error over more
+terms, not a limit being hit.
+
+At the shape that actually matters -- K=64 tiles, which is llama's 2048 hidden, 2x2 output --
+blocking is pure loss:
+
+| | ours | PCC |
+|---|---|---|
+| kb=1, kt=64 | **29.99 us** | 0.999587 |
+| kb=2, kt=32 | 31.31 us | 0.999623 |
+| kb=4, kt=16 | 33.85 us | 0.999616 |
+| kb=8, kt=8 | 39.31 us | 0.999617 |
+| kb=16, kt=4 | 50.45 us | 0.999621 |
+
+**40% for nothing, 1.36us per block.** DstResident recovered 0.33us of that per block; not
+blocking recovers all of it, needs no new mode, no DST ownership rule, and no guard on every
+acquire site in the library. So the k-loop is not the general case that projections and FFNs
+have to live with -- it is a streaming device for when K genuinely does not fit in L1, and
+the operand blocks are `rt*kt` and `kt*ct` tiles, so at 2KB a tile a 64-tile K at 2x2 is
+256KB an operand. That fits. Nothing in a single-core transformer layer needs the k-loop.
+
+What survives from the DstResident measurement, because it is about movement and not the
+accumulator: with the operand loads ablated out of the k-loop, kb=8 went from 10.10 to
+2.72us, so **~1.05us of each blocked step is the per-block DRAM read of the operands** --
+read latency, not bandwidth, since it is the same total bytes either way. That is the real
+reason fine blocking hurts, and if a K ever is too large for L1, prefetch depth (issue
+several blocks' reads before barriering on the first) is the lever, not the accumulator
+mode. The ablation was a six-line `#if` in the kernel that reused block 0's operands for
+every step -- a deliberately wrong answer, kept only long enough to take the measurement,
+and removed with the revert.
+
+Two lessons, and the second is the one I keep relearning. First: check whether the
+constraint you are designing around is real -- I never verified that a large `kt` was a
+problem before building machinery to avoid needing one. Second, for the fourth time this
+session: I priced the mechanism I had just been reading about without checking what else was
+in the same measurement.
 
 ### What to test next
 
