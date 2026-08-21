@@ -1535,16 +1535,8 @@ Two lessons now constrain what is worth trying, both learned the expensive way:
 
 What is left, ranked by how much math work it actually removes:
 
-1. **The wasted half of the diagonal chunk -- unexplored, and the largest.** Each q-chunk's
-   LAST key chunk straddles the diagonal, so about half its score tiles are masked to -inf
-   and computed anyway. The wasted fraction of all score work is `1/(n+1)` for n q-chunks:
-   at S=512 with sq=8 that is n=2 and **33%**. This is real math on the critical path, and
-   it is precisely what ttnn avoids -- `causal_k_limit` skips chunks fully above the
-   diagonal, and `apply_causal_mask_lightweight` stamps only the diagonal band. Recovering
-   it needs finer granularity near the diagonal, which the rectangular score block does not
-   express today. Note the interaction with the sq search: a smaller sq wastes proportionally
-   less (n is larger) but pays more launches and more state updates, so part of what the
-   search was balancing was this.
+1. ~~**The wasted half of the diagonal chunk.**~~ **Measured, and it is gated behind the
+   q-loop -- see below.**
 2. **Defer `o / l` into the output projection (~8%).** `recip` is 9.53us at sq=8, SFPU-only
    with no approximation parameter. `diag(1/l) @ (o @ W_o) == (o/l) @ W_o`, so it can leave
    attention entirely rather than be optimised. Layer-level, so it lands with phase 11.
@@ -1554,6 +1546,54 @@ What is left, ranked by how much math work it actually removes:
 4. **The state copy**, ~2%, still waiting on the read-but-not-consumed ownership question.
 5. **GQA and multi-core** -- throughput rather than per-core time, and the only items that
    make a real model runnable. Phase 11.
+
+### The diagonal waste is real, and cannot be taken without the q-loop
+
+Priced first, which is what made the answer clear. Widening the key extent at fixed sq adds
+sq score tiles per step, so the slope is what a score tile costs with everything that
+touches it -- matmul, fused mask, exp, reduce_max, the row-sum matmul:
+
+**0.685 us per score tile.** At S=512 with sq=8 the kernel computes 192 score tiles where
+the causal triangle needs 136, so **56 wasted tiles = 38.3 us of a 178 us head, 22%**. The
+largest single item left, confirmed by measurement rather than by counting tiles.
+
+Then the surprise. Finer K chunks cannot help -- the waste is masked ROWS inside a chunk,
+not whole chunks, so any rectangular tiling of the same key range computes the same 192.
+Finer Q chunks can, and do, and it makes things worse:
+
+| | q-chunks | k-chunks | score tiles (136 needed) | total |
+|---|---|---|---|---|
+| sq=8 | 2 | 3 | 192 | **178.5 us** |
+| sq=4 | 4 | 6 | 160 | 182.8 us |
+| sq=2 | 8 | 12 | 144 | 222.4 us |
+
+sq=2 computes almost exactly the triangle and is 25% SLOWER. Subtracting the score work at
+the measured price leaves the non-score cost, and it fits `13.1us fixed per q-chunk +
+1.30us per sq tile` (predicts 15.7us at sq=2 against 15.5 measured). The fixed 13.1us is
+per-LAUNCH: kernel startup, program setup, the fixed part of the tail. Eight q-chunks pay
+it eight times, which swamps the 38us of waste they avoid.
+
+**So the diagonal waste is not a separate item -- it is the q-loop's payoff.** With the
+per-q-chunk fixed cost down to kernel startup alone (~2us), the same three plans model as:
+
+| | with a q-loop |
+|---|---|
+| sq=2 | ~135 us |
+| sq=4 | ~138 us |
+| sq=8 | ~156 us |
+
+against 178.5us today: **roughly 24%**, and it inverts which sq wins. That is the whole
+diagonal waste plus the launch overhead, from one change that phase 11 needs anyway and
+that makes the dispatch structure match ttnn's.
+
+The alternative -- ragged computation inside a rectangular block -- was considered and is
+worth less. The banded matmul already walks one output row at a time and `ct_dim` is a
+RUNTIME argument to `matmul_block`, so band r could compute only its needed columns; DST
+would be seeded with the mask row first so skipped tiles carry -inf and `exp` sends them to
+zero, and the full sk tiles still get packed so the block stays rectangular. But it saves
+only the MATMUL share of a score tile -- about 0.27us of the 0.685 -- because exp, reduce
+and the row-sum matmul still run on all sk tiles. Call it 9% of the kernel for a change to
+the banded path, against 24% for the q-loop.
 
 ### What to test next
 
