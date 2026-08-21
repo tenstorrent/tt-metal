@@ -6,6 +6,18 @@ BRANCH="main"
 TT_METAL_DIR="/localdev/skrstic/tt-metal"
 SLACK_WEBHOOK_FILE="$HOME/.conv-watch/slack_webhook"
 
+# ---- Slack bot API (edit-in-place digest) ----------------------------------
+# When a bot token (xoxb-, scopes: chat:write) and channel ID are present the
+# watcher posts via chat.postMessage ONCE and then chat.update's that same
+# message while the status stays the same (tick times accumulate on a
+# "checked:" line); a status CHANGE posts a fresh message. The message ts
+# lives in state.json under "_slack". If token or channel ID is missing the
+# watcher falls back to the legacy webhook (new message per tick). The bot
+# user must be a MEMBER of the channel (private channels especially):
+# /invite @sdpawatch.
+SLACK_BOT_TOKEN_FILE="$HOME/.conv-watch/slack_bot_token"
+SLACK_CHANNEL_ID="C0BGS09TVL7"   # #conv-watch (private)
+
 # ---- Auth ----------------------------------------------------------------
 # The org retired console API keys (2026-07), so there is no api_key file.
 # watch.sh authenticates the headless agent one of two ways, in this order:
