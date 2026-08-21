@@ -245,23 +245,19 @@ def test_fused_bit_exact_vs_phased(device, monkeypatch, with_initial_state):
     assert torch.equal(fs_fu, fs_ph), "fused path changed final_state (must be bit-identical to phased)"
 
 
-# The fused path is opt-in at F1: it is bit-exact but producer-math-bound (~34us/chunk measured),
-# 1.11x at BH=48/T=4096 and 0.82x at T=512 — below the ship gate. The default flips to shape-gated
-# fused (BH >= 24 && 2*BH cores fit) once F2's producer-side work clears the w_p <= ~27us
-# checkpoint; re-add a (16, 48, "fused") row here when it does. See gdn-fused-handoff-design.md §8.
 @pytest.mark.parametrize(
     "num_k_heads, num_v_heads, expected_path",
     [
-        (16, 48, "phased"),  # BH=48: fused fits but stays opt-in until F2 clears its perf gate
-        (4, 12, "phased"),  # BH=12: phased regardless
+        (16, 48, "fused"),  # BH=48 >= 24 and 2*BH=96 cores fit -> default engages fused (F2 gate cleared)
+        (4, 12, "phased"),  # BH=12 < 24 -> default falls back to phased
     ],
-    ids=["bh48_phased_default", "bh12_phased"],
+    ids=["bh48_fused", "bh12_phased"],
 )
 def test_fused_default_dispatch(device, monkeypatch, num_k_heads, num_v_heads, expected_path):
-    """With NO path env set, the dispatcher must pick phased (the fused path is opt-in at F1).
-    Since fused and phased are bit-exact, torch.equal cannot discriminate paths: the proof that
-    the default took the expected path is a program-cache delta of ZERO after warming exactly
-    that path explicitly (any other path would compile at least one new prim program)."""
+    """With NO path env set, the dispatcher must pick fused iff (BH >= 24 and 2*BH fits the grid),
+    else phased. Since fused and phased are bit-exact, torch.equal cannot discriminate paths: the
+    proof that the default took the expected path is a program-cache delta of ZERO after warming
+    exactly that path explicitly (any other path would compile at least one new prim program)."""
     B = 1
     BH = B * num_v_heads
     grid = device.compute_with_storage_grid_size()
