@@ -1,0 +1,39 @@
+name: "LLK merge gate"
+
+# LLK Performance Regression Gate (Post-Merge)
+#
+# WHAT: Second line of defense. Catches regressions that PR gate missed by
+# comparing each commit against its parent on main. Identifies exactly which
+# commit caused degradation.
+#
+# WHY: Measurement variability, environmental differences, or false negatives
+# in PR gate can let regressions slip through. Merge gate catches them and
+# reverts before they compound.
+#
+# TRIGGER: Automatically on push to main (after merge), or manually with
+# 'llk-merge-gate' label. Compares current commit against parent commit.
+#
+# REVERT: Creates draft PR to revert bad commit (waits for approval).
+# Later: will auto-merge approved revert PRs.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tt_metal/tt-llk/**"
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: write
+  checks: write
+  pull-requests: write
+
+jobs:
+  llk-merge-gate:
+    name: "LLK merge regression gate"
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'llk-merge-gate')
+    uses: ./.github/workflows/llk-merge-gate-impl.yaml
+    secrets: inherit

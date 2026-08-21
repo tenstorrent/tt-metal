@@ -1,0 +1,208 @@
+name: "LLK merge gate impl"
+# Entry points: workflow_call only. Trigger lives in llk-merge-gate.yaml.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+  checks: write
+  pull-requests: write
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  llk-merge-gate:
+    name: "Compare current vs parent commit"
+    runs-on: ubuntu-slim
+    outputs:
+      regression_found: ${{ steps.compare.outputs.regression_found }}
+      parent_commit: ${{ steps.parent.outputs.commit }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 2  # Need parent commit
+
+      - name: Get parent commit
+        id: parent
+        run: |
+          PARENT=$(git rev-parse HEAD~1)
+          CURRENT=$(git rev-parse HEAD)
+          echo "commit=$PARENT" >> $GITHUB_OUTPUT
+          echo "Parent: $PARENT"
+          echo "Current: $CURRENT"
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9e0d6c9882fc7902038978ad1a988142 # v5.0.0
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas snowflake-connector-python
+
+      # Query Snowflake for parent commit's perf baseline
+      - name: Get parent commit perf baseline from Snowflake
+        id: parent_baseline
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+          SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
+          PARENT_COMMIT: ${{ steps.parent.outputs.commit }}
+          ARCH: wormhole
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          import json
+          from snowflake.connector import connect
+
+          conn = connect(
+            account=os.environ['SNOWFLAKE_ACCOUNT'],
+            user=os.environ['SNOWFLAKE_USER'],
+            password=os.environ['SNOWFLAKE_PASSWORD'],
+            warehouse=os.environ['SNOWFLAKE_WAREHOUSE'],
+            database=os.environ['SNOWFLAKE_DATABASE']
+          )
+
+          cursor = conn.cursor()
+
+          # Get perf data for parent commit
+          query = """
+          SELECT commit_sha, timestamp
+          FROM llk_baselines
+          WHERE arch = %s AND commit_sha = %s
+          LIMIT 1
+          """
+
+          cursor.execute(query, (os.environ['ARCH'], os.environ['PARENT_COMMIT']))
+          result = cursor.fetchone()
+          cursor.close()
+          conn.close()
+
+          if result:
+            print(f"✓ Found parent commit baseline: {result[0]}")
+          else:
+            print(f"⚠️  No baseline for parent commit (may be first measurement)")
+          PYTHON
+
+      # Run perf on current commit
+      - name: Run perf tests on current commit
+        run: |
+          echo "TODO: Run perf tests on current commit"
+          echo "Outputs: perf_data CSVs to current_perf/"
+
+      # Download parent commit's perf_data from SFTP
+      - name: Download parent commit perf_data from SFTP
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_USER: ${{ secrets.SFTP_USER }}
+          SFTP_PASS: ${{ secrets.SFTP_PASSWORD }}
+          PARENT_COMMIT: ${{ steps.parent.outputs.commit }}
+        run: |
+          set +e
+          mkdir -p parent_perf
+
+          echo "Downloading parent commit perf_data from SFTP: perf_${PARENT_COMMIT}/"
+          sshpass -p "${SFTP_PASS}" sftp -o StrictHostKeyChecking=no \
+            "${SFTP_USER}@${SFTP_HOST}:/baselines/llk/perf_${PARENT_COMMIT}/" \
+            parent_perf/ || {
+            echo "⚠️  Could not download parent perf data"
+            exit 0
+          }
+
+      # Compare current vs parent
+      - name: Compare regressions
+        id: compare
+        run: |
+          python3 ${{ env.LLK_PATH }}/perf/regression_compare.py \
+            --current 'current_perf/**/*.csv' \
+            --baseline 'parent_perf/**/*.csv' \
+            --threshold 0.02 \
+            --min-cycles 30 \
+            --run-types 'L1_TO_L1' \
+            --report merge_gate_report.md \
+            --test 'LLK perf' \
+            --baseline-sha "${{ steps.parent.outputs.commit }}" \
+            --current-sha "${{ github.sha }}" \
+            --baseline-label "parent commit" \
+            --current-label "current commit"
+          EXIT_CODE=$?
+          echo "regression_found=$([[ $EXIT_CODE -ne 0 ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          exit 0  # Don't fail; let next step decide
+
+      - name: Report results
+        if: always()
+        run: |
+          cat merge_gate_report.md
+
+  create-revert-pr:
+    name: "Create revert PR (if regression found)"
+    if: needs.llk-merge-gate.outputs.regression_found == 'true'
+    needs: llk-merge-gate
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 2
+
+      - name: Create revert commit
+        env:
+          PARENT_COMMIT: ${{ needs.llk-merge-gate.outputs.parent_commit }}
+        run: |
+          git config user.name "LLK Merge Gate"
+          git config user.email "llk-merge-gate@tenstorrent.com"
+
+          # Create revert commit
+          git revert --no-edit HEAD
+
+          echo "✓ Created revert commit"
+          git log --oneline -2
+
+      - name: Create draft revert PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CURRENT_COMMIT=$(git rev-parse HEAD~1)
+          REVERT_COMMIT=$(git rev-parse HEAD)
+
+          echo "Creating draft revert PR..."
+
+          gh pr create \
+            --title "REVERT: Perf regression detected in ${CURRENT_COMMIT:0:7}" \
+            --body "Perf regression detected. This is an automatically-created draft revert PR. Review merge gate output for details. Approve to merge revert." \
+            --draft \
+            --head "llk-merge-gate-revert-${REVERT_COMMIT:0:7}" \
+            --base main
+
+          echo "✓ Draft revert PR created"
+
+      - name: Comment on original commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "TODO: Post comment on commit explaining regression"
+
+  gate-verdict:
+    name: "Gate verdict"
+    if: always()
+    needs: llk-merge-gate
+    runs-on: ubuntu-slim
+    steps:
+      - name: Regression detected
+        if: needs.llk-merge-gate.outputs.regression_found == 'true'
+        run: |
+          echo "❌ Performance regression detected"
+          echo "A draft revert PR has been created (awaiting approval)"
+          exit 1
+
+      - name: No regression
+        if: needs.llk-merge-gate.outputs.regression_found == 'false'
+        run: |
+          echo "✅ No regressions detected"
