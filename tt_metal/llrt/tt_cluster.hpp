@@ -434,6 +434,9 @@ private:
     void start_driver(umd::DeviceParams& device_params) const;
     void validate_harvesting_masks() const;
 
+    // Apply the TT_METAL_TDP_LIMIT_WATTS override to every local ASIC. No-op when it is unset.
+    void apply_tdp_limit_override();
+
     void get_metal_desc_from_tt_desc();
     void generate_virtual_to_umd_coord_mapping();
     void generate_virtual_to_profiler_flat_id_mapping();

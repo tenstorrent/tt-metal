@@ -110,6 +110,7 @@ class Flux2SingleTransformerBlock(Module):
             mesh_axis=tp_axis,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            mm_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         )
 
         self._dim = dim
@@ -293,6 +294,7 @@ class Flux2Transformer(Module):
             mesh_device=device,
             mesh_axis=tp_axis,
             ccl_manager=ccl_manager,
+            mm_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         )
 
         self.device = device

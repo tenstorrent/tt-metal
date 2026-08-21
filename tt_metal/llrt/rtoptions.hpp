@@ -166,6 +166,10 @@ struct SanitizerSettings {
     std::optional<bool> internal = std::nullopt;
 };
 
+// Not a limit: the value TT_METAL_TDP_LIMIT_WATTS carries to ask for the board default back rather
+// than a specific limit. Firmware only accepts limits in [50, 500] W, so zero is free to mean this.
+inline constexpr uint32_t TDP_LIMIT_RESTORE_DEFAULT_SENTINEL = 0;
+
 class RunTimeOptions {
     std::string root_dir;
 
@@ -238,6 +242,9 @@ class RunTimeOptions {
     bool clear_dram = false;
 
     size_t pinned_memory_cache_limit_bytes = 4ULL * 1024 * 1024 * 1024;
+
+    // Firmware throttler TDP limit [W] to apply when the cluster opens, or the restore sentinel.
+    std::optional<uint32_t> tdp_limit_watts;
 
     bool skip_loading_fw = false;
 
@@ -683,6 +690,9 @@ public:
 
     size_t get_pinned_memory_cache_limit_bytes() const { return pinned_memory_cache_limit_bytes; }
     void set_pinned_memory_cache_limit_bytes(size_t limit_bytes) { pinned_memory_cache_limit_bytes = limit_bytes; }
+
+    std::optional<uint32_t> get_tdp_limit_watts() const { return tdp_limit_watts; }
+    void set_tdp_limit_watts(std::optional<uint32_t> limit_watts) { tdp_limit_watts = limit_watts; }
 
     std::string get_visible_devices() const { return visible_devices; }
     std::string get_arch_name() const { return arch_name; }
