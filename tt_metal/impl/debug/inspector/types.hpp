@@ -5,6 +5,7 @@
 #pragma once
 
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -23,6 +24,7 @@ namespace tt::tt_metal {
     namespace distributed {
     class MeshDeviceImpl;
     class MeshWorkloadImpl;
+    class MeshBuffer;
     }
 }
 
@@ -56,6 +58,33 @@ struct MeshDeviceData {
     int mesh_id{};
     std::optional<int> parent_mesh_id;
     bool initialized = false;
+};
+
+struct MeshSocketPeerData {
+    uint32_t fabric_chip_id{};
+    uint32_t core_x{};
+    uint32_t core_y{};
+};
+
+struct MeshSocketEndpointData {
+    uint32_t chip_id{};
+    uint32_t core_x{};
+    uint32_t core_y{};
+    uint32_t fabric_chip_id{};
+    std::vector<MeshSocketPeerData> peers;
+};
+
+struct MeshSocketData {
+    bool is_sender{};
+    std::weak_ptr<distributed::MeshBuffer> config_buffer;
+    uint64_t config_buffer_address{};
+    uint64_t data_buffer_address{};
+    uint64_t fifo_size{};
+    uint32_t sender_md_size_bytes{};
+    uint32_t bytes_acked_stride_bytes{};
+    uint32_t local_mesh_id{};
+    uint32_t peer_mesh_id{};
+    std::vector<MeshSocketEndpointData> endpoints;
 };
 
 struct MeshWorkloadRuntimeEntry {

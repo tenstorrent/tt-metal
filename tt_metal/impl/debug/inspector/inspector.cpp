@@ -12,8 +12,14 @@
 #include "jit_build/jit_build_options.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include "distributed/mesh_socket_utils.hpp"
 #include "program.hpp"
+#include <map>
 #include <memory>
+#include <tuple>
 #include <tt-metalium/experimental/inspector.hpp>
 #include "impl/kernels/kernel.hpp"
 
@@ -292,6 +298,80 @@ void Inspector::mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_
         data->logger.log_mesh_device_initialized(mesh_device_data);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh device initialized: {}", e.what());
+    }
+}
+
+void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(data->mesh_sockets_mutex);
+        const distributed::SocketSenderSize sender_size;
+        auto config_buffer = socket->get_config_buffer();
+        const bool is_sender = socket->get_socket_endpoint_type() == distributed::SocketEndpoint::SENDER;
+
+        inspector::MeshSocketData socket_data;
+        socket_data.is_sender = is_sender;
+        socket_data.config_buffer = config_buffer;
+        socket_data.config_buffer_address = config_buffer->address();
+        socket_data.data_buffer_address = is_sender ? 0 : socket->get_data_buffer()->address();
+        socket_data.fifo_size = socket->get_config().socket_mem_config.fifo_size;
+        socket_data.sender_md_size_bytes = sender_size.md_size_bytes;
+        socket_data.bytes_acked_stride_bytes = sender_size.ack_size_bytes;
+
+        auto* mesh_device = socket->get_mesh_device();
+        const auto local_ep = socket->get_socket_endpoint_type();
+        const auto peer_ep = is_sender ? distributed::SocketEndpoint::RECEIVER : distributed::SocketEndpoint::SENDER;
+        // One entry per local core: a sender core feeding several downstreams collects several peers
+        // here, rather than repeating the core once per downstream.
+        std::map<std::tuple<uint32_t, uint32_t, uint32_t>, inspector::MeshSocketEndpointData> endpoint_by_core;
+        for (const auto& conn : socket->get_config().socket_connection_config) {
+            const auto& local_core = is_sender ? conn.sender_core : conn.receiver_core;
+            if (!mesh_device->is_local(local_core.device_coord)) {
+                continue;  // Another rank owns this endpoint and reports it itself.
+            }
+            auto* local_device = mesh_device->get_device(local_core.device_coord);
+            if (local_device == nullptr) {
+                continue;
+            }
+            const auto& peer_core = is_sender ? conn.receiver_core : conn.sender_core;
+            auto local_node = socket->get_fabric_node_id(local_ep, local_core.device_coord);
+            auto peer_node = socket->get_fabric_node_id(peer_ep, peer_core.device_coord);
+
+            // The socket config carries one mesh id per side, so every connection agrees on these.
+            socket_data.local_mesh_id = *local_node.mesh_id;
+            socket_data.peer_mesh_id = *peer_node.mesh_id;
+
+            const auto core_key = std::tuple(
+                static_cast<uint32_t>(local_device->id()),
+                static_cast<uint32_t>(local_core.core_coord.x),
+                static_cast<uint32_t>(local_core.core_coord.y));
+            // Reassigned per connection, but every connection on a core agrees on these.
+            auto& endpoint = endpoint_by_core[core_key];
+            endpoint.chip_id = local_device->id();
+            endpoint.core_x = local_core.core_coord.x;
+            endpoint.core_y = local_core.core_coord.y;
+            endpoint.fabric_chip_id = local_node.chip_id;
+            auto& peer = endpoint.peers.emplace_back();
+            peer.fabric_chip_id = peer_node.chip_id;
+            peer.core_x = peer_core.core_coord.x;
+            peer.core_y = peer_core.core_coord.y;
+        }
+        if (endpoint_by_core.empty()) {
+            return;  // this rank owns no endpoint of this socket
+        }
+        socket_data.endpoints.reserve(endpoint_by_core.size());
+        for (auto& [core, endpoint] : endpoint_by_core) {
+            socket_data.endpoints.push_back(std::move(endpoint));
+        }
+        data->mesh_sockets_data.insert_or_assign(config_buffer.get(), std::move(socket_data));
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh socket created: {}", e.what());
     }
 }
 

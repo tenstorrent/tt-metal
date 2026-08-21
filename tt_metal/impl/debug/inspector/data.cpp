@@ -58,6 +58,7 @@ Data::Data(std::optional<int> rank, ContextId context_id) :
             // Connect callbacks that we want to respond to
             get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
+            get_rpc_server().setGetSocketsCallback([this](auto result) { this->rpc_get_sockets(result); });
             get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
             get_rpc_server().setGetMeshWorkloadRuntimeEntriesCallback(
                 [this](auto result) { this->rpc_get_mesh_workload_runtime_entries(result); });
@@ -157,6 +158,45 @@ void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& 
         mesh_device.setInitialized(mesh_device_data.initialized);
         mesh_device.setProgramCacheEnabled(
             const_cast<distributed::MeshDeviceImpl*>(mesh_device_data.mesh_device)->get_program_cache().is_enabled());
+    }
+}
+
+void Data::rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(mesh_sockets_mutex);
+    // Drop endpoints whose config buffer is gone or deallocated
+    std::erase_if(mesh_sockets_data, [](const auto& entry) {
+        auto config_buffer = entry.second.config_buffer.lock();
+        return !config_buffer || !config_buffer->is_allocated();
+    });
+    auto sockets = results.initSockets(mesh_sockets_data.size());
+    uint32_t i = 0;
+    for (const auto& [config_buffer, socket_data] : mesh_sockets_data) {
+        auto socket = sockets[i++];
+        socket.setIsSender(socket_data.is_sender);
+        socket.setConfigBufferAddress(socket_data.config_buffer_address);
+        socket.setDataBufferAddress(socket_data.data_buffer_address);
+        socket.setFifoSize(socket_data.fifo_size);
+        socket.setSenderMdSizeBytes(socket_data.sender_md_size_bytes);
+        socket.setBytesAckedStrideBytes(socket_data.bytes_acked_stride_bytes);
+        socket.setLocalMeshId(socket_data.local_mesh_id);
+        socket.setPeerMeshId(socket_data.peer_mesh_id);
+        auto endpoints = socket.initEndpoints(socket_data.endpoints.size());
+        uint32_t j = 0;
+        for (const auto& e : socket_data.endpoints) {
+            auto endpoint = endpoints[j++];
+            endpoint.setChipId(e.chip_id);
+            endpoint.setCoreX(e.core_x);
+            endpoint.setCoreY(e.core_y);
+            endpoint.setFabricChipId(e.fabric_chip_id);
+            auto peers = endpoint.initPeers(e.peers.size());
+            uint32_t k = 0;
+            for (const auto& p : e.peers) {
+                auto peer = peers[k++];
+                peer.setFabricChipId(p.fabric_chip_id);
+                peer.setCoreX(p.core_x);
+                peer.setCoreY(p.core_y);
+            }
+        }
     }
 }
 
