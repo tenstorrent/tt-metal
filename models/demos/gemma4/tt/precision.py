@@ -39,8 +39,8 @@ def _env_overrides():
     meant editing a checked-in JSON — which makes a sweep awkward, leaves no
     record in the run's own log of what was tested, and is exactly how earlier
     A/B pairs ended up bit-identical because the intended change never took
-    effect. Score any sweep on the per-layer PCC ladder
-    ladder against the HF reference, not on end-to-end token counts.
+    effect. Score any sweep on the per-layer PCC ladder against the HF reference,
+    not on end-to-end token counts.
 
     Unknown module names and bad dtypes raise rather than being ignored: a typo'd
     knob that silently does nothing is the failure mode this exists to prevent.
