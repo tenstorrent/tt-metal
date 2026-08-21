@@ -89,11 +89,16 @@ class McastFamily:
     def compile_time_args(self, rt_base: int, *, pre_handshake: bool = None) -> dict:
         """The four named CT words. Semaphore ids are absent: they arrive via sem:: bindings."""
         # Reuse Mcast1D's flags computation by reading the descriptor-path block: [active,
-        # data_ready, consumer_ready, num_active, flags].
+        # data_ready, consumer_ready, num_active, flags, rotating_span]. Only the leading five are
+        # read here, and dropping the trailing span is deliberate rather than lossy: on the spec
+        # path the span is a TEMPLATE argument the kernel passes itself via
+        # MCAST_ARGS_ROTATING(prefix, span), because McastArgsSpec takes it as a non-type template
+        # param. The descriptor path has no such channel, which is the only reason Mcast1D ships it
+        # as a sixth CT word. Slice rather than unpack-all so a future seventh word cannot break us.
         block = (
             self._mcast.compile_time_args() if pre_handshake is None else self._mcast.compile_time_args(pre_handshake)
         )
-        active, _, _, num_active, flags = block
+        active, _, _, num_active, flags = block[:5]
         return {
             f"{self.prefix}_active": active,
             f"{self.prefix}_num_active": num_active,
