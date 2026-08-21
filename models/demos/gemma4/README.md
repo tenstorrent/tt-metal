@@ -23,7 +23,6 @@ Wormhole rows are from CI (cold-start TTFT, including one-time program compile).
 | E2B     | N150 | 1×1 | 12.24 | 12.24 | 38714.7 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762105) |
 | E4B     | N150 | 1×1 |  7.95 |  7.95 | 36832.1 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762123) |
 | 26B-A4B | T3K  | 1×8 | 11.68 | 11.68 | 64186.5 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762080) |
-| 31B     | T3K  | 1×8 |  9.48 |  9.48 | 44772.1 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762120) |
 | E2B     | P150 | 1×1 | 22.82 | 22.82 | 580 [^bh-perf] | measured |
 | E4B     | P150 | 1×1 | 13.97 | 13.97 | 950 [^bh-perf] | measured |
 | 12B     | P150 | 1×1 | 15.57 | 15.57 | 1190 [^bh-perf] | measured |
@@ -65,30 +64,19 @@ export HF_MODEL=google/gemma-4-31B-it   # 12B: see "12B checkpoint layout" below
 MESH_DEVICE=T3K pytest models/demos/gemma4/tests/e2e/test_isl_sweep.py -k "long-context-128k" -s --timeout 1800
 ```
 
-**31B / T3K** sweep (2026-08-21, measured run 2):[^t3k-sweep311].
+Sweep results, 12B and 31B:
 
-| ISL bucket (`-k`) | ISL | Batch | 12B TTFT (ms) | 12B ms/tok | 12B tok/s/user | 31B TTFT (ms) | 31B ms/tok | 31B tok/s/user |
-|---|---:|:-:|---:|---:|---:|---:|---:|---:|
-| `batch-1`           |   128 |  1 | **58.5** [^t3k-12b-b1] | **26.21** | **38.15** | **93.5** | **42.88** | **23.32** |
-| `batch-8`           |   128 |  8 | **4706.8** [^t3k-12b-b8] | **34.21** | **29.23** | **6977.7** | **57.12** | **17.51** |
-| `batch-32`          |   128 | 32 | **13452.1** [^t3k-12b-b32] | **45.37** | **22.04** | **13801.5** [^t3k-b32] | **71.82** | **13.92** |
-| `long-context-4k`   |    4k |  1 | **841.6** [^t3k-12b-4k] | **27.62** | **36.21** | **2032.2** | **45.05** | **22.20** |
-| `long-context-32k`  |   32k |  1 | **7229.8** [^t3k-12b-32k] | **30.48** | **32.81** | **15067.5** | **48.68** | **20.54** |
-| `long-context-64k`  |   64k |  1 | **14750.2** [^t3k-12b-64k] | **33.66** | **29.71** | **32943.4** | **52.74** | **18.96** |
-| `long-context-128k` |  128k |  1 | **28925.7** [^t3k-12b-128k] | **38.01** | **26.31** | **61584.4** [^t3k-31b-128k] | **58.15** | **17.20** |
-| `long-context-256k` |  256k |  1 | **105341.0** [^t3k-12b-256k] | **55.33** | **18.07** | **241697.9** | **80.08** | **12.49** |
+| ISL bucket (`-k`) | ISL | Batch | 12B TTFT (ms) | 12B ms/tok | 31B TTFT (ms) | 31B ms/tok |
+|---|---:|:-:|---:|---:|---:|---:|
+| `batch-1`           |   128 |  1 |     58.5 | 26.21 |     93.5 | 42.88 |
+| `batch-8`           |   128 |  8 |   4706.8 | 34.21 |   6977.7 | 57.12 |
+| `batch-32`          |   128 | 32 |  13452.1 | 45.37 |  13801.5 [^t3k-b32] | 71.82 |
+| `long-context-4k`   |    4k |  1 |    841.6 | 27.62 |   2032.2 | 45.05 |
+| `long-context-32k`  |   32k |  1 |   7229.8 | 30.48 |  15067.5 | 48.68 |
+| `long-context-64k`  |   64k |  1 |  14750.2 | 33.66 |  32943.4 | 52.74 |
+| `long-context-128k` |  128k |  1 |  28925.7 | 38.01 |  61584.4 | 58.15 |
+| `long-context-256k` |  256k |  1 | 105341.0 | 55.33 | 241697.9 | 80.08 |
 
-[^t3k-sweep311]: 31B on WH T3K, `MESH_DEVICE=T3K`, `tests/e2e/test_isl_sweep.py`, run 2 per bucket (warm traces). Source: `isl_sweep_logs/text_demo_v2_20260821_101826.csv`.
-[^t3k-12b-b1]: 12B `batch-1` on WH T3K (warm run 2): full demo runtime 22.5 s.
-[^t3k-12b-b8]: 12B `batch-8` on WH T3K (warm run 2): full demo runtime 31.7 s; throughput 233.82 tok/s.
-[^t3k-12b-b32]: 12B `batch-32` on WH T3K (warm run 2): full demo runtime 43.2 s; throughput 705.33 tok/s.
-[^t3k-12b-4k]: 12B `long-context-4k` on WH T3K (warm run 2): full demo runtime 25.0 s.
-[^t3k-12b-32k]: 12B `long-context-32k` on WH T3K (warm run 2): full demo runtime 34.9 s.
-[^t3k-12b-64k]: 12B `long-context-64k` on WH T3K (warm run 2): full demo runtime 45.4 s.
-[^t3k-12b-128k]: 12B `long-context-128k` on WH T3K (warm run 2): full demo runtime 63.9 s.
-[^t3k-12b-256k]: 12B `long-context-256k` on WH T3K (warm run 2): full demo runtime 144.4 s.
-[^t3k-b32]: 31B `batch-32` on WH T3K (warm run 2): full demo runtime 81.7 s; throughput 445.58 tok/s. Run 1 (warmup): TTFT 13238.4 ms, 72.01 ms/tok, 13.89 tok/s/user. Requires 31B batch-32 L1 fix (host batched extract + auto chunk-span warmup).
-[^t3k-31b-128k]: 31B `long-context-128k` on WH T3K (`MESH_DEVICE=1x8`, 2026-08-21): prompt tokens 100793, model load 36.3 s, prefill warmup 4.1 s, full demo runtime 116.7 s.
 
 ## Code Support Matrix
 
@@ -100,13 +88,13 @@ Legend: 🟢 fully supported · 🟡 supported with known issues / limitations �
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | E2B     | 🟢 | 🟢 | 🟢 | 🟢 [^gemma4-p150] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
 | E4B     | 🟢 | 🟡 [^e4b-n300] | 🟢 | 🟢 [^gemma4-p150] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
-| 12B     | 🟡 [^gemma4-12b-wh] | 🔴 | 🟡 [^gemma4-12b-t3k] | 🟢 [^gemma4-p150-12b] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
+| 12B     | 🟡 [^gemma4-12b-wh] | 🔴 | 🟢 [^gemma4-12b-t3k] | 🟢 [^gemma4-p150-12b] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
 | 26B-A4B | 🔴 | 🔴 | 🟢 | 🔴 | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
 | 31B     | 🔴 | 🔴 | 🟢 | 🔴 | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
 
 [^e4b-n300]: E4B on N300 is exercised by the test suite locally but the CI entry is commented out due to runner availability. See `tests/pipeline_reorg/models_{unit,e2e}_tests.yaml`.
 [^gemma4-12b-wh]: 12B on Wormhole N150 is short-context only (does not fit long-context KV).
-[^gemma4-12b-t3k]: 12B on Wormhole T3K (1×8) runs the full demo and unit suite and is now gated in CI (`wh_llmbox` unit tier 1, `wh_llmbox_perf` e2e tier 2). 🟡 rather than 🟢 because the e2e leg is `release_ready: false` and a few decode PCC nodes still sit below the 0.99 default: 12B was Blackhole-only until this branch, so its `pcc_thresholds` rows carried `blackhole-*` keys with no `wormhole_b0` twin and the WH numerics were never gated. The residual loss is dominated by bfp8 attention weights (`GEMMA4_ATTN_WEIGHT_DTYPE=bf16` lifts four of six failing nodes over 0.99). Per-ISL perf: see [Per-ISL performance on Wormhole T3K](#per-isl-performance-on-wormhole-t3k).
+[^gemma4-12b-t3k]: 12B on Wormhole T3K (1×8) runs the full demo and unit suite, and is gated in CI (`wh_llmbox` unit tier 1, `wh_llmbox_perf` e2e tier 2) including the teacher-forced token/logit e2e that both 12B and 31B now run. A handful of `pcc_thresholds` nodes sit below the 0.99 default — fewer than 31B's on the same mesh — because 12B was Blackhole-only until this branch and its WH numerics were never gated. The one place 12B is genuinely behind 31B is `test_full_model[wormhole_b0-1x8]` at 0.935 against 31B's 0.98. Note that `GEMMA4_ATTN_WEIGHT_DTYPE=bf16` lifts several of those single-node PCCs but measures **worse** accumulated end to end, so do not read it as the fix (see `GEMMA4_PRECISION_OVERRIDE`). Per-ISL perf: see [Per-ISL performance on Wormhole T3K](#per-isl-performance-on-wormhole-t3k).
 [^gemma4-p150]: Single Blackhole P150 — **E2B / E4B fully supported through HF 256k** with default multi-chunk prefill (4096), unbounded KV (`tests/e2e/test_isl_sweep.py -k long-context-{4k,…,256k}`). CI: `bh_p150` e2e for E2B/E4B.
 [^gemma4-p150-12b]: Single Blackhole P150 — **12B through full ISL 256k** with auto **bounded sliding + chunked prefill (4096)** above 32k (unbounded KV OOMs). Measured PASS + coherent gen at 64k/128k/256k (`isl_sweep_logs/full_matrix`). CI short-demo e2e on `bh_p150`; long-context via `MESH_DEVICE=P150 … tests/e2e/test_isl_sweep.py -k long-context-256k` (reports TTFT + decode tok/s). Prefill at 256k is slow (~6 min TTFT).
 [^gemma4-lc]: Long-context via `models/demos/gemma4/tests/e2e/test_isl_sweep.py` (`-k long-context-{4k,32k,64k,128k,256k}`) — reports **TTFT and decode tok/s** (long-context `text_demo.py` only logs TTFT). Same `GEMMA4_LONG_CONTEXT_POLICY` in both demos. **Coherence target on QB2 + LoudBox for 12B and 31B: 4k–128k** (256k may allocate; 31B/26B quality not a target). QB2 — E2B/E4B unbounded through 256k; 12B/26B-A4B unbounded through 128k, bounded(+chunked) at 256k; 31B bounded from 64k (chunk=2048 at ≥128k). LoudBox / P150x8 — E2B/E4B/12B unbounded through 256k; **31B/26B-A4B auto-bounded at 128k** with chunk=2048. Defaults: `GEMMA4_HOST_SAMPLE=0` (on-device sampling; set `=1` to force host sampling); do not set `GEMMA4_DEMO_SINGLE_CHUNK=1`.
