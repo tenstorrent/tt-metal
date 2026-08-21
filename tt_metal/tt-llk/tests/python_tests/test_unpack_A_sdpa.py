@@ -20,7 +20,7 @@ from itertools import product
 
 import pytest
 import torch
-from conftest import skip_for_wormhole
+from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -196,7 +196,7 @@ def create_simple_ids(all_params):
 param_ids = create_simple_ids(all_params)
 
 
-@skip_for_wormhole
+@blackhole_only
 @pytest.mark.parametrize(
     "testname, formats, num_faces, face_r_dim, input_dimensions",
     all_params,

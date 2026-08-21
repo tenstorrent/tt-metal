@@ -46,7 +46,7 @@ test_sdpa_reduce_row.py likewise checks only its single defined lane, column 0.)
 """
 
 import torch
-from conftest import skip_for_coverage
+from conftest import blackhole_only, skip_for_coverage
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
@@ -67,6 +67,9 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
 # The header reduces over exactly 8 head weights: weights[1, 8], qk[8, 32]. Fixed by the op.
+# Blackhole-only experimental SDPA LLK: guard WH/Quasar from building BH-only headers.
+pytestmark = blackhole_only
+
 NUM_HEADS = 8
 
 # One Dest face is 16 columns wide. MVMUL #1 defines exactly logical row 0, cols 0..15 (face0);

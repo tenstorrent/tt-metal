@@ -1754,32 +1754,6 @@ class RMSNORM_UNPACK_FULL_TRANSPOSE(TemplateParameter):
 
 
 @dataclass
-class TOP32_RM(TemplateParameter):
-    """Compile-time configuration for the DeepSeek top32_rm test.
-
-    Mirrors the two on-silicon demo compute kernels, selected by ``mode``:
-      * mode == 0 : the 64-elements-at-a-time path (top32_rm_dev_compute.cpp),
-                    used when ``row_elements`` < 1024.
-      * mode == 1 : the whole-1024-chunk pre-sort path (top32_rm_dev_compute_v2.cpp),
-                    used when ``row_elements`` >= 1024 (plus the < 1024 tail loop).
-    ``num_input_tiles`` is ceil(row_elements / 1024): the number of input tiles per
-    stream (values and indices each have this many contiguous L1 tiles).
-    """
-
-    row_elements: int = 64
-    mode: int = 0
-    num_input_tiles: int = 1
-
-    def convert_to_cpp(self) -> str:
-        lines: list[str] = [
-            f"constexpr std::uint32_t TOP32_RM_ROW_ELEMENTS = {self.row_elements};",
-            f"constexpr std::uint32_t TOP32_RM_MODE = {self.mode};",
-            f"constexpr std::uint32_t TOP32_RM_NUM_IN_TILES = {self.num_input_tiles};",
-        ]
-        return "\n".join(lines)
-
-
-@dataclass
 class MUL_REDUCE_SCALAR_CHUNK_SIZE(RuntimeParameter):
     chunk_size: int = 0
 
