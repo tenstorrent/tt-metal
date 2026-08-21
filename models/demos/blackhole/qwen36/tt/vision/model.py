@@ -19,7 +19,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     standardize_hf_keys_multimodal,
 )
 
-from .patch_embed import VisionEmbed
+from .patch_embed import VisionEmbed, from_torch_host_tiled
 from .patch_merger import PatchMerger
 from .vision_block import VisionBlock
 from .vision_model_config import VisionModelArgs
@@ -322,12 +322,10 @@ class DropInVisionTransformer(torch.nn.Module):
                 if pad_rows or pad_cols:
                     # F.pad's last-dim-first order: (left, right, top, bottom).
                     t = torch.nn.functional.pad(t, (0, pad_cols, 0, pad_rows), value=pad_value)
-                return ttnn.from_torch(
+                return from_torch_host_tiled(
                     t.unsqueeze(0).unsqueeze(0).contiguous(),
-                    dtype=ttnn.bfloat16,  # rotary_embedding_llama hard-asserts bfloat16
-                    layout=ttnn.TILE_LAYOUT,
-                    device=mesh,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+                    mesh,
+                    ttnn.ReplicateTensorToMesh(mesh),
                 )
 
             cos = _upload_padded(cos_orig, 1.0)
