@@ -19,7 +19,47 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
+static constexpr std::uint32_t MAX_TILES_DEST = (dest_sync == ckernel::DstSync::SyncFull ? 16 : 8) / (is_fp32_dest_acc_en ? 2 : 1);
+
+struct MatmulBlockDimensions
+{
+    std::uint32_t ct;
+    std::uint32_t rt;
+};
+
+inline MatmulBlockDimensions select_matmul_block_dimensions(std::uint32_t ct_dim, std::uint32_t rt_dim)
+{
+    MatmulBlockDimensions best = {1, 1};
+
+    for (std::uint32_t rt = 1; rt <= rt_dim; ++rt)
+    {
+        if (rt_dim % rt != 0)
+        {
+            continue;
+        }
+
+        for (std::uint32_t ct = 1; ct <= ct_dim; ++ct)
+        {
+            if (ct_dim % ct != 0 || ct * rt > MAX_TILES_DEST)
+            {
+                continue;
+            }
+
+            const std::uint32_t candidate_tiles = ct * rt;
+            const std::uint32_t best_tiles      = best.ct * best.rt;
+            const std::uint32_t candidate_loads = ct + rt;
+            const std::uint32_t best_loads      = best.ct + best.rt;
+
+            if (candidate_tiles > best_tiles || (candidate_tiles == best_tiles && candidate_loads < best_loads) ||
+                (candidate_tiles == best_tiles && candidate_loads == best_loads && ct > best.ct))
+            {
+                best = {ct, rt};
+            }
+        }
+    }
+
+    return best;
+}
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -53,8 +93,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B           = params.buffer_B;
 #endif
 
+    const MatmulBlockDimensions block_dimensions = select_matmul_block_dimensions(CT_DIM, RT_DIM);
+    const std::uint32_t BLOCK_CT_DIM             = block_dimensions.ct;
+    const std::uint32_t BLOCK_RT_DIM             = block_dimensions.rt;
+
     {
         START_PERF_MEASURE("INIT")
+        LLK_ASSERT(CT_DIM % BLOCK_CT_DIM == 0 && RT_DIM % BLOCK_RT_DIM == 0, "Matmul output grid must be evenly divisible into destination blocks");
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
             formats.unpack_B_src,
@@ -68,8 +113,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TILE_SIZE_UNPACK_A);
         _llk_unpack_AB_matmul_init_<>(
             UNPACK_TRANSPOSE_FACES,
-            CT_DIM,
-            RT_DIM,
+            BLOCK_CT_DIM,
+            BLOCK_RT_DIM,
             KT_DIM,
             in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM,
             in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
@@ -87,27 +132,44 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block_row = 0; block_row < RT_DIM; block_row += BLOCK_RT_DIM)
+                {
+                    for (std::uint32_t block_col = 0; block_col < CT_DIM; block_col += BLOCK_CT_DIM)
+                    {
+                        _perf_unpack_matmul_mock(1, BLOCK_RT_DIM, KT_DIM, BLOCK_CT_DIM);
+                    }
+                }
+            }
             return;
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t j = 0; j < KT_DIM; j++)
+                for (std::uint32_t block_row = 0; block_row < RT_DIM; block_row += BLOCK_RT_DIM)
                 {
-                    _llk_unpack_AB_matmul_<>(
-                        L1_ADDRESS(buffer_A[0]),
-                        L1_ADDRESS(buffer_B[0]),
-                        j,
-                        j * CT_DIM,
-                        TILE_SIZE_UNPACK_A,
-                        TILE_SIZE_UNPACK_B,
-                        PARTIAL_FACE_B, // In1
-                        PARTIAL_FACE_A, // In0
-                        CT_DIM,
-                        RT_DIM,
-                        KT_DIM);
+                    for (std::uint32_t block_col = 0; block_col < CT_DIM; block_col += BLOCK_CT_DIM)
+                    {
+                        for (std::uint32_t j = 0; j < KT_DIM; j++)
+                        {
+                            const std::uint32_t src_a_tile = block_row * KT_DIM + j;
+                            const std::uint32_t src_b_tile = j * CT_DIM + block_col;
+                            _llk_unpack_AB_matmul_<>(
+                                L1_ADDRESS(buffer_A[0]),
+                                L1_ADDRESS(buffer_B[0]),
+                                src_a_tile,
+                                src_b_tile,
+                                TILE_SIZE_UNPACK_A,
+                                TILE_SIZE_UNPACK_B,
+                                PARTIAL_FACE_B, // In1
+                                PARTIAL_FACE_A, // In0
+                                BLOCK_CT_DIM,
+                                BLOCK_RT_DIM,
+                                KT_DIM);
+                        }
+                    }
                 }
             }
         }
@@ -145,12 +207,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool UNPACK_TRANSPOSE_FACES = params.UNPACK_TRANSPOSE_FACES;
 #endif
 
+    const MatmulBlockDimensions block_dimensions = select_matmul_block_dimensions(CT_DIM, RT_DIM);
+    const std::uint32_t BLOCK_CT_DIM             = block_dimensions.ct;
+    const std::uint32_t BLOCK_RT_DIM             = block_dimensions.rt;
+
     {
         START_PERF_MEASURE("INIT")
+        LLK_ASSERT(DST_INDEX + BLOCK_CT_DIM * BLOCK_RT_DIM <= MAX_TILES_DEST, "Matmul block exceeds destination capacity");
+        LLK_ASSERT(CT_DIM % BLOCK_CT_DIM == 0 && RT_DIM % BLOCK_RT_DIM == 0, "Matmul output grid must be evenly divisible into destination blocks");
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
-            in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
+            in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, BLOCK_CT_DIM, BLOCK_RT_DIM);
 
         PROFILER_SYNC();
     }
@@ -162,16 +230,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            _perf_math_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block_row = 0; block_row < RT_DIM; block_row += BLOCK_RT_DIM)
+                {
+                    for (std::uint32_t block_col = 0; block_col < CT_DIM; block_col += BLOCK_CT_DIM)
+                    {
+                        _perf_math_matmul_mock(1, BLOCK_RT_DIM, KT_DIM, BLOCK_CT_DIM);
+                    }
+                }
+            }
             return;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t j = 0; j < KT_DIM; j++)
+                for (std::uint32_t block_row = 0; block_row < RT_DIM; block_row += BLOCK_RT_DIM)
                 {
-                    _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(DST_INDEX, CT_DIM, RT_DIM);
+                    for (std::uint32_t block_col = 0; block_col < CT_DIM; block_col += BLOCK_CT_DIM)
+                    {
+                        for (std::uint32_t j = 0; j < KT_DIM; j++)
+                        {
+                            _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(DST_INDEX, BLOCK_CT_DIM, BLOCK_RT_DIM);
+                        }
+                    }
                 }
             }
         }
@@ -179,12 +262,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_math_wait_for_dest_available_<dest_sync>();
-                for (std::uint32_t j = 0; j < KT_DIM; j++)
+                for (std::uint32_t block_row = 0; block_row < RT_DIM; block_row += BLOCK_RT_DIM)
                 {
-                    _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(DST_INDEX, CT_DIM, RT_DIM);
+                    for (std::uint32_t block_col = 0; block_col < CT_DIM; block_col += BLOCK_CT_DIM)
+                    {
+                        _llk_math_wait_for_dest_available_<dest_sync>();
+                        for (std::uint32_t j = 0; j < KT_DIM; j++)
+                        {
+                            _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(DST_INDEX, BLOCK_CT_DIM, BLOCK_RT_DIM);
+                        }
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
                 }
-                _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
         PROFILER_SYNC();
@@ -215,8 +304,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t RT_DIM         = params.RT_DIM;
 #endif
 
+    const MatmulBlockDimensions block_dimensions = select_matmul_block_dimensions(CT_DIM, RT_DIM);
+    const std::uint32_t BLOCK_CT_DIM             = block_dimensions.ct;
+    const std::uint32_t BLOCK_RT_DIM             = block_dimensions.rt;
+
     {
         START_PERF_MEASURE("INIT")
+        LLK_ASSERT(DST_INDEX + BLOCK_CT_DIM * BLOCK_RT_DIM <= MAX_TILES_DEST, "Matmul block exceeds destination capacity");
+        LLK_ASSERT(CT_DIM % BLOCK_CT_DIM == 0 && RT_DIM % BLOCK_RT_DIM == 0, "Matmul output grid must be evenly divisible into destination blocks");
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
             formats.pack_src,
             formats.pack_dst,
@@ -240,9 +335,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t tile = 0; tile < CT_DIM * RT_DIM; tile++)
+                for (std::uint32_t block_row = 0; block_row < RT_DIM; block_row += BLOCK_RT_DIM)
                 {
-                    _llk_pack_<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, PERF_ADDRESS(PERF_OUTPUT, tile));
+                    for (std::uint32_t block_col = 0; block_col < CT_DIM; block_col += BLOCK_CT_DIM)
+                    {
+                        for (std::uint32_t tile = 0; tile < BLOCK_CT_DIM * BLOCK_RT_DIM; tile++)
+                        {
+                            const std::uint32_t local_row   = tile / BLOCK_CT_DIM;
+                            const std::uint32_t local_col   = tile % BLOCK_CT_DIM;
+                            const std::uint32_t output_tile = (block_row + local_row) * CT_DIM + block_col + local_col;
+                            _llk_pack_<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, PERF_ADDRESS(PERF_OUTPUT, output_tile));
+                        }
+                    }
                 }
             }
         }
@@ -250,12 +354,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_packer_wait_for_math_done_();
-                for (std::uint32_t tile = 0; tile < CT_DIM * RT_DIM; tile++)
+                for (std::uint32_t block_row = 0; block_row < RT_DIM; block_row += BLOCK_RT_DIM)
                 {
-                    _llk_pack_<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, PERF_ADDRESS(PERF_OUTPUT, tile));
+                    for (std::uint32_t block_col = 0; block_col < CT_DIM; block_col += BLOCK_CT_DIM)
+                    {
+                        _llk_packer_wait_for_math_done_();
+                        for (std::uint32_t tile = 0; tile < BLOCK_CT_DIM * BLOCK_RT_DIM; tile++)
+                        {
+                            const std::uint32_t local_row   = tile / BLOCK_CT_DIM;
+                            const std::uint32_t local_col   = tile % BLOCK_CT_DIM;
+                            const std::uint32_t output_tile = (block_row + local_row) * CT_DIM + block_col + local_col;
+                            _llk_pack_<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, PERF_ADDRESS(PERF_OUTPUT, output_tile));
+                        }
+                        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
                 }
-                _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
         PROFILER_SYNC();
