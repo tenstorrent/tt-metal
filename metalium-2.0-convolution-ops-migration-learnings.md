@@ -1623,3 +1623,163 @@ unit matrices, explicit 28/28 Halo reshard anchor, cold-JIT/cache evidence,
 release build, disassembly proof, nonregressed Tracy results, and final explicit
 Opus `APPROVED`, these post-packed reruns close Halo's T3K Wormhole acceptance
 surface. No Quasar validation is claimed.
+
+## Pool2D migration baseline (2026-08-20)
+
+Pool2D work started only after freezing the final-source Wormhole baseline with
+the completed Halo migration present and no Pool2D source edits. The complete
+public correctness surface accounts for 9,947 collected cases: 2,563 passed
+and 7,384 followed existing documented skip paths, with no failure, error, new
+skip, or xfail. This comprises unit MaxPool2D 104/13 pass/skip, unit AvgPool2D
+276/144, unit MaxPool-with-indices 67/4, nightly MaxPool2D 973/3,673, nightly
+AvgPool2D 745/3,530, unit adaptive pooling 76/16, unit global average pooling
+10/0, nightly MaxPool sweeps 68/0, nightly MaxPool-with-indices sweeps 72/0,
+nightly AvgPool sweeps 32/0, and nightly adaptive pooling 140/4. All six suites
+not already covered by Halo's final exhaustive matrices ended with the safe
+runner's PASS sentinel.
+
+Three representative Tracy gates originally froze the performance comparison.
+Medians exclude the first row for each program. A later audit found that every
+Pool row in these reports has `PROGRAM CACHE HIT=False`; therefore the remaining
+rows must not be described as warm-cache measurements:
+
+- Regular MaxPool2D, BF16 height-sharded 112x112 input with a 3x3 window:
+  21 remaining rows, 7,890 ns profiler-host, 22,724 ns device firmware, and 21,844 ns device
+  kernel. The report is
+  `generated/profiler/reports/2026_08_20_12_02_24/ops_perf_results_2026_08_20_12_02_24.csv`.
+- AvgPool2D, BF16 `[1, 512, 112, 32]`, 3x3 window, stride 2, padding 1, and
+  `count_include_pad=false`: 19 remaining rows per divisor mode. The null-divisor
+  medians are 3,827 ns host, 23,056 ns firmware, and 22,142 ns kernel; the
+  divisor-5 medians are 4,020 ns, 19,124 ns, and 18,226 ns. The repeated tests
+  passed and the report is
+  `generated/profiler/reports/2026_08_20_14_43_02/ops_perf_results_2026_08_20_14_43_02.csv`.
+- MaxPool2D-with-indices, BF16 `[1, 528, 14, 14]`, 3x3 window, stride 1,
+  padding 1, and ceil mode: all 22 repeated tests passed. Its 21 remaining rows have
+  medians of 7,476 ns host, 293,349 ns firmware, and 292,059 ns kernel. The
+  report is
+  `generated/profiler/reports/2026_08_20_14_43_42/ops_perf_results_2026_08_20_14_43_42.csv`.
+
+The regular and average cases use `reader_pool_2d.cpp` with
+`compute_pool_2d.cpp`; the indices case uses `reader_mpwi.cpp` with
+`compute_mpwi.cpp`. Post-migration performance must compare the same shapes,
+specializations, profiler mode, warm-row exclusion, and host/device columns.
+
+### Pool2D migration implementation and validation (2026-08-20)
+
+The shared Pool2D factory now returns `ProgramArtifacts` with one
+`ProgramSpec`/`ProgramRunArgs` schema for regular MaxPool, AvgPool, and
+MaxPool-with-indices. The four owned kernels use `TT_KERNEL`, typed named
+compile/runtime arguments, tensor bindings, and exact conditional DFBs. The
+port preserves reader0 on RISC0/NOC0, split reader1 on RISC1/NOC1, regular and
+MPWI kernel order, DRAM config landing plus local scratch, sharded L1-small
+config storage, tiled packing, the aliased pre-/fast-tilize allocation, public
+compute configuration, and explicit O3 on compute KernelSpecs only. Inactive
+Quasar debug resources were not imported.
+
+The first cold-JIT run found that registered compile-time arguments must appear
+in each `TT_KERNEL` template list, not merely be read by name inside the entry.
+MPWI then exposed a stale Quasar-only include and a misplaced non-large-kernel
+preprocessor brace. After fixing those schema defects, small and large MPWI and
+regular Max/Avg cold-JIT representatives passed from fresh caches. The exact
+release build passed repeatedly.
+
+The initial complete public matrix matched the frozen baseline exactly: 2,563
+passes plus 7,384 existing skips across 9,947 collected cases, with no failure,
+new skip, xfail, threshold change, or test change. Unit logs are under
+`/tmp/pool2d-post-unit-faSBjG/`; nightly logs are under
+`/tmp/pool2d-post-nightly-Ar9Dx5/`. After the substantive review fixes, the
+full regular Max/Avg/MPWI unit gate again passed 447 cases with 161 existing
+skips, and the final MPWI cleanup gate passed all 24 selected writer-face and
+large-kernel cases.
+
+Removing the legacy custom Pool2D program hash was incorrect even though the
+default reflected key compiled and ran: it included the allocator-derived
+`memory_used` snapshot and grew the cache from 4 to 5 to 6 for fresh identical
+calls. Restoring the exact legacy semantic hash kept the count at 4 while a
+disposable AvgPool probe proved fresh input/output/generated-config rebinding,
+distinct-input sensitivity, repeated bit-exact output, and two bit-exact trace
+replays. The probe and all disposable test sources were removed.
+
+The high-effort Opus loop found and drove fixes for seven substantive issues:
+an inactive second scalar DFB, an MPWI second-input resource-model mismatch,
+missing local/global DFB capacity checks, missing reader/scalar config bounds,
+duplicated reader-config upload logic, lost diagnostics/reserve/comments, and
+irrelevant specialization defines. A follow-up found only three cleanup items:
+a dead regular `LARGE_KERNEL` define, an output-channel diagnostic typo, and an
+unused MPWI writer reader-index binding. After all fixes, the final focused
+review ended with `No actionable findings remain` and explicit `APPROVED`.
+
+The frozen performance shapes all passed in normal mode before Tracy, then all
+repetitions passed under Tracy. Direct parameterized node IDs cannot be passed
+through the current Tracy wrapper because it reparses the unquoted parentheses;
+a shell-safe disposable selector was used and removed. Candidate reports were:
+
+- Regular MaxPool: 7,695 ns host, 22,721 ns firmware, and 21,851 ns kernel
+  versus 7,890/22,724/21,844 baseline (21 warm rows), report
+  `generated/profiler/reports/2026_08_20_17_47_59/ops_perf_results_2026_08_20_17_47_59.csv`.
+- AvgPool without divisor override: 8,197/23,472/22,570 ns versus
+  3,827/23,056/22,142; divisor 5: 8,180/19,153/18,244 ns versus
+  4,020/19,124/18,226 (19 warm rows per mode), report
+  `generated/profiler/reports/2026_08_20_17_48_36/ops_perf_results_2026_08_20_17_48_36.csv`.
+- MaxPool-with-indices: 7,682/291,635/290,345 ns versus
+  7,476/293,349/292,059 (21 warm rows), report
+  `generated/profiler/reports/2026_08_20_17_49_07/ops_perf_results_2026_08_20_17_49_07.csv`.
+
+Device firmware/kernel performance is preserved. The apparent AvgPool host
+regression is not yet a production regression: `process_ops_logs.py` sources
+`HOST DURATION` from the `TT_DNN_DEVICE_OP` zone, while
+`TracyOpMeshWorkload` creates that zone only after `EnqueueMeshWorkload` and
+wraps `op_meta_data_serialized_json`. The value therefore measures profiler
+metadata serialization, not operation dispatch. Both baseline and candidate
+reports also mark every Pool row `PROGRAM CACHE HIT=False`, so excluding the
+first row did not produce the claimed warm population.
+
+This interpretation was confirmed experimentally. Allocation-removal changes
+in the common tensor rebinding path measured 7.2--7.9 microseconds; skipping
+`UpdateTensorArgs` entirely measured 7,673/7,725 ns; and bypassing the entire
+ProgramSpec cache-hit adapter callback still measured 7,484/7,836 ns. If the
+column measured dispatch, those bypasses would have reduced it. All speculative
+and intentionally incorrect diagnostic changes were fully reverted. Bead
+`tt-metal-rf8.16` now owns a corrected same-process benchmark that must prove
+actual cache hits and synchronized production wall time on both legacy and
+migrated source. Pool2D and dependent Conv3D remain open until that valid
+no-regression comparison is complete.
+
+### Corrected Pool2D cache-hit wall-time gate (2026-08-21)
+
+Bead `tt-metal-rf8.16` was resolved with a disposable, shell-safe pytest
+benchmark run against two exact release builds: the staged final-Halo tree with
+legacy Pool2D at temporary detached tree `6670d3c15b1`, and the migrated
+worktree. `/proc/self/maps`, `ttnn.__file__`, `TT_METAL_HOME`, `PYTHONPATH`, and
+the library path proved that each run loaded its own `_ttnn.so`, `_ttnncpp.so`,
+kernel sources, and isolated JIT artifacts. The legacy release build passed;
+the migrated exact restored-source release build had already passed at the
+Pool2D pause point.
+
+Each process kept one module-scoped Wormhole device alive, enabled the program
+cache, warmed each exact representative once, and then measured 101 calls with
+fresh live input and output allocations. Input construction and output cleanup
+were outside the timed interval. Every measured call asserted that the program
+cache entry count remained unchanged, proving a true cache hit; both final runs
+also reported 34/34 JIT artifact hits. Each timed interval covered the Pool2D
+call followed by `ttnn.synchronize_device`, and separately recorded enqueue and
+synchronization components. The final alternating legacy/migrated medians were:
+
+- Regular MaxPool: 443,885 / 444,122 ns synchronized wall time and 287,727 /
+  288,198 ns enqueue.
+- AvgPool without divisor override: 358,269 / 349,407 ns wall and 278,457 /
+  270,880 ns enqueue.
+- AvgPool with divisor 5: 347,212 / 363,981 ns wall and 268,739 / 288,097 ns
+  enqueue.
+- MaxPool-with-indices: 331,106 / 340,139 ns wall and 226,912 / 234,210 ns
+  enqueue.
+
+The largest wall-time delta is 4.8%, all enqueue and synchronization p10--p90
+bands overlap, and the direction varies by specialization. Combined with the
+already non-regressed device firmware/kernel Tracy medians, this proves no
+material Pool2D production performance regression. Earlier 31-sample AvgPool
+medians varied by roughly 0.1 ms between alternating processes and were not
+used for disposition. The authoritative final logs are
+`/tmp/pool2d-legacy-cache-hit-wall-bench-split.log` and
+`/tmp/pool2d-migrated-cache-hit-wall-bench-split.log`; the disposable benchmark
+source and detached worktree were removed after capture.

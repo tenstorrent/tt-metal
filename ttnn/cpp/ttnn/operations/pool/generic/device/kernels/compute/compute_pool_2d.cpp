@@ -1,29 +1,58 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Legacy entry point retained until all consumers migrate to Metalium 2.0. Keep this shell free of
-// algorithmic logic; both entry points share pool_2d_compute_impl.
-
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_compute_impl.hpp"
 
-void kernel_main() {
+template <
+    uint32_t in_ntiles_c,
+    uint32_t window_size_hw,
+    uint32_t split_reader,
+    uint32_t max_out_sticks_per_core,
+    uint32_t in_c,
+    uint32_t in_nblocks_c,
+    uint32_t max_sticks_for_reduction,
+    uint32_t one_scalar_per_core,
+    uint32_t is_output_tiled,
+    uint32_t is_output_block_format>
+TT_KERNEL void compute_pool_2d(uint32_t out_nhw_this_core) {
+#ifdef SPLIT_READER
+    constexpr auto in_cb_1 = dfb::in_cb_1;
+#else
+    constexpr auto in_cb_1 = dfb::in_cb_0;
+#endif
+
+#ifdef HAS_SECOND_SCALAR_CB
+    constexpr auto in_scalar_cb_1 = dfb::in_scalar_cb_1;
+#else
+    constexpr auto in_scalar_cb_1 = dfb::in_scalar_cb_0;
+#endif
+
+#ifdef OUTPUT_TILED
+    constexpr auto pre_tilize_cb = dfb::pre_tilize_cb;
+    constexpr auto fast_tilize_cb = dfb::fast_tilize_cb;
+#else
+    constexpr auto pre_tilize_cb = dfb::out_cb;
+    constexpr auto fast_tilize_cb = dfb::out_cb;
+#endif
+
     pool_2d_compute_impl<
-        get_compile_time_arg_val(0),
-        get_compile_time_arg_val(1),
-        get_compile_time_arg_val(2),
-        get_compile_time_arg_val(3),
-        get_compile_time_arg_val(4),
-        get_compile_time_arg_val(5),
-        get_compile_time_arg_val(6),
-        get_compile_time_arg_val(7),
-        get_compile_time_arg_val(8),
-        get_compile_time_arg_val(9),
-        get_compile_time_arg_val(10),
-        get_compile_time_arg_val(11),
-        get_compile_time_arg_val(12),
-        get_compile_time_arg_val(13),
-        get_compile_time_arg_val(14),
-        get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16),
-        get_compile_time_arg_val(38)>(get_arg_val<uint32_t>(0));
+        in_ntiles_c,
+        window_size_hw,
+        split_reader,
+        max_out_sticks_per_core,
+        in_c,
+        in_nblocks_c,
+        max_sticks_for_reduction,
+        dfb::in_cb_0,
+        in_cb_1,
+        dfb::in_scalar_cb_0,
+        in_scalar_cb_1,
+        dfb::out_cb,
+        one_scalar_per_core,
+        pre_tilize_cb,
+        is_output_tiled,
+        is_output_block_format,
+        false,
+        fast_tilize_cb>(out_nhw_this_core);
 }

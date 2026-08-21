@@ -165,10 +165,14 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
     return {create_device_tensor(output_spec_data, tensor.input_tensor_.device())};
 }
 
+Pool2D::program_factory_t Pool2D::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
+    return MultiCore{};
+}
+
 ttsl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
-    auto input_mem_config = tensor.input_tensor_.memory_config();
-    auto in_dtype = tensor.input_tensor_.dtype();
-    auto out_dtype = op_attr.output_dtype_;
+    const auto input_mem_config = tensor.input_tensor_.memory_config();
+    const auto in_dtype = tensor.input_tensor_.dtype();
+    const auto out_dtype = op_attr.output_dtype_;
     return tt::tt_metal::operation::hash_operation<Pool2D>(
         op_attr.sliding_window_config_.get_hash(),
         op_attr.pool_type_,
