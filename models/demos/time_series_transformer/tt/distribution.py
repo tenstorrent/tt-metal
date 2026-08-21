@@ -143,6 +143,30 @@ class DistributionHead:
             return ttnn.multiply(total_count, ttnn.exp(logits))
         raise ValueError(f"Unsupported distribution_output: {kind}")
 
+    @property
+    def supports_device_sampling(self) -> bool:
+        """Whether a draw can be produced on device from pre-generated noise.
+
+        A Normal draw is ``loc + scale * z`` with ``z`` standard normal, so the randomness can
+        be generated in bulk on the host and uploaded once. Student's t needs a Gamma variate
+        whose shape parameter is the predicted ``df``, and the negative binomial needs a
+        Poisson-Gamma pair; neither can be pre-generated without knowing the parameters, so
+        both stay on the host.
+        """
+        return self.config.distribution_output == "normal"
+
+    def sample_from_hidden(self, hidden_states: ttnn.Tensor, noise: ttnn.Tensor) -> ttnn.Tensor:
+        """Draw on device from pre-generated standard-normal ``noise``.
+
+        Returns the *pre-affine* draw, which is exactly what the autoregressive loop feeds
+        back into the normalized running series.
+        """
+        if not self.supports_device_sampling:
+            raise ValueError(f"{self.config.distribution_output} cannot be sampled on device.")
+        loc = self.projection.project(hidden_states, 0)
+        scale = ttnn.clamp(squareplus(self.projection.project(hidden_states, 1)), FLOAT32_EPS, float("inf"))
+        return ttnn.add(loc, ttnn.multiply(scale, noise))
+
     def base_mean_from_hidden(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """Compute only what an autoregressive mean-mode rollout consumes.
 

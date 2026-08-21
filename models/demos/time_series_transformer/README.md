@@ -62,6 +62,7 @@ time_series_transformer/
     │   └── test_benchmark.py       forecast quality on tourism-monthly
     └── perf/                   latency / throughput / scaling gates
         ├── test_perf.py            gates, scaling, trace lifecycle, pipelining
+        ├── test_utilization.py     core counts, shape overhead, head switching
         └── test_perf_report.py     repository-standard perf CSV
 ```
 
@@ -302,9 +303,12 @@ HuggingFace, not accuracy on a multivariate benchmark.
 
 - Multivariate parity is against constructed reference models, not a trained multivariate
   checkpoint; forecast quality at `input_size > 1` is therefore unmeasured.
-- Sampling draws from `torch.distributions` on the host. A Student's t variate needs a Gamma
-  draw whose shape parameter is itself data-dependent, so it cannot be pre-generated and
-  uploaded. Mean-mode decoding — what the accuracy gates measure — stays on device.
+- Sampling closes on device only for the Normal head, where a draw is `loc + scale * z` and the
+  noise can be generated in bulk and uploaded once. Student's t needs a Gamma variate whose
+  shape is the predicted `df`, and the negative binomial a Poisson-Gamma pair; both keep the
+  stepped host loop. Mean-mode decoding is always on device.
+- A single forecast cannot fill the 64-core grid: at `d_model=26` every batch-1 activation is
+  one tile. Batching is the lever, not sharding — see PERF.md.
 - L1 residency and sharding do not pay off at this model size (see above). Sharding support was
   removed rather than left as unused scaffolding; `use_l1` is kept, working and tested, but off.
 - Exactly one trace is live at a time. A new `batch * num_parallel_samples` releases the

@@ -167,3 +167,59 @@ class TestDistributionCoverage:
         samples = model.generate(num_parallel_samples=16, mode="sample", **make_inputs(hf_model.config, batch=2))
         assert torch.isfinite(samples).all()
         assert float(samples.std(dim=1).mean()) > 0.0
+
+
+class TestDeviceSampling:
+    """Normal draws are built on device from pre-generated noise.
+
+    Stage 2 asks for the sampling operation itself on device. A Normal draw is
+    ``loc + scale * z``, so the randomness can be generated in bulk and uploaded once, and the
+    whole sampling rollout closes on device. Student's t needs a Gamma variate whose shape is
+    the predicted ``df``, and the negative binomial a Poisson-Gamma pair; neither can be
+    pre-generated, so both keep the host loop.
+    """
+
+    @pytest.mark.parametrize(
+        "distribution, on_device",
+        [("normal", True), ("student_t", False), ("negative_binomial", False)],
+    )
+    def test_which_heads_sample_on_device(self, device, config, distribution, on_device):
+        head = DistributionHead(
+            replace(config, distribution_output=distribution), device=device, dtype=get_ttnn_dtype(config.dtype)
+        )
+        assert head.supports_device_sampling is on_device
+
+    def test_device_draw_matches_the_closed_form(self, device, config, hf_state, goldens):
+        """``loc + scale * z`` on device must equal the same expression on the host."""
+        local = replace(config, distribution_output="normal")
+        head = DistributionHead(local, device=device, dtype=get_ttnn_dtype(local.dtype))
+        head.load_hf_state_dict(substate(hf_state, "parameter_projection"), strict=False)
+
+        hidden = to_device(goldens.decoder_last_hidden_state, device=device, dtype=get_ttnn_dtype(local.dtype))
+        torch.manual_seed(0)
+        noise_torch = torch.randn(*goldens.decoder_last_hidden_state.shape[:2], local.input_size)
+        noise = to_device(noise_torch, device=device, dtype=get_ttnn_dtype(local.dtype))
+
+        drawn = to_torch(head.sample_from_hidden(hidden, noise))
+
+        loc, scale = [to_torch(p) for p in head.parameters(hidden)]
+        expected = loc + scale * noise_torch
+        torch.testing.assert_close(drawn.reshape(expected.shape), expected, atol=1e-3, rtol=1e-3)
+
+    def test_sampling_rollout_stays_on_device(self, device, config, hf_state, hf_model):
+        """A Normal sampling forecast must use the rollout trace, not the stepped path."""
+        from models.demos.time_series_transformer.reference.torch_reference import build_reference_model
+
+        reference = build_reference_model("normal")
+        local = config_from_hf(reference.config, dtype="float32", use_trace=True)
+        model = TimeSeriesTransformer(local, device=device)
+        model.load_hf_state_dict(reference.state_dict(), strict=True)
+
+        try:
+            output = model.generate(num_parallel_samples=8, mode="sample", **make_inputs(reference.config, batch=2))
+            assert model._trace_key is not None
+            assert model._trace_key[0] == "rollout_sample", "Normal sampling should close on device"
+            assert torch.isfinite(output).all()
+            assert float(output.std(dim=1).mean()) > 0.0, "device draws must actually vary"
+        finally:
+            model.release_traces()

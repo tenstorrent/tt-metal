@@ -223,17 +223,23 @@ class TimeSeriesTransformer:
         repeated_features = features.repeat_interleave(samples, dim=0)
         rows = repeated_past.shape[0]
 
-        # Mean mode has no host-side dependency inside the loop, so encoder and rollout both run
-        # from a single trace with the feedback closed on device.
-        if config.use_trace and mode == "mean":
+        # The loop can close entirely on device when nothing in it needs the host: always for
+        # mean mode, and for sampling when the draw can be built from pre-generated noise.
+        device_loop = mode == "mean" or self.distribution_head.supports_device_sampling
+        if config.use_trace and device_loop:
             # The rollout wants the running series channel-major, (rows, channels, length).
             running = (
                 repeated_past.transpose(1, 2).contiguous() if config.is_multivariate else repeated_past.unsqueeze(1)
             )
-            predictions = self._traced("rollout", rows).run(
+            noise = None
+            if mode == "sample":
+                # One standard-normal draw per row, step and channel, generated up front.
+                noise = torch.randn(rows, config.prediction_length, config.input_size, generator=self.rng)
+            predictions = self._traced(f"rollout_{mode}", rows, mode=mode).run(
                 running=running,
                 covariates=repeated_features,
                 encoder_inputs=network_inputs.transformer_inputs.repeat_interleave(samples, dim=0),
+                noise=noise,
             )
             forecast = repeated_loc + repeated_scale * predictions
             return self._shape_forecast(forecast, batch=past_values.shape[0], samples=samples)
@@ -290,7 +296,7 @@ class TimeSeriesTransformer:
             return flat.reshape(batch, samples, horizon, self.config.input_size)
         return flat.reshape(batch, samples, horizon)
 
-    def _traced(self, kind: str, rows: int):
+    def _traced(self, kind: str, rows: int, *, mode: str = "mean"):
         """Return the runner for ``(kind, rows)``, holding at most one live trace.
 
         tt-metal pins device allocations for as long as any trace exists, so building a second
@@ -303,8 +309,10 @@ class TimeSeriesTransformer:
         key = (kind, rows)
         if self._trace_key != key:
             self.release_traces()
-            factory = TracedRolloutRunner if kind == "rollout" else TracedDecodeRunner
-            self._trace_runner = factory(self, rows)
+            if kind.startswith("rollout"):
+                self._trace_runner = TracedRolloutRunner(self, rows, mode=mode)
+            else:
+                self._trace_runner = TracedDecodeRunner(self, rows)
             self._trace_key = key
         return self._trace_runner
 

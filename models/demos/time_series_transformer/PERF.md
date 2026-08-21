@@ -202,6 +202,49 @@ The residual 10% is host-side input construction plus one readback. At batch 1 t
 second device stage to overlap it against; across concurrent requests a second command queue
 would be the next lever, and is not implemented.
 
+## Core utilisation, shape overhead, and distribution switching
+
+Three Stage 3 items whose honest answer is bounded by geometry rather than effort. All are
+measured in `tests/perf/test_utilization.py` rather than asserted in prose.
+
+**Maximise core counts.** The device offers an 8x8 grid, 64 cores. At batch 1 every activation
+in this model is a single 32x32 tile, so no amount of sharding can spread one across cores —
+which is also why the Stage 2 sharding attempts raised `TT_FATAL`.
+
+| Activation | Tiles | Cores it can occupy |
+|---|---:|---:|
+| Encoder input, batch 1 | 1 | 1 |
+| Hidden state, batch 1 | 1 | 1 |
+| Attention scores, batch 1 | 1 | 1 |
+| Hidden state, batch 64 | 48 | 48 |
+
+Batching, not sharding, is what fills the grid here: throughput rises from 57.9 seq/s at batch 1
+to 325.0 seq/s at batch 64 (5.6x). A single forecast of a 26-wide model cannot occupy 64 cores,
+and no implementation choice changes that.
+
+**Minimise tensor-manipulation overhead.** A forecast on the eager path issues 814 shape ops:
+
+| Op | Count |
+|---|---:|
+| `permute` | 398 |
+| `reshape` | 300 |
+| `concat` | 92 |
+| `slice` | 24 |
+
+Roughly 34 per decode step. Permutes dominate because every attention splits and merges heads,
+and at `head_dim=13` there is no tile-aligned layout that avoids the transpose. The traced path
+pays these once at capture rather than once per forecast, which is a large part of why tracing
+is worth 10x here.
+
+**Multi-distribution switching.** Switching heads is a model rebuild, not a recompile: weights
+are re-uploaded and no kernel is rebuilt.
+
+| Head | Rebuild | Output |
+|---|---:|---|
+| Student's t | 11.9 ms | valid |
+| Normal | 11.7 ms | valid |
+| Negative binomial | 11.8 ms | valid |
+
 ## Stage 3 stretch targets
 
 | Metric | Stretch target | Measured | Status |
@@ -260,9 +303,16 @@ Context scales far better than the quadratic attention term would suggest, becau
 widths the encoder is not the critical path — the 24 sequential decoder steps are, and their
 cost grows only with the cross-attention key count.
 
-Sampling still steps through the decoder from the host, because a Student's t variate needs a
-Gamma draw whose shape parameter is data-dependent and so cannot be produced on device or
-pre-generated. That path meets its own gate (100 samples in 0.382 s) comfortably.
+Sampling closes on device where the draw can be built from pre-generated noise. A Normal draw
+is `loc + scale * z`, so the randomness is generated in bulk on the host, uploaded once, and the
+whole sampling rollout runs from the same single trace as mean mode. Student's t needs a Gamma
+variate whose shape parameter is the predicted `df`, and the negative binomial a Poisson-Gamma
+pair; neither can be pre-generated without the parameters, so both keep the stepped host loop.
+That path meets its own gate (100 samples in 0.382 s) comfortably.
+
+Speculative decoding, also listed under Stage 3, does not apply: a 24-step probabilistic rollout
+has no draft model to speculate from and no verification criterion that would preserve the
+predictive distribution.
 
 ## Latency distribution
 

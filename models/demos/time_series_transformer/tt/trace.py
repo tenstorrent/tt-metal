@@ -120,13 +120,26 @@ class TracedRolloutRunner:
     data-dependent, so it cannot be drawn on device or pre-generated.
     """
 
-    def __init__(self, model: "TimeSeriesTransformer", rows: int):
+    def __init__(self, model: "TimeSeriesTransformer", rows: int, *, mode: str = "mean"):
         self.model = model
         self.rows = rows
+        self.mode = mode
         self.device = model.device
         self.dtype = model.dtype
         config = model.config
         self.num_lags = len(config.lags_sequence)
+
+        # Sampling on device needs its randomness up front: one standard-normal draw per row,
+        # step and channel, uploaded once per rollout rather than per step.
+        self.noise = (
+            to_device(
+                torch.zeros(rows, config.prediction_length, config.input_size),
+                device=self.device,
+                dtype=self.dtype,
+            )
+            if mode == "sample"
+            else None
+        )
 
         # Written per rollout; the trace reads them at fixed addresses.
         self.channels = config.input_size
@@ -181,7 +194,12 @@ class TracedRolloutRunner:
             window = row if window is None else ttnn.concat([window, row], dim=1)
             hidden = self.model.decoder(window, encoder_hidden, cross_caches=cross_caches)
 
-            next_value = self.model.distribution_head.base_mean_from_hidden(slice_last_step(hidden))
+            last = slice_last_step(hidden)
+            if self.mode == "sample":
+                step_noise = ttnn.slice(self.noise, [0, step, 0], [self.rows, step + 1, self.model.config.input_size])
+                next_value = self.model.distribution_head.sample_from_hidden(last, step_noise)
+            else:
+                next_value = self.model.distribution_head.base_mean_from_hidden(last)
             collected.append(next_value)
             # next_value is (rows, 1, channels); the running series is channel-major.
             appended = ttnn.permute(ttnn.reshape(next_value, (self.rows, 1, self.channels)), (0, 2, 1))
@@ -205,6 +223,7 @@ class TracedRolloutRunner:
         running: torch.Tensor,
         covariates: torch.Tensor,
         encoder_inputs: torch.Tensor,
+        noise: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Execute encoder and rollout together.
 
@@ -216,6 +235,11 @@ class TracedRolloutRunner:
             (covariates, self.covariates),
             (encoder_inputs, self.encoder_inputs),
         )
+        if self.mode == "sample":
+            if noise is None:
+                raise ValueError("Sampling rollouts require pre-generated noise.")
+            staged = staged + ((noise, self.noise),)
+
         for host_value, buffer in staged:
             uploaded = ttnn.from_torch(host_value.contiguous(), dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
             ttnn.copy_host_to_device_tensor(uploaded, buffer)

@@ -143,7 +143,7 @@ class TestTraceEquivalence:
         sampling still steps through the decoder and registers a per-step runner.
         """
         inputs = make_inputs(hf_model.config, batch=1)
-        expected_kind = "rollout" if mode == "mean" else "decode"
+        expected_kind = "rollout_mean" if mode == "mean" else "decode"
 
         with traced_model(device, config, hf_state) as model:
             model.generate(num_parallel_samples=1, mode=mode, **inputs)
@@ -286,7 +286,7 @@ class TestTraceLifecycle:
                 inputs = make_inputs(hf_model.config, batch=batch)
                 output = model.generate(num_parallel_samples=1, mode="mean", **inputs)
                 assert torch.isfinite(output).all()
-                assert model._trace_key == ("rollout", batch)
+                assert model._trace_key == ("rollout_mean", batch)
 
             # Switching mode swaps the trace rather than adding a second one.
             model.generate(num_parallel_samples=2, mode="sample", **make_inputs(hf_model.config, batch=1))
