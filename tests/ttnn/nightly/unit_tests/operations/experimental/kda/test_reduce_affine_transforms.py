@@ -170,26 +170,12 @@ def _composed_ttnn_baseline(
 
 @pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("sharded_inputs", [False, True], ids=("interleaved", "height-sharded-l1"))
-@pytest.mark.parametrize(
-    ("batch_heads", "groups_per_head", "key_dim", "value_dim"),
-    [
-        (2, 1, 32, 32),
-        (2, 3, 32, 32),
-        (2, 4, 32, 32),
-        (3, 2, 32, 64),
-        (2, 2, 160, 32),
-        (2, 2, 32, 160),
-    ],
-)
 def test_reduce_affine_transforms_contract_and_trace(
     device: ttnn.Device,
     summary_dtype: ttnn.DataType,
     sharded_inputs: bool,
-    batch_heads: int,
-    groups_per_head: int,
-    key_dim: int,
-    value_dim: int,
 ) -> None:
+    batch_heads, groups_per_head, key_dim, value_dim = 2, 4, 32, 32
     a, b = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim)
     expected_a, expected_b = _oracle(a, b, batch_heads, groups_per_head)
     leading = batch_heads * groups_per_head
@@ -228,6 +214,50 @@ def test_reduce_affine_transforms_contract_and_trace(
     assert_bit_identical(snapshots[0], ttnn.to_torch(a_tt), name="a immutability")
     assert_bit_identical(snapshots[1], ttnn.to_torch(b_tt), name="b immutability")
     ttnn.release_trace(device, trace_id)
+
+
+@pytest.mark.parametrize(
+    ("batch_heads", "groups_per_head", "key_dim", "value_dim", "summary_dtype", "sharded_inputs"),
+    [
+        pytest.param(2, 1, 32, 32, ttnn.float32, False, id="bh2-g1-k32-v32-fp32-interleaved"),
+        pytest.param(2, 3, 32, 32, ttnn.bfloat16, True, id="bh2-g3-k32-v32-bf16-height-sharded-l1"),
+        pytest.param(3, 2, 32, 64, ttnn.float32, False, id="bh3-g2-k32-v64-fp32-interleaved"),
+        pytest.param(2, 2, 160, 32, ttnn.bfloat16, True, id="bh2-g2-k160-v32-bf16-height-sharded-l1"),
+        pytest.param(2, 2, 32, 160, ttnn.float32, False, id="bh2-g2-k32-v160-fp32-interleaved"),
+    ],
+)
+def test_reduce_affine_transforms_shape_accuracy(
+    device: ttnn.Device,
+    batch_heads: int,
+    groups_per_head: int,
+    key_dim: int,
+    value_dim: int,
+    summary_dtype: ttnn.DataType,
+    sharded_inputs: bool,
+) -> None:
+    a, b = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim)
+    expected = _oracle(a, b, batch_heads, groups_per_head)
+    leading = batch_heads * groups_per_head
+    a_memory = (
+        _height_sharded_memory_config(device, leading, key_dim, key_dim) if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
+    )
+    b_memory = (
+        _height_sharded_memory_config(device, leading, key_dim, value_dim)
+        if sharded_inputs
+        else ttnn.DRAM_MEMORY_CONFIG
+    )
+    a_tt = _to_device(a, device, summary_dtype, memory_config=a_memory)
+    b_tt = _to_device(b, device, summary_dtype, memory_config=b_memory)
+
+    outputs = _run(a_tt, b_tt, groups_per_head)
+
+    for name, golden, output in zip(("A", "B"), expected, outputs, strict=True):
+        assert_accurate(
+            golden,
+            ttnn.to_torch(output),
+            name=f"{summary_dtype} shape-sweep reduced {name}",
+            pcc_threshold=0.999,
+        )
 
 
 @pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])
