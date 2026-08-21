@@ -447,7 +447,14 @@ void kernel_main() {
             cb_v.reserve_back(k_chunk_tiles);
             cb_k.push_back(k_chunk_tiles);
             cb_v.push_back(k_chunk_tiles);
-            if (is_mux_writer) {
+            // The compute-facing dummy (cb_k/cb_v) is always drained by compute's phase-alignment
+            // pop, even on cores with no assigned Q chunks. But the writer-facing dummy is only
+            // popped inside the writer's per-q_chunk loop (exp_ring_joint_writer.cpp), which is empty
+            // when q_per_core == 0 — so pushing it there would strand it and hang the writer CB.
+            // Gate on q_per_core > 0 to match the writer. (Active cores use q_per_core == 1, so this
+            // is a no-op for every shape the dense path exercises — idle cores only occur when
+            // total_q_chunks < num_sdpa_cores, e.g. the small sparse-frames shapes.)
+            if (is_mux_writer && q_per_core > 0) {
                 CircularBuffer cb_k_writer(cb_k_writer_in);
                 CircularBuffer cb_v_writer(cb_v_writer_in);
                 cb_k_writer.reserve_back(k_chunk_tiles);
