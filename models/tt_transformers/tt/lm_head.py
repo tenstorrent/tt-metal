@@ -13,6 +13,24 @@ from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 
 
+def _lm_head_cache_file_name(
+    weight_cache_path,
+    *,
+    dummy_weights,
+    num_splits,
+    shard,
+    width,
+    mode,
+    galaxy_2d,
+    mesh_shape,
+):
+    if dummy_weights:
+        return None
+
+    layout_suffix = f"_galaxy_2d_{mesh_shape[0]}x{mesh_shape[1]}_v1" if galaxy_2d else ""
+    return weight_cache_path / (f"output_lm_head_{num_splits}_split_shard_{shard}_{width}_mode_{mode}{layout_suffix}")
+
+
 class LMHead(LightweightModule):
     def __init__(
         self,
@@ -90,11 +108,15 @@ class LMHead(LightweightModule):
                 # Concatenate the splits from all devices
                 combined_split = torch.cat(device_splits, dim=-1)
 
-                cache_file_name = (
-                    None
-                    if args.dummy_weights
-                    else weight_cache_path
-                    / f"output_lm_head_{len(split_sizes)}_split_shard_{i}_{combined_split.shape[-1]}_mode_{mode}"
+                cache_file_name = _lm_head_cache_file_name(
+                    weight_cache_path,
+                    dummy_weights=args.dummy_weights,
+                    num_splits=len(split_sizes),
+                    shard=i,
+                    width=combined_split.shape[-1],
+                    mode=mode,
+                    galaxy_2d=self.use_galaxy_no_prefetch and mode == 0,
+                    mesh_shape=args.cluster_shape,
                 )
 
                 def pad_to_power_of_2(n):
