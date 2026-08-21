@@ -1326,6 +1326,50 @@ the programs built once and enqueued back to back, which is phase 11's shape any
 sum-of-device-times used throughout is the right basis for comparing compute, and it is
 what both sides are measured with.
 
+### Are the two flash attentions functionally equivalent? No.
+
+The core algorithm is the same, and that is the part the ratio compares: Q@K^T, mask,
+online softmax with a running max and sum and the rescaling that goes with them, P@V, a
+final normalise. Same structure, same numerics.
+
+Everything around it differs. From `sdpa.cpp`'s compile-time arguments and
+`compute_common.hpp`, ttnn's op carries:
+
+| | ttnn SDPA | ours |
+|---|---|---|
+| GQA (`NQH` vs `NKH`) | yes | one head, no mapping |
+| batch and head loops | in the kernel | none |
+| q-chunk and k-chunk loops | both in one program | k-chunk only; q-chunk is a launch |
+| causal | internal, with `causal_k_limit` skipping fully-masked k-chunks | host picks each q-chunk's key extent |
+| the mask | GENERATED on device: `apply_causal_mask_lightweight` stamps a neginf tile and a diagonal tile through L1 accumulate, and rows below the diagonal get nothing | a full S_q x S_k tensor materialised in DRAM and loaded per chunk |
+| user-provided mask, padded mask | both | mask is the only input |
+| chunked prefill / KV-cache continuation | `is_chunked`, `chunk_start_idx` | no |
+| sliding window | `sliding_window_size` | no |
+| attention sinks | `use_attention_sink` | no |
+| multi-core | `num_cores`, `core_id`, zigzag load balancing | single core |
+| subblocking | explicit qk and out subblock params | derived from the shape |
+| the scale | folded into exp via `exp_tile_init<true, scale_fp32, ...>` | pre-applied to Q on the host |
+| V head dim != K head dim | `vDHt` separate from `DHt` | assumed equal |
+| second implementation | `use_streaming_compute` path | one |
+
+So ours is the core of a flash attention and ttnn's is a production attention op. The 1.5x
+is measured on the intersection, which is the fair thing to compare, but "1.5x off ttnn"
+should not be read as "1.5x off a like-for-like kernel".
+
+**Does the difference flatter us?** The one place the work genuinely differs is the mask,
+and it runs against us: ttnn stamps a band and skips below-diagonal rows entirely, where we
+load a scores-sized tensor and add it over the whole block. Measured, though, that costs
+only about **1.65us per k-chunk** -- roughly 3% -- because on the thread that binds, the
+math TRISC, an FPU add is one instruction per tile. The reader has slack too (20.8us busy
+of a 120.7us span), so the mask's DRAM traffic is free as well. The functional gap is real;
+it is not what the performance gap is made of.
+
+Worth recording alongside it: the per-op us/tile rates measured with passcost are
+WHOLE-PIPELINE throughput, taken from kernels where the unpacker was often the limit. They
+are the right numbers for comparing ops against each other, and the wrong ones for
+attributing time on a critical path that a different thread owns -- which is why removing
+the mask add saved 1.65us where those rates predicted 15.
+
 ### What to test next
 
 Ordered by expected value, with what each result would actually mean. Six candidates are
