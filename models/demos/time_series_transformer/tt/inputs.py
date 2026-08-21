@@ -83,11 +83,11 @@ def apply_scaler(
         return mean_scaler(
             data,
             observed_indicator,
-            minimum_scale=config.minimum_scale,
+            minimum_scale=config.mean_minimum_scale,
             default_scale=config.default_scale,
         )
     if config.scaling == "std":
-        return std_scaler(data, observed_indicator, minimum_scale=config.minimum_scale)
+        return std_scaler(data, observed_indicator, minimum_scale=config.std_minimum_scale)
     if config.scaling == "none":
         shape = data.shape[:1] + (1,) + data.shape[2:]
         return torch.zeros(shape, dtype=data.dtype), torch.ones(shape, dtype=data.dtype)
@@ -120,7 +120,14 @@ def get_latest_lags(sequence: torch.Tensor, lags_sequence: tuple[int, ...]) -> t
     columns = [length - lag for lag in lags_sequence]
     if min(columns) < 0:
         raise ValueError(f"Lag {max(lags_sequence)} exceeds history length {length}.")
-    return sequence[:, columns].reshape(sequence.shape[0], 1, len(lags_sequence))
+
+    gathered = sequence[:, columns]
+    if gathered.dim() == 2:
+        return gathered.reshape(sequence.shape[0], 1, len(lags_sequence))
+    # Multivariate: gathering gives (batch, lags, channels), but get_lagged_subsequences
+    # stacks lags last and flattens channel-major, so transpose before flattening to keep the
+    # same element order as the full gather.
+    return gathered.transpose(1, 2).reshape(sequence.shape[0], 1, -1)
 
 
 def get_lagged_subsequences(

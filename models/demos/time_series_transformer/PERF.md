@@ -58,19 +58,31 @@ Against the HuggingFace reference on identical inputs:
 | Attention (self, cross, causal) | PCC | > 0.999 |
 | Encoder / decoder stacks | PCC | > 0.99 |
 | Distribution parameters | PCC | > 0.999 |
-| Negative log-likelihood | relative | within 5% |
+| Negative log-likelihood (TT encoder+decoder+head, masked) | relative | within 5% |
 | CRPS | relative | within 5% |
 | Mean prediction | relative MAE | within 5% |
 | Unrolled rollout vs stepped path | PCC | 1.0 (bit-identical) |
 | Student's t / Normal / Negative Binomial generate | relative MAE | within 5% |
+| Multivariate (`input_size=3`) generate | relative MAE | within 5% |
+| Mean / std scalers, incl. constant and unobserved series | exact | matches HF |
 
 On the real benchmark (Monash tourism-monthly, 8 series, 100 trajectories): median forecast
 MAPE **13.0%**, and the nominal 80% prediction interval covers **79.2%** of observations.
 
 ## Stage 2 memory and fusion options, measured
 
-Each Stage 2 lever was implemented far enough to benchmark before being adopted. Most of them
-are pessimizations at this model size, and are recorded here rather than shipped on.
+Bounty #32140 Stage 2 asks for sharded/interleaved memory configurations, attention and
+autoregressive/sample-generation sharding, L1 placement where beneficial, and the recommended
+TTNN fused flows. Each was implemented far enough to benchmark on the target shapes before
+being adopted or rejected. Two paid and are shipped on; three measure *slower* here and are
+rejected with the numbers below rather than silently omitted.
+
+The decisive fact is the shape. At `d_model=26`, `head_dim=13`, `ffn_dim=32` and a 24-step
+context, every activation in this model is one or two tiles. There is no DRAM bandwidth
+pressure to relieve and nothing wide enough to spread across cores, so the extra dispatch each
+of those techniques costs is not repaid. The same techniques would be expected to pay on a
+larger configuration, which is why `use_l1` is kept working and correctness-tested rather than
+deleted.
 
 | Option | Effect | Adopted |
 |---|---|---|
@@ -79,6 +91,17 @@ are pessimizations at this model size, and are recorded here rather than shipped
 | L1-resident activations (`use_l1=True`) | 0.48x FFN, 0.33x projection — *slower* | no, off by default |
 | Height-sharded activations | `TT_FATAL` at these shapes | no, scaffolding removed |
 | Fused QKV projection (26 -> 78 + 3 slices) | 0.38x at batch 1, 0.72x at batch 64 — *slower* | no |
+
+Sharding, specifically: height-sharding the activations raises `TT_FATAL` at these shapes — 24
+rows across a 8x8 grid leaves most cores empty and the shard shape degenerate. Attention,
+autoregressive-decode and sample-generation sharding all reduce to the same constraint, since
+they shard the same one-tile activations. Sample generation is instead parallelised by batching:
+all `num_parallel_samples` trajectories advance as one batch, which is what makes 1000 samples
+in 1.68 s possible.
+
+For the fused flows that *do* apply at this size, both are adopted: `ttnn.softmax` in place of a
+composed reduction, and `ttnn.transformer.scaled_dot_product_attention` in the performance
+profile.
 
 Per-op measurements behind those numbers (float32, `d_model=26`, `ffn_dim=32`, seq 24):
 
@@ -129,8 +152,12 @@ The step from 46 ms to 23 ms is the host round-trips, not device work. A 24-step
 in 18.1 ms of pure device time, so the stepped loop was spending roughly 28 ms assembling
 windows, uploading them and reading parameters back. Unrolling the loop inside a single capture
 makes every step's lag offsets and sequence lengths compile-time constants, which is what lets
-the feedback close on device. Capture cost for the unrolled trace is ~0.2 s per row count, paid
-once.
+the feedback close on device.
+
+Exactly one trace is live at a time. A change of `batch * num_parallel_samples` releases the
+previous capture and takes a fresh one (~0.2 s). Keeping several live is what makes tt-metal
+warn that subsequently allocated buffers may be corrupted once a trace executes, which would
+invalidate any measurement taken afterwards.
 
 Folding the encoder into the same trace is worth a further ~3 ms: it is only ~90 ops, but run
 eagerly they each pay host dispatch. What crosses the host boundary per forecast is now three

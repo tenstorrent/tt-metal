@@ -188,9 +188,15 @@ class DistributionHead:
         else:
             raise ValueError(f"Unsupported distribution_output: {kind}")
 
+        # HuggingFace treats the channel axis as an event dimension once input_size > 1, so a
+        # multivariate draw is one sample across all channels rather than independent scalars.
+        event_dim = 1 if self.config.is_multivariate else 0
+        if event_dim:
+            base = torch.distributions.Independent(base, 1)
+
         if loc is None and scale is None:
             return base
-        return AffineTransformed(base, loc=loc, scale=scale, event_dim=0)
+        return AffineTransformed(base, loc=loc, scale=scale, event_dim=event_dim)
 
 
 __all__ = ["FLOAT32_EPS", "DistributionHead", "ParameterProjection"]

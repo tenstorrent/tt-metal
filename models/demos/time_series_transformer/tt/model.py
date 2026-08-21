@@ -24,10 +24,11 @@ from .weights import LoadResult, merge_results, substate
 
 @dataclass
 class ForwardOutput:
-    """Teacher-forced forward pass results."""
+    """Teacher-forced forward pass results, including the distribution head."""
 
     encoder_last_hidden_state: ttnn.Tensor
     decoder_last_hidden_state: ttnn.Tensor
+    distribution_parameters: list[ttnn.Tensor]
     loc: torch.Tensor
     scale: torch.Tensor
     static_feat: torch.Tensor
@@ -53,8 +54,9 @@ class TimeSeriesTransformer:
         self.decoder = Decoder(config, device=device, dtype=self.dtype)
         self.distribution_head = DistributionHead(config, device=device, dtype=self.dtype, memory_config=memory_config)
         self.embedder_weights: list[torch.Tensor] = []
-        self._runners: dict[int, TracedDecodeRunner] = {}
-        self._rollouts: dict[int, TracedRolloutRunner] = {}
+        # At most one trace is live at a time; see _traced().
+        self._trace_runner: Optional[object] = None
+        self._trace_key: Optional[tuple[str, int]] = None
 
         if config.use_program_cache:
             device.enable_program_cache()
@@ -138,10 +140,39 @@ class TimeSeriesTransformer:
         return ForwardOutput(
             encoder_last_hidden_state=encoder_hidden,
             decoder_last_hidden_state=decoder_hidden,
+            # The head runs on the TT decoder output, so the loss below reflects accumulated
+            # encoder/decoder error rather than just the projection.
+            distribution_parameters=self.distribution_head.parameters(decoder_hidden),
             loc=network_inputs.loc,
             scale=network_inputs.scale,
             static_feat=network_inputs.static_feat,
         )
+
+    def negative_log_likelihood(
+        self,
+        output: ForwardOutput,
+        future_values: torch.Tensor,
+        *,
+        future_observed_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Masked NLL of ``future_values`` under the predicted distribution.
+
+        This is HuggingFace's ``TimeSeriesTransformerForPrediction`` loss: the negative log
+        probability, averaged with the observed mask as weights so unobserved steps do not
+        contribute. Multivariate targets reduce the mask over channels first, matching HF.
+        """
+        parameters = [to_torch(p) for p in output.distribution_parameters]
+        distribution = self.distribution_head.torch_distribution(parameters, loc=output.loc, scale=output.scale)
+        loss = -distribution.log_prob(future_values)
+
+        if future_observed_mask is None:
+            future_observed_mask = torch.ones_like(future_values)
+        weights = future_observed_mask
+        if self.config.is_multivariate:
+            weights, _ = future_observed_mask.min(dim=-1)
+
+        weighted = torch.where(weights != 0, loss * weights, torch.zeros_like(loss))
+        return weighted.sum() / torch.clamp(weights.sum(), min=1.0)
 
     # -- generation ---------------------------------------------------------
 
@@ -195,20 +226,24 @@ class TimeSeriesTransformer:
         # Mean mode has no host-side dependency inside the loop, so encoder and rollout both run
         # from a single trace with the feedback closed on device.
         if config.use_trace and mode == "mean":
-            predictions = self._traced_rollout(rows).run(
-                running=repeated_past,
+            # The rollout wants the running series channel-major, (rows, channels, length).
+            running = (
+                repeated_past.transpose(1, 2).contiguous() if config.is_multivariate else repeated_past.unsqueeze(1)
+            )
+            predictions = self._traced("rollout", rows).run(
+                running=running,
                 covariates=repeated_features,
                 encoder_inputs=network_inputs.transformer_inputs.repeat_interleave(samples, dim=0),
             )
             forecast = repeated_loc + repeated_scale * predictions
-            return forecast.reshape(past_values.shape[0], samples, config.prediction_length)
+            return self._shape_forecast(forecast, batch=past_values.shape[0], samples=samples)
 
         encoder_hidden = self.encode(network_inputs.transformer_inputs)
         repeated_encoder_hidden = (
             ttnn.repeat_interleave(encoder_hidden, repeats=samples, dim=0) if samples > 1 else encoder_hidden
         )
 
-        runner = self._traced_runner(rows) if config.use_trace else None
+        runner = self._traced("decode", rows) if config.use_trace else None
         if runner is not None:
             runner.prepare(repeated_encoder_hidden)
             caches = None
@@ -246,28 +281,38 @@ class TimeSeriesTransformer:
             repeated_past = torch.cat((repeated_past, (next_sample - repeated_loc) / repeated_scale), dim=1)
             collected.append(next_sample)
 
-        return torch.cat(collected, dim=1).reshape(past_values.shape[0], samples, config.prediction_length)
+        return self._shape_forecast(torch.cat(collected, dim=1), batch=past_values.shape[0], samples=samples)
 
-    def _traced_runner(self, rows: int) -> TracedDecodeRunner:
-        """Traces are shape-specific, so keep one runner per row count and reuse it."""
-        runner = self._runners.get(rows)
-        if runner is None:
-            runner = TracedDecodeRunner(self, rows)
-            self._runners[rows] = runner
-        return runner
+    def _shape_forecast(self, flat: torch.Tensor, *, batch: int, samples: int) -> torch.Tensor:
+        """``(rows, horizon[, channels])`` -> ``(batch, samples, horizon[, channels])``."""
+        horizon = self.config.prediction_length
+        if self.config.is_multivariate:
+            return flat.reshape(batch, samples, horizon, self.config.input_size)
+        return flat.reshape(batch, samples, horizon)
 
-    def _traced_rollout(self, rows: int) -> TracedRolloutRunner:
-        runner = self._rollouts.get(rows)
-        if runner is None:
-            runner = TracedRolloutRunner(self, rows)
-            self._rollouts[rows] = runner
-        return runner
+    def _traced(self, kind: str, rows: int):
+        """Return the runner for ``(kind, rows)``, holding at most one live trace.
+
+        tt-metal pins device allocations for as long as any trace exists, so building a second
+        runner while the first is live allocates against it and the runtime warns that those
+        buffers may be corrupted once a trace executes. Traces are also shape-specific, and a
+        batch sweep changes the row count, so caching one runner per shape would accumulate
+        live traces exactly the way that warning describes. Releasing first costs a recapture
+        (~0.2 s) when the shape changes and keeps the invariant simple: one trace, always.
+        """
+        key = (kind, rows)
+        if self._trace_key != key:
+            self.release_traces()
+            factory = TracedRolloutRunner if kind == "rollout" else TracedDecodeRunner
+            self._trace_runner = factory(self, rows)
+            self._trace_key = key
+        return self._trace_runner
 
     def release_traces(self) -> None:
-        for runner in list(self._runners.values()) + list(self._rollouts.values()):
-            runner.release()
-        self._runners.clear()
-        self._rollouts.clear()
+        if self._trace_runner is not None:
+            self._trace_runner.release()
+            self._trace_runner = None
+            self._trace_key = None
 
     def _build_decode_step(
         self,
@@ -312,7 +357,10 @@ class TimeSeriesTransformer:
         """
         distribution = self.distribution_head.torch_distribution(parameters, loc=loc, scale=scale)
         value = distribution.mean if mode == "mean" else distribution.sample()
-        return value.reshape(loc.shape[0], 1)
+        rows = loc.shape[0]
+        if self.config.is_multivariate:
+            return value.reshape(rows, 1, self.config.input_size)
+        return value.reshape(rows, 1)
 
 
 __all__ = ["ForwardOutput", "TimeSeriesTransformer"]

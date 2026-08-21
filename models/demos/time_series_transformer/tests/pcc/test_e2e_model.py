@@ -155,8 +155,9 @@ class TestTracedRollout:
         model = model_with(device, replace(config, use_trace=True), hf_state)
         try:
             model.generate(num_parallel_samples=4, mode="sample", **goldens.inputs)
-            assert model._rollouts == {}, "sample mode must not use the mean-only rollout trace"
-            assert model._runners, "sample mode should register a per-step runner"
+            # rows is batch * num_parallel_samples; what matters here is the trace kind.
+            assert model._trace_key is not None
+            assert model._trace_key[0] == "decode", "sample mode must not use the mean-only rollout trace"
         finally:
             model.release_traces()
 

@@ -96,3 +96,58 @@ class TestTimeSeriesEmbedding:
         embedding.load_hf_state_dict(substate(hf_state, "model.encoder"), strict=True)
         assert embedding.value_embedding.weight_torch.shape == (config.d_model, config.feature_size)
         assert not any("value_projection.bias" in key for key in hf_state)
+
+
+class TestScalerParity:
+    """Both scalers against HuggingFace, including the degenerate series that expose the floor."""
+
+    @staticmethod
+    def _hf_scaler(hf_config, kind: str):
+        from transformers.models.time_series_transformer.modeling_time_series_transformer import (
+            TimeSeriesMeanScaler,
+            TimeSeriesStdScaler,
+        )
+
+        return (TimeSeriesStdScaler if kind == "std" else TimeSeriesMeanScaler)(hf_config)
+
+    @staticmethod
+    def _degenerate_batch() -> tuple[torch.Tensor, torch.Tensor]:
+        """A normal series, a constant one, a near-zero one, and one with nothing observed."""
+        data = torch.stack(
+            (
+                torch.linspace(10.0, 40.0, 24),
+                torch.full((24,), 7.0),
+                torch.full((24,), 1e-8),
+                torch.linspace(1.0, 5.0, 24),
+            )
+        )
+        observed = torch.ones_like(data)
+        observed[3] = 0.0
+        return data, observed
+
+    @pytest.mark.parametrize("kind", ["mean", "std"])
+    def test_matches_huggingface(self, config, hf_model, kind):
+        from dataclasses import replace
+
+        from models.demos.time_series_transformer.tt.inputs import apply_scaler
+
+        data, observed = self._degenerate_batch()
+        scaler = self._hf_scaler(hf_model.config, kind)
+        _, expected_loc, expected_scale = scaler(data, observed)
+
+        loc, scale = apply_scaler(replace(config, scaling=kind), data, observed)
+
+        torch.testing.assert_close(loc, expected_loc)
+        torch.testing.assert_close(scale, expected_scale)
+
+    def test_std_floor_matches_huggingface(self, config):
+        """A constant series is entirely floor-determined, so a wrong floor shows up here."""
+        from dataclasses import replace
+
+        from models.demos.time_series_transformer.tt.inputs import apply_scaler
+
+        constant = torch.full((1, 24), 7.0)
+        _, scale = apply_scaler(replace(config, scaling="std"), constant, torch.ones_like(constant))
+
+        # HuggingFace's TimeSeriesStdScaler floors variance at 1e-5, not the mean scaler's 1e-10.
+        assert abs(float(scale) - (1e-5**0.5)) < 1e-9

@@ -28,6 +28,12 @@ from models.demos.time_series_transformer.reference.torch_reference import (
     make_inputs,
 )
 from models.demos.time_series_transformer.tests.perf.perf_common import (
+    STRETCH_BATCH,
+    STRETCH_CONTEXT,
+    STRETCH_LATENCY_MS,
+    STRETCH_SAMPLE_COUNT,
+    STRETCH_SAMPLE_SECONDS,
+    STRETCH_THROUGHPUT,
     TARGET_LATENCY_MS,
     TARGET_SAMPLE_SECONDS,
     TARGET_THROUGHPUT,
@@ -72,10 +78,16 @@ class TestStageOneTargets:
         with traced_model(device, config, hf_state) as model:
             result = run_benchmark(model, inputs, batch=1, num_samples=1, mode="mean")
 
-        logger.info(f"latency: {result.latency_ms:.2f} ms (target < {TARGET_LATENCY_MS} ms)")
+        logger.info(
+            f"latency: {result.latency_ms:.2f} ms "
+            f"(Stage 1 target < {TARGET_LATENCY_MS} ms, Stage 3 stretch < {STRETCH_LATENCY_MS} ms)"
+        )
         assert (
             result.latency_ms < TARGET_LATENCY_MS
         ), f"batch-1 latency {result.latency_ms:.2f} ms exceeds {TARGET_LATENCY_MS} ms"
+        assert (
+            result.latency_ms < STRETCH_LATENCY_MS
+        ), f"batch-1 latency {result.latency_ms:.2f} ms exceeds the Stage 3 stretch {STRETCH_LATENCY_MS} ms"
 
     def test_throughput(self, device, config, hf_state, hf_model):
         """Best sustained sequences/second across a batch sweep."""
@@ -131,16 +143,15 @@ class TestTraceEquivalence:
         sampling still steps through the decoder and registers a per-step runner.
         """
         inputs = make_inputs(hf_model.config, batch=1)
-        registry_name = "_rollouts" if mode == "mean" else "_runners"
+        expected_kind = "rollout" if mode == "mean" else "decode"
 
         with traced_model(device, config, hf_state) as model:
             model.generate(num_parallel_samples=1, mode=mode, **inputs)
-            registry = getattr(model, registry_name)
-            assert len(registry) == 1, f"{mode} mode did not populate {registry_name}"
+            assert model._trace_key == (expected_kind, 1), f"{mode} mode captured the wrong trace"
 
-            before = dict(registry)
+            before = model._trace_runner
             model.generate(num_parallel_samples=1, mode=mode, **inputs)
-            assert getattr(model, registry_name) == before, "generate recaptured a trace for a known shape"
+            assert model._trace_runner is before, "generate recaptured a trace for a known shape"
 
 
 @pytest.mark.models_performance_bare_metal
@@ -176,8 +187,8 @@ class TestOptimizedProfile:
                 logger.info(f"optimized {result}")
                 best = max(best, result.throughput)
 
-        logger.info(f"optimized best throughput: {best:.1f} seq/s")
-        assert best >= TARGET_THROUGHPUT
+        logger.info(f"optimized best throughput: {best:.1f} seq/s (stretch >= {STRETCH_THROUGHPUT})")
+        assert best >= STRETCH_THROUGHPUT, f"optimized throughput {best:.1f} seq/s below {STRETCH_THROUGHPUT}"
 
 
 @pytest.mark.models_performance_bare_metal
@@ -193,19 +204,19 @@ class TestScalingLimits:
         """
         inputs = make_inputs(hf_model.config, batch=1)
         with traced_model(device, config, hf_state, profile="performance") as model:
-            model.generate(num_parallel_samples=1000, mode="sample", **inputs)
+            model.generate(num_parallel_samples=STRETCH_SAMPLE_COUNT, mode="sample", **inputs)
             start = time.perf_counter()
-            output = model.generate(num_parallel_samples=1000, mode="sample", **inputs)
+            output = model.generate(num_parallel_samples=STRETCH_SAMPLE_COUNT, mode="sample", **inputs)
             seconds = time.perf_counter() - start
 
-        logger.info(f"1000 samples: {seconds:.3f} s (target < 2 s)")
-        assert output.shape == (1, 1000, hf_model.config.prediction_length)
+        logger.info(f"{STRETCH_SAMPLE_COUNT} samples: {seconds:.3f} s (target < {STRETCH_SAMPLE_SECONDS} s)")
+        assert output.shape == (1, STRETCH_SAMPLE_COUNT, hf_model.config.prediction_length)
         assert torch.isfinite(output).all()
-        assert seconds < 2.0, f"1000 samples took {seconds:.3f} s"
+        assert seconds < STRETCH_SAMPLE_SECONDS, f"{STRETCH_SAMPLE_COUNT} samples took {seconds:.3f} s"
 
     def test_wide_batch(self, device, config, hf_state, hf_model):
-        """Forecast 128 series in one call -- the '100+ time series' target."""
-        batch = 128
+        """Forecast many series in one call -- the '100+ time series' target."""
+        batch = STRETCH_BATCH
         inputs = make_inputs(hf_model.config, batch=batch)
         with traced_model(device, config, hf_state) as model:
             result = run_benchmark(model, inputs, batch=batch, num_samples=1, mode="mean", iterations=3)
@@ -214,7 +225,7 @@ class TestScalingLimits:
         assert result.throughput >= TARGET_THROUGHPUT
 
     def test_long_context(self, device, config, hf_state, hf_model):
-        """The architecture must run at a 2048-step context.
+        """The architecture must run at the full stretch context length.
 
         No checkpoint exists at that size, so this uses untrained weights and checks that the
         shapes hold and the output stays finite -- op shapes do not depend on weight values, so
@@ -223,7 +234,7 @@ class TestScalingLimits:
         """
         long_config = replace(
             config,
-            context_length=2048,
+            context_length=STRETCH_CONTEXT,
             num_static_categorical_features=0,
             cardinality=(),
             embedding_dimension=(),
@@ -241,7 +252,7 @@ class TestScalingLimits:
             model.release_traces()
             ttnn.synchronize_device(device)
 
-        logger.info(f"context 2048: {latency_ms:.2f} ms")
+        logger.info(f"context {STRETCH_CONTEXT}: {latency_ms:.2f} ms")
         assert output.shape == (1, 1, long_config.prediction_length)
         assert torch.isfinite(output).all()
 
@@ -258,3 +269,32 @@ def long_context_inputs(config, batch: int) -> dict[str, torch.Tensor]:
         ),
         "static_real_features": torch.zeros(batch, config.num_static_real_features),
     }
+
+
+@pytest.mark.models_performance_bare_metal
+class TestTraceLifecycle:
+    """Only one trace may be live at a time, whatever sequence of shapes a caller asks for."""
+
+    def test_single_live_trace_across_shape_changes(self, device, config, hf_state, hf_model):
+        """A batch sweep changes the row count; each change must release before recapturing.
+
+        Holding several live traces makes tt-metal warn that buffers allocated afterwards may
+        be corrupted once a trace executes, which invalidates any measurement taken from them.
+        """
+        with traced_model(device, config, hf_state) as model:
+            for batch in (1, 8, 32):
+                inputs = make_inputs(hf_model.config, batch=batch)
+                output = model.generate(num_parallel_samples=1, mode="mean", **inputs)
+                assert torch.isfinite(output).all()
+                assert model._trace_key == ("rollout", batch)
+
+            # Switching mode swaps the trace rather than adding a second one.
+            model.generate(num_parallel_samples=2, mode="sample", **make_inputs(hf_model.config, batch=1))
+            assert model._trace_key == ("decode", 2)
+
+    def test_release_clears_the_live_trace(self, device, config, hf_state, hf_model):
+        with traced_model(device, config, hf_state) as model:
+            model.generate(num_parallel_samples=1, mode="mean", **make_inputs(hf_model.config, batch=1))
+            assert model._trace_runner is not None
+            model.release_traces()
+            assert model._trace_runner is None and model._trace_key is None

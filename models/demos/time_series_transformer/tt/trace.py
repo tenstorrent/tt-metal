@@ -129,7 +129,12 @@ class TracedRolloutRunner:
         self.num_lags = len(config.lags_sequence)
 
         # Written per rollout; the trace reads them at fixed addresses.
-        self.running_init = to_device(torch.zeros(rows, config.past_length), device=self.device, dtype=self.dtype)
+        self.channels = config.input_size
+        # Channel-major: matmul against a selector then yields (rows, channels, lags), which
+        # flattens to the channel-major/lag-minor order get_lagged_subsequences produces.
+        self.running_init = to_device(
+            torch.zeros(rows, self.channels, config.past_length), device=self.device, dtype=self.dtype
+        )
         self.covariates = to_device(
             torch.zeros(rows, config.prediction_length, config.num_covariate_features),
             device=self.device,
@@ -169,7 +174,7 @@ class TracedRolloutRunner:
 
         for step in range(config.prediction_length):
             lags = ttnn.matmul(running, self.selectors[step], dtype=self.dtype)
-            lags = ttnn.reshape(lags, (self.rows, 1, self.num_lags))
+            lags = ttnn.reshape(lags, (self.rows, 1, self.channels * self.num_lags))
             covariate = ttnn.slice(self.covariates, [0, step, 0], [self.rows, step + 1, config.num_covariate_features])
             row = ttnn.concat([lags, covariate], dim=-1)
 
@@ -178,7 +183,9 @@ class TracedRolloutRunner:
 
             next_value = self.model.distribution_head.base_mean_from_hidden(slice_last_step(hidden))
             collected.append(next_value)
-            running = ttnn.concat([running, ttnn.reshape(next_value, (self.rows, 1))], dim=-1)
+            # next_value is (rows, 1, channels); the running series is channel-major.
+            appended = ttnn.permute(ttnn.reshape(next_value, (self.rows, 1, self.channels)), (0, 2, 1))
+            running = ttnn.concat([running, appended], dim=-1)
 
         return ttnn.concat(collected, dim=1)
 
@@ -199,7 +206,11 @@ class TracedRolloutRunner:
         covariates: torch.Tensor,
         encoder_inputs: torch.Tensor,
     ) -> torch.Tensor:
-        """Execute encoder and rollout together, returning normalized ``(rows, horizon)``."""
+        """Execute encoder and rollout together.
+
+        Returns normalized predictions, ``(rows, horizon)`` or ``(rows, horizon, channels)``.
+        ``running`` must be channel-major, ``(rows, channels, past_length)``.
+        """
         staged = (
             (running, self.running_init),
             (covariates, self.covariates),
@@ -210,7 +221,11 @@ class TracedRolloutRunner:
             ttnn.copy_host_to_device_tensor(uploaded, buffer)
 
         ttnn.execute_trace(self.device, self.trace_id, cq_id=0, blocking=False)
-        return to_torch(self.output).reshape(self.rows, self.model.config.prediction_length)
+        horizon = self.model.config.prediction_length
+        predictions = to_torch(self.output)
+        if self.channels > 1:
+            return predictions.reshape(self.rows, horizon, self.channels)
+        return predictions.reshape(self.rows, horizon)
 
     def release(self) -> None:
         if self.trace_id is not None:

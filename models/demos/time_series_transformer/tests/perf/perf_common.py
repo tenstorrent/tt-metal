@@ -20,6 +20,15 @@ TARGET_THROUGHPUT = 100.0  # sequences/second
 TARGET_LATENCY_MS = 50.0  # single sequence, batch 1
 TARGET_SAMPLE_SECONDS = 1.0  # 100 samples for one series
 
+# Stage 3 stretch goals. These are asserted, not merely observed: a claim in PERF.md that no
+# test enforces is a claim that silently rots.
+STRETCH_THROUGHPUT = 500.0  # sequences/second, performance profile
+STRETCH_LATENCY_MS = 20.0  # single sequence, batch 1
+STRETCH_SAMPLE_COUNT = 1000
+STRETCH_SAMPLE_SECONDS = 2.0
+STRETCH_BATCH = 256  # "100+ time series in batch"
+STRETCH_CONTEXT = 2048
+
 
 WARMUP_ITERATIONS = 2
 MEASURE_ITERATIONS = 5
@@ -89,6 +98,12 @@ def run_benchmark(
 __all__ = [
     "BenchmarkResult",
     "MEASURE_ITERATIONS",
+    "STRETCH_BATCH",
+    "STRETCH_CONTEXT",
+    "STRETCH_LATENCY_MS",
+    "STRETCH_SAMPLE_COUNT",
+    "STRETCH_SAMPLE_SECONDS",
+    "STRETCH_THROUGHPUT",
     "TARGET_LATENCY_MS",
     "TARGET_SAMPLE_SECONDS",
     "TARGET_THROUGHPUT",

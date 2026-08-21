@@ -27,12 +27,21 @@ MIN_COVERAGE_PERCENT = 60.0
 MAX_COVERAGE_PERCENT = 99.5
 
 
+# Only a genuinely unreachable Hub is grounds for skipping. Schema, parsing and
+# feature-construction bugs are regressions in this PR and must fail the benchmark rather
+# than disguise themselves as an infrastructure skip.
+DOWNLOAD_FAILURES = (
+    OSError,  # covers HTTPError, ConnectionError and huggingface_hub's network errors
+    TimeoutError,
+)
+
+
 @pytest.fixture(scope="module")
 def tourism_inputs(hf_model):
     try:
         return tourism_series(hf_model.config, batch=BATCH)
-    except Exception as exc:  # noqa: BLE001 - the Hub may be unreachable
-        pytest.skip(f"tourism-monthly data unavailable: {type(exc).__name__}: {exc}")
+    except DOWNLOAD_FAILURES as exc:
+        pytest.skip(f"tourism-monthly data could not be downloaded: {type(exc).__name__}: {exc}")
 
 
 class TestTourismBenchmark:

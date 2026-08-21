@@ -15,6 +15,7 @@ encoder-decoder transformer for probabilistic time-series forecasting.
 - Autoregressive sampling with all trajectories advanced as one batch
 - Parity-checked against the HuggingFace reference at every stage
 - Two runtime profiles: a float32 accuracy profile and a bfloat16 + flash-attention profile
+- Univariate and multivariate (`input_size > 1`) inputs, with observed-mask handling
 - Scales to 2048-step context, 256 series per batch, and 1000 sampled trajectories
 
 Reference checkpoint: [`huggingface/time-series-transformer-tourism-monthly`](https://huggingface.co/huggingface/time-series-transformer-tourism-monthly)
@@ -62,12 +63,19 @@ time_series_transformer/
 
 ```bash
 ./build_metal.sh
+./create_venv.sh
+source python_env/bin/activate
+
 export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
-pip install -r models/demos/time_series_transformer/requirements.txt
+
+# Bind the install to the interpreter that will run the tests. A bare `pip` can resolve to
+# /usr/bin/pip and user-site packages even inside an activated environment.
+python -m pip install -r models/demos/time_series_transformer/requirements.txt
 ```
 
-The checkpoint is pulled from the Hub on first use and cached.
+Run everything below with the same activated environment. The checkpoint is pulled from the
+Hub on first use and cached.
 
 ## Run the demo
 
@@ -227,15 +235,35 @@ out near 0.9998 — the residual is device float32 matmul precision, already pre
 and compute-kernel fidelity does not move it (HiFi4 with fp32 accumulate measures the same as
 the default).
 
+## Multivariate support
+
+`input_size > 1` is supported end to end and checked against HuggingFace in
+`tests/pcc/test_multivariate.py`:
+
+| Aspect | Coverage |
+|---|---|
+| Lag window | Flattened channel-major, verified equal to the full `get_lagged_subsequences` gather |
+| Feature width | `feature_size` matches HF, including the per-channel `log1p(\|loc\|)` and `log(scale)` terms |
+| Distribution | Channels are an event dimension (`Independent`), as in HF |
+| Generation | Mean-mode rollout parity within 5% MAE; traced path matches eager |
+| Output shape | `(batch, samples, horizon, channels)` |
+| Observed mask | Masked channels change the scaler and still match HF |
+
+The published tourism checkpoint is univariate, so multivariate parity is established against
+reference models built with the same geometry and a wider input. There is no multivariate
+checkpoint to measure forecast *quality* against — these tests establish numerical parity with
+HuggingFace, not accuracy on a multivariate benchmark.
+
 ## Known limitations
 
-- Multivariate series (`input_size > 1`) are not exercised; the reference checkpoint is
-  univariate. The config carries `input_size` through but there is no parity coverage.
+- Multivariate parity is against constructed reference models, not a trained multivariate
+  checkpoint; forecast quality at `input_size > 1` is therefore unmeasured.
 - Sampling draws from `torch.distributions` on the host. A Student's t variate needs a Gamma
   draw whose shape parameter is itself data-dependent, so it cannot be pre-generated and
   uploaded. Mean-mode decoding — what the accuracy gates measure — stays on device.
 - L1 residency and sharding do not pay off at this model size (see above). Sharding support was
   removed rather than left as unused scaffolding; `use_l1` is kept, working and tested, but off.
-- Trace capture is per row-count: the first `generate` at a new `batch * num_parallel_samples`
-  pays a one-time capture cost, and later calls at that shape reuse it.
+- Exactly one trace is live at a time. A new `batch * num_parallel_samples` releases the
+  previous capture and pays a fresh one (~0.2 s). Holding several live traces is what makes
+  tt-metal warn that later allocations may be corrupted, so the recapture is deliberate.
 - Perf numbers are sensitive to host CPU load, since the model is dispatch-bound.

@@ -56,7 +56,12 @@ class TimeSeriesTransformerConfig:
     distribution_output: str = "student_t"
     num_parallel_samples: int = 100
     scaling: str = "mean"
-    minimum_scale: float = 1e-10
+    # HuggingFace's scalers carry different floors and only read config.minimum_scale when
+    # the config defines it -- TimeSeriesTransformerConfig does not, so each falls back to
+    # its own default. A single shared value would silently change std scaling for constant
+    # or very low-variance series.
+    mean_minimum_scale: float = 1e-10
+    std_minimum_scale: float = 1e-5
     default_scale: Optional[float] = None
 
     # TTNN runtime
@@ -104,12 +109,20 @@ class TimeSeriesTransformerConfig:
 
     @property
     def num_static_features(self) -> int:
-        """Width of the static feature vector: embedded categoricals, static reals, log loc/scale."""
-        return sum(self.embedding_dimension) + self.num_static_real_features + 2
+        """Width of the static feature vector: embedded categoricals, static reals, log loc/scale.
+
+        The log1p(|loc|) and log(scale) terms are per channel, so they contribute
+        ``2 * input_size`` -- matching HuggingFace's ``_number_of_features``.
+        """
+        return sum(self.embedding_dimension) + self.num_static_real_features + 2 * self.input_size
 
     @property
     def num_covariate_features(self) -> int:
         return self.num_time_features + self.num_dynamic_real_features + self.num_static_features
+
+    @property
+    def is_multivariate(self) -> bool:
+        return self.input_size > 1
 
     @property
     def num_distribution_params(self) -> int:

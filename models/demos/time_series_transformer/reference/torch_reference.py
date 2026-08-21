@@ -34,10 +34,13 @@ def make_inputs(hf_config, *, batch: int = DEFAULT_BATCH, seed: int = DEFAULT_SE
     """Deterministic, dimensionally valid inputs covering every optional feature."""
     generator = torch.Generator().manual_seed(seed)
     length = past_length(hf_config)
+    channels = int(getattr(hf_config, "input_size", 1) or 1)
+    # HuggingFace drops the channel axis entirely when input_size == 1.
+    value_shape = (batch, length) if channels == 1 else (batch, length, channels)
     inputs = {
-        "past_values": torch.rand(batch, length, generator=generator) * 100 + 50,
+        "past_values": torch.rand(*value_shape, generator=generator) * 100 + 50,
         "past_time_features": torch.randn(batch, length, hf_config.num_time_features, generator=generator),
-        "past_observed_mask": torch.ones(batch, length),
+        "past_observed_mask": torch.ones(*value_shape),
         "future_time_features": torch.randn(
             batch, hf_config.prediction_length, hf_config.num_time_features, generator=generator
         ),
@@ -152,7 +155,7 @@ def capture_goldens(
     return goldens
 
 
-def build_reference_model(distribution_output: str, *, seed: int = 0, model_id: str = MODEL_ID):
+def build_reference_model(distribution_output: str, *, seed: int = 0, input_size: int = 1, model_id: str = MODEL_ID):
     """A randomly-initialised HF model with a chosen distribution head.
 
     The published checkpoint only carries a Student's t head, so parity for the Normal and
@@ -180,6 +183,7 @@ def build_reference_model(distribution_output: str, *, seed: int = 0, model_id: 
         encoder_ffn_dim=int(template.encoder_ffn_dim),
         decoder_ffn_dim=int(template.decoder_ffn_dim),
         distribution_output=distribution_output,
+        input_size=input_size,
         scaling=template.scaling,
         dropout=0.0,
         encoder_layerdrop=0.0,
