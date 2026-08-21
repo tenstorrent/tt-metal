@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tests.decode_test_helpers import decode_step_state
+from models.tt_transformers.tests.decode_test_helpers import decode_step_state, teacher_forced_decode_token
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
@@ -334,6 +334,10 @@ def test_model_inference(
     )
 
     for i in range(generation_length):
+        # Validate the absolute position before executing the model step.
+        next_position, next_token_index, num_written = decode_step_state(
+            generation_start_pos, i, len(encoded_prompts[0]), model_args.max_seq_len
+        )
         logger.info(f"[Model] Generating token {i}")
 
         decode_input = model_args.prepare_residual_tensor_decode(
@@ -379,9 +383,6 @@ def test_model_inference(
             ref_output = reference_model(pt_decode_input, current_pos[0])
 
         # Increment position
-        next_position, next_token_index, num_written = decode_step_state(
-            generation_start_pos, i, len(encoded_prompts[0]), model_args.max_seq_len
-        )
         current_pos = torch.tensor([next_position for _ in range(batch)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
@@ -406,20 +407,25 @@ def test_model_inference(
                 pt_decode_input = embd(encoded_prompts_tensor[:, next_token_index]).view(batch, seqlen, -1)
         else:
             # Greedy decode (temperature = 0) the generated token and save it to print out later
+            reference_token = None
+            device_token = None
             if run_ref_pt:
                 # Sample from reference model first
-                _, pt_out_tok = sample_host(ref_output, temperature=0, top_p=0.8)
-                pt_decode_input = embd(pt_out_tok)
-                all_outputs_ref.append(pt_out_tok.squeeze(1).tolist()[0])
-
-                # Use the same token for TT model (teacher forcing)
-                tt_decode_input = pt_decode_input
-                all_outputs.append(pt_out_tok.squeeze(1).tolist()[0])
+                _, reference_token = sample_host(ref_output, temperature=0, top_p=0.8)
             else:
                 # If not running reference model, sample from TT model directly
-                _, tt_out_tok = sample_host(tt_output_torch, temperature=0, top_p=0.8)
-                tt_decode_input = embd(tt_out_tok)
-                all_outputs.append(tt_out_tok.squeeze(1).tolist()[0])
+                _, device_token = sample_host(tt_output_torch, temperature=0, top_p=0.8)
+
+            next_token = teacher_forced_decode_token(
+                reference_token=reference_token,
+                device_token=device_token,
+            )
+            next_token_id = next_token.squeeze(1).tolist()[0]
+            tt_decode_input = embd(next_token)
+            all_outputs.append(next_token_id)
+            if run_ref_pt:
+                pt_decode_input = tt_decode_input
+                all_outputs_ref.append(next_token_id)
 
         # Measure PCC if also running reference model
         if run_ref_pt:
