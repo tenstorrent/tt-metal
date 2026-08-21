@@ -54,6 +54,7 @@ def create_tt_model(
     create_kv_cache=True,
     model_path=None,
     bounded_sliding_kv_cache: bool = False,
+    bounded_sliding_cache_slots: int | None = None,
     prefill_chunk_size=None,
 ):
     """
@@ -154,6 +155,7 @@ def create_tt_model(
         create_kv_cache=create_kv_cache,
         precision=precision,
         bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+        bounded_sliding_cache_slots=bounded_sliding_cache_slots,
     )
 
     # After a full cold build, record completion (+ capture host-consumed weights to the sidecar)
