@@ -4328,10 +4328,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         return 1.0 if bool(close) else 0.0
 
     def _logsigmoid(self, t1, t2):
-        # logsigmoid(x) = log(sigmoid(x)) = -softplus(-x), with x = t1. The kernel takes
-        # exp(-x) as its second operand (t2), which the test bakes into the paired
-        # stimuli; the golden only needs x. It is a piecewise (poly + exp) approximation,
-        # so it is matched under the PCC tolerance. Evaluated in fp32.
+        # The operation remains registered in the legacy binary LLK harness, but
+        # the production kernel is now unary and ignores t2. Evaluated in fp32.
         return torch.nn.functional.logsigmoid(t1.to(torch.float32))
 
     def _add_top_row(
