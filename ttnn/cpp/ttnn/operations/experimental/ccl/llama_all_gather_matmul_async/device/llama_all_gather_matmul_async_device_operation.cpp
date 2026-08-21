@@ -92,21 +92,27 @@ ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_has
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input0 = tensor_args.input0;
     const auto& input1 = tensor_args.input1;
+    const auto& intermediate = tensor_args.intermediate;
 
     auto input0_shape = input0.padded_shape();
     auto input0_memory_layout = input0.layout();
     auto input0_dtype = input0.dtype();
     auto input0_memory_config = input0.memory_config();
+    // The matmul half reads in0/in1 tiles off its operands to size every block and circular buffer,
+    // and the aggregated matmul input inherits input0's page config, so tile geometry must be keyed.
+    auto input0_page_config = input0.tensor_spec().page_config();
 
     auto input1_shape = input1.padded_shape();
     auto input1_memory_layout = input1.layout();
     auto input1_dtype = input1.dtype();
     auto input1_memory_config = input1.memory_config();
+    auto input1_page_config = input1.tensor_spec().page_config();
 
-    auto intermediate_shape = input1.padded_shape();
-    auto intermediate_memory_layout = input1.layout();
-    auto intermediate_dtype = input1.dtype();
-    auto intermediate_memory_config = input1.memory_config();
+    auto intermediate_shape = intermediate.padded_shape();
+    auto intermediate_memory_layout = intermediate.layout();
+    auto intermediate_dtype = intermediate.dtype();
+    auto intermediate_memory_config = intermediate.memory_config();
+    auto intermediate_page_config = intermediate.tensor_spec().page_config();
 
     return tt::tt_metal::operation::hash_operation<LlamaAllGatherMatmulAsyncDeviceOperation>(
         args.dim,
@@ -119,14 +125,17 @@ ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_has
         input0_memory_layout,
         input0_dtype,
         input0_memory_config,
+        input0_page_config,
         input1_shape,
         input1_memory_layout,
         input1_dtype,
         input1_memory_config,
+        input1_page_config,
         intermediate_shape,
         intermediate_memory_layout,
         intermediate_dtype,
-        intermediate_memory_config);
+        intermediate_memory_config,
+        intermediate_page_config);
 }
 
 }  // namespace ttnn::experimental::prim
