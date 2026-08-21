@@ -4,6 +4,7 @@
 
 #include "unary_composite_op.hpp"
 
+#include <array>
 #include <functional>
 #include <optional>
 #include <variant>
@@ -357,9 +358,14 @@ Tensor logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_m
 namespace ttnn::operations::unary {
 
 Tensor is_odd(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = ttnn::multiply(input, (1.0f / 2.0f), std::nullopt, output_mem_config);
-    Tensor floor_res = ttnn::floor(result, output_mem_config);
-    return ttnn::ne(result, floor_res, std::nullopt, output_mem_config);
+    // The same comparison, with the halving and the floor moved onto the two
+    // operands of the ne that was already reading them. ne applies a unary
+    // chain to each operand before comparing, so the three dispatches become
+    // one and the expression is unchanged, infinities included.
+    const std::array halve = {EltwiseUnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, 0.5f}};
+    const std::array halve_then_floor = {
+        EltwiseUnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, 0.5f}, EltwiseUnaryWithParam{UnaryOpType::FLOOR}};
+    return ttnn::ne(input, input, std::nullopt, output_mem_config, std::nullopt, {}, halve, halve_then_floor);
 }
 
 }  // namespace ttnn::operations::unary
