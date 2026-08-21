@@ -7,7 +7,7 @@
 #include <cstdint>
 #include "llk_unpack_tilize_api.h"  // legacy CB-id API + unified llk_unpack_tilize_init_impl / llk_unpack_tilize_impl
 #include "data_format_derive.h"
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/compute/experimental/2_0/internal/llk_descriptor.h"
 
 /*************************************************************************
  * LLK UNPACK TILIZE -- LLKOperand (id-free, compile-time NTTP) overloads
@@ -16,7 +16,7 @@
  * taking an LLKMemDescriptor as the first NTTP. DESC carries the input buffer L1 format + tile geometry;
  * the SrcA register (dst) format is derived HERE from DESC.format + the fp32-dest-acc flag and never
  * exposed above the LLK. narrow_tile is derived from the tile geometry (a single face-column wide tile
- * is narrow). The runtime base address comes from the caller (l1_spec.h::cb_read_address).
+ * is narrow). The runtime base address comes from the caller (cb_operand_helpers.h::cb_read_address).
  *************************************************************************/
 
 template <ckernel::experimental::LLKMemDescriptor DESC, bool is_fp32_dest_acc_en = false>

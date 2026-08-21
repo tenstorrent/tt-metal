@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include "llk_math_binary_api.h"  // legacy CB-id API + unified llk_math_eltwise_binary_{init_,}impl
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/compute/experimental/2_0/internal/llk_descriptor.h"
 
 /*************************************************************************
  * LLK ELTWISE BINARY -- LLKOperand (id-free, compile-time NTTP) overloads

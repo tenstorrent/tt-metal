@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include "api/compute/common_globals.h"
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/compute/experimental/2_0/llk_operand.h"
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_unary_datacopy.h"
@@ -34,6 +34,9 @@ namespace experimental {
 // clang-format on
 template <DataFormat Format, TensorShape Shape>
 ALWI void copy_tile_init(LLKOperand<Format, Shape> /*src*/) {
+    static_assert(
+        is_legal_tile_shape(Shape),
+        "copy_tile_init: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
     UNPACK((llk_unpack_A_init<
             LLKOperand<Format, Shape>::descriptor,
             DST_ACCUM_MODE,
@@ -62,6 +65,9 @@ ALWI void copy_tile_init(LLKOperand<Format, Shape> /*src*/) {
 // clang-format on
 template <DataFormat Format, TensorShape Shape>
 ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index) {
+    static_assert(
+        is_legal_tile_shape(Shape),
+        "copy_tile: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
     UNPACK((llk_unpack_A<
             LLKOperand<Format, Shape>::descriptor,
             DST_ACCUM_MODE,

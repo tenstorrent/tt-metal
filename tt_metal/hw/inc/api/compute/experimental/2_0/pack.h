@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include "api/compute/common_globals.h"
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/compute/experimental/2_0/llk_operand.h"
 
 #ifdef TRISC_PACK
 #include "experimental/2_0/llk_pack_tile.h"
@@ -29,6 +29,7 @@ namespace experimental {
 // clang-format on
 template <DataFormat Format, TensorShape Shape>
 ALWI void pack_init(LLKOperand<Format, Shape> /*out*/) {
+    static_assert(is_legal_tile_shape(Shape), "pack_init: illegal output tile shape.");
     PACK((llk_pack_init<LLKOperand<Format, Shape>::descriptor, DST_ACCUM_MODE>()));
 }
 
@@ -53,6 +54,7 @@ ALWI void pack_init(LLKOperand<Format, Shape> /*out*/) {
 // clang-format on
 template <DataFormat Format, TensorShape Shape>
 ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst) {
+    static_assert(is_legal_tile_shape(Shape), "pack_tile: illegal output tile shape.");
     // out_of_order_output=true: pack to the absolute address in the LLKOperand (no fifo_wr_tile_ptr bump).
     PACK((llk_pack<
           LLKOperand<Format, Shape>::descriptor,

@@ -7,7 +7,7 @@
 #include <cstdint>
 #include "llk_math_unary_datacopy_api.h"  // legacy CB-id API + unified datacopy impls
 #include "data_format_derive.h"
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/compute/experimental/2_0/internal/llk_descriptor.h"
 
 /*************************************************************************
  * LLK ELTWISE UNARY DATACOPY -- LLKOperand (id-free, compile-time NTTP) overloads

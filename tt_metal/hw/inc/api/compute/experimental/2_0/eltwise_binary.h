@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include "api/compute/common_globals.h"
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/compute/experimental/2_0/llk_operand.h"
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_binary.h"
@@ -36,19 +36,16 @@ namespace experimental {
  *
  * | Template | full_init           | Do the UNPACK init too (not just MATH) | bool             |  | True |
  * | Template | eltwise_binary_type | ELWADD / ELWSUB / ELWMUL               | EltwiseBinaryType |  | True |
- * | Function | a / b               | Input operands (A -> SrcA, B -> SrcB)  | LLKOperand       |  | True |
+ * | Function | a                   | Operand A (A -> SrcA); drives geometry | LLKOperand       |  | True |
  * | Function | acc_to_dest         | Accumulate the result into DST         | bool             |  | False |
+ *
+ * NOTE (PART B): the init forwards ONLY operand A's descriptor (geometry + format), mirroring legacy which
+ * inits from a single operand. Operand B contributes nothing to init, so it is not taken here; the
+ * A.shape == B.shape requirement is enforced at the execute (add/sub/mul_tiles), which does see both.
  */
 // clang-format on
-template <
-    bool full_init,
-    EltwiseBinaryType eltwise_binary_type,
-    DataFormat AFormat,
-    TensorShape AShape,
-    DataFormat BFormat,
-    TensorShape BShape>
-ALWI void binary_tiles_init(
-    LLKOperand<AFormat, AShape> /*a*/, LLKOperand<BFormat, BShape> /*b*/, bool acc_to_dest = false) {
+template <bool full_init, EltwiseBinaryType eltwise_binary_type, DataFormat AFormat, TensorShape AShape>
+ALWI void binary_tiles_init(LLKOperand<AFormat, AShape> /*a*/, bool acc_to_dest = false) {
     MATH((llk_math_eltwise_binary_init<
           LLKOperand<AFormat, AShape>::descriptor,
           eltwise_binary_type,
@@ -60,28 +57,28 @@ ALWI void binary_tiles_init(
     }
 }
 
-template <DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
-ALWI void add_init(LLKOperand<AFormat, AShape> a, LLKOperand<BFormat, BShape> b, bool acc_to_dest = false) {
-    binary_tiles_init<true, EltwiseBinaryType::ELWADD>(a, b, acc_to_dest);
+template <DataFormat AFormat, TensorShape AShape>
+ALWI void add_init(LLKOperand<AFormat, AShape> a, bool acc_to_dest = false) {
+    binary_tiles_init<true, EltwiseBinaryType::ELWADD>(a, acc_to_dest);
 }
 
-template <DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
-ALWI void sub_init(LLKOperand<AFormat, AShape> a, LLKOperand<BFormat, BShape> b, bool acc_to_dest = false) {
-    binary_tiles_init<true, EltwiseBinaryType::ELWSUB>(a, b, acc_to_dest);
+template <DataFormat AFormat, TensorShape AShape>
+ALWI void sub_init(LLKOperand<AFormat, AShape> a, bool acc_to_dest = false) {
+    binary_tiles_init<true, EltwiseBinaryType::ELWSUB>(a, acc_to_dest);
 }
 
-template <DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
-ALWI void mul_init(LLKOperand<AFormat, AShape> a, LLKOperand<BFormat, BShape> b, bool acc_to_dest = true) {
-    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(a, b, acc_to_dest);
+template <DataFormat AFormat, TensorShape AShape>
+ALWI void mul_init(LLKOperand<AFormat, AShape> a, bool acc_to_dest = true) {
+    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(a, acc_to_dest);
 }
 
 namespace detail {
-// Per-tile L1 base for operand X at tile index (16B words); stride folds to a constant from X's geometry.
-// Assumes fifo_page_size == a single tile's size (exact for linear formats), consistent with tilize/untilize.
+// Per-tile L1 base for operand X at tile index (16B words); stride folds to a constant from X's geometry via
+// tile_stride_words == one tile's L1 size (geometry-exact for linear formats, exp section included for BFP),
+// consistent with tilize/untilize/reduce/matmul.
 template <DataFormat Format, TensorShape Shape>
 ALWI std::uint32_t tile_address(LLKOperand<Format, Shape> op, std::uint32_t tile_index) {
-    constexpr std::uint32_t stride =
-        SCALE_DATUM_SIZE(static_cast<std::uint32_t>(Format), Shape.total_tensor_size()) >> 4;
+    constexpr std::uint32_t stride = tile_stride_words(static_cast<std::uint8_t>(Format), Shape);
     return op.l1_address + tile_index * stride;
 }
 }  // namespace detail
@@ -104,6 +101,8 @@ ALWI void add_tiles(
     std::uint32_t itile0,
     std::uint32_t itile1,
     std::uint32_t idst) {
+    static_assert(is_legal_tile_shape(AShape), "add_tiles: illegal tile shape for operand A.");
+    static_assert(same_tile_shape(AShape, BShape), "add_tiles: operands A and B must have the same tile shape.");
     UNPACK((llk_unpack_AB<LLKOperand<AFormat, AShape>::descriptor, BroadcastType::NONE>(
         detail::tile_address(a, itile0), detail::tile_address(b, itile1))));
     MATH((llk_math_eltwise_binary<
@@ -122,6 +121,8 @@ ALWI void sub_tiles(
     std::uint32_t itile0,
     std::uint32_t itile1,
     std::uint32_t idst) {
+    static_assert(is_legal_tile_shape(AShape), "sub_tiles: illegal tile shape for operand A.");
+    static_assert(same_tile_shape(AShape, BShape), "sub_tiles: operands A and B must have the same tile shape.");
     UNPACK((llk_unpack_AB<LLKOperand<AFormat, AShape>::descriptor, BroadcastType::NONE>(
         detail::tile_address(a, itile0), detail::tile_address(b, itile1))));
     MATH((llk_math_eltwise_binary<
@@ -140,6 +141,8 @@ ALWI void mul_tiles(
     std::uint32_t itile0,
     std::uint32_t itile1,
     std::uint32_t idst) {
+    static_assert(is_legal_tile_shape(AShape), "mul_tiles: illegal tile shape for operand A.");
+    static_assert(same_tile_shape(AShape, BShape), "mul_tiles: operands A and B must have the same tile shape.");
     UNPACK((llk_unpack_AB<LLKOperand<AFormat, AShape>::descriptor, BroadcastType::NONE>(
         detail::tile_address(a, itile0), detail::tile_address(b, itile1))));
     MATH((llk_math_eltwise_binary<

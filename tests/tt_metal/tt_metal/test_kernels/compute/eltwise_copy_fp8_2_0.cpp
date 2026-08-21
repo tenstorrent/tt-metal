@@ -14,6 +14,8 @@
 // address seam + infer fn. Output must be bit-identical to the legacy path (eltwise_copy_fp8.cpp).
 #include "api/compute/experimental/2_0/tile_move_copy.h"
 #include "api/compute/experimental/2_0/pack.h"
+#include "tests/tt_metal/tt_metal/test_kernels/compute/cb_operand_helpers.h"
+#include "api/compute/experimental/2_0/hw_startup.h"
 
 void kernel_main() {
     std::uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
@@ -29,7 +31,7 @@ void kernel_main() {
     using InOp = experimental::LLKOperand<static_cast<DataFormat>(in_desc.format), in_desc.shape>;
     using OutOp = experimental::LLKOperand<static_cast<DataFormat>(out_desc.format), out_desc.shape>;
 
-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(InOp(in_cb.read_address()), OutOp(out_cb.write_address()));
     copy_tile_init(tt::CBIndex::c_0);
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {

@@ -7,7 +7,7 @@
 #include <cstdint>
 #include "llk_pack_untilize_api.h"  // legacy CB-id API + unified llk_pack_untilize_*_impl cores
 #include "data_format_derive.h"
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/compute/experimental/2_0/internal/llk_descriptor.h"
 
 /*************************************************************************
  * LLK PACK UNTILIZE -- LLKOperand (id-free, compile-time NTTP) overloads
@@ -16,13 +16,12 @@
  * distinguished by taking an LLKMemDescriptor (the OUTPUT buffer L1 format + geometry) as the first NTTP.
  * The dest-register (pack src) format is derived HERE from DESC.format + the fp32-dest-acc flag and never
  * exposed above the LLK. All three forward to the same unified cores as the CB-id API. The runtime write
- * base pointer comes from the caller via llk_mem_descriptor.h::cb_write_address (absolute/out-of-order).
+ * base pointer comes from the caller via cb_operand_helpers.h::cb_write_address (absolute/out-of-order).
  *
  * ADDRESSING ASSUMPTION (documented at the compute layer, 2_0/pack_untilize.h): the id-free op has no CB
- * handle, so the per-tile-row output stride (page_stride) is derived from the output descriptor and assumes
- * fifo_page_size == a single tile's size. Exact for linear formats (Float32 / Float16 / int); for block
- * formats or padded/multi-tile pages it diverges (SCALE_DATUM_SIZE omits the shared-exponent bytes). The
- * current test path is single tile-row (block_rt_dim == 1), where the stride is never applied.
+ * handle, so the per-tile-row output stride (page_stride) is derived from the output descriptor via
+ * tile_stride_words == one tile's L1 size. Correct for linear formats (geometry-exact) and block floats
+ * (exp section included); the remaining edge is padded/multi-tile pages, which no shipping factory uses.
  *************************************************************************/
 
 template <
@@ -57,10 +56,9 @@ inline void llk_pack_untilize(
     constexpr std::uint8_t RegFmt = static_cast<std::uint8_t>(
         ckernel::infer_pack_src_format(static_cast<DataFormat>(OUT_DESC.format), is_fp32_dest_acc_en));
     // Per tile-row output stride, folded to a compile-time constant. Replaces the legacy
-    // full_ct_dim * fifo_page_size; assumes fifo_page_size == a single tile's size (see header note).
+    // full_ct_dim * fifo_page_size; tile_stride_words is the one-tile L1 size (exp section included for BFP).
     constexpr std::uint32_t page_stride =
-        full_ct_dim *
-        (SCALE_DATUM_SIZE(static_cast<std::uint32_t>(OUT_DESC.format), OUT_DESC.shape.total_tensor_size()) >> 4);
+        full_ct_dim * ckernel::experimental::tile_stride_words(OUT_DESC.format, OUT_DESC.shape);
     llk_pack_untilize_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
         block_rt_dim,
         base_ptr,

@@ -7,7 +7,7 @@
 #include <cstdint>
 #include "llk_unpack_A_api.h"  // legacy CB-id API + the unified llk_unpack_A_init_impl / llk_unpack_A_impl
 #include "data_format_derive.h"
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/compute/experimental/2_0/internal/llk_descriptor.h"
 
 /*************************************************************************
  * LLK UNPACK A -- LLKOperand (id-free, compile-time NTTP) overloads
@@ -16,7 +16,7 @@
  * LLKMemDescriptor as the first NTTP instead of a CB id. DESC carries the buffer L1 format + geometry
  * (folds -> DCE); the SrcA register format is derived HERE from DESC.format + the fp32-dest-acc flag
  * (data_format_derive.h) and never exposed above the LLK. Both overloads forward to the same unified
- * cores as the CB-id API. The runtime base pointer comes from the caller via l1_spec.h::cb_read_address.
+ * cores as the CB-id API. The runtime base pointer comes from the caller via cb_operand_helpers.h::cb_read_address.
  *************************************************************************/
 
 template <

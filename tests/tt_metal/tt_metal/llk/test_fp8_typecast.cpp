@@ -462,4 +462,194 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixBinaryAddSpecMatchesLegacy) {
     EXPECT_EQ(legacy, spec);
 }
 
+// ============================================================================
+// Matmul (single tile): two classic CBs (c_0 -> SrcB, c_1 -> SrcA) -> c_16. The id-free (2.0) matmul kernel
+// must produce output bit-for-bit identical to the shipping legacy matmul.cpp on the same inputs. Both take
+// the same 7 matmul compile args (all 1 => a single-tile C = A*B) and use compute_kernel_hw_startup<Reverse>.
+// ============================================================================
+static vector<std::uint32_t> run_matmul_single_tile(
+    distributed::MeshDevice& mesh_device,
+    const vector<std::uint32_t>& src0_vec,
+    const vector<std::uint32_t>& src1_vec,
+    const std::string& compute_kernel) {
+    IDevice* dev = mesh_device.get_devices()[0];
+    Program program = CreateProgram();
+    CoreCoord core = {0, 0};
+
+    const tt::DataFormat fmt = tt::DataFormat::Float16_b;
+    std::uint32_t tile_bytes = tt::tile_size(fmt);
+
+    auto make_dram = [&]() {
+        InterleavedBufferConfig cfg{
+            .device = dev, .size = tile_bytes, .page_size = tile_bytes, .buffer_type = BufferType::DRAM};
+        return CreateBuffer(cfg);
+    };
+    auto src0_buffer = make_dram();
+    auto src1_buffer = make_dram();
+    auto dst_buffer = make_dram();
+
+    auto make_cb = [&](tt::CBIndex idx) {
+        CircularBufferConfig cb_cfg = CircularBufferConfig(tile_bytes, {{idx, fmt}}).set_page_size(idx, tile_bytes);
+        CreateCircularBuffer(program, core, cb_cfg);
+    };
+    make_cb(tt::CBIndex::c_0);
+    make_cb(tt::CBIndex::c_1);
+    make_cb(tt::CBIndex::c_16);
+
+    auto reader = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    // 7 matmul compile args, all 1: block_tile_dim, dst_tile_rows, dst_tile_cols, block_cnt,
+    // in0_block_tile_cnt, in1_block_tile_cnt, out_block_tile_cnt.
+    CreateKernel(
+        program, compute_kernel, core, ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {1, 1, 1, 1, 1, 1, 1}});
+
+    detail::WriteToBuffer(src0_buffer, src0_vec);
+    detail::WriteToBuffer(src1_buffer, src1_vec);
+    SetRuntimeArgs(program, reader, core, {src0_buffer->address(), 0, src1_buffer->address(), 0, 1});
+    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, 1});
+
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+
+    vector<std::uint32_t> result_vec;
+    detail::ReadFromBuffer(dst_buffer, result_vec);
+    return result_vec;
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    auto src0 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/2, /*seed=*/42, /*offset=*/-1.0f);
+    auto src1 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/2, /*seed=*/7, /*offset=*/-1.0f);
+
+    auto legacy =
+        run_matmul_single_tile(mesh_device, src0, src1, "tests/tt_metal/tt_metal/test_kernels/compute/matmul.cpp");
+    auto spec = run_matmul_single_tile(
+        mesh_device, src0, src1, "tests/tt_metal/tt_metal/test_kernels/compute/matmul_idfree.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Reduce (REDUCE_SCALAR SUM): c_0 = data, c_1 = scaler -> c_16 (reduced). The id-free (2.0) reduce kernel
+// must produce output bit-for-bit identical to the minimal legacy reduce kernel. Reuses the generic
+// two-input classic-CB runner (run_binary_add: c_0/c_1 in via reader_binary, c_16 out via writer_unary).
+// The scaler value is irrelevant to the differential comparison (both kernels use the same input).
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixReduceSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 1;
+    auto data = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto scaler = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/2, /*seed=*/7, /*offset=*/-1.0f);
+
+    auto legacy = run_binary_add(
+        mesh_device, data, scaler, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/reduce_scalar_legacy.cpp");
+    auto spec = run_binary_add(
+        mesh_device, data, scaler, num_tiles, "tests/tt_metal/tt_metal/test_kernels/compute/reduce_scalar_idfree.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
+// ============================================================================
+// Pack-untilize with a block-float (Bfp8_b) INPUT and block_ct_dim = 4 (> 1). This is the block>1 guard for
+// the block-float stride fix. The id-free pack_untilize reads column tile c of the block at
+// in.l1_address + c * tile_stride_words(Bfp8_b, shape) (internal/llk_descriptor.h). tile_stride_words returns the
+// real one-tile L1 size 68 words (1088 B, exp section included); the OLD SCALE_DATUM_SIZE stride was 64 words
+// (1024 B, exponent bytes omitted) -- a 4-word divergence per tile. The CB page is one tile (the shipping
+// model), so the legacy kernel reads tile c at fifo_page_size == 68 words; the id-free kernel matches only
+// with the corrected stride. Untilize is pure layout movement (no arithmetic), so a misread tile changes the
+// row-major output BYTES -- unlike a reduce, whose sum can mask a shift. This FAILS if tile_stride_words
+// reverts to SCALE_DATUM_SIZE. The same helper backs the tilize / reduce / binary / matmul strides, so this
+// covers the block-float fix for all of them.
+// ============================================================================
+static vector<std::uint32_t> run_pack_untilize_block4_bfp8(
+    distributed::MeshDevice& mesh_device, const std::string& compute_kernel) {
+    constexpr std::uint32_t BLOCK = 4;
+    IDevice* dev = mesh_device.get_devices()[0];
+    Program program = CreateProgram();
+    CoreCoord core = {0, 0};
+
+    const tt::DataFormat in_fmt = tt::DataFormat::Bfp8_b;      // tilized block-float input (the stride under test)
+    const tt::DataFormat out_fmt = tt::DataFormat::Float16_b;  // row-major output (linear -- not under test)
+    const std::uint32_t in_tile = tt::tile_size(in_fmt);       // 1088 B = 68 words (mantissa + exp section)
+    const std::uint32_t out_tile = tt::tile_size(out_fmt);
+
+    auto make_dram = [&](std::uint32_t bytes) {
+        InterleavedBufferConfig cfg{.device = dev, .size = bytes, .page_size = bytes, .buffer_type = BufferType::DRAM};
+        return CreateBuffer(cfg);
+    };
+    auto in_buffer = make_dram(BLOCK * in_tile);
+    auto out_buffer = make_dram(BLOCK * out_tile);
+
+    // One-tile PAGE, BLOCK capacity: the 4 input tiles sit contiguously at one-tile (68-word) spacing, the
+    // shipping factories' layout. The kernel reads all 4 in a single window via pack_untilize_block<4,4>.
+    auto make_cb = [&](tt::CBIndex idx, tt::DataFormat fmt, std::uint32_t tile) {
+        CircularBufferConfig cfg = CircularBufferConfig(BLOCK * tile, {{idx, fmt}}).set_page_size(idx, tile);
+        CreateCircularBuffer(program, core, cfg);
+    };
+    make_cb(tt::CBIndex::c_0, in_fmt, in_tile);
+    make_cb(tt::CBIndex::c_16, out_fmt, out_tile);
+
+    auto reader = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    CreateKernel(program, compute_kernel, core, ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {BLOCK}});
+
+    // Deterministic per-word-distinct fill so each input tile differs -- a mis-strided read of tile c>0 lands
+    // on different bytes and changes the untilized output. Raw content is otherwise irrelevant (differential).
+    std::vector<std::uint32_t> in_vec(BLOCK * in_tile / sizeof(std::uint32_t));
+    for (std::uint32_t i = 0; i < in_vec.size(); ++i) {
+        in_vec[i] = 0x3C003C00u + i * 0x00010001u;
+    }
+
+    detail::WriteToBuffer(in_buffer, in_vec);
+    SetRuntimeArgs(program, reader, core, {in_buffer->address(), 0, BLOCK});
+    SetRuntimeArgs(program, writer, core, {out_buffer->address(), 0, BLOCK});
+
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+
+    vector<std::uint32_t> result_vec;
+    detail::ReadFromBuffer(out_buffer, result_vec);
+    return result_vec;
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeBfp8BlockSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    auto legacy = run_pack_untilize_block4_bfp8(
+        mesh_device, "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_block4_legacy.cpp");
+    auto spec = run_pack_untilize_block4_bfp8(
+        mesh_device, "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_block4_2_0.cpp");
+    EXPECT_EQ(legacy, spec);
+}
+
 }  // namespace tt::tt_metal

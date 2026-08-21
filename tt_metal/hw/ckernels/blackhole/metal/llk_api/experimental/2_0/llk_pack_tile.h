@@ -7,7 +7,7 @@
 #include <cstdint>
 #include "llk_pack_tile_api.h"  // legacy CB-id API + unified llk_pack_init_impl / llk_pack_impl
 #include "data_format_derive.h"
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/compute/experimental/2_0/internal/llk_descriptor.h"
 
 /*************************************************************************
  * LLK PACK -- LLKOperand (id-free, compile-time NTTP) overloads
@@ -16,7 +16,7 @@
  * LLKMemDescriptor as the first NTTP. DESC carries the output buffer L1 format + geometry; the Dest
  * register format is derived HERE from DESC.format + the fp32-dest-acc flag and never exposed above the
  * LLK. Both overloads forward to the same unified cores as the CB-id API. The runtime write address
- * comes from the caller via l1_spec.h::cb_write_address (absolute/out-of-order) -- no fifo bookkeeping.
+ * comes from the caller via cb_operand_helpers.h::cb_write_address (absolute/out-of-order) -- no fifo bookkeeping.
  *************************************************************************/
 
 template <
@@ -81,15 +81,14 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t base_ptr) {
 // llk_pack_init (which does NOT touch the format registers -- only addrmod/mop/strides), this programs the
 // out/in data formats, dest-read control and exp/section sizes. Used by the id-free pack_untilize init so
 // the packer formats are correct regardless of the prior op (the CB-id path calls reconfig for the same
-// reason). tile_size is derived from the descriptor and carries the same fifo_page_size == a single tile's
-// size ASSUMPTION as tilize/untilize: exact for linear formats, omits the block-format exponent bytes.
+// reason). tile_size is the one-tile L1 size derived from the descriptor via tile_stride_words (the id-free
+// stand-in for fifo_page_size): geometry-exact for linear formats, exp section included for block floats.
 template <ckernel::experimental::LLKMemDescriptor DESC, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reconfig_data_format() {
     constexpr std::uint8_t RegFmt = static_cast<std::uint8_t>(
         ckernel::infer_pack_src_format(static_cast<DataFormat>(DESC.format), is_fp32_dest_acc_en));
-    // tile_size in 16B words (fifo_page_size units) == a single tile's size (SCALE_DATUM_SIZE >> 4).
-    constexpr std::uint32_t tile_size =
-        SCALE_DATUM_SIZE(static_cast<std::uint32_t>(DESC.format), DESC.shape.total_tensor_size()) >> 4;
+    // tile_size in 16B words (fifo_page_size units) == a single tile's L1 size.
+    constexpr std::uint32_t tile_size = ckernel::experimental::tile_stride_words(DESC.format, DESC.shape);
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
         RegFmt,
         DESC.format,

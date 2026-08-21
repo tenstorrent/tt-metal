@@ -118,4 +118,50 @@ constexpr DataFormat infer_pack_src_format(DataFormat l1_format, bool fp32_dest_
     return l1_format;
 }
 
+// =====================================================================================================
+// TWO-OPERAND exponent-width reconciliation (C1). The HW does NOT support mixing exponent widths across the
+// two source registers: both must be the 5-bit "a" family (fp16 / Bfp8 / Bfp4 / ...) or both the 8-bit "b"
+// family (bf16 / Bfp8_b / Tf32 / ...). The ONE exception is Float32, which the HW rebiases to whichever family
+// the OTHER operand uses. Any other cross-family pairing is a hardware error, caught here as a hard compile
+// failure. Formats are passed as template args so both the assert and the derivation fold at compile time.
+// =====================================================================================================
+
+// The common exponent-width family for two operand formats (true = 8-bit "b" family). Float32 is a wildcard
+// that adopts the other operand's family; two concrete formats of different families are rejected.
+template <DataFormat A, DataFormat B>
+constexpr bool common_exp_is_b() {
+    constexpr bool a_fp32 = (A == DataFormat::Float32);
+    constexpr bool b_fp32 = (B == DataFormat::Float32);
+    if constexpr (a_fp32 && b_fp32) {
+        return true;  // both Float32: native 8-bit exponent
+    } else if constexpr (a_fp32) {
+        return df_is_exp_b_format(B);  // Float32 rebiases to B's family
+    } else if constexpr (b_fp32) {
+        return df_is_exp_b_format(A);  // Float32 rebiases to A's family
+    } else {
+        static_assert(
+            df_is_exp_b_format(A) == df_is_exp_b_format(B),
+            "HW does not support mixed exponent-width operands (only Float32 rebiases to the other's width).");
+        return df_is_exp_b_format(A);
+    }
+}
+
+// Unpack-dst (register) format for the SELF operand of a two-operand op, honoring the common exp-width family
+// so both source registers agree. Non-Float32 formats are unchanged (identical to the single-operand infer);
+// a Float32 operand adopts the common family: Float32 under fp32-dest-acc, else Float16_b (b) / Float16 (a).
+// For matching formats this is exactly infer_unpack_dst_format(Self, ...), so it changes nothing on that path
+// -- its job is the Float32-rebias case and the compile-time mixed-width guard.
+template <DataFormat Self, DataFormat Other>
+constexpr DataFormat infer_unpack_dst_format_2op(bool fp32_dest_acc) {
+    static_cast<void>(common_exp_is_b<Self, Other>());  // fires the mixed-width static_assert for any pairing
+    if constexpr (Self == DataFormat::Float32) {
+        if (fp32_dest_acc) {
+            return DataFormat::Float32;
+        }
+        return common_exp_is_b<Self, Other>() ? DataFormat::Float16_b : DataFormat::Float16;
+    } else {
+        return infer_unpack_dst_format(Self, fp32_dest_acc);
+    }
+}
+
 }  // namespace ckernel

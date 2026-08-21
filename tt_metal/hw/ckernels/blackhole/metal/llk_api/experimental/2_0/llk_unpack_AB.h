@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include "llk_unpack_AB_api.h"  // legacy CB-id API + unified llk_unpack_AB_init_impl / llk_unpack_AB_impl
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/compute/experimental/2_0/internal/llk_descriptor.h"
 
 /*************************************************************************
  * LLK UNPACK AB -- LLKOperand (id-free, compile-time NTTP) overloads
@@ -14,7 +14,7 @@
  * Same function names as the CB-id API (llk_unpack_AB_init / llk_unpack_AB), distinguished by taking an
  * LLKMemDescriptor (of operand A -- the shape source, mirroring the CB-id API) as the first NTTP. AB unpack
  * is FORMAT-FREE at the op level (src/dst formats are programmed once at compute_kernel_hw_startup), so the
- * op forwards only the two runtime L1 base pointers (from llk_mem_descriptor.h::cb_read_address). Both
+ * op forwards only the two runtime L1 base pointers (from cb_operand_helpers.h::cb_read_address). Both
  * overloads forward to the same unified cores as the CB-id API. ROW-broadcast is not part of the id-free
  * surface yet (would need operand B's L1 format); only BroadcastType::NONE is exercised.
  *************************************************************************/

@@ -10,13 +10,13 @@
 #include "tests/tt_metal/tt_metal/test_kernels/compute/cb_operand_helpers.h"
 #include "api/compute/experimental/2_0/hw_startup.h"
 
-// Id-free (2.0) pack-untilize kernel, classic circular buffers. The ops take LLKOperand (data format + tile
-// geometry as NTTPs, L1 address the only runtime state). pack_untilize_block owns the row/column loops and
-// derives per-tile input/output addresses from the compile-time geometry (SCALE_DATUM_SIZE). Output must be
-// bit-identical to the legacy kernel pack_untilize_legacy.cpp. This run uses block_ct_dim/full_ct_dim/
-// block_rt_dim == 1 (one tile per CB slot).
+// Id-free (2.0) pack-untilize with block_ct_dim = 4 (> 1). Reads 4 tiled input tiles in ONE window at
+// in.l1_address + c * tile_stride_words(InFormat, InShape) and packs one row-major output row 4 tiles wide.
+// With a block-float (Bfp8_b) INPUT this exercises the per-tile input stride for tile c > 0 -- the case where
+// the old SCALE_DATUM_SIZE stride (68 vs 64 words; exponent bytes omitted) misreads tiles. Output must be
+// bit-identical to pack_untilize_block4_legacy.cpp (differential; pure layout movement, byte-exact).
 void kernel_main() {
-    std::uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    constexpr std::uint32_t BLOCK = 4;
 
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
@@ -29,19 +29,14 @@ void kernel_main() {
     using OutOp = experimental::LLKOperand<static_cast<DataFormat>(out_desc.format), out_desc.shape>;
 
     compute_kernel_hw_startup(InOp(in_cb.read_address()), OutOp(out_cb.write_address()));
-    experimental::pack_untilize_init<1 /*block_ct_dim*/, 1 /*full_ct_dim*/>(
-        InOp(in_cb.read_address()), OutOp(out_cb.write_address()));
+    experimental::pack_untilize_init<BLOCK, BLOCK>(InOp(in_cb.read_address()), OutOp(out_cb.write_address()));
 
-    for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        cb0.wait_front(1);
-        cb16.reserve_back(1);
-
-        experimental::pack_untilize_block<1 /*block_ct_dim*/, 1 /*full_ct_dim*/>(
-            InOp(in_cb.read_address()), 1 /*block_rt_dim*/, OutOp(out_cb.write_address()));
-
-        cb0.pop_front(1);
-        cb16.push_back(1);
-    }
+    cb0.wait_front(BLOCK);
+    cb16.reserve_back(BLOCK);
+    experimental::pack_untilize_block<BLOCK, BLOCK>(
+        InOp(in_cb.read_address()), 1 /*block_rt_dim*/, OutOp(out_cb.write_address()));
+    cb0.pop_front(BLOCK);
+    cb16.push_back(BLOCK);
 
     experimental::pack_untilize_uninit(OutOp(out_cb.write_address()));
 }

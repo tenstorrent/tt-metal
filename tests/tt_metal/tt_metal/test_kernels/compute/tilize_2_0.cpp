@@ -7,6 +7,8 @@
 #include "api/compute/tilize.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/compute/experimental/2_0/tilize.h"
+#include "tests/tt_metal/tt_metal/test_kernels/compute/cb_operand_helpers.h"
+#include "api/compute/experimental/2_0/hw_startup.h"
 
 // Id-free (2.0) tilize kernel, classic circular buffers. The ops take LLKOperand (data format + tile
 // geometry as NTTPs, L1 address the only runtime state). tilize_block owns the block loop and derives each
@@ -25,7 +27,7 @@ void kernel_main() {
     using InOp = experimental::LLKOperand<static_cast<DataFormat>(in_desc.format), in_desc.shape>;
     using OutOp = experimental::LLKOperand<static_cast<DataFormat>(out_desc.format), out_desc.shape>;
 
-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(InOp(in_cb.read_address()), OutOp(out_cb.write_address()));
     experimental::tilize_init(InOp(in_cb.read_address()), 1 /*block*/, OutOp(out_cb.write_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {

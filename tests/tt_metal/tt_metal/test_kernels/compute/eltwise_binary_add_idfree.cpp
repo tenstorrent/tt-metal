@@ -8,6 +8,8 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/compute/experimental/2_0/eltwise_binary.h"
 #include "api/compute/experimental/2_0/pack.h"
+#include "tests/tt_metal/tt_metal/test_kernels/compute/cb_operand_helpers.h"
+#include "api/compute/experimental/2_0/hw_startup.h"
 
 // Id-free (2.0) eltwise-binary ADD kernel, classic circular buffers. The ops take one LLKOperand per input
 // (format + geometry as NTTPs, L1 address the only runtime state); binary is format-free so only geometry +
@@ -30,8 +32,8 @@ void kernel_main() {
     using BOp = experimental::LLKOperand<static_cast<DataFormat>(in1_desc.format), in1_desc.shape>;
     using OutOp = experimental::LLKOperand<static_cast<DataFormat>(out_desc.format), out_desc.shape>;
 
-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
-    experimental::add_init(AOp(in0_cb.read_address()), BOp(in1_cb.read_address()));
+    compute_kernel_hw_startup(AOp(in0_cb.read_address()), BOp(in1_cb.read_address()), OutOp(out_cb.write_address()));
+    experimental::add_init(AOp(in0_cb.read_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         c0.wait_front(1);

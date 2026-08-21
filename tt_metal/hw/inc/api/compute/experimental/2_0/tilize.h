@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include "api/compute/common_globals.h"
-#include "api/compute/experimental/2_0/llk_mem_descriptor.h"
+#include "api/compute/experimental/2_0/llk_operand.h"
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_unary_datacopy.h"
@@ -40,6 +40,8 @@ namespace experimental {
 template <DataFormat InFormat, TensorShape InShape, DataFormat OutFormat, TensorShape OutShape>
 ALWI void tilize_init(
     LLKOperand<InFormat, InShape> /*in*/, std::uint32_t block, LLKOperand<OutFormat, OutShape> /*out*/) {
+    static_assert(is_legal_tile_shape(InShape), "tilize_init: illegal input tile shape.");
+    static_assert(is_legal_tile_shape(OutShape), "tilize_init: illegal output tile shape.");
     UNPACK((llk_unpack_tilize_init<LLKOperand<InFormat, InShape>::descriptor, DST_ACCUM_MODE>(block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           LLKOperand<InFormat, InShape>::descriptor,
@@ -61,23 +63,15 @@ ALWI void tilize_init(
  * kernel tile_regs). Runtime "where": in.l1_address (unpack base -- the LLK offsets by tile_index inside)
  * and out.l1_address (the block's first output tile).
  *
- * PER-TILE OUTPUT ADDRESSING + ASSUMPTION vs the legacy BH tilize (fifo_page_size == one tile_size):
+ * PER-TILE OUTPUT ADDRESSING vs the legacy BH tilize (fifo_page_size == one tile_size):
  *   Tile t is packed to out.l1_address + t * <output tile stride>. The stride folds to a compile-time
- *   constant from the output descriptor via SCALE_DATUM_SIZE:
- *       stride_words = SCALE_DATUM_SIZE(OutFormat, OutShape.total_tensor_size()) >> 4   // bytes -> 16B words
- *   SCALE_DATUM_SIZE returns the tile size in BYTES (datum_count x the format's datum width: Float32 x4,
- *   Float16/Float16_b/UInt16 x2, else x1); L1 pack addresses are in 16-byte words, hence >> 4.
- *
- *   DISCREPANCY vs legacy: legacy BH tilize_block packs via llk_pack(0, ocb, t + output_tile_index), whose
- *   address advances by the CB's ACTUAL fifo_page_size (read from the CB interface). This 2.0 API has no CB
- *   handle, so it ASSUMES fifo_page_size == a single tile's size (the SCALE_DATUM_SIZE value above). That
- *   assumption holds when the output CB page is exactly one bare tile -- TRUE for linear formats
- *   (Float32 / Float16 / int, incl. the tested bf16) -- but NOT when the page differs from one bare tile:
- *     - block formats (Bfp8/Bfp4): the CB page includes shared-exponent bytes SCALE_DATUM_SIZE omits;
- *     - CB pages sized with alignment/padding, or holding more than one tile.
- *   In those cases the derived stride diverges from fifo_page_size and block>1 output would be mis-placed.
- *   KNOWN LIMITATION: a general fix must read the CB fifo_page_size (as legacy does) or add the exponent
- *   section to the stride. block==1 (the current test path) is unaffected because t is always 0.
+ *   constant from the output descriptor via tile_stride_words(OutFormat, OutShape) (16B words):
+ *     - linear formats (Float32/Float16/int): geometry-exact datum-count size (SCALE_DATUM_SIZE >> 4);
+ *     - block floats (Bfp8/Bfp4/Bfp2): GET_L1_HEADERLESS_TILE_SIZE -- the shared-exponent section included,
+ *       matching tile_size(fmt) / the shipping CB page (see internal/llk_descriptor.h::tile_stride_words).
+ *   The shipping tilize factories set the output CB page to exactly one tile (output_single_tile_size), so
+ *   this matches fifo_page_size for every format the factories use. Remaining edge (no shipping op hits it):
+ *   padded / multi-tile CB pages, and partial/tiny BFP tiles (tile_stride_words uses full-tile BFP size).
  *
  * | Function | in    | Input operand (unpack base; LLK offsets by tile_index) | LLKOperand |     | True |
  * | Function | block | Number of column tiles in the block                    | uint32_t   | > 0 | True |
@@ -86,6 +80,8 @@ ALWI void tilize_init(
 // clang-format on
 template <DataFormat InFormat, TensorShape InShape, DataFormat OutFormat, TensorShape OutShape>
 ALWI void tilize_block(LLKOperand<InFormat, InShape> in, std::uint32_t block, LLKOperand<OutFormat, OutShape> out) {
+    static_assert(is_legal_tile_shape(InShape), "tilize_block: illegal input tile shape.");
+    static_assert(is_legal_tile_shape(OutShape), "tilize_block: illegal output tile shape.");
     // Unpack the whole block into srcA first (mirrors llk_unpack_tilize_block), then drain via math+pack.
     for (std::uint32_t t = 0; t < block; t++) {
         UNPACK((llk_unpack_tilize<LLKOperand<InFormat, InShape>::descriptor, DST_ACCUM_MODE>(in.l1_address, t)));
@@ -101,15 +97,13 @@ ALWI void tilize_block(LLKOperand<InFormat, InShape> in, std::uint32_t block, LL
               DST_ACCUM_MODE,
               BroadcastType::NONE,
               UnpackToDestEn>(0 /*dst index*/)));
-        // Per-tile output slot: out.l1_address + t * (tile bytes / 16). The stride folds to a constant.
+        // Per-tile output slot: out.l1_address + t * one-tile L1 size. The stride folds to a constant.
         PACK((llk_pack<
               LLKOperand<OutFormat, OutShape>::descriptor,
               DST_ACCUM_MODE,
               true /*out_of_order*/,
               PackMode::Default>(
-            0 /*tile index*/,
-            out.l1_address +
-                t * (SCALE_DATUM_SIZE(static_cast<std::uint32_t>(OutFormat), OutShape.total_tensor_size()) >> 4))));
+            0 /*tile index*/, out.l1_address + t * tile_stride_words(static_cast<std::uint8_t>(OutFormat), OutShape))));
 
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
