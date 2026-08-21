@@ -1253,9 +1253,9 @@ class Gemma4Model:
 
         ``layout=ttnn.TILE_LAYOUT`` tilizes inside the embedding kernel instead of
         emitting ROW_MAJOR for a separate ``to_layout``. Every consumer wants TILE,
-        and dropping the standalone ``TilizeDeviceOperation`` measured 1.64x on the
-        embed+all-gather path at ISL 128 / TP=8, bit-identical output — the same
-        pattern the RoPE cache lookups already use. ``memory_config`` lands the
+        and dropping the standalone ``TilizeDeviceOperation`` measured faster on the
+        embed+all-gather path with bit-identical output — the same pattern the RoPE
+        cache lookups already use. ``memory_config`` lands the
         result (and the gather output) where the old ``to_layout`` put it.
         """
         if self.embedding_weight is None:

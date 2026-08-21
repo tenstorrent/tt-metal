@@ -693,7 +693,7 @@ def interleaved_down_proj_prefill_config(m, k, n):
     hoist in0 to L1 interleaved when still in DRAM (GeGLU ``mul`` leaves it
     there). Above the cutoff, ``SharedMLP._down_proj_linear`` uses
     ``prefill_linear_above_cutoff`` (reshape to cutoff-sized 2D CBs) instead of
-    auto — isolation 1.42x at M=2048. Decode ``M<=32`` still returns ``None``.
+    auto, which wins there. Decode ``M<=32`` still returns ``None``.
     """
     if not TILE_SIZE < m <= _PREFILL_CUTOFF:
         return None, None, None

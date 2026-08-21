@@ -180,7 +180,7 @@ class Gemma4Precision:
         model_key, model_entry = _lookup_model_entry(table, candidates)
         if not model_entry:
             # A silent miss here downgrades every module to the caller's default
-            # dtype (bf16), which looks like a 1.4x perf regression with no error
+            # dtype (bf16), which looks like a perf regression with no error
             # — so say so loudly. Only warn when the table actually has entries
             # to match against (an empty/absent table is a valid "no overrides").
             if any(k for k in table if not k.startswith("_")):

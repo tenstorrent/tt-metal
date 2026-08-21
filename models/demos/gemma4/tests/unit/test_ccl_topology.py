@@ -166,6 +166,94 @@ def test_prefill_progcfg_in0_block_w_divides_kt():
     assert k_tiles % pc.in0_block_w == 0
 
 
+# SharedMLP's two tuned prefill matmuls, at the shapes the shipped variants
+# actually run (intermediate_size/TP from each checkpoint's config, TP=8):
+#   gate_up  in0=[M, hidden]          weight=[hidden, 2*inter/tp]
+#   down     in0=[M, inter/tp]        weight=[inter/tp, hidden]
+_MLP_PREFILL_SHAPES = [
+    ("31B gate_up", "gate_up", 5376, 5376),
+    ("31B down_proj", "down", 2688, 5376),
+    ("12B gate_up", "gate_up", 3840, 3840),
+    ("12B down_proj", "down", 1920, 3840),
+]
+
+
+def _mlp_prefill_config(which, m, k, n):
+    from models.demos.gemma4.tt.dram_sharded import (
+        interleaved_down_proj_prefill_config,
+        interleaved_gate_up_prefill_config,
+    )
+
+    fn = interleaved_gate_up_prefill_config if which == "gate_up" else interleaved_down_proj_prefill_config
+    return fn(m, k, n)
+
+
+@pytest.mark.parametrize("label,which,k,n", _MLP_PREFILL_SHAPES, ids=[c[0] for c in _MLP_PREFILL_SHAPES])
+def test_mlp_prefill_config_is_wired_and_legal(label, which, k, n):
+    """SharedMLP's tuned prefill matmuls must stay wired, and stay legal.
+
+    This is deliberately NOT a pin on the swept numbers (core count,
+    ``in0_block_w``, ``per_core_N``) — those were removed with the sweep-winner
+    tests, and re-adding them just recreates a test that fails on any retune.
+    What it does hold is the part the win rests on and the part ttnn will
+    ``TT_FATAL`` on:
+
+    * **Wired at all.** Returning all-``None`` in the band silently drops both
+      matmuls back to ``ttnn.linear``'s auto choice, which is the regression this
+      config exists to avoid. Nothing else in the suite would notice.
+    * **1D mcast family.** ``mcast_in0`` with every core holding all of M is the
+      shape of the optimization; a 2D config here is a different thing wearing
+      the same name.
+    * **Legality.** ``in0_block_w`` must divide Kt, ``per_core_N * cores`` must
+      cover Nt exactly (a short cover drops output tiles), and the output
+      subblock must fit DST.
+    * **The two CKC guardrails** from ``_prefill_hifi4_ckc``: pinning a program
+      config without an explicit CKC silently selects LoFi, and dest-acc on this
+      band dropped last-token PCC.
+    """
+    from models.demos.gemma4.tt.dram_sharded import _PREFILL_CUTOFF, TILE_SIZE
+
+    m = _PREFILL_CUTOFF  # top of the band, where SharedMLP actually calls it
+    pc, out_memcfg, ckc = _mlp_prefill_config(which, m, k, n)
+
+    assert pc is not None, f"{label}: tuned prefill config went missing — falls back to ttnn auto"
+    assert out_memcfg is not None and ckc is not None, f"{label}: partial config"
+
+    assert isinstance(pc, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig), f"{label}: not the 1D mcast family"
+    assert pc.mcast_in0, f"{label}: 1D config must multicast in0"
+
+    grid = pc.compute_with_storage_grid_size
+    cores = grid.x * grid.y
+    k_tiles = (k + TILE_SIZE - 1) // TILE_SIZE
+    n_tiles = (n + TILE_SIZE - 1) // TILE_SIZE
+
+    assert pc.per_core_M == (m + TILE_SIZE - 1) // TILE_SIZE, f"{label}: every core must hold all of M"
+    assert k_tiles % pc.in0_block_w == 0, f"{label}: in0_block_w={pc.in0_block_w} must divide Kt={k_tiles}"
+    assert pc.per_core_N * cores == n_tiles, f"{label}: per_core_N*{cores} != Nt={n_tiles} (N not covered)"
+    assert pc.out_subblock_h * pc.out_subblock_w <= 4, f"{label}: output subblock exceeds DST"
+
+    assert ckc.math_fidelity != ttnn.MathFidelity.LoFi, f"{label}: explicit CKC must not fall back to LoFi"
+    assert ckc.fp32_dest_acc_en is False, f"{label}: dest-acc on this band drops last-token PCC"
+
+
+@pytest.mark.parametrize("label,which,k,n", _MLP_PREFILL_SHAPES, ids=[c[0] for c in _MLP_PREFILL_SHAPES])
+def test_mlp_prefill_config_band_gated(label, which, k, n):
+    """Outside ``TILE < M <= _PREFILL_CUTOFF`` both configs must decline.
+
+    Decode (M=32) keeps the auto/DRAM-sharded path, and above the cutoff the 2D
+    kernel's CBs scale with ``per_core_M`` — pinning this config at long context
+    blows L1. Both edges are load-bearing, so assert them rather than the middle.
+    """
+    from models.demos.gemma4.tt.dram_sharded import _PREFILL_CUTOFF, TILE_SIZE
+
+    assert _mlp_prefill_config(which, TILE_SIZE, k, n) == (None, None, None), f"{label}: fired at decode M=32"
+    assert _mlp_prefill_config(which, _PREFILL_CUTOFF + TILE_SIZE, k, n) == (
+        None,
+        None,
+        None,
+    ), f"{label}: fired above the cutoff"
+
+
 def test_prefill_matmul_lofi_env(monkeypatch):
     """LoFi tall prefill is opt-in: off unless GEMMA4_PREFILL_MATMUL_LOFI=1.
 
