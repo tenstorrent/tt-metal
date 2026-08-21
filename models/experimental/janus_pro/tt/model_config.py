@@ -79,6 +79,19 @@ class ModelArgs(TTModelArgs):
     # projection runs once per image, so the sweep would cost more than it could return.
     VISION_PATCH_EMBED_IN0_BLOCK_W = 4
 
+    # Encoder blocks from this index on carry a bfloat8_b residual; earlier ones stay bfloat16.
+    # The residual is the one tensor summed across every layer, so unlike every other bfloat8_b
+    # tensor in the tower it has more than one consumer and its quantization error compounds.
+    # That makes the format a boundary rather than a flag, and the boundary is where
+    # `test_vision_transformer`'s 0.99 runs out: 12 costs 2.1e-3 of its PCC, 18 costs 7.2e-3, 19
+    # fails at 0.9898 and all 24 fail at 0.9765.
+    #
+    # It has to be a suffix. Early blocks cost roughly six times what late ones do, their error
+    # propagating through every block that follows, and a bfloat16 add cannot restore bits the
+    # running sum has already dropped -- so alternating blocks is strictly worse than a suffix of
+    # the same length: every second block fails the gate at 0.9774 while these 12 pass at 0.9967.
+    VISION_BFP8_RESIDUAL_FROM_LAYER = 12
+
     # Below this the explicit config was not measured against ttnn's derivation.
     _VISION_MIN_CONFIGURED_CORES = 24
     # Below this the sharded layer-norm factory loses to the interleaved one.

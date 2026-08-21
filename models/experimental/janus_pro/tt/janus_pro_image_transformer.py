@@ -9,6 +9,7 @@ one loop over identical layers.
 
 # SPDX-License-Identifier: Apache-2.0
 
+import ttnn
 from tqdm import tqdm
 
 from models.common.lightweightmodule import LightweightModule
@@ -38,6 +39,7 @@ class TtJanusProImageTransformer(LightweightModule):
                 weight_cache_path=weight_cache_path,
                 dtype=dtype,
                 configuration=configuration,
+                residual_dtype=(ttnn.bfloat8_b if i >= configuration.VISION_BFP8_RESIDUAL_FROM_LAYER else None),
             )
             for i in tqdm(range(layers), desc=f"Loading {layers} vision transformer blocks")
         ]

@@ -26,8 +26,13 @@ class TtJanusProImageTransformerBlock(LightweightModule):
         weight_cache_path,
         dtype,
         configuration,
+        residual_dtype=None,
     ):
         super().__init__()
+
+        # `None` leaves the adds inheriting their input format. Both layer norms take their output
+        # format from the residual, so this also sets what qkv and c_fc multicast as in0.
+        self.residual_dtype = residual_dtype
 
         self.ln_1 = TtJanusProLayerNorm(
             device=mesh_device,
@@ -84,10 +89,10 @@ class TtJanusProImageTransformerBlock(LightweightModule):
         # Align x_11SH shape with attn_output
         x_11SH = ttnn.reshape(x_11SH, [batch_size, 1, seq_len, -1])
 
-        res = ttnn.add(x_11SH, attn_out)
+        res = ttnn.add(x_11SH, attn_out, dtype=self.residual_dtype)
 
         mlp_out = self.mlp(self.ln_2(res, out_sharded=True))
-        out = ttnn.add(res, mlp_out)
+        out = ttnn.add(res, mlp_out, dtype=self.residual_dtype)
 
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(attn_out)
