@@ -18,7 +18,7 @@ data:
   # h/w must be multiples of 16 (VAE spatial stride 8 * patch 2); frames must be 4k+1.
   train_h: 512
   train_w: 512
-  train_frames: 1
+  train_frames: 13
   trigger: "lg, "
   # Drop "lego/blocky/minifigure" clauses so the trigger alone carries the style.
   strip_style_words: true
