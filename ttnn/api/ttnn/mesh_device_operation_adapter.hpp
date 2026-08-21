@@ -905,16 +905,25 @@ public:
             auto op_owned_tensors =
                 std::make_shared<std::vector<tt::tt_metal::MeshTensor>>(std::move(artifacts.op_owned_tensors));
 
-            // Cache miss is the cold path: always validate here, so every cached program was
-            // built from a checked spec. validate_program_args only gates the hit-path re-checks.
+            // Map the factory's ProgramSpec onto every occupied range and materialize
+            // the MeshWorkload. Cache miss is the cold path: always validate here, so
+            // every cached program was built from a checked spec. validate_program_args
+            // only gates the hit-path re-checks.
             std::unordered_map<ttnn::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec> program_specs;
             for (const auto& range : tensor_coords.ranges()) {
                 program_specs.emplace(range, artifacts.spec);
             }
             auto mesh_workload = tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(*mesh_device, program_specs);
-            std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+            // Apply the factory's initial ProgramRunArgs to each MeshWorkload program.
             for (auto& [range, program] : mesh_workload.get_programs()) {
                 tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
+            }
+
+            // shared_variables is TTNN cache state, independent of the MeshWorkload:
+            // per-range bindings and parked op-owned tensors for the cache-hit path.
+            std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+            for (const auto& range : tensor_coords.ranges()) {
                 shared_variables.emplace(
                     range, shared_variables_t{.bindings = bindings, .op_owned_tensors = op_owned_tensors});
             }
