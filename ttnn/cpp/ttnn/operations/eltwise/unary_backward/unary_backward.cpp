@@ -9,6 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
@@ -251,7 +252,7 @@ std::vector<std::optional<Tensor>> pow_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad = input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     const float ZERO_THRESHOLD = std::numeric_limits<float>::epsilon() * 10.0f;
     TT_FATAL(exponent >= 0.0, "negative exponents are not supported; use recip(pow(input,abs(exponent)))");
     if (std::abs(exponent) < ZERO_THRESHOLD) {
@@ -282,7 +283,7 @@ std::vector<std::optional<Tensor>> exp_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
 
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad = input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     Tensor exp_result = ttnn::exp(input, false, output_mem_config);
     Tensor result = ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
@@ -314,7 +315,7 @@ std::vector<std::optional<Tensor>> sqrt_bw(
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
 
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad = input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     ttnn::sqrt(input, false, output_mem_config, input_grad);
     ttnn::multiply(
         grad,
@@ -383,9 +384,9 @@ std::vector<Tensor> lgamma_bw(
 }
 
 std::vector<Tensor> frac_bw(
-    const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
+    grad_tensor.emplace_back(ttnn::to_memory_config(grad, output_mem_config.value_or(grad.memory_config())));
     return grad_tensor;
 }
 
@@ -477,7 +478,7 @@ std::vector<std::optional<ttnn::Tensor>> rsqrt_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     if (!input_grad.has_value()) {
-        input_grad = ttnn::empty_like(grad);
+        input_grad = ttnn::empty_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
@@ -510,7 +511,7 @@ std::vector<std::optional<Tensor>> neg_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt};
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad = input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     result[0] = ttnn::neg(grad, output_mem_config, input_grad);
     return result;
 }
@@ -874,7 +875,7 @@ std::vector<std::optional<Tensor>> silu_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt};
 
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad = input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     Tensor sigmoid_res = ttnn::sigmoid(
         input,
         (int)ttnn::operations::unary::VecMode::RC,
@@ -1561,7 +1562,7 @@ std::vector<std::optional<ttnn::Tensor>> gelu_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     if (!input_grad.has_value()) {
-        input_grad = ttnn::empty_like(grad);
+        input_grad = ttnn::empty_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
 
     auto output_memory_config =
