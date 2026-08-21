@@ -24,6 +24,17 @@ void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
         slice_index,
         num_slices);
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Currently, only tile layout is supported for partial I->S");
+    // The factory sizes its units and tile counts from the architectural 32x32 constants, and the tile
+    // is absent from compute_program_hash, so a non-standard tile would both compile a mis-sized
+    // program and alias onto a cached 32x32 one.
+    {
+        const auto tile = input_tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "interleaved_to_sharded_partial requires standard 32x32 tiles, got {}x{}",
+            tile.get_height(),
+            tile.get_width());
+    }
     TT_FATAL(
         (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % num_slices == 0,
         "Total height of a tensor must be divisible by num_slices!");

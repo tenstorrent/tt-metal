@@ -4,6 +4,8 @@
 
 #include "roll_device_operation.hpp"
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -27,6 +29,17 @@ void validate_roll(const RollParams& operation_attributes, const RollInputs& ten
     TT_FATAL(
         input.shard_spec().value().grid.ranges().size() == 1,
         "Native sharded roll requires a single contiguous rectangular CoreRange");
+    if (input.layout() == Layout::TILE) {
+        // The factory derives cell_h/cell_w/cell_size from the architectural 32x32 constants, and the
+        // tile is absent from compute_program_hash, so a non-standard tile would both compile a
+        // mis-sized program and alias onto a cached 32x32 one.
+        const auto tile = input.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "roll requires standard 32x32 tiles, got {}x{}",
+            tile.get_height(),
+            tile.get_width());
+    }
 }
 
 }  // namespace
