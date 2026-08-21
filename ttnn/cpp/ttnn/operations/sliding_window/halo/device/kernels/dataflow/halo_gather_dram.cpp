@@ -14,7 +14,7 @@ template <
     uint32_t block_size_width_tiles,
     uint32_t block_start_offset,
     uint32_t block_stride>
-TT_KERNEL void halo_gather() {
+TT_KERNEL void halo_gather(uint32_t config_read_index) {
     halo::gather<
         pad_val,
         input_npages,
@@ -25,5 +25,5 @@ TT_KERNEL void halo_gather() {
         block_size_height,
         block_size_width_tiles,
         block_start_offset,
-        block_stride>(0);
+        block_stride>(config_read_index);
 }
