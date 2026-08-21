@@ -35,20 +35,18 @@ void kernel_main() {
     // The local weight cache exists only for the embeddings types that serve some weight rows out of
     // local SRAM, so it is bound (and named) only on those builds.
 #if defined PADDED
-    prepare_local_cache(noc, dfb::local_cache, weights, weight_stick_size, get_arg(args::pad_token));
+    prepare_local_cache(noc, scratch::local_cache, weights, weight_stick_size, get_arg(args::pad_token));
 #elif defined BINARY
-    prepare_local_cache(noc, dfb::local_cache, weights, weight_stick_size);
+    prepare_local_cache(noc, scratch::local_cache, weights, weight_stick_size);
 #endif
 
     // dfb_in0 stages the weight sticks this reader gathers; a writer kernel drains it to the output
     // tensor, except when the output is sharded and the staging buffer is the output shard itself.
     DataflowBuffer dfb_in0(dfb::in0);
-    // dfb_in1 is this reader's private scratch page for the block of indices it is working through.
-    DataflowBuffer dfb_in1(dfb::in1);
-
-    dfb_in1.reserve_back(1);
-    uint32_t input_l1_addr = dfb_in1.get_write_ptr();
-    volatile tt_l1_ptr input_token_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr input_token_t*>(input_l1_addr);
+    // The index scratchpad is this reader's private page for the block of indices it is working
+    // through: it fetches the block into it and decodes tokens straight back out, with no hand-off to
+    // another kernel. Volatile because the NoC writes the region behind the compiler's back.
+    Scratchpad<volatile input_token_t> indices(scratch::indices);
 
     uint32_t curr_row = batch_offset;  // Number of pages/rows we have read from input so far
     uint32_t offset = weights_offset;  // Which input elem we are on (bytes offset from start of row)
@@ -58,16 +56,11 @@ void kernel_main() {
     bool read_indices = true;
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
-            noc.async_read(
-                input,
-                CoreLocalMem<uint32_t>(input_l1_addr),
-                input_block_size_bytes,
-                {.page_id = curr_row, .offset_bytes = offset},
-                {});
+            noc.async_read(input, indices, input_block_size_bytes, {.page_id = curr_row, .offset_bytes = offset}, {});
             noc.async_read_barrier();
             read_indices = false;
         }
-        input_token_t token = input_l1_ptr[index];
+        input_token_t token = indices[index];
 
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
             dfb_in0.reserve_back(1);
@@ -93,7 +86,4 @@ void kernel_main() {
             read_indices = true;
         }
     }
-    // dfb_in1 is reserved once as an index scratch buffer (no downstream consumer); commit the
-    // reservation so the buffer is left balanced.
-    dfb_in1.push_back(1);
 }

@@ -31,6 +31,8 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer_scoped_lock_cache.cpp
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
+    metal2_host_api/test_dfb_gen2_credits_hw.cpp
+    metal2_host_api/test_dfb_gen2_split_read_repro_hw.cpp
     metal2_host_api/test_mesh_workload_factories_hw.cpp
     metal2_host_api/test_program_spec.cpp
     metal2_host_api/test_program_spec_hw.cpp

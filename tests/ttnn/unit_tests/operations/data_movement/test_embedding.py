@@ -55,6 +55,9 @@ def test_embedding(
     output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=layout)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    #    print("zero rows:", (output_tensor.reshape(-1, 768).abs().sum(-1) == 0).nonzero().flatten())
+    #    logger.info("zero rows:", (output_tensor.reshape(-1, 768).abs().sum(-1) == 0).nonzero().flatten())
+
     assert_equal(torch_output_tensor, output_tensor)
 
 
@@ -211,6 +214,9 @@ def test_embedding_tiled_input(
         layout=output_layout,
     )
     output_tensor = ttnn.to_torch(output_tensor)
+
+    #    print("zero rows:", (output_tensor.reshape(-1, 768).abs().sum(-1) == 0).nonzero().flatten())
+    #    logger.info("zero rows:", (output_tensor.reshape(-1, 768).abs().sum(-1) == 0).nonzero().flatten())
 
     assert_equal(torch_output_tensor, output_tensor)
 

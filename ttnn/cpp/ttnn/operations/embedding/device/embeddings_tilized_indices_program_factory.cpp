@@ -40,7 +40,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    uint32_t input_element_size_bytes = a.element_size();
     uint32_t weights_element_size_bytes = weights.element_size();
     uint32_t output_element_size_bytes = output.element_size();
 
@@ -74,8 +73,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
 
     uint32_t g1_numcores = core_group_1.num_cores();
 
-    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
     tt::DataFormat weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
     uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
@@ -91,8 +88,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
     const KernelSpecName WRITER{"writer"};
 
     const DFBSpecName OUTPUT{"output"};
-    const DFBSpecName INDEX_SCRATCH{"index_scratch"};
-    const DFBSpecName WEIGHT_CACHE{"weight_cache"};
+    const ScratchpadSpecName INDEX_SCRATCH{"index_scratch"};
+    const ScratchpadSpecName WEIGHT_CACHE{"weight_cache"};
 
     const TensorParamName INPUT_PARAM{"input"};
     const TensorParamName WEIGHTS_PARAM{"weights"};
@@ -117,22 +114,27 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
         .data_format_metadata = weights_data_format,
     });
 
-    uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+    // -----------------------------------------------------------------------
+    // Scratchpads
+    //
+    // Both regions below are private working memory of the reader: it writes them and reads them
+    // back itself, with no hand-off to another kernel, so neither carries producer/consumer
+    // synchronization.
+    // -----------------------------------------------------------------------
+    // The reader fetches one whole index page at a time and then walks that page's face-swizzled
+    // token layout, so the region has to hold a full page: the indices for a tile are spread across
+    // all four of its faces, not confined to one face row.
+    spec.scratchpads.push_back(ScratchpadSpec{
         .unique_id = INDEX_SCRATCH,
-        .entry_size = FACE_HEIGHT * index_page_size,
-        .num_entries = 1,
-        .data_format_metadata = input_data_format,
+        .size_per_node = static_cast<uint32_t>(a.buffer()->aligned_page_size()),
     });
 
     if (use_local_cache) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
         // PADDED caches the single pad row; BINARY caches rows 0 and 1.
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        spec.scratchpads.push_back(ScratchpadSpec{
             .unique_id = WEIGHT_CACHE,
-            .entry_size = cache_page_size,
-            .num_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u,
-            .data_format_metadata = weights_data_format,
+            .size_per_node = cache_page_size * ((embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u),
         });
     }
 
@@ -149,36 +151,15 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
     // -----------------------------------------------------------------------
     // Reader
     // -----------------------------------------------------------------------
-    Group<DFBBinding> reader_dfb_bindings;
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = OUTPUT,
-        .accessor_name = "in0",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
-    // The index scratch page never leaves the reader: it reserves the page once, decodes indices out
-    // of it, and commits it at the end only to leave the buffer balanced. Both roles are the reader's.
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::CONSUMER,
+    Group<ScratchpadBinding> reader_scratchpad_bindings;
+    reader_scratchpad_bindings.push_back(ScratchpadBinding{
+        .scratchpad_spec_name = INDEX_SCRATCH,
+        .accessor_name = "indices",
     });
     if (use_local_cache) {
-        // Likewise the weight cache: the reader fills it and reads tokens back out of it, with no
-        // hand-off to another kernel.
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = WEIGHT_CACHE,
+        reader_scratchpad_bindings.push_back(ScratchpadBinding{
+            .scratchpad_spec_name = WEIGHT_CACHE,
             .accessor_name = "local_cache",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = WEIGHT_CACHE,
-            .accessor_name = "local_cache",
-            .endpoint_type = DFBEndpointType::CONSUMER,
         });
     }
 
@@ -189,10 +170,10 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    // These defines and the weight cache's DFB binding share one condition, the embeddings type. That
-    // is what lets the reader name the cache handle at all: a dfb:: handle exists only on the builds
-    // where the host binds it, so the reader's reference to it is compiled out under the same defines
-    // on the builds where it is not.
+    // These defines and the weight cache's scratchpad binding share one condition, the embeddings
+    // type. That is what lets the reader name the cache handle at all: a scratch:: handle exists only
+    // on the builds where the host binds it, so the reader's reference to it is compiled out under the
+    // same defines on the builds where it is not.
     KernelSpec::CompilerOptions::Defines embedding_defines{
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"},
@@ -206,7 +187,15 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embedding_ind_tilized.cpp",
         .compiler_options = {.defines = std::move(embedding_defines)},
-        .dfb_bindings = std::move(reader_dfb_bindings),
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT,
+                    .accessor_name = "in0",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .scratchpad_bindings = std::move(reader_scratchpad_bindings),
         .tensor_bindings =
             {
                 TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},

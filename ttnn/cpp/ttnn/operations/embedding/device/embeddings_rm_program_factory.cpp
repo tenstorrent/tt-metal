@@ -89,8 +89,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     }
     uint32_t g1_numcores = core_group_1.num_cores();
 
-    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
     tt::DataFormat weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
     uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
@@ -130,8 +128,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     const KernelSpecName WRITER{"writer"};
 
     const DFBSpecName OUTPUT{"output"};
-    const DFBSpecName INDEX_SCRATCH{"index_scratch"};
-    const DFBSpecName WEIGHT_CACHE{"weight_cache"};
+    const ScratchpadSpecName INDEX_SCRATCH{"index_scratch"};
+    const ScratchpadSpecName WEIGHT_CACHE{"weight_cache"};
 
     const TensorParamName INPUT_PARAM{"input"};
     const TensorParamName WEIGHTS_PARAM{"weights"};
@@ -167,22 +165,25 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     }
     spec.dataflow_buffers.push_back(std::move(out_dfb));
 
+    // -----------------------------------------------------------------------
+    // Scratchpads
+    //
+    // Both regions below are private working memory of the reader: it writes them and reads them
+    // back itself, with no hand-off to another kernel, so neither carries producer/consumer
+    // synchronization.
+    // -----------------------------------------------------------------------
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+    spec.scratchpads.push_back(ScratchpadSpec{
         .unique_id = INDEX_SCRATCH,
-        .entry_size = block_height * index_page_size,
-        .num_entries = 1,
-        .data_format_metadata = input_data_format,
+        .size_per_node = block_height * index_page_size,
     });
 
     if (use_local_cache) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
         // PADDED caches the single pad row; BINARY caches rows 0 and 1.
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        spec.scratchpads.push_back(ScratchpadSpec{
             .unique_id = WEIGHT_CACHE,
-            .entry_size = cache_page_size,
-            .num_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u,
-            .data_format_metadata = weights_data_format,
+            .size_per_node = cache_page_size * ((embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u),
         });
     }
 
@@ -211,37 +212,25 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     });
     if (output_sharded) {
         // With no writer kernel the reader is the staging buffer's only endpoint, so it holds both
-        // roles.
+        // roles. A data-movement kernel holding both endpoints of one buffer is a Gen1-only shape:
+        // Gen2 credit machinery needs the two endpoints on different RISCs, so this configuration is
+        // rejected at program creation there.
         reader_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = OUTPUT,
             .accessor_name = "in0",
             .endpoint_type = DFBEndpointType::CONSUMER,
         });
     }
-    // The index scratch page never leaves the reader: it reserves the page once, decodes indices out
-    // of it, and commits it at the end only to leave the buffer balanced. Both roles are the reader's.
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::CONSUMER,
+
+    Group<ScratchpadBinding> reader_scratchpad_bindings;
+    reader_scratchpad_bindings.push_back(ScratchpadBinding{
+        .scratchpad_spec_name = INDEX_SCRATCH,
+        .accessor_name = "indices",
     });
     if (use_local_cache) {
-        // Likewise the weight cache: the reader fills it and reads tokens back out of it, with no
-        // hand-off to another kernel.
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = WEIGHT_CACHE,
+        reader_scratchpad_bindings.push_back(ScratchpadBinding{
+            .scratchpad_spec_name = WEIGHT_CACHE,
             .accessor_name = "local_cache",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = WEIGHT_CACHE,
-            .accessor_name = "local_cache",
-            .endpoint_type = DFBEndpointType::CONSUMER,
         });
     }
 
@@ -252,10 +241,10 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    // These defines and the weight cache's DFB binding share one condition, the embeddings type. That
-    // is what lets the reader name the cache handle at all: a dfb:: handle exists only on the builds
-    // where the host binds it, so the reader's reference to it is compiled out under the same defines
-    // on the builds where it is not.
+    // These defines and the weight cache's scratchpad binding share one condition, the embeddings
+    // type. That is what lets the reader name the cache handle at all: a scratch:: handle exists only
+    // on the builds where the host binds it, so the reader's reference to it is compiled out under the
+    // same defines on the builds where it is not.
     KernelSpec::CompilerOptions::Defines embedding_defines{
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"},
@@ -271,6 +260,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         .source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings.cpp",
         .compiler_options = {.defines = embedding_defines},
         .dfb_bindings = std::move(reader_dfb_bindings),
+        .scratchpad_bindings = std::move(reader_scratchpad_bindings),
         .tensor_bindings =
             {
                 TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
