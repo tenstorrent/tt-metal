@@ -530,6 +530,48 @@ KNOBS = {
     # REFUSAL_BYTE_IDENTICAL.
     "milp": "-mtt-tensix-optimize-pressure-schedule "
     "-mtt-tensix-pressure-schedule-use-milp",
+    # ---- pin-16 NEW default-off flags (lane EN ceremony): knob legs
+    # ONLY, on-plus mode; ON-set promotion stays a separate reviewed
+    # step with its own R9 union fire witness.  (EL's cc-restore and
+    # EB's dst-autoincr pricing carry NO knob: they are pass-behavior
+    # changes inside the reviewed invariant-loadi / dst-autoincr flags,
+    # adjudicated at the pin-16 union gate.)
+    # EG (delivery-shape-solver): priced unroll x delivery arbitration
+    # — exact B&B over the audited issue-cost table chooses each
+    # proven-trip row loop's delivery shape; a refusal or rolled
+    # selection is byte-identical.  The
+    # -mtt-tensix-delivery-shape-min-benefit= override is deliberately
+    # NOT in the token (the cost-table default prices the leg).
+    "delivery-shape": "-mtt-tensix-optimize-delivery-shape",
+    # EC (replay-record-hoist): hoist a proven iteration-invariant
+    # re-recorded replay capture's record phase to the loop preheader
+    # (DX-F3 closure); admission keeps every structural/invariance/
+    # slot-liveness proof, profitability prices removed per-trip record
+    # delivery (default saturation-calibrated model refuses) —
+    # measurement class, promotion needs its own silicon A/B.
+    "record-hoist": "-mtt-tensix-optimize-replay-record-hoist",
+    # EH (prera-pressure-schedule): pressure-cost list scheduling at
+    # the pre-RA pseudo seam (GCC -fsched-pressure ECC model adapted to
+    # the typed-effect region model); commits only on modeled
+    # peak-pressure AND makespan non-worse with a strict decrease in at
+    # least one; corpus flag delta ZERO rows at its lane gate.
+    "prera": "-mtt-tensix-optimize-pressure-schedule-prera",
+    # EI (round-chain-interleave): unroll-by-two dual-chain interleave
+    # of counted independent round loops (RecMII-bounded cyclic list
+    # schedule; recurrence-saturated shapes refuse by name — the gcd
+    # RecMII=9-exact refusal is the honest verdict).
+    "round-interleave": "-mtt-tensix-optimize-round-interleave",
+    # EK (store-fold): S1 same-mask merge-source store forwarding +
+    # proven INT32 store sink (2^32 round-trip proof; float sinks
+    # refused by denorm-flush, stochrnd refused by the proven
+    # store-rounding divergence).  Adjudicated knob-leg delta 269 rows:
+    # 2 word-level fires (unary max/min int32, replay window 8->7,
+    # CRAQ PASS) + 267 word-neutral value-identical scalar ripple.
+    "store-fold": "-mtt-tensix-optimize-store-fold",
+    # EK (int-not): single-SFPNOT selection for the
+    # all-ones-minus-x value function (exhaustive 2^32 equivalence
+    # proof); byte-inert on the mapped corpus at its lane gate.
+    "int-not": "-mtt-tensix-optimize-int-not",
     # EJ (reassoc-license): THE LICENSED REASSOCIATION LEG.  COUPLED:
     # this entry merges only at a pin advance whose toolchain carries
     # sfpi-gcc agent/reassoc-license — the pin-15 driver REJECTS
@@ -588,6 +630,15 @@ KNOB_MODES = {
     "list-schedule": "on-plus",
     "lreg-alloc": "on-plus",
     "milp": "on-plus",
+    # pin-16 booking flags (lane EN): same on-plus reasoning as the
+    # pin-15 seeds — the shapes materialize on the reviewed-ON
+    # pipeline's regions, so the booking A/B is (ON + flag) vs plain ON.
+    "delivery-shape": "on-plus",
+    "record-hoist": "on-plus",
+    "prera": "on-plus",
+    "round-interleave": "on-plus",
+    "store-fold": "on-plus",
+    "int-not": "on-plus",
     # EJ licensed reassociation: booking A/B is (reviewed-ON + license
     # tokens) vs plain reviewed-ON — the licensed fire acts on the
     # post-ON pipeline's chains, and the delta must read as the
