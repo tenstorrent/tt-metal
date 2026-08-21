@@ -1654,20 +1654,16 @@ bool topology_sat_search(
             // below) still returns a valid mapping quickly. Tractable budgets finish well within the cap and return
             // the identical model they would unbounded, so existing golden mappings are unchanged.
             static constexpr int kHostMinimizeConflictBudget = 300'000;
-            for (size_t k = std::max<size_t>(k_min, 1); k < num_host_groups; ++k) {
-                // Skip budgets that cannot hold n_target at all (the k largest groups must sum to >= n_target).
-                if (!topology_sat_max_groups_cap_capacity_feasible(constraint_data, graph_data.n_target, k)) {
-                    continue;
-                }
-                // Full packing: uniform capacity and n_target exactly fills k hosts -> use the all-or-nothing fast path.
-                const bool full_packing = uniform_capacity && (graph_data.n_target == k * max_group_capacity);
+            // Attempt one host budget k with a given encoding. Returns: 1 = solved (mapping finalized), 0 = this
+            // budget is UNSAT/unencodable/timed out (try another), -1 = hard constraints alone are UNSAT (give up).
+            auto attempt_budget = [&](size_t k, bool full_packing) -> int {
                 TopologySatSolver solver;
                 TopologySatHardEncoding enc;
                 if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
-                    break;  // hard constraints alone are UNSAT; defer to the normal path for error messaging
+                    return -1;  // hard constraints alone are UNSAT; defer to the normal path for error messaging
                 }
                 if (!topology_sat_encode_at_most_k_groups(solver, constraint_data, enc, k, full_packing)) {
-                    continue;  // this budget is trivially unencodable; try a larger one
+                    return 0;  // this budget is trivially unencodable; try a larger one
                 }
                 if (solver.solve_limited(kHostMinimizeConflictBudget) == TopologySatSolver::kSat &&
                     finalize_success(solver, enc)) {
@@ -1678,7 +1674,36 @@ bool topology_sat_search(
                             k,
                             k_min);
                     }
+                    return 1;
+                }
+                return 0;
+            };
+            for (size_t k = std::max<size_t>(k_min, 1); k < num_host_groups; ++k) {
+                // Skip budgets that cannot hold n_target at all (the k largest groups must sum to >= n_target).
+                if (!topology_sat_max_groups_cap_capacity_feasible(constraint_data, graph_data.n_target, k)) {
+                    continue;
+                }
+                // Full packing: uniform capacity and n_target exactly fills k hosts -> use the all-or-nothing fast path.
+                const bool full_packing = uniform_capacity && (graph_data.n_target == k * max_group_capacity);
+                // Always try the hard cap (full-packing fast path when applicable) first.
+                int r = attempt_budget(k, full_packing);
+                if (r == 1) {
                     return true;
+                }
+                if (r == -1) {
+                    break;
+                }
+                // Fallback: if the full-packing hard cap did not yield a mapping at this budget, retry the SAME budget
+                // with the general (non-all-or-nothing) encoding, so the aggressive fast path can never lose a mapping
+                // the general cardinality constraint would have found.
+                if (full_packing) {
+                    r = attempt_budget(k, /*full_packing=*/false);
+                    if (r == 1) {
+                        return true;
+                    }
+                    if (r == -1) {
+                        break;
+                    }
                 }
             }
             // No binding budget was satisfiable within the conflict cap; fall through to the unconstrained solve.
