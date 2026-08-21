@@ -49,6 +49,8 @@ jobs:
       target-repo: ${{ inputs.target-repo }}
       max-issues: ${{ fromJSON(inputs.max-issues) }}
       llm-backend: ${{ inputs.llm-backend }}
+      dry-run: true
+      auto-triage-ref: ebanerjee/fix-auto-triage-run-selection
       workflow-filter: ${{ inputs.workflow-filter }}
       consecutive-failures-high-volume: ${{ fromJSON(inputs.consecutive-failures-high-volume) }}
       consecutive-failures-low-volume: ${{ fromJSON(inputs.consecutive-failures-low-volume) }}
