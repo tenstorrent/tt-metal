@@ -281,13 +281,12 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     //   phased — prep -> (7 fp32 DRAM tensors) -> scan, two prims. The bit-exact reference.
     //   mono   — the original single-kernel op, 1 core/head (benchmark/debug only).
     // Precedence: QWEN_GDN_PATH=fused|phased|mono if set; else the legacy QWEN_GDN_PHASED
-    // ('0' -> mono, else phased) if set; else DEFAULT phased. The fused path is bit-exact vs
-    // phased and eliminates the seven-tensor DRAM round trip, but at F1 (one producer per head)
-    // it is producer-math-bound at ~34us/chunk: measured 1.11x at BH=48/T=4096 and 0.82x at
-    // BH=48/T=512 — below the ship gate. It stays opt-in until the F2 producer-side work
-    // (input pipelining, init batching, HiFi2/SFPU on the now math-bound producers) clears the
-    // w_p <= ~27us checkpoint; then the default becomes shape-gated fused (BH >= 24 && 2*BH
-    // cores fit). See gdn-fused-handoff-design.md sections 6 and 8.
+    // ('0' -> mono, else phased) if set; else DEFAULT fused iff it both pays (BH >= 24 — below
+    // that one producer per head cannot keep up with the phased grid-wide prep fan-out) and fits
+    // (2*BH cores), else phased. The fused path is bit-exact vs phased, eliminates the
+    // seven-tensor DRAM round trip, and after the F2 producer work (input+hand-off double
+    // buffering, reconfig hoisting in the WY hot path) measures w_p = 26.9us/chunk ->
+    // 1.40x at BH=48/T=4096 (3440 vs 4816us), no regression at T=512.
     // Envs are read fresh per call — op-level env dispatch is cache-safe (each branch launches a
     // DIFFERENT prim with its own program-cache hash), unlike an env read inside a factory.
     enum class GdnPath { Fused, Phased, Mono };
@@ -308,7 +307,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
         if (const char* e = std::getenv("QWEN_GDN_PHASED")) {
             return e[0] == '0' ? GdnPath::Mono : GdnPath::Phased;
         }
-        return GdnPath::Phased;
+        const auto grid = dev->compute_with_storage_grid_size();
+        return (BH >= 24 && 2 * BH <= grid.x * grid.y) ? GdnPath::Fused : GdnPath::Phased;
     }();
 
     ttnn::Tensor o_c;          // [BH, NC, C, V]

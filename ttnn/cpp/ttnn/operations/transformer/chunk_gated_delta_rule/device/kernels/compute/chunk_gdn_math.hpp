@@ -34,17 +34,35 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
 
+// GDN_HOIST_RECONFIG (a per-kernel define, set by the fused factory on its producer compute
+// kernel only): hoist the packer/unpacker format reconfigs out of the WY hot path (invert16 /
+// invert_block — all-fp32 regions where the per-call reconfigs are redundant register writes).
+// Math ops, order, and pack boundaries are identical either way (bit-exact both settings; the
+// phased path measured byte-identical outputs WITH the hoist). It is a per-path PERF switch:
+// the hoist measured -15% on the fused producer's chunk rate but +22-37% on phased prep at
+// low items-per-core shapes (BH=12/T=512) — a timing sensitivity, not a correctness issue —
+// so only the fused producer opts in.
+#ifdef GDN_HOIST_RECONFIG
+inline constexpr bool kGdnHoistReconfig = true;
+#else
+inline constexpr bool kGdnHoistReconfig = false;
+#endif
+
 inline void WAIT(uint32_t cb, uint32_t n) { CircularBuffer(cb).wait_front(n); }
 inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
 
 // out[Mt,Nt] = A[Mt,Kt] @ (tr ? B[Nt,Kt]^T : B[Kt,Nt]). Inputs must be available.
-inline void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr) {
+inline void mm(
+    uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr, bool skip_reconfig = false) {
     cb_reserve_back(o, Mt * Nt);
-    pack_reconfig_data_format(o);  // mixed bf16/fp32 CBs: set packer to this output's format
-    // matmul_tiles(a,b): in0=a->srcB, in1=b->srcA. Reconfig unpack src formats to match (the op
-    // init only asserts formats, it does not set them), else fp32/bf16 CBs are read at the wrong
-    // format and produce garbage.
-    reconfig_data_format(b, a);
+    if (!skip_reconfig) {
+        pack_reconfig_data_format(o);  // mixed bf16/fp32 CBs: set packer to this output's format
+        // matmul_tiles(a,b): in0=a->srcB, in1=b->srcA. Reconfig unpack src formats to match (the
+        // op init only asserts formats, it does not set them), else fp32/bf16 CBs are read at the
+        // wrong format and produce garbage. skip_reconfig=true is legal ONLY when the caller has
+        // already configured the packer/unpackers for these operands' formats (all-fp32 regions).
+        reconfig_data_format(b, a);
+    }
     matmul_init(a, b, tr ? 1 : 0);
     for (uint32_t mi = 0; mi < Mt; mi++) {
         for (uint32_t ni = 0; ni < Nt; ni++) {
@@ -165,10 +183,12 @@ inline void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n) 
 }
 
 // out[0] = copy of src[src_tile] (single 32x32 tile). src must be available.
-inline void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o) {
+inline void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o, bool skip_reconfig = false) {
     cb_reserve_back(o, 1);
-    pack_reconfig_data_format(o);
-    reconfig_data_format_srca(src);
+    if (!skip_reconfig) {  // see mm() for the skip_reconfig contract
+        pack_reconfig_data_format(o);
+        reconfig_data_format_srca(src);
+    }
     copy_tile_to_dst_init_short(src);
     tile_regs_acquire();
     copy_tile(src, src_tile, 0);
@@ -180,10 +200,12 @@ inline void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o) {
 }
 
 // out[0] = a[ai] (op) b[bi], single tile. op: 0 add, 2 mul. (Like ew but with free tile indices.)
-inline void ewt(uint32_t a, uint32_t ai, uint32_t b, uint32_t bi, uint32_t o, int op) {
+inline void ewt(uint32_t a, uint32_t ai, uint32_t b, uint32_t bi, uint32_t o, int op, bool skip_reconfig = false) {
     cb_reserve_back(o, 1);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(a, b);
+    if (!skip_reconfig) {  // see mm() for the skip_reconfig contract
+        pack_reconfig_data_format(o);
+        reconfig_data_format(a, b);
+    }
     if (op == 0) {
         add_init(a, b);
     } else {
@@ -207,13 +229,50 @@ inline void ewt(uint32_t a, uint32_t ai, uint32_t b, uint32_t bi, uint32_t o, in
 // Small block + short chain keeps fp32 bounded where a 32x32/31-term Horner cancels.
 // cb_eye holds the identity (tile 0 = I32).
 inline void invert16(uint32_t nq, uint32_t out, uint32_t tmp, uint32_t cb_eye) {
-    ew(cb_eye, nq, out, 1, 0);  // out = I + Nq
+    // Hot path: 15 alternating single-tile matmul/add rounds per call, ~4 calls per chunk. All
+    // four CBs are fp32, so the unpacker/packer format registers never change across the loop —
+    // reconfigure ONCE up front instead of inside every mm()/ew() call (their per-call
+    // reconfig_data_format/pack_reconfig are unconditional register writes). The MOP inits still
+    // alternate per op class. Ops, operands, order, and pack boundaries are identical to the
+    // plain mm/ew composition this replaces — bit-exact with it by construction.
+    if (kGdnHoistReconfig) {
+        pack_reconfig_data_format(out);    // out and tmp are both fp32: one packer config serves all
+        reconfig_data_format(cb_eye, nq);  // all operands fp32: one unpack config serves mm and ew
+    }
+    auto add1 = [&](uint32_t a, uint32_t b, uint32_t o) {  // o = a + b, 1 tile
+        cb_reserve_back(o, 1);
+        if (!kGdnHoistReconfig) {  // per-call reconfigs, exactly as the plain ew() would issue
+            pack_reconfig_data_format(o);
+            reconfig_data_format(a, b);
+        }
+        add_init(a, b);
+        tile_regs_acquire();
+        add_tiles(a, b, 0, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, o, 0);
+        tile_regs_release();
+        cb_push_back(o, 1);
+    };
+    add1(cb_eye, nq, out);  // out = I + Nq
     CircularBuffer(out).wait_front(1);
     for (uint32_t m = 2; m < 16; m++) {  // sum_{k<16} Nq^k
-        mm(nq, out, tmp, 1, 1, 1, false);
+        cb_reserve_back(tmp, 1);
+        if (!kGdnHoistReconfig) {  // per-call reconfigs, exactly as the plain mm() would issue
+            pack_reconfig_data_format(tmp);
+            reconfig_data_format(out, nq);
+        }
+        matmul_init(nq, out, 0);
+        tile_regs_acquire();
+        matmul_tiles(nq, out, 0, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, tmp, 0);
+        tile_regs_release();
+        cb_push_back(tmp, 1);
         CircularBuffer(tmp).wait_front(1);
         CircularBuffer(out).pop_front(1);
-        ew(cb_eye, tmp, out, 1, 0);  // out = I + Nq @ out
+        add1(cb_eye, tmp, out);  // out = I + Nq @ out
         CircularBuffer(out).wait_front(1);
         CircularBuffer(tmp).pop_front(1);
     }
@@ -268,42 +327,50 @@ inline void invert_block(
     uint32_t B,
     uint32_t C,
     uint32_t D) {
-    cpy_t(src, tile, tmpN);
+    // Every CB this function touches is fp32, so one packer+unpacker format config up front
+    // serves the whole body; the per-call reconfigs inside cpy_t/ewt/mm are skipped (they are
+    // unconditional register writes and this body issues ~9 such calls per invocation, twice per
+    // chunk). Op order and pack boundaries are unchanged — bit-exact with the unhoisted form.
+    if (kGdnHoistReconfig) {
+        pack_reconfig_data_format(out);
+        reconfig_data_format(cb_eye, src);
+    }
+    cpy_t(src, tile, tmpN, kGdnHoistReconfig);
     CircularBuffer(tmpN).wait_front(1);  // negN -> tmpN[0]
     // Bi00 = (I-N00)^-1  (N00 = top-left quadrant of negN; top-right is already 0)
-    ewt(tmpN, 0, cb_mask, 0, A, 2);
+    ewt(tmpN, 0, cb_mask, 0, A, 2, kGdnHoistReconfig);
     CircularBuffer(A).wait_front(1);  // N00
     invert16(A, B, tmpT, cb_eye);
     CircularBuffer(B).wait_front(1);
     CircularBuffer(A).pop_front(1);  // Bi00 -> B
     // Bi11 = (I-N11)^-1  (N11 = bottom-right quadrant)
-    ewt(tmpN, 0, cb_mask, 1, A, 2);
+    ewt(tmpN, 0, cb_mask, 1, A, 2, kGdnHoistReconfig);
     CircularBuffer(A).wait_front(1);  // N11
     invert16(A, C, tmpT, cb_eye);
     CircularBuffer(C).wait_front(1);
     CircularBuffer(A).pop_front(1);  // Bi11 -> C
     // off = Bi11 @ N10 @ Bi00  (N10 = bottom-left quadrant; result lives only there)
-    ewt(tmpN, 0, cb_mask, 2, A, 2);
+    ewt(tmpN, 0, cb_mask, 2, A, 2, kGdnHoistReconfig);
     CircularBuffer(A).wait_front(1);  // N10
     CircularBuffer(tmpN).pop_front(1);
-    mm(C, A, tmpT, 1, 1, 1, false);
+    mm(C, A, tmpT, 1, 1, 1, false, kGdnHoistReconfig);
     CircularBuffer(tmpT).wait_front(1);
     CircularBuffer(A).pop_front(1);  // Bi11@N10
-    mm(tmpT, B, A, 1, 1, 1, false);
+    mm(tmpT, B, A, 1, 1, 1, false, kGdnHoistReconfig);
     CircularBuffer(A).wait_front(1);
     CircularBuffer(tmpT).pop_front(1);  // @Bi00 -> A(off)
     // out = Qtl*Bi00 + Qbr*Bi11 + off
-    ewt(B, 0, cb_mask, 0, D, 2);
+    ewt(B, 0, cb_mask, 0, D, 2, kGdnHoistReconfig);
     CircularBuffer(D).wait_front(1);
     CircularBuffer(B).pop_front(1);  // Bi00_tl -> D
-    ewt(C, 0, cb_mask, 1, B, 2);
+    ewt(C, 0, cb_mask, 1, B, 2, kGdnHoistReconfig);
     CircularBuffer(B).wait_front(1);
     CircularBuffer(C).pop_front(1);  // Bi11_br -> B
-    ewt(D, 0, B, 0, C, 0);
+    ewt(D, 0, B, 0, C, 0, true);
     CircularBuffer(C).wait_front(1);
     CircularBuffer(D).pop_front(1);
     CircularBuffer(B).pop_front(1);
-    ewt(C, 0, A, 0, out, 0);
+    ewt(C, 0, A, 0, out, 0, true);
     CircularBuffer(C).pop_front(1);
     CircularBuffer(A).pop_front(1);  // + off -> out
 }
