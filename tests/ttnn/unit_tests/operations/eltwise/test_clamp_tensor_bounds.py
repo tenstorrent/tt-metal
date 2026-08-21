@@ -28,3 +28,24 @@ def test_clamp_tensor_bounds(device, dtype, case):
 
     want = torch.clamp(x.float(), lo.float(), hi.float()).to(torch_dtype)
     assert torch.equal(got, want), f"{int((got != want).sum())} of {want.numel()} differ"
+
+
+@pytest.mark.parametrize("sign", [1.0, -1.0], ids=["positive_nan", "negative_nan"])
+@pytest.mark.parametrize("bounds", [(0.0, 0.0), (0.0, 5.0), (-1.0, 1.0), (2.0, -2.0)])
+def test_clamp_nan_input_fp32(device, sign, bounds):
+    """A NaN input is NaN out, whatever the bounds and whichever sign the NaN has.
+
+    The sign matters: minimum and maximum are one SFPSWAP and order by bit
+    pattern, so a NaN with the sign bit set survives one of them and not the other.
+    """
+    nan = (torch.tensor(float("nan")) * sign).item()
+    x = torch.full((1, 1, 32, 32), nan, dtype=torch.float32)
+    lo = torch.full((1, 1, 32, 32), bounds[0], dtype=torch.float32)
+    hi = torch.full((1, 1, 32, 32), bounds[1], dtype=torch.float32)
+
+    t = [ttnn.from_torch(v, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device) for v in (x, lo, hi)]
+    got = ttnn.to_torch(ttnn.clamp(t[0], t[1], t[2]))
+
+    assert (
+        got.isnan().all()
+    ), f"{int((~got.isnan()).sum())} of {got.numel()} came back not NaN, first {got.flatten()[0]}"
