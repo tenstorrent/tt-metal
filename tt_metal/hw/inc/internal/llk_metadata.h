@@ -6,6 +6,10 @@
 
 #include <cstdint>
 
+// Constructs within this namespace are reserved for metal 2.0 binding infrastructure and is subject to change without
+// notice.
+namespace binding_details {
+
 // The LLK operand metadata a Metal 2.0 BindingToken carries, as baked on by headergen. Kernels never name
 // this type: headergen emits it as a nested braced-initializer on the token's constructor, and the token
 // exposes it only through to_llk_mem_descriptor().
@@ -25,3 +29,5 @@ struct LLKMetadata {
     uint8_t num_faces_r_dim = 2;
     uint8_t num_faces_c_dim = 2;
 };
+
+}  // namespace binding_details

@@ -6,8 +6,7 @@
 
 #include <cstdint>
 
-// The LLK operand conversion below is compute-only: llk_mem_descriptor.h reaches into the ckernel/LLK
-// headers, which are not on the include path for data-movement builds.
+// Extraction of LLK metadata is only possible on compute kernels.
 #ifdef COMPILE_FOR_TRISC
 #include "api/compute/experimental/2_0/llk_mem_descriptor.h"
 #endif
@@ -52,7 +51,7 @@ struct TensorBindingToken {
     static constexpr args_t args{};
     static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
 
-    constexpr TensorBindingToken(LLKMetadata llk) noexcept : llk_metadata_(llk) {}
+    constexpr TensorBindingToken(binding_details::LLKMetadata llk) noexcept : llk_metadata_(llk) {}
 
 #ifdef COMPILE_FOR_TRISC
     // Converts to a LLKMemDescriptor, which contains LLK relevant information about the tensor.
@@ -71,7 +70,7 @@ struct TensorBindingToken {
 #endif
 
 private:
-    LLKMetadata llk_metadata_;
+    binding_details::LLKMetadata llk_metadata_;
 };
 
 }  // namespace tensor_accessor

@@ -29,11 +29,7 @@ namespace experimental {
 // The compile-time descriptor the LLK APIs accept as an NTTP: buffer L1 format + tile geometry.
 //
 // In Metal 2.0, this information can be injected from the host side. A kernel obtains a LLKMemDescriptor
-// from a Metal 2.0 BindingToken by calling to_llk_mem_descriptor(token). Each token supplies its own
-// conversion, found by ADL, so the call must be UNQUALIFIED:
-//
-//   constexpr auto desc = to_llk_mem_descriptor(dfb::in);
-//
+// from a Metal 2.0 BindingToken by calling to_llk_mem_descriptor(token).
 struct LLKMemDescriptor {
     std::uint8_t format;  // buffer L1 format (what the unpacker reads / the packer writes)
     TensorShape shape;    // tile geometry; derive num_faces / tile dims via TensorShape helpers

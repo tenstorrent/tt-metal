@@ -21,8 +21,7 @@
 #include "tools/profiler/noc_debugging_profiler.hpp"
 #endif
 
-// The LLK operand conversion below is compute-only: llk_mem_descriptor.h reaches into the ckernel/LLK
-// headers, which are not on the include path for data-movement builds.
+// Extraction of LLK metadata is only possible on compute kernels.
 #ifdef COMPILE_FOR_TRISC
 #include "api/compute/experimental/2_0/llk_mem_descriptor.h"
 #endif
@@ -87,9 +86,9 @@ template <bool IsWrite, typename ReleaseFunc>
 struct DFBBindingToken {
     explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
 
-    // Compute endpoints additionally bake the operand's LLK format + face grid; see
-    // ckernel::experimental::to_llk_mem_descriptor below. DM-only DFBs use the id-only constructor.
-    constexpr DFBBindingToken(uint16_t id, LLKMetadata llk) noexcept : id_(id), llk_metadata_(llk) {}
+    // Binding token constructor when host supplies LLK metadata.
+    // See "Entry format metadata" section in DataflowBufferSpec on host side for more details.
+    constexpr DFBBindingToken(uint16_t id, binding_details::LLKMetadata llk) noexcept : id_(id), llk_metadata_(llk) {}
 
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
 
@@ -103,6 +102,7 @@ struct DFBBindingToken {
     // Converts to a LLKMemDescriptor, which contains LLK relevant information about the dataflow buffer.
     //
     // These metadata are passed in from the host side through the DataflowBufferSpec associated with the DFB binding.
+    // See "Entry format metadata" section in DataflowBufferSpec on host side for more details.
     friend constexpr ckernel::experimental::LLKMemDescriptor to_llk_mem_descriptor(DFBBindingToken token) {
         return {
             token.llk_metadata_.format,
@@ -116,7 +116,7 @@ struct DFBBindingToken {
 
 private:
     uint16_t id_;
-    LLKMetadata llk_metadata_{};
+    binding_details::LLKMetadata llk_metadata_{};
 };
 
 class DataflowBuffer {
