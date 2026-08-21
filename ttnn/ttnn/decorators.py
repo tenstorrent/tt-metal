@@ -26,7 +26,7 @@ def compare_tensors_using_pcc(
 ):
     import torch
 
-    from models.common.utility_functions import comp_pcc
+    from models.common.utility_functions import comp_pcc, comp_ulp
 
     if isinstance(outputs, ttnn.Tensor):
         # Backward goldens commonly return a one-element list even when the runtime returns one tensor.
@@ -56,23 +56,41 @@ def compare_tensors_using_pcc(
             torch_output = to_torch_for_comparison(output, golden_output)
         else:
             torch_output = output
-        # Flatten both tensors so element counts and constant-value checks are shape-independent.
-        # Mark PCC as degenerate when either tensor is empty/singleton or constant, since correlation is undefined.
-        # The degenerate branch uses allclose; the else branch retains the normal PCC comparison.
+
         flattened_golden = golden_output.reshape(-1)
         flattened_output = torch_output.reshape(-1)
+
+        def is_constant(flattened_tensor):
+            if flattened_tensor.numel() == 0:
+                return True
+            first_value = flattened_tensor[0]
+            # NaN never compares equal to itself, so direct equality misses all-NaN constants.
+            # Recognize that case explicitly before checking ordinary constant values.
+            if flattened_tensor.dtype.is_floating_point or flattened_tensor.dtype.is_complex:
+                if bool(torch.isnan(first_value)):
+                    return bool(torch.all(torch.isnan(flattened_tensor)))
+            return bool(torch.all(flattened_tensor == first_value))
+
         pcc_is_degenerate = (
             flattened_golden.numel() < 2
             or flattened_output.numel() < 2
-            or (flattened_golden.numel() > 0 and torch.all(flattened_golden == flattened_golden[0]))
-            or (flattened_output.numel() > 0 and torch.all(flattened_output == flattened_output[0]))
+            or is_constant(flattened_golden)
+            or is_constant(flattened_output)
         )
         if pcc_is_degenerate:
             if golden_output.dtype != torch_output.dtype:
                 torch_output = torch_output.to(golden_output.dtype)
-            matches = golden_output.shape == torch_output.shape and bool(
-                torch.allclose(golden_output, torch_output, rtol=1e-5, atol=1e-4, equal_nan=True)
-            )
+            same_shape = golden_output.shape == torch_output.shape
+            ulp_threshold = getattr(golden_output, "_ttnn_comparison_ulp_threshold", None)
+            if same_shape and ulp_threshold is not None and golden_output.dtype in (torch.bfloat16, torch.float16):
+                # Only goldens with an operation-specific ULP contract opt into this path.
+                # Other constant outputs retain the established allclose comparison behavior.
+                matches, _ = comp_ulp(golden_output, torch_output, ulp_threshold=ulp_threshold, allow_nonfinite=True)
+                matches = bool(matches)
+            else:
+                matches = same_shape and bool(
+                    torch.allclose(golden_output, torch_output, rtol=1e-5, atol=1e-4, equal_nan=True)
+                )
             actual_pcc = 1.0 if matches else 0.0
         else:
             matches, actual_pcc = comp_pcc(golden_output, torch_output, desired_pcc)

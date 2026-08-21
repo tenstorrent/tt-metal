@@ -121,6 +121,31 @@ def shift(input_tensor, shift_amount, torch_function):
     return restore_unsigned(result, dtype)
 
 
+def right_shift(input_tensor, shift_amount):
+    import torch
+
+    dtype = input_tensor.dtype
+    wide_input = _to_wide(input_tensor)
+    wide_shift = _to_wide(shift_amount)
+
+    # Unary SFPU right shift clamps counts at 31 and treats UInt32 lanes as signed
+    # Int32 bit patterns. Left and binary shifts instead retain zero-on-invalid semantics.
+    if dtype == torch.uint32:
+        wide_input = torch.where(wide_input >= (1 << 31), wide_input - (1 << 32), wide_input)
+
+    if torch.is_tensor(wide_shift):
+        valid_shift = wide_shift >= 0
+        effective_shift = torch.clamp(wide_shift, min=0, max=31)
+        result = torch.bitwise_right_shift(wide_input, effective_shift)
+        result = torch.where(valid_shift, result, torch.zeros_like(result))
+    elif wide_shift >= 0:
+        result = torch.bitwise_right_shift(wide_input, min(wide_shift, 31))
+    else:
+        result = torch.zeros_like(wide_input)
+
+    return restore_unsigned(result, dtype)
+
+
 def addcmul(input_tensor_a, input_tensor_b, input_tensor_c, value):
     dtype = input_tensor_a.dtype
     scalar = _to_unsigned_scalar(value, dtype)

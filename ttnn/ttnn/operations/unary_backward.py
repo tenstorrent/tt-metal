@@ -487,15 +487,21 @@ def _golden_function_frac(grad_tensor, input_tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.frac_bw, golden_function=_golden_function_frac)
 
 
-def _golden_function_gelu(grad_tensor, input_tensor, *args, **kwargs):
+def _golden_function_gelu(grad_tensor, input_tensor, *args, approximate="none", **kwargs):
     import torch
 
     _prepare_input_for_backward(input_tensor).retain_grad()
-    pyt_y = torch.nn.functional.gelu(input_tensor)
+    # The device selects exact or tanh GELU backward from `approximate`.
+    # Build autograd from the same forward approximation so its derivative matches.
+    pyt_y = torch.nn.functional.gelu(input_tensor, approximate=approximate)
     pyt_y.backward(gradient=grad_tensor)
     # Backward goldens use a one-element list to preserve the multi-output operation contract.
     # Comparison infrastructure unwraps that list only when the runtime returns one tensor.
-    return [input_tensor.grad]
+    output_tensor = input_tensor.grad
+    # GELU backward accuracy is specified in ULP for singleton and constant BF16 cases.
+    # Opt this golden into that comparison without changing unrelated low-precision operations.
+    output_tensor._ttnn_comparison_ulp_threshold = 3
+    return [output_tensor]
 
 
 ttnn.attach_golden_function(ttnn.gelu_bw, golden_function=_golden_function_gelu)

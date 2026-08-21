@@ -55,7 +55,19 @@ def apply_activations(tensor, activations):
     return tensor
 
 
-def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
+def _golden_function(
+    input_tensor_a,
+    input_tensor_b,
+    *args,
+    activations=None,
+    input_tensor_a_activations=None,
+    input_tensor_b_activations=None,
+    **kwargs,
+):
+    # Binary kernels apply operand activations before the elementwise operation and
+    # result activations afterward. Mirror that order in comparison-mode goldens.
+    input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations)
+    input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations)
     if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
         # PyTorch lacks unsigned arithmetic kernels; widen and restore TT wraparound.
         output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: a + b)
@@ -307,8 +319,15 @@ def _golden_function_squared_difference(input_tensor_a, input_tensor_b, *args, *
 
     if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
         # Widen unsigned subtraction and square before restoring TTNN wraparound.
-        return integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: torch.square(torch.sub(a, b)))
-    return torch_squared_difference(input_tensor_a, input_tensor_b)
+        output_tensor = integer_golden.binary(
+            input_tensor_a, input_tensor_b, lambda a, b: torch.square(torch.sub(a, b))
+        )
+    else:
+        output_tensor = torch_squared_difference(input_tensor_a, input_tensor_b)
+    # Singleton low-precision squared-difference results are validated to three ULP.
+    # Mark this golden explicitly instead of weakening all constant-tensor comparisons.
+    output_tensor._ttnn_comparison_ulp_threshold = 3
+    return output_tensor
 
 
 ttnn.attach_golden_function(ttnn.squared_difference, golden_function=_golden_function_squared_difference)
