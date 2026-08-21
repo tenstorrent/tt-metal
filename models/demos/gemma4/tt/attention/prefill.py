@@ -487,14 +487,13 @@ def _prefill_forward_single(
                 # Unbounded: in-forward fill. When ``valid_seq_len`` is known
                 # (last multi-chunk with true last-token index), slice away
                 # power-of-2 pad rows before fill. Pad rows otherwise write
-                # through page-table zeros into physical block 0 and corrupt
-                # the prompt prefix (LB 12B ~9k / 16k garbage cliff).
+                # through extra page-table columns; valid_seq_len caps the fill.
+                # Extra columns pad with 0 (vLLM null block).
                 k_fill, v_fill = tt_k, tt_v
                 if valid_seq_len is not None:
                     v = min(int(valid_seq_len), int(tt_k.shape[-2]))
                     # Tile-ceil so the writer sees a legal RM height; unused
-                    # rows inside the last tile must be -1 in the page table
-                    # (generator pads with -1, not 0).
+                    # rows inside the last tile sit on pad columns (0).
                     tile_end = ((v + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT
                     tile_end = min(tile_end, int(tt_k.shape[-2]))
                     if 0 < tile_end < int(tt_k.shape[-2]):

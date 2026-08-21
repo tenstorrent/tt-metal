@@ -424,7 +424,7 @@ class SpeculativeDecoder:
             off_h = (torch.arange(nkv, dtype=torch.int64) * src_seq).unsqueeze(1)
             embed[lt] = (m.unsqueeze(0) + off_h).reshape(1, nkv * S2).to(torch.int32)
 
-        hot = torch.full((1, BLK), -1, dtype=torch.int32)
+        hot = torch.zeros((1, BLK), dtype=torch.int32)
         hot[0, 0] = int(self._pv_pages[a])
         if off + P > bs:
             hot[0, 1] = int(self._pv_pages[a + 1])
