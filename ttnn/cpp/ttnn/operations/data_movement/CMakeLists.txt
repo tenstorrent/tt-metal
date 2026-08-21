@@ -368,3 +368,5 @@ install(TARGETS ttnn_op_data_movement LIBRARY COMPONENT tar)
 if(TARGET ttnn)
     target_sources(ttnn PRIVATE ${TTNN_OP_DATA_MOVEMENT_NANOBIND_SRCS})
 endif()
+
+# bug-check diagnostic test (tenstorrent/tt-metal#TBD) — safe to revert/ignore, no functional change
