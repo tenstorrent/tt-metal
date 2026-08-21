@@ -19,7 +19,6 @@ import torch
 import ttnn
 
 from ...layers.audio_ops import (
-    TIGHT_T_ALIGN,
     ConvTranspose1dViaConv3d,
     Snake,
     SnakeBeta,
@@ -240,6 +239,10 @@ class Vocoder(Module):
         prefer_mac: bool = False,
         split_mode: str = "off",
         tap_matmul: bool = False,
+        # H3-only opt-ins, defaulted from env in MiniMaxH3AudioDecoder: LTX's construction never
+        # passes these, so it always gets `False` here regardless of that env var. See audio_ops.py.
+        tight_t_align: bool = False,
+        local_tpad_tail: bool = False,
     ) -> None:
         super().__init__()
 
@@ -266,6 +269,8 @@ class Vocoder(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self.tight_t_align = tight_t_align
+        self.local_tpad_tail = local_tpad_tail
         self._tpad_mask_cache: dict = {}
         self._t_pad = 0  # set per-input by _host_to_device
         # Traced decode: _forward_device is @traced_function, keyed per input shape via
@@ -311,6 +316,7 @@ class Vocoder(Module):
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
                     tap_matmul=tap_matmul,
+                    tight_t_align=tight_t_align,
                 )
                 for i in range(self.num_upsamples)
             ]
@@ -451,7 +457,7 @@ class Vocoder(Module):
             # `32 * factor` exists only so the TILE-layout mesh_partition splits on tile boundaries.
             # Partitioning in ROW_MAJOR instead needs T divisible by `factor` alone, which for T=207
             # means 1 pad row rather than 49 -- and those 49 get upsampled up to 800x downstream.
-            align = factor if TIGHT_T_ALIGN else tile_h * factor
+            align = factor if self.tight_t_align else tile_h * factor
             rem = x_BTC_torch.shape[1] % align
             if rem != 0:
                 t_pad = align - rem
@@ -470,7 +476,7 @@ class Vocoder(Module):
 
         if sharded and not pre_unsharded:
             # Channel-TP path: original ordering, conv_pre consumes a T-shard and gathers C itself.
-            if TIGHT_T_ALIGN:
+            if self.tight_t_align:
                 x_dev = _partition_t(x_dev, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
             else:
                 x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)
@@ -495,6 +501,8 @@ class Vocoder(Module):
                 mesh_device=self.mesh_device,
                 parallel_config=self.parallel_config,
                 cache=self._tpad_mask_cache,
+                tight_t_align=self.tight_t_align,
+                local_tpad_tail=self.local_tpad_tail,
             )
 
         cumrate = 1
@@ -504,7 +512,7 @@ class Vocoder(Module):
         x_dev = self.conv_pre(x_dev)
 
         if sharded and pre_unsharded:
-            if TIGHT_T_ALIGN:
+            if self.tight_t_align:
                 x_dev = _partition_t(x_dev, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
             else:
                 x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)

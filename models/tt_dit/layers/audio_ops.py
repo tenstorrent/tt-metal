@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import math
-import os
 from typing import Sequence
 
 import torch
@@ -523,15 +522,21 @@ def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tenso
 # `ttnn.mesh_partition` is happy in ROW_MAJOR at unaligned offsets (verified at 26 rows/shard), and
 # all four call sites untilize immediately afterwards anyway. Measured: 167.9 -> 146.9 ms for a
 # single clip on a 4x8 mesh at factor 8, bit-identical output, `test_audio_decode_t_parallel` passing
-# at the same 84.6 dB. Off by default pending wider coverage; flip it on with
-# MINIMAX_H3_AUDIO_TIGHT_T_ALIGN=1.
-TIGHT_T_ALIGN = os.environ.get("MINIMAX_H3_AUDIO_TIGHT_T_ALIGN", "0") == "1"
-
-# With TIGHT_T_ALIGN the pad image is smaller than one shard (800 rows of 20800 for band 6), so the
-# tail-set no longer has to rewrite whole tensors: see `_set_tpad_tail_local`. Ablating the tail-set
-# entirely is worth 19.7 ms (146.7 -> 127.0 ms), and ~96% of that work is copying rows it cannot
-# change. Needs TIGHT_T_ALIGN to be useful, since without it the pad image spans whole shards.
-LOCAL_TPAD_TAIL = os.environ.get("MINIMAX_H3_AUDIO_LOCAL_TPAD_TAIL", "0") == "1"
+# at the same 84.6 dB. Off by default pending wider coverage.
+#
+# A `tight_t_align` / `local_tpad_tail` parameter, not a module-level flag: this file is shared with
+# LTX's audio decode (`Vocoder` is the same class for both), so a global read from a
+# MiniMax-namespaced env var would silently change LTX's partitioning too. Each affected function
+# takes the flag explicitly; `MiniMaxH3AudioDecoder` is the only place that defaults it from env
+# (`MINIMAX_H3_AUDIO_TIGHT_T_ALIGN` / `MINIMAX_H3_AUDIO_LOCAL_TPAD_TAIL`), matching how
+# `split_mode`/`tap_matmul`/`prefer_mac` are already scoped -- LTX's `Vocoder` construction never
+# passes these, so it always gets the hardcoded `False` default below regardless of that env var.
+#
+# With `tight_t_align` on, the pad image is smaller than one shard (800 rows of 20800 for band 6), so
+# `local_tpad_tail` can localize the tail-set instead of rewriting whole tensors: see
+# `_set_tpad_tail_local`. Ablating the tail-set entirely is worth 19.7 ms (146.7 -> 127.0 ms), and
+# ~96% of that work is copying rows it cannot change. `local_tpad_tail` is a no-op without
+# `tight_t_align`, since the pad image then always spans whole shards.
 
 
 def _partition_t(x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
@@ -594,7 +599,7 @@ def _replicate_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_dev
     return ttnn.concat(pieces, dim=1)
 
 
-def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache):
+def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache, *, tight_t_align=False):
     """Cached T-sharded validity mask ``M`` (1.0 real, 0.0 on trailing ``tpad_image`` rows) and its complement ``inv``."""
     key = (global_T, tpad_image, dtype)
     cached = cache.get(key)
@@ -603,7 +608,7 @@ def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache)
         m[:, global_T - tpad_image :, :] = 0.0
         pair = []
         for t in (m, 1.0 - m):
-            if TIGHT_T_ALIGN:
+            if tight_t_align:
                 # The mask ends up ROW_MAJOR anyway, so build it that way and skip the tile-aligned
                 # partition constraint entirely.
                 mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
@@ -642,7 +647,9 @@ def _tpad_mask_suffix(mesh_device, parallel_config, dtype, global_T, tpad_image,
     return cached
 
 
-def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache):
+def _set_tpad_tail(
+    x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache, tight_t_align=False, local_tpad_tail=False
+):
     """Set the trailing ``tpad_image`` tail rows: ``mode="zeros"`` zeros them, ``mode="replicate"`` fills the last real row.
 
     CCL-free via a cached validity mask (body rows multiply by 1.0, staying bit-identical).
@@ -650,12 +657,18 @@ def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cac
     if tpad_image <= 0 or parallel_config is None or getattr(parallel_config, "factor", 0) <= 1:
         return x_BTC
     local_T = x_BTC.shape[1]
-    if LOCAL_TPAD_TAIL and tpad_image < local_T:
+    if local_tpad_tail and tpad_image < local_T:
         return _set_tpad_tail_local(
             x_BTC, tpad_image, mode=mode, mesh_device=mesh_device, parallel_config=parallel_config, cache=cache
         )
     M, inv = _tpad_mask(
-        mesh_device, parallel_config, x_BTC.get_dtype(), local_T * parallel_config.factor, tpad_image, cache
+        mesh_device,
+        parallel_config,
+        x_BTC.get_dtype(),
+        local_T * parallel_config.factor,
+        tpad_image,
+        cache,
+        tight_t_align=tight_t_align,
     )
     xm = ttnn.multiply(x_BTC, M)
     if mode == "zeros":
@@ -1376,6 +1389,7 @@ class ConvTranspose1dViaConv3d(Module):
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
         tap_matmul: bool = False,
+        tight_t_align: bool = False,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -1387,6 +1401,7 @@ class ConvTranspose1dViaConv3d(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self.tight_t_align = tight_t_align
 
         # Inner conv stays UNSHARDED; forward gathers T, runs unsharded, then re-partitions.
         self.conv = _AlignedOutConv1d(
@@ -1443,7 +1458,7 @@ class ConvTranspose1dViaConv3d(Module):
         y = self.conv(x_padded)
 
         if sharded:
-            if TIGHT_T_ALIGN:
+            if self.tight_t_align:
                 y = _partition_t(y, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
             else:
                 y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
