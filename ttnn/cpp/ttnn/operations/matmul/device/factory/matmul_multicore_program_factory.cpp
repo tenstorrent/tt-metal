@@ -159,6 +159,29 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     writer_desc.named_compile_time_args = {{"cb_out", output_cb_index}};
     writer_desc.config = WriterConfigDescriptor{};
 
+    // Core-invariant common runtime args (broadcast to all cores).
+    // Reader common args: idx 0 = in0 (a), idx 1 = in1 (b), idx 2-9 = grid-wide matmul dims.
+    {
+        KernelDescriptor::RTArgList reader_common_rtargs;
+        reader_common_rtargs.push_back(a);
+        reader_common_rtargs.push_back(b);
+        reader_common_rtargs.push_back(Mt);
+        reader_common_rtargs.push_back(Kt);
+        reader_common_rtargs.push_back(Nt);
+        reader_common_rtargs.push_back(MtKt);
+        reader_common_rtargs.push_back(KtNt);
+        reader_common_rtargs.push_back(B);
+        reader_common_rtargs.push_back(uint32_t(bcast_batch));
+        reader_common_rtargs.push_back(MtNt);
+        reader_desc.emplace_common_runtime_args(reader_common_rtargs);
+    }
+    // Writer common args: idx 0 = output.
+    {
+        KernelDescriptor::RTArgList writer_common_rtargs;
+        writer_common_rtargs.push_back(output);
+        writer_desc.emplace_common_runtime_args(writer_common_rtargs);
+    }
+
     // Per-core runtime args for reader and writer
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -171,21 +194,8 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        reader_desc.emplace_runtime_args(
-            core,
-            {a,
-             b,
-             Mt,
-             Kt,
-             Nt,
-             MtKt,
-             KtNt,
-             B,
-             uint32_t(bcast_batch),
-             num_tiles_written,
-             num_output_tiles_per_core,
-             MtNt});
-        writer_desc.emplace_runtime_args(core, {output, num_output_tiles_per_core, num_tiles_written});
+        reader_desc.emplace_runtime_args(core, {num_tiles_written, num_output_tiles_per_core});
+        writer_desc.emplace_runtime_args(core, {num_output_tiles_per_core, num_tiles_written});
         num_tiles_written += num_output_tiles_per_core;
     }
 

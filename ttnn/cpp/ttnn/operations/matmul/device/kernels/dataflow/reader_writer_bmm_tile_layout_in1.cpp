@@ -14,19 +14,22 @@ void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
     // in1 tensor args
-    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    // in1 base address is core-invariant -> COMMON runtime arg (common idx 0)
+    const uint32_t in1_tensor_addr = get_common_arg_val<uint32_t>(0);
     uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
     // batch args
     const uint32_t batch = get_arg_val<uint32_t>(rt_args_idx++);
 
     // WRITER
     // out tensor args
-    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    // out base address is core-invariant -> COMMON runtime arg (common idx 1)
+    const uint32_t out_tensor_addr = get_common_arg_val<uint32_t>(1);
     uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
 
 #ifdef FUSE_BIAS
     // bias tensor args
-    const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    // bias base address is core-invariant -> COMMON runtime arg (common idx 2)
+    const uint32_t in3_tensor_addr = get_common_arg_val<uint32_t>(2);
     const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
 #endif
 

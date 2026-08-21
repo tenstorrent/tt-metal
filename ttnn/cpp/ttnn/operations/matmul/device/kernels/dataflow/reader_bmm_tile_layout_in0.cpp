@@ -14,7 +14,8 @@ void kernel_main() {
     // RUNTIME ARGS
     uint32_t rt_args_idx = 0;
     // in0 tensor args
-    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    // in0 base address is core-invariant -> COMMON runtime arg (common idx 0)
+    const uint32_t in0_tensor_addr = get_common_arg_val<uint32_t>(0);
     uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
     // batch args
     const uint32_t batch = get_arg_val<uint32_t>(rt_args_idx++);
