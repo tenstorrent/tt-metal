@@ -54,16 +54,26 @@ void kernel_main() {
     constexpr auto inv_sqrt_bc2_args = TensorAccessorArgs<step_size_args.next_compile_time_args_offset()>();
     constexpr auto decay_factor_args = TensorAccessorArgs<inv_sqrt_bc2_args.next_compile_time_args_offset()>();
 
-    const uint32_t scalar_tile_size_bytes = get_tile_size(cb_scalars_idx);
+    // Each scalar is the single f32 at element (0, 0) of its padded tile, i.e. at
+    // byte offset 0 of DRAM page 0 -- a sized read of just that element replaces a
+    // full tile read per scalar. Slot stride must match the CB page size configured
+    // by the host (get_tile_size() would report the format-derived 4 KB tile size).
+    constexpr uint32_t scalar_slot_bytes = SCALAR_SLOT_BYTES;
     cb_reserve_back(cb_scalars_idx, 3U);
     const uint32_t scalars_l1_addr = get_write_ptr(cb_scalars_idx);
-    noc_async_read_page(0, TensorAccessor(step_size_args, step_size_addr), scalars_l1_addr);
-    noc_async_read_page(
-        0, TensorAccessor(inv_sqrt_bc2_args, inv_sqrt_bc2_addr), scalars_l1_addr + scalar_tile_size_bytes);
-    noc_async_read_page(
-        0, TensorAccessor(decay_factor_args, decay_factor_addr), scalars_l1_addr + 2U * scalar_tile_size_bytes);
-    noc_async_read_barrier();
-    cb_push_back(cb_scalars_idx, 3U);
+    noc_async_read(TensorAccessor(step_size_args, step_size_addr).get_noc_addr(0), scalars_l1_addr, sizeof(float));
+    noc_async_read(
+        TensorAccessor(inv_sqrt_bc2_args, inv_sqrt_bc2_addr).get_noc_addr(0),
+        scalars_l1_addr + scalar_slot_bytes,
+        sizeof(float));
+    noc_async_read(
+        TensorAccessor(decay_factor_args, decay_factor_addr).get_noc_addr(0),
+        scalars_l1_addr + 2U * scalar_slot_bytes,
+        sizeof(float));
+    // No barrier here: the scalar reads ride along with the first block's tile reads
+    // instead of stalling the reader for a full DRAM round trip up front. The push
+    // happens after the first barrier below.
+    bool scalars_pushed = false;
 #endif
 
     uint32_t end_tile = start_tile + num_tiles_to_process;
@@ -89,6 +99,12 @@ void kernel_main() {
             block_size);
 #endif
         noc_async_read_barrier();
+#if SCALARS_FROM_TENSOR
+        if (!scalars_pushed) {
+            cb_push_back(cb_scalars_idx, 3U);
+            scalars_pushed = true;
+        }
+#endif
         cb_push_back(cb_param_idx, block_size);
         cb_push_back(cb_grad_idx, block_size);
         cb_push_back(cb_exp_avg_idx, block_size);
@@ -97,4 +113,13 @@ void kernel_main() {
         cb_push_back(cb_max_exp_avg_sq_in_idx, block_size);
 #endif
     }
+
+#if SCALARS_FROM_TENSOR
+    // A core with no tiles never reaches the loop's barrier; compute still waits on
+    // the scalars CB, so flush and push here.
+    if (!scalars_pushed) {
+        noc_async_read_barrier();
+        cb_push_back(cb_scalars_idx, 3U);
+    }
+#endif
 }

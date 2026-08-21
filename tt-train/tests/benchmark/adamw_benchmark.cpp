@@ -35,6 +35,9 @@ const std::vector<AdamWShape> adamw_shapes = {
 
 void BM_AdamW(benchmark::State& state) {
     const int shape_index = static_cast<int>(state.range(0));
+    // Second arg selects how the step-varying scalars reach the kernel:
+    // 0 = float runtime args, 1 = single-element f32 device tensors.
+    const bool scalars_from_tensor = state.range(1) != 0;
     const auto& adamw_shape = adamw_shapes[shape_index];
 
     constexpr int device_id = 0;
@@ -70,49 +73,60 @@ void BM_AdamW(benchmark::State& state) {
     const float epsilon = 1e-8f;
     const float weight_decay = 0.01f;
 
-    // Warmup
-    for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
-        auto result = ttml::metal::adamw(
-            param,
-            grad,
-            exp_avg,
-            exp_avg_sq,
-            std::nullopt,
-            lr,
-            beta1,
-            beta2,
-            beta1_pow,
-            beta2_pow,
-            epsilon,
-            weight_decay);
+    // Step-varying scalars as device tensors (only used when scalars_from_tensor).
+    const auto scalar_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape({1, 1, 1, 1}),
+        tt::tt_metal::TensorLayout(ttnn::DataType::FLOAT32, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG));
+    const auto make_scalar_tensor = [&](float value) {
+        return ttnn::Tensor::from_vector(std::vector<float>{value}, scalar_spec, device.get());
+    };
+    auto step_size = make_scalar_tensor(lr / (1.0f - beta1_pow));
+    auto inv_sqrt_bc2 = make_scalar_tensor(1.0f / std::sqrt(1.0f - beta2_pow));
+    auto decay_factor = make_scalar_tensor(1.0f - lr * weight_decay);
+
+    const auto run_step = [&]() {
+        auto result = scalars_from_tensor ? ttml::metal::adamw(
+                                                param,
+                                                grad,
+                                                exp_avg,
+                                                exp_avg_sq,
+                                                std::nullopt,
+                                                step_size,
+                                                inv_sqrt_bc2,
+                                                decay_factor,
+                                                beta1,
+                                                beta2,
+                                                epsilon)
+                                          : ttml::metal::adamw(
+                                                param,
+                                                grad,
+                                                exp_avg,
+                                                exp_avg_sq,
+                                                std::nullopt,
+                                                lr,
+                                                beta1,
+                                                beta2,
+                                                beta1_pow,
+                                                beta2_pow,
+                                                epsilon,
+                                                weight_decay);
         tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
         result.deallocate();
+    };
+
+    // Warmup
+    for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
+        run_step();
     }
 
     for ([[maybe_unused]] auto _ : state) {
         const double avg_time_s =
-            ttml::benchmark_utils::measure_average_iteration_time_s(test_config.num_measurement_iterations, [&]() {
-                auto result = ttml::metal::adamw(
-                    param,
-                    grad,
-                    exp_avg,
-                    exp_avg_sq,
-                    std::nullopt,
-                    lr,
-                    beta1,
-                    beta2,
-                    beta1_pow,
-                    beta2_pow,
-                    epsilon,
-                    weight_decay);
-                tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
-                result.deallocate();
-            });
+            ttml::benchmark_utils::measure_average_iteration_time_s(test_config.num_measurement_iterations, run_step);
         const double time_us = avg_time_s * 1e6;
         const double gb_per_s = static_cast<double>(total_dram_bytes) / avg_time_s / 1e9;
 
         state.SetIterationTime(avg_time_s);
-        state.SetLabel(adamw_shape.name);
+        state.SetLabel(adamw_shape.name + (scalars_from_tensor ? "/tensor_scalars" : "/float_scalars"));
         state.counters["Time_us"] = time_us;
         state.counters["GB_per_s"] = gb_per_s;
         state.counters["Tensor_MB"] = static_cast<double>(tensor_bytes) / 1e6;
@@ -122,6 +136,9 @@ void BM_AdamW(benchmark::State& state) {
     grad.deallocate();
     exp_avg.deallocate();
     exp_avg_sq.deallocate();
+    step_size.deallocate();
+    inv_sqrt_bc2.deallocate();
+    decay_factor.deallocate();
 
     device->close();
 }
@@ -129,7 +146,7 @@ void BM_AdamW(benchmark::State& state) {
 }  // namespace
 
 BENCHMARK(BM_AdamW)
-    ->DenseRange(0, static_cast<int>(adamw_shapes.size()) - 1, 1)
+    ->ArgsProduct({benchmark::CreateDenseRange(0, static_cast<int>(adamw_shapes.size()) - 1, /*step=*/1), {0, 1}})
     ->Unit(benchmark::kMillisecond)
     ->UseManualTime()
     ->Iterations(1)

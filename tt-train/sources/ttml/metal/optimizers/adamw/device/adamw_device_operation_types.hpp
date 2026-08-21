@@ -26,6 +26,17 @@ struct operation_attributes_t {
     std::optional<uint32_t> stochastic_rounding_seed{std::nullopt};
 };
 
+// Single-element f32 tensors carrying the step-varying scalars (see the
+// tensor-scalar ttml::metal::adamw overload). Grouped in one struct so the
+// three can only be engaged together. When set, the lr / beta*_pow /
+// weight_decay attributes are ignored and stochastic rounding must be
+// disabled.
+struct step_scalar_tensors_t {
+    ttnn::Tensor step_size;
+    ttnn::Tensor inv_sqrt_bc2;
+    ttnn::Tensor decay_factor;
+};
+
 struct tensor_args_t {
     const ttnn::Tensor& param;
     const ttnn::Tensor& grad;
@@ -34,13 +45,7 @@ struct tensor_args_t {
     const ttnn::Tensor& exp_avg_sq;
     std::optional<ttnn::Tensor> max_exp_avg_sq = std::nullopt;
 
-    // Single-element f32 tensors carrying the step-varying scalars (see
-    // ttml::metal::adamw_tensor_scalars). Engaged together; when set, the
-    // lr / beta*_pow / weight_decay attributes are ignored and stochastic
-    // rounding must be disabled.
-    std::optional<ttnn::Tensor> step_size = std::nullopt;
-    std::optional<ttnn::Tensor> inv_sqrt_bc2 = std::nullopt;
-    std::optional<ttnn::Tensor> decay_factor = std::nullopt;
+    std::optional<step_scalar_tensors_t> step_scalars = std::nullopt;
 };
 
 using tensor_return_value_t = ttnn::Tensor;

@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Parity tests for ttml::metal::adamw_tensor_scalars: the variant taking the
-// step-varying scalars as single-element f32 device tensors must produce
-// bit-identical results to the float-scalar ttml::metal::adamw.
+// Parity tests for the tensor-scalar ttml::metal::adamw overload: the variant
+// taking the step-varying scalars as single-element f32 device tensors must
+// produce bit-identical results to the float-scalar ttml::metal::adamw.
 
 #include <gtest/gtest.h>
 
@@ -51,7 +51,8 @@ struct AdamWHyperParams {
     float weight_decay{0.01F};
 };
 
-void run_parity_step(ttnn::DataType param_dtype, bool amsgrad, uint32_t step) {
+void run_parity_step(
+    ttnn::DataType param_dtype, bool amsgrad, uint32_t step, std::vector<ttnn::Tensor>* keep_alive = nullptr) {
     const ttnn::Shape shape({1, 1, 64, 96});
     const AdamWHyperParams hp{};
 
@@ -66,6 +67,12 @@ void run_parity_step(ttnn::DataType param_dtype, bool amsgrad, uint32_t step) {
     const float beta2_pow = std::pow(hp.beta2, static_cast<float>(step));
 
     // The op updates exp_avg / exp_avg_sq (/ max_exp_avg_sq) in place, so each path gets its own copies.
+    auto keep = [&](std::initializer_list<ttnn::Tensor> tensors) {
+        if (keep_alive != nullptr) {
+            keep_alive->insert(keep_alive->end(), tensors.begin(), tensors.end());
+        }
+    };
+
     auto run_float_path = [&]() {
         auto param = make_device_tensor(param_data, shape, param_dtype);
         auto grad = make_device_tensor(grad_data, shape, ttnn::DataType::BFLOAT16);
@@ -74,6 +81,10 @@ void run_parity_step(ttnn::DataType param_dtype, bool amsgrad, uint32_t step) {
         auto max_exp_avg_sq =
             amsgrad ? std::optional<ttnn::Tensor>(make_device_tensor(max_exp_avg_sq_data, shape, param_dtype))
                     : std::nullopt;
+        keep({param, grad, exp_avg, exp_avg_sq});
+        if (max_exp_avg_sq.has_value()) {
+            keep({*max_exp_avg_sq});
+        }
         auto param_out = ttml::metal::adamw(
             param,
             grad,
@@ -107,7 +118,11 @@ void run_parity_step(ttnn::DataType param_dtype, bool amsgrad, uint32_t step) {
         auto step_size = make_scalar_tensor(hp.lr / (1.0F - beta1_pow));
         auto inv_sqrt_bc2 = make_scalar_tensor(1.0F / std::sqrt(1.0F - beta2_pow));
         auto decay_factor = make_scalar_tensor(1.0F - hp.lr * hp.weight_decay);
-        auto param_out = ttml::metal::adamw_tensor_scalars(
+        keep({param, grad, exp_avg, exp_avg_sq, step_size, inv_sqrt_bc2, decay_factor});
+        if (max_exp_avg_sq.has_value()) {
+            keep({*max_exp_avg_sq});
+        }
+        auto param_out = ttml::metal::adamw(
             param,
             grad,
             exp_avg,
@@ -142,7 +157,12 @@ void run_parity_check(ttnn::DataType param_dtype, bool amsgrad) {
     // The first step compiles and caches the program; the second hits the program
     // cache with freshly allocated scalar tensors holding different values, so it
     // exercises override_runtime_arguments updating the scalar-tensor addresses.
-    run_parity_step(param_dtype, amsgrad, /*step=*/10U);
+    // Step 10's tensors are kept alive across step 11's allocations so step 11's
+    // tensors land at genuinely different addresses -- otherwise the allocator
+    // would hand back the freed addresses and a broken override_runtime_arguments
+    // (reading new values from old addresses) would still pass.
+    std::vector<ttnn::Tensor> step10_tensors;
+    run_parity_step(param_dtype, amsgrad, /*step=*/10U, &step10_tensors);
     run_parity_step(param_dtype, amsgrad, /*step=*/11U);
 }
 
@@ -160,6 +180,10 @@ TEST_F(AdamWTensorScalarsTest, MatchesFloatScalars_FP32) {
     run_parity_check(ttnn::DataType::FLOAT32, /*amsgrad=*/false);
 }
 
+TEST_F(AdamWTensorScalarsTest, MatchesFloatScalars_FP32_AmsGrad) {
+    run_parity_check(ttnn::DataType::FLOAT32, /*amsgrad=*/true);
+}
+
 TEST_F(AdamWTensorScalarsTest, RejectsMultiElementScalarTensor) {
     const ttnn::Shape shape({1, 1, 32, 32});
     const auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.0F, 1.0F, /*seed=*/0U);
@@ -171,7 +195,7 @@ TEST_F(AdamWTensorScalarsTest, RejectsMultiElementScalarTensor) {
     auto bad_step_size = make_device_tensor({1.0F, 2.0F}, ttnn::Shape({1, 1, 1, 2}), ttnn::DataType::FLOAT32);
     auto inv_sqrt_bc2 = make_scalar_tensor(1.0F);
     auto decay_factor = make_scalar_tensor(1.0F);
-    EXPECT_ANY_THROW(ttml::metal::adamw_tensor_scalars(
+    EXPECT_ANY_THROW(ttml::metal::adamw(
         param,
         grad,
         exp_avg,
@@ -196,7 +220,7 @@ TEST_F(AdamWTensorScalarsTest, RejectsNonFloat32ScalarTensor) {
     auto bad_step_size = make_scalar_tensor(1.0F, ttnn::DataType::BFLOAT16);
     auto inv_sqrt_bc2 = make_scalar_tensor(1.0F);
     auto decay_factor = make_scalar_tensor(1.0F);
-    EXPECT_ANY_THROW(ttml::metal::adamw_tensor_scalars(
+    EXPECT_ANY_THROW(ttml::metal::adamw(
         param,
         grad,
         exp_avg,

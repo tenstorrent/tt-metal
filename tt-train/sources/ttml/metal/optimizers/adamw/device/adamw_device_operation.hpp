@@ -50,7 +50,7 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     ttml::metal::StochasticRounding stochastic_rounding,
     std::optional<uint32_t> stochastic_rounding_seed);
 
-ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_value_t adamw_tensor_scalars(
+ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_value_t adamw(
     const ttnn::Tensor& param,
     const ttnn::Tensor& grad,
     const ttnn::Tensor& exp_avg,

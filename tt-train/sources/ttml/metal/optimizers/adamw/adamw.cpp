@@ -44,7 +44,7 @@ ttnn::Tensor adamw(
         stochastic_rounding_seed);
 }
 
-ttnn::Tensor adamw_tensor_scalars(
+ttnn::Tensor adamw(
     const ttnn::Tensor& param_in,
     const ttnn::Tensor& grad,
     const ttnn::Tensor& exp_avg,
@@ -56,7 +56,7 @@ ttnn::Tensor adamw_tensor_scalars(
     float beta1,
     float beta2,
     float epsilon) {
-    return ttnn::prim::adamw_tensor_scalars(
+    return ttnn::prim::adamw(
         param_in,
         grad,
         exp_avg,

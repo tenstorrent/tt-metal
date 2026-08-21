@@ -88,21 +88,18 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
             max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
     }
 
-    TT_FATAL(
-        tensor_args.step_size.has_value() == tensor_args.inv_sqrt_bc2.has_value() &&
-            tensor_args.step_size.has_value() == tensor_args.decay_factor.has_value(),
-        "step_size, inv_sqrt_bc2 and decay_factor must be provided together");
-    if (tensor_args.step_size.has_value()) {
+    if (tensor_args.step_scalars.has_value()) {
         // Stochastic rounding needs a fresh seed as a per-step compute runtime argument,
         // which defeats the point of taking the step-varying scalars as device tensors.
         TT_FATAL(
             args.stochastic_rounding == StochasticRounding::Disabled,
             "Stochastic rounding is not supported when the step-varying scalars are passed as tensors");
+        const auto& scalars = tensor_args.step_scalars.value();
         for (const auto& [tensor, name] :
-             {std::pair{tensor_args.step_size, "step_size"},
-              std::pair{tensor_args.inv_sqrt_bc2, "inv_sqrt_bc2"},
-              std::pair{tensor_args.decay_factor, "decay_factor"}}) {
-            check_tensor(tensor.value(), name, tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::FLOAT32);
+             {std::pair{&scalars.step_size, "step_size"},
+              std::pair{&scalars.inv_sqrt_bc2, "inv_sqrt_bc2"},
+              std::pair{&scalars.decay_factor, "decay_factor"}}) {
+            check_tensor(*tensor, name, tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::FLOAT32);
             TT_FATAL(
                 tensor->logical_volume() == 1,
                 "Tensor '{}' must hold exactly one element, got {}",
@@ -135,7 +132,7 @@ ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     auto amsgrad = args.amsgrad;
     auto stochastic_rounding = args.stochastic_rounding;
     auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
-    auto scalars_from_tensor = tensor_args.step_size.has_value();
+    auto scalars_from_tensor = tensor_args.step_scalars.has_value();
     auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
         amsgrad,
         stochastic_rounding,
@@ -192,7 +189,7 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_value_t adamw_tensor_scalars(
+ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_value_t adamw(
     const ttnn::Tensor& param,
     const ttnn::Tensor& grad,
     const ttnn::Tensor& exp_avg,
@@ -207,7 +204,7 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     bool amsgrad) {
     using OperationType = ttml::metal::optimizers::adamw::device::AdamWDeviceOperation;
 
-    // Stochastic rounding is left at its Disabled default: see ttml::metal::adamw_tensor_scalars.
+    // Stochastic rounding is left at its Disabled default: see the tensor-scalar ttml::metal::adamw overload.
     auto operation_attributes = OperationType::operation_attributes_t{
         .beta1 = beta1,
         .beta2 = beta2,
@@ -220,9 +217,8 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
         .exp_avg = exp_avg,
         .exp_avg_sq = exp_avg_sq,
         .max_exp_avg_sq = max_exp_avg_sq,
-        .step_size = step_size,
-        .inv_sqrt_bc2 = inv_sqrt_bc2,
-        .decay_factor = decay_factor,
+        .step_scalars =
+            ttml::metal::optimizers::adamw::device::step_scalar_tensors_t{step_size, inv_sqrt_bc2, decay_factor},
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
