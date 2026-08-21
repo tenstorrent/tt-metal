@@ -49,16 +49,24 @@ class PerfMetrics:
     Stage times are in seconds. feature_extract_s covers host-side feature
     extraction only; encoder_s covers encoder input preprocessing, the encoder
     stack, and the device synchronize that makes the encoder result observable.
+
+    total_audio_s is the audio actually processed, i.e. each item's duration capped
+    at the feature extractor's chunk_length, since anything past that window is
+    truncated before the encoder sees it. Note the converse is not corrected for:
+    an item shorter than the window still costs a full padded window of encoder
+    work, so the throughput properties read low on short clips.
     """
 
     feature_extract_s: float = 0.0
     encoder_s: float = 0.0
-    total_audio_s: float = 0.0
+    total_audio_s: float = 0.0  # capped at the feature extractor's chunk_length per item
     ttft: float = 0.0
     decode_throughput: float = 0.0  # tokens/s/user
-    # False on the call that captures the encoder trace for a batch bucket. That call runs
-    # the encoder eagerly to warm up and then again under capture, so its encoder_s is a
-    # one-off outlier and should be excluded from steady-state throughput reporting.
+    # True only when the encoder ran as a clean trace replay, i.e. steady state. False for the
+    # two outlier paths: the call that captures a bucket's trace (runs the encoder eagerly to
+    # warm up, then again under capture) and a call whose replay failed and fell back to eager.
+    # Both inflate encoder_s, so exclude them from steady-state throughput reporting. Always
+    # True when encoder tracing is disabled, since then every call is alike.
     encoder_trace_hit: bool = True
 
     @property
@@ -806,10 +814,16 @@ class WhisperGenerator:
 
         # Run encoder (optional trace replay per batch/seq-length bucket; see _run_encoder_traced_or_eager)
         trace_key = self._get_batch_size_per_device(unpadded_batch_size)
-        # Sampled before the call: a miss means this call captures the trace for the bucket and
-        # therefore pays an extra eager encoder pass, making its encoder_s a one-off outlier.
-        encoder_trace_hit = (not self.enable_encoder_trace) or (trace_key in self.encoder_trace_state.trace_id_encoder)
+        # encoder_trace_hit must mean "this call was a plain trace replay", i.e. steady state.
+        # That needs the bucket sampled on both sides of the call, because the helper mutates it:
+        # a capture adds the key (warm-up, pays an extra eager pass) and a failed replay pops it
+        # and falls back to eager (recovery). Requiring the key before AND after excludes both,
+        # leaving True only for a clean replay.
+        had_trace = trace_key in self.encoder_trace_state.trace_id_encoder
         encoder_output = self._run_encoder_traced_or_eager(trace_key, input_embeds)
+        encoder_trace_hit = (not self.enable_encoder_trace) or (
+            had_trace and trace_key in self.encoder_trace_state.trace_id_encoder
+        )
 
         # Copy encoder output to pre-allocated tensor
         ttnn.copy(encoder_output, self.encoder_hidden_states_per_size[trace_key])
@@ -819,10 +833,15 @@ class WhisperGenerator:
         encoder_s = time.time() - start_encoder
         logger.info(f"Time to encoder states: {(time.time() - start_encode)*1000:.3f}ms")
 
+        # The feature extractor pads or truncates every item to a fixed chunk_length window
+        # (30s for Whisper), so only that much of a longer clip ever reaches the encoder. Cap
+        # per item: summing raw durations would over-report the throughput properties by the
+        # truncated remainder (a 90s clip would read 3x fast).
+        chunk_s = getattr(self.feature_extractor, "chunk_length", 30)
         perf_metrics = PerfMetrics(
             feature_extract_s=feature_extract_s,
             encoder_s=encoder_s,
-            total_audio_s=sum(all_audio_durations),
+            total_audio_s=sum(min(d, chunk_s) for d in all_audio_durations),
             encoder_trace_hit=encoder_trace_hit,
         )
 
