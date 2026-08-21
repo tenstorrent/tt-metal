@@ -2449,6 +2449,8 @@ _BINARY_SPECIALS_NOT_READY: Dict[MathOperation, str] = {
     MathOperation.SfpuBinaryRemainder: "composition: as fmod. Section 5.6 Q1.",
     MathOperation.SfpuAtan2: "composition: ratio plus a format-specific polynomial. Diverges on "
     "2 cells rather than 4, so its non-finite handling is partial. Section 5.6 Q1.",
+    MathOperation.SfpuLogaddexp: "composition: max(a, b) + log1p(exp(-|a - b|)), so a log and an "
+    "exp behind the same question as div and xlogy. Section 5.6 Q1.",
     # (2) Compare-against-zero on an operand that may be a NaN. calculate_mask is
     # `v_if(mask == 0)`, which lowers to SFPSETCC -- whose contract is conditioned "provided that
     # VC is neither negative zero nor any kind of NaN". Identical to what holds Sign and Heaviside
