@@ -39,7 +39,8 @@ private:
 // ---------------------------------------------------------------------
 class MPIRequest : public Request {
 public:
-    explicit MPIRequest(MPI_Request req) : req_(req) {}
+    explicit MPIRequest(MPI_Request req, std::optional<int> recv_capacity = std::nullopt) :
+        req_(req), recv_capacity_(recv_capacity) {}
 
     Status wait() override;
     std::optional<Status> test() override;
@@ -48,6 +49,7 @@ public:
 
 private:
     mutable MPI_Request req_{};
+    std::optional<int> recv_capacity_;
     bool done_{};
 };
 

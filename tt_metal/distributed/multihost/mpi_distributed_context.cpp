@@ -182,6 +182,52 @@ bool was_mpi_finalized() noexcept {
 
 #define MPI_CHECK(call) mpi_check((call), #call)
 
+// Validate receive completion separately from generic MPI errors so legal short messages succeed while a message
+// larger than the posted byte capacity fails with the source, tag, and reported message size.
+// Annoyingly, MPI can return a truncate error even when the message can fit perfectly well in the receive buffer,
+// so we need to special-case handle it.
+Status check_receive_completion(int error_code, const MPI_Status& status, int recv_capacity, const char* call_text) {
+    if (error_code != MPI_SUCCESS) {
+        int error_class = error_code;
+        if (MPI_Error_class(error_code, &error_class) != MPI_SUCCESS) {
+            error_class = error_code;
+        }
+        if (error_class == MPI_ERR_TRUNCATE) {
+            int received_count = MPI_UNDEFINED;
+            const int count_error = MPI_Get_count(&status, MPI_CHAR, &received_count);
+            TT_FATAL(
+                false,
+                "{} reported a true MPI truncation: incoming message size {} bytes, receive capacity {} bytes, "
+                "source {}, tag {}",
+                call_text,
+                count_error == MPI_SUCCESS && received_count != MPI_UNDEFINED ? std::to_string(received_count)
+                                                                              : std::string("unknown or > INT_MAX"),
+                recv_capacity,
+                status.MPI_SOURCE,
+                status.MPI_TAG);
+        }
+        mpi_check(error_code, call_text);
+    }
+
+    int received_count = 0;
+    MPI_CHECK(MPI_Get_count(&status, MPI_CHAR, &received_count));
+    TT_FATAL(
+        received_count != MPI_UNDEFINED,
+        "{} completed with an undefined receive count for source {}, tag {}",
+        call_text,
+        status.MPI_SOURCE,
+        status.MPI_TAG);
+    TT_FATAL(
+        received_count <= recv_capacity,
+        "{} received {} bytes into a {}-byte buffer from source {}, tag {}",
+        call_text,
+        received_count,
+        recv_capacity,
+        status.MPI_SOURCE,
+        status.MPI_TAG);
+    return Status{Rank(status.MPI_SOURCE), Tag(status.MPI_TAG), received_count};
+}
+
 MPIDistributedException::MPIDistributedException(Rank rank, int error_code, std::string msg) :
     rank_(rank), error_code_(error_code), message_(std::move(msg)) {
     // retrieve human-readable MPI error string
@@ -205,7 +251,14 @@ const std::string& MPIDistributedException::error_string() const noexcept { retu
 
 Status MPIRequest::wait() {
     MPI_Status status{};
-    MPI_CHECK(MPI_Wait(&req_, &status));
+    const int error_code = MPI_Wait(&req_, &status);
+    if (recv_capacity_.has_value()) {
+        Status result = check_receive_completion(error_code, status, *recv_capacity_, "MPI_Wait");
+        done_ = true;
+        return result;
+    }
+
+    MPI_CHECK(error_code);
     done_ = true;
 
     int count = 0;
@@ -216,12 +269,21 @@ Status MPIRequest::wait() {
 std::optional<Status> MPIRequest::test() {
     MPI_Status status{};
     int flag = 0;
-    MPI_CHECK(MPI_Test(&req_, &flag, &status));
+    const int error_code = MPI_Test(&req_, &flag, &status);
+    if (error_code != MPI_SUCCESS && recv_capacity_.has_value()) {
+        done_ = true;
+        return check_receive_completion(error_code, status, *recv_capacity_, "MPI_Test");
+    }
+    MPI_CHECK(error_code);
     if (!flag) {
         return std::nullopt;
     }
 
     done_ = true;
+    if (recv_capacity_.has_value()) {
+        return check_receive_completion(MPI_SUCCESS, status, *recv_capacity_, "MPI_Test");
+    }
+
     int count = 0;
     MPI_CHECK(MPI_Get_count(&status, MPI_CHAR, &count));
     return Status{Rank(status.MPI_SOURCE), Tag(status.MPI_TAG), count};
@@ -399,7 +461,10 @@ void MPIContext::ssend(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const {
 
 void MPIContext::recv(ttsl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
-    MPI_CHECK(MPI_Recv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, MPI_STATUS_IGNORE));
+    const int recv_capacity = static_cast<int>(buf.size());
+    MPI_Status status{};
+    const int error_code = MPI_Recv(buf.data(), recv_capacity, MPI_CHAR, *src, *tag, comm_, &status);
+    static_cast<void>(check_receive_completion(error_code, status, recv_capacity, "MPI_Recv"));
 }
 
 RequestPtr MPIContext::isend(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const {
@@ -413,8 +478,9 @@ RequestPtr MPIContext::isend(ttsl::Span<std::byte> buf, Rank dest, Tag tag) cons
 RequestPtr MPIContext::irecv(ttsl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_Request req{};
-    MPI_CHECK(MPI_Irecv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, &req));
-    return std::make_shared<MPIRequest>(req);
+    const int recv_capacity = static_cast<int>(buf.size());
+    MPI_CHECK(MPI_Irecv(buf.data(), recv_capacity, MPI_CHAR, *src, *tag, comm_, &req));
+    return std::make_shared<MPIRequest>(req, recv_capacity);
 }
 
 /* ---- collectives ------------------------------------------------------- */
