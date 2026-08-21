@@ -11,6 +11,6 @@ Installed: cc1plus 664bbf81b2ca0ba6fcde5eb9f796690647960be3af928ac0974abde2b7629
 
 ## Gates
 - Full rvtt.exp: FAIL set byte-identical to the pin-17 frozen reference (independent diff rc=0).
-- Corpus: OFF base-vs-mine byte-identical; ON-25 delta vs installed pin-17 = EMPTY (.text identical 3213/3213) — the final window-rule guard preserves every witnessed-good composition byte-exactly (the 24-variant list in evidence is a narrowed-away draft, caught by the xielu counter-witness).
+- Corpus: OFF base-vs-mine byte-identical; ON-25 delta vs installed pin-17 = EMPTY (.text identical 3213/3213) — the final window-rule guard preserves every witnessed-good composition byte-exactly (the 24-variant list was a narrowed-away DRAFT guard, superseded — the final identity proof is IN-REPO: attachments/pin18-on25-{base,mine}.text.tsv, byte-identical, and the reset-ledger timeline grounding the collateral exoneration is attachments/pin18-reset-ledger-20260821.txt; the off-box laneES-evidence dir is corroborating, no longer load-bearing).
 - Post-fix device (flush-bracketed, solo): divint32floor corr node PASS; lcm record-hoist knob leg PASS (previously wedged the device).
 - Collateral adjudication: the pin-17 sweep divint32floor corr FAIL and log-fresh corr FAIL were device-poisoning collateral of the lcm knob-leg hang (reset-ledger timeline in ES evidence); log-fresh re-measured solo = WIN -9.0% all-corr-PASS.

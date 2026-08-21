@@ -1,0 +1,36 @@
+Aug 21 06:20:52 tt-quietbox-0 packagekitd[2033]: An error occurred during the signature verification. The repository is not updated and the previous index files will be used. GPG error: https://ppa.tenstorrent.com/ubuntu jammy InRelease: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 3A44817BAF0FE074
+Aug 21 06:20:52 tt-quietbox-0 packagekitd[2033]: https://ppa.tenstorrent.com/ubuntu jammy InRelease is not (yet) available (The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 3A44817BAF0FE074)
+Aug 21 06:20:52 tt-quietbox-0 gnome-software[3119]: not handling error download-failed for action refresh: W: An error occurred during the signature verification. The repository is not updated and the previous index files will be used. GPG error: https://ppa.tenstorrent.com/ubuntu jammy InRelease: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 3A44817BAF0FE074
+                                                    E: https://ppa.tenstorrent.com/ubuntu jammy InRelease is not (yet) available (The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 3A44817BAF0FE074)
+Aug 21 06:20:56 tt-quietbox-0 packagekitd[2033]: An error occurred during the signature verification. The repository is not updated and the previous index files will be used. GPG error: https://ppa.tenstorrent.com/ubuntu jammy InRelease: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 3A44817BAF0FE074
+Aug 21 06:20:56 tt-quietbox-0 packagekitd[2033]: https://ppa.tenstorrent.com/ubuntu jammy InRelease is not (yet) available (The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 3A44817BAF0FE074)
+Aug 21 06:20:56 tt-quietbox-0 gnome-software[3119]: not handling error failed for action refresh: W: An error occurred during the signature verification. The repository is not updated and the previous index files will be used. GPG error: https://ppa.tenstorrent.com/ubuntu jammy InRelease: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 3A44817BAF0FE074
+                                                    E: https://ppa.tenstorrent.com/ubuntu jammy InRelease is not (yet) available (The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 3A44817BAF0FE074)
+Aug 21 06:20:59 tt-quietbox-0 packagekitd[2033]: Failed to fetch https://ppa.tenstorrent.com/ubuntu/dists/jammy/InRelease
+                                                    E: Failed to fetch https://ppa.tenstorrent.com/ubuntu/dists/jammy/InRelease
+Aug 21 06:21:55 tt-quietbox-0 packagekitd[2033]: Failed to fetch https://ppa.tenstorrent.com/ubuntu/dists/jammy/InRelease
+                                                    E: Failed to fetch https://ppa.tenstorrent.com/ubuntu/dists/jammy/InRelease
+Aug 21 06:22:13 tt-quietbox-0 packagekitd[2033]: Failed to fetch https://ppa.tenstorrent.com/ubuntu/dists/jammy/InRelease
+                                                    E: Failed to fetch https://ppa.tenstorrent.com/ubuntu/dists/jammy/InRelease
+Aug 21 06:22:48 tt-quietbox-0 packagekitd[2033]: Failed to fetch https://ppa.tenstorrent.com/ubuntu/dists/jammy/InRelease
+                                                    E: Failed to fetch https://ppa.tenstorrent.com/ubuntu/dists/jammy/InRelease
+Aug 21 06:22:50 tt-quietbox-0 packagekitd[2033]: Failed to fetch https://ppa.tenstorrent.com/ubuntu/dists/jammy/InRelease
+                                                    E: Failed to fetch https://ppa.tenstorrent.com/ubuntu/dists/jammy/InRelease
+Aug 21 06:23:28 tt-quietbox-0 packagekitd[2033]: Failed to fetch https://ppa.tenstorrent.com/ubuntu/dists/jammy/InRelease
+                                                    E: Failed to fetch https://ppa.tenstorrent.com/ubuntu/dists/jammy/InRelease
+Aug 21 09:36:55 tt-quietbox-0 kernel: tenstorrent 0000:01:00.0: Found a Tenstorrent Blackhole device
+Aug 21 09:36:55 tt-quietbox-0 kernel: tenstorrent 0000:01:00.0: enabling device (0000 -> 0002)
+Aug 21 09:36:56 tt-quietbox-0 kernel: tenstorrent 0000:43:00.0: Found a Tenstorrent Blackhole device
+Aug 21 09:36:56 tt-quietbox-0 kernel: tenstorrent 0000:43:00.0: enabling device (0000 -> 0002)
+Aug 21 09:36:56 tt-quietbox-0 kernel: tenstorrent 0000:c1:00.0: Found a Tenstorrent Blackhole device
+Aug 21 09:36:56 tt-quietbox-0 kernel: tenstorrent 0000:c1:00.0: enabling device (0000 -> 0002)
+Aug 21 09:36:56 tt-quietbox-0 kernel: tenstorrent 0000:41:00.0: Found a Tenstorrent Blackhole device
+Aug 21 09:36:56 tt-quietbox-0 kernel: tenstorrent 0000:41:00.0: enabling device (0000 -> 0002)
+Aug 21 10:21:10 tt-quietbox-0 kernel: tenstorrent 0000:43:00.0: Found a Tenstorrent Blackhole device
+Aug 21 10:21:10 tt-quietbox-0 kernel: tenstorrent 0000:43:00.0: enabling device (0000 -> 0002)
+Aug 21 10:21:10 tt-quietbox-0 kernel: tenstorrent 0000:41:00.0: Found a Tenstorrent Blackhole device
+Aug 21 10:21:10 tt-quietbox-0 kernel: tenstorrent 0000:41:00.0: enabling device (0000 -> 0002)
+Aug 21 10:21:10 tt-quietbox-0 kernel: tenstorrent 0000:01:00.0: Found a Tenstorrent Blackhole device
+Aug 21 10:21:10 tt-quietbox-0 kernel: tenstorrent 0000:01:00.0: enabling device (0000 -> 0002)
+Aug 21 10:21:10 tt-quietbox-0 kernel: tenstorrent 0000:c1:00.0: Found a Tenstorrent Blackhole device
+Aug 21 10:21:10 tt-quietbox-0 kernel: tenstorrent 0000:c1:00.0: enabling device (0000 -> 0002)

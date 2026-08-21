@@ -1,0 +1,6 @@
+PIN-18 ON-25 identity certificate (lane ES final guard; verified at commit time on quietbox0)
+base leg text-hash manifest : sha256 8889933216e9431000d61836e9b7731961be57644c12ce591bce68f2acfcc0c9  (3213 lines)
+mine leg text-hash manifest : sha256 8889933216e9431000d61836e9b7731961be57644c12ce591bce68f2acfcc0c9  (3213 lines)
+byte-identical              : True
+full manifests: laneES-evidence-20260821/corpus/ (SHA256SUMS-sealed, quietbox0) — this certificate
+is the in-repo load-bearing artifact; the manifests exceed the repo's 500KB hook limit.
