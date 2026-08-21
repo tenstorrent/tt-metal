@@ -37,6 +37,7 @@ from .llk_params import (
     TopKSortDirection,
     TopKXLChunkBaseMode,
     TopKXLIndexOp,
+    TopKXLSortMode,
     Transpose,
     UnpackerEngine,
     VectorMode,
@@ -745,6 +746,9 @@ class TOPK_XL(TemplateParameter):
     chunk_base: int = 0
     fused_e2e: bool = False
     seg_base: int = 0
+    sort_mode: TopKXLSortMode = TopKXLSortMode.Dispatch
+    lsb_row_major: bool = False
+    reinit_after_copy: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -762,6 +766,9 @@ class TOPK_XL(TemplateParameter):
             f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE = {self.chunk_base};",
             f"constexpr bool TOPK_XL_FUSED_E2E = {str(self.fused_e2e).lower()};",
             f"constexpr std::uint32_t TOPK_XL_SEG_BASE = {self.seg_base};",
+            f"constexpr std::uint32_t TOPK_XL_SORT_MODE = {self.sort_mode.value};",
+            f"constexpr bool TOPK_XL_LSB_ROW_MAJOR = {str(self.lsb_row_major).lower()};",
+            f"constexpr bool TOPK_XL_REINIT_AFTER_COPY = {str(self.reinit_after_copy).lower()};",
         ]
         return "\n".join(lines)
 
