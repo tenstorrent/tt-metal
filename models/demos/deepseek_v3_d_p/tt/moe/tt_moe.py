@@ -199,6 +199,7 @@ class TtMoe(LightweightModule):
         shared_expert_weights: dict = None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
@@ -267,6 +268,9 @@ class TtMoe(LightweightModule):
                 (K3: latent_moe_use_norm=True).
             rms_norm_eps: eps for that latent norm. Passed explicitly because
                 TtDistributedRmsNorm defaults to 1e-6 while K3's config says 1e-5.
+            routed_expert_activation: GLU activation the fused routed-expert kernel runs.
+                Defaults to SiLU (DeepSeek / K2.6 / GLM). Kimi-K3 passes SituGlu. Routed only:
+                the shared expert and the dense FFN have no SiTU kernel and stay on SiLU.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -482,7 +486,7 @@ class TtMoe(LightweightModule):
             weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
-            activation=ttnn.RoutedExpertActivation.Silu,
+            activation=routed_expert_activation,
         )
 
         # Initialize shared expert (col axis: axis 1)

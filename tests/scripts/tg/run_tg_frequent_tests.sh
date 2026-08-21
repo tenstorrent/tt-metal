@@ -15,10 +15,6 @@ run_tg_tests() {
     pytest models/tt_dit/tests/encoders/umt5/test_umt5.py -k "wh_glx" ; fail+=$?
     pytest models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding  -k "wh_glx" ; fail+=$?
 
-  elif [[ "$1" == "qwenimage" ]]; then
-    echo "LOG_METAL: running QwenImage run_tg_frequent_tests"
-    pytest models/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair -k "4x8"; fail+=$?
-
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1

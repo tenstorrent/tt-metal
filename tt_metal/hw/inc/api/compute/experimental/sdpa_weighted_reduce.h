@@ -33,6 +33,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
@@ -87,12 +88,16 @@ inline void weighted_reduce_addrmod_init() {
 }
 
 #ifdef TRISC_MATH
-inline void weighted_reduce_math_impl() {
+inline void weighted_reduce_math_impl(const std::uint32_t dst_slot = 0) {
+    // Math addresses DEST in raw rows. Each weighted result occupies the same
+    // compact [8,32] footprint as the active pack stride: two 8-row faces.
+    constexpr std::uint32_t weighted_dest_slot_rows = 16;
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // Target tile 0 of the framework-tracked dest half (kept in sync with the
-    // packer, which ZEROACCs this half on dest-section-done, so the accumulating
-    // MVMULs start from a cleared bank).
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
+    // Target slot dst_slot of the framework-tracked dest half (kept in sync with
+    // the packer, which ZEROACCs this half on dest-section-done, so the
+    // accumulating MVMULs start from a cleared bank). dst_slot = 0 is the
+    // single-slot layout.
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base() + dst_slot * weighted_dest_slot_rows);
     // MVMUL #1: qk face0 -> Dst row 0 (out[0:16]); then advance SrcA+16, Dst+16.
     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_6, 0);
     // MVMUL #2: qk face1 -> Dst row 16 (out[16:32]); clear SrcA/SrcB.
@@ -107,10 +112,12 @@ inline void weighted_reduce_math_impl() {
 // since the MVMULs only read SrcB cols 0..7 (weights face0). Three UNPACR replace
 // the standard AB template MOP, with SetDatValid deferred to the last unpack of
 // each source so both srcs go valid only once fully loaded.
-inline void weighted_reduce_unpack_impl(const std::uint32_t weights_cb, const std::uint32_t qk_cb) {
+inline void weighted_reduce_unpack_impl(
+    const std::uint32_t weights_cb, const std::uint32_t qk_cb, const std::uint32_t qk_tile_index = 0) {
     const std::uint32_t qk_id = get_operand_id(qk_cb);            // operandA -> SrcA
     const std::uint32_t weights_id = get_operand_id(weights_cb);  // operandB -> SrcB
-    const std::uint32_t address_a = get_local_cb_interface(qk_id).fifo_rd_ptr - 1;
+    const std::uint32_t address_a =
+        get_local_cb_interface(qk_id).fifo_rd_ptr - 1 + qk_tile_index * get_local_cb_interface(qk_id).fifo_page_size;
     const std::uint32_t address_b = get_local_cb_interface(weights_id).fifo_rd_ptr - 1;
 
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
@@ -139,9 +146,13 @@ inline void weighted_reduce_unpack_impl(const std::uint32_t weights_cb, const st
 
 // Unpack qk + weights and run the two MVMULs. Call between tile_regs_acquire and
 // tile_regs_commit.
-inline void weighted_reduce(const std::uint32_t weights_cb, const std::uint32_t qk_cb) {
-    UNPACK((weighted_reduce_unpack_impl(weights_cb, qk_cb)));
-    MATH((weighted_reduce_math_impl()));
+inline void weighted_reduce(
+    const std::uint32_t weights_cb,
+    const std::uint32_t qk_cb,
+    const std::uint32_t qk_tile_index = 0,
+    const std::uint32_t dst_slot = 0) {
+    UNPACK((weighted_reduce_unpack_impl(weights_cb, qk_cb, qk_tile_index)));
+    MATH((weighted_reduce_math_impl(dst_slot)));
 }
 
 #ifdef TRISC_PACK
@@ -149,7 +160,8 @@ inline void weighted_reduce(const std::uint32_t weights_cb, const std::uint32_t 
 // of the `partial` tile. chunk maps to row (chunk % TILE_R_DIM) of
 // tile (chunk / TILE_R_DIM). Packer L1 addresses are in 16B words
 // (cb_addr_shift == 4): one face row = 16 bf16 = 32 B = 2 words; a 16x16 face = 32 words
-inline void weighted_reduce_pack_impl(const std::uint32_t partial_cb, const std::uint32_t chunk) {
+inline void weighted_reduce_pack_impl(
+    const std::uint32_t partial_cb, const std::uint32_t chunk, const std::uint32_t dst_slot = 0) {
     constexpr std::uint32_t row_1x32_size_words = 4;  // 1x32 = 4 words
     const std::uint32_t tile = chunk / TILE_R_DIM;
     const std::uint32_t row = chunk % TILE_R_DIM;
@@ -158,7 +170,9 @@ inline void weighted_reduce_pack_impl(const std::uint32_t partial_cb, const std:
         get_output_tile_address<true, ckernel::PackMode::Default>(out_id, tile) + row * row_1x32_size_words;
 
     // ADDR_MOD_3 (pack) is configured once by weighted_reduce_addrmod_init().
-    set_dst_write_addr(0);             // read DEST tile 0 (logical row 0 = result)
+    // set_dst_write_addr uses the configured packer W index, not raw DEST rows;
+    // slot 0 is DEST tile 0 (logical row 0 = result).
+    set_dst_write_addr(dst_slot);
     program_packer_destination(addr);  // L1 write base for face0/face1 of this row
     // Raw (no-MOP) pack of DEST logical row 0 into the partial tile's row. PACR #1
     // (ADDR_MOD_3, set above) packs face0 and steps the DEST read to face1; PACR #2
@@ -194,8 +208,9 @@ inline void weighted_reduce_pack_impl(const std::uint32_t partial_cb, const std:
 #endif
 
 // Pack the result. Call between tile_regs_wait and tile_regs_release.
-inline void weighted_reduce_pack(const std::uint32_t partial_cb, const std::uint32_t chunk) {
-    PACK((weighted_reduce_pack_impl(partial_cb, chunk)));
+inline void weighted_reduce_pack(
+    const std::uint32_t partial_cb, const std::uint32_t chunk, const std::uint32_t dst_slot = 0) {
+    PACK((weighted_reduce_pack_impl(partial_cb, chunk, dst_slot)));
 }
 
 // Restore dataformats, and cfgs to what is needed for sdpa_custom_mm_block

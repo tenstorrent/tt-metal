@@ -971,10 +971,14 @@ void expect_galaxy_rank_group_2x4_check(const ControlPlane& control_plane, MeshI
     EXPECT_EQ(trays.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
                                 << " 2x4 rank group must sit on one tray or exactly two trays";
 
-    const auto& valid_tray_pairs = psd.is_bh_galaxy_rev_c() ? rev_c_tray_pairs : rev_ab_tray_pairs;
+    // Wormhole galaxy shares Blackhole rev-C's tray-pair mapping; only Blackhole rev-A/B differs.
+    const bool is_wormhole_galaxy =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
+    const bool use_rev_c_tray_pairs = is_wormhole_galaxy || psd.is_bh_galaxy_rev_c();
+    const auto& valid_tray_pairs = use_rev_c_tray_pairs ? rev_c_tray_pairs : rev_ab_tray_pairs;
     EXPECT_TRUE(valid_tray_pairs.contains(trays))
         << "mesh " << *mesh_id << " host_rank " << *host_rank << " 2x4 rank group tray pair must be "
-        << (psd.is_bh_galaxy_rev_c() ? "{1,2} or {3,4}" : "{1,3} or {2,4}");
+        << (use_rev_c_tray_pairs ? "{1,2} or {3,4}" : "{1,3} or {2,4}");
 
     for (const auto& [tray_id, asic_locations] : asic_locations_by_tray) {
         EXPECT_EQ(asic_locations.size(), 4u) << "mesh " << *mesh_id << " host_rank " << *host_rank
@@ -990,6 +994,66 @@ void expect_galaxy_rank_group_2x4_check(const ControlPlane& control_plane, MeshI
         EXPECT_EQ(asic_locations, all_asic_locations)
             << "mesh " << *mesh_id << " host_rank " << *host_rank << " 2x4 rank group tray " << tray_id
             << " must use the same half-tray asic location group as the rank group";
+    }
+}
+
+void expect_galaxy_rank_group_4x1_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto chip_ids = mesh_graph.get_chip_ids(mesh_id, host_rank);
+    ASSERT_EQ(chip_ids.size(), 4u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                   << " 4x1 rank group must contain exactly 4 chips";
+
+    // A 4x1 column spans a tray pair's shared column: asic locations {1,5}, {2,6}, {3,7}, or {4,8}
+    // (2 chips per tray). The tray pair is rev-dependent: rev C {1,2} or {3,4}; rev A/B {1,3} or {2,4}.
+    static const std::set<std::set<uint32_t>> valid_column_asic_location_groups = {{1, 5}, {2, 6}, {3, 7}, {4, 8}};
+    static const std::set<std::set<uint32_t>> rev_c_tray_pairs = {{1, 2}, {3, 4}};
+    static const std::set<std::set<uint32_t>> rev_ab_tray_pairs = {{1, 3}, {2, 4}};
+
+    std::set<uint32_t> all_asic_locations;
+    std::set<uint32_t> trays;
+    std::set<std::string> hostnames;
+    std::map<uint32_t, std::set<uint32_t>> asic_locations_by_tray;
+
+    for (const auto chip_id : chip_ids.values()) {
+        const FabricNodeId fabric_node_id(mesh_id, static_cast<std::uint32_t>(chip_id));
+        const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        const uint32_t tray_id_value = *psd.get_tray_id(asic_id);
+        const uint32_t asic_location_value = *psd.get_asic_location(asic_id);
+
+        hostnames.insert(psd.get_host_name_for_asic(asic_id));
+        trays.insert(tray_id_value);
+        all_asic_locations.insert(asic_location_value);
+        asic_locations_by_tray[tray_id_value].insert(asic_location_value);
+    }
+
+    EXPECT_EQ(hostnames.size(), 1u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                    << " 4x1 rank group fabric nodes must be on the same host";
+
+    EXPECT_EQ(trays.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                << " 4x1 rank group must sit on exactly two trays";
+
+    // Wormhole galaxy shares Blackhole rev-C's tray-pair mapping ({1,2}/{3,4}); only Blackhole rev-A/B uses
+    // {1,3}/{2,4}.
+    const bool is_wormhole_galaxy =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
+    const bool use_rev_c_tray_pairs = is_wormhole_galaxy || psd.is_bh_galaxy_rev_c();
+    const auto& valid_tray_pairs = use_rev_c_tray_pairs ? rev_c_tray_pairs : rev_ab_tray_pairs;
+    EXPECT_TRUE(valid_tray_pairs.contains(trays))
+        << "mesh " << *mesh_id << " host_rank " << *host_rank << " 4x1 rank group tray pair must be "
+        << (use_rev_c_tray_pairs ? "{1,2} or {3,4}" : "{1,3} or {2,4}");
+
+    // All 4 chips share one column asic-location pair ({1,5}, {2,6}, {3,7}, or {4,8}).
+    EXPECT_TRUE(valid_column_asic_location_groups.contains(all_asic_locations))
+        << "mesh " << *mesh_id << " host_rank " << *host_rank
+        << " 4x1 rank group must use asic locations {1,5}, {2,6}, {3,7}, or {4,8}, got a different set";
+
+    for (const auto& [tray_id, asic_locations] : asic_locations_by_tray) {
+        EXPECT_EQ(asic_locations.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                             << " 4x1 rank group tray " << tray_id << " must contain exactly 2 chips";
+        EXPECT_EQ(asic_locations, all_asic_locations)
+            << "mesh " << *mesh_id << " host_rank " << *host_rank << " 4x1 rank group tray " << tray_id
+            << " must use the same column asic location group as the rank group";
     }
 }
 
@@ -1020,10 +1084,14 @@ void expect_galaxy_rank_group_2x8_check(const ControlPlane& control_plane, MeshI
     EXPECT_EQ(trays.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
                                 << " 2x8 rank group must sit on exactly two trays";
 
-    const auto& valid_tray_pairs = psd.is_bh_galaxy_rev_c() ? rev_c_tray_pairs : rev_ab_tray_pairs;
+    // Wormhole galaxy shares Blackhole rev-C's tray-pair mapping; only Blackhole rev-A/B differs.
+    const bool is_wormhole_galaxy =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
+    const bool use_rev_c_tray_pairs = is_wormhole_galaxy || psd.is_bh_galaxy_rev_c();
+    const auto& valid_tray_pairs = use_rev_c_tray_pairs ? rev_c_tray_pairs : rev_ab_tray_pairs;
     EXPECT_TRUE(valid_tray_pairs.contains(trays))
         << "mesh " << *mesh_id << " host_rank " << *host_rank << " 2x8 rank group tray pair must be "
-        << (psd.is_bh_galaxy_rev_c() ? "{1,3} or {2,4}" : "{1,2} or {3,4}");
+        << (use_rev_c_tray_pairs ? "{1,3} or {2,4}" : "{1,2} or {3,4}");
 }
 
 void expect_galaxy_rank_group_4x4_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
@@ -1053,10 +1121,15 @@ void expect_galaxy_rank_group_4x4_check(const ControlPlane& control_plane, MeshI
     EXPECT_EQ(trays.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
                                 << " 4x4 rank group must sit on exactly two trays";
 
-    const auto& valid_tray_pairs = psd.is_bh_galaxy_rev_c() ? rev_c_tray_pairs : rev_ab_tray_pairs;
+    // Wormhole galaxy shares Blackhole rev-C's tray-pair mapping ({1,2}/{3,4}); only Blackhole rev-A/B uses
+    // {1,3}/{2,4}.
+    const bool is_wormhole_galaxy =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
+    const bool use_rev_c_tray_pairs = is_wormhole_galaxy || psd.is_bh_galaxy_rev_c();
+    const auto& valid_tray_pairs = use_rev_c_tray_pairs ? rev_c_tray_pairs : rev_ab_tray_pairs;
     EXPECT_TRUE(valid_tray_pairs.contains(trays))
         << "mesh " << *mesh_id << " host_rank " << *host_rank << " 4x4 rank group tray pair must be "
-        << (psd.is_bh_galaxy_rev_c() ? "{1,2} or {3,4}" : "{1,3} or {2,4}");
+        << (use_rev_c_tray_pairs ? "{1,2} or {3,4}" : "{1,3} or {2,4}");
 }
 
 void expect_galaxy_rank_group_4x8_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
@@ -1152,6 +1225,10 @@ void expect_galaxy_rank_group_checks(const ControlPlane& control_plane) {
             } else if (rank_group_shape_is(rank_shape, 2, 8)) {
                 expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 8);
                 expect_galaxy_rank_group_2x8_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 4, 1)) {
+                // 4x1 (or 1x4) column slice: e.g. a 4x4 mesh split across hosts with host_topology [1,4].
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 1);
+                expect_galaxy_rank_group_4x1_check(control_plane, mesh_id, host_rank);
             } else if (rank_group_shape_is(rank_shape, 4, 4)) {
                 expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 4);
                 expect_galaxy_rank_group_4x4_check(control_plane, mesh_id, host_rank);
@@ -1204,9 +1281,13 @@ void expect_galaxy_4x4_split_host_mesh_checks(const ControlPlane& control_plane)
                     expect_galaxy_rank_group_4x4_4x4split_check(control_plane, mesh_id, host_rank);
                     ran_4x4split_check = true;
                 }
+            } else if (rank_group_shape_is(rank_shape, 4, 1)) {
+                // 4x1 (or 1x4) column slice: e.g. a 4x4 mesh split across hosts with host_topology [1,4].
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 1);
+                expect_galaxy_rank_group_4x1_check(control_plane, mesh_id, host_rank);
             } else {
                 ADD_FAILURE() << "mesh " << *mesh_id << " host_rank " << *host_rank
-                              << " split-host 4x4 layout rank shape must be 1x1, 1x2, 2x2, 2x4, or 4x4, got "
+                              << " split-host 4x4 layout rank shape must be 1x1, 1x2, 2x2, 2x4, 4x1, or 4x4, got "
                               << rank_shape;
             }
         }
