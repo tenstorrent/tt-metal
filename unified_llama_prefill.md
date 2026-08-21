@@ -1983,6 +1983,18 @@ and 8x8 all verified with a bias, on Dst, L1 and single-shot, with a relu epilog
 That also closes the gap flagged above -- `bias_finish`'s multi-subblock banding is now
 exercised, by L1 at 8x8.
 
+**Re-swept afterwards to check the shared code**, since the fold moved the chain ordering
+and restructured `run_banded`: 240 cells, 9 holes, all still the L1 ceiling, ratios 0.90x to
+1.43x with a 1.15x median. Compared cell by cell against the pre-bias sweep, the 231 cells
+with a reference on both sides have a median delta of 0.00% and a mean absolute delta of
+0.36%, the largest movement in either direction is 0.09us, and exactly one cell moves more
+than 3% -- a 1x2 kt=1 *speedup* where 0.08us is 3.4%. So the bias work is neutral on
+unbiased matmuls, which is what it should be: the fold sits behind a `bias_cb != kNoBias`
+test that is false for every cell the sweep runs. Worth stating plainly, though -- **the
+sweep does not exercise a bias at all**, so it confirms the absence of a regression and
+nothing about the change itself. The bias numbers above are the evidence for that, and they
+come from a separate harness.
+
 **The cost is a real footgun.** A caller that leaves rows 1..31 zeroed gets the bias applied
 to one output row in 32, and because L1 still uses the broadcast form it gets the RIGHT
 answer there and the wrong one in Dst and single-shot. That is not hypothetical: the fold
