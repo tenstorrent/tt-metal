@@ -14,7 +14,8 @@ on:
           kimi_prefill_block, kimi_chunked, kimi_chunked_padded, kimi_dflash, glm_chunked, dsa_mla, dsa_mla_glm, glm_moe, glm_prefill_block, glm_chunked_accuracy, prefill_block_determinism,
           prefill_transformer_determinism, prefill_runner, minimax_prefill_kv_pcc,
           minimax_prefill_perf, high_bw_all_gather_perf, mistral4_mla,
-          mistral4_kv_cache_table, mistral4_mla_chunked, mistral4_moe_ops.
+          mistral4_kv_cache_table, mistral4_mla_chunked, mistral4_moe_ops,
+          mistral4_prefill_block, mistral4_moe, mistral4_prefill_transformer.
           The "module" group also runs every stage; the "sdpa_perf" group runs
           ring-joint SDPA and high-bandwidth all-gather perf checks.
         required: false
