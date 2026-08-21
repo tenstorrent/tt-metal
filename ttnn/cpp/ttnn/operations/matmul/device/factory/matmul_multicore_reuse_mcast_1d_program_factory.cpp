@@ -1356,9 +1356,33 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
     uint32_t num_cores = num_blocks_total;
 
-    // Note: mcast_in1 requires num_blocks_x == 1 (a single in1 sender multicasts one per_core_N-wide
-    // weight slice to the whole grid). That precondition is enforced in the op validator
-    // (matmul_device_operation.cpp), mirroring the mcast_in0 num_blocks_y == 1 guard.
+    TT_FATAL(
+        num_blocks_x == 1,
+        "mcast_in1 requires N ({}) to fit within one per_core_N block ({}); got num_blocks_x={}",
+        N,
+        per_core_N,
+        num_blocks_x);
+    TT_FATAL(
+        ((N - 1) / out_block_w) + 1 == out_num_blocks_x,
+        "mcast_in1 requires the logical N tail to be in the final internal W block; got N={}, per_core_N={}, "
+        "out_block_w={}",
+        N,
+        per_core_N,
+        out_block_w);
+    TT_FATAL(
+        num_blocks_y != 1 || ((M - 1) / out_block_h) + 1 == out_num_blocks_y,
+        "a single-Y mcast_in1 sender requires the logical M tail to be in the final internal H block; got M={}, "
+        "per_core_M={}, out_block_h={}",
+        M,
+        per_core_M,
+        out_block_h);
+    TT_FATAL(
+        num_blocks_y != 1 || M % out_block_h == 0 || out_num_blocks_y == 1,
+        "a single-Y mcast_in1 sender supports a partial final H block only with one internal H block; got M={}, "
+        "per_core_M={}, out_block_h={}",
+        M,
+        per_core_M,
+        out_block_h);
 
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
@@ -1962,9 +1986,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
         // in0 sender and in1 sender
         if (core == start_core) {
-            // W-dim tail for the last X block. start_core is always output_idx_y == 0,
-            // so no H tail applies here; but when num_blocks_x == 1 (e.g. per_core_N > Nt)
-            // start_core is itself the last X block and must trim its W writes.
+            // The sender can independently be the last block in either dimension.
+            bool last_y = (output_idx_y == num_blocks_y - 1);
             bool last_x = (output_idx_x == num_blocks_x - 1);
             std::vector<uint32_t> mm_in1_sender_writer_args = {
                 // READER
@@ -1988,11 +2011,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
                 // padding args (READER)
                 (std::uint32_t)(last_x ? last_out_block_w : out_block_w),  // last_block_w
-                // padding args (WRITER): H stays full (start_core is output_idx_y == 0);
-                // W tail is trimmed when start_core is the last X block.
-                (std::uint32_t)out_block_h / out_subblock_h,
-                (std::uint32_t)out_subblock_h,
-                (std::uint32_t)0,
+                // padding args (WRITER)
+                (std::uint32_t)(last_y ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h),
+                (std::uint32_t)(last_y ? last_subblock_of_last_block_h : out_subblock_h),
+                (std::uint32_t)(last_y ? last_block_padded_block_tiles_h_skip : 0),
                 (std::uint32_t)out_block_w / out_subblock_w,
                 (std::uint32_t)(last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w),
                 (std::uint32_t)(last_x ? last_subblock_of_last_block_w : out_subblock_w),
@@ -4347,6 +4369,34 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
     uint32_t num_cores = num_blocks_total;
 
+    TT_FATAL(
+        num_blocks_x == 1,
+        "mcast_in1 requires N ({}) to fit within one per_core_N block ({}); got num_blocks_x={}",
+        N,
+        per_core_N,
+        num_blocks_x);
+    TT_FATAL(
+        ((N - 1) / out_block_w) + 1 == out_num_blocks_x,
+        "mcast_in1 requires the logical N tail to be in the final internal W block; got N={}, per_core_N={}, "
+        "out_block_w={}",
+        N,
+        per_core_N,
+        out_block_w);
+    TT_FATAL(
+        num_blocks_y != 1 || ((M - 1) / out_block_h) + 1 == out_num_blocks_y,
+        "a single-Y mcast_in1 sender requires the logical M tail to be in the final internal H block; got M={}, "
+        "per_core_M={}, out_block_h={}",
+        M,
+        per_core_M,
+        out_block_h);
+    TT_FATAL(
+        num_blocks_y != 1 || M % out_block_h == 0 || out_num_blocks_y == 1,
+        "a single-Y mcast_in1 sender supports a partial final H block only with one internal H block; got M={}, "
+        "per_core_M={}, out_block_h={}",
+        M,
+        per_core_M,
+        out_block_h);
+
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
         tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, matmul_core_rect, row_major);
@@ -4946,9 +4996,8 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 
         // in0 sender and in1 sender
         if (core == start_core) {
-            // W-dim tail for the last X block. start_core is always output_idx_y == 0,
-            // so no H tail applies here; but when num_blocks_x == 1 (e.g. per_core_N > Nt)
-            // start_core is itself the last X block and must trim its W writes.
+            // The sender can independently be the last block in either dimension.
+            bool last_y = (output_idx_y == num_blocks_y - 1);
             bool last_x = (output_idx_x == num_blocks_x - 1);
             std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> mm_in1_sender_writer_args = {
                 // READER
@@ -4972,11 +5021,10 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 
                 // padding args (READER)
                 (std::uint32_t)(last_x ? last_out_block_w : out_block_w),  // last_block_w
-                // padding args (WRITER): H stays full (start_core is output_idx_y == 0);
-                // W tail is trimmed when start_core is the last X block.
-                (std::uint32_t)out_block_h / out_subblock_h,
-                (std::uint32_t)out_subblock_h,
-                (std::uint32_t)0,
+                // padding args (WRITER)
+                (std::uint32_t)(last_y ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h),
+                (std::uint32_t)(last_y ? last_subblock_of_last_block_h : out_subblock_h),
+                (std::uint32_t)(last_y ? last_block_padded_block_tiles_h_skip : 0),
                 (std::uint32_t)out_block_w / out_subblock_w,
                 (std::uint32_t)(last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w),
                 (std::uint32_t)(last_x ? last_subblock_of_last_block_w : out_subblock_w),
