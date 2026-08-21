@@ -411,6 +411,27 @@ namespace unified {
 
 // INPUT + INTERMED + OUTPUT: two DRAM loads, an SFPU add into an intermediate,
 // a second add, then a DRAM store.
+// Shape::dim, both directions. These are compile-time facts, so a static_assert is the
+// whole test -- nothing runs, and a wrong answer never reaches a device.
+namespace shape_checks {
+using R3 = Shape<2, 3, 4>;
+using R1 = Shape<7>;
+
+// Forward indexing, unchanged.
+static_assert(R3::dim(0) == 2 && R3::dim(1) == 3 && R3::dim(2) == 4, "forward indices");
+
+// Backward, which is the point: the last dimension is dim(-1) whatever the rank, so code
+// that means "columns" can say so without knowing how many leading axes there are.
+static_assert(R3::dim(-1) == 4 && R3::dim(-2) == 3 && R3::dim(-3) == 2, "negative indices");
+static_assert(R1::dim(-1) == 7 && R1::dim(0) == 7, "rank 1 has one dimension either way");
+
+// And that the two namings agree, which is what would break if the wrap arithmetic were
+// off by one in either direction.
+static_assert(R3::dim(-1) == R3::cols && R3::dim(-2) == R3::rows, "dim agrees with cols/rows");
+static_assert(R1::dim(-1) == R1::cols, "rank 1 columns");
+static_assert(R3::dim(R3::rank - 1) == R3::dim(-1), "the two ends meet");
+}  // namespace shape_checks
+
 void example_eltwise() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t1 = TensorAccessor(FakeArgs{1}, 0);
