@@ -19,6 +19,7 @@ from .llk_params import (
     BroadcastType,
     DataCopyType,
     DestSync,
+    DestSyncScheme,
     DstRoundingMode,
     EltwiseBinaryReuseDestType,
     FastMode,
@@ -635,6 +636,27 @@ class DEST_SYNC(TemplateParameter):
     def convert_to_cpp(self) -> str:
         return (
             f"constexpr auto dest_sync = ckernel::DstSync::Sync{self.dest_sync.name};"
+        )
+
+
+@dataclass
+class DEST_SYNC_SCHEME(TemplateParameter):
+    scheme: DestSyncScheme = DestSyncScheme.Semaphore
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool USE_DVALID_SCHEME = {self.scheme.value};"
+
+
+@dataclass
+class SYNC_CHAIN(TemplateParameter):
+    chain: tuple = ()
+
+    def convert_to_cpp(self) -> str:
+        ops = ", ".join(f"ChainOp::{op.name}" for op in self.chain)
+        return (
+            "enum class ChainOp : std::uint32_t { UNPACK = 0, FPU = 1, SFPU = 2, PACK = 3 };\n"
+            f"constexpr ChainOp CHAIN_OPS[] = {{{ops}}};\n"
+            f"constexpr std::uint32_t CHAIN_LENGTH = {len(self.chain)};"
         )
 
 

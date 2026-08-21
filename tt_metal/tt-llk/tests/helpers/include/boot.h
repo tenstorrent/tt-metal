@@ -132,6 +132,8 @@ TT_ALWAYS_INLINE void device_setup()
     // Reset all dest dvalid bits for all clients
     TTI_CLEARDVALID(0, 0, 0xf, 0xf, 0, 0);
     TTI_SEMINIT(1, 0, 0, ckernel::trisc::semaphore::t6_sem(ckernel::trisc::semaphore::PACK_UNPACK));
+    TTI_SEMINIT(1, 0, 0, ckernel::trisc::semaphore::t6_sem(ckernel::trisc::semaphore::FPU_SFPU));
+    TTI_SEMINIT(1, 0, 0, ckernel::trisc::semaphore::t6_sem(ckernel::trisc::semaphore::SFPU_FPU));
 #endif
 
 // Enable CC stack
