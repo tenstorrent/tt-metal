@@ -66,6 +66,34 @@ void kernel_main() {
     constexpr auto dfb_xsum_id = tt::CBIndex::c_31;
 
     constexpr uint32_t onetile = 1;
+    constexpr auto x_scalar_offset_input = ckl::input(
+        dfb_x_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        kDataFormatReconfig,
+        ckl::TileAddressing::Offset);
+    constexpr auto mask_h_scalar_offset_input = ckl::input(
+        dfb_mask_h_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        kDataFormatReconfig,
+        ckl::TileAddressing::Offset);
+    constexpr auto mask_w_scalar_offset_input = ckl::input(
+        dfb_mask_w_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        kDataFormatReconfig,
+        ckl::TileAddressing::Offset);
+    constexpr auto xmm_block_offset_input = ckl::input(
+        dfb_xmm_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Block,
+        kDataFormatReconfig,
+        ckl::TileAddressing::Offset);
 
     dfb_scaler_obj.wait_front(onetile);  // comes from the reader
     dfb_eps_obj.wait_front(onetile);     // comes from the reader
@@ -100,36 +128,14 @@ void kernel_main() {
                 if (w_idx == 0) {
                     ckl::eltwise_chain(
                         ckl::IterationShape::one_tile(),
-                        ckl::CopyTile<ckl::input(
-                            dfb_x_id,
-                            ckl::WaitPolicy::None,
-                            ckl::PopPolicy::None,
-                            ckl::InputTileMapping::Scalar,
-                            kDataFormatReconfig,
-                            ckl::TileAddressing::Offset)>{first_tile},
+                        ckl::CopyTile<x_scalar_offset_input>{first_tile},
                         ckl::runtime_if(
                             do_mask_h && need_to_do_mask_h(w_idx, origin_Ht, origin_Wt),
-                            ckl::CopyTile<
-                                ckl::input(
-                                    dfb_mask_h_id,
-                                    ckl::WaitPolicy::None,
-                                    ckl::PopPolicy::None,
-                                    ckl::InputTileMapping::Scalar,
-                                    kDataFormatReconfig,
-                                    ckl::TileAddressing::Offset),
-                                ckl::Dst::D1>{first_tile},
+                            ckl::CopyTile<mask_h_scalar_offset_input, ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
                         ckl::runtime_if(
                             do_mask_w && ((w_idx + 1) % origin_Wt == 0),
-                            ckl::CopyTile<
-                                ckl::input(
-                                    dfb_mask_w_id,
-                                    ckl::WaitPolicy::None,
-                                    ckl::PopPolicy::None,
-                                    ckl::InputTileMapping::Scalar,
-                                    kDataFormatReconfig,
-                                    ckl::TileAddressing::Offset),
-                                ckl::Dst::D1>{first_tile},
+                            ckl::CopyTile<mask_w_scalar_offset_input, ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
                         ckl::PackTile<ckl::output(
                             dfb_xsum_id,
@@ -141,36 +147,14 @@ void kernel_main() {
                     constexpr auto dfb_tmp_id = dfb_ex_id;
                     ckl::eltwise_chain(
                         ckl::IterationShape::one_tile(),
-                        ckl::CopyTile<ckl::input(
-                            dfb_x_id,
-                            ckl::WaitPolicy::None,
-                            ckl::PopPolicy::None,
-                            ckl::InputTileMapping::Scalar,
-                            kDataFormatReconfig,
-                            ckl::TileAddressing::Offset)>{w_idx},
+                        ckl::CopyTile<x_scalar_offset_input>{w_idx},
                         ckl::runtime_if(
                             do_mask_h && need_to_do_mask_h(w_idx, origin_Ht, origin_Wt),
-                            ckl::CopyTile<
-                                ckl::input(
-                                    dfb_mask_h_id,
-                                    ckl::WaitPolicy::None,
-                                    ckl::PopPolicy::None,
-                                    ckl::InputTileMapping::Scalar,
-                                    kDataFormatReconfig,
-                                    ckl::TileAddressing::Offset),
-                                ckl::Dst::D1>{first_tile},
+                            ckl::CopyTile<mask_h_scalar_offset_input, ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
                         ckl::runtime_if(
                             do_mask_w && ((w_idx + 1) % origin_Wt == 0),
-                            ckl::CopyTile<
-                                ckl::input(
-                                    dfb_mask_w_id,
-                                    ckl::WaitPolicy::None,
-                                    ckl::PopPolicy::None,
-                                    ckl::InputTileMapping::Scalar,
-                                    kDataFormatReconfig,
-                                    ckl::TileAddressing::Offset),
-                                ckl::Dst::D1>{first_tile},
+                            ckl::CopyTile<mask_w_scalar_offset_input, ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
                         ckl::PackTile<ckl::output(
                             dfb_tmp_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
@@ -218,13 +202,7 @@ void kernel_main() {
                     ckl::IterationShape::one_tile(),
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Sub,
-                        ckl::input(
-                            dfb_x_id,
-                            ckl::WaitPolicy::None,
-                            ckl::PopPolicy::None,
-                            ckl::InputTileMapping::Scalar,
-                            kDataFormatReconfig,
-                            ckl::TileAddressing::Offset),
+                        x_scalar_offset_input,
                         ckl::input(
                             dfb_ex_id,
                             is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
@@ -235,27 +213,11 @@ void kernel_main() {
                             ckl::TileAddressing::Offset)>{w_idx, first_tile},
                     ckl::runtime_if(
                         do_mask_h && need_to_do_mask_h(w_idx, origin_Ht, origin_Wt),
-                        ckl::CopyTile<
-                            ckl::input(
-                                dfb_mask_h_id,
-                                ckl::WaitPolicy::None,
-                                ckl::PopPolicy::None,
-                                ckl::InputTileMapping::Scalar,
-                                kDataFormatReconfig,
-                                ckl::TileAddressing::Offset),
-                            ckl::Dst::D1>{first_tile},
+                        ckl::CopyTile<mask_h_scalar_offset_input, ckl::Dst::D1>{first_tile},
                         ckl::Mask<>{}),
                     ckl::runtime_if(
                         do_mask_w && (w_idx + 1) % origin_Wt == 0,
-                        ckl::CopyTile<
-                            ckl::input(
-                                dfb_mask_w_id,
-                                ckl::WaitPolicy::None,
-                                ckl::PopPolicy::None,
-                                ckl::InputTileMapping::Scalar,
-                                kDataFormatReconfig,
-                                ckl::TileAddressing::Offset),
-                            ckl::Dst::D1>{first_tile},
+                        ckl::CopyTile<mask_w_scalar_offset_input, ckl::Dst::D1>{first_tile},
                         ckl::Mask<>{}),
                     ckl::PackTile<ckl::output(
                         dfb_xmm_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
@@ -272,22 +234,8 @@ void kernel_main() {
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx++) {
             ckl::eltwise_chain(
                 ckl::IterationShape::tiles(onetile),
-                ckl::BinaryFpu<
-                    ckl::BinaryFpuOp::Mul,
-                    ckl::input(
-                        dfb_xmm_id,
-                        ckl::WaitPolicy::None,
-                        ckl::PopPolicy::None,
-                        ckl::InputTileMapping::Block,
-                        kDataFormatReconfig,
-                        ckl::TileAddressing::Offset),
-                    ckl::input(
-                        dfb_xmm_id,
-                        ckl::WaitPolicy::None,
-                        ckl::PopPolicy::None,
-                        ckl::InputTileMapping::Block,
-                        kDataFormatReconfig,
-                        ckl::TileAddressing::Offset)>{inner_idx, inner_idx},
+                ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, xmm_block_offset_input, xmm_block_offset_input>{
+                    inner_idx, inner_idx},
                 ckl::PackTile<ckl::output(
                     dfb_xmm2_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
             if (inner_idx == 0) {
@@ -351,13 +299,7 @@ void kernel_main() {
                 ckl::IterationShape::tiles(block_size).block_size(block_size),
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Mul,
-                    ckl::input(
-                        dfb_xmm_id,
-                        ckl::WaitPolicy::None,
-                        ckl::PopPolicy::None,
-                        ckl::InputTileMapping::Block,
-                        kDataFormatReconfig,
-                        ckl::TileAddressing::Offset),
+                    xmm_block_offset_input,
                     ckl::input(
                         dfb_recip_std_id,
                         is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
