@@ -95,8 +95,6 @@ def generate_parallel_matmul_add_combinations(formats_list):
     for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
         formats_list
     ):
-        if not fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
-            continue
         for dest_sync in (DestSync.Half, DestSync.Full):
             for implied_math_format in (
                 ImpliedMathFormat.No,

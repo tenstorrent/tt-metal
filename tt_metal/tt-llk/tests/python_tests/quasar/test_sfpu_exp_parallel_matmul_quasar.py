@@ -83,8 +83,6 @@ def generate_parallel_matmul_exp_combinations(
     for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
         formats_list
     ):
-        if not fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
-            continue
         dest_sync_modes = (DestSync.Half, DestSync.Full)
         implied_math_modes = (
             (ImpliedMathFormat.Yes,)
