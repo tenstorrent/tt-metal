@@ -18,15 +18,15 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_tanh_(const int iterations)
 {
     // SFPU microcode
-    sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vFloat8Pair l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vFloat8Pair l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vFloat8Pair l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
 
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
         sfpi::vFloat val = sfpi::dst_reg[0];
-        val              = lut(val, l0, l1, l2);
+        val              = sfpi::lut(val, l0, l1, l2);
         sfpi::dst_reg[0] = val;
 
         sfpi::dst_reg++;
@@ -40,9 +40,9 @@ inline void _calculate_tanh_(const int iterations)
 template <bool APPROXIMATION_MODE>
 inline void _init_tanh_()
 {
-    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(static_cast<std::uint16_t>(0x1DFF)); // 0.90625*x
-    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(static_cast<std::uint16_t>(0x481A)); // 0.09375*x + 0.8125
-    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(static_cast<std::uint16_t>(0xFF00)); // 1
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vFloat8Pair(0.90625f, 0.0f);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vFloat8Pair(0.09375f, 0.8125f);
+    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vFloat8Pair(0.0f, 1.0f);
 }
 
 } // namespace sfpu

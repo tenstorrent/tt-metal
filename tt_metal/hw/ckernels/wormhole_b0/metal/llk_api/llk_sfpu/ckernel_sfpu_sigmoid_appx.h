@@ -16,15 +16,15 @@ namespace sfpu {
 
 template <int ITERATIONS = 8>
 inline void calculate_sigmoid_appx() {
-    vUInt l0 = l_reg[LRegs::LReg0];
-    vUInt l1 = l_reg[LRegs::LReg1];
-    vUInt l2 = l_reg[LRegs::LReg2];
+    sfpi::vFloat8Pair l0 = l_reg[sfpi::LRegs::LReg0];
+    sfpi::vFloat8Pair l1 = l_reg[sfpi::LRegs::LReg1];
+    sfpi::vFloat8Pair l2 = l_reg[sfpi::LRegs::LReg2];
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat val = dst_reg[0];
 
-        dst_reg[0] = lut(val, l0, l1, l2) + 0.5f;
+        dst_reg[0] = sfpi::lut(val, l0, l1, l2) + 0.5f;
 
         dst_reg++;
     }
@@ -35,9 +35,9 @@ inline void calculate_sigmoid_appx() {
 }
 
 inline void sigmoid_appx_init() {
-    l_reg[LRegs::LReg0] = vUInt(static_cast<std::uint16_t>(0x3DFF));
-    l_reg[LRegs::LReg1] = vUInt(static_cast<std::uint16_t>(0x21D8));
-    l_reg[LRegs::LReg2] = vUInt(static_cast<std::uint16_t>(0xFF10));
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vFloat8Pair(0.22656f, 0.0f);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vFloat8Pair(0.26562f, -0.04687f);
+    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vFloat8Pair(0.0f, 0.5f);
 }
 
 }  // namespace sfpu
