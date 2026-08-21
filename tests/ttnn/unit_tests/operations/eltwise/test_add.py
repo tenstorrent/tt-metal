@@ -481,6 +481,9 @@ def test_add_with_block_sharding(device, input_a_sharded, input_b_sharded, out_s
         ([1], [2], [3]),
         ([1], [], []),
         ([], [1], []),
+        ([1, 2], [3], [4, 5]),
+        ([1], [2, 3], [3, 4]),
+        ([1, 2], [3, 4], [4, 6]),
     ],
 )
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
@@ -585,6 +588,7 @@ def test_add_block_float_defaults_to_fpu(device, ttnn_dtype):
         ttnn.add(
             input_tensor_a,
             input_tensor_b,
+            fast_and_approximate_mode=True,
         )
     )
 
