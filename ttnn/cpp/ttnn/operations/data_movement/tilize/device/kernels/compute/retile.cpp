@@ -16,6 +16,10 @@
 // (consumer) to avoid a copy, exposed as two aliased CB views because the producer and consumer
 // need different fixed tile/face geometry: mid_cb has the input tile shape, mid_view_cb the output
 // tile shape (its bytes stay in the input data format; conversion happens on the final pack).
+//
+// Untilize the whole assignment, then tilize it, rather than interleaving the two. The output CB
+// may be buffer-backed (sharded zero-copy); re-entering tilize_init there would re-base the packer
+// write pointer and overwrite already-packed rows.
 
 namespace {
 
@@ -60,77 +64,49 @@ void kernel_main() {
             (out_tile_height > in_tile_height && (out_tile_height % in_tile_height) == 0),
         "retile kernel requires one tile height to divide the other exactly");
 
-    // Shrink: one input tile-row untilizes to `ratio` output tile-rows. Grow: `ratio` input
-    // tile-rows form one output tile-row. One tile height must divide the other exactly.
-    constexpr bool shrink = in_tile_height >= out_tile_height;
-    constexpr uint32_t ratio = shrink ? (in_tile_height / out_tile_height) : (out_tile_height / in_tile_height);
-
-    constexpr uint32_t in_rows_per_iter = shrink ? 1u : ratio;
-    constexpr uint32_t out_rows_per_iter = shrink ? ratio : 1u;
-    constexpr uint32_t block_pages = in_rows_per_iter * tiles_per_block;
     constexpr uint32_t words_per_out_tile_row = (tiles_per_block * out_tile_size) >> 4;
-
-    const uint32_t num_iters = num_input_blocks / in_rows_per_iter;
+    const uint32_t total_mid_pages = num_input_blocks * tiles_per_block;
 
     compute_kernel_hw_startup(src_cb, mid_cb);
 
     DataflowBuffer mid(mid_cb);
     DataflowBuffer out_dfb(out_cb);
 
-    uint32_t emitted_output_rows = 0;
-
-    for (uint32_t b = 0; b < num_iters; ++b) {
-        // Rows beyond num_real_input_rows are grow-case height padding: they don't exist in DRAM,
-        // so they are zero-filled into the intermediate instead of untilized from the input.
-        const uint32_t block_in_row_start = b * in_rows_per_iter;
-        uint32_t real_rows = 0;
-        if (block_in_row_start < num_real_input_rows) {
-            const uint32_t rem = num_real_input_rows - block_in_row_start;
-            real_rows = rem < in_rows_per_iter ? rem : in_rows_per_iter;
-        }
-        const uint32_t pad_rows = in_rows_per_iter - real_rows;
-
-        if (real_rows > 0) {
+    if (num_real_input_rows > 0) {
+        // One tile-row at a time: pack_untilize of a full shard can exceed dest capacity
+        // for wide sharded blocks, and InitAndUninit per row matches the previously working path.
+        for (uint32_t row = 0; row < num_real_input_rows; ++row) {
             compute_kernel_lib::untilize<
                 tiles_per_block,
                 src_cb,
                 mid_cb,
                 compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(real_rows);
-        }
-        for (uint32_t k = 0; k < pad_rows; ++k) {
-            fill_zeros_pages(mid, tiles_per_block, mid_page_size);
-        }
-
-        mid.wait_front(block_pages);
-        uint32_t block_rd_ptr = 0;
-        UNPACK({ block_rd_ptr = get_local_cb_interface(mid_cb).fifo_rd_ptr; })
-
-        // mid_view_cb aliases the mid_cb L1 region but has no producer of its own, and its output
-        // tile-rows sit at non-page-aligned byte offsets within the block that pops can't express.
-        // So set its fifo_rd_ptr directly to the block base plus each output tile-row's offset.
-        pack_reconfig_data_format(mid_cb, out_cb);
-        tilize_init(mid_view_cb, tiles_per_block, out_cb);
-        for (uint32_t r = 0; r < out_rows_per_iter; ++r) {
-            if (emitted_output_rows >= num_real_output_rows) {
-                break;
-            }
-            UNPACK({ get_local_cb_interface(mid_view_cb).fifo_rd_ptr = block_rd_ptr + r * words_per_out_tile_row; })
-            out_dfb.reserve_back(tiles_per_block);
-            tilize_block(mid_view_cb, tiles_per_block, out_cb);
-            out_dfb.push_back(tiles_per_block);
-            ++emitted_output_rows;
-        }
-        tilize_uninit(mid_view_cb, out_cb);
-
-        mid.pop_front(block_pages);
-
-        reconfig_data_format_srca(mid_view_cb, src_cb);
-        pack_reconfig_data_format(out_cb, mid_cb);
-
-        if (emitted_output_rows >= num_real_output_rows) {
-            break;
+                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
         }
     }
+    const uint32_t pad_rows = num_input_blocks > num_real_input_rows ? (num_input_blocks - num_real_input_rows) : 0;
+    for (uint32_t k = 0; k < pad_rows; ++k) {
+        fill_zeros_pages(mid, tiles_per_block, mid_page_size);
+    }
+
+    mid.wait_front(total_mid_pages);
+    uint32_t block_rd_ptr = 0;
+    UNPACK({ block_rd_ptr = get_local_cb_interface(mid_cb).fifo_rd_ptr; })
+
+    // Reconfigure the unpacker/packer from the untilize config (src_cb/mid_cb) to the tilize
+    // config (mid_view_cb/out_cb). tilize_init's state_configure is sentinel-only, so the
+    // hardware reconfig must be explicit — for bf16 it's a no-op, for bfloat8 it's required.
+    reconfig_data_format_srca(src_cb, mid_view_cb);
+    pack_reconfig_data_format(mid_cb, out_cb);
+    tilize_init(mid_view_cb, tiles_per_block, out_cb);
+    for (uint32_t r = 0; r < num_real_output_rows; ++r) {
+        UNPACK({ get_local_cb_interface(mid_view_cb).fifo_rd_ptr = block_rd_ptr + r * words_per_out_tile_row; })
+        out_dfb.reserve_back(tiles_per_block);
+        tilize_block(mid_view_cb, tiles_per_block, out_cb);
+        out_dfb.push_back(tiles_per_block);
+    }
+    tilize_uninit(mid_view_cb, out_cb);
+
+    mid.pop_front(total_mid_pages);
 }
