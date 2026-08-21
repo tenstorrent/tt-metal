@@ -530,6 +530,27 @@ KNOBS = {
     # REFUSAL_BYTE_IDENTICAL.
     "milp": "-mtt-tensix-optimize-pressure-schedule "
     "-mtt-tensix-pressure-schedule-use-milp",
+    # EJ (reassoc-license): THE LICENSED REASSOCIATION LEG (owner
+    # ratification 2026-08-21: value-changing FP reassociation is
+    # licensed when the user passes -fassociative-math, the explicit
+    # industry opt-in; the charter's silent-rounding-change ban stands —
+    # nothing reassociates without the flag).  The compiler fires only
+    # under BOTH -fassociative-math AND -mtt-tensix-optimize-reassoc
+    # (accumulation-chain rebalance, multi-use MUL+ADD->SFPMAD fusion;
+    # integer/bitwise rebalance is value-identical and needs only the
+    # -mtt flag).  The token carries -fno-signed-zeros
+    # -fno-trapping-math because GCC itself CLEARS flag_associative_math
+    # without them (toplev.cc:1623 "-fassociative-math disabled; other
+    # options take precedence") — without the pair the leg would be a
+    # silent A/A with a warning, the exact blind-leg class the modes
+    # exist to kill.  LICENSED-LEG BOOKKEEPING (LICENSED_KNOBS below):
+    # cells are LICENSED, never merged into unlicensed cells; a knob-leg
+    # CRAQ mismatch against the bit-exact baseline is LICENSED-EXPECTED
+    # (the license working, recorded never silent); correctness
+    # authority is the device-golden run at the row's documented
+    # tolerance.
+    "reassoc": "-fassociative-math -fno-signed-zeros -fno-trapping-math "
+    "-mtt-tensix-optimize-reassoc",
 }
 # Per-knob leg MODE (see the KNOBS comment).  Every key must be a KNOBS
 # key; absent = "solo".  The three seeded drop-one knobs are the known
@@ -562,7 +583,71 @@ KNOB_MODES = {
     "list-schedule": "on-plus",
     "lreg-alloc": "on-plus",
     "milp": "on-plus",
+    # EJ licensed reassociation: booking A/B is (reviewed-ON + license
+    # tokens) vs plain reviewed-ON — the licensed fire acts on the
+    # post-ON pipeline's chains, and the delta must read as the
+    # license's own effect.
+    "reassoc": "on-plus",
 }
+
+# ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
+# A licensed knob's flag string deliberately CHANGES VALUES (here:
+# floating-point reassociation under -fassociative-math, the explicit
+# opt-in mechanism production compilers use for changed rounding).
+# Three bookkeeping rules, enforced in knob_silicon via
+# licensed_craq_disposition and the entry/cell "licensed" markers:
+#   1. cells are marked LICENSED and are never merged into unlicensed
+#      cells — the license tokens ride entry["flags"], so every device
+#      jobkey and cross-run reuse key differs from any unlicensed cell
+#      by construction;
+#   2. paired-CRAQ bit-exact equality between the legs is EXPECTED to
+#      fail on a reassociated leg — that is the license working, and it
+#      is recorded as LICENSED-EXPECTED (never silent) instead of
+#      withholding silicon;
+#   3. correctness authority for the licensed leg is the DEVICE-GOLDEN
+#      correctness run at the row's documented tolerance (knob_silicon
+#      step 4) — a device correctness failure still stops perf
+#      unconditionally, licensed or not.
+LICENSED_KNOBS = {
+    "reassoc": (
+        "value-changing FP reassociation, owner-ratified 2026-08-21: "
+        "-fassociative-math (+ the -fno-signed-zeros -fno-trapping-math "
+        "pair GCC requires for it to take effect) AND "
+        "-mtt-tensix-optimize-reassoc"
+    ),
+}
+for _k in LICENSED_KNOBS:
+    if _k not in KNOBS:
+        sys.exit(f"LICENSED_KNOBS names an unknown knob: {_k}")
+
+
+def licensed_craq_disposition(knob, legs):
+    """CRAQ-gate disposition for one knob's paired BH CRAQ legs.
+
+    Returns (gate_open, licensed_note).  Unlicensed knobs keep the
+    historical rule byte-identically: the gate opens only on all-PASS.
+    LICENSED knobs (LICENSED_KNOBS): the OFF leg must PASS — it is the
+    unlicensed baseline and a broken baseline withholds silicon exactly
+    as before — but a knob-leg mismatch is the license working
+    (value-changing reassociation is EXPECTED to break bit-exact/sim
+    equality), so the gate stays OPEN and the mismatch is recorded
+    LICENSED-EXPECTED, never silent.  Correctness authority for the
+    licensed leg is the device-golden correctness run at the row's
+    documented tolerance (knob_silicon step 4), which still stops perf
+    on any failure."""
+    if not legs:
+        return False, None
+    if all(v == "PASS" for v in legs.values()):
+        return True, None
+    if knob in LICENSED_KNOBS and legs.get("off") == "PASS":
+        return True, (
+            f"LICENSED-EXPECTED: knob-leg CRAQ {legs.get('knob')} under the "
+            f"'{knob}' license ({LICENSED_KNOBS[knob]}); bit-exact equality "
+            "is expected to fail on a reassociated leg — correctness "
+            "authority is the device-golden run at the row's documented "
+            "tolerance"
+        )
+    return False, None
 
 
 def knob_mode(knob):
@@ -3732,12 +3817,19 @@ exit $RC
                 )
                 if arch == "bh":
                     bh_verdict = v
-            gate = bool(
-                bh_verdict
-                and bh_verdict.get("legs")
-                and all(x == "PASS" for x in bh_verdict["legs"].values())
+            gate, lic_note = licensed_craq_disposition(
+                knob, bh_verdict.get("legs") if bh_verdict else None
             )
             entry["craq_bh"] = bh_verdict
+            if knob in LICENSED_KNOBS:
+                # LICENSED cells: marked, and never merged into
+                # unlicensed cells (the license tokens ride
+                # entry["flags"], so every jobkey differs from any
+                # unlicensed cell's by construction).
+                entry["licensed"] = LICENSED_KNOBS[knob]
+            if lic_note:
+                # The license working — recorded, never silent.
+                entry["craq_licensed_expected"] = lic_note
             if not gate and not self.a.skip_craq_gate:
                 entry["status"] = "WITHHELD_CRAQ_NOT_GREEN"
                 self.reds.append(
@@ -3796,6 +3888,8 @@ exit $RC
             cell = {leg: (sum(v) / len(v)) if v else None for leg, v in samples.items()}
             if cell["off"] and cell["knob"]:
                 cell["delta_pct"] = 100.0 * (cell["knob"] - cell["off"]) / cell["off"]
+            if knob in LICENSED_KNOBS:
+                cell["licensed"] = True  # never merge into unlicensed cells
             entry["cells"] = cell
             entry["status"] = "OK"
         (self.ev / row["op"] / "knob-silicon.json").write_text(
