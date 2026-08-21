@@ -1,0 +1,219 @@
+diff --git a/tt_metal/tt-llk/tests/corpus/sfpu_device_baseline_p150_v1.tsv b/tt_metal/tt-llk/tests/corpus/sfpu_device_baseline_p150_v1.tsv
+index 3303323c29..f6bf51126a 100644
+--- a/tt_metal/tt-llk/tests/corpus/sfpu_device_baseline_p150_v1.tsv
++++ b/tt_metal/tt-llk/tests/corpus/sfpu_device_baseline_p150_v1.tsv
+@@ -70,7 +70,7 @@
+ #      flags default-off, measured as knob legs).  Driver 5d3742f58472….  Installed
+ #      via pin-install-fast (gate-proven binaries, PIN_REVIEW-3ca94518817a).  First
+ #      silicon = the pin-14 full sweep.
+-#  15. c5bf1bf9aa2c9a36f210a3656b9ea40e6350f2387e760d138e431fe70b557393 (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — the pin-15
++#  15. c5bf1bf9aa2c9a36f210a3656b9ea40e6350f2387e760d138e431fe70b557393 — the pin-15
+ #      crown-jewel union (sfpi-gcc f5aa5bbf676b90ca4f2045edf6613658b76fd0db: DK census fail-closed, DL latency
+ #      audits + capture-rotation widening, DN ccmask/int-abs completions, DM
+ #      residency widenings, DS/DT arsenals, DQ list scheduler, DP lreg allocator,
+@@ -78,6 +78,15 @@
+ #      UNCHANGED at 25; new flags (list-schedule, lreg-alloc [+dst-layout-32b
+ #      harness wiring], pressure-schedule+milp) are Init(0) on-plus knob legs.
+ #      First silicon = the pin-15 measurement pass (MEASUREMENT-PLAN-PIN15.md).
++#  16. __CC1PLUS16__ (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — the pin-16
++#      pass-wave-2 union (sfpi-gcc __SFPIGCC16__: EB dst-autoincr pricing [58
++#      adjudicated ON-25 rows], EC record-hoist, EH prera, EG delivery-shape, DP
++#      df-notes fix, EJ licensed reassoc, EI round-interleave, EL cc-restore in
++#      invariant-loadi [19 adjudicated ON-25 rows], EK store-folds [ON-25 inert;
++#      269-row adjudicated knob delta] + lane EN pure-union merge fixes).  Driver
++#      __DRIVER16__.  ON set UNCHANGED at 25; new flags (delivery-shape,
++#      record-hoist, prera, round-interleave, reassoc [licensed triple],
++#      store-fold, int-not) are Init(0) on-plus knob legs.
+ # SIM PAIRING: from pin 7 onward the CRAQ oracle is the CORRECTED craq-sim 9f324140 pair —
+ # bh 32489dda4fd6… (CURRENT sweep_2x2.conf PINNED_SIM_BH_SHA256), wh 8f0079a9a16c… (CURRENT
+ # sweep_2x2.conf PINNED_SIM_WH_SHA256); conf_lint.sh R6 enforces the bh anchor and
+diff --git a/tt_metal/tt-llk/tests/corpus/sweep_2x2.conf b/tt_metal/tt-llk/tests/corpus/sweep_2x2.conf
+index 1d9f8333af..80f895dc2e 100644
+--- a/tt_metal/tt-llk/tests/corpus/sweep_2x2.conf
++++ b/tt_metal/tt-llk/tests/corpus/sweep_2x2.conf
+@@ -27,17 +27,64 @@
+ # harness hardcodes tests/sfpi/compiler/bin; preflight records the
+ # symlink's realpath and re-verifies the resolved cc1plus at every phase).
+ #
+-# CURRENT PIN (values below): cc1plus c5bf1bf9aa2c9a36f210a3656b9ea40e6350f2387e760d138e431fe70b557393 / driver
+-# 0ce0f02f5033afb45e3a90c40b5e67857684767c3ed59f61eaddfd0b53f5577a — pin 15 (pin cycle 11), the crown-jewel union.  This
+-# prose block and history entry 15 were PREPARED by lane DZ (pin-15
+-# prep, 2026-08-20) so the ceremony after the union toolchain install
+-# only substitutes the sha values (here, in history entry 15, in the
+-# _REVIEWED_{CC1PLUS,COMPILER}_SHA256 assignments below, and in the
+-# baseline TSV header anchor — tools/pin15/apply_pin15.sh does all four)
+-# — conf-lint is DESIGNED-RED until then (R1 rejects the placeholders,
+-# R3 names the placeholder entry), and both sweep wrappers refuse at
+-# conf-lint before anything runs, so no sweep can execute against this
+-# conf with a pre-union binary.
++# CURRENT PIN (values below): cc1plus __CC1PLUS16__ / driver
++# __DRIVER16__ — pin 16 (pin cycle 12), the pass-wave-2 union.  This
++# prose block and history entry 16 carry placeholders until the lane EN
++# ceremony substitutes the installed shas (here, in history entry 16,
++# in the _REVIEWED_{CC1PLUS,COMPILER}_SHA256 assignments below, and in
++# the baseline TSV header anchor — tools/pin16/apply_pin16.sh does all
++# four) — conf-lint is DESIGNED-RED until then (R1 rejects the
++# placeholders, R3 names the placeholder entry), and both sweep
++# wrappers refuse at conf-lint before anything runs.
++# The pin-16 build is the sfpi build of sfpi-gcc __SFPIGCC16__ =
++# nkapre/sfpi bbd6feec5d2 (nine post-pin-15 payloads) + lane EN's two
++# pure-union merge-resolution fixes (riscv.opt record separator the
++# round-interleave union dropped; round-interleave census call sites
++# re-pointed at the renamed replay-unroll vocabulary — both proven
++# byte-exact unions of their parents): EB dst-autoincr shape pricing
++# (rows-per-crossing discriminator, audited-RWC re-anchor,
++# mod-write-dominates-rolled-body refusal — a pass-behavior change
++# WITHIN the reviewed ON set: 58 adjudicated corpus rows, 23
++# EQUALS-OFF reverts + 35 PARTIAL, CRAQ 59/59) + EC replay
++# record-hoist (-mtt-tensix-optimize-replay-record-hoist, default-off
++# measurement class) + EH pre-RA pressure scheduler
++# (-mtt-tensix-optimize-pressure-schedule-prera, corpus-inert at its
++# lane gate) + EG delivery-shape solver
++# (-mtt-tensix-optimize-delivery-shape [+ the min-benefit= override
++# param], priced unroll x delivery arbitration over the audited cost
++# table) + DP df-notes side-effect fix (notes only on the audit path;
++# the 2 changed AB rows re-proven byte-identical) + EJ licensed
++# reassociation (-mtt-tensix-optimize-reassoc, fires ONLY with
++# -fassociative-math — owner ratification 2026-08-21; licensed knob
++# leg with LICENSED-EXPECTED CRAQ bookkeeping) + EI round-chain
++# interleave (-mtt-tensix-optimize-round-interleave, RecMII-bounded
++# unroll-x2 interleave) + EL structured CC-restore proof family in
++# invariant-loadi (NO new flag — rides the reviewed
++# -mtt-tensix-optimize-invariant-loadi: a pass-behavior change WITHIN
++# the reviewed ON set, 19 adjudicated corpus rows CRAQ 790/0) + EK
++# store folds (-mtt-tensix-optimize-store-fold same-mask merge-source
++# forwarding + proven INT32 sink; -mtt-tensix-optimize-int-not
++# single-SFPNOT selection; ON-25-inert at the lane gate, knob-leg
++# delta 269 rows all adjudicated value-identical or CRAQ-green).
++# The reviewed ON set is UNCHANGED at pin 16 (25 flags): every new
++# flag stays Init(0)/default-off until measured — delivery-shape,
++# record-hoist, prera, round-interleave, reassoc (the licensed triple
++# token), store-fold, int-not ride as on-plus knob legs only
++# (KNOBS/KNOB_MODES); ON-set promotion is a separate reviewed step
++# carrying its own R9 union fire witness.  The pin-16 ON-25 corpus
++# delta vs the pin-15 store is EXACTLY the union of the EB and EL
++# adjudicated row lists (71 rows = EB 58 + EL 19 minus the 6-row
++# overlap) — pass-behavior changes within reviewed flags, documented
++# in REVIEW_RECORD-<cc1plus12> (the PIN_REVIEW for this pin); EK
++# contributes ZERO ON-25 rows (its flags are default-off).  Union
++# verification evidence rides the lane EN union gate record (frozen
++# 16-row DejaGnu FAIL set identical, corpus flags-off + ON-25 +
++# TRUE-DEFAULT byte-legs via the leg store, DS/DT arsenal gates at the
++# union tip); sim pins UNCHANGED (bh 32489dda4fd6…, wh 8f0079a9a16c…).
++#
++# SUPERSEDED PIN 15 PROSE (audit trail):
++# cc1plus c5bf1bf9aa2c… / driver
++# 0ce0f02f5033… — pin 15 (pin cycle 11), the crown-jewel union.
+ # The pin-15 build is the sfpi build of sfpi-gcc f5aa5bbf676b90ca4f2045edf6613658b76fd0db =
+ # nkapre/sfpi a0ea2fcd9aa (the merged DK+DL+DN+DM+DS+DT+DQ tip) union-
+ # merged with DP agent/lreg-allocator (e3e442ff63c lineage) and DR
+@@ -291,7 +338,7 @@
+ #      Quarantine LIFTED this pin: ON set back to 25 (see the
+ #      QUARANTINE LIFTED block above for the citation chain); new
+ #      default-off flags ride as knob legs only.
+-#  15. c5bf1bf9aa2c9a36f210a3656b9ea40e6350f2387e760d138e431fe70b557393 (CURRENT) — the pin-15 crown-jewel union
++#  15. c5bf1bf9aa2c9a36f210a3656b9ea40e6350f2387e760d138e431fe70b557393 — the pin-15 crown-jewel union
+ #      (sfpi-gcc f5aa5bbf676b90ca4f2045edf6613658b76fd0db = nkapre/sfpi a0ea2fcd9aa
+ #      [DK fail-closed census + DL latency/rotation + DN ccmask/int-abs
+ #      completions + DM residency widenings + DS/DT arsenals + DQ list
+@@ -303,6 +350,20 @@
+ #      (tools/pin15/apply_pin15.sh; conf-lint R1/R3 are designed-RED
+ #      until it does) and runs witness_preflight on the installed
+ #      union binary for the 25 reviewed rows.
++#  16. __CC1PLUS16__ (CURRENT) — the pin-16 pass-wave-2 union
++#      (sfpi-gcc __SFPIGCC16__ = nkapre/sfpi bbd6feec5d2 [EB
++#      dst-autoincr pricing + EC record-hoist + EH prera + EG
++#      delivery-shape + DP df-notes fix + EJ licensed reassoc + EI
++#      round-interleave + EL cc-restore-in-invariant-loadi + EK
++#      store-folds] + lane EN's two pure-union merge fixes).  Driver
++#      __DRIVER16__.  ON set UNCHANGED at 25 — new flags
++#      (delivery-shape, record-hoist, prera, round-interleave, reassoc
++#      [licensed triple], store-fold, int-not) are Init(0) on-plus
++#      knob legs; EL's cc-restore rides the reviewed invariant-loadi
++#      flag and EB's pricing rides the reviewed dst-autoincr flag —
++#      their adjudicated ON-25 deltas (19 + 58 rows) are documented in
++#      REVIEW_RECORD-<cc1plus12>.  Ceremony: tools/pin16/apply_pin16.sh
++#      substitutes the shas; witness_preflight on the installed binary.
+ #
+ # RULE: this prose is part of the pin.  Any commit that changes the
+ # PINNED_* values MUST update this comment block in the SAME commit to
+@@ -328,8 +389,8 @@
+ # --sim-bh-sha/--sim-wh-sha.  A sim re-pin follows the same rule as the
+ # compiler pins: sha values + this prose in the same reviewed commit.
+ 
+-_REVIEWED_CC1PLUS_SHA256=c5bf1bf9aa2c9a36f210a3656b9ea40e6350f2387e760d138e431fe70b557393
+-_REVIEWED_COMPILER_SHA256=0ce0f02f5033afb45e3a90c40b5e67857684767c3ed59f61eaddfd0b53f5577a
++_REVIEWED_CC1PLUS_SHA256=__CC1PLUS16__
++_REVIEWED_COMPILER_SHA256=__DRIVER16__
+ _REVIEWED_SIM_BH_SHA256=32489dda4fd6321262fbc7c18b8f05126ed760073c7030dc529555111967ffd3
+ _REVIEWED_SIM_WH_SHA256=8f0079a9a16c782bf47a56c2e48e0c73d4da32faa69b56a307bc0b921b29dbc5
+ 
+diff --git a/tt_metal/tt-llk/tests/corpus/sweep_2x2.py b/tt_metal/tt-llk/tests/corpus/sweep_2x2.py
+index 93a28eab64..a9c9524efd 100755
+--- a/tt_metal/tt-llk/tests/corpus/sweep_2x2.py
++++ b/tt_metal/tt-llk/tests/corpus/sweep_2x2.py
+@@ -530,6 +530,48 @@ KNOBS = {
+     # REFUSAL_BYTE_IDENTICAL.
+     "milp": "-mtt-tensix-optimize-pressure-schedule "
+     "-mtt-tensix-pressure-schedule-use-milp",
++    # ---- pin-16 NEW default-off flags (lane EN ceremony): knob legs
++    # ONLY, on-plus mode; ON-set promotion stays a separate reviewed
++    # step with its own R9 union fire witness.  (EL's cc-restore and
++    # EB's dst-autoincr pricing carry NO knob: they are pass-behavior
++    # changes inside the reviewed invariant-loadi / dst-autoincr flags,
++    # adjudicated at the pin-16 union gate.)
++    # EG (delivery-shape-solver): priced unroll x delivery arbitration
++    # — exact B&B over the audited issue-cost table chooses each
++    # proven-trip row loop's delivery shape; a refusal or rolled
++    # selection is byte-identical.  The
++    # -mtt-tensix-delivery-shape-min-benefit= override is deliberately
++    # NOT in the token (the cost-table default prices the leg).
++    "delivery-shape": "-mtt-tensix-optimize-delivery-shape",
++    # EC (replay-record-hoist): hoist a proven iteration-invariant
++    # re-recorded replay capture's record phase to the loop preheader
++    # (DX-F3 closure); admission keeps every structural/invariance/
++    # slot-liveness proof, profitability prices removed per-trip record
++    # delivery (default saturation-calibrated model refuses) —
++    # measurement class, promotion needs its own silicon A/B.
++    "record-hoist": "-mtt-tensix-optimize-replay-record-hoist",
++    # EH (prera-pressure-schedule): pressure-cost list scheduling at
++    # the pre-RA pseudo seam (GCC -fsched-pressure ECC model adapted to
++    # the typed-effect region model); commits only on modeled
++    # peak-pressure AND makespan non-worse with a strict decrease in at
++    # least one; corpus flag delta ZERO rows at its lane gate.
++    "prera": "-mtt-tensix-optimize-pressure-schedule-prera",
++    # EI (round-chain-interleave): unroll-by-two dual-chain interleave
++    # of counted independent round loops (RecMII-bounded cyclic list
++    # schedule; recurrence-saturated shapes refuse by name — the gcd
++    # RecMII=9-exact refusal is the honest verdict).
++    "round-interleave": "-mtt-tensix-optimize-round-interleave",
++    # EK (store-fold): S1 same-mask merge-source store forwarding +
++    # proven INT32 store sink (2^32 round-trip proof; float sinks
++    # refused by denorm-flush, stochrnd refused by the proven
++    # store-rounding divergence).  Adjudicated knob-leg delta 269 rows:
++    # 2 word-level fires (unary max/min int32, replay window 8->7,
++    # CRAQ PASS) + 267 word-neutral value-identical scalar ripple.
++    "store-fold": "-mtt-tensix-optimize-store-fold",
++    # EK (int-not): single-SFPNOT selection for the
++    # all-ones-minus-x value function (exhaustive 2^32 equivalence
++    # proof); byte-inert on the mapped corpus at its lane gate.
++    "int-not": "-mtt-tensix-optimize-int-not",
+     # EJ (reassoc-license): THE LICENSED REASSOCIATION LEG.  COUPLED:
+     # this entry merges only at a pin advance whose toolchain carries
+     # sfpi-gcc agent/reassoc-license — the pin-15 driver REJECTS
+@@ -588,6 +630,15 @@ KNOB_MODES = {
+     "list-schedule": "on-plus",
+     "lreg-alloc": "on-plus",
+     "milp": "on-plus",
++    # pin-16 booking flags (lane EN): same on-plus reasoning as the
++    # pin-15 seeds — the shapes materialize on the reviewed-ON
++    # pipeline's regions, so the booking A/B is (ON + flag) vs plain ON.
++    "delivery-shape": "on-plus",
++    "record-hoist": "on-plus",
++    "prera": "on-plus",
++    "round-interleave": "on-plus",
++    "store-fold": "on-plus",
++    "int-not": "on-plus",
+     # EJ licensed reassociation: booking A/B is (reviewed-ON + license
+     # tokens) vs plain reviewed-ON — the licensed fire acts on the
+     # post-ON pipeline's chains, and the delta must read as the
