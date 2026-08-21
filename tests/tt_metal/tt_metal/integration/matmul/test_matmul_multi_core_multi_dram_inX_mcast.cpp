@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -139,26 +140,38 @@ create_program(
                                 std::to_string(mcast_xy_offset) + "_mcast_sender.cpp";
     std::string kernel_receiver = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in" +
                                   std::to_string(mcast_xy_offset) + "_mcast_receiver.cpp";
+    vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_compile_time_args);
+
     auto mm_reader_kernel_sender = tt_metal::CreateKernel(
         program_,
         kernel_sender,
         mcast_senders,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
 
     auto mm_reader_kernel_receiver = tt_metal::CreateKernel(
         program_,
         kernel_receiver,
         mcast_receivers,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
 
+    vector<uint32_t> writer_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(writer_compile_time_args);
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_matmul_tile_layout.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
 
     int num_blocks = (K / in0_block_w);
 
@@ -443,7 +456,9 @@ bool matmul_multi_core_multi_dram_inX_mcast(
 
     log_debug(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
 
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
     log_debug(LogTest, "Matmul test done");
 
     log_debug(LogTest, "Gathering data back from dram and checking against golden");

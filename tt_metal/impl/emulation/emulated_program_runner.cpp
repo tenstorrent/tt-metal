@@ -55,6 +55,7 @@
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "jit_build/jit_build_utils.hpp"  // format_named_ct_arg_map (shared with the silicon JIT path)
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/device.hpp>
@@ -286,23 +287,13 @@ extern "C" void __emule_fiber_note_publish(unsigned pages) {
     efib::FiberScheduler::instance().note_publish(pages);
 }
 
-// Worker L1 slot size + mask: a worker's L1 field is a 0-based in-slot offset (< 2 MB), so masking the low
-// bits is an idempotent guard. Applied ONLY for WORKER cores (DRAM banks are GB-scale — see the
-// per-resolver comments). Used by every NOC-address resolver.
-static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
-static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
-
 // Resolve a NOC address (encoded 64-bit) to a host pointer.
 // Real firmware encoding: y in bits [47:42], x in bits [41:36], addr in bits [35:0]
 //
-// The L1_SLOT_MASK is applied ONLY for WORKER cores. Two reasons:
-//  1. Worker L1 fields are 0-based in-slot offsets (from `get_write_ptr()` etc.),
-//     always < 2 MB, so the mask is an idempotent guard on the local field.
-//  2. DRAM banks are GB-scale (2 GB on Wormhole views, 4 GB on Blackhole)
-//     and the kernel-side per-bank addrgen helper produces an `addr` field
-//     that is the true in-bank offset (already includes
-//     `bank_to_dram_offset[bank_index]`). Masking to 2 MB silently aliases
-//     any DRAM access >= 2 MB to an offset within the first 2 MB of the bank.
+// The decoded offset is bounded by the target core's own size, not masked into range: a
+// worker L1 field is a 0-based in-slot offset while a DRAM bank is GB-scale (2 GB on
+// Wormhole views, 4 GB on Blackhole), so no single mask fits both, and an offset that fits
+// neither belongs to no core.
 // Helper: get SWEmuleChip* from MetalContext cluster for a given device_id. (Relocated up from
 // later in this file — needed here for the PCIe branch below, and by the fabric teleport hooks
 // further down.)
@@ -339,22 +330,26 @@ static uint64_t get_pcie_base_cached(uint32_t device_id) {
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     emule_require_self(__func__);
 
-    // Host-facing (PCIe) address: SimulationSysmemManager's device_io_addr space starts at
-    // pcie_base_ and shares the same 64-bit range as a real on-chip NOC address, so this branch
-    // must run FIRST, before any noc_x/noc_y/local_addr decomposition below.
+    // pcie_base alone cannot tell host-facing from on-chip: on Wormhole it is 0x8'0000'0000,
+    // below the bit-36 coordinate field, so every on-chip address clears it. Registry
+    // membership is the discriminator; the threshold is only a pre-filter.
     uint32_t device_id = __emule_self->chip_id;
     if (noc_addr >= get_pcie_base_cached(device_id)) {
         auto* sw_emu = get_sw_emulated_chip(static_cast<tt::ChipId>(device_id));
         auto* sysmem = sw_emu ? static_cast<tt::umd::SimulationSysmemManager*>(sw_emu->get_sysmem_manager()) : nullptr;
         // A host-facing address (>= pcie_base) is by construction on an emule chip that has a
         // SimulationSysmemManager, so a null manager is a contract violation, not a resolvable miss.
-        // (A buffer miss still returns nullptr below — callers like noc_semaphore_set_remote rely on it.)
         TT_FATAL(
             sysmem != nullptr,
             "emule: host-facing NOC address 0x{:x} on chip {} has no SimulationSysmemManager.",
             noc_addr,
             device_id);
-        return static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr));
+        if (auto* host_ptr = static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr))) {
+            return host_ptr;
+        }
+        // Miss: decode as on-chip. The bounds check below is what keeps an unmapped
+        // host-window address from landing on a core — it decodes to a real coord (the
+        // window carries no coordinates) but with an offset no core is that big.
     }
 
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
@@ -365,10 +360,13 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
         auto it = __emule_self->core_map->find(key);
         if (it != __emule_self->core_map->end()) {
-            uint32_t offset = (it->second->role() == tt_emule::CoreRole::WORKER)
-                                  ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
-                                  : static_cast<uint32_t>(local_addr);
-            return it->second->l1_ptr(offset);
+            // An offset the target cannot hold is not an address on that core, so it is a
+            // resolve miss like any other. Bounding it by the core's own size, rather than
+            // masking it into range, is what keeps a bad address from silently landing on
+            // real memory.
+            if (local_addr < it->second->l1_size()) {
+                return it->second->l1_ptr(local_addr);
+            }
         }
     }
     return nullptr;
@@ -424,11 +422,10 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     uint32_t y_start = (mcast_addr >> (NOC_LOCAL_BITS + 3 * NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint64_t l1_offset = mcast_addr & NOC_LOCAL_MASK;
 
-    // The L1 offset is a 0-based in-slot offset (< 2 MB, from get_write_ptr() etc.), so masking
-    // with SLOT_MASK is an idempotent guard on the local field.
-    // Multicast targets only WORKER cores (DRAM cores are skipped by the role
-    // check in the delivery loop below), so the mask is L1-correct here.
-    l1_offset &= L1_SLOT_MASK;
+    // Left raw: the offset is a 0-based in-slot L1 offset (get_write_ptr() etc.), and an
+    // out-of-range one is a kernel bug, so Core::l1_ptr's bounds check should surface it
+    // rather than a mask hiding it. Multicast targets only WORKER cores; the delivery loop
+    // below skips the rest.
 
     emule_require_self(__func__);
     if (!__emule_self->core_map) {
@@ -477,7 +474,7 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
             uint64_t key = (uint64_t(x) << 32) | y;
             auto it = __emule_self->core_map->find(key);
             if (it != __emule_self->core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER) {
-                uint8_t* dst = it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
+                uint8_t* dst = it->second->l1_ptr(l1_offset);
                 if (size == sizeof(uint32_t)) {
                     TT_FATAL(
                         reinterpret_cast<uintptr_t>(dst) % alignof(std::atomic<uint32_t>) == 0,
@@ -543,6 +540,10 @@ struct KernelInfo {
     // Kernel source path; owns the string __emule_kernel_name points at during
     // this kernel's launch (used by the ASAN trace to name the offending kernel).
     std::string kernel_name;
+    // Count of unique (per-core) runtime-arg words = size of the rta_offset region.
+    // rt_arg_values is [unique..(this many).., common..]; used to bounds-check
+    // out-of-range per-core arg reads to 0 (silicon zero-pad).
+    uint32_t num_unique_rt_args = 0;
 };
 
 // Captures a Metal 2.0 kernel's named bindings. Drives both the JIT wrapper's
@@ -629,6 +630,7 @@ struct PendingKernelInfo {
     // Object-Intent uses them to find this kernel's I/O tensors (§12).
     std::vector<uint32_t> rt_arg_values;
     std::string kernel_name;  // kernel source path, for the ASAN trace
+    uint32_t num_unique_rt_args = 0;  // size of the per-core (rta) region; see KernelInfo
 };
 
 // DFB allocation info for a single DFB on a core. Only device_slot and base_addr
@@ -651,7 +653,7 @@ struct CoreSetup {
     uint8_t phys_x;
     uint8_t phys_y;
     std::vector<DFBAllocInfo> dfb_allocs;
-    bool has_dfbs = false;
+    bool has_tc_dfbs = false;  // Quasar: DFBs here are tile-counter-backed, not CB-backed
     uint32_t sem_base;
     uint32_t sem_size;
     // Globally-allocated (persistent) CB extents on this core, packed (start<<32|end);
@@ -1034,6 +1036,14 @@ static std::function<void()> jit_compile_kernel(
                 f << "#define " << key << " " << value << "\n";
             }
         }
+        // KERNEL_COMPILE_TIME_ARG_MAP (read by api/compile_time_args.h) goes in the wrapper for the
+        // same reason the kernel defines above do -- emule shells out via std::system(), so it has
+        // the whole command as one argv string against MAX_ARG_STRLEN (128 KB), and this map alone
+        // can exceed that. Must precede every include so the consuming header sees it.
+        if (!named_compile_args.empty()) {
+            f << "#define KERNEL_COMPILE_TIME_ARG_MAP "
+              << tt::jit_build::utils::format_named_ct_arg_map(named_compile_args) << "\n";
+        }
         f << "#include \"jit_kernel_stubs.hpp\"\n";
         // Metal-2.0 `namespace args` (base).
         emit_metal2_namespaces(f, bindings, named_compile_args);
@@ -1068,21 +1078,8 @@ static std::function<void()> jit_compile_kernel(
     // rather than here, so they can be dynamically computed per-program.
     std::string define_flags = " -DTT_EMULE_USE_L1_POOL";
 
-    // 5b. Build -DKERNEL_COMPILE_TIME_ARG_MAP for named compile-time args
-    if (!named_compile_args.empty()) {
-        std::ostringstream ss;
-        ss << " \"-DKERNEL_COMPILE_TIME_ARG_MAP=";
-        bool first = true;
-        for (const auto& [name, value] : named_compile_args) {
-            if (!first) {
-                ss << ',';
-            }
-            ss << "{\\\"" << name << "\\\"," << value << "}";
-            first = false;
-        }
-        ss << "\"";
-        define_flags += ss.str();
-    }
+    // 5b. KERNEL_COMPILE_TIME_ARG_MAP is emitted as a #define at the top of wrapper.cpp (step 3),
+    // not as a -D flag here: it is far too large for one shell command. See that site.
 
     // 6. Compute the kernel's source directory for relative includes
     std::string kernel_dir = std::filesystem::path(abs_kernel).parent_path().string();
@@ -1529,6 +1526,33 @@ static std::map<std::string, std::string> build_kernel_defines(
                 }
             }
         }
+        // A DFB carries the same entry metadata at the same device slot, so it feeds the same
+        // tables; without this ttnn::typecast reports page size 0 to its kernels.
+        // See tt-emule docs/cb-dataformat.md.
+        for (const auto& dfb_impl : impl.dataflow_buffers_on_core(first_core)) {
+            const uint32_t slot = dfb_impl->device_slot;
+            TT_FATAL(
+                slot < EMULE_NUM_CBS,
+                "DFB device slot {} exceeds the emulated CB ceiling ({}); the host assigns slots below the arch's "
+                "NUM_CIRCULAR_BUFFERS ({}).",
+                slot,
+                EMULE_NUM_CBS,
+                MetalContext::instance().hal().get_arch_num_circular_buffers());
+            const auto& dfb_cfg = dfb_impl->config;
+            // Derived like the CB pass above, not from entry_size: that is the NOC-facing entry
+            // stride, which typecast deliberately aligns, and it belongs to the sync state only.
+            // Invalid format is skipped for the same reason set_dfb_data_fmt_and_tile skips it.
+            if (dfb_cfg.data_format == tt::DataFormat::Invalid) {
+                continue;
+            }
+            tile_sizes[slot] = dfb_cfg.tile.has_value() ? dfb_cfg.tile->get_tile_size(dfb_cfg.data_format)
+                                                        : Tile().get_tile_size(dfb_cfg.data_format);
+            cb_formats[slot] = static_cast<uint8_t>(dfb_cfg.data_format);
+            if (dfb_cfg.tile.has_value()) {
+                tile_r_dim[slot] = dfb_cfg.tile->get_height();
+                tile_c_dim[slot] = dfb_cfg.tile->get_width();
+            }
+        }
         std::ostringstream ts, df, tr, tc;
         for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
             if (i) {
@@ -1735,17 +1759,29 @@ static void collect_kernels(
             // chain and to define `is_brisc` / `is_ncrisc` / `is_trisc` constexpr bools; without
             // them, `SelectByRISCV<>` aliases fail to resolve. Emule runs all RISCs in one unified
             // thread, so we set the corresponding macro based on the kernel's processor class.
+            //
+            // PROCESSOR_INDEX backs get_hw_thread_idx(), so the debug headers that reach it
+            // (waypoint, pause, assert, device_print) will not compile without it.
+            uint32_t processor_type_idx = 0;  // emule fuses TRISC0-2 into one compute fiber
             if (is_tensix) {
                 defines["COMPILE_FOR_TRISC"] = "1";
             } else if (auto* dm_kernel = dynamic_cast<DataMovementKernel*>(kernel.get()); dm_kernel != nullptr) {
                 auto cfg_variant = dm_kernel->config();
                 const auto& cfg = std::get<DataMovementConfig>(cfg_variant);
                 switch (cfg.processor) {
-                    case DataMovementProcessor::RISCV_0: defines["COMPILE_FOR_BRISC"] = "1"; break;
-                    case DataMovementProcessor::RISCV_1: defines["COMPILE_FOR_NCRISC"] = "1"; break;
+                    case DataMovementProcessor::RISCV_0:
+                        defines["COMPILE_FOR_BRISC"] = "1";
+                        processor_type_idx = 0;
+                        break;
+                    case DataMovementProcessor::RISCV_1:
+                        defines["COMPILE_FOR_NCRISC"] = "1";
+                        processor_type_idx = 1;
+                        break;
                     default: break;
                 }
             }
+            defines["PROCESSOR_INDEX"] = std::to_string(hal.get_processor_index(
+                hal.get_programmable_core_type(pct), kernel->get_kernel_processor_class(), processor_type_idx));
 
             // Helper: compute cache key from a defines map (preserves upstream's sorted
             // iteration of named_compile_args and defines for key stability).
@@ -1902,8 +1938,10 @@ static void collect_kernels(
                         // core; the Object-Intent check uses them to find its I/O tensors
                         // (see ObjectIntentTracker::pre_launch_snapshot). Build once, copy.
                         std::vector<uint32_t> rt_arg_values;
+                        uint32_t num_unique_rt = 0;
                         if (kernel->cores_with_runtime_args().count(logical_core) != 0) {
                             const auto& ra = kernel->runtime_args(logical_core);
+                            num_unique_rt = static_cast<uint32_t>(ra.size());
                             rt_arg_values.insert(rt_arg_values.end(), ra.begin(), ra.end());
                         }
                         const auto& cra = kernel->common_runtime_args();
@@ -1922,7 +1960,8 @@ static void collect_kernels(
                                 rta_off,
                                 crta_off,
                                 rt_arg_values,
-                                src_path});
+                                src_path,
+                                num_unique_rt});
                         }
                     }
                 }
@@ -2286,10 +2325,12 @@ extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t no
         }
         return nullptr;
     }
-    uint32_t offset = (cit->second->role() == tt_emule::CoreRole::WORKER)
-                          ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
-                          : static_cast<uint32_t>(local_addr);
-    return cit->second->l1_ptr(offset);
+    // Bounded by the target's own size, as in __emule_resolve_noc_addr: an offset it cannot
+    // hold is a miss, not something to mask into range.
+    if (local_addr >= cit->second->l1_size()) {
+        return nullptr;
+    }
+    return cit->second->l1_ptr(local_addr);
 }
 
 // Destination chip for a fabric send from src_chip: the single ethernet-connected neighbor of a
@@ -2883,7 +2924,15 @@ static void init_core_cb_sync(
     bool configured[EMULE_NUM_CBS] = {};
     auto configure = [&](const std::shared_ptr<CircularBufferImpl>& cb_impl, const CoreCoord& lc) {
         for (uint8_t idx : cb_impl->local_buffer_indices()) {
-            if (idx >= EMULE_NUM_CBS || configured[idx]) {
+            // Loud, not clamped: a silent skip leaves the CB's sync state uninitialised, which
+            // resurfaces far away as wrong tile data.
+            TT_FATAL(
+                idx < EMULE_NUM_CBS,
+                "CB index {} exceeds the emulated CB ceiling ({}); the host CircularBufferConfig must cap at the "
+                "arch's NUM_CIRCULAR_BUFFERS.",
+                idx,
+                EMULE_NUM_CBS);
+            if (configured[idx]) {
                 continue;
             }
             uint32_t cb_addr = cb_impl->address();
@@ -2896,10 +2945,10 @@ static void init_core_cb_sync(
             const auto& cb_fg = cb_impl->unpack_face_geometry(idx);
             if (cb_fg.has_value()) {
                 cb_face_r_dim = cb_fg->face_r_dim;
-                cb_num_faces  = cb_fg->num_faces;
+                cb_num_faces = cb_fg->num_faces;
             }
-            core->init_cb_sync(idx, base, page_size, num_pages, cb_impl->globally_allocated(),
-                               cb_face_r_dim, cb_num_faces);
+            core->init_cb_sync(
+                idx, base, page_size, num_pages, cb_impl->globally_allocated(), cb_face_r_dim, cb_num_faces);
             configured[idx] = true;
             log_debug(
                 tt::LogMetal,
@@ -2941,25 +2990,28 @@ static void init_core_semaphores(
     }
 }
 
-// Allocate L1 for each DFB on a core, register CB-sync bridges, and initialize
-// tile counters. Returns per-DFB allocation info consumed by launch_cores.
+// Allocate L1 for each DFB on a core, register CB-sync bridges, and — on Quasar —
+// initialize tile counters. Returns per-DFB allocation info consumed by launch_cores.
 static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     tt_emule::Core* core,
     const CoreCoord& logical_core,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dfb_impls) {
     core->reset_dfb_sync();
     if (dfb_impls.empty()) {
-        // No DFBs to allocate (always the case on WH/BH; DFBs are Quasar-only),
-        // so the L1 bump allocator never grows and there's nothing to reset.
-        // Skipping reset also leaves the mmap-init zeros at MEM_ZEROS_BASE
-        // undisturbed for kernels that NOC-read the region.
+        // Nothing to allocate, so the L1 bump allocator never grows and there's
+        // nothing to reset. Skipping reset also leaves the mmap-init zeros at
+        // MEM_ZEROS_BASE undisturbed for kernels that NOC-read the region.
         return {};
     }
-    // DFB fallback path (Quasar): start the bump allocator at 0.  When Quasar
-    // bring-up needs to protect MEM_ZEROS from bump-allocator overlap, dispatch
-    // its per-arch MEM_ZEROS_BASE here.
+    // Tile counters are Quasar hardware. On WH/BH a DFB is the CB the kernel-side
+    // DataflowBuffer wraps, so init_cb_sync below is its whole sync state.
+    // See tt-emule docs/DFB_EMULATION.md §1.
+    const bool tc_backed = MetalContext::instance().hal().has_tile_counter_registers();
+    // DFB fallback path: start the bump allocator at 0.  When Quasar bring-up needs
+    // to protect MEM_ZEROS from bump-allocator overlap, dispatch its per-arch
+    // MEM_ZEROS_BASE here.
     core->reset_l1_bump();
-    if (!core->tile_counters()) {
+    if (tc_backed && !core->tile_counters()) {
         core->init_tile_counters(4);
     }
 
@@ -3004,34 +3056,50 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
         bool is_all = (cfg.cap == ::dfb::AccessPattern::ALL);
         uint32_t M = is_all ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
         uint32_t capacity = cfg.num_entries / M;
-        core->init_dfb_sync(device_slot, base, cfg.entry_size, cfg.num_entries, capacity);
 
         // Also populate CB sync state for this DFB so compute ops (pack_tile,
         // matmul_tiles) can reuse the same L1 buffer via cb_read_ptr/cb_write_ptr.
+        // On WH/BH the slot is a CB index, so this IS the DFB's whole sync state.
+        TT_FATAL(
+            device_slot < EMULE_NUM_CBS,
+            "DFB device slot {} exceeds the emulated CB ceiling ({}); the host assigns slots below the arch's "
+            "NUM_CIRCULAR_BUFFERS ({}).",
+            device_slot,
+            EMULE_NUM_CBS,
+            MetalContext::instance().hal().get_arch_num_circular_buffers());
         // Same faced-tile geometry carry as the CB pass above, else full-tile 16/4.
-        if (device_slot < EMULE_NUM_CBS) {
-            uint32_t dfb_face_r_dim = 16, dfb_num_faces = 4;
-            if (cfg.unpack_face_geometry.has_value()) {
-                dfb_face_r_dim = cfg.unpack_face_geometry->face_r_dim;
-                dfb_num_faces  = cfg.unpack_face_geometry->num_faces;
-            }
-            core->init_cb_sync(static_cast<uint8_t>(device_slot), base, cfg.entry_size, cfg.num_entries,
-                               /*globally_allocated=*/false, dfb_face_r_dim, dfb_num_faces);
+        uint32_t dfb_face_r_dim = 16, dfb_num_faces = 4;
+        if (cfg.unpack_face_geometry.has_value()) {
+            dfb_face_r_dim = cfg.unpack_face_geometry->face_r_dim;
+            dfb_num_faces = cfg.unpack_face_geometry->num_faces;
         }
+        core->init_cb_sync(
+            static_cast<uint8_t>(device_slot),
+            base,
+            cfg.entry_size,
+            cfg.num_entries,
+            /*globally_allocated=*/false,
+            dfb_face_r_dim,
+            dfb_num_faces);
 
-        // Initialize tile counters for this DFB.
-        // STRIDED: M TCs. ALL DM-DM: P*C TCs. Counter IDs are spaced by
-        // MAX_TC_SLOTS_PER_DFB to prevent cross-DFB collisions.
-        if (device_slot >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
-            throw std::out_of_range("DFB device slot exceeds safe TC range (max 8 DFBs per NEO with neo_id=0)");
-        }
-        uint8_t counter_base = static_cast<uint8_t>(device_slot * tt_emule::MAX_TC_SLOTS_PER_DFB);
-        uint32_t num_tcs_to_init = is_all ? static_cast<uint32_t>(cfg.num_producers) * cfg.num_consumers : M;
-        for (uint32_t tc_idx = 0; tc_idx < num_tcs_to_init; ++tc_idx) {
-            auto& tc = core->tile_counters()->get(0, counter_base + static_cast<uint8_t>(tc_idx));
-            tc.capacity = capacity;
-            tc.posted.store(0, std::memory_order_relaxed);
-            tc.acked.store(0, std::memory_order_relaxed);
+        // STRIDED gets M TCs, ALL DM-DM gets P*C, spaced by MAX_TC_SLOTS_PER_DFB so DFBs cannot
+        // collide. DFBSyncState belongs to the same model, so it is populated here too.
+        if (tc_backed) {
+            core->init_dfb_sync(device_slot, base, cfg.entry_size, cfg.num_entries, capacity);
+            if (device_slot >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
+                // counter_base assigns out of NEO 0 only. Lifting this means spreading DFBs
+                // across NEOs and threading neo_id through the CB->DFB bridge.
+                throw std::out_of_range(
+                    "Quasar DFB device slot exceeds safe TC range (max 8 DFBs per NEO with neo_id=0)");
+            }
+            uint8_t counter_base = static_cast<uint8_t>(device_slot * tt_emule::MAX_TC_SLOTS_PER_DFB);
+            uint32_t num_tcs_to_init = is_all ? static_cast<uint32_t>(cfg.num_producers) * cfg.num_consumers : M;
+            for (uint32_t tc_idx = 0; tc_idx < num_tcs_to_init; ++tc_idx) {
+                auto& tc = core->tile_counters()->get(0, counter_base + static_cast<uint8_t>(tc_idx));
+                tc.capacity = capacity;
+                tc.posted.store(0, std::memory_order_relaxed);
+                tc.acked.store(0, std::memory_order_relaxed);
+            }
         }
 
         dfb_allocs.push_back({device_slot, base_addr, &cfg});
@@ -3073,7 +3141,9 @@ static void setup_core_state(
         init_core_semaphores(core, impl, logical_core, emule_sem_base);
 
         auto dfb_impls = impl.dataflow_buffers_on_core(logical_core);
-        bool has_dfbs = !dfb_impls.empty();
+        // Quasar-only. Null on WH/BH keeps the cb_api CB->DFB bridge short-circuited, and stops
+        // a slot legal up to get_arch_num_circular_buffers() indexing the MAX_DFBS-sized array.
+        bool has_tc_dfbs = !dfb_impls.empty() && MetalContext::instance().hal().has_tile_counter_registers();
         std::vector<DFBAllocInfo> dfb_allocs = allocate_dfbs_on_core(core, logical_core, dfb_impls);
 
         uint32_t sem_region_size = tt::tt_metal::NUM_SEMAPHORES * EMULE_SEM_ALIGN;
@@ -3084,7 +3154,7 @@ static void setup_core_state(
              phys_x,
              phys_y,
              std::move(dfb_allocs),
-             has_dfbs,
+             has_tc_dfbs,
              emule_sem_base,
              sem_region_size,
              std::move(persistent_cb_ranges)});
@@ -3491,7 +3561,7 @@ static void launch_cores(
         auto* core = cs.core;
         uint8_t* l1_data = core->l1_data();
         tt_emule::CBSyncState* cb_array = core->cb_sync_array();
-        tt_emule::TileCounterArray* tc_array = cs.has_dfbs ? core->tile_counters() : nullptr;
+        tt_emule::TileCounterArray* tc_array = cs.has_tc_dfbs ? core->tile_counters() : nullptr;
         const uint8_t px = cs.phys_x;
         const uint8_t py = cs.phys_y;
         const uint32_t lx = cs.logical_core.x;
@@ -3503,7 +3573,7 @@ static void launch_cores(
         cstate.logical_y = ly;
 
         std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> per_thread_dfbs;
-        if (cs.has_dfbs) {
+        if (cs.has_tc_dfbs) {
             per_thread_dfbs = build_per_thread_dfb_interfaces(*cs.ki_list, cs.dfb_allocs);
         }
 
@@ -3529,7 +3599,7 @@ static void launch_cores(
         for (size_t kidx = 0; kidx < cs.ki_list->size(); ++kidx) {
             KernelInfo* ki_ptr = &(*cs.ki_list)[kidx];
             auto& ki = *ki_ptr;
-            tt_emule::EmuleDFBInterface* dfb_array = cs.has_dfbs ? per_thread_dfbs[kidx].get() : nullptr;
+            tt_emule::EmuleDFBInterface* dfb_array = cs.has_tc_dfbs ? per_thread_dfbs[kidx].get() : nullptr;
 
             // Build + populate the fiber-owned ctx (set-once identity). The scheduler
             // repoints __emule_self to this ctx on swap-in; my_x/my_y are restored from
@@ -3543,6 +3613,10 @@ static void launch_cores(
             ctx->common_rt_args = (ki.crta_offset_in_kc != kRtaCrtaNoArgsSentinel)
                 ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.crta_offset_in_kc))
                 : nullptr;
+            // Bounds so out-of-range per-core/common arg reads return 0 (silicon zero-pads
+            // the RTA region; emule's mock L1 keeps stale bytes).
+            ctx->rt_args_count = ki.num_unique_rt_args;
+            ctx->common_rt_args_count = static_cast<uint32_t>(ki.rt_arg_values.size()) - ki.num_unique_rt_args;
             ctx->bridge_l1 = l1_data;
             ctx->l1_size = static_cast<uint32_t>(core->l1_size());
             ctx->bridge_dram = dram_data;
@@ -3734,6 +3808,7 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
                 ki.variants.push_back(resolved_fns.at(key));
             }
             ki.rt_arg_values = std::move(pk.rt_arg_values);
+            ki.num_unique_rt_args = pk.num_unique_rt_args;
             ki.kernel_name = std::move(pk.kernel_name);
             resolved.core_kernels[logical_core].push_back(std::move(ki));
         }

@@ -282,7 +282,9 @@ Tensor quantize(
                         none,
                         none,
                         none),
-                    c_dtype);
+                    c_dtype,
+                    memory_config,
+                    optional_output_tensor);
             },
             [&](const Tensor& scale, const Tensor& zero_point) {
                 const Tensor input_scaled = ttnn::divide(
@@ -304,7 +306,9 @@ Tensor quantize(
                         none,
                         none,
                         none),
-                    c_dtype);
+                    c_dtype,
+                    memory_config,
+                    optional_output_tensor);
             }},
         scale_arg,
         zero_point_arg);

@@ -594,7 +594,8 @@ Noc::async_read(
     // DPRINT("Issue the read\n");
     noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
         get_src_ptr<AddressType::NOC>(src, src_args),
-        dst.get_write_ptr(),
+        // Use cached addresses for NOC APIs
+        dst.get_noc_write_addr(),
         dst.get_entry_size(),
         noc_id_,
         NOC_UNICAST_WRITE_VC);
@@ -609,7 +610,8 @@ Noc::async_write(
     const DataflowBufferArgs& src_args,
     const typename noc_traits_t<Dst>::dst_args_type& dst_args) const {
     uint32_t txn_id = src.prepare_implicit_write();
-    auto src_addr = src.get_read_ptr();
+    // Use cached addresses for NOC APIs
+    auto src_addr = src.get_noc_read_addr();
     auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());

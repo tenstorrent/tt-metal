@@ -4,9 +4,13 @@
 
 #include <mesh_event.hpp>
 
+#include "mesh_command_queue.hpp"
 #include "mesh_device.hpp"
 
 namespace tt::tt_metal::distributed {
+
+MeshEvent::MeshEvent(uint32_t id, MeshCommandQueue& cq, const MeshCoordinateRange& device_range) :
+    id_(id), device_(cq.device()), mesh_cq_id_(cq.id()), device_range_(device_range) {}
 
 MeshEvent::MeshEvent(uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range) :
     id_(id), device_(device), mesh_cq_id_(mesh_cq_id), device_range_(device_range) {}

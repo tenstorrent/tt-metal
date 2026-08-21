@@ -508,28 +508,48 @@ def _normalize(report):
     return normalize_health_report(report)
 
 
-def analyze(report, csv_output_dir, hostname, slurm_job_id, jira_ticket="", versions=None, telemetry=None):
+def analyze(
+    report,
+    csv_output_dir,
+    hostname,
+    slurm_job_id,
+    jira_ticket="",
+    versions=None,
+    telemetry=None,
+    discard=None,
+    discard_reason=None,
+):
     """Translate a normalized diag_report.json dict into runs.csv (+ checks.csv).
 
     report must already be normalized by the caller so the verdict reflects
     post-reset state. A missing/empty report (None) yields a lone ERROR runs.csv.
     Returns the list of CSV paths written.
+
+    A truthy ``discard`` (e.g. run_health_check.py --exclude) forces discard=1 with
+    ``discard_reason`` so a full end-to-end dev run still uploads but stays out of
+    the fleet dashboards; it takes precedence over the report's own dry_run flag.
     """
     os.makedirs(csv_output_dir, exist_ok=True)
     ts = now_iso()
     base = os.path.join(csv_output_dir, f"health_check_{hostname}_{slurm_job_id}")
     runs_path, checks_path = base + ".runs.csv", base + ".checks.csv"
 
+    def _apply_exclusion(row):
+        if discard:
+            row["discard"] = 1
+            row["discard_reason"] = discard_reason or row.get("discard_reason") or "excluded"
+        return row
+
     if not report:
         print("WARNING: no diag_report.json - writing fail-closed ERROR runs row")
-        row = error_runs_row(hostname, slurm_job_id, ts, "no diag_report.json", jira_ticket)
+        row = _apply_exclusion(error_runs_row(hostname, slurm_job_id, ts, "no diag_report.json", jira_ticket))
         _validate([row], [])
         _write_csv(runs_path, RUNS_COLS, [row])
         return [runs_path]
 
     meta = machine_meta(report, hostname, slurm_job_id, jira_ticket, ts, versions)
     checks = checks_rows(report, meta)
-    runs = runs_row(report, meta, checks, telemetry)
+    runs = _apply_exclusion(runs_row(report, meta, checks, telemetry))
     _validate([runs], checks)
     _write_csv(runs_path, RUNS_COLS, [runs])
     _write_csv(checks_path, CHECKS_COLS, checks)
@@ -544,6 +564,16 @@ def main():
     p.add_argument("--hostname", required=True)
     p.add_argument("--slurm-job-id", required=True)
     p.add_argument("--jira-ticket", default="")
+    p.add_argument(
+        "--discard",
+        action="store_true",
+        help="Mark the run as discarded (discard=1) so it is excluded from fleet dashboards.",
+    )
+    p.add_argument(
+        "--discard-reason",
+        default="",
+        help="Reason recorded in discard_reason when --discard is set.",
+    )
     args = p.parse_args()
 
     report = None
@@ -562,6 +592,8 @@ def main():
         hostname=args.hostname,
         slurm_job_id=args.slurm_job_id,
         jira_ticket=args.jira_ticket,
+        discard=1 if args.discard else None,
+        discard_reason=args.discard_reason or None,
     )
 
 
