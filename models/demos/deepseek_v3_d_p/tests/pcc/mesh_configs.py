@@ -20,6 +20,7 @@ Test-id naming convention
 - Production IDs are `fabric2d-torus-xy-8x4-{1,2}link`.
 """
 
+
 import pytest
 
 import ttnn
@@ -359,6 +360,7 @@ def fabric_to_device_params(fabric_cfg, cmb_version):
             max_payload_size=get_max_payload_size(0 if cmb_version == 1 else 64)
         ),
     }
+    device_params["trace_region_size"] = 330000
     reliability_mode = _fabric_cfg_to_init_reliability_mode(fabric_cfg)
     if reliability_mode is not None:
         device_params["reliability_mode"] = reliability_mode

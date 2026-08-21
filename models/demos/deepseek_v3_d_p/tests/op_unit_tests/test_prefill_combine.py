@@ -312,14 +312,16 @@ def run_combine(
     # launch, so `perf_iterations` samples cost a launch each rather than a process each. When the output is
     # checked, it is the LAST launch that gets checked, which is also what proves a launch leaves the op's
     # counters fit for the next one.
-    for _ in range(perf_iterations() - 1):
-        # The op resets its ring counters at end of stream, which is only sound once every chip has finished:
-        # launches are not barriered against each other, so without this a chip that has already started the
-        # next launch has its neighbour's counter reset underneath it, and the neighbour then waits for pages
-        # that were counted and wiped.
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(tt_output)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    tt_output = tt_combine(*combine_inputs)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    for _ in range(perf_iterations()):
         ttnn.synchronize_device(mesh_device)
-        ttnn.deallocate(tt_output)
-        tt_output = tt_combine(*combine_inputs)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.release_trace(mesh_device, trace_id)
 
     if not run_pcc_check:
         ttnn.synchronize_device(mesh_device)
