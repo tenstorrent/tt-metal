@@ -27,8 +27,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 
 #elif defined(LIGHTWEIGHT_KERNEL_ASSERTS)
 
-// Non-constexpr on purpose: C++17 forbids asm in a constexpr function body.
-// FORCE_INLINE keeps the ebreak at the ASSERT site in the binary (debug PC).
+// Trap wrapped as a function to avoid inline assembly at ASSERT macro's use site.
 FORCE_INLINE void lightweight_assert_trap() { asm("ebreak"); }
 
 #define ASSERT(condition, ...) (void(not(condition) ? lightweight_assert_trap(), 0 : 0))
