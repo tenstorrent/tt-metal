@@ -58,6 +58,8 @@
     "1x8": {
       "_comment_full_model_wh": "Wormhole twin of QuietBox test_full_model[blackhole-1x4] 0.935. WH T3K 1x8 measured 0.9379 vs HF (same unified-arch gap); no prior 12B WH 1x8 row so it fell through to 0.99.",
       "test_full_model[wormhole_b0-1x8]": 0.935,
+      "_comment_attn_prefill_wh_4096": "WH T3K 1x8 global seq4096 measured 0.9873 under the default 0.99. Same 0.98 gate as 31B/26B WH 1x8 and 12B BH seq4096.",
+      "test_attention_prefill[wormhole_b0-seq4096-global-1x8]": 0.98,
       "_comment_via_harness_full": "Same #47311 SDPA-reduce precision gap as E2B (pcc_thresholds ~0.986); measured ~0.985 on 12B/P150x8 full-attention via_harness. Tier-1 unit test — gate below measured.",
       "test_attention_paged_decode_via_harness[blackhole-full-1x8]": 0.984,
       "test_attention_paged_decode_via_harness[blackhole-sliding-1x8]": 0.98,
