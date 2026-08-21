@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Confi
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     GATE_KEY_PREFIX_DEEPSEEK,
@@ -63,6 +64,7 @@ GATE_MODELS = {
     "glm_5_1": GLM51Config,
     "minimax_m2_7": MiniMaxM27Config,
     "gpt_oss_120b": GptOss120BConfig,
+    "mistral4": MistralSmall4Config,
     "dsv4_pro": DeepSeekV4ProConfig,
     "dsv4_flash": DeepSeekV4FlashConfig,
 }
@@ -258,6 +260,15 @@ REGULAR_GATE_CASES = [
     pytest.param("minimax_m2_7", GateComputeMode.DEVICE_FP32, id="minimax_m2_7-device_fp32"),
     pytest.param("gpt_oss_120b", GateComputeMode.GPT_HOST, id="gpt_oss_120b-gpt_host"),
     pytest.param("gpt_oss_120b", GateComputeMode.GPT_DEVICE, id="gpt_oss_120b-gpt_device"),
+    # Mistral Small 4 119B routes with the GPT-OSS rule (softmax over all 128 experts -> top-4 ->
+    # renormalize is identical to top-4 on raw logits -> softmax over the selection, since softmax is
+    # monotonic), so it shares this kernel path -- but at dims no other GPT-mode row covers: 128
+    # experts / top-4 / dim 4096, against gpt_oss_120b's 128 / top-4 / dim 2880. Both the device gate
+    # and the golden read the SAME generated e_score_correction_bias, so the comparison holds even
+    # though Mistral's real checkpoint has no bias tensor at all; what this row gates is the op at
+    # Mistral's shapes, not the bias-free-ness of its config.
+    pytest.param("mistral4", GateComputeMode.GPT_DEVICE, id="mistral4-gpt_device"),
+    pytest.param("mistral4", GateComputeMode.GPT_HOST, id="mistral4-gpt_host"),
     pytest.param("dsv4_pro", GateComputeMode.DEVICE_FP32, id="dsv4_pro-device_fp32"),
     pytest.param("dsv4_flash", GateComputeMode.DEVICE_FP32, id="dsv4_flash-device_fp32"),
 ]
