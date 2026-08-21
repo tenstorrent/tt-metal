@@ -329,7 +329,12 @@ def _seed_worker_csv(workers, base, mean):
 
 
 def _perf_run(tmp_path, monkeypatch, tag, bases, mean=10.0):
-    """Run combine_perf_reports once under `tag`, for the given test bases."""
+    """Run combine_perf_reports once under `tag`, for the given test bases.
+
+    A real run never names a tag: ``perf_run_tag()`` mints ``local-<UTC stamp>``
+    on its own. These tests pin it because a directory named after the current
+    second is not something an assertion can address.
+    """
     workers = tmp_path / f"workers-{tag}"
     workers.mkdir()
     monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", workers)
@@ -396,6 +401,22 @@ def test_local_run_id_is_unique_per_run(tmp_path, monkeypatch):
 
     assert first.startswith("local-")
     assert TestConfig.perf_run_tag() == "second-tag"
+
+
+def test_run_tag_fallback_timestamps_instead_of_naming_the_arch(monkeypatch):
+    # CHIP_ARCH was once part of the fallback tag, but it cannot disambiguate what
+    # actually collides: every shard of one architecture shares GITHUB_RUN_ID, and
+    # only the workflow can see the shard index -- which is why CI sets
+    # PERF_RUN_TAG itself. Here a timestamp is what keeps invocations apart.
+    monkeypatch.setenv("GITHUB_RUN_ID", "999")
+    monkeypatch.setenv("CHIP_ARCH", "wormhole")
+    monkeypatch.delenv("PERF_RUN_TAG", raising=False)
+
+    tag = TestConfig.perf_run_tag()
+
+    assert tag.startswith("999-")
+    assert tag != "999"  # a bare run id is the collision this exists to avoid
+    assert "wormhole" not in tag
 
 
 def test_run_tag_is_stable_within_a_process(tmp_path, monkeypatch):

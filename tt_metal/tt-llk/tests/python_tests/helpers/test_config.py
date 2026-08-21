@@ -432,13 +432,18 @@ class TestConfig:
 
         Seeded into the environment on first use so xdist workers and the
         controller agree; conftest sets it before workers spawn.
+
+        CI sets ``PERF_RUN_TAG`` itself, because only the workflow can see the
+        shard index: ``GITHUB_RUN_ID`` and ``CHIP_ARCH`` are shared by every shard
+        of one architecture, so a tag built from them here would collide. The
+        fallback below therefore only has to keep successive invocations apart,
+        which a UTC timestamp does on its own.
         """
         tag = os.environ.get("PERF_RUN_TAG", "").strip()
         if not tag:
             run = os.environ.get("GITHUB_RUN_ID", "").strip()
-            arch = os.environ.get("CHIP_ARCH", "unknown").strip()
             stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-            tag = f"{run}-{arch}" if run else f"local-{stamp}"
+            tag = f"{run}-{stamp}" if run else f"local-{stamp}"
             os.environ["PERF_RUN_TAG"] = tag
         return tag
 
