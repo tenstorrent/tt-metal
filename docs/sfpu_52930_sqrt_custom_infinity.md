@@ -8,7 +8,7 @@ that issue are not addressed here.
 |---|---|
 | Kernels changed | `ckernel_sfpu_sqrt_custom.h` and `ckernel_sfpu_trigonometry.h`, Wormhole B0 and Blackhole |
 | Silicon | Wormhole n300 and Blackhole p100a |
-| Performance | measured on Wormhole n300 only |
+| Performance | measured on Wormhole n300 and Blackhole p100a |
 | Quasar | unchanged — still carries the pre-fix kernel |
 | SFPI | 7.69.0 (the pinned version) |
 
@@ -105,10 +105,12 @@ identical before and after, and neither is a `sqrt_custom` defect.
 
 ## 4. Performance
 
-Wormhole n300, `perf_eltwise_unary_sfpu.py` with CI's flags, `MATH_ISOLATE` on the `TILE_LOOP`
+`perf_eltwise_unary_sfpu.py` with CI's flags, `MATH_ISOLATE` on the `TILE_LOOP`
 marker, cycles per tile. Baseline and branch built from clean build roots so neither can serve the
 other a stale ELF. `Acosh` and `Asinh` are carried as controls — same suite, same shape, no
 `sqrt_custom` in them. `approx_mode` Yes and No measure identically for all six ops.
+
+### Wormhole n300
 
 | Op | dest_acc | Baseline | Branch | Δ | % |
 |---|---|---|---|---|---|
@@ -122,6 +124,38 @@ other a stale ELF. `Acosh` and `Asinh` are carried as controls — same suite, s
 | Acos | Yes | 2041.6 | 2041.6 | 0.0 | 0.00 % |
 | Acosh *(control)* | No, Yes | 3320.3, 3965.4 | 3320.3, 3965.4 | 0.0 | 0.00 % |
 | Asinh *(control)* | No, Yes | 5122.6, 6540.8 | 5122.6, 6540.8 | 0.0 | 0.00 % |
+
+### Blackhole p100a
+
+Same method and the same six ops, measured on p100a. `approx_mode` Yes and No again measure
+identically.
+
+| Op | dest_acc | Baseline | Branch | Δ | % |
+|---|---|---|---|---|---|
+| **SqrtCustom** | No | 892.1 | 988.1 | +96.0 | **+10.76 %** |
+| **SqrtCustom** | Yes | 892.1 | 988.1 | +96.0 | **+10.76 %** |
+| **Erfinv** | No | 3010.1 | 3202.1 | +192.0 | **+6.38 %** |
+| **Erfinv** | Yes | 3010.0 | 3202.0 | +192.0 | **+6.38 %** |
+| Asin | No | 2300.1 | 2300.1 | 0.0 | 0.00 % |
+| Asin | Yes | 1852.0 | 1852.0 | 0.0 | 0.00 % |
+| Acos | No | 2332.1 | 2332.1 | 0.0 | 0.00 % |
+| Acos | Yes | 1948.0 | 1948.0 | 0.0 | 0.00 % |
+| Acosh *(control)* | No, Yes | 3228.0, 3900.0 | 3228.0, 3900.0 | 0.0 | 0.00 % |
+| Asinh *(control)* | No, Yes | 4316.0, 5115.9 | 4316.0, 5115.9 | 0.0 | 0.00 % |
+
+The direct op costs **+96.0 exactly** on Blackhole, the same absolute cost as Wormhole and the same
+32 × 3 accounting below. The larger percentage is only a cheaper baseline (892.1 against 983.0),
+not a more expensive guard.
+
+`Erfinv` gains **+192.0 = 2 × 96** on Blackhole. `ckernel_sfpu_erfinv.h` calls `sqrt_custom` twice
+(lines 39 and 43) on both architectures, and both sites are guarded on both — on Wormhole
+`sfpu_sqrt_custom<false, 2>` leaves `GUARD_NON_FINITE` defaulted to true. Blackhole pays the full
+serial cost of both guards where Wormhole measured +134.4, so about 58 cycles of the second guard
+are absorbed into existing instruction slots there. A scheduling difference between the two
+architectures, not a difference in what is guarded.
+
+`Asin` and `Acos` are flat on Blackhole too, so the `GUARD_NON_FINITE=false` opt-out is confirmed
+on BH silicon rather than only from the ELF.
 
 **Where the SqrtCustom cycles go.** The guard adds three SFPU instructions per vector iteration —
 `SFPEXEXP` to extract the biased exponent, `SFPIADD` to compare it against 255, `SFPSETCC` to
@@ -191,8 +225,6 @@ pass. The `Asin`/`Acos` row exercises the `GUARD_NON_FINITE=false` opt-out on BH
 therefore exhibited the defect for the same reason Wormhole did, and the guard repairs it.
 Confirmed against the include path the LLK suite actually builds with,
 `-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu`.
-
-Performance is still measured on Wormhole only; §4 has not been re-run on Blackhole.
 
 ## 6. Scope and follow-ups
 
