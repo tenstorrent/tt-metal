@@ -496,12 +496,11 @@ def run_model(
 
 
 def _ci_unsupported_param_combos(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     is_balanced = params["is_balanced"]
     fabric_config = params["device_params"].get("fabric_config")
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     if not is_balanced:
         return True

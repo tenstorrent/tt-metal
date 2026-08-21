@@ -58,19 +58,17 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
 
 
 def _ci_unsupported_param_combos_lm_head(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     return True
 
 
 def _ci_unsupported_param_combos_global_to_local_token_id(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     return True
 

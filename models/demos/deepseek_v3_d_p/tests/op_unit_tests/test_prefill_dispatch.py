@@ -431,8 +431,9 @@ SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh(
         (8, 4): ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         (4, 2): ttnn.FabricConfig.FABRIC_2D,  # 8-chip proxy
         (2, 2): ttnn.FabricConfig.FABRIC_2D,  # 4-chip proxy
-        (2, 1): ttnn.FabricConfig.FABRIC_1D,
+        (2, 1): ttnn.FabricConfig.FABRIC_1D_RING,
         # TODO: add (1, 8) and (1, 4) with FABRIC_2D once fabric 2d works out on these meshes
+        # and remove 4,2 and 2,2
     },
 )
 
@@ -542,8 +543,7 @@ def _ci_unsupported_param_combos(**params):
     output_dtype = params["output_dtype"]
     num_links = params["num_links"]
     fabric_config = params["device_params"]["fabric_config"]
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     is_bh = params["is_bh"]
 
     fp8_input = input_dtype == ttnn.fp8_e4m3
@@ -571,7 +571,7 @@ def _ci_unsupported_param_combos(**params):
     if not (bf16_tile_combo or fp8_rm_combo):
         return True
 
-    if is_ci_env or is_ci_v2_env:
+    if on_ci:
         # Perf (no-pcc) variants prove nothing without a correctness check, so direct CI
         # collection drops them. Perf CI enters through wrapper tests whose
         # --wrapper-invocation flag bypasses this predicate entirely, so they still run there.

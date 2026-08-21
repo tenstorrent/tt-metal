@@ -228,11 +228,10 @@ def run_reduce(
 
 
 def _ci_unsupported_param_combos_ttnn_reduce(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     use_weights = params["use_weights"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     if use_weights is False:
         return True
@@ -240,11 +239,10 @@ def _ci_unsupported_param_combos_ttnn_reduce(**params):
 
 
 def _ci_unsupported_param_combos_ttnn_reduce_single_expert(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     use_weights = params["use_weights"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     if use_weights is False:
         return True
@@ -252,11 +250,10 @@ def _ci_unsupported_param_combos_ttnn_reduce_single_expert(**params):
 
 
 def _ci_unsupported_param_combos_ttnn_reduce_models(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     use_weights = params["use_weights"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     if use_weights is False:
         return True

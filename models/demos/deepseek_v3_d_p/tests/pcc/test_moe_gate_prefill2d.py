@@ -392,12 +392,11 @@ def _validate_gate(
 
 
 def _ci_unsupported_param_combos_forward_pass(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     fabric_config = params["device_params"]["fabric_config"]
     gate_fallback_mode = params["gate_fallback_mode"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     if fabric_config != ttnn.FabricConfig.FABRIC_2D:
         return True
@@ -407,11 +406,10 @@ def _ci_unsupported_param_combos_forward_pass(**params):
 
 
 def _ci_unsupported_param_combos_hash_gate_forward_pass(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     fabric_config = params["device_params"]["fabric_config"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     if fabric_config != ttnn.FabricConfig.FABRIC_2D:
         return True

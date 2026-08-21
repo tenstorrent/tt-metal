@@ -724,28 +724,25 @@ def test_sparse_mla_rotated(
 # None of these tests cover the chunked+non_balanced case, which is the only path production
 # runs — so they are all CI-skipped (still runnable locally).
 def _ci_unsupported_param_combos_sparse_mla_accuracy(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     return True
 
 
 def _ci_unsupported_param_combos_sparse_mla_indexer_reuse(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     return True
 
 
 def _ci_unsupported_param_combos_sparse_mla_determinism(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     return True
 

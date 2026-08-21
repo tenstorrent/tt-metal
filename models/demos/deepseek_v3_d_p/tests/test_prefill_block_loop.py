@@ -56,11 +56,10 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
 
 
 def _ci_unsupported_param_combos(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     gate_fallback_mode = params["gate_fallback_mode"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     if gate_fallback_mode != GateComputeMode.DEVICE:
         return True

@@ -26,12 +26,11 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def _ci_unsupported_param_combos_rmsnorm_distributed(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     isl_per_chip = params["isl_per_chip"]
     fabric_config = params["device_params"]["fabric_config"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     if isl_per_chip == 4096:
         return True
@@ -41,11 +40,10 @@ def _ci_unsupported_param_combos_rmsnorm_distributed(**params):
 
 
 def _ci_unsupported_param_combos_rmsnorm_single_chip(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     isl_per_chip = params["isl_per_chip"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     if isl_per_chip == 4096:
         return True

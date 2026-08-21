@@ -51,11 +51,10 @@ def create_gate_input(config, mesh_device):
 
 
 def _ci_unsupported_param_combos(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     gate_mode = params["gate_mode"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     if gate_mode != GateComputeMode.DEVICE:
         return True

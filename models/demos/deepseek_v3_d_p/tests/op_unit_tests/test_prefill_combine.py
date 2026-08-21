@@ -486,8 +486,7 @@ def _ci_unsupported_param_combos(**params):
     use_predictable_data = params["use_predictable_data"]
     use_fp8_output = params["use_fp8_output"]
     dispatched_buffer_layout = params["dispatched_buffer_layout"]
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     is_bh = params["is_bh"]
 
     num_devices = mesh_device[0] * mesh_device[1]
@@ -506,7 +505,7 @@ def _ci_unsupported_param_combos(**params):
     if use_fp8_output and not is_bh:
         return True
 
-    if (is_ci_env or is_ci_v2_env) and not run_pcc_check:
+    if on_ci and not run_pcc_check:
         return True
 
     return False

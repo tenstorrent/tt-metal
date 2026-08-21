@@ -460,12 +460,11 @@ def _dispatch_combine_mesh_params():
 
 
 def _ci_unsupported_param_combos_dispatch_combine(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     dispatched_buffer_layout = params["dispatched_buffer_layout"]
     num_links = params["num_links"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     if dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
         return True
@@ -475,19 +474,17 @@ def _ci_unsupported_param_combos_dispatch_combine(**params):
 
 
 def _ci_unsupported_param_combos_dispatch_combine_overflow(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     return True
 
 
 def _ci_unsupported_param_combos_dispatch_combine_top4(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     return True
 

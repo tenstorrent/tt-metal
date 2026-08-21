@@ -132,7 +132,7 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "uncollect_if(pred): deselect parametrized cases for which pred(**params) returns True. "
-        "pred receives the test's collection-time param values as keyword args, plus is_ci_env / is_ci_v2_env.",
+        "pred receives the test's collection-time param values as keyword args, plus on_ci / is_bh.",
     )
 
 

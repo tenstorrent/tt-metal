@@ -466,19 +466,17 @@ def run_ring_joint_sdpa(
 
 
 def _ci_unsupported_param_combos_mla_sdpa(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     return True
 
 
 def _ci_unsupported_param_combos_mla_sdpa_perf(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     return True
 

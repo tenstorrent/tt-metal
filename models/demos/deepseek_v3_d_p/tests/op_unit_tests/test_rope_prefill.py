@@ -22,11 +22,10 @@ PCC_REQUIRED = 0.99
 
 
 def _ci_unsupported_param_combos(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     is_balanced = params["is_balanced"]
 
-    if not (is_ci_env or is_ci_v2_env):
+    if not on_ci:
         return False
     if is_balanced:
         return True
