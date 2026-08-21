@@ -1,6 +1,6 @@
 # A dataflow buffer defect on Quasar, seen in simulation
 
-Companion to the [Quasar uplift report](ttnn/cpp/ttnn/operations/embedding/QUASAR_UPLIFT_REPORT.md),
+Companion to the [Quasar uplift report](QUASAR_UPLIFT_REPORT.md),
 which covers porting `ttnn.embedding` to Quasar. This document explains only the platform defect that
 port ran into, and is written to stand on its own for a reader who has not seen the operation or the
 port.
@@ -30,7 +30,7 @@ simulator. Wormhole results are from a real chip. That limit is discussed under
 
 A **dataflow buffer** hands data from one kernel to another. It is a ring of a fixed number of
 **entries**, and the two kernels run at the same time and coordinate through four calls
-([dataflow_buffer.h:180-183](tt_metal/hw/inc/api/dataflow/dataflow_buffer.h#L180-L183)):
+([dataflow_buffer.h:180-183](../../../../../tt_metal/hw/inc/api/dataflow/dataflow_buffer.h#L180-L183)):
 
 - The **producer** calls `reserve_back(n)` to claim `n` free entries, writes data into them, then calls
   `push_back(n)` to announce "these are full."
@@ -81,10 +81,10 @@ still open.
 
 One producer, one consumer, one ring, one round trip through DRAM. No compute kernel, no scratchpad,
 nothing from ttnn. The whole thing is
-[test_dfb_gen2_split_read_repro_hw.cpp:69-168](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_split_read_repro_hw.cpp#L69-L168).
+[test_dfb_gen2_split_read_repro_hw.cpp:69-168](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_split_read_repro_hw.cpp#L69-L168).
 
 The producer's entire body is this
-([dfb_split_read_producer.cpp:34-41](tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_split_read_producer.cpp#L34-L41)):
+([dfb_split_read_producer.cpp:34-41](../../../../../tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_split_read_producer.cpp#L34-L41)):
 
 ```cpp
 for (uint32_t i = 0; i < num_entries; i++) {
@@ -98,7 +98,7 @@ for (uint32_t i = 0; i < num_entries; i++) {
 ```
 
 The consumer is the textbook drain loop: `wait_front(1)`, write the entry out to DRAM, `pop_front(1)`
-([dfb_split_read_consumer.cpp:29-35](tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_split_read_consumer.cpp#L29-L35)).
+([dfb_split_read_consumer.cpp:29-35](../../../../../tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_split_read_consumer.cpp#L29-L35)).
 
 The only thing that differs from a program that works is one line. The correct version reads the whole
 entry in one transfer; this one reads it as two halves, into the first and second half of the same
@@ -128,7 +128,7 @@ pair of counters. See [What is still open](#what-is-still-open).
 ## The fuller test suite
 
 The minimal case above is deliberately one scenario. A second file,
-[test_dfb_gen2_credits_hw.cpp:1-94](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1-L94),
+[test_dfb_gen2_credits_hw.cpp:1-94](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1-L94),
 explores the space around it, which is what turns "this one program misbehaves" into a statement about
 the condition. Every test that varies the transfer count uses a ring two entries deep; the controls
 deliberately sweep depth 2 and 4, since depth is one of the things they rule out.
@@ -149,7 +149,7 @@ than only tripping a probe, and it is the only check the minimal reproduction ab
 The table below has three rows. Each pushes four entries' worth of data, so the announcement count is
 four every time and only the transfer count changes. Every transfer targets the ring itself. One
 producer kernel covers all three rows, varying only how it splits its reads
-([dfb_ratio_probe_producer.cpp:48-87](tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_ratio_probe_producer.cpp#L48-L87)).
+([dfb_ratio_probe_producer.cpp:48-87](../../../../../tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_ratio_probe_producer.cpp#L48-L87)).
 
 | Producer's pattern | transfers | announcements | surplus | Wormhole | Quasar |
 |---|---|---|---|---|---|
@@ -159,18 +159,18 @@ producer kernel covers all three rows, varying only how it splits its reads
 
 A surplus over-grants the consumer. A matching count and a deficit both behave correctly, so this is
 not simply "the counting is unreliable"; it goes wrong in one direction only. The failing row is
-[RatioTwoReadsPerAnnouncedSlot](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L796-L814);
+[RatioTwoReadsPerAnnouncedSlot](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L796-L814);
 the deficit row is
-[RatioOneReadPerTwoAnnouncedSlotsCompletes](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L844-L855).
+[RatioOneReadPerTwoAnnouncedSlotsCompletes](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L844-L855).
 
 ### The consumer's kind is the second condition
 
 Same producer, same surplus. The only change is putting a compute kernel in the draining position, with
 a data movement kernel after it to write the result out to DRAM where the test can check it
-([run_compute_consumer_ratio_case](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L910-L1021)).
+([run_compute_consumer_ratio_case](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L910-L1021)).
 The compute kernel copies each entry straight through unchanged, so nothing is being tested except
 which hardware performs the wait
-([dfb_tile_copy_compute.cpp:36-51](tests/tt_metal/tt_metal/test_kernels/compute/dfb_tile_copy_compute.cpp#L36-L51)).
+([dfb_tile_copy_compute.cpp:36-51](../../../../../tests/tt_metal/tt_metal/test_kernels/compute/dfb_tile_copy_compute.cpp#L36-L51)).
 
 | Transfers per entry | surplus | Consumer | Wormhole | Quasar |
 |---|---|---|---|---|
@@ -194,7 +194,7 @@ movement consumer completely, and the compute consumer delivers bit-exact output
 
 The clearest picture comes from adding a single extra transfer on top of four reads that fill four
 entries
-([MinimalExtraReadNoScratchpad](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L584-L684)).
+([MinimalExtraReadNoScratchpad](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L584-L684)).
 Its per-grant record on Quasar, with "unwritten" meaning the entry read as zero:
 
 ```
@@ -214,7 +214,7 @@ are not comparable. See [What is still open](#what-is-still-open).
 **It is not about where a transfer lands.** That is the natural suspect, because in the embedding
 operation the extra transfer reads into a scratchpad. One test sweeps eight variations of what else the
 producer does
-([ScratchpadUsePatternsThatDisturbTheBuffer](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1097-L1265)).
+([ScratchpadUsePatternsThatDisturbTheBuffer](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1097-L1265)).
 Six fail on Quasar and all eight pass on Wormhole. The six failures are an extra transfer into a
 scratchpad through its handle, that same transfer repeated every second entry, a transfer to the
 scratchpad's own address reached through a plain pointer instead of the handle, a transfer to the far
@@ -225,7 +225,7 @@ Of the two that pass on Quasar, one is the baseline that does nothing extra, so 
 information. The informative one is the other: the producer writes to that same scratchpad memory with
 an ordinary store instruction instead of over the NoC, and the ring is undisturbed. A store is not a
 transfer, so it does not change the count, which is exactly what the surplus explanation predicts.
-[MinimalExtraReadNoScratchpad](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L584-L684)
+[MinimalExtraReadNoScratchpad](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L584-L684)
 is the same result again with no scratchpad declared at all.
 
 **It is not Quasar's implicit sync.** Quasar has a feature, called implicit sync in the code, that can
@@ -233,14 +233,14 @@ announce an entry from the NoC transfer that filled it rather than waiting for `
 obvious culprit, and there is an existing issue, #50328, describing a problem with it whose documented
 fix is to switch the feature off. Switching it off here changes nothing: the failing case produces
 bit-identical results with the feature on and off, down to the recorded grant values
-([RatioTwoReadsPerAnnouncedSlotNoImplicitSync](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L822-L838)).
+([RatioTwoReadsPerAnnouncedSlotNoImplicitSync](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L822-L838)).
 So this is a different defect that resembles that one, and it should not be filed as a duplicate or
 closed as one.
 
 That null result is less surprising than it first looks, and it is worth being precise about why rather
 than presenting it as a mystery. Implicit sync applies to a specific form of the read call, one that
 takes no size argument and lets the ring supply the transfer parameters itself
-([noc.h:796-812](tt_metal/hw/inc/api/dataflow/noc.h#L796-L812)). Every kernel here passes an explicit
+([noc.h:796-812](../../../../../tt_metal/hw/inc/api/dataflow/noc.h#L796-L812)). Every kernel here passes an explicit
 byte count, so it uses the ordinary form and these transfers were never on the implicit-sync path to
 begin with. Switching the feature off was still worth doing, because it also covers the announcement
 calls and because it is the documented fix for #50328, but it was never likely to be the cause. What
@@ -252,7 +252,7 @@ ResNet already runs on Quasar, which raises a fair question: if this defect is r
 working model not hit it?
 
 We audited every operation written for Quasar, all 27 of them under
-[experimental/quasar/](ttnn/cpp/ttnn/operations/experimental/quasar/) (28 directories, one of which is
+[experimental/quasar/](../experimental/quasar) (28 directories, one of which is
 a shared helper rather than an operation), covering every program factory (the host-side code that
 builds a program) and every ring in them. The answer is structural rather than
 lucky, and it comes in three parts.
@@ -291,7 +291,7 @@ in the companion report.)
 ## Why the Wormhole results are the point
 
 `wait_front` is part of Metal 2.0's public API
-([dataflow_buffer.h:182](tt_metal/hw/inc/api/dataflow/dataflow_buffer.h#L182)) and is meant to hold on
+([dataflow_buffer.h:182](../../../../../tt_metal/hw/inc/api/dataflow/dataflow_buffer.h#L182)) and is meant to hold on
 every architecture. The kernel and host code are identical in both columns of every table above and
 call only documented functions, yet the result is correct on one architecture and wrong on the other.
 Either the platform breaks the promise or the promise is under-specified, and both are platform
@@ -344,9 +344,9 @@ binary with `./build_metal.sh --build-tests` from the repository root.
 The tests are written with gtest, the C++ test framework, where each file's tests belong to a named
 suite and `--gtest_filter` selects which ones to run.
 
-- [test_dfb_gen2_split_read_repro_hw.cpp](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_split_read_repro_hw.cpp#L69-L168),
+- [test_dfb_gen2_split_read_repro_hw.cpp](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_split_read_repro_hw.cpp#L69-L168),
   suite `Gen2DFBSplitReadReproTest`. One test, the minimal case.
-- [test_dfb_gen2_credits_hw.cpp](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1-L94),
+- [test_dfb_gen2_credits_hw.cpp](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1-L94),
   suite `Gen2DFBCreditsTest`. Sixteen tests: three vary the ratio, three vary where the extra transfer
   lands, four compare compute against data movement consumers, and six are controls.
 
@@ -355,18 +355,18 @@ things that matter, by varying everything else in turn:
 
 | Control | What it varies |
 |---|---|
-| [ConsumerDoesNotRunAheadOfProducer](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L309-L331) | ring depth and entry size |
-| [...RawWritePtr](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L339-L364) | how the producer addresses the ring |
-| [...TwoCores](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L371-L475) | one core against two |
-| [...TensorAccessor](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L484-L576) | how DRAM addresses are computed |
-| [...NoImplicitSync](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1504-L1517) | implicit sync off on a working program |
-| [ConsumerObservesProducerPushCountAtEachGrant](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1381-L1492) | nothing; it confirms entries really are full at grant time when the counts match |
+| [ConsumerDoesNotRunAheadOfProducer](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L309-L331) | ring depth and entry size |
+| [...RawWritePtr](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L339-L364) | how the producer addresses the ring |
+| [...TwoCores](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L371-L475) | one core against two |
+| [...TensorAccessor](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L484-L576) | how DRAM addresses are computed |
+| [...NoImplicitSync](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1504-L1517) | implicit sync off on a working program |
+| [ConsumerObservesProducerPushCountAtEachGrant](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1381-L1492) | nothing; it confirms entries really are full at grant time when the counts match |
 
 A Quasar run needs the craq-sim environment exported, which is documented separately. Leave it unset
 and the same binary runs on Wormhole, which is how both columns in every table above were produced.
 `TT_METAL_SLOW_DISPATCH_MODE=1` appears on every command line below because the shared test fixture
 these suites derive from skips every test unless it is set
-([device_fixture.hpp:79-95](tests/tt_metal/tt_metal/common/device_fixture.hpp#L79-L95)). Without it the
+([device_fixture.hpp:79-95](../../../../../tests/tt_metal/tt_metal/common/device_fixture.hpp#L79-L95)). Without it the
 run reports success having executed nothing.
 
 **The minimal case on its own.** This is the one to attach to a bug report.
@@ -407,9 +407,9 @@ TT_METAL_SLOW_DISPATCH_MODE=1 timeout 120 ./build_Release/test/tt_metal/unit_tes
   --gtest_filter="Gen2DFBCreditsTest.DmConsumerManyReadsPerAnnouncedSlot"
 ```
 
-[ScratchpadReadEveryEntryCompletes](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1275-L1371)
+[ScratchpadReadEveryEntryCompletes](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1275-L1371)
 adds one extra transfer per entry across eight entries, a surplus of 8.
-[DmConsumerManyReadsPerAnnouncedSlot](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1083-L1095)
+[DmConsumerManyReadsPerAnnouncedSlot](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1083-L1095)
 performs eight transfers per entry across four entries, a surplus of 28, and is the data movement half
 of the compute comparison above. Wormhole: both pass in well under a second. Quasar: neither finishes,
 and `timeout` kills them.

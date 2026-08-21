@@ -237,7 +237,7 @@ DFB's `entry_size`). What makes it an owner decision rather than a mechanical ed
 stride comes from: `rounded_weight_page_size` is `tt::align(weight_page_size, alignment)` where
 `alignment` is the **index** tensor's buffer alignment, not the output's. The factory's own
 `TT_FATAL` and comment at
-[embeddings_rm_program_factory.cpp:144-153](ttnn/cpp/ttnn/operations/embedding/device/embeddings_rm_program_factory.cpp#L144-L153)
+[embeddings_rm_program_factory.cpp:144-153](device/embeddings_rm_program_factory.cpp#L144-L153)
 already flag that these two alignments can disagree. Re-deriving that stride in explicit kernel
 arithmetic risks a silently different value writing to the wrong offsets in the output tensor, with
 nothing to catch it.
@@ -335,7 +335,7 @@ so the two checks together separate a real early release from a probe artifact.
 **The transaction-to-announcement ratio is the trigger.** Nothing in these three cases involves a
 scratchpad, a second destination, or anything else unusual. The producer is one kernel varying only
 how it splits its reads
-([dfb_ratio_probe_producer.cpp:48-87](tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_ratio_probe_producer.cpp#L48-L87)).
+([dfb_ratio_probe_producer.cpp:48-87](../../../../../tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_ratio_probe_producer.cpp#L48-L87)).
 
 | Producer, per announced slot | Wormhole (hardware) | Quasar (craq-sim) |
 |---|---|---|
@@ -344,15 +344,15 @@ how it splits its reads
 | one double-entry read, then announce two slots | pass | pass |
 
 A surplus breaks it. A matching count and a deficit both behave. The failing case is
-[test_dfb_gen2_credits_hw.cpp:790-814](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L790-L814),
+[test_dfb_gen2_credits_hw.cpp:790-814](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L790-L814),
 and it is the smallest repro in the file.
 
 **The consumer's hardware decides whether the surplus matters.** Same producer, same surplus, three
 kernels instead of two so a compute kernel can hold the consumer end: producer, then a compute tile
 copy, then a data-movement writer that drains to DRAM
-([test_dfb_gen2_credits_hw.cpp:904-1018](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L904-L1018),
+([test_dfb_gen2_credits_hw.cpp:904-1018](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L904-L1018),
 compute kernel at
-[dfb_tile_copy_compute.cpp:28-52](tests/tt_metal/tt_metal/test_kernels/compute/dfb_tile_copy_compute.cpp#L28-L52)).
+[dfb_tile_copy_compute.cpp:28-52](../../../../../tests/tt_metal/tt_metal/test_kernels/compute/dfb_tile_copy_compute.cpp#L28-L52)).
 
 | Producer, per announced slot | Consumer | Wormhole | Quasar |
 |---|---|---|---|
@@ -371,14 +371,14 @@ been masked by the copy's own latency, and a surplus this large cannot be.
 
 **The destination is irrelevant.** An earlier reading of this defect blamed the scratchpad, because the
 op's reader NoC-reads an index page into one. The sweep at
-[test_dfb_gen2_credits_hw.cpp:1091-1267](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1091-L1267)
+[test_dfb_gen2_credits_hw.cpp:1091-1267](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L1091-L1267)
 varied only where an extra read lands, holding the DataflowBuffer half of the producer identical: into
 a scratchpad through its binding, at the scratchpad's own address through a plain pointer, at a
 scratchpad's far end, at an unrelated address with a scratchpad bound, and at an unrelated address with
 no scratchpad anywhere in the program. All fail identically on Quasar and all pass on Wormhole. The one
 row that passes on Quasar is the row that touches the scratchpad with ordinary load and store
 instructions, because that is not a NoC transaction.
-[test_dfb_gen2_credits_hw.cpp:578-654](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L578-L654)
+[test_dfb_gen2_credits_hw.cpp:578-654](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L578-L654)
 is the same result with no scratchpad declared at all.
 
 So the scratchpad in the op is incidental. What matters is that the index read is one more NoC
@@ -439,7 +439,7 @@ same numbers.
 | Candidate | Ruled out by |
 |---|---|
 | Op-side index or page arithmetic | Gen1 passes. Checked by hand too: core 0 reads index elements 0-15, core 1 reads 256-271, and the writer's `stick_size` equals the buffer's `entry_size` (both 1536, confirmed from the write and read pointers being 1536 apart). |
-| Implicit-sync double count (§8.2, issue #50328) | `disable_dfb_implicit_sync_for_all = true` on both kernels leaves the symptom bit-identical, both in the op and against the failing ratio in the harness ([test_dfb_gen2_credits_hw.cpp:816-836](tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L816-L836), same per-grant samples to the bit). |
+| Implicit-sync double count (§8.2, issue #50328) | `disable_dfb_implicit_sync_for_all = true` on both kernels leaves the symptom bit-identical, both in the op and against the failing ratio in the harness ([test_dfb_gen2_credits_hw.cpp:816-836](../../../../../tests/tt_metal/tt_metal/api/metal2_host_api/test_dfb_gen2_credits_hw.cpp#L816-L836), same per-grant samples to the bit). |
 | A scratchpad, or a second destination, being required | Eight destination variants fail identically, including one with no scratchpad in the program, and the three ratio cases involve no scratchpad at all. |
 | `capacity` clobbered to 0 for consumers (`dataflow_buffer.cpp:620`) | `wait_front_impl` asserts `capacity >= num_entries`; `TT_METAL_LLK_ASSERTS=1` produced no assert. |
 | Stale cached read of a reused slot (§8.3, §12) | Adding `invalidate_l1_cache()` before the writer's `async_write` changes nothing. |
@@ -581,7 +581,7 @@ any case: it was measured and it does not help.
    Tests were **not** added here, deliberately: the tilized-indices `PADDED` path hands
    `starting_index` — this core's starting column within the face row — to `prepare_local_cache` as
    the pad-token value
-   ([embedding_ind_tilized.cpp:33-41](ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embedding_ind_tilized.cpp#L33-L41),
+   ([embedding_ind_tilized.cpp:33-41](device/kernels/dataflow/embedding_ind_tilized.cpp#L33-L41),
    whose comment hedges on exactly this), which looks wrong independently of anything in this
    change. A new test would most likely fail for that pre-existing reason and confuse the parity
    claim for this PR. Recommended follow-up: parametrize `test_embedding` (row-major output) and
