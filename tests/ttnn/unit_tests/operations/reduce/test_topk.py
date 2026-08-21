@@ -404,6 +404,51 @@ def test_topk_fp32_input_with_uint16_indices_tensor_raise(device, expect_error):
         ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
 
 
+def test_topk_indices_tensor_width_raise(device, expect_error):
+    # bf16 W=16384 requires a UInt16 index CB; a UINT32 indices_tensor was read half-width.
+    torch.manual_seed(0)
+    shape = [1, 1, 32, 16384]
+    ttnn_input = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    indices_tensor = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.int32), ttnn.uint32, layout=ttnn.Layout.TILE, device=device
+    )
+    with expect_error(RuntimeError, "does not match the 16-bit index width"):
+        ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
+
+
+def test_topk_preallocated_uint16_indices_too_narrow_raise(device, expect_error):
+    # W=65536 does not fit in 16 bits; a UINT16 preallocated output wraps positions above 65535.
+    torch.manual_seed(0)
+    k = 32
+    ttnn_input = ttnn.from_torch(
+        torch.randn([1, 1, 32, 65536], dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    values_out = ttnn.from_torch(
+        torch.zeros([1, 1, 32, k], dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    indices_out = ttnn.from_torch(
+        torch.zeros([1, 1, 32, k], dtype=torch.int32), ttnn.uint16, layout=ttnn.Layout.TILE, device=device
+    )
+    with expect_error(RuntimeError, "must be UINT32 or INT32"):
+        ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, output_tensor=(values_out, indices_out))
+
+
+def test_topk_indices_tensor_payload_is_read(device):
+    # Constant payload distinguishes a read indices_tensor from a regenerated iota (single-core path).
+    torch.manual_seed(0)
+    shape = [1, 1, 32, 64]
+    ttnn_input = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    indices_tensor = ttnn.from_torch(
+        torch.full(shape, 777, dtype=torch.uint16), ttnn.uint16, layout=ttnn.Layout.TILE, device=device
+    )
+    _, indices = ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
+    assert torch.all(ttnn.to_torch(indices, dtype=torch.uint16).to(torch.int64) == 777)
+
+
 def test_topk_narrower_indices_tensor_raise(device, expect_error):
     # The indices are streamed with the input's page stride, so a narrower indices tensor is read at
     # the wrong pages and produces wrong indices rather than an error.
