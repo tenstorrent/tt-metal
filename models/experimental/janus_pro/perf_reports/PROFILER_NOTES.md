@@ -85,3 +85,32 @@ Stated so the findings above are not over-read:
 - **The aligner's 0.521 ms of matmul has not been characterised** beyond its op time. It is the
   one module still at HiFi2 with bfloat16 activations, and unlike the body it feeds the language
   model directly, so whether it can absorb narrowing is an open measurement, not an inference.
+  **Closed 2026-08-20** — see below.
+
+## The aligner, characterised
+
+`aligner fc1` and `c_fc` are the same 576x1024x4096 with a byte-identical program config, and
+fc1 took 235.8 us against `c_fc`'s 72.3 us. Measured on 2026-08-20
+([CANDIDATES-2026-08-20.md](CANDIDATES-2026-08-20.md)), the 3.27x splits as:
+
+| difference | worth |
+|---|---:|
+| `fp32_dest_acc_en` True → False | **−22.4 us** on fc1, −17.9 on the 4096x4096 |
+| output bfloat16 → bfloat8_b (DRAM) | −4.9 us on fc1, −13.4 on the 4096x4096 |
+| `out_subblock_w` 4 → 8, DST budget freed | **+7.5 us**, i.e. worse |
+| fidelity HiFi2 vs LoFi | not measured; it feeds the language model |
+
+Only the second row is in the tree (change 30). The first is measured and deliberately not taken —
+it costs 82% of the aligner gate's slack, see [DEAD_ENDS](DEAD_ENDS.md#measured-and-rejected) — so
+read the table as a characterisation of where the time is, not as a list of available levers.
+
+So the gap is mostly **fp32 dest accumulation**, and it is not the output format and not the
+subblock. The aligner **can** absorb narrowing: bfloat8_b on the read-once intermediate costs
+1.5e-5 of the 0.9999 aligner gate, a third of what turning off fp32 accumulation costs.
+
+One thing to carry forward: fc1's reported DRAM utilisation falls 13.1% → 9.9% when its output
+narrows — the write genuinely halves — and its time moves 2%. Both aligner matmuls are classified
+writer-bound by "BRISC duration dominates", and halving the write did almost nothing. That is
+[the section above](#brisc-at-100-of-op-duration-does-not-mean-reader-bound) restated on a
+different module: **BRISC dominating tells you nothing about which half of its job binds**, and
+here neither half was bytes.

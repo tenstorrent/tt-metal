@@ -43,6 +43,78 @@ bfloat8_b tensor has exactly one consumer.
 To reproduce: pass `dtype=ttnn.bfloat8_b` to both `ttnn.add` calls in
 `janus_pro_image_block.py:forward` and change nothing else.
 
+### It is not a binary — a suffix of it landed as change 31
+
+**PCC is monotonic in how many layers carry the bfp8 residual**, so there is a boundary rather
+than a cliff. Change 31 takes the last 12; the full sweep is in
+[31-bfp8-residual-last12.md](31-bfp8-residual-last12.md) and
+[CANDIDATES-2026-08-20.md](CANDIDATES-2026-08-20.md).
+
+| suffix length | `test_vision_transformer` | |
+|---:|---|---|
+| 6 | 0.997891 | pass |
+| **12** | **0.996674** | **landed as change 31** |
+| 18 | 0.991522 | passes, and buys −0.089 ms, but leaves 1.5e-3 of the gate |
+| 19 | 0.989845 | fail |
+| 24 | 0.9765 | fail |
+
+18 was measured and **deliberately not taken**: it spends 7.2e-3 of the gate's 8.8e-3 of slack
+for 0.13% more tower time than 12 does, which prices every later encoder change out of the same
+budget. 12 leaves 6.7e-3.
+
+Also worth recording: scaling to all 24 layers gives roughly **−1.3%**, against the **−8.70%**
+this section reports from stage 11. The lever did not shrink, the tower did — stage 11 measured
+15.88 ms on span, before bfp8 weights, LoFi and the output sharding. Read the caveat at the top
+of this file about a delta and a stage's `kernel after` not sharing a denominator; this is its
+largest instance.
+
+### Why it has to be a suffix
+
+Interleaving is the obvious way to spend fewer layers, and it is **strictly worse than a suffix
+of the same length** — at 12 layers it does not merely lose, it fails the gate:
+
+| 12 of 24 blocks bfp8 | `test_vision_transformer` |
+|---|---|
+| suffix, blocks 12-23 | **0.996674** pass |
+| every second block, 1,3,…,23 | 0.980624 **fail** |
+| every second block, 0,2,…,22 | 0.977422 **fail** |
+
+Both interleavings are worse than the *18*-block suffix despite narrowing six fewer blocks, and
+the even one is close to all-24's 0.9765. Two mechanisms, and neither is about how many
+quantizations happen — that count is 12 either way:
+
+- **A bfloat16 add cannot restore bits the running sum has already dropped.** There is no
+  recovery between steps, so alternating buys nothing; the intuition that a wide layer "repairs"
+  the narrow one before it has no mechanism behind it.
+- **Position dominates count.** Marginal cost of narrowing a six-block window: blocks 18-23 cost
+  8.7e-4, blocks 12-17 cost 1.27e-3, blocks 6-11 cost **5.10e-3** — roughly six times, because
+  an early block's error propagates through every block after it. Any interleaving reaches into
+  block 0 or 1 and pays that rate. Starting at 1 rather than 0 is worth 3.2e-3 on its own, which
+  is the same effect measured at one block of resolution.
+
+**Where the 0.99 comes from: nowhere.** `test_vision_transformer.py:36` is
+`pcc_required = 0.99`, bare. `git log --follow` traces the file to
+`models/demos/multimodal/gemma3/tests/vision_tests/test_vision_transformer.py`, added by
+**PR #26924 "Add Experimental Support for Gemma-3-4b-it"** (`85a33e8a34d`), where the same line
+already reads `pcc_required = 0.99` with no comment and no derivation. Janus's copy inherited it;
+`3cff7544b5c` only moved it. So the constant was chosen for **Gemma-3-4b's** SigLIP tower, not
+this one.
+
+The repo's gates are a tier convention by module depth, not per-model measurements:
+
+| tier | tests |
+|---|---|
+| 0.9999 | aligner, patch embedding, vision embedding, decoder RMS |
+| 0.999 | rope |
+| 0.99 | **transformer**, transformer block, attention, mlp, layernorm, decoder |
+| 0.95 | tower, vision model, pipeline, e2e |
+
+That is the whole provenance. It is **not** a reason to move it — a gate with no derivation is as
+likely to be too loose as too tight, and nothing here measures what this tower's downstream
+actually tolerates. It is a reason to know that "0.99" carries no information about Janus, and
+that the case for the bfp8 residual rests on a downstream measurement nobody has taken, not on
+arguing with 0.99.
+
 ## Superseded — lost once, paid later
 
 The most useful entries in this file, because each says the same lever is worth re-testing after
@@ -61,6 +133,10 @@ Each row is a device measurement, not an opinion.
 
 | stage | lever | measured | why it lost |
 |---|---|---|---|
+| 29 | the aligner's compute config `hifi2` → **`hifi2_fp16`**, i.e. `fp32_dest_acc_en` off at the same fidelity | **−0.036 ms (−0.39%)**, aligner fc1 235.8 → **213.4 us**, and aligner PCC 0.999955 → **0.999910** | it pays, and it is not in the tree. Against a **0.9999** gate that is 82% of the remaining 5.5e-5 of slack spent on 0.39%, leaving 1.0e-5 — no later aligner change could be measured against it. The only lever here whose cost is a gate rather than a clock. Its diagnostic value is kept in [PROFILER_NOTES](PROFILER_NOTES.md#the-aligner-characterised): the aligner's 3.27x against `c_fc` at an identical shape and config is mostly this flag |
+| 29 | the sharded layer norm's math fidelity at **LoFi** | tower PCC **0.937403** against its 0.95 gate | the one LayerNorm knob [not in the swept list](#where-every-knob-has-already-been-swept), and it is an accuracy wall rather than a flat result. The norm's rsqrt is where the tower's precision actually lives |
+| 29 | the same at **HiFi2** | 9.298 ms, −0.013 ms, but tower PCC 0.970880 → **0.962398** | it does pay, 19.23 → 18.61 us over 49 ops, so "fidelity cannot touch a cross-core reduction" was wrong. It loses on the trade: **8.5e-3 of tower PCC for 0.14%**, where the bfp8 residual on 18 layers buys 0.96% for 6.8e-3. Worst PCC-per-microsecond of anything measured on this tower |
+| 29 | `out_subblock_w` 4 → 8 on the **aligner only**, with `fp32_dest_acc_en` off so the DST bound is 8 | 9.277 vs 9.275 flat; aligner fc1 213.4 → **220.9 us**, i.e. worse | the [stage-22 result](#measured-and-rejected) again — "DST was not the constraint" — now confirmed on a **writer-bound** op, which was the one reason to retest. A wider subblock widens the write burst and the write burst was not the cost either. `get_out_subblock_w`'s hardcoded 4 is not leaving anything on the table |
 | 28 | the patch projection writing L1 **interleaved**, to cheapen the position add | **9.990 ms against 9.401**, +0.589 ms | an interleaved-L1 output propagates into the residual, and from there **47 new `InterleavedToSharded`** appear and the block adds go 3.9 -> 9.7 us. The milder form of the stage-7 result below. Block-sharding the same output, with a 2D config so the grid survives, is change 29 |
 | 28 | the same output block-sharded but with **no** program config | 9.452 ms, +0.051 ms | the shard spec alone is not enough: ttnn's derivation collapsed the projection to **12 cores** and it went 43.7 -> 128.3 us. The consumer side worked exactly as intended (-28 us); the producer paid three times that |
 | 28 | dropping the `qkv` output shard, so the matmul writes DRAM and no unshard is needed | **11.507 ms against 9.300**, +23.7% | re-tested because changes 18 and 19 were measured against an 11.7 ms tower, before LoFi and before the norm shard. The unshard costs 226 us; removing it costs the matmuls **+1.76 ms**. The margin is wider now, not narrower |

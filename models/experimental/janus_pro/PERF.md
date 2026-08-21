@@ -104,10 +104,14 @@ target: nothing about it varies at runtime. This section documents how long it t
 device and why.
 
 **Where it stands.** Kernel time — the sum of every op's compute time for one forward pass —
-went from **29.501 ms to 9.316 ms, −68.4%**, and device ops from 393 to 293. Every number here
-was measured on an N150; none is estimated. Accuracy held: the strictest gate
-(`test_vision_transformer`, 0.99) ended at 0.998811, *higher* than the 0.998631 it started at.
-The tower's own metric ended at 0.970880 against its 0.95 gate.
+went from **29.501 ms to 9.230 ms, −68.7%**, and device ops from 393 to 293. Every number here
+was measured on an N150; none is estimated. The tower's own metric ended at 0.967334 against its
+0.95 gate, and the strictest gate (`test_vision_transformer`, 0.99) at 0.996628.
+
+Accuracy held to change 29 without being spent — that gate *rose*, 0.998631 to 0.998811. Changes
+30 and 31 are the first that buy time with precision rather than for free, and 31 is bounded by
+that gate rather than by anything on the device: it narrows the residual on as many blocks as
+0.99 allows and no more, which leaves 6.7e-3 of slack for whatever comes next.
 
 **Where the 20.2 ms came from.** Four op families account for 96% of it. If you read nothing
 else, read this table:
@@ -406,7 +410,9 @@ figure against its 0.95 gate. The per-stage breakdowns are in
 | 26 | MLP `c_fc` | sharding | [c_fc output block-sharded in L1](perf_reports/26-cfc-output-block-sharded.md) | -0.142 ms | 9.841 | 295 | 0.966489 | per-RISC split: BRISC at 99-100% of every matmul, and c_fc's was the only unsharded output |
 | 27 | attn heads | memcfg | [q/k/v written into L1](perf_reports/27-qkv-heads-output-l1.md) | -0.342 ms | 9.499 | 295 | 0.966489 | pure data movement, and SDPA reads all three straight back |
 | 28 | SDPA | memcfg | [SDPA's output written into L1](perf_reports/28-sdpa-output-l1.md) | -0.098 ms | 9.401 | 295 | 0.966489 | same shape; `nlp_concat_heads` is its only consumer |
-| 29 | patch embed, attn | progcfg + memcfg | [the encoder's activations all live in L1](perf_reports/29-encoder-activations-in-l1.md) | -0.085 ms | **9.316** | 293 | 0.970880 | the patch projection's 2D config lands on the norm's grid; `nlp_concat_heads` writes L1 because the in0 penalty is mcast, not L1 |
+| 29 | patch embed, attn | progcfg + memcfg | [the encoder's activations all live in L1](perf_reports/29-encoder-activations-in-l1.md) | -0.085 ms | 9.316 | 293 | 0.970880 | the patch projection's 2D config lands on the norm's grid; `nlp_concat_heads` writes L1 because the in0 penalty is mcast, not L1 |
+| 30 | aligner | dtype | [the aligner's intermediate in bfloat8_b](perf_reports/30-aligner-bfp8-intermediate.md) | -0.022 ms | 9.294 | 293 | 0.970875 | fc1's output has exactly one consumer, so the read-once rule applies to the aligner too. Halving a 4.72 MB write moved it 2% — the aligner is transaction-bound like the body, not write-bandwidth-bound |
+| 31 | encoder block | dtype | [bfloat8_b residual on the last 12 blocks](perf_reports/31-bfp8-residual-last12.md) | -0.064 ms | **9.230** | 293 | 0.967334 | both norms inherit the residual's format, so `qkv`'s and `c_fc`'s in0 multicast halves with no typecast to pay for it. A suffix rather than all 24: the residual is summed across every layer, so its error compounds and the count is bounded by a gate |
 
 The PCC column is the **tower unit test's** (`test_vision_tower_janus`), against its 0.95 gate,
 **except rows 2 and 3 which only have an end-to-end figure** and are labelled `e2e`. Read the
