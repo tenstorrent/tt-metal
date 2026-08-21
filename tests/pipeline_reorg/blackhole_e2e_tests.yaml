@@ -73,6 +73,18 @@
   owner_id: U08ARDXARPF # Ilija Anastasijevic
   team: ttnn
 
+# The op gathers over a mesh axis, and a mesh smaller than the box is a submesh, which
+# fabric does not come up on — so the mesh a row asks for is fixed by the box it runs on.
+- id: bh-lb-ttnn-attn-res-gather-softmax-unit
+  name: ttnn attn_res_gather_softmax unit tests
+  model-name: kimi_k3
+  cmd: pytest tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py -k "mesh-2x4"
+  skus:
+    bh_loudbox:
+      timeout: 10
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: ttnn
+
 # --- unit (fast) ---
 # Fast multi-card legs that the legacy blackhole-multi-card-unit-tests-impl.yaml
 # also runs in post-commit (fast-only: true). Kept in e2e to match the run-count
@@ -277,4 +289,20 @@
     bh_quietbox_2:
       timeout: 10
   owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+
+- id: bh-lb-kimi-k3-attn-res
+  name: bh_lb_Kimi_K3_ATTN_RES
+  model-name: kimi_k3
+  # Kimi K3 attention residuals: the device walk at 1280 tokens over SP 2 and `d` over
+  # TP 4. Needs tp > 1 — the read's reduction is over the hidden shards — and bh_loudbox
+  # is the smallest box carrying Galaxy's TP factor of 4. The directory's host-only files
+  # come along because they gate code the device tests cannot: the PCC and bit-exactness
+  # helpers those tests reach their verdicts through, and the weight cache path, which is
+  # only taken when a checkpoint is staged and CI stages none.
+  cmd: pytest models/demos/deepseek_v3_d_p/tests/attn_res/ -vvv --tb=short
+  skus:
+    bh_loudbox:
+      timeout: 10
+  owner_id: U09LK84G4TF # Nikola Milicevic
   team: models

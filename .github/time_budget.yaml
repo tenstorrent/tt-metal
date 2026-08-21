@@ -317,7 +317,7 @@ models:
     wh_llmbox: 198
     bh_p150b_civ2: 8
     bh_p300: 20
-    bh_loudbox: 193
+    bh_loudbox: 200
     bh_quietbox_2: 90
     bh_sc1: 20
   e2e_tier1:
