@@ -16,6 +16,7 @@ import ttnn
 from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout, get_num_dram_banks
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_OUTPUT_TOKENS
 
 # This is a predefined constant for the number of contiguous tokens in a DRAM bank
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
@@ -23,7 +24,6 @@ NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 # at runtime: harvested parts expose fewer banks (e.g. 7), and the cache ND-shard grid + the
 # disaggregation address-table striding must both use the device's actual count to stay consistent.
 BH_NUM_DRAM_BANKS = 8
-PREFILL_CHUNK_OUTPUT_TOKENS = 5 * 1024
 
 
 class MlaKvCacheFormat(str, Enum):
