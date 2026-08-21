@@ -149,8 +149,8 @@ void RunSparseMcastPerPage(BaseFabricFixture* fixture, RoutingDirection dir, uin
     }
 
     std::vector<uint32_t> sender_status;
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -160,8 +160,8 @@ void RunSparseMcastPerPage(BaseFabricFixture* fixture, RoutingDirection dir, uin
 
     for (auto& [dev, _] : receiver_programs) {
         std::vector<uint32_t> recv_status;
-        tt_metal::detail::ReadFromDeviceL1(
-            dev->get_devices()[0],
+        tt_metal::slow_dispatch::ReadFromL1(
+            *dev,
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,

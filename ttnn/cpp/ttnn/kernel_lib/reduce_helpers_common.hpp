@@ -12,8 +12,8 @@
  * @brief Float32 reduce precision mode.
  *
  * Fast keeps fp32 on the FPU/GMPOOL path (inputs truncated to tf32 — faster, lossy); Accurate
- * routes fp32 SUM through the SFPU for full-fp32 accumulation (accurate ttnn.mean). Only affects
- * Float32 SUM; Int32 always uses the SFPU regardless of this mode.
+ * routes fp32 through the SFPU at full fp32 (accurate ttnn.mean / ttnn.max). Only affects
+ * Float32 SUM and MAX; Int32 always uses the SFPU regardless of this mode.
  */
 enum class ReduceFp32Mode : uint8_t { Fast, Accurate };
 
@@ -25,8 +25,8 @@ enum class ReduceFp32Mode : uint8_t { Fast, Accurate };
  * Int32 HW reduce into a W-then-H two-step (see reduce_op.cpp use_two_step_hw_sfpu_reduce).
  * Int32 MIN drives the LLK MIN reduce directly, instead of the -MAX(-x) reduce_{h,w}_neg path that FPU MIN uses.
  *
- * Float32 SUM additionally opts into the SFPU path when the caller passes ReduceFp32Mode::Accurate
- * (accurate ttnn.mean); the host threads that mode in from the kernel's compile-time args.
+ * Float32 SUM and MAX additionally opt into the SFPU path when the caller passes
+ * ReduceFp32Mode::Accurate; the host threads that mode in from the kernel's compile-time args.
  */
 template <
     ckernel::PoolType pool_type,
@@ -34,6 +34,21 @@ template <
     DataFormat data_format,
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast>
 constexpr bool is_sfpu_reduce_path() {
+#ifdef ARCH_QUASAR
+    // Quasar has no SFPU reduce path (and no ckernel::PoolType::MIN) — every reduce runs on the FPU. Rather
+    // than silently sending an SFPU-only reduce to the FPU (unsupported / reduced-precision output), REJECT
+    // it at compile time. requires_sfpu mirrors the WH/BH contract in the #else branch (Int32 MAX/SUM, and
+    // accurate Float32 SUM/MAX, on REDUCE_ROW/COL require SFPU). It names only MAX/SUM — never the absent
+    // PoolType::MIN — so it stays valid on Quasar; a Quasar kernel cannot instantiate the missing MIN anyway.
+    constexpr bool requires_sfpu =
+        (reduce_dim == ckernel::ReduceDim::REDUCE_ROW || reduce_dim == ckernel::ReduceDim::REDUCE_COL) &&
+        ((data_format == DataFormat::Int32 &&
+          (pool_type == ckernel::PoolType::MAX || pool_type == ckernel::PoolType::SUM)) ||
+         (data_format == DataFormat::Float32 && fp32_mode == ReduceFp32Mode::Accurate &&
+          (pool_type == ckernel::PoolType::SUM || pool_type == ckernel::PoolType::MAX)));
+    static_assert(!requires_sfpu, "SFPU reduce path is not supported on Quasar");
+    return false;
+#else
     if constexpr (
         pool_type != ckernel::PoolType::MAX && pool_type != ckernel::PoolType::SUM &&
         pool_type != ckernel::PoolType::MIN) {
@@ -41,10 +56,11 @@ constexpr bool is_sfpu_reduce_path() {
     }
     if constexpr (data_format != DataFormat::Int32) {
         // Float32 opts into the SFPU path only in Accurate mode, and only for SUM (accurate ttnn.mean,
-        // which the host lowers to SUM + a 1/N post-mul). Everything else non-Int32 stays on the FPU.
+        // which the host lowers to SUM + a 1/N post-mul) or MAX (accurate ttnn.max). Everything else
+        // non-Int32 stays on the FPU.
         if constexpr (
             fp32_mode != ReduceFp32Mode::Accurate || data_format != DataFormat::Float32 ||
-            pool_type != ckernel::PoolType::SUM) {
+            (pool_type != ckernel::PoolType::SUM && pool_type != ckernel::PoolType::MAX)) {
             return false;
         }
     }
@@ -52,6 +68,7 @@ constexpr bool is_sfpu_reduce_path() {
         return false;
     }
     return reduce_dim == ckernel::ReduceDim::REDUCE_ROW || reduce_dim == ckernel::ReduceDim::REDUCE_COL;
+#endif  // ARCH_QUASAR
 }
 
 /**

@@ -17,7 +17,7 @@
 model:
   variant: deepseek_v3_d_p  # PREFILL_MODEL           (default: deepseek_v3_d_p) registry key in adapter.py
   num_layers: 61            # PREFILL_NUM_LAYERS      (default: 61)    [MATCH RUNNER] per-layer ack count
-  max_seq_len: 61440        # PREFILL_MAX_SEQ_LEN     (default: 61440) [MATCH RUNNER] per-user cache tokens
+  max_seq_len: 56320        # PREFILL_MAX_SEQ_LEN     (default: 56320) [MATCH RUNNER] per-user cache tokens
   chunk_size: 5120          # PREFILL_CHUNK_SIZE      (default: 5120)  [MATCH RUNNER] tokens per push
 
 # ---------------------------------------------------------------------------

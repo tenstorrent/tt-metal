@@ -4,12 +4,27 @@
 
 import math
 import pytest
-
 import torch
 
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+
+
+def test_view_preserves_root_buffer_unique_id(device):
+    input_tensor = ttnn.from_torch(
+        torch.rand((1, 1, 32, 32), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    input_buffer_id = input_tensor.buffer_unique_id()
+
+    reshaped_tensor = ttnn.experimental.view(input_tensor, (1, 32, 32))
+
+    assert input_buffer_id is not None
+    assert reshaped_tensor.buffer_unique_id() == input_buffer_id
+    assert ttnn.mark_corruptible(reshaped_tensor) == input_buffer_id
 
 
 @pytest.mark.parametrize(
@@ -934,3 +949,108 @@ def test_reshape_rm_interleaved_wide_multi_page(device, input_shape, output_shap
     )
     y = ttnn.reshape(x, output_shape)
     assert_equal(t.reshape(*output_shape), ttnn.to_torch(y))
+
+
+@pytest.mark.parametrize(
+    "rows,cols",
+    [
+        # dest_page_size = 1 * sizeof(bf16) = 2B — non-clean RM reshape path (issue #50191).
+        (64, 65),
+        (32, 17),
+    ],
+)
+def test_reshape_rm_unit_last_dim_dram(device, rows, cols):
+    """ROW_MAJOR reshape to [N, 1] on interleaved DRAM must not hang and must be correct.
+
+    Regression for https://github.com/tenstorrent/tt-metal/issues/50191: previously the
+    dual-kernel non-clean path issued millions of barriered 2-byte DRAM writes and could
+    hard-deadlock Blackhole (SYS-1419). Shape is smaller than the issue repro but still
+    hits dest_page_size_bytes=2; loop a few times to catch intermittent hangs.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn((rows, cols), dtype=torch.bfloat16)
+    n = rows * cols
+    torch_expected = torch_input.reshape(n, 1)
+
+    for _ in range(8):
+        tt_input = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_out = ttnn.reshape(tt_input, (n, 1))
+        ttnn.synchronize_device(device)
+        actual = ttnn.to_torch(tt_out)
+        assert_equal(torch_expected, actual)
+        ttnn.deallocate(tt_out)
+        ttnn.deallocate(tt_input)
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
+    [
+        # One accumulate + one drain case on the non-clean path (#50191).
+        ((96, 3), (32, 9)),  # src=6B, dest=18B — accumulate
+        ((32, 9), (96, 3)),  # src=18B, dest=6B — drain
+    ],
+    ids=["accumulate_6_to_18", "drain_18_to_6"],
+)
+def test_reshape_rm_nonclean_misaligned_last_dim(device, input_shape, output_shape):
+    """Non-clean RM DRAM reshape with odd last dims must stay bit-exact (#50191)."""
+    torch.manual_seed(2)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.reshape(tt_input, output_shape)
+    ttnn.synchronize_device(device)
+    assert_equal(torch_input.reshape(output_shape), ttnn.to_torch(tt_out))
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
+    [
+        ((48, 65), (24, 130)),  # dest_page=260B — multi-slot staging
+        # Issue #50191 width: 8 fixed slots would exceed L1; factory must shrink.
+        ((200002, 1), (2, 100001)),
+    ],
+    ids=["dest_page_260B", "dest_page_200002B_issue_width"],
+)
+def test_reshape_rm_nonclean_large_odd_dest_page_l1_cb(device, input_shape, output_shape):
+    """Non-clean RM reshape with large odd dest pages must fit dest CB and be correct."""
+    torch.manual_seed(3)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.reshape(tt_input, output_shape)
+    ttnn.synchronize_device(device)
+    assert_equal(torch_input.reshape(output_shape), ttnn.to_torch(tt_out))
+
+
+def test_quasar_reshape_rm_unit_last_dim(device):
+    """Quasar RM factory/kernel: misaligned [N, 1] reshape must stay bit-exact (#50191)."""
+    rows, cols = 32, 17
+    torch.manual_seed(4)
+    torch_input = torch.randn((rows, cols), dtype=torch.bfloat16)
+    n = rows * cols
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.experimental.quasar.reshape(tt_input, (n, 1))
+    ttnn.synchronize_device(device)
+    assert_equal(torch_input.reshape(n, 1), ttnn.to_torch(tt_out))

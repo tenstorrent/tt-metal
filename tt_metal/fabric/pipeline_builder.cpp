@@ -183,6 +183,13 @@ std::map<std::string, size_t> assign_submeshes(
                 if (!is_lb) {
                     continue;
                 }
+                // A self-loop is satisfied trivially: a single-stage graph's return path
+                // never leaves its submesh, so there is no inter-submesh link to require.
+                // discover_connections() skips i == j, so demanding one here would make
+                // every single-stage graph unassignable.
+                if (src == dst) {
+                    continue;
+                }
                 size_t si = node_to_sub.at(src);
                 size_t sj = node_to_sub.at(dst);
                 if (!connections.contains({si, sj})) {
@@ -270,6 +277,7 @@ std::map<std::string, size_t> assign_submeshes(
 }  // anonymous namespace
 
 GraphLayoutResult resolve_graph_layout(
+    const std::vector<std::string>& nodes,
     const std::vector<EdgeInputTuple>& edges,
     const std::vector<std::vector<ChipTuple>>& submesh_chips,
     const std::map<std::string, uint32_t>& node_chip_counts) {
@@ -290,18 +298,23 @@ GraphLayoutResult resolve_graph_layout(
     auto connections = discover_connections(chips);
 
     // ------------------------------------------------------------------
-    // 2. Collect unique node names and separate loopback edges
+    // 2. Collect node names.
+    //
+    // The explicit `nodes` list is authoritative, so graphs whose nodes are
+    // not all covered by edges (e.g. a single-stage pipeline with no edges)
+    // still register every node.  Every endpoint referenced by an edge must
+    // appear in `nodes`; an edge referencing an unlisted node is an error.
     // ------------------------------------------------------------------
-    std::vector<std::string> all_nodes;
-    all_nodes.reserve(edges.size() * 2);
+    const std::vector<std::string>& all_nodes = nodes;
     {
-        std::set<std::string> seen;
+        // Check all nodes in edges to ensure they are all registered.
+        std::set<std::string> node_set(nodes.begin(), nodes.end());
         for (const auto& [src, dst, is_lb] : edges) {
-            if (seen.insert(src).second) {
-                all_nodes.push_back(src);
+            if (!node_set.contains(src)) {
+                throw std::runtime_error("resolve_graph_layout: node " + src + " not found in the explicit nodes list");
             }
-            if (seen.insert(dst).second) {
-                all_nodes.push_back(dst);
+            if (!node_set.contains(dst)) {
+                throw std::runtime_error("resolve_graph_layout: node " + dst + " not found in the explicit nodes list");
             }
         }
     }
@@ -322,6 +335,12 @@ GraphLayoutResult resolve_graph_layout(
     std::vector<ResolvedEdge> resolved_edges;
     resolved_edges.reserve(edges.size());
     for (const auto& [src, dst, is_lb] : edges) {
+        // Self-loop: no physical hop to resolve (see assign_submeshes). It is left out of
+        // resolved_edges deliberately — a single-stage caller reads its entry/exit from
+        // h2d_entry_* / d2h_exit_* below, not from a per-edge entry.
+        if (src == dst) {
+            continue;
+        }
         size_t si = node_to_sub.at(src);
         size_t sj = node_to_sub.at(dst);
         auto it = connections.find({si, sj});

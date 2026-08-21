@@ -11,6 +11,7 @@ from loguru import logger
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
+    batched_prefill_padded_batch,
     max_prefill_chunk_size_cutoff,
 )
 
@@ -348,6 +349,7 @@ def resolve_gemma4_prefill_trace_enable(
     batch_size: int,
     prefill_seq_lens: list[int],
     can_batch_prefill: bool,
+    empty_slots=None,
 ) -> bool:
     """Resolve whether prefill trace stays enabled for this batch/prefill shape."""
     # Batched + bounded: the fill-cap device tensor is a single scalar, so a
@@ -362,10 +364,9 @@ def resolve_gemma4_prefill_trace_enable(
         return False
     trace_batch_size = batch_size
     if can_batch_prefill:
-        trace_batch_size = next(
-            (b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size),
-            model_args.max_batch_size,
-        )
+        # Must match the padded_batch the batched prefill will actually run, which
+        # spans the physical slots rather than just the request count.
+        trace_batch_size = batched_prefill_padded_batch(batch_size, empty_slots, model_args.max_batch_size)
     return apply_gemma4_prefill_trace_policy(
         enable_trace,
         prefill_seq_lens[0],

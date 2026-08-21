@@ -229,7 +229,8 @@
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D COMPRESSED_ROUTING_PATH_SIZE_2D
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D  // Union size
 #define MEM_ERISC_MAILBOX_SIZE 12768
-#define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
+// Must fit the largest erisc kernel config: the 2D-torus fabric_erisc_router needs 25680B.
+#define MEM_ERISC_KERNEL_CONFIG_SIZE (26 * 1024)
 #define MEM_ERISC_BASE 0
 
 // From the top of L1. Common.
@@ -326,7 +327,19 @@
 #define MEM_DRISC_LOCAL_SIZE MEM_BRISC_LOCAL_SIZE  // 8KB private data at MEM_LOCAL_BASE (0xFFB00000)
 #define MEM_DRISC_RESERVED_SIZE 64                 // Reserved at address 0 for corruption detection
 #define MEM_DRISC_MAILBOX_BASE MEM_DRISC_RESERVED_SIZE
-#define MEM_DRISC_MAILBOX_SIZE MEM_ERISC_MAILBOX_SIZE
+// Magic size must be big enough to hold mailboxes_t as instantiated for DRISC (PROCESSOR_COUNT == 1); the
+// static_assert in bh_hal_dram.cpp fires if this is too small. Sized tight (not shared with ERISC, which is
+// sized for its 2 processors) to free L1 for the programmable-DRAM-core kernel working region.
+//
+// mailboxes_t is unconditional: every debug/profiling feature that lives in the mailbox reserves its space
+// whether or not the feature is turned on, so this one number covers, simultaneously and regardless of which
+// are enabled at runtime, the watcher (288B: waypoints, NOC sanitize, assert, pause, stack usage,
+// insert-delays, ring buffer), DPRINT (204B = 1 processor * 204) and the kernel profiler (2304B = 256B
+// control vector + 1 processor * 2KB marker buffer). Nothing else in the DRISC map is conditional either:
+// the fabric routing tables/packet-header pool are Tensix/ERISC-only, and the realtime profiler message
+// lives in the CQ region rather than the mailbox. The remaining 1492B is the launch ring (8 * 144B) + go
+// messages + core info + sync/ready flags.
+#define MEM_DRISC_MAILBOX_SIZE 4288
 #define MEM_DRISC_MAILBOX_END (MEM_DRISC_MAILBOX_BASE + MEM_DRISC_MAILBOX_SIZE)
 #define MEM_DRISC_L1_INLINE_BASE MEM_DRISC_MAILBOX_END
 #define MEM_DRISC_L1_INLINE_END (MEM_DRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)

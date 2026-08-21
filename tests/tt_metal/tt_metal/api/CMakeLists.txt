@@ -87,6 +87,7 @@ target_include_directories(
     PRIVATE
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${PROJECT_SOURCE_DIR}
 )
 target_link_libraries(unit_tests_per_core_allocation PRIVATE test_metal_common_libs)
 target_precompile_headers(unit_tests_per_core_allocation REUSE_FROM metal_common_pch)

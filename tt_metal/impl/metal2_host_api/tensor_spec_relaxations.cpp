@@ -4,7 +4,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace tt::tt_metal::experimental {

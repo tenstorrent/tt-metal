@@ -17,14 +17,19 @@ void kernel_main() {
     constexpr uint32_t stride_h = get_arg(args::stride_h);
     constexpr uint32_t stride_w = get_arg(args::stride_w);
     constexpr uint32_t input_width = get_arg(args::input_width);
-    constexpr uint32_t work_per_core = get_arg(args::work_per_core);
 
     constexpr uint32_t patch_size = stride_h * stride_w;
+    constexpr uint32_t output_stick_nbytes = stick_nbytes * patch_size;
+    // Generic accessor + noc_async_write_sharded helper: compile-time dispatch to noc.async_write for interleaved /
+    // H-sharded outputs and per-shard writes for W/B-sharded outputs.
     const auto s_out = TensorAccessor(tensor::dst);
-    uint32_t dst_index = get_arg(args::dst_index);
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb::in0);
+
+    // work_per_core is runtime (per-core) so unused cores skip iteration and the cliff core can carry a partial tail.
+    uint32_t work_per_core = get_arg(args::work_per_core);
+    uint32_t dst_index = get_arg(args::dst_index);
 
     // The src1 scratch DFB is bound (and used) only when the stick is not L1-aligned.
     // Its binding, and every reference to it, is #ifdef-gated on the same condition the host
@@ -48,18 +53,12 @@ void kernel_main() {
                 }
                 l1_addr += aligned_stick_nbytes_dram;
             }
-            // Scratch buffer (dfb_in1) is populated at its WRITE_PTR; no push_back has advanced it yet.
-            noc.async_write(
-                CoreLocalMem<uint32_t>(dfb_in1.get_write_ptr()),
-                s_out,
-                stick_nbytes * patch_size,
-                {},
-                {.page_id = dst_index});
+            noc_async_write_sharded(noc, intermed_l1_scratch, s_out, dst_index, /*offset=*/0, output_stick_nbytes);
         }
 #else
         {
-            // If L1 aligned, write directly from the circular buffer.
-            noc.async_write(dfb_in0, s_out, stick_nbytes * patch_size, {}, {.page_id = dst_index});
+            noc_async_write_sharded(
+                noc, dfb_in0.get_read_ptr(), s_out, dst_index, /*offset=*/0, output_stick_nbytes);
         }
 #endif
         noc.async_write_barrier();

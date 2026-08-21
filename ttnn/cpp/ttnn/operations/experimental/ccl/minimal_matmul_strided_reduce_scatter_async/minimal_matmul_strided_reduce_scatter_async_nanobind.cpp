@@ -36,7 +36,13 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             [1] reduce-scatter output (final result)
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): multi-device input activations tensor
+            * :attr:`input_tensor` (ttnn.Tensor | list[ttnn.Tensor]): input activations. Pass a single
+              tensor for a standard matmul, or exactly 2 tensors [prefix, suffix] for fused concat over
+              in0's K (concat-free, no host concat). Concatenation is on the channel (K, last) axis ONLY —
+              the two must be identical on every other axis. Any per-segment channel count is allowed
+              (the seam lands on the prefix's padded-K tile boundary); the weight must be per-segment
+              tile-padded (see prepare_weight_for_concatenated_input in models/tt_dit/utils/tensor.py)
+              so that prefix_padded_K + suffix_padded_K == weight_padded_K.
             * :attr:`weight_tensor` (ttnn.Tensor): multi-device weight tensor
             * :attr:`dim` (int): scatter dimension for reduce-scatter
             * :attr:`multi_device_global_semaphore`: global semaphores for reduce-scatter
@@ -44,7 +50,13 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
 
         Keyword Args:
             * :attr:`num_links` (int): Number of links for reduce-scatter. Defaults to 1.
-            * :attr:`memory_config_mm` (Optional[ttnn.MemoryConfig]): Memory configuration for the matmul output.
+            * :attr:`memory_config_mm` (Optional[ttnn.MemoryConfig]): Memory configuration for the matmul
+              output. Requesting an L1 buffer type opts into the L1 hand-off: the MM output is then
+              block-sharded over the matmul core grid so the RS reader consumes it without a DRAM
+              round-trip. That shard stays resident on every matmul core for the life of the tensor, so
+              prefer it only when Mt/grid.y * Nt/grid.x tiles comfortably fit alongside the circular
+              buffers of the programs that follow — otherwise keep the output in DRAM, or bound the
+              shard with :attr:`mm_window_blocks`.
             * :attr:`rs_output_mem_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the RS output.
             * :attr:`rs_intermediate_mem_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the RS intermediate.
             * :attr:`topology` (ttnn.Topology): Communication topology. Defaults to Ring.

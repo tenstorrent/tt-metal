@@ -5,11 +5,11 @@
 import math
 import os
 import json
+import inspect
 import ttnn
 from pathlib import Path
 from loguru import logger
 import torch
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.tt_transformers.tt.common import (
     precompute_freqs,
     freqs_to_rotation_matrix,
@@ -17,7 +17,6 @@ from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
     get_base_model_name,
     get_out_subblock_w,
-    encode_prompt_instruct,
     encode_prompt_hf,
     get_rope_theta,
     get_rope_scaling,
@@ -29,10 +28,18 @@ from pathlib import Path
 from enum import Enum, auto
 from dataclasses import dataclass
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
-    load_meta_state_dict,
     load_hf_state_dict,
     convert_hf_to_meta,
+    convert_meta_to_hf,
     standardize_hf_keys,
+)
+
+# HuggingFace reference-model wrappers are shared with models/tt_transformers instead of being
+# copied here, so a transformers version bump is fixed in one place (see Issue #42139 review).
+from models.tt_transformers.tt.model_config import (
+    HfAttentionWrapper,
+    HfDecoderWrapper,
+    HfModelWrapper,
 )
 
 # Performance tuning:
@@ -463,6 +470,7 @@ class TtModelArgs:
         max_batch_size=1,
         max_seq_len=1024 * 128,
         optimizations=LlamaOptimizations.accuracy,
+        cache_hf=True,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -474,6 +482,19 @@ class TtModelArgs:
         self.tile_size = 32
         self.is_70b = False
         self.from_hf_url = False  # updated below if true
+        # HuggingFace-backed reference model infrastructure (mirrors models/tt_transformers).
+        # Galaxy Llama/Qwen use Meta-format state dicts, so keep the Meta<->HF permute path (use_hf_rope=False).
+        self.hf_config = None  # Populated in _set_hf_params for HF checkpoints
+        self.use_hf_rope = False
+        self.trust_remote_code_hf = False
+        # When True, the real-weight load_state_dict() builds its state dict from the HF reference
+        # model and caches it, so a subsequent reference_*() call reuses that model instead of
+        # loading the 70B checkpoint a second time. Pure-inference consumers that never build a
+        # torch reference (demos, vLLM, accuracy) pass cache_hf=False to keep the lighter loader.
+        self.cache_hf_flag = cache_hf
+        self.cached_hf_model = None
+        self.fuse_qkv = False
+        self.fuse_mlp = False
         self.max_prefill_chunk_size = max_seq_len
         self.use_prefetcher = False
         self.max_top_k = 32
@@ -506,39 +527,18 @@ class TtModelArgs:
         )
         self.start_core = ttnn.CoreCoord(1, 0)
 
-        LLAMA_DIR = os.getenv("LLAMA_DIR")
+        # Galaxy Llama 3.3-70B is HuggingFace-only (Meta / LLAMA_DIR support was removed, Issue #42139).
         HF_MODEL = os.getenv("HF_MODEL")
-        assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
-        if LLAMA_DIR:
-            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
-                logger.warning("LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH")
-            self.CKPT_DIR = LLAMA_DIR
-            self.TOKENIZER_PATH = LLAMA_DIR
-            self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
-            if not self.CACHE_PATH:
-                self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
-            self.model_name = os.path.basename(LLAMA_DIR)  # May be overridden by config
-        elif HF_MODEL:
-            self.CKPT_DIR = HF_MODEL
-            self.TOKENIZER_PATH = HF_MODEL
-            self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
-            if not self.CACHE_PATH:
-                self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
-            else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
-                self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.device_name)
-            self.model_name = HF_MODEL  # May be overridden by config
-            self.from_hf_url = True
-        else:
-            assert (
-                False
-            ), "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
-
-        if not dummy_weights and not HF_MODEL:
-            # Assert if all folders and files exist
-            assert os.path.exists(
-                self.CKPT_DIR
-            ), f"Checkpoint directory {self.CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
-            os.makedirs(self.CACHE_PATH, exist_ok=True)
+        assert HF_MODEL, "Please set HF_MODEL to a HuggingFace model name, e.g. meta-llama/Llama-3.3-70B-Instruct"
+        self.CKPT_DIR = HF_MODEL
+        self.TOKENIZER_PATH = HF_MODEL
+        self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
+        if not self.CACHE_PATH:
+            self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
+        else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
+            self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.device_name)
+        self.model_name = HF_MODEL  # May be overridden by config
+        self.from_hf_url = True
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
@@ -557,39 +557,18 @@ class TtModelArgs:
         if "instruct" in self.CKPT_DIR.lower():
             self.instruct = True
 
-        # Load model params
-        if HF_MODEL:
-            self.checkpoint_type = CheckpointType.HuggingFace
-            self._set_hf_params(self.CKPT_DIR)
-        elif not dummy_weights:
-            self.checkpoint_type = self.detect_checkpoint_type()
-            self._set_model_params(self.CKPT_DIR)
-        else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
-            self.checkpoint_type = CheckpointType.Meta
-            if "3.2-1B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_1B_PARAMS"
-            elif "3.2-3B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_3B_PARAMS"
-            elif "3.1-8B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_8B_PARAMS"
-            elif "3.2-11B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_11B_PARAMS"
-            elif "3.1-70B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_70B_PARAMS"
-            elif "3.3-70B" in self.CKPT_DIR:
-                local_params = "LLAMA3_3_70B_PARAMS"
-            else:
-                raise ValueError(
-                    f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
-                )
-            self._set_model_params(self.LOCAL_LLAMA_PARAMS[local_params])
+        # Load model params. Galaxy Llama 3.3-70B always runs on HuggingFace checkpoints, so the
+        # HF config (also available under TT_CACHE_PATH in CI) drives the params for both real and
+        # dummy weights. dummy_weights must be set before _set_hf_params: dummy runs read the
+        # bundled in-repo config instead of touching the HF hub/cache.
+        self.dummy_weights = dummy_weights
+        self.checkpoint_type = CheckpointType.HuggingFace
+        self._set_hf_params(self.CKPT_DIR)
 
         if callable(optimizations):
             self.optimizations = optimizations(self.model_name)
         else:
             self.optimizations = optimizations
-
-        self.dummy_weights = dummy_weights
         self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
 
         # Enable workarounds by default until di/dt issues are fixed
@@ -2206,15 +2185,38 @@ class TtModelArgs:
         self.orig_context_len = 8192
 
     def _set_hf_params(self, checkpoint_dir):
-        if self.from_hf_url:
-            from transformers import AutoConfig
+        from transformers import AutoConfig
 
-            config = AutoConfig.from_pretrained(self.model_name).to_dict()
+        if self.from_hf_url:
+            if self.dummy_weights:
+                # Dummy-weight runs must not depend on the HF hub or its on-disk cache: CI galaxy
+                # runners set HF_HUB_OFFLINE and the gated meta-llama repo may be absent from the
+                # runner's cache. Mirror tt_transformers.LOCAL_HF_PARAMS and load the architecture
+                # config bundled in-repo instead.
+                local_params_dir = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "..",
+                    "model_params",
+                    os.path.basename(self.model_name),
+                )
+                assert os.path.exists(
+                    os.path.join(local_params_dir, "config.json")
+                ), f"No bundled HF config for dummy weights at {local_params_dir}"
+                logger.info(f"Dummy weights: loading bundled HF config from {local_params_dir}")
+                self.hf_config = AutoConfig.from_pretrained(
+                    local_params_dir, trust_remote_code=self.trust_remote_code_hf
+                )
+            else:
+                self.hf_config = AutoConfig.from_pretrained(
+                    self.model_name, trust_remote_code=self.trust_remote_code_hf
+                )
+            config = self.hf_config.to_dict()
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
+            self.hf_config = AutoConfig.from_pretrained(checkpoint_dir, trust_remote_code=self.trust_remote_code_hf)
         self._set_params_from_dict(config, is_hf=True)
         self.is_70b = self.dim == 8192 and self.n_layers == 80
         if self.is_70b:
@@ -2276,22 +2278,128 @@ class TtModelArgs:
     def get_model_config(self):
         return self.model_config
 
+    def get_hf_model_cls(self):
+        # Galaxy Llama / Qwen are text-only causal LMs.
+        from transformers import AutoModelForCausalLM
+
+        return AutoModelForCausalLM
+
+    def reference_transformer(self, wrap=True, load_checkpoint=False):
+        """Return the HuggingFace reference transformer, mirroring models/tt_transformers.
+
+        When wrap=True, returns an HfModelWrapper exposing a Meta-style forward/load_state_dict.
+        When wrap=False, returns the raw HF model (used by the submodule reference_* helpers).
+        """
+        import copy
+
+        model_cls = self.get_hf_model_cls()
+
+        if self.dummy_weights and not load_checkpoint:
+            assert self.hf_config is not None, "hf_config must be set to build a dummy HF reference model"
+            config = copy.deepcopy(self.hf_config)
+            if hasattr(config, "text_config"):
+                config.text_config.num_layers = self.n_layers
+                config.text_config.num_hidden_layers = self.n_layers
+            else:
+                config.num_layers = self.n_layers
+                config.num_hidden_layers = self.n_layers
+            try:
+                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            except TypeError:
+                model = model_cls.from_config(config)
+        else:
+            # Load real HF weights. Mirrors the from_pretrained call in load_state_dict so the
+            # CI checkpoint-resolution behavior stays consistent.
+            if self.cache_hf_flag and self.cached_hf_model is not None:
+                model = self.cached_hf_model
+            else:
+                model = model_cls.from_pretrained(
+                    self.CKPT_DIR,
+                    torch_dtype="auto",
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true",
+                )
+                if self.cache_hf_flag:
+                    self.cached_hf_model = model
+
+        # Keep only the requested number of layers.
+        model.model.layers = model.model.layers[: self.n_layers]
+        if wrap:
+            return HfModelWrapper(model, self.head_dim, config=self.hf_config, use_hf_rope=self.use_hf_rope)
+        return model
+
+    def reference_rms_norm(self):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0].input_layernorm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_mlp(self):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0].mlp
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_embedding(self, reference_model=None):
+        if reference_model is None:
+            model = self.reference_transformer(wrap=False)
+            layer = model.model.embed_tokens
+        else:
+            layer = reference_model.model.model.embed_tokens
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_decoder(self, load_checkpoint=False):
+        model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
+        layer = model.model.layers[0]
+        rotary_emb_local = getattr(model.model, "rotary_emb_local", None)
+        wrapper = HfDecoderWrapper(
+            layer,
+            self.head_dim,
+            model.model.rotary_emb,
+            rotary_emb_local,
+            self.use_hf_rope,
+        )
+        return wrapper
+
+    def reference_attention(self, load_checkpoint=False):
+        model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
+        layer = model.model.layers[0].self_attn
+        use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
+        wrapper = HfAttentionWrapper(
+            layer,
+            self.head_dim,
+            model.model.rotary_emb if use_position_embeddings else None,
+            use_hf_rope=self.use_hf_rope,
+        )
+        return wrapper
+
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         """Generate or load state_dict for n_layers of the model"""
-        if self.dummy_weights:
-            reference_model = Transformer(self)
+        if self.dummy_weights or self.cache_hf_flag:
+            # Build the HF reference model and convert its keys to Meta format. For dummy weights
+            # this is a random-init model from config; for real weights reference_transformer()
+            # loads (and, when cache_hf_flag is set, caches) the checkpoint once so a subsequent
+            # reference_*() call reuses the same model instead of loading the 70B checkpoint twice.
+            reference_model = self.reference_transformer(wrap=False)
             state_dict = reference_model.state_dict()
-            state_dict_prefix = self.get_state_dict_prefix("", None)
-            state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
-        elif self.checkpoint_type == CheckpointType.Meta:
-            state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
+            state_dict = standardize_hf_keys(state_dict)
+            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
                 from transformers import AutoModelForCausalLM
 
-                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                model = AutoModelForCausalLM.from_pretrained(
+                    self.CKPT_DIR,
+                    torch_dtype="auto",
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true",
+                )
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
@@ -2735,21 +2843,20 @@ class TtModelArgs:
                 tokenizer.stop_tokens = [tokenizer.eos_token_id]
             return tokenizer
 
-    def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
-        if self.checkpoint_type == CheckpointType.Meta:
-            if instruct:
-                return encode_prompt_instruct(self.tokenizer, prompt_text, system_prompt_text)
-            else:
-                return self.tokenizer.encode(prompt_text, bos=True, eos=False)
-        else:
-            if instruct:
-                try:
-                    return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
-                except ValueError as e:
-                    logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
-                    logger.warning(f"Falling back to base model encoding with no chat template")
+    def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True, add_special_tokens=True):
+        if instruct:
+            try:
+                return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
+            except ValueError as e:
+                logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
+                logger.warning(f"Falling back to base model encoding with no chat template")
 
-            return self.tokenizer.encode(prompt_text, add_special_tokens=False)
+        # add_special_tokens=True prepends the BOS token (Llama HF tokenizers add BOS, not EOS),
+        # matching the previous Meta-tokenizer behavior (bos=True, eos=False). Accuracy thresholds
+        # were calibrated with BOS present, so it must not be dropped on the HF path. Callers that
+        # need a raw single-token encoding (e.g. the embedding shape test) can pass
+        # add_special_tokens=False to suppress the BOS token.
+        return self.tokenizer.encode(prompt_text, add_special_tokens=add_special_tokens)
 
 
 def num_to_corerange(x):
@@ -2839,3 +2946,8 @@ def set_tg_attention_config(model_config, dim):
     )
 
     return model_config
+
+
+# HuggingFace reference-model wrappers (HfAttentionWrapper / HfDecoderWrapper / HfModelWrapper)
+# are imported from models/tt_transformers at the top of this file instead of being duplicated
+# here (see Issue #42139 review, finding #9).

@@ -57,6 +57,15 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     Galaxy.
                 subdevice_id: Subdevice containing the worker cores.
                 sub_core_grids: Optional worker-core restriction.
+                input_batch_index: Optional batch slot selected from a persistent input cache.
+                    When set, input has shape [B, 1, ...], output has batch 1, and only that
+                    slot is transported.
+                gathered_dim_size: Optional active global gathered extent along ``dim``. The
+                    output tensor must still be allocated at its worst-case full gathered size.
+                    Each rank writes its active local prefix into that rank's fixed worst-case
+                    slot; bytes outside those prefixes are left unchanged. ``gathered_dim_size``
+                    is the total valid extent, not a contiguous output prefix: consumers must
+                    preserve the fixed per-rank stride when locating every rank's valid data.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -66,7 +75,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("cluster_axis"),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("sub_core_grids") = nb::none(),
-        nb::arg("num_links") = nb::none());
+        nb::arg("num_links") = nb::none(),
+        nb::arg("input_batch_index") = nb::none(),
+        nb::arg("gathered_dim_size") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail

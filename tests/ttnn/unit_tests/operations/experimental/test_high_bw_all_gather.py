@@ -18,16 +18,16 @@ from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 
-def _fabric_router_config():
+def _fabric_router_config(max_packet_payload_size=14 * 1024):
     config = ttnn.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = 14 * 1024
+    config.max_packet_payload_size_bytes = max_packet_payload_size
     return config
 
 
-def _device_params(fabric_config):
+def _device_params(fabric_config, max_packet_payload_size=14 * 1024):
     return {
         "fabric_config": fabric_config,
-        "fabric_router_config": _fabric_router_config(),
+        "fabric_router_config": _fabric_router_config(max_packet_payload_size),
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         "l1_small_size": 2048,
     }
@@ -84,6 +84,11 @@ _FABRIC_2D_TORUS_XY_DEVICE_PARAMS = pytest.param(
     id="fabric_2d_torus_xy",
 )
 
+_SELECTED_BATCH_PREFIX_DEVICE_PARAMS = [
+    _FABRIC_2D_LINE_DEVICE_PARAMS,
+    pytest.param(_device_params(ttnn.FabricConfig.FABRIC_1D_RING), id="fabric_1d_ring"),
+]
+
 _TEST_CASES = [
     ("bf16_1152b_rows", ttnn.bfloat16, 576, ttnn.ROW_MAJOR_LAYOUT, 1152),
     ("scaled_fp8_704b_rows", ttnn.fp8_e4m3, 656, ttnn.ROW_MAJOR_LAYOUT, 704),
@@ -99,6 +104,7 @@ _NUM_LINKS = 2
 # CI performance targets are global sequence lengths. Both divide exactly by
 # the four-rank QuietBox ring and eight-rank Blackhole Galaxy line.
 _CI_PERF_GLOBAL_ROWS = (55_000, 512 * 1024)
+_CI_INDEXED_CACHE_CAPACITY_GLOBAL_ROWS = 1_000_000
 _CI_PERF_TEST_CASES = [
     ("bf16_row_major", ttnn.bfloat16, 576, ttnn.ROW_MAJOR_LAYOUT, 1152),
     ("fp8_row_major", ttnn.fp8_e4m3, 656, ttnn.ROW_MAJOR_LAYOUT, 704),
@@ -289,6 +295,28 @@ def _run_high_bw_all_gather_accuracy(
 
 
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
+@pytest.mark.parametrize(
+    "device_params",
+    [pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D, 6144), id="fabric_2d_6k_payload")],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_high_bw_all_gather_single_page_bank_owned_packet(mesh_device):
+    """A bank-owned GLM q-latent page must use the single-page writer when only one page fits a packet."""
+    assert ttnn.get_tt_fabric_max_payload_size_bytes() == 6144
+    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    _run_high_bw_all_gather_accuracy(
+        rank_line,
+        ttnn.bfloat16,
+        width=2048,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        expected_page_size=4096,
+        cluster_axis=cluster_axis,
+        rows_per_device=640,
+    )
+
+
+@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_device, expect_error):
@@ -467,12 +495,25 @@ def _run_high_bw_all_gather_perf(
     cluster_axis,
     rows_per_device=_PERF_ROWS_PER_DEVICE,
     profile_samples=7,
+    capacity_rows_per_device=None,
+    input_batch_index=None,
+    gathered_dim_size=None,
 ):
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.skip("high_bw_all_gather bandwidth test requires the realtime device profiler")
 
     axis_size = mesh_device.shape[cluster_axis]
-    global_shape = (1, 1, rows_per_device * axis_size, width)
+    capacity_rows_per_device = capacity_rows_per_device or rows_per_device
+    assert rows_per_device <= capacity_rows_per_device
+    if input_batch_index is not None:
+        assert input_batch_index >= 0
+        cache_slots = input_batch_index + 1
+    else:
+        cache_slots = 1
+    if gathered_dim_size is not None:
+        assert gathered_dim_size == rows_per_device * axis_size
+
+    global_shape = (cache_slots, 1, capacity_rows_per_device * axis_size, width)
     torch.manual_seed(0)
     host_input = torch.rand(global_shape, dtype=torch.bfloat16)
     device_input = _make_tensor(
@@ -489,6 +530,7 @@ def _run_high_bw_all_gather_perf(
     # produces 640 * ring_size output rows).
     local_padded_shape = ttnn.get_device_tensors(device_input)[0].padded_shape
     output_shape = list(local_padded_shape)
+    output_shape[0] = 1
     output_shape[2] *= axis_size
     persistent_output = _make_tensor(
         mesh_device,
@@ -501,16 +543,25 @@ def _run_high_bw_all_gather_perf(
     assert page_size == expected_page_size
     assert ttnn.get_tt_fabric_max_payload_size_bytes() == 14 * 1024
 
-    def run():
+    def run(batch_index=input_batch_index):
+        runtime_controls = {}
+        if batch_index is not None:
+            runtime_controls["input_batch_index"] = batch_index
+        if gathered_dim_size is not None:
+            runtime_controls["gathered_dim_size"] = gathered_dim_size
         return ttnn.experimental.high_bw_all_gather(
             device_input,
             dim=2,
             output_tensor=persistent_output,
             cluster_axis=cluster_axis,
             num_links=_NUM_LINKS,
+            **runtime_controls,
         )
 
-    run()
+    # Prime the indexed program with slot zero, then measure the nonzero slot.
+    # input_batch_index is excluded from the cache key, so this also proves its
+    # source-page base is patched on a cache hit without adding a launch.
+    run(0 if input_batch_index is not None else None)
     ttnn.synchronize_device(mesh_device)
     run()
     ttnn.synchronize_device(mesh_device)
@@ -525,7 +576,8 @@ def _run_high_bw_all_gather_perf(
     bandwidth_gbps = pages_per_device * page_size * (axis_size - 1) / median_ns
     print(
         f"HIGH_BW_ALL_GATHER fabric={ttnn.get_fabric_config()} dtype={dtype} "
-        f"layout={layout} num_links={_NUM_LINKS} rows_per_device={rows_per_device} page_size={page_size}B "
+        f"layout={layout} num_links={_NUM_LINKS} rows_per_device={rows_per_device} "
+        f"capacity_rows_per_device={capacity_rows_per_device} cache_slots={cache_slots} page_size={page_size}B "
         f"median={median_ns / 1e6:.3f}ms effective_receive_bw={bandwidth_gbps:.3f}GB/s "
         f"samples_ms={[round(duration / 1e6, 3) for duration in durations_ns]}"
     )
@@ -603,6 +655,13 @@ def _run_high_bw_all_gather_ci_perf(mesh_device, cluster_axis, min_bandwidth_gbp
         )
         for case_name, dtype, width, layout, expected_page_size in _CI_PERF_TEST_CASES:
             print(f"HIGH_BW_ALL_GATHER_CI_PERF global_rows={global_rows} case={case_name}")
+            # Replace the large BF16 measurement with the serving-shaped indexed-cache path. Its
+            # 512K active payload keeps the existing ring floor meaningful while the 1M allocation
+            # selects the persistent-cache worker topology.
+            indexed_cache_case = global_rows == 512 * 1024 and case_name == "bf16_row_major"
+            capacity_rows_per_device = (
+                _CI_INDEXED_CACHE_CAPACITY_GLOBAL_ROWS // axis_size if indexed_cache_case else None
+            )
             _run_high_bw_all_gather_perf(
                 mesh_device,
                 dtype,
@@ -612,6 +671,9 @@ def _run_high_bw_all_gather_ci_perf(mesh_device, cluster_axis, min_bandwidth_gbp
                 required_bandwidth_gbps,
                 cluster_axis,
                 rows_per_device=rows_per_device,
+                capacity_rows_per_device=capacity_rows_per_device,
+                input_batch_index=1 if indexed_cache_case else None,
+                gathered_dim_size=global_rows if indexed_cache_case else None,
             )
             # Use a compact reference run after the full-size measurement. This
             # validates the same dtype/layout/route without doubling CI memory
@@ -727,6 +789,70 @@ def test_high_bw_all_gather_512k_fabric_2d_line(mesh_device):
     # 1x4 row submesh; both omit a wraparound edge under FABRIC_2D.
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
     _run_high_bw_all_gather_test_cases(rank_line, min_bandwidth_gbps=45.0, cluster_axis=cluster_axis)
+
+
+@pytest.mark.parametrize("device_params", _SELECTED_BATCH_PREFIX_DEVICE_PARAMS, indirect=True)
+@run_for_blackhole("high_bw_all_gather selected-cache-slot coverage requires Blackhole")
+def test_high_bw_all_gather_selected_batch_prefix(mesh_device):
+    """One maximum-size output allocation can gather either cache slot and a shorter valid prefix."""
+    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    axis_size = rank_line.shape[cluster_axis]
+    local_rows, active_local_rows, width = 1024, 512, 576
+    torch.manual_seed(0)
+    host_input = torch.rand((2, 1, local_rows * axis_size, width), dtype=torch.bfloat16)
+    device_input = _make_tensor(
+        rank_line,
+        host_input,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ShardTensor2dMesh(
+            rank_line,
+            dims=(2, None) if cluster_axis == 0 else (None, 2),
+            mesh_shape=tuple(rank_line.shape),
+        ),
+    )
+    persistent_output = _make_tensor(
+        rank_line,
+        torch.zeros((1, 1, local_rows * axis_size, width), dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ReplicateTensorToMesh(rank_line),
+    )
+
+    cache_entries_after_first = None
+    # Start smaller and grow the logical extent. This proves the cached program is compiled for the
+    # worst-case slab rather than the first active prefix.
+    for batch_index, rows_this_call in ((0, active_local_rows // 2), (1, active_local_rows)):
+        ttnn.experimental.high_bw_all_gather(
+            device_input,
+            dim=2,
+            output_tensor=persistent_output,
+            cluster_axis=cluster_axis,
+            num_links=_NUM_LINKS,
+            input_batch_index=batch_index,
+            gathered_dim_size=rows_this_call * axis_size,
+        )
+        ttnn.synchronize_device(rank_line)
+        if cache_entries_after_first is None:
+            cache_entries_after_first = rank_line.num_program_cache_entries()
+        else:
+            assert rank_line.num_program_cache_entries() == cache_entries_after_first
+
+        # Runtime extents transfer only the valid prefix from every rank, but retain the
+        # maximum-size output's rank stride. This makes the output safe to reuse as an
+        # address-indexed cache without moving its later-rank pages on every call.
+        expected = torch.zeros((1, 1, local_rows * axis_size, width), dtype=torch.bfloat16)
+        for rank, shard in enumerate(ttnn.get_device_tensors(device_input)):
+            expected[:, :, rank * local_rows : rank * local_rows + rows_this_call, :] = ttnn.to_torch(shard)[
+                batch_index : batch_index + 1, :, :rows_this_call, :
+            ]
+        for output_shard in ttnn.get_device_tensors(persistent_output):
+            actual = ttnn.to_torch(output_shard)
+            for rank in range(axis_size):
+                start = rank * local_rows
+                assert torch.equal(
+                    actual[:, :, start : start + rows_this_call, :], expected[:, :, start : start + rows_this_call, :]
+                )
 
 
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
