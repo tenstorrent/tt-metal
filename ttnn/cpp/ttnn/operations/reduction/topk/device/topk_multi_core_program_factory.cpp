@@ -542,7 +542,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // survive the transpose/sort datapath without truncation. Fused keys are 32-bit words and need
     // 32-bit DEST for the same reason (and for the exact bf16->fp32 value widening the fuse relies on).
     compute_local_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = is_fp32_input || fused_stable_keys,
+        .fp32_dest_acc_en = is_fp32_input || is32_bit_data || fused_stable_keys,
         .dst_full_sync_en = false,
         .unpack_to_dest_mode = unpack_local,
     };
@@ -590,7 +590,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // 32-bit indices require the full-width DST registers (fp32 dest accumulation) so the index values
     // survive the merge datapath without truncation. Fused keys are 32-bit words and need 32-bit DEST.
     compute_final_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = is_fp32_input || fused_stable_keys,
+        .fp32_dest_acc_en = is_fp32_input || is32_bit_data || fused_stable_keys,
         .dst_full_sync_en = false,
         .unpack_to_dest_mode = unpack_final,
     };
