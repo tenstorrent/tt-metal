@@ -5,6 +5,13 @@
 #include "ttnn-nanobind/bind_function.hpp"
 namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail {
 void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
+    nb::class_<ttnn::experimental::kda::QkvCausalConv1dSiluProgramConfig>(mod, "QkvCausalConv1dSiluProgramConfig")
+        .def(nb::init<uint32_t>(), nb::kw_only(), nb::arg("channel_chunk_size").noconvert())
+        .def_ro("channel_chunk_size", &ttnn::experimental::kda::QkvCausalConv1dSiluProgramConfig::channel_chunk_size)
+        .def("__repr__", [](const ttnn::experimental::kda::QkvCausalConv1dSiluProgramConfig& config) {
+            return fmt::format("QkvCausalConv1dSiluProgramConfig(channel_chunk_size={})", config.channel_chunk_size);
+        });
+
     ttnn::bind_function<"qkv_causal_conv1d_silu", "ttnn.experimental.kda.">(
         mod,
         R"doc(
@@ -32,6 +39,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
             v_width (int): Output V width.
 
         Keyword Args:
+            program_config (QkvCausalConv1dSiluProgramConfig): Required program tuning;
+                ``channel_chunk_size`` is expressed in logical channels.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
@@ -57,6 +66,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("k_width"),
         nb::arg("v_width"),
         nb::kw_only(),
+        nb::arg("program_config").noconvert(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 }

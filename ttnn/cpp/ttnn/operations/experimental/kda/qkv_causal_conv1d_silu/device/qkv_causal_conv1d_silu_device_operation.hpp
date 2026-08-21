@@ -33,6 +33,7 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     uint32_t,
     uint32_t,
     uint32_t,
+    uint32_t,
     const tt::tt_metal::MemoryConfig&,
     const DeviceComputeKernelConfig&);
 

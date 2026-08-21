@@ -26,16 +26,6 @@ namespace m2 = tt::tt_metal::experimental;
 
 namespace {
 
-uint32_t choose_channel_block_tiles(uint32_t channel_tiles) {
-    constexpr uint32_t max_single_block_channel_tiles = 48;
-    constexpr uint32_t wide_channel_block_tiles = 24;
-    uint32_t block_tiles = channel_tiles <= max_single_block_channel_tiles ? channel_tiles : wide_channel_block_tiles;
-    while (channel_tiles % block_tiles != 0) {
-        --block_tiles;
-    }
-    return block_tiles;
-}
-
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::create_program_artifacts(
@@ -57,7 +47,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     const uint32_t Kt = attrs.k_width / TILE_WIDTH;
     const uint32_t Vt = attrs.v_width / TILE_WIDTH;
     const uint32_t Ct = Qt + Kt + Vt;
-    const uint32_t block_ct = choose_channel_block_tiles(Ct);
+    const uint32_t block_ct = attrs.channel_chunk_size / tt::constants::TILE_WIDTH;
     const uint32_t num_blocks = Ct / block_ct;
     auto dist = kda_factory_detail::distribute_prep(
         device.compute_with_storage_grid_size(), Mt * num_blocks, std::numeric_limits<uint32_t>::max());

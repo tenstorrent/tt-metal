@@ -62,6 +62,15 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
         "qkv_causal_conv1d_silu: Q/K/V widths must be tile aligned");
     const uint64_t channels =
         static_cast<uint64_t>(attrs.q_width) + static_cast<uint64_t>(attrs.k_width) + attrs.v_width;
+    TT_FATAL(attrs.channel_chunk_size > 0, "qkv_causal_conv1d_silu: channel_chunk_size must be positive");
+    TT_FATAL(
+        attrs.channel_chunk_size % tt::constants::TILE_WIDTH == 0,
+        "qkv_causal_conv1d_silu: channel_chunk_size must be tile aligned");
+    TT_FATAL(
+        attrs.channel_chunk_size <= channels, "qkv_causal_conv1d_silu: channel_chunk_size must not exceed Q+K+V width");
+    TT_FATAL(
+        channels % attrs.channel_chunk_size == 0,
+        "qkv_causal_conv1d_silu: channel_chunk_size must divide Q+K+V width exactly");
 
     const auto& input_shape = in.input.logical_shape();
     const auto& history_shape = in.history.logical_shape();
@@ -120,6 +129,7 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     uint32_t q_width,
     uint32_t k_width,
     uint32_t v_width,
+    uint32_t channel_chunk_size,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     const auto& input_shape = input.logical_shape();
@@ -130,6 +140,7 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
             .q_width = q_width,
             .k_width = k_width,
             .v_width = v_width,
+            .channel_chunk_size = channel_chunk_size,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         QkvCausalConv1dSiluInputs{
