@@ -184,13 +184,19 @@ FORCE_INLINE void matmul_phase(
     // writes fixed slots and WrPtr does not advance until the push_back after the
     // K-loop, so every K-block re-packs the SAME L1 addresses and PACKER_L1_ACC
     // accumulates physically in place — nothing ties the pushed count to the ring
-    // size. EFF_OUT shrinks only on the final (tail) chunk, and adaptive_chunk keeps
-    // per_core_M a divisor of the compile-time max, so a shrunk block still tiles
-    // the ring evenly. EFF_M == 0 reserves nothing. The K-loop pays for the missing
-    // CB round trip with an explicit packer drain per block.
-    if (EFF_M > 0) {
-        partials_cb.reserve_back(EFF_OUT);
-    }
+    // size. The K-loop pays for the missing CB round trip with an explicit packer
+    // drain per block.
+    //
+    // Reserve the FULL block, never the runtime EFF_OUT. partials_cb is single-
+    // buffered at exactly one max block, so pushing a SHORT block leaves the ring
+    // write pointer off a block boundary and the next full-size block straddles the
+    // end of the CB — and the packs above use an absolute output_tile_index off
+    // get_write_ptr(), so they run past the end instead of wrapping. EFF_OUT does
+    // NOT shrink only on an expert's final chunk: this op runs every local expert in
+    // one kernel, so per_core_M (hence EFF_OUT) drops on each expert's tail chunk and
+    // rises again on the next expert's first chunk. Only [0, EFF_OUT) is ever packed;
+    // the unpacked tail is drained by the pointer-only pop after the copy loop.
+    partials_cb.reserve_back(out_block_num_tiles);
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
         // The reader pushes the FULL compile-time-max activated block (filling only
@@ -272,9 +278,7 @@ FORCE_INLINE void matmul_phase(
         in1_cb.pop_front(in1_block_num_tiles);
     }
     // Make the accumulated partials visible to the second-pass copy below.
-    if (EFF_M > 0) {
-        partials_cb.push_back(EFF_OUT);
-    }
+    partials_cb.push_back(out_block_num_tiles);
 
     // After the K-loop: partials_cb_id has EFF_OUT tiles holding the final
     // accumulated sum. Move them through dst into final_cb_id, applying silu on
@@ -334,6 +338,15 @@ FORCE_INLINE void matmul_phase(
         final_cb.push_back(out_subblock_num_tiles);
 
         tile_regs_release();
+    }
+
+    // Pointer-only drain of the partials tail: slots [EFF_OUT, out_block_num_tiles)
+    // were never packed this chunk. Popping them keeps the single-buffered partials
+    // ring block-aligned across chunks (see the reserve above).
+    if (EFF_OUT < out_block_num_tiles) {
+        const uint32_t partials_pad = out_block_num_tiles - EFF_OUT;
+        partials_cb.wait_front(partials_pad);
+        partials_cb.pop_front(partials_pad);
     }
 
     // The writer drains final_cb at the compile-time-MAX subblock count (it cannot

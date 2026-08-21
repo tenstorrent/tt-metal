@@ -196,6 +196,24 @@ def test_situglu_bias_routed_expert(mesh_device, device_params, num_tokens):
 # all < max) so the device-side count bounding is exercised alongside the per-expert bias wiring.
 MULTI_EXPERT_PARAMS = [
     pytest.param([128, 256, 64, 160], id="e4"),
+    # Repro axes the e4 case above does not reach, all of which occur in real routing:
+    #   e4mc: counts > chunk_M_max*TILE (2048), so effective_chunks > 1 per expert
+    #   e4zero: an expert that received no tokens (effective_chunks == 0)
+    #   e4odd: counts that are not multiples of TILE=32 (tail-chunk per_core_M path)
+    pytest.param([2560, 3072, 64, 128], id="e4mc"),
+    pytest.param([128, 0, 256, 64], id="e4zero"),
+    pytest.param([100, 250, 33, 256], id="e4odd"),
+    # Isolation: only expert 1 is multi-chunk. If corruption starts at the expert
+    # AFTER a multi-chunk expert, 0 and 1 pass and 2 is wrong.
+    pytest.param([128, 3072, 64, 128], id="e4mc2"),
+    # Separates "multi-chunk at index>0" from "count fills the region exactly".
+    # max_tokens=3072 (M_tiles_full=96). expert 1: 2 chunks, 80<96 tiles (does NOT
+    # fill). expert 3: 2 chunks, 96==96 tiles (fills exactly).
+    pytest.param([128, 2560, 64, 3072], id="e4mc3"),
+    # e0 = exactly one FULL chunk (2048 = chunk_M_max*TILE) so per_core_M stays 8
+    # into e1c0 -- no growth. If growth is the trigger, this passes despite e1
+    # being multi-chunk.
+    pytest.param([2048, 3072, 64, 128], id="e4nogrow"),
 ]
 
 
