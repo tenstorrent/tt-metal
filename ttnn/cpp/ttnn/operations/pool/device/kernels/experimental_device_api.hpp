@@ -16,6 +16,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #endif
 
 namespace experimental {
@@ -25,66 +26,21 @@ using CB = CircularBuffer;
 
 #ifndef COMPILE_FOR_TRISC
 // Short aliases for NOC types (dataflow kernels only)
-// Note: CoreLocalMem<uint32_t> is used internally by the read_with_state raw-address overload below.
+// Note: CoreLocalMem<uint32_t> is used internally by the read_with_state raw-address overload.
 // Prefer passing experimental::CB with offset_bytes args over constructing CoreLocalMem directly.
 
-// Single-packet convenience wrappers for set_async_read_state / async_read_with_state.
-// These wrappers put max_page_size first so callers don't need to spell out
-// NocOptions::DEFAULT every time.
-
-// Helper to create UnicastEndpoint src_args for local L1 self-reads.
-// Must use my_x/my_y for the correct NOC — NOC 0 and NOC 1 have different coordinate spaces.
-FORCE_INLINE auto local_addr(uint32_t addr, uint8_t noc_id = noc_index) {
-    return noc_traits_t<UnicastEndpoint>::src_args_type{.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = addr};
-}
-
-// Single-packet read with state: call set_read_state once, then read_with_state in a loop.
-// transfer_size is baked into both calls so they always agree on single-packet mode.
-template <uint32_t transfer_size>
-FORCE_INLINE void set_read_state(Noc noc, uint32_t src_addr) {
-    static_assert(transfer_size <= NOC_MAX_BURST_SIZE, "Use noc.async_read for multi-packet transfers");
-    UnicastEndpoint ep;
-    noc.set_async_read_state<NocOptions::DEFAULT, transfer_size>(
-        ep, transfer_size, local_addr(src_addr, noc.get_noc_id()));
-}
-
-// Simple form: local L1 src addr -> local L1 dst addr.
-// transfer_size must match the value used in set_read_state. Default of 1 selects the
-// single-packet branch for legacy callers.
-template <uint32_t transfer_size = 1>
-FORCE_INLINE void read_with_state(Noc noc, uint32_t dst_addr, uint32_t src_addr) {
-    UnicastEndpoint ep;
-    noc.async_read_with_state<NocOptions::DEFAULT, transfer_size>(
-        ep, CoreLocalMem<uint32_t>(dst_addr), transfer_size, local_addr(src_addr, noc.get_noc_id()), {});
-}
-
-// CB/typed destination form with dst_args (e.g. offset_bytes)
-template <typename Dst>
-FORCE_INLINE void read_with_state(
-    Noc noc, const Dst& dst, uint32_t src_addr, const typename noc_traits_t<Dst>::dst_args_type& dst_args) {
-    UnicastEndpoint ep;
-    noc.async_read_with_state<NocOptions::DEFAULT, 1>(
-        ep, dst, 0, local_addr(src_addr, noc.get_noc_id()), dst_args);
-}
-
-// CB/typed destination form, no offset
-template <typename Dst>
-FORCE_INLINE void read_with_state(Noc noc, const Dst& dst, uint32_t src_addr) {
-    UnicastEndpoint ep;
-    noc.async_read_with_state<NocOptions::DEFAULT, 1>(ep, dst, 0, local_addr(src_addr, noc.get_noc_id()), {});
-}
-
-// Set the active transaction id (NOC_PACKET_TAG) for subsequent async_read* calls on this
-// Noc's read cmd_buf.  Trid persists across set_read_state / read_with_state (those write
-// different cmd_buf registers).  Pair with async_read_barrier_with_trid to wait on just
-// this batch of reads.  Pass trid=0 to clear (untagged reads = no per-trid accounting).
-FORCE_INLINE void set_read_trid(Noc noc, uint32_t trid) { noc_async_read_set_trid(trid, noc.get_noc_id()); }
-
-// Block until reads tagged `trid` on this noc are flushed.  Other in-flight reads with
-// different trids continue independently.
-FORCE_INLINE void async_read_barrier_with_trid(Noc noc, uint32_t trid) {
-    noc.template async_read_barrier<NocOptions::TXN_ID>({.trid = trid});
-}
+// The local L1 -> L1 copy helpers now live in the kernel library:
+//   ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp
+// which is the single source of truth for their contracts (why a self-aimed READ and not a write,
+// the per-NoC my_x/my_y rule, the single-packet bound, and the deliberate size_bytes = 0 in the
+// typed-destination overloads). These using-declarations keep the historical
+// `experimental::`-qualified spelling working for existing conv/pool/sdpa/fold call sites; NEW
+// call sites should include the kernel_lib header directly and say `dataflow_kernel_lib::`.
+using dataflow_kernel_lib::async_read_barrier_with_trid;
+using dataflow_kernel_lib::local_addr;
+using dataflow_kernel_lib::read_with_state;
+using dataflow_kernel_lib::set_read_state;
+using dataflow_kernel_lib::set_read_trid;
 
 #endif
 
