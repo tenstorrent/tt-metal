@@ -436,15 +436,22 @@
 </dt>
 <dd>
 <p>Performs backward operations for where of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_c</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p>
+<p>The three input tensors are the arguments of a forward <cite>ttnn.where</cite> call, with <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> as its predicate,
+and <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code> is the gradient with respect to the output of that call, so its elements line up one to one
+with that output. The forward <cite>ttnn.where</cite> copies each output element from <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> where the predicate
+is 1 and from <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_c</span></code> where the predicate is 0, so each element of <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code> belongs to
+whichever tensor supplied the element in that position. This function returns (up to) two gradients derived from
+<code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code> split by the predicate: <cite>where(predicate, grad_tensor, 0)</cite> and <cite>where(predicate, 0, grad_tensor)</cite>.
+The values of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_c</span></code> do not affect the result.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>grad_tensor</strong> (<em>ttnn.Tensor</em>) – the input gradient tensor.</p></li>
-<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
-<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
-<li><p><strong>input_tensor_c</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
+<li><p><strong>grad_tensor</strong> (<em>ttnn.Tensor</em>) – the gradient with respect to the output of the forward <cite>ttnn.where</cite> call.</p></li>
+<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the predicate tensor of the forward <cite>ttnn.where</cite> call, containing only 0’s or 1’s.</p></li>
+<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em>) – the true_value tensor of the forward <cite>ttnn.where</cite> call.</p></li>
+<li><p><strong>input_tensor_c</strong> (<em>ttnn.Tensor</em>) – the false_value tensor of the forward <cite>ttnn.where</cite> call.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
@@ -452,15 +459,15 @@
 <dd class="field-even">
 <ul class="simple">
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>are_required_outputs</strong> (<em>List</em><em>[</em><em>bool</em><em>]</em><em>, </em><em>optional</em>) – list of required outputs. Defaults to <cite>[True, True]</cite>.</p></li>
-<li><p><strong>input_a_grad</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>input_b_grad</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>are_required_outputs</strong> (<em>List</em><em>[</em><em>bool</em><em>]</em><em>, </em><em>optional</em>) – which output gradients to compute. A <cite>False</cite> entry skips that gradient, and the returned list holds <cite>None</cite> in its place. Defaults to <cite>[True, True]</cite>.</p></li>
+<li><p><strong>input_a_grad</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated tensor to hold the first of the two results (corresponding to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code>). Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>input_b_grad</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated tensor to hold the second of the two results (corresponding to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_c</span></code>). Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>List of ttnn.Tensor</em> – the output tensor.</p>
+<p><em>List of ttnn.Tensor</em> – the gradients with respect to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_c</span></code>, or <cite>None</cite> if the corresponding entry in <code class="xref py py-attr docutils literal notranslate"><span class="pre">are_required_outputs</span></code> is <cite>False</cite>.</p>
 </dd>
 </dl>
 <div class="admonition note">
@@ -484,22 +491,25 @@
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="c1"># Create three tensors and a gradient tensor for the operation</span>
+<div class="highlight"><pre><span></span><span class="c1"># Create the forward inputs, with a predicate of 0's and 1's, and a gradient tensor</span>
 <span class="n">grad_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
     <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
 <span class="p">)</span>
-<span class="n">tensor1</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
-    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+<span class="n">predicate</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
 <span class="p">)</span>
-<span class="n">tensor2</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
-    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+<span class="n">true_value</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span> <span class="p">[</span><span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
 <span class="p">)</span>
-<span class="n">tensor3</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
-    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+<span class="n">false_value</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">],</span> <span class="p">[</span><span class="mi">11</span><span class="p">,</span> <span class="mi">12</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="c1"># Perform the where backward operation</span>
-<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">where_bw</span><span class="p">(</span><span class="n">grad_tensor</span><span class="p">,</span> <span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">,</span> <span class="n">tensor3</span><span class="p">)</span>
+<span class="c1"># Perform the where backward operation. Each gradient depends only on grad_tensor and the predicate,</span>
+<span class="c1"># giving [[1, 0], [3, 0]] for true_value and [[0, 2], [0, 4]] for false_value</span>
+<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">where_bw</span><span class="p">(</span><span class="n">grad_tensor</span><span class="p">,</span> <span class="n">predicate</span><span class="p">,</span> <span class="n">true_value</span><span class="p">,</span> <span class="n">false_value</span><span class="p">)</span>
 <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Where Backward result: </span><span class="si">{</span><span class="n">output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>

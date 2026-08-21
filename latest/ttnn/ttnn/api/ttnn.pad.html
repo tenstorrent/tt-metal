@@ -377,7 +377,7 @@
 </dt>
 <dd>
 <p>Returns a padded tensor, with a specified value at the specified location. If the input tensor is on host, the pad will be performed on host, and if its on device it will be performed on device.
-Any rank of tensor is supported, however tensors with rank &gt; 4 can only apply padding to the lower 3 dimensions.</p>
+Any rank of tensor is supported. For rank &gt; 4, leading dimensions are padded via a reshape path before the 4D device kernel; tile layout still does not support front padding on device.</p>
 <p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: (ttnn.Tensor): the input tensor.
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">padding</span></code>: (list[Tuple[int,int]]): padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor. Mutually exclusive to output_tensor_shape and input_tensor_start.
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">value</span></code>: (Union[float,int]): value to pad with.</p>
