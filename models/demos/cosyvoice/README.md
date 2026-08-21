@@ -66,14 +66,16 @@ would risk the tt-metal build for no benefit, since the reference never runs on 
 ### 1. Reference environment (host only, no device)
 
 ```bash
-uv venv --python 3.10 /root/tt/cosyvoice_env
-VIRTUAL_ENV=/root/tt/cosyvoice_env uv pip install -r requirements-reference.txt
+cd $TT_METAL_HOME/models/demos/cosyvoice
+
+uv venv --python 3.10 /mnt/cosyvoice_env
+VIRTUAL_ENV=/mnt/cosyvoice_env uv pip install -r requirements-reference.txt
 
 git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git /mnt/CosyVoice
 git -C /mnt/CosyVoice checkout 074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc
 git -C /mnt/CosyVoice submodule update --init --recursive
 
-/root/tt/cosyvoice_env/bin/python scripts/download_model.py --skip-onnx-trt
+/mnt/cosyvoice_env/bin/python scripts/download_model.py --skip-onnx-trt
 ```
 
 `--skip-onnx-trt` omits `flow.decoder.estimator.fp32.onnx` (329 MB × 2), which only the
@@ -87,7 +89,7 @@ TensorRT export path reads. The three checkpoints then total ~6.9 GB.
 
 ```bash
 export PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS
-/root/tt/cosyvoice_env/bin/python scripts/gen_golden.py --mode zero_shot
+/mnt/cosyvoice_env/bin/python scripts/gen_golden.py --mode zero_shot
 ```
 
 Writes `tests/golden/*.npz` — one per module boundary, plus `manifest.json`.
@@ -131,7 +133,7 @@ side loads without importing cosyvoice or onnxruntime — the same boundary
 ```bash
 export PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS
 for m in hift flow llm; do
-  /root/tt/cosyvoice_env/bin/python scripts/export_weights.py --module $m --fp16
+  /mnt/cosyvoice_env/bin/python scripts/export_weights.py --module $m --fp16
 done
 ```
 
@@ -144,8 +146,8 @@ recomputes a constant normalisation.
 
 ```bash
 export PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS
-/root/tt/cosyvoice_env/bin/python scripts/run_reference.py --out /tmp/ref
-/root/tt/cosyvoice_env/bin/python scripts/eval_wer_sim.py --run-dir /tmp/ref
+/mnt/cosyvoice_env/bin/python scripts/run_reference.py --out /tmp/ref
+/mnt/cosyvoice_env/bin/python scripts/eval_wer_sim.py --run-dir /tmp/ref
 ```
 
 > **Never run scoring and synthesis at the same time.** Whisper large-v3 is ~9 GB

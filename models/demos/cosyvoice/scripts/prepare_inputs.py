@@ -16,7 +16,7 @@ So the boundary is drawn here, the same two-environment boundary as
 onnxruntime.
 
     PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS \
-    /root/tt/cosyvoice_env/bin/python prepare_inputs.py --out-dir /tmp/sweep
+    /mnt/cosyvoice_env/bin/python prepare_inputs.py --out-dir /tmp/sweep
 
 The texts, speakers and instruct descriptions are imported from
 `run_reference.py` rather than duplicated, so the TTNN sweep and the PyTorch
