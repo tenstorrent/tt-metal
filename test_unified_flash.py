@@ -71,7 +71,20 @@ def grid_transpose(k, sk, dt):
     return v.permute(2, 1, 0, 3).reshape(dt * TILE, sk * TILE)
 
 
-def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, stream_buffering=2, num_q=1):
+def run(
+    device,
+    sq,
+    sk_total,
+    dt,
+    num_chunks,
+    causal,
+    seed=0,
+    fidelity=None,
+    stream_buffering=2,
+    num_q=1,
+    n_heads=1,
+    n_kv_heads=1,
+):
     """One launch, `num_q` query chunks of `sq` tiles each, against `sk_total` key tiles.
 
     num_q=1 is the old shape: one query chunk against the whole key range, which for a
@@ -90,15 +103,21 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, str
         # range, and divides sq too once there is more than one chunk to step by.
         assert (k_offset + sq) % sk == 0, "sk must divide k_offset + sq"
         assert num_q == 1 or sq % sk == 0, "sk must divide sq when there are several query chunks"
+    assert n_heads % n_kv_heads == 0, "every KV head must serve the same number of query heads"
+    kv_group = n_heads // n_kv_heads
     S_q, S_k, D = num_q * sq * TILE, sk_total * TILE, dt * TILE
 
     torch.manual_seed(seed)
+    # GQA: n_heads query heads over n_kv_heads key/value heads, query head h reading KV head
+    # h // kv_group -- the same mapping the kernel does, written here independently so the
+    # test would catch the kernel disagreeing with it rather than sharing the mistake.
+    #
+    # Each head gets its OWN random data. Identical heads would make a head-indexing bug
+    # invisible: reading the wrong head would return the right answer.
+    #
     # Q carries the 1/sqrt(d) scale: folding it in on the host costs one multiply here and
     # saves a broadcast pass per chunk on device.
-    q_raw = torch.rand([S_q, D]) - 0.5
-    q = (q_raw / (D**0.5)).to(torch.bfloat16)
-    k = torch.rand([S_k, D]) - 0.5
-    v = (torch.rand([S_k, D]) - 0.5).to(torch.bfloat16)
+    q_raws = [torch.rand([S_q, D]) - 0.5 for _ in range(n_heads)]
 
     # The keys are RAMPED along the sequence so later ones score much higher. Without this the
     # test is vacuous: with uniform random inputs every chunk's row maximum is nearly the same,
@@ -108,7 +127,8 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, str
     # The ramp is a function of the key's position in the FULL sequence, not of the chunk it
     # lands in, so every chunk count sees the same problem and invariance still means something.
     ramp = 1.0 + 20.0 * (torch.arange(S_k, dtype=torch.float32) / S_k)
-    k = (k * ramp.unsqueeze(1)).to(torch.bfloat16)
+    ks = [((torch.rand([S_k, D]) - 0.5) * ramp.unsqueeze(1)).to(torch.bfloat16) for _ in range(n_kv_heads)]
+    vs = [(torch.rand([S_k, D]) - 0.5).to(torch.bfloat16) for _ in range(n_kv_heads)]
 
     if causal:
         # K may carry context the queries did not produce, so query i sees keys up to
@@ -119,18 +139,26 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, str
         keep = torch.ones([S_q, S_k], dtype=torch.bool)
     mask = torch.where(keep, 0.0, MASK_NEG)
 
-    # Chunk-major layouts, so each chunk's slice is contiguous for the kernel. K and V are
-    # laid out ONCE over the whole key range: every query chunk reads a prefix of the same
-    # chunks, so no per-query-chunk copy is needed.
+    # Head-major over chunk-major, which is the layout the kernel's two strides assume: a
+    # head's blocks are contiguous, and within a head each chunk's slice is contiguous. K and
+    # V are laid out ONCE over the whole key range per head: every query chunk reads a prefix
+    # of the same chunks, so no per-query-chunk copy is needed.
+    q = torch.cat([(qr / (D**0.5)).to(torch.bfloat16) for qr in q_raws], dim=0)
     k_dev = torch.cat(
-        [grid_transpose(k[j * sk * TILE : (j + 1) * sk * TILE].to(torch.float32), sk, dt) for j in range(num_chunks)],
+        [
+            grid_transpose(kh[j * sk * TILE : (j + 1) * sk * TILE].to(torch.float32), sk, dt)
+            for kh in ks
+            for j in range(num_chunks)
+        ],
         dim=0,
     ).to(torch.bfloat16)
-    v_dev = v
+    v_dev = torch.cat(vs, dim=0)
 
     # The mask, in exactly the order the kernel consumes it: for each query chunk, one
     # block per key chunk it actually visits. The kernel walks a flat counter, so this
-    # sequence IS the indexing -- there is no (i, j) arithmetic on either side.
+    # sequence IS the indexing -- there is no (i, j) arithmetic on either side. ONE copy
+    # serves every head, because a causal mask does not depend on the head and the kernel
+    # restarts its counter per head.
     mask_blocks = []
     for i in range(num_q):
         visited = (k_offset + (i + 1) * sq) // sk if causal else num_chunks
@@ -153,10 +181,12 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, str
     col_ones[:, 0] = 1.0
     tq, tk, tv, tmask = to_dev(q), to_dev(k_dev), to_dev(v_dev), to_dev(mask_dev)
     tcolones = to_dev(col_ones.to(torch.bfloat16))
-    tout = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S_q, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
+    tout = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, n_heads * S_q, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram
+    )
 
     core_ranges, cores = single_core()
-    ct_args = [sq, sk, dt, num_q, k_offset, sk_total]
+    ct_args = [sq, sk, dt, num_q, k_offset, sk_total, n_heads, n_kv_heads]
     for t in (tq, tk, tv, tmask, tcolones, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     rt_args = [t.buffer_address() for t in (tq, tk, tv, tmask, tcolones, tout)]
@@ -209,11 +239,16 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, str
     got = ttnn.to_torch(out).to(torch.float32)[0, 0]
 
     # The reference divides the scores, where the device pre-divided Q: mathematically the same,
-    # and the rounding difference shows up in the error rather than being hidden.
-    qf, kf, vf = q_raw.to(torch.float32), k.to(torch.float32), v.to(torch.float32)
-    scores = qf @ kf.T / (D**0.5) + mask
-    want = torch.softmax(scores, dim=-1) @ vf
-    return got, want
+    # and the rounding difference shows up in the error rather than being hidden. One head at a
+    # time, through the same h // kv_group mapping, stacked in the same head-major order.
+    wants = []
+    for h in range(n_heads):
+        qf = q_raws[h].to(torch.float32)
+        kf = ks[h // kv_group].to(torch.float32)
+        vf = vs[h // kv_group].to(torch.float32)
+        scores = qf @ kf.T / (D**0.5) + mask
+        wants.append(torch.softmax(scores, dim=-1) @ vf)
+    return got, torch.cat(wants, dim=0)
 
 
 def main(argv=None):
@@ -270,6 +305,23 @@ def main(argv=None):
             )
             if not ok:
                 failed.append(f"qloop-{sq_q}-{nq}-{sk_q}")
+
+        # GQA: several query heads per KV head, in one launch. Every head gets its own
+        # random data, so reading the wrong one is a wrong answer rather than a coincidence
+        # -- with identical heads a broken mapping would return the right result. Sabotaging
+        # the kernel's h // kv_group to h % n_kv_heads takes these to 0.46 error, so they do
+        # bite; the n_kv=1 rows are the exception and cannot, since with one KV head every
+        # mapping selects it.
+        for n_heads, n_kv in ((2, 1), (2, 2), (4, 1), (4, 2), (4, 4), (8, 2)):
+            got, want = run(device, sq, sk_total, dt, 2, True, n_heads=n_heads, n_kv_heads=n_kv)
+            e = (got - want).abs().max().item()
+            ok = e <= args.abs_err and got.shape[0] == n_heads * sq * TILE
+            logger.info(
+                f"GQA n_heads={n_heads} n_kv={n_kv} (group {n_heads // n_kv}): "
+                f"max|err|={e:.5f}  {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failed.append(f"gqa-{n_heads}-{n_kv}")
     finally:
         ttnn.close_device(device)
 
