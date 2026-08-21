@@ -25,39 +25,28 @@ struct SynchronizationEventWaitEnd {
 //////////////////////////////
 
 #define RECORD_CB_PUSH_BACK(cb_id) \
-    kernel_profiler::              \
-        timeStampedData<1000, kernel_profiler::DoingDispatch::DISPATCH, kernel_profiler::PacketTypes::TS_DATA>(cb_id)
+    kernel_profiler::timeStampedData<1000, kernel_profiler::DoingDispatch::DISPATCH>(cb_id)
 
 #define RECORD_CB_WAIT_FRONT_START(cb_id) \
-    kernel_profiler::                     \
-        timeStampedData<1001, kernel_profiler::DoingDispatch::DISPATCH, kernel_profiler::PacketTypes::TS_DATA>(cb_id)
+    kernel_profiler::timeStampedData<1001, kernel_profiler::DoingDispatch::DISPATCH>(cb_id)
 
 #define RECORD_CB_WAIT_FRONT_END(cb_id) \
-    kernel_profiler::                   \
-        timeStampedData<1002, kernel_profiler::DoingDispatch::DISPATCH, kernel_profiler::PacketTypes::TS_DATA>(cb_id)
+    kernel_profiler::timeStampedData<1002, kernel_profiler::DoingDispatch::DISPATCH>(cb_id)
 
 //////////////////////////////
 // Semaphore events
 //////////////////////////////
-#define RECORD_SEMAPHORE_SET(semaphore_address)                                                                 \
-    kernel_profiler::                                                                                           \
-        timeStampedData<1003, kernel_profiler::DoingDispatch::DISPATCH, kernel_profiler::PacketTypes::TS_DATA>( \
-            semaphore_address)
+#define RECORD_SEMAPHORE_SET(semaphore_address) \
+    kernel_profiler::timeStampedData<1003, kernel_profiler::DoingDispatch::DISPATCH>(semaphore_address)
 
-#define RECORD_SEMAPHORE_SET_REMOTE(semaphore_address)                                                          \
-    kernel_profiler::                                                                                           \
-        timeStampedData<1004, kernel_profiler::DoingDispatch::DISPATCH, kernel_profiler::PacketTypes::TS_DATA>( \
-            semaphore_address)
+#define RECORD_SEMAPHORE_SET_REMOTE(semaphore_address) \
+    kernel_profiler::timeStampedData<1004, kernel_profiler::DoingDispatch::DISPATCH>(semaphore_address)
 
-#define RECORD_SEMAPHORE_WAIT_START(semaphore_address)                                                          \
-    kernel_profiler::                                                                                           \
-        timeStampedData<1005, kernel_profiler::DoingDispatch::DISPATCH, kernel_profiler::PacketTypes::TS_DATA>( \
-            semaphore_address)
+#define RECORD_SEMAPHORE_WAIT_START(semaphore_address) \
+    kernel_profiler::timeStampedData<1005, kernel_profiler::DoingDispatch::DISPATCH>(semaphore_address)
 
-#define RECORD_SEMAPHORE_WAIT_END(semaphore_address)                                                            \
-    kernel_profiler::                                                                                           \
-        timeStampedData<1006, kernel_profiler::DoingDispatch::DISPATCH, kernel_profiler::PacketTypes::TS_DATA>( \
-            semaphore_address)
+#define RECORD_SEMAPHORE_WAIT_END(semaphore_address) \
+    kernel_profiler::timeStampedData<1006, kernel_profiler::DoingDispatch::DISPATCH>(semaphore_address)
 
 #else
 // Null macros, so this header is safe to include from a non-profiled build.
