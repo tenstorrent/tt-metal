@@ -11,11 +11,10 @@
 // device-side. Frames with SPSC_SPAN_RAW_FLAG in word 0 instead carry the whole raw span (five full
 // rings at fixed offsets, windows circular) -- the drainer's high-fill fallback, where packing would
 // cost write issues to save almost nothing. Inside each window is a packet run (spsc_packet.h):
-// ZONE_START/END/TOTAL markers
-// (2 words), STICKY_TIMER (1 word, per-lane wall-clock high half), STICKY_PROG (1 word, per-lane
-// runtime host-id in low27; 2-word PROG_EXT escape past 2^27), EVENT (2 words, a payload-less flag)
-// and DATA (3 + size words, self-describing -- the length lives in its word2). The producer publishes
-// its tail only on packet boundaries, so a window never ends mid-packet.
+// ZONE_ATOMIC packets (3 words: id | end timer_low | duration), legacy ZONE_START/END markers (2 words), STICKY_TIMER
+// (1 word, per-lane wall-clock high half), STICKY_PROG (1 word, per-lane runtime host-id in low27; 2-word PROG_EXT
+// escape past 2^27), EVENT (2 words, a payload-less flag) and DATA (3 + size words, self-describing -- the length lives
+// in its word2). The producer publishes its tail only on packet boundaries, so a window never ends mid-packet.
 #pragma once
 
 #include <algorithm>
@@ -110,12 +109,12 @@ inline void spsc_prefetch(const void* p) {
 #endif
 }
 
-// Decode ONE whole packed BULK_SPAN frame in place. For each marker calls
-//   emit(lane, wire_type, zone_id27, full_ts, prog)  (ZONE_START/END)
-// where zone_id27 is the FULL 27-bit structural zone id (tu_id << TT_ZONE_LOCAL_BITS | local --
-// hostdevcommon/profiler_zone_id.h; it was a 16-bit source-location hash before, and the mask that
-// truncated it here is gone),
-// and for each PP_DATA/PP_EVENT
+// Decode ONE whole packed BULK_SPAN frame in place. For each zone packet calls
+//   emit(lane, wire_type, zone_id27, full_ts, dur, prog)
+// where for ZONE_ATOMIC full_ts is the zone END and dur its 32-bit duration (start = end - dur), and
+// for the legacy ZONE_START/END markers (stall zone, >3.2s fallback, DRISC self-zones) dur is 0.
+// zone_id27 is the FULL 27-bit structural zone id (hostdevcommon/profiler_zone_id.h).
+// For each PP_DATA/PP_EVENT it calls
 //   emit_data(lane, wire_type, id, full_ts, prog, payload_words, n)   (payload in place, hi-word first)
 // and emit_prog(lane, prog) whenever a lane's sticky host-id changes.
 //
@@ -226,14 +225,22 @@ inline uint32_t spsc_decode_frame(
 #endif
                 const uint32_t w0 = ring[(hm + i) & kSpscRingMask];
                 const uint32_t t = pp_type(w0);
-                if (t == PP_ZONE_START || t == PP_ZONE_END) {
+                if (t == PP_ZONE_ATOMIC) {
+                    if (i + 3 > run) {
+                        st.anomalies++;
+                        break;
+                    }
+                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    const uint32_t w2 = ring[(hm + i + 2) & kSpscRingMask];
+                    emit(lane, t, pp_low27(w0), pp_full_ts(th, w1), w2, pg);  // ts = END, w2 = duration
+                    i += 3;
+                } else if (t == PP_ZONE_START || t == PP_ZONE_END) {
                     if (i + 2 > run) {
                         st.anomalies++;
                         break;
                     }
                     const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
-                    const uint64_t ts = pp_full_ts(th, w1);
-                    emit(lane, t, pp_low27(w0), ts, pg);  // full 27-bit structural id
+                    emit(lane, t, pp_low27(w0), pp_full_ts(th, w1), 0, pg);  // full 27-bit structural id
                     i += 2;
                 } else if (t == PP_STICKY_TIMER) {
                     th = pp_timer_hi(w0);
@@ -324,14 +331,20 @@ inline uint32_t spsc_decode_frame(
 #endif
             const uint32_t w0 = p[i];
             const uint32_t t = pp_type(w0);
-            if (t == PP_ZONE_START || t == PP_ZONE_END) {
+            if (t == PP_ZONE_ATOMIC) {
+                if (i + 3 > run) {
+                    st.anomalies++;
+                    break;
+                }
+                emit(lane, t, pp_low27(w0), pp_full_ts(th, p[i + 1]), p[i + 2], pg);  // ts = END, [2] = duration
+                i += 3;
+            } else if (t == PP_ZONE_START || t == PP_ZONE_END) {
                 if (i + 2 > run) {
                     st.anomalies++;
                     break;
                 }
                 const uint32_t w1 = p[i + 1];
-                const uint64_t ts = pp_full_ts(th, w1);
-                emit(lane, t, pp_low27(w0), ts, pg);  // full 27-bit structural id
+                emit(lane, t, pp_low27(w0), pp_full_ts(th, w1), 0, pg);  // full 27-bit structural id
                 i += 2;
             } else if (t == PP_STICKY_TIMER) {
                 th = pp_timer_hi(w0);

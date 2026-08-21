@@ -38,6 +38,19 @@
  * its logical marker kind to these codes explicitly (see ppfmt in kernel_profiler.hpp). */
 #define PP_ZONE_START 0u
 #define PP_ZONE_END 1u
+/* ZONE_ATOMIC: one whole zone in ONE 3-word packet, emitted at scope CLOSE. The producer's RAII scope
+ * object holds the start timestamp (hi, lo) from open to close, so the open touches nothing but the
+ * wall clock and the wire carries 3 words per zone instead of 2+2:
+ *   [0] word0 = pp_zone_atomic_w0(id)   [1] end timer_low   [2] duration (end - start, 32-bit cycles)
+ * end = (sticky timer_hi << 32) | word1 ; start = end - word2. The 32-bit duration bounds a zone at
+ * ~3.2 s @ 1.35 GHz; a producer whose zone outlives that falls back to a legacy START/END pair with a
+ * sticky refresh before each half (exact, but the stale start trips the host's per-lane order-
+ * regression diagnostic once -- desirable visibility for a >3.2 s on-device zone, which is a bug).
+ * PRODUCER-STALL keeps the legacy pair on purpose: its two halves are written at different times to
+ * protect the ring's stall reserve accounting. Per-lane wire order is END order, so nested zones
+ * arrive inner-first; only the END timestamp is a per-lane order invariant (an outer zone's
+ * reconstructed START legitimately precedes an already-arrived inner END). */
+#define PP_ZONE_ATOMIC 2u
 /* STICKY_META (LEGACY / synthetic bench path only): combined sticky carrying BOTH timer_hi(low27) and
  * prog_id(payload32) in one packet. Emitted by the throwaway producer_common.h stand-in. The REAL
  * kernel_profiler path does NOT use this -- it splits identity into three separate stickies below
@@ -150,6 +163,10 @@ static inline uint32_t pp_timer_w1(void) { return 0u; }
 static inline uint32_t pp_marker_w0(uint32_t type, uint32_t zone_id) { return pp_word0(type, zone_id & PP_LOW27_MASK); }
 static inline uint32_t pp_marker_w1(uint32_t timer_low) { return timer_low; }
 
+/* ZONE_ATOMIC: word0 = type | full 27-bit id; word1 = END timer_low; word2 = duration in cycles. */
+static inline uint32_t pp_zone_atomic_w0(uint32_t zone_id) { return pp_word0(PP_ZONE_ATOMIC, zone_id); }
+static inline uint32_t pp_zone_atomic_dur(uint32_t w2) { return w2; }
+
 /* DATA header word0 (type | full 27-bit id) and its separate length word2. */
 static inline uint32_t pp_data_w0(uint32_t id) { return pp_word0(PP_DATA, id & PP_LOW27_MASK); }
 static inline uint32_t pp_data_w2(uint32_t size_words) {
@@ -192,7 +209,10 @@ static inline uint32_t pp_packet_words(uint32_t w0, uint32_t w2) {
     if (t == PP_DATA) {
         return 3u + pp_data_size(w2);  // word0 + timer_low + size word + payload (self-describing)
     }
-    return 2u;  // zone markers, PP_EVENT, STICKY_PROG_EXT, STICKY_META
+    if (t == PP_ZONE_ATOMIC) {
+        return 3u;  // word0 + end timer_low + duration
+    }
+    return 2u;  // legacy zone markers, PP_EVENT, STICKY_PROG_EXT, STICKY_META
 }
 
 /* reader-injected source sticky: lane_id = core*NRISC + risc, carried in both words. */

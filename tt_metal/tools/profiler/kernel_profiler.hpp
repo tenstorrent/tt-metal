@@ -46,6 +46,14 @@
 // !DISPATCH_KERNEL clause a dispatch core fills its blocking ring and the NEXT device open's drainer
 // bring-up wedges at its write barrier (heartbeat stuck, phase=11).
 #if defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL)
+
+#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_ERISC)
+// Kernel-link stack floor (kernel_<risc>.ld), for the stack canary below. Declared at GLOBAL scope --
+// a block-scope extern inside the namespace would look for kernel_profiler::__stack_base and fail to
+// link. Same declaration shape (C++ linkage) as internal/debug/stack_usage.h.
+extern uint32_t __stack_base[];
+#endif
+
 namespace kernel_profiler {
 
 extern uint32_t wIndex;  // producer tail: monotonic word count, lives in FW .bss across launches
@@ -87,18 +95,20 @@ enum class ZoneKind : uint32_t { Start = 0, End = 1 };
 TT_ZONE_DEFINE_ID(PROFILER_STALL_ZONE_ID, "PRODUCER-STALL");
 
 // Wire encode; MUST stay in sync with tt_metal/tools/profiler/spsc_packet.h (inlined because the JIT
-// build lacks that include path). word0 = type(5) | low27. A zone marker is 2 words: type|id27 +
-// timer_low. Lane identity and time's high half are host-reconstructed from stickies: STICKY_PROG
-// (runtime host-id, 1 word; 2-word PROG_EXT past 2^27), STICKY_TIMER (timer_hi, on high-half tick),
-// STICKY_SRC (lane, injected by the drainer reader, never by the producer).
+// build lacks that include path). word0 = type(5) | low27. A zone ships WHOLE as one 3-word
+// ZONE_ATOMIC packet (id | end timer_low | duration) at scope close; the legacy 2-word START/END
+// markers survive only for the stall zone and the >3.2s fallback. Lane identity and time's high half
+// are host-reconstructed from stickies: STICKY_PROG (runtime host-id, 1 word; 2-word PROG_EXT past
+// 2^27), STICKY_TIMER (timer_hi, on high-half tick), STICKY_SRC (injected by the drainer reader).
 struct ppfmt {
     static constexpr uint32_t TYPE_SHIFT = 27;
     static constexpr uint32_t TYPE_MASK = 0x1Fu;
     static constexpr uint32_t LOW27_MASK = 0x7FFFFFFu;
     // This wire's OWN type space -- never pass a hostdevcommon PacketTypes value through (that aliased
     // unrelated types on this wire before). Retired values (11 = ZONE_TOTAL) are never reused.
-    static constexpr uint32_t T_ZONE_START = 0u;        // PP_ZONE_START
-    static constexpr uint32_t T_ZONE_END = 1u;          // PP_ZONE_END
+    static constexpr uint32_t T_ZONE_START = 0u;        // PP_ZONE_START (stall zone + long-zone fallback only)
+    static constexpr uint32_t T_ZONE_END = 1u;          // PP_ZONE_END   (stall zone + long-zone fallback only)
+    static constexpr uint32_t T_ZONE_ATOMIC = 2u;       // PP_ZONE_ATOMIC (3 words: id | end_lo | duration)
     static constexpr uint32_t T_STICKY_PROG = 8u;       // PP_STICKY_PROG
     static constexpr uint32_t T_STICKY_PROG_EXT = 14u;  // PP_STICKY_PROG_EXT
     static constexpr uint32_t T_STICKY_TIMER = 9u;      // PP_STICKY_TIMER
@@ -113,6 +123,8 @@ struct ppfmt {
     static inline uint32_t zone_w0(uint32_t id, ZoneKind kind) {
         return w0(kind == ZoneKind::End ? T_ZONE_END : T_ZONE_START, id & LOW27_MASK);
     }
+    // ZONE_ATOMIC header: one whole zone per packet, emitted at scope close.
+    static inline uint32_t zone_atomic_w0(uint32_t id) { return w0(T_ZONE_ATOMIC, id & LOW27_MASK); }
     // PP_DATA: word0 shaped exactly like a zone marker's; the payload length rides in its own word2.
     static inline uint32_t data_w0(uint32_t id) { return w0(T_DATA, id & LOW27_MASK); }
     static inline uint32_t data_w2(uint32_t size_words) { return (size_words & DATA_SIZE_MASK) << DATA_SIZE_SHIFT; }
@@ -215,16 +227,46 @@ inline __attribute__((always_inline)) void publish_tail() {
     profiler_control_buffer[TAIL_INDEX] = wIndex;
 }
 
-// Zone marker emit. Reserve room BEFORE reading the clock: a stall must elongate the marker's
-// timestamp, or the marker would carry a pre-stall time yet sit after the (later) stall zone -- a
-// backwards jump on the lane. Worst case is 1-word sticky + 2-word marker, so the check runs once.
-inline __attribute__((always_inline)) void mark_time(uint32_t timer_id, ZoneKind kind = ZoneKind::Start) {
-    ring_ensure_room(SPSC_MARKER_WORDS + 1);
+// ZONE_ATOMIC packet size: word0 (type|id) + end timer_low + 32-bit duration.
+static constexpr uint32_t SPSC_ATOMIC_ZONE_WORDS = 3;
+
+// Long-zone fallback (duration >= 2^32 cycles, ~3.2 s): the 32-bit duration word cannot carry it, so
+// ship the zone as an exact legacy START/END pair, refreshing the sticky before each half (the two
+// halves are guaranteed to differ in timer_hi -- that is what put us here). The stale start timestamp
+// trips the host's per-lane order-regression diagnostic ONCE, which is desirable visibility: a >3.2 s
+// on-device zone is a wedge, not a measurement. Out of line: this path must cost nothing at the
+// (always_inline) zone sites that can never take it.
+__attribute__((noinline)) void mark_zone_long(
+    uint32_t timer_id, uint32_t start_hi, uint32_t start_lo, uint32_t end_hi, uint32_t end_lo) {
+    ring_ensure_room(2 * (SPSC_MARKER_WORDS + 1));
+    ring_write_sticky_timer(start_hi);
+    ring_write_word(ppfmt::zone_w0(timer_id, ZoneKind::Start));
+    ring_write_word(start_lo);
+    ring_write_sticky_timer(end_hi);
+    ring_write_word(ppfmt::zone_w0(timer_id, ZoneKind::End));
+    ring_write_word(end_lo);
+    publish_tail();
+}
+
+// Atomic zone close: ONE 3-word packet per zone, emitted here with the start the scope object carried.
+// Reserve room BEFORE reading the end clock: a stall must elongate the zone (the stall happened inside
+// it), or the packet would carry a pre-stall end yet sit after the (later) stall zone -- a backwards
+// jump on the lane. Worst case is 1-word sticky + the 3-word packet, so the check runs once.
+// The duration is a 64-bit subtract done as sub + borrow (rv32); hi_d != 0 means >= 2^32 cycles.
+inline __attribute__((always_inline)) void mark_zone_close(uint32_t timer_id, uint32_t start_hi, uint32_t start_lo) {
+    ring_ensure_room(SPSC_ATOMIC_ZONE_WORDS + 1);
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
+    const uint32_t lo_d = lo - start_lo;
+    const uint32_t hi_d = hi - start_hi - (lo < start_lo);
+    if (__builtin_expect(hi_d != 0, 0)) {
+        mark_zone_long(timer_id, start_hi, start_lo, hi, lo);
+        return;
+    }
     ring_write_sticky_timer(hi);
-    ring_write_word(ppfmt::zone_w0(timer_id, kind));
+    ring_write_word(ppfmt::zone_atomic_w0(timer_id));
     ring_write_word(lo);
+    ring_write_word(lo_d);
     publish_tail();
 }
 
@@ -288,10 +330,19 @@ __attribute__((noinline)) void init_profiler(
 // Final commit point of a launch's markers.
 __attribute__((noinline)) void finish_profiler() { publish_tail(); }
 
+// The RAII zone. The constructor touches NOTHING but the wall clock -- no ring traffic, no room
+// check; the whole zone ships as one ZONE_ATOMIC packet at close. The start rides as member state:
+// 8 B per open zone, register-resident to nesting depth ~2-4 (rv32 ilp32, 12 callee-saved regs),
+// then a cheap 8 B frame spill per level. Accepted exposures of member state (measured: ~190 open
+// zones fit the tightest RISC; real code nests <= ~5): a globals-maxed kernel squeezed to the
+// 192-256 B loader stack floor gets tight around 10-20 open zones, and overflow is silent without
+// TT_METAL_WATCHER's stack watermark. Hold EXACTLY these two words -- anything more is register
+// pressure across all user code inside the zone.
 template <uint32_t timer_id>
 struct profileScope {
-    inline __attribute__((always_inline)) profileScope() { mark_time(timer_id); }
-    inline __attribute__((always_inline)) ~profileScope() { mark_time(timer_id, ZoneKind::End); }
+    uint32_t start_hi, start_lo;
+    inline __attribute__((always_inline)) profileScope() { read_wall_clock(start_hi, start_lo); }
+    inline __attribute__((always_inline)) ~profileScope() { mark_zone_close(timer_id, start_hi, start_lo); }
 };
 
 // FW wrapper: lifecycle only (ring init + validity gate in, final publish out); emits NO markers.
@@ -303,7 +354,7 @@ struct profileScopeLifecycle {
 
 // PP_DATA point marker: tag + timestamp + payload. The length is self-describing (word2), so trailers
 // just extend the one packet; the only bound is the 7-bit length field. Same reserve-before-clock-read
-// ordering as mark_time.
+// ordering as mark_zone_close.
 template <uint32_t data_id, typename... Args>
 inline __attribute__((always_inline)) void time_stamped_data(uint64_t data, Args... trailers) {
     constexpr uint32_t total_data_count = 1 + sizeof...(trailers);
@@ -334,6 +385,32 @@ inline __attribute__((always_inline)) void record_flag() {
     publish_tail();
 }
 
+// Stack canary: the production-run (watcher-off) net for the one real overflow tail -- a globals-heavy
+// kernel whose loader-guaranteed stack floor is only MEM_*_STACK_MIN_SIZE (192-256 B). Plants one word
+// at __stack_base (the kernel's lowest stack address, right above its own bss) when the kernel zone
+// opens and checks it when it closes; if sp ever reached the floor the word was overwritten by frame
+// data, and the check emits a named PP_EVENT ("STACK-OVERFLOW") the host resolves like any zone.
+// DELIBERATELY the same value as the watcher's stack_usage_pattern (0xBABABABA): under TT_METAL_WATCHER
+// the paint in mark_stack_usage() and this plant write the same word, and an intact canary reads as
+// painted-and-unused so measure_stack_usage() keeps walking -- the two nets compose instead of tripping
+// each other. Cost: ~4 instructions per kernel LAUNCH, not per zone. Compiled out for firmware builds
+// (__stack_base is a kernel-link symbol) and for active ERISC (COMPILE_FOR_ERISC: its stack belongs to
+// base FW, __stack_base does not exist there, and -Werror=stack-usage=1912 guards it at compile time).
+#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_ERISC)
+TT_ZONE_DEFINE_ID(STACK_CANARY_DEAD_ID, "STACK-OVERFLOW");
+constexpr uint32_t STACK_CANARY_PATTERN = 0xBABABABA;  // == watcher stack_usage_pattern; load-bearing
+struct stackCanaryScope {
+    inline __attribute__((always_inline)) stackCanaryScope() { ::__stack_base[0] = STACK_CANARY_PATTERN; }
+    inline __attribute__((always_inline)) ~stackCanaryScope() {
+        if (__builtin_expect(::__stack_base[0] != STACK_CANARY_PATTERN, 0)) {
+            record_flag<STACK_CANARY_DEAD_ID>();
+        }
+    }
+};
+#else
+struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floor to watch
+#endif
+
 }  // namespace kernel_profiler
 
 #include "noc_event_profiler.hpp"
@@ -363,8 +440,12 @@ inline __attribute__((always_inline)) void record_flag() {
 #define DeviceZoneScopedMainN(name) \
     kernel_profiler::profileScopeLifecycle zone_fw_lifecycle = kernel_profiler::profileScopeLifecycle();
 
-// KERNEL wrapper: an ordinary zone -- a "<RISC>-KERNEL" span per kernel invocation.
-#define DeviceZoneScopedMainChildN(name) DeviceZoneScopedN(name)
+// KERNEL wrapper: an ordinary zone -- a "<RISC>-KERNEL" span per kernel invocation -- plus the stack
+// canary. The canary is declared SECOND so its check runs FIRST at scope exit (reverse destruction
+// order), landing the overflow flag inside the still-open kernel zone.
+#define DeviceZoneScopedMainChildN(name) \
+    DeviceZoneScopedN(name);             \
+    kernel_profiler::stackCanaryScope zone_stack_canary = kernel_profiler::stackCanaryScope();
 
 #define DeviceZoneSetCounter(counter) kernel_profiler::set_host_counter(counter);
 

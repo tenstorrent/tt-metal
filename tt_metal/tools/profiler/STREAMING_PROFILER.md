@@ -27,8 +27,10 @@ else's. The batch span is only valid during the call, so copy what you keep.
 
 ## What you get
 
-Zones arrive **whole**: start/end markers are paired for you on the host, so a zone is one
-record with a start and a duration.
+Zones arrive **whole**: a zone is one record with a start and a duration. On the wire the device
+already ships most zones atomically (one 3-word packet at scope close, carrying end + duration);
+the few remaining legacy start/end pairs (the producer-stall zone, the >3.2 s long-zone fallback,
+DRISC drainer self-zones) are paired for you on the host. Either way you never see halves.
 
 ```cpp
 enum class PerfDebugRecType : uint32_t {

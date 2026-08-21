@@ -13,14 +13,12 @@
 // one reader per ring; a lagging consumer drops its own oldest records (counted) -- the
 // only place on the host where records can drop.
 //
-// TWO record types, deliberately: the RING carries the raw 24 B record the decode hot path
-// emits (separate ZoneStart/ZoneEnd markers, exactly what the device produced -- the AVX2
-// packer and the all-NT-store discipline depend on this layout, do not widen it), while
-// consumers receive the PUBLIC 32 B PerfDebugRec, whose zones are already PAIRED: every
-// consumer's delivery thread runs a per-(dev, lane) stack between the ring read and the
-// callback, converting start/end pairs into single Zone records. Pairing is per delivery
-// thread on purpose -- no shared state, no locks, and its cost lands on the consumer's
-// thread, never on decode.
+// TWO record types, deliberately: the RING carries the raw 24 B record the decode hot path emits
+// (the AVX2 packer and the all-NT-store discipline depend on this layout, do not widen it), while
+// consumers receive the PUBLIC 32 B PerfDebugRec. Worker zones arrive from the device WHOLE
+// (ZoneAtomic: end + duration) and convert 1:1; only the legacy start/end pairs -- the stall zone,
+// the >3.2s long-zone fallback, and the DRISC self-zones -- still go through the per-(dev, lane)
+// pairing stack on each consumer's delivery thread (no shared state, no locks, never on decode).
 #pragma once
 
 #include <atomic>
@@ -58,9 +56,11 @@ namespace perf_debug {
 // Receiver-internal only: every consumer, the built-in Tracy sink included, receives the public
 // paired record.
 enum class PerfDebugRawRecType : uint32_t {
-    ZoneStart = 1,
+    ZoneStart = 1,  // legacy pair halves: stall zone, >3.2s fallback, DRISC self-zones
     ZoneEnd = 2,
-    // 3 retired (was ZoneTotal -- the SUM/accumulate zone, feature removed)
+    // 3 recycled: it was ZoneTotal (SUM zones, removed). Safe to reuse HERE because this enum is
+    // in-process only -- the never-reuse rule binds wire values (PP_*), which a stale JIT ELF can emit.
+    ZoneAtomic = 3,  // one complete zone: ts = END, dur = duration (start = ts - dur)
     Data = 4,
     Event = 5,
     Ext = 6,
@@ -76,10 +76,14 @@ struct PerfDebugRawRecMeta {
 static_assert(sizeof(PerfDebugRawRecMeta) == 4);
 
 struct PerfDebugRawRec {
-    uint64_t ts;
+    uint64_t ts;  // ZoneAtomic: zone END; everything else: the marker's timestamp
     uint32_t id;  // full 27-bit structural zone id
     PerfDebugRawRecMeta meta;
     uint32_t prog;
+    // ZoneAtomic duration in cycles; 0 on every other type. Occupies what used to be tail padding, so
+    // field offsets are unchanged -- the AVX2 legacy-pair packer's third quadword (zero-extended prog)
+    // already writes these bytes as 0.
+    uint32_t dur;
 };
 static_assert(sizeof(PerfDebugRawRec) == 24);
 static_assert(std::is_trivially_copyable_v<PerfDebugRawRec>);

@@ -246,9 +246,10 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     uint64_t min_ts = s.min_zone_ts, max_ts = s.max_zone_ts;
     uint64_t* const last_ts = s.last_zone_ts.data();
 
-    auto emit = [&](uint32_t lane, uint32_t type, uint32_t zone_id, uint64_t ts, uint32_t prog) {
-        const PerfDebugRawRecType rt =
-            type == PP_ZONE_START ? PerfDebugRawRecType::ZoneStart : PerfDebugRawRecType::ZoneEnd;
+    auto emit = [&](uint32_t lane, uint32_t type, uint32_t zone_id, uint64_t ts, uint32_t dur, uint32_t prog) {
+        const PerfDebugRawRecType rt = type == PP_ZONE_ATOMIC  ? PerfDebugRawRecType::ZoneAtomic
+                                       : type == PP_ZONE_START ? PerfDebugRawRecType::ZoneStart
+                                                               : PerfDebugRawRecType::ZoneEnd;
         zone_markers++;
         // PRODUCER-STALL, matched by ELF-resolved NAME via the id table: a producer RISC blocked on
         // a FULL ring. STALL_ONLY mode only -- on a normal run this per-marker probe is redundant
@@ -265,7 +266,7 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         }
         max_ts = ts;
         if (sink) {
-            w.emit_store(pos++, PerfDebugRawRec{ts, zone_id, {0, lane, dev, rt}, prog});
+            w.emit_store(pos++, PerfDebugRawRec{ts, zone_id, {0, lane, dev, rt}, prog, dur});
         }
     };
     auto emit_data = [&](uint32_t lane,
@@ -585,6 +586,15 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
         for (const PerfDebugRawRec& r : got) {
             const uint32_t si = r.meta.dev * kPerfDebugMaxLanes + r.meta.lane;
             switch (r.meta.type) {
+                case PerfDebugRawRecType::ZoneAtomic: {
+                    // Already a whole zone: ts is the END, dur the duration -- no stack involved.
+                    PerfDebugRec& o = out.emplace_back();
+                    o.data.zone = {r.ts - r.dur, r.dur};
+                    o.id = r.id;
+                    o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::Zone};
+                    o.prog = r.prog;
+                    break;
+                }
                 case PerfDebugRawRecType::ZoneStart: stacks[si].push_back({r.ts, r.id, r.prog}); break;
                 case PerfDebugRawRecType::ZoneEnd: {
                     if (stacks[si].empty()) {
