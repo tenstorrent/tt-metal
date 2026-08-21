@@ -14,9 +14,13 @@ The rule: the skip fires exactly when the per-chip head shard is too thin for `s
 re-split the indices over TP anyway. tp=1 and fat head shards never fire.
 """
 
+from types import SimpleNamespace
+
 import pytest
 
+from models.demos.deepseek_v3_d_p.tt.mla import indexer as indexer_module
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer
 
 
 class _MlaStub:
@@ -97,3 +101,131 @@ def test_glm_configs_opt_in_and_others_do_not():
         assert getattr(kimi_k2_6_hf_config(), "indexer_skip_tp_regather", False) is False
     except ImportError:
         pass  # builder name differs; the getattr default in mla.py is the guarantee
+
+
+class _FakeTensor:
+    def __init__(self, shape):
+        self.shape = tuple(shape)
+
+
+class _FakeCCL:
+    def get_indexer_ring_k_buffer(self, *, local_k, sp_axis):
+        return _FakeTensor(local_k.shape)
+
+    def get_and_cycle_ag_semaphore_handles(self, *, cluster_axis):
+        return object()
+
+
+def _run_direct_indexer_forward(monkeypatch, *, skip_tp_regather):
+    """Execute the real TtIndexer.forward control flow with shape-only TTNN operators."""
+    seq_len = 128  # S/sp: the local sequence slab supplied to one SP rank.
+    tp_factor = 4
+    index_n_heads = 32
+    index_head_dim = 128
+    calls = {"tp_all_gather": 0, "to_layout": 0}
+    q_weight = object()
+    weights_proj = object()
+
+    indexer = object.__new__(TtIndexer)
+    indexer.index_args = SimpleNamespace(index_n_heads=index_n_heads, index_head_dim=index_head_dim)
+    indexer._is_index_compact = False
+    indexer.sp_factor = 2
+    indexer.tp_factor = tp_factor
+    indexer.tp_axis = 1
+    indexer.sp_axis = 0
+    indexer._index_cache_layers = 1
+    indexer._idx_wq_b = q_weight
+    indexer._idx_wproj = weights_proj
+    indexer.default_compute_kernel_config = None
+    indexer.tt_ccl = _FakeCCL()
+    indexer.sp_ccl_topology = None
+    indexer.ccl_num_links = 1
+    indexer.index_topk_capacity = 32
+    indexer.skip_tp_regather = skip_tp_regather
+    indexer.write_k = lambda *args, **kwargs: None
+    indexer._bc_rope_pe = lambda tensor, *args, **kwargs: tensor
+    indexer._tp_all_reduce_via_gather = lambda tensor: tensor
+
+    def tp_all_gather(tensor, dim):
+        calls["tp_all_gather"] += 1
+        gathered_shape = list(tensor.shape)
+        gathered_shape[dim] *= tp_factor
+        return _FakeTensor(gathered_shape)
+
+    indexer._tp_all_gather = tp_all_gather
+
+    def linear(tensor, weight, **kwargs):
+        output_width = index_n_heads * index_head_dim if weight is q_weight else index_n_heads
+        return _FakeTensor((1, 1, tensor.shape[2], output_width))
+
+    def create_qkv_heads(tensor, **kwargs):
+        return _FakeTensor((1, index_n_heads, tensor.shape[2], index_head_dim)), None, None
+
+    def mesh_partition(tensor, dim, cluster_axis):
+        partitioned_shape = list(tensor.shape)
+        partitioned_shape[dim] //= tp_factor
+        return _FakeTensor(partitioned_shape)
+
+    def permute(tensor, order):
+        return _FakeTensor(tuple(tensor.shape[dim] for dim in order))
+
+    def ring_indexer_score(q, *args, **kwargs):
+        return _FakeTensor((1, 1, q.shape[2], kwargs["kv_len"]))
+
+    def topk_large_indices(logits, *, k, valid_length):
+        return _FakeTensor((1, 1, logits.shape[2], k))
+
+    def to_layout(tensor, layout):
+        calls["to_layout"] += 1
+        return _FakeTensor(tensor.shape)
+
+    monkeypatch.setattr(indexer_module.ttnn, "linear", linear)
+    monkeypatch.setattr(indexer_module.ttnn.experimental, "nlp_create_qkv_heads", create_qkv_heads)
+    monkeypatch.setattr(indexer_module.ttnn, "multiply", lambda tensor, scalar: tensor)
+    monkeypatch.setattr(indexer_module.ttnn, "permute", permute)
+    monkeypatch.setattr(indexer_module.ttnn, "mesh_partition", mesh_partition)
+    monkeypatch.setattr(
+        indexer_module.ttnn,
+        "IndexerScoreProgramConfig",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+        raising=False,
+    )
+    monkeypatch.setattr(indexer_module.ttnn.experimental, "ring_indexer_score_dsa", ring_indexer_score, raising=False)
+    monkeypatch.setattr(indexer_module.ttnn.experimental, "topk_large_indices", topk_large_indices, raising=False)
+    monkeypatch.setattr(indexer_module.ttnn, "to_layout", to_layout)
+    monkeypatch.setattr(indexer_module.ttnn, "deallocate", lambda tensor: None)
+
+    hidden_states = _FakeTensor((1, 1, seq_len, 7168))
+    qr = _FakeTensor((1, 1, seq_len, 1536))
+    index_kv_cache = _FakeTensor((1, 1, 1024, index_head_dim))
+    output = indexer.forward(
+        hidden_states,
+        qr,
+        seq_len,
+        rope_tensors={},
+        index_kv_cache=index_kv_cache,
+    )
+    return output, calls, seq_len, tp_factor
+
+
+def test_thin_head_forward_skips_tp_all_gather(monkeypatch):
+    output, calls, _, _ = _run_direct_indexer_forward(monkeypatch, skip_tp_regather=True)
+
+    assert calls["tp_all_gather"] == 0
+    assert calls["to_layout"] == 0
+    assert output.shape[-1] == 32
+
+
+def test_thin_head_forward_returns_tp_local_sequence_rows(monkeypatch):
+    output, _, seq_len, tp_factor = _run_direct_indexer_forward(monkeypatch, skip_tp_regather=True)
+
+    assert output.shape[2] == seq_len // tp_factor  # S/(sp*tp), since seq_len is S/sp.
+
+
+def test_fat_head_forward_retains_gathered_sequence_contract(monkeypatch):
+    assert _needs_reshard(128, 4) is False  # Fat-head negative: 32 heads/chip needs the gathered contract.
+    output, calls, seq_len, _ = _run_direct_indexer_forward(monkeypatch, skip_tp_regather=False)
+
+    assert calls["tp_all_gather"] == 1
+    assert calls["to_layout"] == 2
+    assert output.shape[2] == seq_len  # S/sp after regather.
