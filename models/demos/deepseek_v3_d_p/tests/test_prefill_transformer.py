@@ -1412,28 +1412,26 @@ def _mistral4_reference_snapshots(config, state_dict: dict, token_ids, num_layer
     ids=["e128_device_fp32"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                # (sp, tp) = (8, 4): SP 8 on axis 0, TP 4 on axis 1 — the whole-galaxy shape the
-                # mistral4 long-seq matmul configs were tuned on. FABRIC_1D + a router config sized to
-                # this model's own FABRIC_PAYLOAD_SIZE (4096 == hidden), matching its dense-MLA + MoE
-                # family (test_kimi_prefill_transformer) rather than GLM's DSA FABRIC_2D.
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=Mistral4Small119BConfig.FABRIC_PAYLOAD_SIZE
-                ),
-                # The adapter's l1_small_size, verbatim: routing_use_l1_small_for_semaphores=True
-                # (below) puts the MoE routing all-gather's semaphores in L1_SMALL. Routing consumes
-                # 512 B; the remaining 256 B is for MLA high-bandwidth-gather semaphores.
-                "l1_small_size": 768,
-            },
+            # (sp, tp) = (8, 4): SP 8 on axis 0, TP 4 on axis 1 — the whole-galaxy shape the mistral4
+            # long-seq matmul configs were tuned on. The production TorusXY profile, sized to this
+            # model's own FABRIC_PAYLOAD_SIZE (4096 == hidden), matching its dense-MLA + MoE family
+            # (test_kimi_prefill_transformer) rather than GLM's. The per-axis CCL topology is derived from
+            # the fabric by per_axis_topology in the body, as every sibling case does.
+            #
+            # l1_small_size is the adapter's, verbatim: routing_use_l1_small_for_semaphores=True
+            # (below) puts the MoE routing all-gather's semaphores in L1_SMALL. Routing consumes
+            # 512 B; the remaining 256 B is for MLA high-bandwidth-gather semaphores.
+            torus_xy_device_params(
+                fabric_payload_size=Mistral4Small119BConfig.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=768,
+            ),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1452,12 +1450,12 @@ def test_mistral4_prefill_transformer(
     n_routed_experts,
     gate_fallback_mode,
     num_links,
-    topology,
     pcc_validation,
     input_source,
     use_pretrained,
 ):
     """embed -> [Mistral-Small-4 block x num_layers] -> norm -> lm_head vs the chained CPU reference."""
+    topology = per_axis_topology(device_params["fabric_config"])
     torch.manual_seed(42)
     assert not use_pretrained and input_source == "random", "see the decorator comments"
     profiler.clear()
