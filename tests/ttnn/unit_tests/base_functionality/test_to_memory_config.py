@@ -8,25 +8,14 @@ import torch
 import ttnn
 import math
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
+from tests.ttnn.utils_for_testing import (
+    assert_equal,
+    assert_allclose,
+    make_disjoint_dram_core_range_set,
+    make_full_dram_core_range_set,
+)
 
 pytestmark = pytest.mark.use_module_device
-
-
-def _make_disjoint_dram_core_range_set(device):
-    num_dram_banks = device.dram_grid_size().x
-    first_range_end = 2 if num_dram_banks == 7 else 1
-    return ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(first_range_end, 0)),
-            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(num_dram_banks - 1, 0)),
-        }
-    )
-
-
-def _make_full_dram_core_range_set(device):
-    num_dram_banks = device.dram_grid_size().x
-    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))})
 
 
 # Test for int types
@@ -392,10 +381,10 @@ def test_to_memory_config_rm_interleaved_to_nd_sharded(
         (
             [4, 3, 16, 32],
             [2, 1, 16, 32],
-            _make_disjoint_dram_core_range_set,
+            make_disjoint_dram_core_range_set,
         ),
         # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards
-        ([5, 32, 64], [2, 32, 64], _make_full_dram_core_range_set),
+        ([5, 32, 64], [2, 32, 64], make_full_dram_core_range_set),
     ],
 )
 @pytest.mark.parametrize(
@@ -1138,12 +1127,12 @@ def test_to_memory_config_tilized_interleaved_to_nd_sharded_dtype_conversion(
         (
             [4, 3, 32, 64],
             [2, 1, 32, 64],
-            _make_disjoint_dram_core_range_set,
+            make_disjoint_dram_core_range_set,
         ),
         # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards
-        ([5, 32, 64], [2, 32, 64], _make_full_dram_core_range_set),
+        ([5, 32, 64], [2, 32, 64], make_full_dram_core_range_set),
         # 3-D tensor sharded across all dims → 8 shards on the full DRAM bank grid
-        ([4, 64, 64], [2, 32, 32], _make_full_dram_core_range_set),
+        ([4, 64, 64], [2, 32, 32], make_full_dram_core_range_set),
     ],
 )
 @pytest.mark.parametrize(
@@ -1196,12 +1185,12 @@ def test_to_memory_config_tilized_interleaved_to_nd_sharded_dram(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ),
         # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards
-        ([5, 32, 64], [2, 32, 64], _make_full_dram_core_range_set),
+        ([5, 32, 64], [2, 32, 64], make_full_dram_core_range_set),
         # 3-D tensor sharded across all dims → disjoint DRAM banks
         (
             [3, 160, 160],
             [2, 64, 64],
-            _make_disjoint_dram_core_range_set,
+            make_disjoint_dram_core_range_set,
         ),
     ],
 )
@@ -2621,7 +2610,7 @@ def test_to_memory_config_tile_interleaved_to_width_sharded_bf8(device):
 
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    shard_grid = _make_full_dram_core_range_set(device)
+    shard_grid = make_full_dram_core_range_set(device)
     shard_shape = (8192, 256)
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
