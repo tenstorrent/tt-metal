@@ -275,7 +275,7 @@ TEST_F(NormalizationSmoke, SoftmaxGeneralC) {
     const ttnn::Shape shape({1, C, H, W});
     // Channel c holds the constant c everywhere -> channel softmax at every (h,w) is the same
     // 4-way closed form: p_c = e^c / (1 + e + e^2 + e^3).
-    const float denom = 1.0f + std::exp(1.0f) + std::exp(2.0f) + std::exp(3.0f);
+    const float denom = 1.0f + std::numbers::e_v<float> + std::exp(2.0f) + std::exp(3.0f);
     std::vector<float> data(C * HW);
     std::vector<float> expected(C * HW);
     for (uint32_t c = 0; c < C; c++) {
