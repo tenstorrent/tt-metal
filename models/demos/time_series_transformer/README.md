@@ -5,7 +5,10 @@ encoder-decoder transformer for probabilistic time-series forecasting.
 
 ## Platforms
 
-- Wormhole (`n150`, `n300`)
+- Wormhole `n300` — every number and test result in this directory was produced here.
+- Wormhole `n150` — expected to work and not yet run. The demo opens a single device and
+  never addresses a second chip, so nothing in it depends on the `n300` topology, but that
+  is a reading of the code rather than a measurement.
 
 ## Overview
 
