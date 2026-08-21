@@ -252,12 +252,28 @@ fi
 
 [[ -f "$STATE" ]] || echo '{}' > "$STATE"
 
+# Debounce duplicate invocations: two cron daemons run on this host, so each
+# scheduled tick fires 2-3×. The flock above only SERIALIZES them — a
+# duplicate that starts after the first finishes still reruns the whole tick,
+# and its API burst right on the heels of the healthy run's is exactly what
+# trips GitHub's secondary rate limit (the all-"no runs" digest flap).
+# FORCE=1 overrides for deliberate back-to-back manual runs.
+if [[ "${FORCE:-0}" != "1" && "$DRY_RUN" != "1" ]]; then
+  last_end=$(jq -r '._last_tick_end // 0' "$STATE" 2>/dev/null || echo 0)
+  now_epoch=$(date +%s)
+  if (( now_epoch - last_end < 600 )); then
+    log "duplicate-tick debounce — previous tick finished $((now_epoch - last_end))s ago (<600s); FORCE=1 to override"
+    exit 0
+  fi
+fi
+
 # Best-effort fetch so commit-range lookups work.
 git -C "$TT_METAL_DIR" fetch --quiet origin "$BRANCH" 2>/dev/null \
   || log "warn: git fetch failed; commit-range data may be stale"
 
 # ---------- per-pipeline processing ----------
 blocks=()
+api_failures=0
 
 for entry in "${PIPELINES[@]}"; do
   IFS='|' read -r workflow display test_hint job_pattern <<<"$entry"
@@ -279,8 +295,24 @@ for entry in "${PIPELINES[@]}"; do
   # per_page=1 response: the list endpoint occasionally serves a stale page
   # whose first item is an ancient run (2026-08-19 it returned May's #6154
   # as L2's "latest", which then got cached as current state).
-  run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&per_page=10$evq" \
-        --jq '[.workflow_runs[]] | sort_by(.created_at) | last' 2>/dev/null || echo "null")
+  if ! run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&per_page=10$evq" \
+        --jq '[.workflow_runs[]] | sort_by(.created_at) | last' 2>>"$AGENT_ERR"); then
+    # gh failed (burst rate limit / auth / network) — NOT the same as "no
+    # runs". Reuse the cached summary so the digest content (and therefore
+    # its fingerprint) stays stable instead of flapping to a bogus
+    # all-"no runs" digest; only surface an error block when there is no
+    # cache to fall back on. Root-cause error text lands in agent_errors.log.
+    api_failures=$((api_failures + 1))
+    cached=$(jq -r --arg w "$workflow" '.[$w].summary // ""' "$STATE")
+    if [[ -n "$cached" ]]; then
+      blocks+=("$cached")
+      log "  WARN: gh api failed — reusing cached summary (see agent_errors.log)"
+    else
+      blocks+=("▸ *$display* — ⚠️ _GitHub query failed this tick_")
+      log "  WARN: gh api failed — no cache to fall back on"
+    fi
+    continue
+  fi
 
   if [[ -z "$run" || "$run" == "null" ]]; then
     blocks+=("▸ *$display* — _no runs on ${BRANCH}_")
@@ -428,6 +460,14 @@ for entry in "${PIPELINES[@]}"; do
      "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 done
 
+# Total API outage → nothing was actually checked this tick. Don't post:
+# with every block degraded the digest is either garbage ("no runs"-style)
+# or a stale echo of the cache claiming a fresh "checked" time.
+if (( api_failures >= ${#PIPELINES[@]} )); then
+  log "WARN: all ${#PIPELINES[@]} GitHub queries failed this tick — skipping Slack post"
+  exit 0
+fi
+
 # ---------- assemble digest (Slack Block Kit) ----------
 # Belgrade = Central European Time with EU DST rules. POSIX TZ string used
 # instead of "Europe/Belgrade" because this host has no tzdata installed.
@@ -553,4 +593,10 @@ else
   else
     log "WARN: Slack response: $resp"
   fi
+fi
+
+# Feed the duplicate-tick debounce at the top of the script.
+if [[ "$DRY_RUN" != "1" ]]; then
+  jq --argjson t "$(date +%s)" '._last_tick_end = $t' "$STATE" > "$STATE.tmp" \
+    && mv "$STATE.tmp" "$STATE"
 fi
