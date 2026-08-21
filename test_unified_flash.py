@@ -71,10 +71,26 @@ def grid_transpose(k, sk, dt):
     return v.permute(2, 1, 0, 3).reshape(dt * TILE, sk * TILE)
 
 
-def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, stream_buffering=2):
+def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, stream_buffering=2, num_q=1):
+    """One launch, `num_q` query chunks of `sq` tiles each, against `sk_total` key tiles.
+
+    num_q=1 is the old shape: one query chunk against the whole key range, which for a
+    causal case is the LAST chunk of a prefill (it sees everything). num_q>1 walks the
+    query dimension inside the kernel, so a whole head is one launch -- and the causal
+    walk then skips key chunks that lie entirely above the diagonal instead of masking
+    them.
+    """
     assert sk_total % num_chunks == 0
     sk = sk_total // num_chunks
-    S_q, S_k, D = sq * TILE, sk_total * TILE, dt * TILE
+    # The kernel's causal walk needs whole chunks for every query chunk's key range.
+    k_offset = sk_total - num_q * sq
+    assert k_offset >= 0, "the key range must cover every query chunk"
+    if causal:
+        # Same condition the kernel static_asserts: sk divides the first query chunk's key
+        # range, and divides sq too once there is more than one chunk to step by.
+        assert (k_offset + sq) % sk == 0, "sk must divide k_offset + sq"
+        assert num_q == 1 or sq % sk == 0, "sk must divide sq when there are several query chunks"
+    S_q, S_k, D = num_q * sq * TILE, sk_total * TILE, dt * TILE
 
     torch.manual_seed(seed)
     # Q carries the 1/sqrt(d) scale: folding it in on the host costs one multiply here and
@@ -103,15 +119,25 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, str
         keep = torch.ones([S_q, S_k], dtype=torch.bool)
     mask = torch.where(keep, 0.0, MASK_NEG)
 
-    # Chunk-major layouts, so each chunk's slice is contiguous for the kernel.
+    # Chunk-major layouts, so each chunk's slice is contiguous for the kernel. K and V are
+    # laid out ONCE over the whole key range: every query chunk reads a prefix of the same
+    # chunks, so no per-query-chunk copy is needed.
     k_dev = torch.cat(
         [grid_transpose(k[j * sk * TILE : (j + 1) * sk * TILE].to(torch.float32), sk, dt) for j in range(num_chunks)],
         dim=0,
     ).to(torch.bfloat16)
     v_dev = v
-    mask_dev = torch.cat([mask[:, j * sk * TILE : (j + 1) * sk * TILE] for j in range(num_chunks)], dim=0).to(
-        torch.bfloat16
-    )
+
+    # The mask, in exactly the order the kernel consumes it: for each query chunk, one
+    # block per key chunk it actually visits. The kernel walks a flat counter, so this
+    # sequence IS the indexing -- there is no (i, j) arithmetic on either side.
+    mask_blocks = []
+    for i in range(num_q):
+        visited = (k_offset + (i + 1) * sq) // sk if causal else num_chunks
+        rows = slice(i * sq * TILE, (i + 1) * sq * TILE)
+        for j in range(visited):
+            mask_blocks.append(mask[rows, j * sk * TILE : (j + 1) * sk * TILE])
+    mask_dev = torch.cat(mask_blocks, dim=0).to(torch.bfloat16)
 
     dram = ttnn.DRAM_MEMORY_CONFIG
 
@@ -130,7 +156,7 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, str
     tout = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S_q, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
 
     core_ranges, cores = single_core()
-    ct_args = [sq, sk, dt, num_chunks]
+    ct_args = [sq, sk, dt, num_q, k_offset, sk_total]
     for t in (tq, tk, tv, tmask, tcolones, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     rt_args = [t.buffer_address() for t in (tq, tk, tv, tmask, tcolones, tout)]
@@ -171,9 +197,15 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None, str
         cbs=cbs,
         compile_time_args=ct_args,
         runtime_args=rt_args,
+        defines=None if causal else [("FLASH_NONCAUSAL", "1")],
         **(fidelity or {}),
     )
     out = ttnn.generic_op([tq, tk, tv, tmask, tcolones, tout], program)
+    # Free the inputs: run() is called many times in one device session, and without this
+    # the accumulated allocations exhaust DRAM partway through the sweep rather than at a
+    # boundary that would make the cause obvious.
+    for t in (tq, tk, tv, tmask, tcolones):
+        ttnn.deallocate(t)
     got = ttnn.to_torch(out).to(torch.float32)[0, 0]
 
     # The reference divides the scores, where the device pre-divided Q: mathematically the same,
@@ -222,6 +254,22 @@ def main(argv=None):
                 )
                 if not ok:
                     failed.append((causal, "invariance", nc))
+
+        # A whole causal head in ONE launch, which is what the q-loop is for. Checked
+        # against the full S x S reference rather than a single query chunk, so this
+        # covers the causal walk's chunk-skipping as well as the arithmetic: query chunk
+        # i visits only the key chunks at or below its diagonal, and a bound that was one
+        # chunk out either reads a masked block or misses a needed one.
+        for sq_q, nq, sk_q in ((2, 4, 2), (2, 8, 1), (4, 4, 4)):
+            got, want = run(device, sq_q, nq * sq_q, dt, nq * sq_q // sk_q, True, num_q=nq)
+            e = (got - want).abs().max().item()
+            ok = e <= args.abs_err
+            logger.info(
+                f"q-loop sq={sq_q} nq={nq} sk={sk_q} (S={nq * sq_q * TILE}): "
+                f"max|err|={e:.5f}  {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failed.append(f"qloop-{sq_q}-{nq}-{sk_q}")
     finally:
         ttnn.close_device(device)
 

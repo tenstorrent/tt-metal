@@ -47,12 +47,27 @@
 // HOST LAYOUT. K arrives grid-transposed per chunk (see TransposeB), and K, V and the mask
 // arrive chunk-major so each chunk's slice is contiguous.
 //
+// One LAUNCH is one attention head: a loop over query chunks, each with its own loop over
+// key chunks and its own online-softmax state. Previously one launch was one query chunk
+// and the host ran the outer loop, which cost 13.1us of fixed setup per chunk -- program
+// launch, matmul_init's hardware startup, the scaler fill, the column of ones. Those now
+// happen once for the head.
+//
+// The causal walk lives here rather than only in the mask: query chunk i sees k_offset +
+// (i+1)*sq key tiles and no more, so chunks entirely above the diagonal are never visited.
+// A rectangular score block cannot express the half-masked diagonal chunk, but it can skip
+// the wholly-masked ones, and that is what the loop bound does.
+//
 // Compile-time args:
-//   0        Sq in tiles
-//   1        Sk per CHUNK, in tiles
+//   0        Sq per query CHUNK, in tiles
+//   1        Sk per key CHUNK, in tiles
 //   2        D in tiles
-//   3        number of chunks
-//   4..      TensorAccessorArgs for q, k, v, mask, then out
+//   3        number of query chunks
+//   4        key tiles already behind the first query chunk (history; 0 for a fresh prefill)
+//   5        total key tiles -- read only under FLASH_NONCAUSAL
+//   6..      TensorAccessorArgs for q, k, v, mask, col_ones, then out
+//
+// Define FLASH_NONCAUSAL to make every query chunk sweep the whole key range.
 //
 // Runtime args (identical on all three kernels):
 //   0..4     q, k, v, mask, out base addresses
@@ -88,9 +103,14 @@ void kernel_main() {
     constexpr uint32_t sq = get_compile_time_arg_val(0);
     constexpr uint32_t sk = get_compile_time_arg_val(1);
     constexpr uint32_t dt = get_compile_time_arg_val(2);
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(3);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(3);
+    // Key tiles already behind the first query chunk. Zero is a fresh prefill; a positive
+    // value is prefill-with-history, where the queries see context they did not produce.
+    constexpr uint32_t k_offset = get_compile_time_arg_val(4);
+    // Only read when FLASH_NONCAUSAL is set, where every q-chunk sweeps the whole range.
+    constexpr uint32_t k_tiles = get_compile_time_arg_val(5);
 
-    constexpr auto q_args = TensorAccessorArgs<4>();
+    constexpr auto q_args = TensorAccessorArgs<6>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -123,6 +143,21 @@ void kernel_main() {
     // reads those, `bcast<Cols>` taking column 0 is a contract worth not quietly changing.
     using Kt1 = u::Shape<sk, 1>;
 
+    // Every q-chunk's key range has to divide into whole chunks, which for the causal
+    // walk means sk must divide both the offset and sq. Checked here because getting it
+    // wrong would silently run a short final chunk over the wrong tiles.
+#if defined(FLASH_NONCAUSAL)
+    static_assert(k_tiles % sk == 0, "sk must divide the key range");
+#else
+    // Query chunk i's key range is k_offset + (i+1)*sq tiles, and each has to be a whole
+    // number of chunks. Consecutive ranges differ by sq, so it is enough that sk divides
+    // the FIRST range, plus sq itself once there is more than one chunk to step by.
+    static_assert(
+        (k_offset + sq) % sk == 0 && (num_q_chunks == 1 || sq % sk == 0),
+        "every query chunk's key range must divide into whole key chunks: sk has to divide "
+        "k_offset + sq, and sq as well when there is more than one query chunk");
+#endif
+
     u::matmul_init<Q, Kt>(kCbQ, kCbK, kCbOut);
 
     u::Storage<Q> q_storage(kCbQ);
@@ -152,72 +187,94 @@ void kernel_main() {
     const auto colones_acc = TensorAccessor(colones_args, colones_addr);
     const auto out = TensorAccessor(out_args, out_addr);
 
-    // Kernel scope: Q feeds every chunk's first matmul, and both constants are re-read by
-    // every reduction and broadcast that folds them in.
+    // Kernel scope, and this is the whole point of the q-loop: the scaler fill and the
+    // column of ones happen ONCE for the head rather than once per query chunk, as does
+    // matmul_init's hardware startup above. Measured, a separate launch per q-chunk cost
+    // 13.1us of fixed work each; what remains per chunk below is only what genuinely
+    // belongs to it -- its queries, its state, its tail.
     u::ComputeBlock one = u::fill_reduce_scaler<1>(one_storage, u::kReduceScalerOne);
-    // Read once and used by every chunk, like q. reduce_max keeps the scaler above:
-    // a maximum has no matmul form.
+    // reduce_max keeps the scaler above: a maximum has no matmul form.
     u::ComputeBlock col_ones = u::noc_load<1>(colones_storage, colones_acc, 0).wait();
-    u::ComputeBlock q = u::noc_load<1>(q_storage, q_acc, 0).wait();
 
-    // The running state. Declared here because here is how long it lives.
-    u::RetainedBlock<Vec> m_slot;
-    u::RetainedBlock<Vec> l_slot;
-    u::RetainedBlock<Out> o_slot;
+    // Mask blocks are consumed in one flat sequence across the whole nest, so the host can
+    // lay them out in exactly this order and the kernel needs no two-dimensional indexing.
+    uint32_t mask_idx = 0;
 
-    for (uint32_t j = 0; j < num_chunks; ++j) {
-        u::ComputeBlock k = u::noc_load<1>(k_storage, k_acc, j).wait();
-        u::ComputeBlock v = u::noc_load<1>(v_storage, v_acc, j).wait();
-        u::ComputeBlock mask = u::noc_load<1>(mask_storage, mask_acc, j).wait();
+    for (uint32_t i = 0; i < num_q_chunks; ++i) {
+        // Causal: this chunk's queries see the history plus their own rows, and nothing
+        // after. Chunks beyond that are entirely -inf, and skipping them is what the
+        // rectangular block cannot express any other way.
+#if defined(FLASH_NONCAUSAL)
+        const uint32_t chunks = k_tiles / sk;
+#else
+        const uint32_t chunks = (k_offset + (i + 1) * sq) / sk;
+#endif
 
-        // The mask rides along in the matmul: `add` puts it into the product while that is
-        // still in DST, so what used to be a separate 8x8-tile pass over the scores -- read
-        // s, read mask, add, write sm -- is now one FPU instruction per output tile with no
-        // L1 round trip. The scores buffer is gone with it.
-        u::ComputeBlock sm = masked_storage.store(u::matmul<u::TransposeB::Yes>(q, k).add(mask));
-        u::ComputeBlock rm = rowmax_storage.store(u::reduce_max<u::Axis::Cols>(sm, one));
+        u::ComputeBlock q = u::noc_load<1>(q_storage, q_acc, i).wait();
 
-        if (j == 0) {
-            // Nothing accumulated yet, so this chunk IS the state and there is nothing to
-            // correct. `rm` still has to be copied out of the reduction's buffer into the one
-            // that will carry it.
-            m_slot = m_storage.store(u::copy(rm));
-            u::ComputeBlock p = prob_storage.store((sm - u::bcast<u::Axis::Cols>(rm)).exp());
-            l_slot = l_storage.store(u::matmul(p, col_ones));
-            o_slot = o_storage.store(u::matmul(p, v));
-        } else {
-            u::ComputeBlock<Vec> m_prev = m_slot.release();
+        // The running state, per query chunk: fresh here, drained by the tail below.
+        // ~RetainedBlock asserts on a slot that was pushed and never waited on, so a
+        // forgotten drain on any iteration is caught rather than leaked.
+        u::RetainedBlock<Vec> m_slot;
+        u::RetainedBlock<Vec> l_slot;
+        u::RetainedBlock<Out> o_slot;
 
-            // The new maximum, to a scratch buffer: the state buffer cannot serve, because with
-            // the old value not yet popped it holds two blocks and a read takes the front.
-            u::ComputeBlock m_now = mnow_storage.store(u::max_(m_prev, rm));
-            u::ComputeBlock c_old = corrold_storage.store((m_prev - m_now).exp());
+        for (uint32_t j = 0; j < chunks; ++j) {
+            u::ComputeBlock k = u::noc_load<1>(k_storage, k_acc, j).wait();
+            u::ComputeBlock v = u::noc_load<1>(v_storage, v_acc, j).wait();
+            u::ComputeBlock mask = u::noc_load<1>(mask_storage, mask_acc, mask_idx++).wait();
 
-            // Normalised to the NEW maximum in one pass, which is what removes the separate
-            // rescale and c_new entirely.
-            u::ComputeBlock p = prob_storage.store((sm - u::bcast<u::Axis::Cols>(m_now)).exp());
+            // The mask rides along in the matmul: `add` puts it into the product while that is
+            // still in DST, so what used to be a separate 8x8-tile pass over the scores -- read
+            // s, read mask, add, write sm -- is now one FPU instruction per output tile with no
+            // L1 round trip. The scores buffer is gone with it.
+            u::ComputeBlock sm = masked_storage.store(u::matmul<u::TransposeB::Yes>(q, k).add(mask));
+            u::ComputeBlock rm = rowmax_storage.store(u::reduce_max<u::Axis::Cols>(sm, one));
 
-            m_slot = m_storage.store(u::copy(m_now));
+            if (j == 0) {
+                // Nothing accumulated yet, so this chunk IS the state and there is nothing to
+                // correct. `rm` still has to be copied out of the reduction's buffer into the one
+                // that will carry it.
+                m_slot = m_storage.store(u::copy(rm));
+                u::ComputeBlock p = prob_storage.store((sm - u::bcast<u::Axis::Cols>(rm)).exp());
+                l_slot = l_storage.store(u::matmul(p, col_ones));
+                o_slot = o_storage.store(u::matmul(p, v));
+            } else {
+                u::ComputeBlock<Vec> m_prev = m_slot.release();
 
-            u::ComputeBlock rs = rowsum_storage.store(u::matmul(p, col_ones));
+                // The new maximum, to a scratch buffer: the state buffer cannot serve, because with
+                // the old value not yet popped it holds two blocks and a read takes the front.
+                u::ComputeBlock m_now = mnow_storage.store(u::max_(m_prev, rm));
+                u::ComputeBlock c_old = corrold_storage.store((m_prev - m_now).exp());
 
-            u::ComputeBlock<Vec> l_prev = l_slot.release();
-            l_slot = l_storage.store(l_prev * c_old + rs);
+                // Normalised to the NEW maximum in one pass, which is what removes the separate
+                // rescale and c_new entirely.
+                u::ComputeBlock p = prob_storage.store((sm - u::bcast<u::Axis::Cols>(m_now)).exp());
 
-            u::ComputeBlock<Out> o_prev = o_slot.release();
-            u::ComputeBlock os = oscaled_storage.store(o_prev * u::bcast<u::Axis::Cols>(c_old));
-            u::ComputeBlock pv = pv_storage.store(u::matmul(p, v));
-            o_slot = o_storage.store(os + pv);
+                m_slot = m_storage.store(u::copy(m_now));
+
+                u::ComputeBlock rs = rowsum_storage.store(u::matmul(p, col_ones));
+
+                u::ComputeBlock<Vec> l_prev = l_slot.release();
+                l_slot = l_storage.store(l_prev * c_old + rs);
+
+                u::ComputeBlock<Out> o_prev = o_slot.release();
+                u::ComputeBlock os = oscaled_storage.store(o_prev * u::bcast<u::Axis::Cols>(c_old));
+                u::ComputeBlock pv = pv_storage.store(u::matmul(p, v));
+                o_slot = o_storage.store(os + pv);
+            }
         }
+
+        // out = o / l, for THIS query chunk. Releasing every slot is not optional:
+        // ~RetainedBlock asserts on a state that was pushed and never waited on, which is
+        // exactly what a forgotten drain is -- and with the loop, a drain forgotten on one
+        // iteration would otherwise corrupt the next.
+        u::ComputeBlock<Vec> m_done = m_slot.release();
+        u::ComputeBlock<Vec> l_done = l_slot.release();
+        u::ComputeBlock<Out> o_done = o_slot.release();
+        (void)sizeof(m_done);
+
+        u::ComputeBlock rl = recipl_storage.store(u::recip(l_done));
+        u::noc_store<0>(out_storage.store(o_done * u::bcast<u::Axis::Cols>(rl)), out, i);
     }
-
-    // out = o / l. Releasing every slot is not optional: ~RetainedBlock asserts on a state
-    // that was pushed and never waited on, which is exactly what a forgotten drain is.
-    u::ComputeBlock<Vec> m_done = m_slot.release();
-    u::ComputeBlock<Vec> l_done = l_slot.release();
-    u::ComputeBlock<Out> o_done = o_slot.release();
-    (void)sizeof(m_done);
-
-    u::ComputeBlock rl = recipl_storage.store(u::recip(l_done));
-    u::noc_store<0>(out_storage.store(o_done * u::bcast<u::Axis::Cols>(rl)), out, 0);
 }
