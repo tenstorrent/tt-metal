@@ -119,6 +119,8 @@ public:
 
     /**
      * @brief Increment the semaphore by the specified value.
+     * @note Currently atomicity is not guaranteed on WH/BH, multiple cores incrementing simultaneously may lead to lost
+     * updates.
      *
      * DM_LOCAL_CACHED: atomic 32-bit AMO on the cached alias.
      * EXTERNAL:        self-targeted NoC atomic increment.
@@ -148,6 +150,10 @@ public:
     /**
      * @brief Atomically increment the semaphore by the specified value on a remote core.
      *
+     * On a DM_LOCAL_CACHED semaphore the only legal target is this node (all its binders are
+     * on-node -- that is why the census picked cached), so the increment is served by the local
+     * AMO. This keeps the portable pattern up(noc, my_x, my_y, v) working under every scope.
+     *
      * @param noc The Noc object representing the NoC to use for the transaction.
      * @param noc_x The X coordinate of the remote core in the NoC.
      * @param noc_y The Y coordinate of the remote core in the NoC.
@@ -156,13 +162,24 @@ public:
      */
     __attribute__((always_inline)) void up(
         const Noc& noc, uint32_t noc_x, uint32_t noc_y, uint32_t value, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);  // Not valid on a DM_LOCAL_CACHED semaphore
+        if (scope_ == SemScope::DM_LOCAL_CACHED) {
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+            // A NoC atomic must never touch the cached pool; instead use an AMO.
+            ASSERT(noc.is_local_bank(noc_x, noc_y));
+            up(value);
+#else
+            ASSERT(false);  // the host never bakes CACHED for this platform
+#endif
+            return;
+        }
         const uint64_t dest_noc_addr = get_noc_addr(noc_x, noc_y, noc.get_noc_id());
         noc_semaphore_inc(dest_noc_addr, value, noc.get_noc_id(), vc);
     }
 
     /**
      * @brief Decrement the semaphore by the specified value, blocking until the semaphore is sufficient.
+     * @note Currently atomicity is not guaranteed on WH/BH, multiple cores incrementing simultaneously may lead to lost
+     * updates.
      *
      * DM_LOCAL_CACHED: multi-consumer-safe via LR/SC retry loop.
      * EXTERNAL:        multi-consumer-safe via a NoC-CAS lock, consumers must run on the semaphore's node.

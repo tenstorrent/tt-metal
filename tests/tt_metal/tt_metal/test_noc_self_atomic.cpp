@@ -495,9 +495,8 @@ TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrain) {
         LogTest, "CAS-lock drain: {} (expected 0; started at {} = {} DMs x {})", observed, start, num_dms_, iterations);
     EXPECT_EQ(observed, 0u)
         << "The NoC CAS lock lost or double-granted around the decrement (a double grant on the LAST "
-           "credit wraps the word to the ret-slot sentinel and presents as a HANG instead), EXTERNAL "
-           "multi-consumer "
-           "down() cannot be enabled.";
+           "credit wraps the word onto the ret-slot sentinel; the kernel's spin budget turns that "
+           "into a bail-out with a wrong count), EXTERNAL multi-consumer down() cannot be enabled.";
 }
 
 // Producer/consumer hart pairs on one word: even harts do INCR_GET up()s

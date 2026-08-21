@@ -22,14 +22,25 @@ void kernel_main() {
     sync_threads(0);
 #endif
 
+    // The credit wait is bounded.
+    constexpr uint32_t kSpinCap = 1u << 20;
+    uint32_t spin = 0;
     for (uint32_t i = 0; i < increment_times; i++) {
         uint32_t observed = __atomic_load_n(word, __ATOMIC_RELAXED);
+        bool expired = false;
         do {
             while (observed < 1) {  // DM cores are mutually coherent, no invalidate needed.
+                if (++spin >= kSpinCap) {
+                    expired = true;
+                    break;
+                }
                 observed = __atomic_load_n(word, __ATOMIC_RELAXED);
             }
-        } while (!__atomic_compare_exchange_n(
-            word, &observed, observed - 1, /*weak=*/false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
+        } while (!expired && !__atomic_compare_exchange_n(
+                                 word, &observed, observed - 1, /*weak=*/false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
+        if (expired) {
+            break;
+        }
     }
 
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)

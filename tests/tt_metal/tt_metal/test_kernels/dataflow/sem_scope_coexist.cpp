@@ -37,7 +37,10 @@ void kernel_main() {
     uint64_t hart;
     asm volatile("csrr %0, mhartid" : "=r"(hart));
     if (hart == 2) {
-        done.wait_min(num_threads);
+        // Bounded wait for every thread to finish.
+        constexpr uint32_t kSpinCap = 1u << 20;
+        for (uint32_t spin = 0; done.value() < num_threads && spin < kSpinCap; spin++) {
+        }
         report_value(report_addr, cached.value());                       // expect num_threads * increment_times
         report_value(report_addr + sizeof(uint32_t), external.value());  // expect num_threads * increment_times
         report_value(report_addr + 2 * sizeof(uint32_t), static_cast<uint32_t>(sem_scope_of(sem::cached)));

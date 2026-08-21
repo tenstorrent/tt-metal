@@ -127,8 +127,7 @@ bool write_named_ct_arg_map_header(const string& out_dir, const JitBuildSettings
 // METAL 2.0 only:
 // This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
 // Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
-// Returns true if the kernel binds >= 1 DM_LOCAL_CACHED semaphore(s).
-bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
+void write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
     const string path = out_dir + "kernel_bindings_generated.h";
 
     // Get the DFB bindings from the settings callback
@@ -148,7 +147,7 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
-    // Returned so the caller can automatically inject the init call.
+    // Gates the cached-pool stub emission below.
     const bool has_cached_sem = std::any_of(
         sem_entries.begin(), sem_entries.end(), [](const auto& e) { return e.scope == SemScope::DM_LOCAL_CACHED; });
 
@@ -268,6 +267,7 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 // everyone else waits for that bit. On exit, each hart increments `exited`;
                 // the last one zeroes the bookkeeping word so the next program starts fresh.
                 // Any number of local kernels/threads works.
+                content << "#define TT_DM_CACHED_SEM_STUBS 1\n";
                 content << "inline void init_dm_cached() {\n";
                 content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
                 for (const auto& entry : sem_entries) {
@@ -353,7 +353,6 @@ bool write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
     }
     write_file(path, content.str());
-    return has_cached_sem;
 }
 
 // METAL 2.0 only:
@@ -622,9 +621,10 @@ void jit_build_genfiles_kernel_include(
     // Legacy kernels created via the old host API are fenced out of this code path.
     const bool is_metal2 = settings.is_metal2_kernel();
     string kernel_header_content;
-    bool has_cached_sem = false;
     if (is_metal2) {
-        has_cached_sem = write_kernel_bindings_generated_header(out_dir, settings);
+        // When the kernel binds cached semaphores, the generated header carries the pool
+        // entry/exit stubs; dmk.cc calls them around kernel_main() (TT_DM_CACHED_SEM_STUBS).
+        write_kernel_bindings_generated_header(out_dir, settings);
         write_kernel_args_generated_header(out_dir, settings);
         kernel_header_content =
             string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
@@ -641,25 +641,12 @@ void jit_build_genfiles_kernel_include(
     }
     ////////////////////////////////////////////////////////////
 
-    // Automatically inject the cached-semaphore pool stubs: rename the kernel's entry point and define the
-    // real kernel_main() as a wrapper that calls sem::init_dm_cached() first and sem::finish_dm_cached() last.
-    static constexpr const char* kUserEntry = "tt_dm_cached_user_kernel_main_";
-    if (has_cached_sem) {
-        kernel_header_content += string("#define kernel_main ") + kUserEntry + "\n";
-    }
-
     kernel_header_content += get_kernel_source_to_include(kernel_src);
 
     // For a TT_KERNEL-tagged entry, append the generated kernel_main() shim that fetches every arg
     // by name and calls the user entry. It must follow the user source (so the entry is declared)
     // and the args:: header (emitted above for Metal 2.0). Empty for legacy kernels.
     kernel_header_content += generate_tt_kernel_shim_if_present(settings, kernel_src, is_metal2);
-
-    if (has_cached_sem) {
-        kernel_header_content +=
-            string("\n#undef kernel_main\nvoid kernel_main() {\n    sem::init_dm_cached();\n    ") + kUserEntry +
-            "();\n    sem::finish_dm_cached();\n}\n";
-    }
 
     string kernel_header = out_dir + "kernel_includes.hpp";
     write_file(kernel_header, kernel_header_content);
@@ -676,7 +663,7 @@ void jit_build_genfiles_triscs_src(
     const bool is_metal2 = settings.is_metal2_kernel();
     if (is_metal2) {
         // The cached pool is DM-only
-        (void)write_kernel_bindings_generated_header(out_dir, settings);
+        write_kernel_bindings_generated_header(out_dir, settings);
         write_kernel_args_generated_header(out_dir, settings);
     }
     // No prolog #include: force-included by the compile recipe instead, so the map is defined ahead

@@ -32,12 +32,23 @@ void kernel_main() {
     const uint64_t lock_noc_addr = get_noc_addr(lock_addr);
     const uint64_t sem_noc_addr = get_noc_addr(sem_addr);
 
-    // One CAS on the lock word; returns its pre-op value (0 or 1).
+    // Shared spin budget for every wait below: on exhaustion the kernel bails out, leaving
+    // a wrong final count for the host to fail on instead of hanging the test binary.
+    uint32_t spins_left = 1u << 20;
+    auto expired = [&]() { return spins_left == 0; };
+    auto tick = [&]() {
+        if (spins_left != 0) {
+            spins_left--;
+        }
+        return spins_left == 0;
+    };
+
+    // One CAS on the lock word; returns its pre-op value (0 or 1; SENTINEL after a bail).
     auto lock_cas = [&](uint32_t cmp, uint32_t swap) -> uint32_t {
         *uncached(ret_slot) = SENTINEL;
         noc_fast_atomic_cas4<DM_DEDICATED_NOC>(noc_index, lock_noc_addr, NOC_UNICAST_WRITE_VC, cmp, swap, ret_slot);
         noc_async_atomic_barrier();
-        while (*uncached(ret_slot) == SENTINEL) {
+        while (*uncached(ret_slot) == SENTINEL && !tick()) {
         }
         return *uncached(ret_slot);
     };
@@ -47,7 +58,7 @@ void kernel_main() {
         *uncached(ret_slot) = SENTINEL;
         noc_semaphore_inc(noc_addr, incr);
         noc_async_atomic_barrier();
-        while (*uncached(ret_slot) == SENTINEL) {
+        while (*uncached(ret_slot) == SENTINEL && !tick()) {
         }
     };
 
@@ -61,8 +72,11 @@ void kernel_main() {
 
     // One lock-protected conditional decrement
     auto locked_decrement = [&]() {
-        while (true) {
-            while (*uncached(sem_addr) < 1) {
+        while (!expired()) {
+            while (*uncached(sem_addr) < 1 && !tick()) {
+            }
+            if (expired()) {
+                return;
             }
             if (lock_cas(0 /*cmp*/, 1 /*swap*/) != 0) {
                 continue;
@@ -79,7 +93,7 @@ void kernel_main() {
 
     if (mode == 0) {
         // Only drains
-        for (uint32_t i = 0; i < increment_times; i++) {
+        for (uint32_t i = 0; i < increment_times && !expired(); i++) {
             locked_decrement();
         }
     } else {
@@ -95,7 +109,7 @@ void kernel_main() {
             }
         } else {
             // Consumer: lock-protected decrements
-            for (uint32_t i = 0; i < increment_times; i++) {
+            for (uint32_t i = 0; i < increment_times && !expired(); i++) {
                 locked_decrement();
             }
         }

@@ -213,7 +213,8 @@ protected:
             .semaphore_bindings =
                 {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"},
                  {.semaphore_spec_name = experimental::SemaphoreSpecName{"done_sem"}, .accessor_name = "done"}},
-            .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "num_threads"}},
+            .runtime_arg_schema =
+                {.runtime_arg_names = {"report_addr", "increment_times", "num_threads", "self_noc_x", "self_noc_y"}},
             .hw_config = experimental::DataMovementGen2Config{},
         };
 
@@ -226,6 +227,8 @@ protected:
         };
         program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
+        // Its own virtual coords, for MODE_SELF_NOC_UP's self-targeted remote up.
+        const CoreCoord core_virtual = mesh_device_->worker_core_from_logical_core(core);
         experimental::ProgramRunArgs params;
         params.kernel_run_args = {
             experimental::ProgramRunArgs::KernelRunArgs{
@@ -234,7 +237,9 @@ protected:
                     core,
                     {{"report_addr", report_addr},
                      {"increment_times", concurrent_iterations},
-                     {"num_threads", num_dms_}}),
+                     {"num_threads", num_dms_},
+                     {"self_noc_x", static_cast<uint32_t>(core_virtual.x)},
+                     {"self_noc_y", static_cast<uint32_t>(core_virtual.y)}}),
             },
         };
         experimental::SetProgramRunArgs(program, params);
@@ -612,9 +617,33 @@ TEST_F(SemScopeFixture, TestDmLocalCachedConcurrentUp) {
     EXPECT_EQ(observed, expected) << "Semaphore<DM_LOCAL_CACHED>::up() lost updates under concurrency.";
 }
 
-// (num_dms-1) producers up(1) while a single consumer drains them all. A non-atomic down()
-// loses producer increments, so the failure mode is a starved consumer timing out, not a
-// wrong count.
+// The current WH/BH pattern, up(noc, my_x, my_y, 1) on a semaphore the census resolves to
+// DM_LOCAL_CACHED: the class must serve it with the local AMO (a NoC atomic would corrupt
+// the cached pool) and keep exact counts.
+TEST_F(SemScopeFixture, TestDmLocalCachedSelfNocUp) {
+    if (num_dms_ < 2) {
+        GTEST_SKIP() << "needs >= 2 user DMs: a 1-instance shape resolves LOCAL_NONATOMIC, not cached";
+    }
+    const uint32_t observed = run_concurrent(SemScope::DM_LOCAL_CACHED, "MODE_SELF_NOC_UP");
+    const uint32_t expected = num_dms_ * concurrent_iterations;
+    log_info(LogTest, "DM_LOCAL_CACHED self-noc up value(): {} (expected {})", observed, expected);
+    EXPECT_EQ(observed, expected)
+        << "up(noc, my_x, my_y, 1) on a cached semaphore lost updates, the AMO redirect is broken.";
+}
+
+// Same pattern on an EXTERNAL semaphore must still take the NoC atomic path and stay exact.
+TEST_F(SemScopeFixture, TestExternalSelfNocUp) {
+    if (!has_second_node()) {
+        GTEST_SKIP() << "needs >= 2 worker nodes: the EXTERNAL shape spans the semaphore across two nodes";
+    }
+    const uint32_t observed = run_concurrent(SemScope::EXTERNAL, "MODE_SELF_NOC_UP");
+    const uint32_t expected = num_dms_ * concurrent_iterations;
+    log_info(LogTest, "EXTERNAL self-noc up value(): {} (expected {})", observed, expected);
+    EXPECT_EQ(observed, expected) << "up(noc, my_x, my_y, 1) on an EXTERNAL semaphore lost updates.";
+}
+
+// (num_dms-1) producers up(1) while a single consumer drains them all. The consumer polls
+// under a spin cap, so lost increments end in a nonzero final count instead of a hang.
 TEST_F(SemScopeFixture, TestExternalProducerConsumer) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs";

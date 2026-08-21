@@ -30,9 +30,16 @@ void kernel_main() {
     }
 #endif
 #if defined(SEM_SCOPE_UPDOWN)
-    // Single writer: up(N) then down(N) must leave the semaphore at 0.
-    for (uint32_t i = 0; i < increment_times; i++) {
-        s.down(1);
+    // Single writer: up(N) then down(N) must leave the semaphore at 0. Polls for a credit
+    // before each down (sole hart, so it cannot block), and lost ups end in a nonzero
+    // count at the cap instead of a hang.
+    constexpr uint32_t kSpinCap = 1u << 20;
+    uint32_t drained = 0;
+    for (uint32_t spin = 0; drained < increment_times && spin < kSpinCap; spin++) {
+        if (s.value() >= 1) {
+            s.down(1);
+            drained++;
+        }
     }
 #endif
     const uint32_t observed = s.value();
