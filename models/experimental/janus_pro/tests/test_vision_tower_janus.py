@@ -50,9 +50,9 @@ from models.tt_transformers.tt.ccl import TT_CCL
 DEVICE_PERF_ENV_VAR = "JANUS_VIT_DEVICE_PERF"
 
 # Iteration counts follow AGENTS_GUIDE_ADD_TEST.md: 10/100 for host e2e, 10/10 on device.
-PERF_WARMUP_ITERS = 1
-PERF_MEASURE_ITERS = 1
-DEVICE_PERF_ITERS = 1
+PERF_WARMUP_ITERS = 10
+PERF_MEASURE_ITERS = 100
+DEVICE_PERF_ITERS = 10
 
 
 def _head_sha():
