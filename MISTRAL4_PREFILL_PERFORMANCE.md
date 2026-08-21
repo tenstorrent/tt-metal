@@ -39,6 +39,55 @@ Also note the `handoff=none` framing was wrong in **both** directions at once: i
 
 ---
 
+## 0b. Rebased onto latest main — a NEW baseline, not comparable to §1
+
+Rebasing onto `origin/main` (2026-08-21, 102 commits) forced a fabric change: upstream retired
+`FABRIC_1D` for the 8x4 prefill rows in favour of `fabric_profiles.torus_xy_device_params`
+(`FABRIC_2D_TORUS_XY`, `RELAXED_INIT`). `FABRIC_1D` at this mesh now reports
+"requested combination of fabric config and mesh, unfeasible on the given hardware" and **skips**, so
+the torus profile is the only runnable option and everything below §0b was measured on a fabric that
+no longer applies.
+
+Measured on 8 kW at `37141629493` (`kmabee/mistral4-prefill-full-rebased`):
+
+| window | single-rank | PP=4 x (8,1) | ratio | (FABRIC_1D ratio) |
+|---|---|---|---|---|
+| 5,120 | 29,595 | 35,110 | **1.19x** | 1.17x |
+| 25,600 | 24,854 | 42,473 | **1.71x** | 1.67x |
+
+Per-config change from the `FABRIC_1D` numbers in §1:
+
+| window | single-rank | PP=4 x (8,1) |
+|---|---|---|
+| 5,120 | -9.2% | -7.7% |
+| 25,600 | -8.3% | -6.1% |
+
+**The absolute drop is uniform across configurations and the ratios are preserved (slightly better),
+so this is a re-baseline, not a regression.** Correctness is unchanged: PP layer slicing still samples
+**token 2 at p=0.7147**, bit-identical to every prior run, across 102 upstream commits and a different
+fabric.
+
+Two things this rebase exposed, both worth knowing:
+
+- **A conflict resolution that passed every static check and failed on hardware.** Upstream's rewritten
+  norm ends with `if not use_high_bw_all_gather: ttnn.deallocate(tt_gathered_stats)`; the merged TP=1
+  branch never assigned that flag, so every TP=1 forward raised `UnboundLocalError`. AST parses, lint
+  and the host-only tests were all green. Only the PP rows caught it. `False` is also the
+  *semantically* right value there -- at TP=1 the tensor is freshly allocated per forward, unlike the
+  high-bandwidth path's reused buffer, so step 3 should free it.
+- **A skip that reports as a pass.** The pre-migration PP rows returned rc=0 with
+  "unfeasible on the given hardware". It was only caught because 22 s was implausible against a known
+  ~3 min baseline. Any harness reading exit codes alone would have recorded those as successes.
+
+The single-rank question raised by the 12 kW run (-6.6% to -14% vs `c34e372b47d`) is **still open** and
+cannot be settled from this run: that A/B needs both sides on the same fabric, and `FABRIC_1D` is no
+longer runnable on main. Ruled out by inspection so far: upstream drift (both commits share base
+`17407015dab`), the matmul-K guard (present in both), the removed `kt` tag (never populated; the
+config table is byte-identical), and rope-table caching (single-shot branch only; every measured
+single-rank row is chunked).
+
+---
+
 ## 1. The decision table — 8 kW, corrected
 
 All four parallelisations, fixed driver, `PP_HANDOFF=none`, traced, 2026-08-20/21.
