@@ -23,7 +23,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 2_000_000}], indirect=True),
+    pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 2_000_000}),
 ]
 
 
@@ -252,7 +252,9 @@ def test_reduce_affine_transforms_is_device_deterministic(device: ttnn.Device, s
         ttnn.deallocate(output)
 
 
-def test_reduce_affine_transforms_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
+def test_reduce_affine_transforms_cache_hit_rebinds_fresh_tensors(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     case = _SMALL_CASE
     host_a = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1911)
     host_b = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1912)
@@ -280,7 +282,9 @@ def test_reduce_affine_transforms_cache_hit_rebinds_fresh_tensors(device: ttnn.D
         assert not torch.equal(actual_a, actual_b)
 
 
-def test_reduce_affine_transforms_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
+def test_reduce_affine_transforms_default_compute_config_matches_explicit_defaults(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     case = _SMALL_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=817)
     a_tt, b_tt = (_to_device(tensor, device) for tensor in host)
@@ -305,7 +309,9 @@ def test_reduce_affine_transforms_default_compute_config_matches_explicit_defaul
         )
 
 
-def test_reduce_affine_transforms_approximate_math_uses_distinct_accurate_program(device: ttnn.Device) -> None:
+def test_reduce_affine_transforms_approximate_math_uses_distinct_accurate_program(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     case = _SMALL_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=818)
     a_tt, b_tt = (_to_device(tensor, device) for tensor in host)
