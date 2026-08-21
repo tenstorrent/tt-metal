@@ -150,8 +150,7 @@ def run_teacher_forced_pcc(verbose=True):
         f"{len(scored)} runs over prefill buckets {sorted(buckets)}, deepest cache {deepest}; "
         f"worst latents {worst_label} pcc {worst_pcc}; "
         f"{len(wav_scored)} vocoder buckets {sorted(voc_done)}, worst waveform {worst_wav} "
-        f"pcc {worst_wav_pcc}; failed: {failed}"
-        + (f"; no codes: {no_codes}" if no_codes else "")
+        f"pcc {worst_wav_pcc}; failed: {failed}" + (f"; no codes: {no_codes}" if no_codes else "")
     )
     return not failed and covered and deepest >= MIN_DEPTH and len(voc_done) >= MIN_VOC_BUCKETS, msg
 

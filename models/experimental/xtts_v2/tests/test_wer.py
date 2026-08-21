@@ -167,11 +167,7 @@ def run_wer(verbose=True):
     _, cond = CondReference().get_style_emb(mel)
     spk = SpeakerReference().core(speaker_logmel(ref_wav, ref_sr), l2_norm=True).unsqueeze(-1)
     voc = HifiganReference()
-    cpu = {
-        (t, s): asr(_cpu_generate(host, gpt, final_norm, voc, cond, spk, t, s))
-        for t in SENTENCES
-        for s in SEEDS
-    }
+    cpu = {(t, s): asr(_cpu_generate(host, gpt, final_norm, voc, cond, spk, t, s)) for t in SENTENCES for s in SEEDS}
 
     dev_scores = {k: _wer(k[0], v) for k, v in device.items()}
     cpu_scores = {k: _wer(k[0], v) for k, v in cpu.items()}
