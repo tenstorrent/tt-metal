@@ -61,18 +61,16 @@ struct McastArgsSpec {
             noc, rect<NOC_ID>(), num_active);
     }
 
+    // ReceiverPipe holds `sender_coords` as a NON-OWNING pointer and dereferences it in receive(),
+    // so the storage must outlive the pipe: a local array built here dies with this frame and
+    // receive() would then ack a garbage core, deadlocking the sender's pre-handshake wait. Point
+    // at the L1 vararg block itself, which lives for the whole kernel -- the same thing McastArgs
+    // does on the descriptor path with get_arg_addr(). The coord pairs already sit contiguously:
+    // [sender_x, sender_y] at RT_BASE for a fixed sender, and one pair per round from RT_BASE + 4
+    // in rotating mode (where RT_BASE..RT_BASE+3 is the rect).
     ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders> receiver(const Noc& noc) const {
-        uint32_t coords[2 * num_senders];
-        if constexpr (SPAN == 0) {
-            coords[0] = sender_x();
-            coords[1] = sender_y();
-        } else {
-            for (uint32_t i = 0; i < SPAN; ++i) {
-                coords[2 * i + 0] = sender_x(i);
-                coords[2 * i + 1] = sender_y(i);
-            }
-        }
-        return ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders>(noc, coords);
+        return ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders>(
+            noc, get_vararg_addr(RT_BASE + (SPAN == 0 ? 0u : 4u)));
     }
 
     template <uint8_t NOC_ID = noc_index>
