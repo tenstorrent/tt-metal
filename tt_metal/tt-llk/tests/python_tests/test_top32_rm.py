@@ -56,15 +56,15 @@ pytestmark = [
     skip_for_quasar,
     pytest.mark.skip(
         reason="Deadlocks real BH at kernel startup (NOT the bitonic sort, contrary to the "
-        "earlier theory). BH-card tt-exalens callstacks show all three TRISCs stall in the "
-        "first unpack->dest tile: MATH in math_unpack_to_dest_math_ready (MATH_DONE sem7), "
-        "UNPACK in _llk_unpack_A_top32_rm_->set_dst_write_addr (mailbox_read). The math side "
-        "of math_top32_group was ALSO wrongly driving unpack->dest for the bf16 value stream "
-        "(now fixed: gated on is_32bit_input like the metal wrapper), but the 32-bit index "
-        "stream's math_unpack_to_dest_math_ready handshake still deadlocks standalone -- the "
-        "bare LLK test lacks the framework CB flow-control ordering the demo kernel relies on. "
-        "Header/handshake issue for @pmilenkovicTT; un-skip once the unpack->dest rendezvous "
-        "works without the compute-kernel framework."
+        "earlier theory). BH-card tt-exalens callstacks show the stall is in the unpack->dest "
+        "rendezvous: MATH in math_unpack_to_dest_math_ready (MATH_DONE sem7), UNPACK in "
+        "_llk_unpack_A_top32_rm_->set_dst_write_addr (mailbox_read). The LLKs are correct "
+        "(model-proven); the gap is test-side -- this bare unit driver does not reproduce the "
+        "compute-kernel framework's flow-control (semaphore/dest-section init + CB ordering) "
+        "the unpack->dest path is written against. Fixed so far in the TEST: gate the math "
+        "unpack->dest on is_32bit_input (value stream) and prime MATH_DONE; the remaining work "
+        "is replicating more of that framework context in the test. Un-skip once it runs "
+        "standalone."
     ),
 ]
 
@@ -101,7 +101,7 @@ _TTSIM_SKIP_REASON = (
     "for a 32-element sort vs ~3099 for a sibling), then the post-timeout "
     "assert probe hard-aborts ttsim via an unmodeled RISC_DBG_CNTL_0 write "
     "(UnsupportedFunctionality: riscv_debug_regs_wr32). ttsim gap, not a golden "
-    "or header defect; runs on real Blackhole silicon."
+    "or LLK defect; runs on real Blackhole silicon."
 )
 
 

@@ -61,25 +61,26 @@ from helpers.tilize_untilize import tilize_block
 from helpers.unpack import unpack_res_tiles
 from helpers.utils import passed_test
 
-# HANGS on ttsim — skipped on all backends. The golden here is fixed (per-face column-0
-# broadcast), but the kernel does NOT run to completion: it reliably TIMES OUT on ttsim
-# (3/3 runs hit the 150s pytest-timeout with no result). NOTE: this is a genuine hang, not
-# the "0.0 KHz" summary line ttsim prints on every run (including passing ones) — the
-# distinguisher is timeout-with-no-summary vs a completing "N passed" line.
+# HANGS on ttsim AND real BH — skipped on all backends. BH-card tt-exalens callstacks: all
+# three TRISCs stall in the kernel-epilogue tensix_sync (store_blocking) -- the Tensix pipe
+# won't drain after the SrcB-reuse-from-DEST math (A2D datacopy -> MOVD2B -> SRCB_BCAST_COL).
+# (On ttsim it reliably TIMES OUT, 3/3 at the 150s timeout with no result -- distinct from the
+# benign "0.0 KHz" summary line ttsim prints on passing runs.)
 #
-# This op reuses SrcB straight out of DEST (A2D datacopy -> MOVD2B -> SRCB_BCAST_COL). Its
-# header has NO semaphore, so — unlike the sibling sdpa_custom_mm_reuse_dest_srcb, which
-# now PASSES once the PACK thread supplies the UNPACK_MATH_DONE producer — there is no
-# semaphore to balance here; the stall is a SrcB bank-valid / dest-section sequencing hazard
-# that an isolated MATH-only driver could not be made to clear reliably. So the reuse family
-# IS unit-testable in principle (the sibling proves it), this specific op just isn't solved.
-# A hang wedges the Tensix and cascades, so it must not run on hardware until fixed.
-# TODO: work out the SrcB-bank-valid / MOVD2B-from-DEST handshake (srcreg-bank-sync-audit),
-# or accept its coverage via the fused deepseek device tests. Its real intended usage is
-# inside the SDPA pipeline, not standalone.
+# The golden here is fixed (per-face column-0 broadcast). This experimental LLK is correct for
+# its real (model-level) usage -- it lives inside the SDPA pipeline, not standalone -- and it
+# carries no semaphore, so (unlike the sibling sdpa_custom_mm_reuse_dest_srcb, which PASSES once
+# the PACK thread supplies the UNPACK_MATH_DONE producer) there is no token for the test to
+# balance. The reuse family IS unit-testable in principle (the sibling proves it); this op just
+# needs the test to reproduce the SrcB-bank-valid / dest-section sequencing the compute-kernel
+# framework provides. A hang wedges the Tensix and cascades, so keep it skipped until the
+# standalone driver supplies that context.
+# TODO: srcreg-bank-sync-audit the MOVD2B-from-DEST sequencing in the driver, or accept its
+# coverage via the fused deepseek device tests.
 pytestmark = pytest.mark.skip(
-    reason="Hangs on ttsim (SrcB-reuse-from-DEST bank-valid sequencing); would wedge the "
-    "BH suite. Golden is fixed. Un-skip once the reuse handshake is resolved."
+    reason="Wedges real BH: standalone test doesn't reproduce the SrcB-reuse-from-DEST "
+    "sequencing this LLK needs (the LLK is model-proven; golden is fixed). Un-skip once "
+    "the driver supplies that context."
 )
 
 # The op processes exactly 2 faces (configure_mop LLK_ASSERTs num_faces == 2).

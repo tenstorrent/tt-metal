@@ -126,12 +126,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-// NOTE(reviewer): llk_math_sdpa_custom_mm.h's _llk_math_sdpa_custom_mm_ declares
+// NOTE: llk_math_sdpa_custom_mm.h's _llk_math_sdpa_custom_mm_ declares
 // `operandB_face_r_dim` but never reads it in either the fast (signal_granularity == ct_dim)
-// or the general MOP/MVMUL path, so every instantiation trips -Werror=unused-parameter. That
-// is a header bug (the param should be [[maybe_unused]] or removed). We cannot edit the
-// promoted header from a test, so we locally suppress the diagnostic across its include. The
-// operand-B row count is still supplied via the runtime arg for when the header is fixed.
+// or the general MOP/MVMUL path, so every instantiation trips -Werror=unused-parameter. This
+// is a compile-level inconsistency with the canonical LLK header conventions (the param would
+// be [[maybe_unused]] or dropped there), not a functional defect. We cannot edit the promoted
+// header from a test, so we locally suppress the diagnostic across its include. The operand-B
+// row count is still supplied via the runtime arg.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #include "experimental/llk_math_sdpa_custom_mm.h"
