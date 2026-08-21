@@ -142,27 +142,34 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     };
 
     // (1) The 7 hand-off CBs FIRST, on the UNION core set: declared first => same base address on
-    // producer and receiver (the lockstep lemma's precondition). nbuf=1, fp32, in the receiver's
-    // reserve order (v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv).
-    add_cb(union_set, fcb::vbeta, cv);
-    add_cb(union_set, fcb::kd, ck);
-    add_cb(union_set, fcb::qdecay, ck);
-    add_cb(union_set, fcb::intra, cc);
-    add_cb(union_set, fcb::kdec_t, kc);
+    // producer and receiver (the lockstep lemma's precondition). fp32, in the receiver's reserve
+    // order (v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv). Double-buffered (F2): the producer
+    // runs one chunk ahead of the receiver's consumption instead of alternating with it; the
+    // lockstep addressing survives any equal nbuf on both sides (equal per-chunk push/pop cadence
+    // keeps the pointers in phase, and the writer sources read_ptr, which names the correct slot).
+    add_cb(union_set, fcb::vbeta, cv, 2);
+    add_cb(union_set, fcb::kd, ck, 2);
+    add_cb(union_set, fcb::qdecay, ck, 2);
+    add_cb(union_set, fcb::intra, cc, 2);
+    add_cb(union_set, fcb::kdec_t, kc, 2);
     // dl is 1 tile. (The phased prep factory sized this index cv as cb_vnew for monolithic layout
     // parity, but the prep kernel only ever uses 1 tile of it, as cb_dl.)
-    add_cb(union_set, fcb::dl, 1);
-    add_cb(union_set, fcb::Tinv, cc);
+    add_cb(union_set, fcb::dl, 1, 2);
+    add_cb(union_set, fcb::Tinv, cc, 2);
 
     // (2) The remaining 25 prep CBs on the PRODUCER cores only — same sizes/formats as the phased
     // prep factory (which mirrors the monolithic op's layout). The absolute L1 layout necessarily
     // shifts (the hand-off CBs above allocate first), which prior measurement showed to be
     // perf-neutral for prep; the math is layout-independent.
-    add_cb(prod_set, fcb::q, ck, 1, df_qkv);
-    add_cb(prod_set, fcb::k, ck, 1, df_qkv);
-    add_cb(prod_set, fcb::v, cv, 1, df_qkv);
-    add_cb(prod_set, fcb::g, Ct);
-    add_cb(prod_set, fcb::beta, Ct);
+    // Producer input CBs are double-buffered (F2): the producer has no DRAM writes, so its reader
+    // prefetching item i+1's ~32KB while compute works item i directly shortens the per-chunk
+    // critical path. (The phased prep keeps nbuf=1 — there this prefetch measured harmful in the
+    // write-bound regime; here the producer is math/latency-bound.) +32KB L1 on producer cores.
+    add_cb(prod_set, fcb::q, ck, 2, df_qkv);
+    add_cb(prod_set, fcb::k, ck, 2, df_qkv);
+    add_cb(prod_set, fcb::v, cv, 2, df_qkv);
+    add_cb(prod_set, fcb::g, Ct, 2);
+    add_cb(prod_set, fcb::beta, Ct, 2);
     add_cb(prod_set, fcb::eye, cc);
     add_cb(prod_set, fcb::tril, cc);
     add_cb(prod_set, fcb::ones, cc);
@@ -273,6 +280,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     prep_compute.core_ranges = prod_set;
     prep_compute.compile_time_args = prep_compute_ct;
     prep_compute.config = fused_compute_cfg();
+    // Fused-only perf: hoisted WY-path reconfigs (see chunk_gdn_math.hpp kGdnHoistReconfig).
+    prep_compute.defines = {{"GDN_HOIST_RECONFIG", "1"}};
     prep_compute.runtime_args.reserve(BH);
 
     KernelDescriptor fused_writer;
