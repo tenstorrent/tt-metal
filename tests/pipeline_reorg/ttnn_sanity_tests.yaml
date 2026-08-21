@@ -286,8 +286,13 @@
   # test_reduce_accumulate_fidelity is a 432-config accuracy+perf sweep that costs ~15 min on
   # wormhole -- it is nightly material, not a sanity gate, and it consumed almost half the group's
   # budget on its own.
+  # The models_device_performance_bare_metal tests drive the profiler through `python3 -m tracy`,
+  # whose host CLI is built into build/tools/profiler/bin. This group installs the wheel only and
+  # never fetches the build tree, so those tests cannot run here -- they belong to the device-perf
+  # pipelines, which pass a build artifact alongside the wheel.
   cmd: >-
     pytest --timeout 1800 -xv
+    -m "not models_device_performance_bare_metal"
     --ignore=tests/ttnn/unit_tests/operations/examples/fidelity_sweep/test_reduce_accumulate_fidelity.py
     tests/ttnn/unit_tests/operations/examples
     tests/ttnn/unit_tests/kernel_lib
