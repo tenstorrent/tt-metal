@@ -2813,11 +2813,11 @@ class UnarySFPUGolden:
     def _log(self, x):
         return self._torch_unary(x, torch.log)
 
-    # log_with_base dispatches _calculate_log_ with base_scale = fp16a bits of
-    # 1/ln(2) (0x3DC5). sFloat16a rounds it to the fp16 value below, so the golden
-    # multiplies ln(x) by that exact rounded scale (=> log2(x) modulo the kernel's
-    # own ln approximation, which is within the same tolerance as plain log).
-    _LOG_WITH_BASE_SCALE = 1.4423828125  # fp16(1/ln 2)
+    # log_with_base dispatches the production metal calculate_log with
+    # base_scale = fp32 bits of 1/ln(2) (0x3FB8AA3B), mirroring log_with_base_tile,
+    # so the golden multiplies ln(x) by the same fp32 scale (=> log2(x) modulo the
+    # kernel's own ln approximation, which is within the same tolerance as plain log).
+    _LOG_WITH_BASE_SCALE = 1.4426950408889634  # 1/ln(2), rounds to fp32 0x3FB8AA3B
 
     def _log_with_base(self, x):
         return self._torch_unary(x, lambda t: torch.log(t) * self._LOG_WITH_BASE_SCALE)
@@ -2973,23 +2973,19 @@ class UnarySFPUGolden:
         return self._torch_unary(x, lambda t: value / t)
 
     def _clamp(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
-        # tt-llk clamp with min/max fixed to the dispatch constants and offset 0. Clamped
-        # under the SFPU's total order, not torch's IEEE one: _calculate_clamp_ applies the
-        # bounds as `v_if (val < min)` then `v_if (val > max)`, so a NaN falls through the
-        # first and lands on max. See sfpu_clamp.
+        # Production metal calculate_clamp with min/max fixed to the dispatch constants.
+        # The kernel is a max(x, min) -> min(x, max) chain of SFPU max/min bodies, i.e.
+        # exactly sfpu_clamp's composition under the SFPU total order (a +NaN survives
+        # the max and lands on max_val via the min). See sfpu_clamp.
         return sfpu_clamp(x, min_val, max_val)
 
     def _hardtanh(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
-        # Modelled as a clamp because it *agrees* with one, not because it is one. The kernel is
-        # `_calculate_hardtanh_`, a different function from `_calculate_clamp_` with differently
-        # formatted constants (bf16 p0/p1/p2 = 1.0/-2.0/1.0 against clamp's fp16 min/max/offset):
-        # `val += p0; v_if (val < 0) val = 0; val += p1; v_if (val >= 0) val = 0; val += p2`.
-        #
-        # The two coincide on every special this op is enrolled for, and on the finite range they
-        # implement the same function, so sfpu_clamp is a faithful golden here. They agree by
-        # arithmetic rather than by construction, though, so the agreement is pinned in
-        # test_sfpu_domains rather than assumed -- see
-        # test_hardtanh_golden_matches_the_hardtanh_kernel_chain.
+        # Production metal calculate_hardtanh is sfpi::clamp(v, min, max) with fp32 bounds,
+        # i.e. the same SFPU max/min composition sfpu_clamp models, so the golden is faithful
+        # by construction (unlike the legacy tt-llk bf16 offset-chain kernel this harness
+        # bound before, whose agreement was arithmetic -- see
+        # test_hardtanh_golden_matches_the_hardtanh_kernel_chain in test_sfpu_domains,
+        # kept as a regression pin for that equivalence).
         return sfpu_clamp(x, min_val, max_val)
 
     def _elu(self, x):
