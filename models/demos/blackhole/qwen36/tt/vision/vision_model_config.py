@@ -14,6 +14,8 @@ from models.demos.qwen3_vl.tt.common import nearest_multiple
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import ModelArgs, OpGroup
 
+from .vision_ccl import vision_ccl_kwargs as _vision_ccl_kwargs
+
 
 class ModelOptimizations:
     def __init__(self, model_name):
@@ -242,6 +244,8 @@ class VisionModelArgs(ModelArgs):
         # returns the untuned plan instead: ttnn's auto config, DRAM in/out, pre-sweep fidelity.
         # `QWEN36_VISION_MM_TUNING=0` forces that path, so it can be exercised on any arch.
         self.vision_mm_tuned = is_wormhole_b0() and os.environ.get("QWEN36_VISION_MM_TUNING", "1") != "0"
+        # CCL workers (10, 4) were swept on Wormhole N300 / T3K only. Blackhole keeps (10, 2).
+        self.vision_ccl_kwargs = _vision_ccl_kwargs(self.device_name)
         # Per-core L1 the plan may not spend (see _L1_RESERVE / _L1_RESERVE_BY_DEVICE).
         self._l1_reserve = _L1_RESERVE_BY_DEVICE.get(self.device_name, _L1_RESERVE)
         if not self.vision_mm_tuned:

@@ -444,7 +444,12 @@ class VisionAttention(LightweightModule):
         # fractured along dim=3 -- exactly the block I/O contract that the LLM uses. When dim cannot
         # be split into whole tiles per device, all-reduce to a replicated full-width tensor instead.
         if self.replicated_acts:
-            output_frac = all_reduce_replicated(output_partial, self.tt_ccl, self.ccl_topology)
+            output_frac = all_reduce_replicated(
+                output_partial,
+                self.tt_ccl,
+                self.ccl_topology,
+                ccl_kwargs=self.configuration.vision_ccl_kwargs,
+            )
         else:
             output_frac = tt_all_reduce(
                 output_partial,
@@ -456,6 +461,7 @@ class VisionAttention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
                 topology=self.ccl_topology,
+                **self.configuration.vision_ccl_kwargs,
             )
         if output_frac is not output_partial:
             ttnn.deallocate(output_partial)

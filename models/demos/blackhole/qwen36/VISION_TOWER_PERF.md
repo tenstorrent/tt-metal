@@ -8,11 +8,12 @@ patch/positional embed → 27 × `VisionBlock` → `PatchMerger`).
 `tt/vision/vision_ccl.py`). The `README.md` deployment targets are Blackhole `P150` / `P150x4`;
 those are **not swept** — see [Not covered](#not-covered).
 
-**The tuning is gated to Wormhole B0 in code**: `VisionModelArgs.vision_mm_tuned` is
+**The tuning is gated to Wormhole N300 / T3K in code**: `VisionModelArgs.vision_mm_tuned` is
 `is_wormhole_b0()`, and off-arch `vision_mm_plan` returns only its untuned plan — ttnn's auto matmul
-config, DRAM in and out, and the pre-sweep fidelity (`decoders_optimizations` for `qkv`/`wo`). So a
-Blackhole run gets the op graph it had before this pass. `QWEN36_VISION_MM_TUNING=0` forces that path
-on any arch, which is how the fallback is tested (both meshes pass PCC on it).
+config, DRAM in and out, and the pre-sweep fidelity (`decoders_optimizations` for `qkv`/`wo`).
+CCL workers (`vision_ccl_tuning`) additionally require `device_name in ("N300", "T3K")`; Blackhole
+keeps the pre-sweep `(chunks_per_sync=10, num_workers_per_link=2)`. `QWEN36_VISION_MM_TUNING=0`
+and `QWEN36_VISION_CCL=0` force those fallbacks on any arch.
 
 All numbers below are `tt-perf-report` device time for the demo image (patch grid `1×86×128` =
 11008 patches → 12288 padded), which is what `demo/benchmark_vision.py` and `demo/vision_demo.py`
@@ -40,7 +41,8 @@ tower:
 | tuning gated off (`QWEN36_VISION_MM_TUNING=0`) | 4.55 | 37.50 | 6.57 | 48.61 ms | 1023.5 ms |
 | + matmul program configs | 4.37 | 34.19 | 6.62 | 45.18 ms | 934.0 ms |
 | + SDPA + redundant-op removal | 3.03 | 30.42 | 6.51 | 39.96 ms | 831.0 ms |
-| + tightened row padding, q/k 128/512 (**current**) | 2.83 | 26.74 | 6.65 | **36.22 ms** | **731.4 ms** |
+| + tightened row padding, q/k 128/512 | 2.83 | 26.74 | 6.65 | 36.22 ms | 731.4 ms |
+| + CCL `num_workers_per_link=4` (**current**) | 2.66 | 26.46 | 6.25 | **35.37 ms** | **723.3 ms** |
 
 **27B / T3K**
 
@@ -49,10 +51,15 @@ tower:
 | tuning gated off (`QWEN36_VISION_MM_TUNING=0`) | 7.23 | 35.01 | 4.39 | 46.63 ms | 956.9 ms |
 | + matmul program configs | 6.59 | 33.18 | 3.99 | 43.76 ms | 906.4 ms |
 | + SDPA + redundant-op removal | 5.17 | 31.48 | 3.74 | 40.38 ms | 858.7 ms |
-| + tightened row padding, q/k 128/512 (**current**) | 4.85 | 27.70 | 3.81 | **36.35 ms** | **756.6 ms** |
+| + tightened row padding, q/k 128/512 | 4.85 | 27.70 | 3.81 | 36.35 ms | 756.6 ms |
+| + CCL `num_workers_per_link=4` (**current**)† | 4.55 | 32.30 | 3.73 | **40.59 ms** | **880.4 ms** |
 
 `patch_embed` and the two `merger` matmuls are in the head/tail — they run once per image at any
 depth, which is why the head/block/tail split is the only honest way to project a 27-block tower.
+
+† The 27B CCL row is a **different session** from the 36.35 ms cell. Same-session `wpl=2` was
+41.55 ms, so the CCL win is **−1.0 ms**, not a regression vs 36.35. The 9B `wpl=2` arm this
+session was 36.52 ms, within noise of the previous campaign's 36.22. See [CCL workers](#ccl-workers).
 
 Two notes on reading these:
 
@@ -78,8 +85,8 @@ after all three passes:
 
 | | depth 1 | **depth 27 (real)** | depth 27, before the padding fix |
 | --- | --- | --- | --- |
-| 9B / N300 | 0.99977 | **0.99921** | 0.98540 |
-| 27B / T3K | 0.99965 | **0.99897** | 0.98696 |
+| 9B / N300 | 0.99977 | **0.99929** | 0.98540 |
+| 27B / T3K | 0.99965 | **0.99903** | 0.98696 |
 
 **An earlier version of this document attributed the ~0.985 to `bfloat8_b` weight error and called
 it pre-existing. That was wrong.** It was the sequence padding: SDPA ran `is_causal=False` with no
@@ -523,12 +530,39 @@ pass's stated rationale — "the winning q_chunk depends on the head count" — 
 happened to hold.** `exp_approx=True` measured 13.35 vs 13.43 ms on the 9B: 0.6%, inside noise, and
 it accumulates error across `SEQ/k_chunk` flash chunks over 27 blocks. Not taken.
 
+## CCL workers
+
+The five AllGather / ReduceScatter sites hardcoded `chunks_per_sync=10, num_workers_per_link=2`.
+Text prefill on this repo already moved N300 to `wpl=4` (−19% AllGather). Vision re-swept the same
+knob on its own shapes (`QWEN36_VISION_CCL=cps,wpl`, demo grid, `-k oneblock`). `num_links` stays 1
+on both N300 and T3K (`get_num_links` is hard-fatal above that).
+
+| | AllGather | ReduceScatter | depth-1 window |
+| --- | --- | --- | --- |
+| **9B / N300** `wpl=2` | 1.90+1.93+1.93 = 5.77 ms (5 cores) | 1.60+1.49+1.28 = 4.37 ms | 36.52 ms |
+| **9B / N300** `wpl=4` | 1.54+1.55+1.60 = **4.69 ms (−19%)** (9 cores) | 1.57+1.51+1.30 = 4.39 ms (wash) | **35.37 ms** |
+| **9B / N300** `wpl=8` | 4.66 ms (17 cores) | 4.40 ms | 35.46 ms (noise vs 4) |
+| **27B / T3K** `wpl=2` | 11.40+11.42 = 22.82 ms (6 cores) | 1.41 ms (merger) | 41.55 ms |
+| **27B / T3K** `wpl=4` | 10.92+10.97 = **21.89 ms (−4%)** (10 cores) | 1.37 ms | **40.59 ms** |
+
+Shipped default is `(10, 4)` from `vision_ccl_tuning()`, **only when** `is_wormhole_b0()` and
+`device_name` is `N300` or `T3K`. Every other SKU (Blackhole `P150` / `P150x4` included) keeps
+`(10, 2)`. `QWEN36_VISION_CCL=0` forces the untuned pair; `QWEN36_VISION_CCL=cps,wpl` overrides on
+any arch for sweeps. Wired into LN AllGather, `wo`/`mlp`/`merger` `tt_all_reduce`, and
+`all_reduce_replicated`. Full-depth PCC: 9B **0.99929**, 27B **0.99903**.
+`chunks_per_sync` left at 10 (text already measured it as a no-op). `wpl=8` matches 4 and spends
+more cores — not taken. Do **not** bf8 the 27B residual gather without a separate PCC decision.
+
+The 27B win is the fabric floor talking: 7 ring hops on 1 link, ~25 MB/gather. Bytes are the only
+remaining lever — pad `dim` 1152→1280 so fracture+reduce-scatter works, or a dtype drop.
+
 ## Remaining headroom, ranked
 
-1. **27B: `AllGather` alone is 50.4% of the depth-1 window** (18.3 ms/block against 3.7 ms of
-   matmuls). `all_reduce_replicated` all-gathers the full activation 8-ways on dim 0 because vision
-   `dim=1152` is 36 tiles and TP=8 cannot split that into whole tiles. Nothing else on that mesh is
-   within an order of magnitude — the matmul and SDPA work there is effectively finished.
+1. **27B: the two residual AllGathers are still ~54% of the depth-1 window** (21.9 ms of 40.6 ms;
+   3.7 ms of matmuls). `wpl=4` took 4% off them and that is the end of this knob. The structural
+   cost is `all_reduce_replicated`: vision `dim=1152` is 36 tiles and TP=8 cannot split that into
+   whole tiles, so each `wo`/`mlp_fc2` all-gathers the full activation 8-ways on dim 0. Pad `dim` to
+   `32×8=1280` to restore fracture+reduce-scatter, or gather in bf8 — neither is this pass.
 2. **9B: SDPA is still the top bucket at 34.7%** of the depth-1 window (12.6 ms/block, down from
    18.1 across three passes). What is left is genuinely structural: `head_dim` 72 tile-pads to 96,
    so a quarter of every QKᵀ and PV is arithmetic on zeros, and 72 is not a tile multiple so 96 is
@@ -555,7 +589,8 @@ it accumulates error across `SEQ/k_chunk` flash chunks over 27 blocks. Not taken
 ## Not covered
 
 - **Blackhole `P150` / `P150x4`**, the `README.md` deployment targets. No BH card was available, so
-  the tuning is **gated off** there (`vision_mm_tuned`) rather than shipped unmeasured: its 13×10
+  the tuning is **gated off** there (`vision_mm_tuned`, and `vision_ccl_tuning` only enables `(10, 4)`
+  on Wormhole `N300`/`T3K`) rather than shipped unmeasured: its 13×10
   grid lets `_grid_extent` pick `grid_x=12`, and the L1 budget's `_L1_PER_CORE`/`_L1_RESERVE` and the
   fidelity walk are Wormhole measurements. To lift the gate: `MESH_DEVICE=P150x4 pytest … -k sweep`,
   add a `"P150x4"` entry to `_VISION_MM_TUNING_BY_DEVICE` wherever the swept winner beats what the
