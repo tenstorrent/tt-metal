@@ -37,7 +37,8 @@ def test_view_buffer_unique_id_after_root_force_deallocated(device, expect_error
     reshaped_tensor = ttnn.experimental.view(input_tensor, (1, 32, 32))
     ttnn.deallocate(input_tensor, force=True)
 
-    # The view's own holder still reports allocated, but the root buffer is gone.
+    # The view's local holder still has allocated state, but its root buffer is gone.
+    assert not reshaped_tensor.is_allocated()
     assert reshaped_tensor.buffer_unique_id() is None
     with expect_error(ValueError, "mark_corruptible expected a tensor with a valid device buffer_unique_id"):
         ttnn.mark_corruptible(reshaped_tensor)
