@@ -405,3 +405,136 @@ def test_llama_sampling_inference(
     tt_ccl.close()
 
     assert passing, f"Llama Sampling output does not meet KL requirement {d_kl:.4f}/{kl_required} KL."
+
+# ---------------------------------------------------------------------------
+# Uniform-seed determinism: identical logits + identical seed must collapse to
+# one sampled token for every user.
+#
+# On-device sampling derives its per-token device seed slot-independently, so
+# equal seeds at equal positions are equal streams. Two seeding styles are
+# covered because the model uses both: a scalar seed (all cores) and a per-user
+# seed tensor (what SeedManager pushes each decode step).
+# ---------------------------------------------------------------------------
+
+UNIFORM_BATCH = 32
+
+UNIFORM_SEED = 42
+
+
+def _uniform_setup(mesh_device, dtype):
+    model_args = TtModelArgs(mesh_device, max_batch_size=UNIFORM_BATCH, max_seq_len=32, dummy_weights=True)
+
+    # One logits row broadcast to every user. Width is the full padded vocab;
+    # the mesh mapper shards it across the mesh, as the model does.
+    full_width = model_args.padded_vocab_size
+    row = torch.randn(1, 1, 1, full_width)
+    torch_input = row.expand(1, 1, UNIFORM_BATCH, full_width).contiguous()
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, None), mesh_shape=model_args.cluster_shape),
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    # The premise of the test: after quantisation and sharding, every user's
+    # row must still be bit-identical on device. Checked, not assumed.
+    shard0 = ttnn.to_torch(ttnn.get_device_tensors(tt_input)[0])[0, 0]
+    assert torch.equal(
+        shard0, shard0[0].unsqueeze(0).expand_as(shard0)
+    ), "input rows are not identical on device; test premise broken"
+
+    prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=model_args.n_layers)
+    mesh_device.set_sub_device_stall_group(
+        [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
+    )
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id)
+
+    # p=1.0 keeps the whole candidate set, so the draw is maximally RNG-sensitive.
+    tt_sampling = TTSampling(
+        args=model_args,
+        mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
+        k=torch.tensor([32] * UNIFORM_BATCH),
+        p=torch.tensor([1.0] * UNIFORM_BATCH),
+        temp=torch.tensor([1.0] * UNIFORM_BATCH),
+    )
+    return model_args, tt_input, tt_sampling
+
+
+def _read_tokens(tt_outputs):
+    # forward() returns (tokens, log_probs).
+    tokens_tensor = tt_outputs[0] if isinstance(tt_outputs, tuple) else tt_outputs
+    t = ttnn.to_torch(ttnn.get_device_tensors(tokens_tensor)[0])
+    return [int(v) for v in t[0, 0, :, :].reshape(-1)[:UNIFORM_BATCH].tolist()]
+
+
+def _assert_one_token(tokens):
+    distinct = sorted(set(tokens))
+    blocks = [tokens[i : i + 8] for i in range(0, UNIFORM_BATCH, 8)]
+    assert len(distinct) == 1, (
+        f"identical logits and identical seeds gave {len(distinct)} distinct tokens "
+        f"across {UNIFORM_BATCH} users\n"
+        f"  tokens={tokens}\n"
+        f"  per-8-user blocks={blocks}\n"
+        f"  distinct={distinct}"
+    )
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("dtype", (ttnn.bfloat8_b,))
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "trace_region_size": 31744,
+            "worker_l1_size": 1344544,
+            "fabric_config": True,
+        }
+    ],
+    indirect=True,
+)
+def test_llama_sampling_uniform_scalar_seed(dtype, mesh_device, reset_seeds):
+    model_args, tt_input, tt_sampling = _uniform_setup(mesh_device, dtype)
+    ttnn.manual_seed(UNIFORM_SEED, device=mesh_device, sub_core_grids=model_args.sub_core_grids)
+    tokens = _read_tokens(tt_sampling(tt_input))
+    logger.info(f"scalar-seed tokens: {tokens}")
+    _assert_one_token(tokens)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("dtype", (ttnn.bfloat8_b,))
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "trace_region_size": 31744,
+            "worker_l1_size": 1344544,
+            "fabric_config": True,
+        }
+    ],
+    indirect=True,
+)
+def test_llama_sampling_uniform_seed_tensor(dtype, mesh_device, reset_seeds):
+    model_args, tt_input, tt_sampling = _uniform_setup(mesh_device, dtype)
+    cores = tt_sampling._sampling_sub_core_grids
+    seeds = ttnn.from_torch(
+        torch.full((UNIFORM_BATCH,), UNIFORM_SEED).to(torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+    )
+    user_ids = ttnn.from_torch(
+        torch.arange(UNIFORM_BATCH).to(torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+    )
+    ttnn.manual_seed(seeds=seeds, user_ids=user_ids, sub_core_grids=cores)
+    tokens = _read_tokens(tt_sampling(tt_input))
+    logger.info(f"seed-tensor tokens: {tokens}")
+    _assert_one_token(tokens)
