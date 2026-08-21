@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <filesystem>
 #include <fstream>
@@ -27,6 +28,8 @@ constexpr std::string_view kT3k = "t3k.textproto";
 constexpr std::string_view kDualT3k = "dual_t3k.textproto";
 constexpr std::string_view k5Lb = "5_n300_lb_superpod.textproto";
 constexpr std::string_view kBhGalaxyMesh = "bh_galaxy_mesh.textproto";
+constexpr std::string_view kWhGalaxyMesh = "wh_galaxy_mesh.textproto";
+constexpr std::string_view k16Cluster = "16_n300_lb_cluster.textproto";
 
 std::string fixture(std::string_view name) { return std::string(kDescriptorDir) + std::string(name); }
 
@@ -43,6 +46,50 @@ std::string write_descriptor(const std::string& name, const std::string& content
     auto path = dir / (name + ".textproto");
     std::ofstream(path) << contents;
     return path.string();
+}
+
+// One graph template of BH galaxy nodes cabled as given on tray 1. Nodes are numbered from 1, and a
+// cable is (node, port, node, port).
+using Cable = std::array<uint32_t, 4>;
+std::string node_template(const std::string& name, size_t num_nodes, const std::vector<Cable>& cables) {
+    std::string out = fmt::format("graph_templates {{\n  key: \"{}\"\n  value {{\n", name);
+    for (size_t node = 1; node <= num_nodes; ++node) {
+        out += fmt::format(
+            "    children {{ name: \"node{}\" node_ref {{ node_descriptor: \"BH_GALAXY_REV_C\" }} }}\n", node);
+    }
+    out += "    internal_connections {\n      key: \"QSFP_DD\"\n      value {\n";
+    for (const auto& [node_a, port_a, node_b, port_b] : cables) {
+        out += fmt::format(
+            "        connections {{ port_a {{ path: [\"node{}\"] tray_id: 1 port_id: {} }} "
+            "port_b {{ path: [\"node{}\"] tray_id: 1 port_id: {} }} }}\n",
+            node_a,
+            port_a,
+            node_b,
+            port_b);
+    }
+    out += "      }\n    }\n  }\n}\n";
+    return out;
+}
+
+// Instantiates a template's nodes onto hosts 0..n-1, which is what makes a descriptor loadable.
+std::string root_instance_for(const std::string& name, size_t num_nodes) {
+    std::string out = fmt::format("root_instance {{\n  template_name: \"{}\"\n", name);
+    for (size_t node = 1; node <= num_nodes; ++node) {
+        out += fmt::format("  child_mappings {{ key: \"node{}\" value {{ host_id: {} }} }}\n", node, node - 1);
+    }
+    return out + "}\n";
+}
+
+// Several descriptors in one directory, which is what a library path stands for.
+std::string write_library(const std::vector<std::pair<std::string, std::string>>& descriptors) {
+    static std::atomic<int> sequence{0};
+    auto dir = std::filesystem::temp_directory_path() / ("cabling_library_" + std::to_string(sequence++));
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    for (const auto& [name, contents] : descriptors) {
+        std::ofstream(dir / (name + ".textproto")) << contents;
+    }
+    return dir.string();
 }
 
 // Two BH galaxy nodes with a single cable between them, on the given ports of tray 1.
@@ -501,6 +548,25 @@ TEST(CablingMatcherFsd, AConnectionOnATrayWithNoBoardIsRefused) {
     EXPECT_THROW(MatchGraph::from_fsd(write_fsd(fsd), "fsd"), std::exception);
 }
 
+TEST(CablingMatcherFsd, ABoardTypeSpelledByItsOtherEnumNameIsAccepted) {
+    // The board type enum spells a wormhole galaxy tray both UBB and UBB_WORMHOLE. Reflection
+    // surfaces only the first, and descriptors written elsewhere use the second, so reading one
+    // through reflection alone rejects a system it otherwise understands completely.
+    ASSERT_EQ(get_board_type_from_string("UBB_WORMHOLE"), get_board_type_from_string("UBB"));
+
+    fsd::proto::FactorySystemDescriptor fsd = generate_fsd(kWhGalaxyMesh, synthetic_hostnames(1));
+    size_t respelled = 0;
+    for (auto& location : *fsd.mutable_board_types()->mutable_board_locations()) {
+        if (get_board_type_from_string(location.board_type()) == BoardType::UBB_WORMHOLE) {
+            location.set_board_type("UBB_WORMHOLE");
+            ++respelled;
+        }
+    }
+    ASSERT_GT(respelled, 0u) << "a wormhole galaxy is built from UBB trays, so there is something to respell";
+
+    EXPECT_EQ(endpoints(MatchGraph::from_fsd(write_fsd(fsd), "fsd")), endpoints(load(kWhGalaxyMesh)));
+}
+
 TEST(CablingMatcherFsd, OneBuiltSystemIsComparedAgainstAnother) {
     // Both sides read from FSDs, which asks whether one system's wiring is reproduced in another.
     MatchGraph pattern = MatchGraph::from_fsd(write_fsd(generate_fsd(kT3k, {"node-a"})), "one node");
@@ -508,6 +574,145 @@ TEST(CablingMatcherFsd, OneBuiltSystemIsComparedAgainstAnother) {
     MatchResult result = match(pattern, target, strict());
     ASSERT_TRUE(result.matched);
     EXPECT_EQ(host_sets(result), (std::vector<std::vector<uint32_t>>{{0}, {1}}));
+}
+
+// ---- Scoring a library of schemes ----
+
+TEST(CablingMatcherLibrary, TheSchemesInsideAMatchedOneAreReportedAsCoveredByIt) {
+    // The cluster fixture is built from four superpods, so both fit, and saying the superpod fits in
+    // four places is only worth reading if it also says all four are inside the cluster.
+    std::string path = fixture(k16Cluster);
+    LibraryResult result = score_library({path}, load(k16Cluster), strict(), TierScope::Full);
+
+    ASSERT_EQ(result.entries.size(), 2u);
+    ASSERT_TRUE(result.skipped.empty()) << result.skipped.front().second;
+
+    EXPECT_EQ(result.entries[0].template_name, "n300_lb_cluster") << "the larger scheme is reported first";
+    EXPECT_EQ(result.findings[0].host_sets.size(), 1u);
+    EXPECT_TRUE(result.findings[0].covered_by.empty()) << "nothing in the library is bigger than the cluster";
+
+    EXPECT_EQ(result.entries[1].template_name, "n300_lb_superpod");
+    EXPECT_EQ(result.findings[1].host_sets.size(), 4u);
+    EXPECT_EQ(result.findings[1].covered_by, std::vector<size_t>{0});
+}
+
+TEST(CablingMatcherLibrary, ASchemeAlsoFoundOutsideTheLargerOneIsNotCoveredByIt) {
+    // The discriminating case for coverage. A three node chain, and a pair that sits inside it but
+    // also once more on hosts the chain does not reach. That second placement is exactly what a
+    // reader wants to know about, so the pair must be reported in its own right.
+    std::string library = write_library(
+        {{"schemes",
+          node_template("chain", 3, {{1, 1, 2, 1}, {2, 2, 3, 2}}) + node_template("pair", 2, {{1, 1, 2, 1}})}});
+    MatchGraph target = MatchGraph::load(
+        write_descriptor(
+            "target",
+            node_template("target", 5, {{1, 1, 2, 1}, {2, 2, 3, 2}, {4, 1, 5, 1}}) + root_instance_for("target", 5)),
+        "",
+        "",
+        TierScope::Full,
+        "chain and a spare pair");
+
+    LibraryResult result = score_library({library}, target, strict(), TierScope::Full);
+    ASSERT_EQ(result.entries.size(), 2u);
+    ASSERT_TRUE(result.skipped.empty()) << result.skipped.front().second;
+
+    EXPECT_EQ(result.entries[0].template_name, "chain");
+    EXPECT_EQ(result.findings[0].host_sets, (std::vector<std::vector<uint32_t>>{{0, 1, 2}}));
+
+    EXPECT_EQ(result.entries[1].template_name, "pair");
+    EXPECT_EQ(result.findings[1].host_sets, (std::vector<std::vector<uint32_t>>{{0, 1}, {3, 4}}));
+    EXPECT_TRUE(result.findings[1].covered_by.empty()) << "one of its two placements is outside the chain";
+}
+
+TEST(CablingMatcherLibrary, ASchemeOnlyFoundInsideTheLargerOneIsCoveredByIt) {
+    // The same library, with the spare pair taken away: now every placement of the pair is inside
+    // the chain, and repeating it as a finding of its own would add nothing.
+    std::string library = write_library(
+        {{"schemes",
+          node_template("chain", 3, {{1, 1, 2, 1}, {2, 2, 3, 2}}) + node_template("pair", 2, {{1, 1, 2, 1}})}});
+    MatchGraph target = MatchGraph::load(
+        write_descriptor(
+            "target", node_template("target", 3, {{1, 1, 2, 1}, {2, 2, 3, 2}}) + root_instance_for("target", 3)),
+        "",
+        "",
+        TierScope::Full,
+        "chain alone");
+
+    LibraryResult result = score_library({library}, target, strict(), TierScope::Full);
+    ASSERT_EQ(result.entries.size(), 2u);
+    EXPECT_EQ(result.findings[1].host_sets, (std::vector<std::vector<uint32_t>>{{0, 1}}));
+    EXPECT_EQ(result.findings[1].covered_by, std::vector<size_t>{0});
+}
+
+TEST(CablingMatcherLibrary, SameNamedTemplatesInDifferentFilesStayDistinct) {
+    // A library is a set of files, each free to name its templates as it likes, and both of these
+    // call theirs "pair". They are different schemes and the report has to tell them apart.
+    std::string library =
+        write_library({{"on_port_1", two_node_descriptor(1, 1)}, {"on_port_4", two_node_descriptor(4, 4)}});
+    MatchGraph target =
+        MatchGraph::load(write_descriptor("target", two_node_descriptor(1, 1)), "", "", TierScope::Full, "target");
+
+    LibraryResult result = score_library({library}, target, strict(), TierScope::Full);
+    ASSERT_EQ(result.entries.size(), 2u);
+    EXPECT_NE(result.entries[0].name, result.entries[1].name);
+
+    // Same size, so the order between them is by name, and only the one cabled like the target fits.
+    size_t on_port_1 = result.entries[0].name.find("on_port_1") != std::string::npos ? 0 : 1;
+    EXPECT_FALSE(result.findings[on_port_1].host_sets.empty());
+    EXPECT_TRUE(result.findings[1 - on_port_1].host_sets.empty());
+}
+
+TEST(CablingMatcherLibrary, EqualSizedSchemesDoNotCoverEachOther) {
+    // Both fit the same two hosts under relaxed ports, but neither contains the other: they are
+    // alternative descriptions of that wiring, and calling one covered would hide it.
+    std::string library =
+        write_library({{"on_port_1", two_node_descriptor(1, 1)}, {"on_port_4", two_node_descriptor(4, 4)}});
+    MatchOptions options = strict();
+    options.port_identity = PortIdentity::Relaxed;
+
+    LibraryResult result = score_library(
+        {library},
+        MatchGraph::load(write_descriptor("target", two_node_descriptor(1, 1)), "", "", TierScope::Full, "target"),
+        options,
+        TierScope::Full);
+    ASSERT_EQ(result.entries.size(), 2u);
+    ASSERT_FALSE(result.findings[0].host_sets.empty());
+    ASSERT_FALSE(result.findings[1].host_sets.empty());
+    EXPECT_EQ(result.findings[0].host_sets, result.findings[1].host_sets);
+    EXPECT_TRUE(result.findings[1].covered_by.empty());
+}
+
+TEST(CablingMatcherLibrary, ASchemeThatDoesNotFitSaysWhereItGotStuck) {
+    LibraryResult result = score_library({fixture(kDualT3k)}, load(kT3k), strict(), TierScope::Full);
+    ASSERT_EQ(result.entries.size(), 1u);
+    EXPECT_TRUE(result.findings[0].host_sets.empty());
+    EXPECT_FALSE(result.findings[0].stuck_at.empty());
+    EXPECT_FALSE(result.findings[0].inconclusive);
+
+    std::string report = format_library_result(load(kT3k), result, strict());
+    EXPECT_NE(report.find("NOTHING IN THE LIBRARY FITS"), std::string::npos);
+    EXPECT_NE(report.find("Does not fit"), std::string::npos);
+}
+
+TEST(CablingMatcherLibrary, ASchemeWithNoCablesOfItsOwnIsSkippedRatherThanMatched) {
+    // A single-node template declares no cables itself, so at own-level scope there is nothing to
+    // look for and any host would satisfy it. That is not an answer worth reporting as a match.
+    LibraryResult result = score_library({fixture(kWhGalaxyMesh)}, load(kWhGalaxyMesh), strict(), TierScope::OwnLevel);
+    EXPECT_TRUE(result.entries.empty());
+    ASSERT_FALSE(result.skipped.empty());
+    EXPECT_NE(result.skipped.front().second.find("no cables"), std::string::npos) << result.skipped.front().second;
+}
+
+TEST(CablingMatcherLibrary, HostsBelongingToNoKnownSchemeAreCalledOut) {
+    // Half of a two-superpod target is wired as a known superpod and half is not. A report that only
+    // listed what matched would leave the other half unaccounted for.
+    LibraryResult result = score_library({fixture(k5Lb)}, load(k16Cluster), strict(), TierScope::Full);
+    ASSERT_EQ(result.entries.size(), 1u);
+    EXPECT_TRUE(result.findings[0].host_sets.empty()) << "the 5lb star is not how the cluster wires its superpods";
+
+    std::string report = format_library_result(load(k16Cluster), result, strict());
+    EXPECT_EQ(report.find("Largest scheme each host belongs to"), std::string::npos)
+        << "with nothing matched there is no coverage to summarise";
 }
 
 // ---- Search shortcuts ----

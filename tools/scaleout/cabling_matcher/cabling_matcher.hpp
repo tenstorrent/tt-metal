@@ -200,6 +200,48 @@ size_t count_hosts(const cabling_generator::proto::ClusterDescriptor& descriptor
 // MatchGraph::load's template_name.
 std::vector<std::string> list_graph_templates(const std::string& cabling_path);
 
+// ---- Scoring a library of schemes against one target ----
+
+// One scheme available to be looked for: a graph template, named by the descriptor defining it.
+struct LibraryEntry {
+    std::string source;
+    std::string template_name;
+    std::string name;  // what the report calls it, e.g. "sc36 :: bh_glx_pod"
+    size_t num_hosts = 0;
+    size_t num_cables = 0;
+};
+
+struct LibraryFinding {
+    // Target host sets the entry fits, each sorted. Empty when it does not fit.
+    std::vector<std::vector<uint32_t>> host_sets;
+    bool stopped_at_limit = false;
+    bool inconclusive = false;
+    // Larger entries that fit over every host set this one does. Wherever a pod is found inside a
+    // superpod that was also found, the pod is not a separate answer, so it is reported as covered
+    // rather than listed again.
+    std::vector<size_t> covered_by;
+    // One line saying where the search got stuck, when it did not fit.
+    std::string stuck_at;
+};
+
+struct LibraryResult {
+    // Largest scheme first, which is the order everything else refers to by index.
+    std::vector<LibraryEntry> entries;
+    std::vector<LibraryFinding> findings;  // parallel to entries
+    // Schemes that could not be asked about at all, with the reason: a template declaring no cables
+    // of its own, or one whose cables leave it in pieces.
+    std::vector<std::pair<std::string, std::string>> skipped;
+};
+
+// Search the target for every scheme in a library. paths are descriptor files, or directories whose
+// .textproto files are each read on their own; every graph template of every one of them is a
+// scheme to look for. Note that under --max-matches the host sets are the ones found rather than all
+// there are, which makes the coverage between entries provisional in the same way.
+LibraryResult score_library(
+    const std::vector<std::string>& paths, const MatchGraph& target, const MatchOptions& options, TierScope tier);
+
+std::string format_library_result(const MatchGraph& target, const LibraryResult& result, const MatchOptions& options);
+
 // ASIC locations a port can reach. More than one means the port is read as reaching either of them;
 // see PortIdentity::Chip.
 const std::set<uint32_t>& asics_for_port(BoardType board_type, PortType port_type, PortId port_id);
