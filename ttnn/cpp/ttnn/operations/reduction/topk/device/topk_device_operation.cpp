@@ -23,20 +23,12 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 namespace {
-// Resolves the data type that will be used for the output index tensor: the preallocated indices dtype when
-// provided, otherwise the auto-selected width (UINT16 when the reduced dimension fits in 16 bits, else UINT32).
 DataType resolve_index_dtype(
     const TopKDeviceOperation::operation_attributes_t& args, const TopKDeviceOperation::tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_outputs.has_value()) {
         return std::get<1>(tensor_args.preallocated_outputs.value()).dtype();
     }
-    const auto input_shape = tensor_args.input.padded_shape();
-    // fp32 input sorts with fp32 dest accumulation, which loads indices as INT32, so it requires
-    // 32-bit indices regardless of dimension size. This must agree with compute_output_specs, or the
-    // index CB format and the single-core cost model describe UInt16 while the output tensor is UINT32.
-    const bool uint16_indices = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max()) &&
-                                (tensor_args.input.dtype() != DataType::FLOAT32);
-    return uint16_indices ? DataType::UINT16 : DataType::UINT32;
+    return required_index_dtype(tensor_args.input, args.dim);
 }
 
 // Maps the resolved index dtype onto the circular-buffer data format used by the sort datapath. 16-bit indices
@@ -215,6 +207,17 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             !(input_tensor_dtype == DataType::FLOAT32 && indices_tensor_dtype == DataType::UINT16),
             "Optional indices tensor must be UINT32 when input tensor is FLOAT32, got UINT16");
+        // Must match the index CB width (preallocated output dtype if given, else required_index_dtype).
+        const DataType resolved = resolve_index_dtype(args, tensor_args);
+        const bool resolved_uint16 = (resolved == DataType::UINT16);
+        TT_FATAL(
+            resolved_uint16 ? indices_tensor_dtype == DataType::UINT16
+                            : (indices_tensor_dtype == DataType::UINT32 || indices_tensor_dtype == DataType::INT32),
+            "Optional indices tensor dtype {} does not match the {}-bit index width TopK resolved for this call. "
+            "Pass a {} indices tensor.",
+            indices_tensor_dtype,
+            resolved_uint16 ? 16 : 32,
+            resolved_uint16 ? "UINT16" : "UINT32 or INT32");
         // The reader kernels page a caller-supplied indices tensor with the input's page index
         // (page_id = i * Wt + j), so the two must describe the same tile grid: same padded width
         // and same total number of tiles. A narrower indices tensor is read past the end of its
@@ -249,6 +252,12 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             "Preallocated output tensor dtype must match input tensor dtype. Got output: {}, input: {}",
             output_tensor0_dtype,
             input_tensor_dtype);
+        // Wider than required is allowed (factory sizes CBs from the output dtype). Narrower wraps.
+        TT_FATAL(
+            !(required_index_dtype(input_tensor, args.dim) == DataType::UINT32 &&
+              output_tensor1_dtype == DataType::UINT16),
+            "Preallocated indices tensor must be UINT32 or INT32 when the reduced dim does not fit in 16 bits or "
+            "the input is FLOAT32, got UINT16");
     }
 
     ReduceOpDeviceGridValidationOptions topk_grid_opts;
@@ -329,19 +338,11 @@ TopKDeviceOperation::spec_return_value_t TopKDeviceOperation::compute_output_spe
     auto output_shape = input_tensor.logical_shape();
     output_shape[-1] = args.k;  // Set last dimension to K (number of top elements)
 
-    ttnn::Shape input_shape = input_tensor.padded_shape();
-    // Choose index data type based on dimension size (16-bit vs 32-bit indices).
-    // fp32 input sorts with fp32 dest accumulation, which loads indices as INT32, so it
-    // requires 32-bit (UINT32) indices regardless of dimension size.
-    const bool uint16_output = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max()) &&
-                               (input_tensor.dtype() != DataType::FLOAT32);  // 65535
-
     // Create values tensor specification (same data type as input)
     const auto values_spec = tt::tt_metal::TensorSpec(
         output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), args.output_memory_config));
 
-    // Create indices tensor specification (integer type based on dimension size)
-    const DataType index_dtype = uint16_output ? DataType::UINT16 : DataType::UINT32;
+    const DataType index_dtype = required_index_dtype(input_tensor, args.dim);
     const auto index_spec = tt::tt_metal::TensorSpec(
         output_shape, TensorLayout(index_dtype, PageConfig(Layout::TILE), args.output_memory_config));
 

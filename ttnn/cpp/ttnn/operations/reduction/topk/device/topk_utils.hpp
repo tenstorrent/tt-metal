@@ -11,6 +11,10 @@
 #include <optional>
 
 namespace ttnn::prim {
+
+// UINT16 when the padded reduced dim fits in 16 bits and the input is not FLOAT32; otherwise UINT32.
+tt::tt_metal::DataType required_index_dtype(const ttnn::Tensor& input_tensor, int8_t dim);
+
 uint32_t largest_power_of_two(uint32_t x);
 
 struct TopKCoreConfig {

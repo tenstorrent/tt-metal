@@ -4,7 +4,15 @@
 
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
+#include <limits>
+
 namespace ttnn::prim {
+
+tt::tt_metal::DataType required_index_dtype(const ttnn::Tensor& input_tensor, int8_t dim) {
+    const bool uint16_indices = (input_tensor.padded_shape()[dim] <= std::numeric_limits<uint16_t>::max()) &&
+                                (input_tensor.dtype() != tt::tt_metal::DataType::FLOAT32);
+    return uint16_indices ? tt::tt_metal::DataType::UINT16 : tt::tt_metal::DataType::UINT32;
+}
 
 /**
  * @brief Finds the largest power of two less than or equal to input value
