@@ -28,18 +28,6 @@ simulator. Wormhole results are from a real chip. That limit is discussed under
 
 ## Background: the queue and its promise
 
-A Tenstorrent chip is a grid of cores. Each core has its own small, fast local memory (SRAM) and
-several small processors. Two kinds matter here:
-
-- **Data movement processors** are small RISC-V cores. They copy bytes between the chip's large shared
-  memory (DRAM) and the core's SRAM over an on-chip network, the NoC. One such copy is a **transfer**.
-- **Compute processors** do the arithmetic. They are not general-purpose cores. Dedicated hardware
-  called the unpacker feeds data from SRAM into the math unit, and a packer writes results back out.
-
-A **kernel** is a small program running on one of these processors. Metal 2.0 is the low-level API for
-writing them. ("Metal 2.0" is the API version and has nothing to do with Quasar being the second
-hardware generation, which the code calls **gen2**. The two twos are unrelated.)
-
 A **dataflow buffer** hands data from one kernel to another. It is a ring of a fixed number of
 **entries**, and the two kernels run at the same time and coordinate through four calls
 ([dataflow_buffer.h:180-183](tt_metal/hw/inc/api/dataflow/dataflow_buffer.h#L180-L183)):
@@ -347,19 +335,11 @@ the operation.
 
 ## What to do about it meanwhile
 
-There is no fix to apply in an operation, and the embedding port deliberately did not work around it.
-The [uplift report](ttnn/cpp/ttnn/operations/embedding/QUASAR_UPLIFT_REPORT.md) explains that decision. If you are writing a kernel
-and need to stay clear of this, either of these is enough, because the defect needs both conditions:
-
-- Perform exactly one transfer per announced entry, or fewer.
-- Have a compute kernel drain the ring rather than a data movement kernel.
-
-Switching implicit sync off is **not** a workaround. It was measured and it does not help.
 
 ## Appendix: running the tests
 
 Both files are in `tests/tt_metal/tt_metal/api/metal2_host_api/`. Build them into the `unit_tests_api`
-binary with `./build_metal.sh -e --enable-fake-kernels-target` from the repository root.
+binary with `./build_metal.sh --build-tests` from the repository root.
 
 The tests are written with gtest, the C++ test framework, where each file's tests belong to a named
 suite and `--gtest_filter` selects which ones to run.
