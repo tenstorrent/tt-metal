@@ -879,7 +879,13 @@ def warmup_gemma4_batched_prefill_traces(
     # ``GEMMA4_WARMUP_CHUNK_SPANS``: unset/``0`` off; ``1`` first chunk boundary
     # (2 x user_cap), the one every chunked batched prefill crosses; ``all``
     # every reachable span, for a server that does prefill full batches.
-    chunk_spans_mode = os.environ.get("GEMMA4_WARMUP_CHUNK_SPANS", "0").lower()
+    # 31B batch-32 defaults to ``all`` so measured prefill replays row-span traces
+    # instead of cold-capturing them in-band (WH T3K L1 clash at span ≥16).
+    chunk_spans_env = os.environ.get("GEMMA4_WARMUP_CHUNK_SPANS")
+    auto_chunk_spans = (
+        chunk_spans_env is None and getattr(generator.model[0], "hidden_size", 0) == 5376 and max_batch_size >= 32
+    )
+    chunk_spans_mode = ("all" if auto_chunk_spans else (chunk_spans_env or "0")).lower()
     if chunk_spans_mode not in ("0", "false", "no"):
         reachable = [span for span in SUPPORTED_PREFILL_BATCH_SIZES if user_cap < span <= max_batch_size]
         if chunk_spans_mode not in ("all", "every"):
