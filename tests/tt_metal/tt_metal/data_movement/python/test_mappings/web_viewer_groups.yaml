@@ -72,12 +72,6 @@ groups:
         a: >
           It measures the NoC read bandwidth and latency when a single Tensix core
           issues async_read calls to pull data from another Tensix core's L1 memory.
-      - q: How does One to One performance compare to One from One?
-        a: >
-          Writes (One to One) are fire-and-forget from the sender's perspective — the sender
-          doesn't stall waiting for data to arrive. Reads (One from One) require a round trip.
-          This means writes can sometimes show higher apparent throughput, though the NoC
-          link bandwidth is the same in both directions.
 
   one_to_one:
     name: One to One
@@ -88,12 +82,6 @@ groups:
         a: >
           It measures NoC write bandwidth and latency when a single Tensix core uses
           async_write to push data to another Tensix core's L1 memory.
-      - q: How does One to One performance compare to One from One?
-        a: >
-          Writes (One to One) are fire-and-forget from the sender's perspective — the sender
-          doesn't stall waiting for data to arrive. Reads (One from One) require a round trip.
-          This means writes can sometimes show higher apparent throughput, though the NoC
-          link bandwidth is the same in both directions.
 
   one_from_all:
     name: One from All
@@ -117,19 +105,14 @@ groups:
           Unicast One to All sends separate noc_async_write transactions to each
           destination core individually. Multicast One to All uses a single multicast
           write for each transaction, which writes to all destination cores simultaneously.
-      - q: Why does multicast perform worse than unicast?
-        a: >
       - q: What is loopback?
         a: >
           Loopback is when a tensix core writes to its own L1 through the NoC.
-      - q: What is the difference between NoC Index 0 and 1?
-        a: >
       - q: What does "Multicast Linked" mean?
         a: >
-          Multicast linked mode sends data to a rectangular grid of cores using a single
-          multicast transaction where each receiving core also updates a linked-list
-          semaphore. This is the pattern used for tilized data distribution in matmul
-          and other collective operations.
+          Linked means that writes are sent with the linked flag set to true, allowing the NoC to
+          reserve the multicast path once on the core grid instead of on every transaction and
+          reuse it, improving performance. On the last transaction, the linked flag must be unset.
       - q: What is the multicast scheme test?
         a: >
           This test compares different multicast schemes (location of sender core relative to a destination grid)
@@ -170,11 +153,6 @@ groups:
           Bandwidth is the median measured throughput of all kernels.
           Combined bandwidth is the "total throughput of the entire system", calculated as the total number of bytes transferred
           divided by the total number of cycles.
-      - q: Why is all-to-all bandwidth lower than one-to-one?
-        a: >
-          Every router in the mesh is simultaneously sourcing and sinking traffic,
-          so links are shared across many flows. Bandwidth per flow drops because
-          the aggregate demand exceeds the bisection bandwidth of the mesh.
 
   all_from_all:
     name: All from All
@@ -199,12 +177,6 @@ groups:
           Bandwidth is the median measured throughput of all kernels.
           Combined bandwidth is the "total throughput of the entire system", calculated as the total number of bytes transferred
           divided by the total number of cycles.
-      - q: How does All from All differ from All to All?
-        a: >
-          All from All uses async_read (each core pulls from all others), while
-          All to All uses async_write (each core pushes to all others). Reads
-          require a request-response round trip, so All from All typically shows
-          higher latency per transaction than All to All.
 
   multi_interleaved:
     name: Multi Interleaved
@@ -287,20 +259,21 @@ groups:
     faq:
       - q: What does the DRAM Neighbour test measure?
         a: >
-          It measures DRAM read bandwidth as a function of the physical distance between
-          the reading core and the target DRAM bank. "Closest neighbour" means the core
-          reads from the nearest DRAM channel, minimizing NoC hops.
+          This test suite implements tests that measure the functionality and performance of
+          Tensix cores reading from DRAM banks using optimal core-to-DRAM mappings.
       - q: What do the page sweep and bank sweep variants show?
         a: >
-          The page sweep varies the number of DRAM pages read per transaction to find
-          the optimal batch size. The bank sweep varies which DRAM banks are targeted
-          to reveal whether spreading reads across banks improves throughput through
-          bank-level parallelism.
-      - q: What are the "one hop" and "loop back" distance variants?
+          The page sweep varies the number of pages read from each DRAM bank, while
+          the bank sweep varies the number of DRAM banks used in the test.
+      - q: What is the "Single Row" variant?
         a: >
-          "One hop" places the reader one NoC hop away from the DRAM controller.
-          "Loop back" places the reader as far as possible, routing traffic across the
-          full chip. Comparing them shows the NoC distance penalty for DRAM access.
+          Tests single-row mapping where all cores in a row access the same DRAM bank. Sweeps through different page sizes to test contention patterns.
+      - q: What are the "one hop" and "loop back" variants?
+        a: >
+          One Hop starts from the single-bank ideal mapping and adds a second core one column to the right (`x+1`, wrapping) that reads from the same DRAM bank.
+          Sweeps pages to measure bandwidth when a non-adjacent core shares a bank with its ideal neighbour.
+          Loop Back starts from the single-bank ideal mapping and adds a second core one column to the left (`x-1`, with wrap-around) that reads from the same DRAM bank.
+          Sweeps pages to measure the loop-back traffic pattern where the added core is on the opposite side of the NOC path from the ideal core.
       - q: What's the difference between bandwidth and combined bandwidth?
         a: >
           For tests running multiple kernels on master cores, we have the option of reporting bandwidth or combined bandwidth.
