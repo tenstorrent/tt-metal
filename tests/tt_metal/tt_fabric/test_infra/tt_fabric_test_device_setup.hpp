@@ -35,6 +35,11 @@ using FabricMuxConfig = tt::tt_fabric::FabricMuxConfig;
 
 namespace tt::tt_fabric::fabric_tests {
 
+// Ceiling on the copies a multicast root injects: the codec names at most one output edge each of
+// E/W/N/S/Z. Kernels clamp their own copy to the connection array size; builds without Z links size
+// for four and also never produce a fifth direction.
+inline constexpr std::size_t MAX_MCAST_INJECTIONS = 5;
+
 // ConnectionKey identifies a unique physical fabric connection from this src device.
 // (direction, link_idx) maps 1:1 to a specific eth channel (eth_chan); we store eth_chan
 // directly to make the dedup intent explicit. The first-hop neighbor through this link is
@@ -224,6 +229,7 @@ public:
         const std::vector<uint32_t>& rt_args,
         const std::vector<uint32_t>& local_args,
         uint32_t local_args_address,
+        uint32_t local_args_capacity_bytes,
         const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
         tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default) const;
     void collect_results();
@@ -244,15 +250,18 @@ public:
     void add_config(TestTrafficSenderConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
-    const std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>>& get_configs() const { return configs_; }
+    const std::vector<std::pair<TestTrafficSenderConfig, std::vector<ConnectionKey>>>& get_configs() const {
+        return configs_;
+    }
 
     // Accessors for progress monitoring
     tt::tt_metal::CoreCoord get_core() const { return logical_core_; }
     uint64_t get_total_packets() const;  // Defined out-of-line
 
-    // stores traffic config and the corresponding fabric connection key
+    // stores traffic config and the fabric connection keys it injects into. All but express multicast
+    // have exactly one; a multi-output multicast root has one per canonical output, in encoder order.
     // Managed by TestDevice::connection_manager_
-    std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>> configs_;
+    std::vector<std::pair<TestTrafficSenderConfig, std::vector<ConnectionKey>>> configs_;
 };
 
 struct TestReceiver : TestWorker {
@@ -272,9 +281,8 @@ public:
     void add_config(TestTrafficSyncConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
-    // stores traffic config and the corresponding fabric connection key
-    // Managed by TestDevice::sync_connection_manager_
-    std::vector<std::pair<TestTrafficSyncConfig, ConnectionKey>> configs_;
+    // stores traffic config and the fabric connection keys
+    std::vector<std::pair<TestTrafficSyncConfig, std::vector<ConnectionKey>>> configs_;
 };
 
 struct TestMux : TestWorker {
@@ -421,14 +429,16 @@ private:
     // and the first-hop neighbor (used as the dst when calling the fabric API later) are
     // derived internally from (src, direction, link_idx) — the caller's final dst is not
     // part of the dedup key, so multiple traffic configs with different final dsts that
-    // share the same physical link collapse to one ConnectionKey.
+    // share the same physical link collapse to one ConnectionKey. final_dst narrows the
+    // candidate channels when a direction reaches out to more than one peer chip
     ConnectionKey register_fabric_connection(
         tt::tt_metal::CoreCoord logical_core,
         TestWorkerType worker_type,
         FabricConnectionManager& connection_mgr,
         RoutingDirection outgoing_direction,
         uint32_t link_idx,
-        uint8_t vc_id = 0);
+        uint8_t vc_id = 0,
+        std::optional<FabricNodeId> final_dst = std::nullopt);
 
     MeshCoordinate coord_;
     std::shared_ptr<IDeviceInfoProvider> device_info_provider_;

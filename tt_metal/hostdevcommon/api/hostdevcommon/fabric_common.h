@@ -44,6 +44,11 @@ enum eth_chan_directions : std::uint8_t {
     COUNT = 5,
 };
 
+// Marks a consumer absent from the current configuration: the host writes it into the named CT args,
+// and the kernel skips initialising any entry reading it. Out of the 0..31 register range, so it can
+// never collide with a real register.
+static constexpr uint32_t k_unused_stream_id = 32;
+
 template <size_t ArraySize>
 struct routing_table_t {
     chan_id_t dest_entry[ArraySize];
@@ -182,15 +187,15 @@ struct RoutingFieldsConstants {
 
     // 2D Constants (Mesh)
     struct Mesh {
-        static constexpr uint32_t FIELD_WIDTH = 8;    // 8 bits per hop command
-        static constexpr uint32_t FIELD_MASK = 0b1111;  // 4-bit mask
+        static constexpr uint32_t FIELD_WIDTH = 8;       // 8 bits per hop command
+        static constexpr uint32_t FIELD_MASK = 0b1111;   // 4-bit mask
 
-        // Basic direction commands (4-bit encoding for each direction)
-        static constexpr uint8_t NOOP = 0b0000;
-        static constexpr uint8_t FORWARD_EAST = 0b0001;
-        static constexpr uint8_t FORWARD_WEST = 0b0010;
-        static constexpr uint8_t FORWARD_NORTH = 0b0100;
-        static constexpr uint8_t FORWARD_SOUTH = 0b1000;
+        // Basic direction commands (bit-per-direction encoding, matching eth_chan_directions)
+        static constexpr uint8_t NOOP = 0b00000;
+        static constexpr uint8_t FORWARD_EAST = 0b00001;
+        static constexpr uint8_t FORWARD_WEST = 0b00010;
+        static constexpr uint8_t FORWARD_NORTH = 0b00100;
+        static constexpr uint8_t FORWARD_SOUTH = 0b01000;
 
         // Multicast combinations (OR of direction bits for write-and-forward)
         static constexpr uint8_t WRITE_AND_FORWARD_EW = FORWARD_EAST | FORWARD_WEST;    // 0b0011
@@ -206,6 +211,522 @@ struct RoutingFieldsConstants {
         static constexpr uint8_t WRITE_AND_FORWARD_NSEW = WRITE_AND_FORWARD_NS | WRITE_AND_FORWARD_EW;  // 0b1111
     };
 };
+
+// ============================================================================
+// Indexed 2D route codec (destination-indexed ABI)
+// ============================================================================
+// L1 holds destination-major, per-axis 2-bit action vectors (y_vectors[dst_y][cur_y],
+// x_vectors[dst_x][cur_x]); packets carry the widened form, one action byte per logical coordinate,
+// with route_buffer_y[Y] immediately followed by route_buffer_x[X]. The control plane generates the
+// 2-bit tables, workers widen them into packets at setup, and the router decodes an action byte using
+// its own coordinate.
+struct IndexedMeshRoutingFields {
+    // ---- Packet action byte -------------------------------------------------
+    // One-hot per output port; bits 0..4 intentionally match eth_chan_directions so the action bit
+    // for a direction is (1 << direction). Bit 5 requests local delivery at the current chip.
+    // Bits 6..7 are reserved and must be zero (kernel fail-stops otherwise).
+    static constexpr uint8_t ACTION_EAST = 0b00000001;
+    static constexpr uint8_t ACTION_WEST = 0b00000010;
+    static constexpr uint8_t ACTION_NORTH = 0b00000100;
+    static constexpr uint8_t ACTION_SOUTH = 0b00001000;
+    static constexpr uint8_t ACTION_Z = 0b00010000;
+    static constexpr uint8_t ACTION_LOCAL_DELIVER = 0b00100000;
+    static constexpr uint8_t ACTION_ETH_MASK = 0b00011111;
+    static constexpr uint8_t ACTION_VALID_MASK = ACTION_ETH_MASK | ACTION_LOCAL_DELIVER;
+    static constexpr uint8_t ACTION_RESERVED_MASK = 0b11000000;
+
+    static constexpr uint8_t action_bit(eth_chan_directions dir) { return static_cast<uint8_t>(1u << dir); }
+
+    // ---- 2-bit L1 vector encodings ------------------------------------------
+    // Y axis: STOP means the destination Y is reached (or the row is not traversed); Z is the
+    // intra-mesh express (skip) link.
+    static constexpr uint8_t Y2_STOP = 0;
+    static constexpr uint8_t Y2_NORTH = 1;
+    static constexpr uint8_t Y2_SOUTH = 2;
+    static constexpr uint8_t Y2_Z = 3;
+    // X axis: encoding 3 has no meaning on X (no express dimension) and is reserved-invalid.
+    static constexpr uint8_t X2_STOP = 0;
+    static constexpr uint8_t X2_EAST = 1;
+    static constexpr uint8_t X2_WEST = 2;
+    static constexpr uint8_t X2_INVALID = 3;
+
+    // ---- Packed-row helpers ---------------------------------------------------
+    // Rows hold ceil(axis/4) bytes, 4 entries per byte, entry 0 at the LSBs of byte 0.
+    static constexpr uint32_t BITS_PER_ACTION = 2;
+    static constexpr uint32_t ACTIONS_PER_BYTE = 4;
+
+    static constexpr uint32_t row_bytes(uint32_t axis_size) {
+        return (axis_size + ACTIONS_PER_BYTE - 1) / ACTIONS_PER_BYTE;
+    }
+    // Destination-major table footprint: one packed row per destination coordinate.
+    static constexpr uint32_t table_bytes(uint32_t axis_size) { return axis_size * row_bytes(axis_size); }
+
+    static inline uint8_t get_action_2bit(const std::uint8_t* packed_row, uint32_t index) {
+        const uint32_t byte_index = index / ACTIONS_PER_BYTE;
+        const uint32_t shift = (index % ACTIONS_PER_BYTE) * BITS_PER_ACTION;
+        return static_cast<uint8_t>((packed_row[byte_index] >> shift) & 0b11);
+    }
+    static inline void set_action_2bit(std::uint8_t* packed_row, uint32_t index, uint8_t action_2bit) {
+        const uint32_t byte_index = index / ACTIONS_PER_BYTE;
+        const uint32_t shift = (index % ACTIONS_PER_BYTE) * BITS_PER_ACTION;
+        packed_row[byte_index] =
+            static_cast<std::uint8_t>((packed_row[byte_index] & ~(0b11u << shift)) | ((action_2bit & 0b11u) << shift));
+    }
+
+    // ---- Widen (2-bit -> one-hot action byte) -----------------------------------
+    // STOP and X2_INVALID widen to 0; the caller pokes ACTION_LOCAL_DELIVER at its own coordinate
+    // afterwards.
+    static constexpr uint8_t widen_y(uint8_t action_2bit) {
+        switch (action_2bit) {
+            case Y2_NORTH: return ACTION_NORTH;
+            case Y2_SOUTH: return ACTION_SOUTH;
+            case Y2_Z: return ACTION_Z;
+            default: return 0;
+        }
+    }
+    static constexpr uint8_t widen_x(uint8_t action_2bit) {
+        switch (action_2bit) {
+            case X2_EAST: return ACTION_EAST;
+            case X2_WEST: return ACTION_WEST;
+            default: return 0;
+        }
+    }
+
+    // ---- L1 region sizing -------------------------------------------------------
+    // Bound [Y,X] = [64,4]: 1024 B of Y table plus 4 B of X table, reusing the legacy 1024 B 2D union
+    // slot plus 4 B of trailing padding. Live tables are sized to the mesh shape via table_bytes().
+    static constexpr uint32_t MAX_INDEXED_MESH_Y = 64;
+    static constexpr uint32_t MAX_INDEXED_MESH_X = 4;
+    // Expanded inline because Clang does not treat in-class constexpr member functions as defined for
+    // constant evaluation within the class body, so table_bytes() cannot be called here.
+    static constexpr uint32_t INDEXED_VECTOR_TABLE_BYTES =
+        MAX_INDEXED_MESH_Y * ((MAX_INDEXED_MESH_Y + ACTIONS_PER_BYTE - 1) / ACTIONS_PER_BYTE) +
+        MAX_INDEXED_MESH_X * ((MAX_INDEXED_MESH_X + ACTIONS_PER_BYTE - 1) / ACTIONS_PER_BYTE);  // 1028
+
+    // ---- Pack (host-side table generation) --------------------------------------
+    // The Y region occupies [0, table_bytes(y_size)) and the X region follows it, both as
+    // destination-major packed rows.
+    static constexpr uint32_t vectors_region_bytes(uint32_t y_size, uint32_t x_size) {
+        return table_bytes(y_size) + table_bytes(x_size);
+    }
+
+    // ---- Multicast reverse-tree region -------------------------------------------
+    // Follows the destination-major vectors. Unlike the vectors, which are mesh-identical, each chip
+    // carries only the trees for its own row and column, so the contents differ per chip.
+    //
+    // The offset is derived from the mesh shape on both sides, because the vectors are packed to the
+    // live shape and a fixed offset would either waste the [64,4] bound or collide.
+    static constexpr uint32_t MCAST_TREE_EDGE_BYTES = 2;
+    // An arborescence over n rows has n-1 edges; a single-row axis has none.
+    static constexpr uint32_t mcast_tree_edge_count(uint32_t axis_size) { return axis_size > 1 ? axis_size - 1 : 0; }
+    static constexpr uint32_t mcast_tree_region_bytes(uint32_t y_size, uint32_t x_size) {
+        return MCAST_TREE_EDGE_BYTES * (mcast_tree_edge_count(y_size) + mcast_tree_edge_count(x_size));
+    }
+    static constexpr uint32_t mcast_tree_offset_bytes(uint32_t y_size, uint32_t x_size) {
+        return (vectors_region_bytes(y_size, x_size) + 3u) & ~3u;
+    }
+    // Whether vectors plus trees fit the existing union slot. False is a legal answer -- [64,4] does
+    // not fit -- and callers must report it rather than pack over the end of the slot.
+    static constexpr bool hybrid_region_fits(uint32_t y_size, uint32_t x_size) {
+        return mcast_tree_offset_bytes(y_size, x_size) + mcast_tree_region_bytes(y_size, x_size) <=
+               INDEXED_VECTOR_TABLE_BYTES;
+    }
+
+    static constexpr uint32_t mcast_tree_y_offset(uint32_t y_size, uint32_t x_size) {
+        return mcast_tree_offset_bytes(y_size, x_size);
+    }
+    static constexpr uint32_t mcast_tree_x_offset(uint32_t y_size, uint32_t x_size) {
+        return mcast_tree_offset_bytes(y_size, x_size) + MCAST_TREE_EDGE_BYTES * mcast_tree_edge_count(y_size);
+    }
+
+    // Packed edge fields: two 6-bit row indices, fixed by the Y <= 64 bound, plus a parent_output
+    // holding this axis's 2-bit vector code, so it widens through widen_y / widen_x.
+    static constexpr int mcast_edge_child(std::uint16_t packed) { return packed & 0x3F; }
+    static constexpr int mcast_edge_parent(std::uint16_t packed) { return (packed >> 6) & 0x3F; }
+    static constexpr std::uint8_t mcast_edge_output(std::uint16_t packed) {
+        return static_cast<std::uint8_t>((packed >> 12) & 0x3);
+    }
+
+    // Byte-wise so neither side has to reason about halfword alignment inside a packed union.
+    static inline std::uint16_t get_mcast_tree_edge(const std::uint8_t* region, uint32_t index) {
+        const uint32_t byte_index = index * MCAST_TREE_EDGE_BYTES;
+        return static_cast<std::uint16_t>(
+            region[byte_index] | (static_cast<std::uint16_t>(region[byte_index + 1]) << 8));
+    }
+    static inline void set_mcast_tree_edge(std::uint8_t* region, uint32_t index, std::uint16_t packed_edge) {
+        const uint32_t byte_index = index * MCAST_TREE_EDGE_BYTES;
+        region[byte_index] = static_cast<std::uint8_t>(packed_edge & 0xFF);
+        region[byte_index + 1] = static_cast<std::uint8_t>((packed_edge >> 8) & 0xFF);
+    }
+
+    static inline std::uint8_t* y_row(std::uint8_t* table, uint32_t y_size, uint32_t dst_y) {
+        return table + dst_y * row_bytes(y_size);
+    }
+    static inline const std::uint8_t* y_row(const std::uint8_t* table, uint32_t y_size, uint32_t dst_y) {
+        return table + dst_y * row_bytes(y_size);
+    }
+    static inline std::uint8_t* x_row(std::uint8_t* table, uint32_t y_size, uint32_t x_size, uint32_t dst_x) {
+        return table + table_bytes(y_size) + dst_x * row_bytes(x_size);
+    }
+    static inline const std::uint8_t* x_row(
+        const std::uint8_t* table, uint32_t y_size, uint32_t x_size, uint32_t dst_x) {
+        return table + table_bytes(y_size) + dst_x * row_bytes(x_size);
+    }
+
+    template <typename YActionSource, typename XActionSource>
+    static inline bool pack_indexed_route_vectors(
+        std::uint8_t* out, uint32_t y_size, uint32_t x_size, YActionSource&& y_action, XActionSource&& x_action) {
+        if (y_size > MAX_INDEXED_MESH_Y || x_size > MAX_INDEXED_MESH_X ||
+            vectors_region_bytes(y_size, x_size) > INDEXED_VECTOR_TABLE_BYTES) {
+            return false;
+        }
+        const uint32_t region_bytes = vectors_region_bytes(y_size, x_size);
+        for (uint32_t i = 0; i < region_bytes; ++i) {
+            out[i] = 0;
+        }
+        for (uint32_t dst = 0; dst < y_size; ++dst) {
+            std::uint8_t* row = y_row(out, y_size, dst);
+            for (uint32_t cur = 0; cur < y_size; ++cur) {
+                uint8_t action = Y2_STOP;
+                if (cur != dst) {
+                    switch (y_action(cur, dst)) {
+                        case eth_chan_directions::NORTH: action = Y2_NORTH; break;
+                        case eth_chan_directions::SOUTH: action = Y2_SOUTH; break;
+                        case eth_chan_directions::Z: action = Y2_Z; break;
+                        default: return false;
+                    }
+                }
+                set_action_2bit(row, cur, action);
+            }
+        }
+        for (uint32_t dst = 0; dst < x_size; ++dst) {
+            std::uint8_t* row = x_row(out, y_size, x_size, dst);
+            for (uint32_t cur = 0; cur < x_size; ++cur) {
+                uint8_t action = X2_STOP;
+                if (cur != dst) {
+                    switch (x_action(cur, dst)) {
+                        case eth_chan_directions::EAST: action = X2_EAST; break;
+                        case eth_chan_directions::WEST: action = X2_WEST; break;
+                        default: return false;
+                    }
+                }
+                set_action_2bit(row, cur, action);
+            }
+        }
+        return true;
+    }
+
+    // ---- Decode (packet-side action selection) -----------------------------------
+    // The router at logical (local_y, local_x) reads its action byte from the packet's flat [Y | X]
+    // route buffer. E/W-facing routers consume X only; N/S/Z-facing routers consume Y whenever the
+    // whole Y byte is nonzero, and X otherwise.
+    template <eth_chan_directions MY_DIR>
+    static inline std::uint8_t decode_action(
+        const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
+        if constexpr (MY_DIR == eth_chan_directions::EAST || MY_DIR == eth_chan_directions::WEST) {
+            return route_buffer[y_size + local_x];
+        } else {
+            const std::uint8_t action_y = route_buffer[local_y];
+            if (action_y != 0) {
+                return action_y;
+            }
+            return route_buffer[y_size + local_x];
+        }
+    }
+
+    // The four eth outputs available to a router facing MY_DIR, in packed dispatch key slot order:
+    // base order {E, W, N, S, Z} with the self direction removed, since there is no return path.
+    template <eth_chan_directions MY_DIR>
+    static constexpr std::array<eth_chan_directions, 4> fwd_dirs() {
+        if constexpr (MY_DIR == eth_chan_directions::EAST) {
+            return {
+                eth_chan_directions::WEST,
+                eth_chan_directions::NORTH,
+                eth_chan_directions::SOUTH,
+                eth_chan_directions::Z};
+        } else if constexpr (MY_DIR == eth_chan_directions::WEST) {
+            return {
+                eth_chan_directions::EAST,
+                eth_chan_directions::NORTH,
+                eth_chan_directions::SOUTH,
+                eth_chan_directions::Z};
+        } else if constexpr (MY_DIR == eth_chan_directions::NORTH) {
+            return {
+                eth_chan_directions::EAST,
+                eth_chan_directions::WEST,
+                eth_chan_directions::SOUTH,
+                eth_chan_directions::Z};
+        } else if constexpr (MY_DIR == eth_chan_directions::SOUTH) {
+            return {
+                eth_chan_directions::EAST,
+                eth_chan_directions::WEST,
+                eth_chan_directions::NORTH,
+                eth_chan_directions::Z};
+        } else {  // Z-facing: the express link lands into the local cardinal plane only
+            return {
+                eth_chan_directions::EAST,
+                eth_chan_directions::WEST,
+                eth_chan_directions::NORTH,
+                eth_chan_directions::SOUTH};
+        }
+    }
+
+    // Valid when the reserved bits and the self-facing bit are clear and at least one output is
+    // selected. A selected direction with no wired sender is rejected by the kernel's dispatch instead.
+    template <eth_chan_directions MY_DIR>
+    static constexpr bool action_is_valid(std::uint8_t action) {
+        if (action & ACTION_RESERVED_MASK) {
+            return false;
+        }
+        if (action & action_bit(MY_DIR)) {
+            return false;
+        }
+        return action != 0;
+    }
+
+    // Packs the action's eth outputs through fwd_dirs<MY_DIR>() into the dense 4-bit dispatch key.
+    // LOCAL_DELIVER stays outside the key and is handled after the eth fanout.
+    template <eth_chan_directions MY_DIR>
+    static constexpr std::uint8_t pack_fwd_key(std::uint8_t action) {
+        constexpr auto dirs = fwd_dirs<MY_DIR>();
+        std::uint8_t key = 0;
+        for (std::uint32_t slot = 0; slot < 4; ++slot) {
+            if (action & action_bit(dirs[slot])) {
+                key = static_cast<std::uint8_t>(key | (1u << slot));
+            }
+        }
+        return key;
+    }
+
+    // This chip is the mesh's exit when the maps say deliver here but the final mesh is elsewhere.
+    // Both halves matter: mesh-id inequality alone also matches packets merely transiting the chip.
+    static inline bool action_is_intermesh_exit(
+        std::uint8_t action, std::uint16_t dst_mesh_id, std::uint16_t my_mesh_id) {
+        return action == ACTION_LOCAL_DELIVER && dst_mesh_id != my_mesh_id;
+    }
+};
+
+// Action bits 0..4 must line up with eth_chan_directions (E=0..Z=4): direction -> bit is (1 << dir).
+static_assert(
+    IndexedMeshRoutingFields::action_bit(eth_chan_directions::EAST) == IndexedMeshRoutingFields::ACTION_EAST,
+    "indexed action bit mismatch for EAST");
+static_assert(
+    IndexedMeshRoutingFields::action_bit(eth_chan_directions::WEST) == IndexedMeshRoutingFields::ACTION_WEST,
+    "indexed action bit mismatch for WEST");
+static_assert(
+    IndexedMeshRoutingFields::action_bit(eth_chan_directions::NORTH) == IndexedMeshRoutingFields::ACTION_NORTH,
+    "indexed action bit mismatch for NORTH");
+static_assert(
+    IndexedMeshRoutingFields::action_bit(eth_chan_directions::SOUTH) == IndexedMeshRoutingFields::ACTION_SOUTH,
+    "indexed action bit mismatch for SOUTH");
+static_assert(
+    IndexedMeshRoutingFields::action_bit(eth_chan_directions::Z) == IndexedMeshRoutingFields::ACTION_Z,
+    "indexed action bit mismatch for Z");
+static_assert(
+    (IndexedMeshRoutingFields::ACTION_VALID_MASK | IndexedMeshRoutingFields::ACTION_RESERVED_MASK) == 0xFF &&
+        (IndexedMeshRoutingFields::ACTION_VALID_MASK & IndexedMeshRoutingFields::ACTION_RESERVED_MASK) == 0,
+    "indexed action byte valid/reserved masks must partition the byte");
+static_assert(IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES == 1028, "indexed vector table must be 1028 B");
+
+// Hybrid footprints: [32,4] is 260 B of vectors plus a 68 B tree region and fits the existing slot;
+// [64,4] is 1160 B and does not.
+static_assert(
+    IndexedMeshRoutingFields::vectors_region_bytes(32, 4) == 260 &&
+        IndexedMeshRoutingFields::mcast_tree_region_bytes(32, 4) == 68 &&
+        IndexedMeshRoutingFields::hybrid_region_fits(32, 4),
+    "[32,4] hybrid layout must fit the 2D union slot");
+static_assert(
+    !IndexedMeshRoutingFields::hybrid_region_fits(64, 4),
+    "[64,4] hybrid layout is expected to exceed the slot until routing_l1_info_t grows");
+static_assert(
+    IndexedMeshRoutingFields::mcast_tree_x_offset(32, 4) == IndexedMeshRoutingFields::mcast_tree_y_offset(32, 4) + 62,
+    "X tree must follow the Y tree's y_size-1 edges");
+
+// ============================================================================
+// Indexed multicast encode
+// ============================================================================
+// Shared by the worker producer and host validation so both run identical arithmetic. No STL, no
+// allocation, and no Z-neighbor lookup, since a reverse-tree edge carries both endpoints and the
+// parent's command.
+
+// Row bitmaps at the Y <= 64 bound.
+inline constexpr std::uint32_t MCAST_ROW_BITS_WORDS = 2;
+
+inline void mcast_set_row_bit(std::uint32_t* bits, std::uint32_t row) { bits[row >> 5] |= 1u << (row & 31); }
+inline bool mcast_test_row_bit(const std::uint32_t* bits, std::uint32_t row) {
+    return ((bits[row >> 5] >> (row & 31)) & 1u) != 0;
+}
+
+// One axis of the reverse pass. `needed` enters holding the requested targets and leaves holding
+// those plus every transit parent; an edge is taken when its child subtree still holds something
+// needed. LOCAL_DELIVER is not set here, since a row can be needed purely as a transit parent.
+inline void mcast_prune_axis(
+    std::uint8_t* out_actions,
+    const std::uint8_t* tree_region,
+    std::uint32_t axis_len,
+    std::uint32_t* needed,
+    bool is_y_axis) {
+    const std::uint32_t edge_count = IndexedMeshRoutingFields::mcast_tree_edge_count(axis_len);
+    for (std::uint32_t i = 0; i < edge_count; ++i) {
+        const std::uint16_t edge = IndexedMeshRoutingFields::get_mcast_tree_edge(tree_region, i);
+        const std::uint32_t child = static_cast<std::uint32_t>(IndexedMeshRoutingFields::mcast_edge_child(edge));
+        if (!mcast_test_row_bit(needed, child)) {
+            continue;
+        }
+        const std::uint32_t parent = static_cast<std::uint32_t>(IndexedMeshRoutingFields::mcast_edge_parent(edge));
+        const std::uint8_t code = IndexedMeshRoutingFields::mcast_edge_output(edge);
+        out_actions[parent] |=
+            is_y_axis ? IndexedMeshRoutingFields::widen_y(code) : IndexedMeshRoutingFields::widen_x(code);
+        mcast_set_row_bit(needed, parent);
+    }
+}
+
+// Fills route_buffer[0..y_size) with route_buffer_y and route_buffer[y_size..y_size+x_size) with
+// route_buffer_x, from the reverse trees embedded in this chip's `vectors` table.
+//
+//   anchor_{y,x}   the chip the client's N/S/E/W extents are measured from
+//   encode_root_x  the column where path tracing begins, which owns `vectors`
+//
+// These are the same chip for a worker sending inside its own mesh (the overload below), and differ at
+// a destination-mesh landing. No encode_root_y is needed, since the Y tree is already rooted there.
+//
+// N walks toward decreasing y and S toward increasing y, both modular, so an extent that wraps the ring
+// is legal rather than clamped.
+inline void encode_indexed_mcast_maps(
+    std::uint8_t* route_buffer,
+    const std::uint8_t* vectors,
+    std::uint32_t y_size,
+    std::uint32_t x_size,
+    std::uint32_t anchor_y,
+    std::uint32_t anchor_x,
+    std::uint32_t encode_root_x,
+    std::uint32_t n_hops,
+    std::uint32_t s_hops,
+    std::uint32_t e_hops,
+    std::uint32_t w_hops) {
+    const std::uint32_t root_y = anchor_y;
+    const std::uint32_t root_x = anchor_x;
+    std::uint8_t* out_y = route_buffer;
+    std::uint8_t* out_x = route_buffer + y_size;
+    for (std::uint32_t i = 0; i < y_size + x_size; ++i) {
+        route_buffer[i] = 0;
+    }
+
+    std::uint32_t y_targets[MCAST_ROW_BITS_WORDS] = {0, 0};
+    std::uint32_t x_targets[MCAST_ROW_BITS_WORDS] = {0, 0};
+
+    if (n_hops == 0 && s_hops == 0) {
+        mcast_set_row_bit(y_targets, root_y);
+    } else {
+        for (std::uint32_t k = 1; k <= n_hops; ++k) {
+            mcast_set_row_bit(y_targets, (root_y + y_size - (k % y_size)) % y_size);
+        }
+        for (std::uint32_t k = 1; k <= s_hops; ++k) {
+            mcast_set_row_bit(y_targets, (root_y + k) % y_size);
+        }
+    }
+
+    // The anchor column is always a target: the spine rows deliver, not merely forward.
+    mcast_set_row_bit(x_targets, root_x);
+    for (std::uint32_t k = 1; k <= e_hops; ++k) {
+        mcast_set_row_bit(x_targets, (root_x + k) % x_size);
+    }
+    for (std::uint32_t k = 1; k <= w_hops; ++k) {
+        mcast_set_row_bit(x_targets, (root_x + x_size - (k % x_size)) % x_size);
+    }
+
+    const std::uint8_t* tree_y = vectors + IndexedMeshRoutingFields::mcast_tree_y_offset(y_size, x_size);
+    const std::uint8_t* tree_x = vectors + IndexedMeshRoutingFields::mcast_tree_x_offset(y_size, x_size);
+
+    std::uint32_t needed_x[MCAST_ROW_BITS_WORDS] = {x_targets[0], x_targets[1]};
+    mcast_prune_axis(out_x, tree_x, x_size, needed_x, /*is_y_axis=*/false);
+    for (std::uint32_t x = 0; x < x_size; ++x) {
+        if (mcast_test_row_bit(x_targets, x)) {
+            out_x[x] |= IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER;
+        }
+    }
+
+    std::uint32_t needed_y[MCAST_ROW_BITS_WORDS] = {y_targets[0], y_targets[1]};
+    mcast_prune_axis(out_y, tree_y, y_size, needed_y, /*is_y_axis=*/true);
+
+    // Every target row carries the encode root column's E/W teeth, and delivers only if that column is
+    // itself a target. Indexed by encode_root_x rather than the anchor, since the teeth are what this
+    // chip has to launch.
+    const std::uint8_t x_root_action = out_x[encode_root_x];
+    const std::uint8_t teeth =
+        x_root_action & (IndexedMeshRoutingFields::ACTION_EAST | IndexedMeshRoutingFields::ACTION_WEST);
+    const std::uint8_t deliver = x_root_action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER;
+    for (std::uint32_t y = 0; y < y_size; ++y) {
+        if (mcast_test_row_bit(y_targets, y)) {
+            out_y[y] |= teeth | deliver;
+        }
+    }
+}
+
+// Same-mesh source, where the anchor and the encode root are the same chip.
+inline void encode_indexed_mcast_maps(
+    std::uint8_t* route_buffer,
+    const std::uint8_t* vectors,
+    std::uint32_t y_size,
+    std::uint32_t x_size,
+    std::uint32_t root_y,
+    std::uint32_t root_x,
+    std::uint32_t n_hops,
+    std::uint32_t s_hops,
+    std::uint32_t e_hops,
+    std::uint32_t w_hops) {
+    encode_indexed_mcast_maps(
+        route_buffer, vectors, y_size, x_size, root_y, root_x, root_x, n_hops, s_hops, e_hops, w_hops);
+}
+
+// FWD_DIRS slot order: base {E, W, N, S, Z} with the self direction removed.
+static_assert(
+    IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::NORTH>()[0] == eth_chan_directions::EAST &&
+        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::NORTH>()[1] == eth_chan_directions::WEST &&
+        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::NORTH>()[2] == eth_chan_directions::SOUTH &&
+        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::NORTH>()[3] == eth_chan_directions::Z,
+    "fwd_dirs<NORTH> must be {E, W, S, Z}");
+static_assert(
+    IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::EAST>()[0] == eth_chan_directions::WEST &&
+        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::EAST>()[3] == eth_chan_directions::Z,
+    "fwd_dirs<EAST> must be {W, N, S, Z}");
+static_assert(
+    IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::Z>()[0] == eth_chan_directions::EAST &&
+        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::Z>()[1] == eth_chan_directions::WEST &&
+        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::Z>()[2] == eth_chan_directions::NORTH &&
+        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::Z>()[3] == eth_chan_directions::SOUTH,
+    "fwd_dirs<Z> must be {E, W, N, S}");
+static_assert(
+    IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::SOUTH>()[2] == eth_chan_directions::NORTH &&
+        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::WEST>()[1] == eth_chan_directions::NORTH,
+    "fwd_dirs<SOUTH>/<WEST> must exclude the self direction in slot order");
+
+// Packing example: at a NORTH-facing router, action S|Z|LOCAL_DELIVER packs to 0b1100
+// (LOCAL_DELIVER stays outside the key).
+static_assert(
+    IndexedMeshRoutingFields::pack_fwd_key<eth_chan_directions::NORTH>(
+        IndexedMeshRoutingFields::ACTION_SOUTH | IndexedMeshRoutingFields::ACTION_Z |
+        IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER) == 0b1100,
+    "pack_fwd_key<NORTH>(S|Z|LOCAL_DELIVER) must be 0b1100");
+static_assert(
+    IndexedMeshRoutingFields::pack_fwd_key<eth_chan_directions::EAST>(
+        IndexedMeshRoutingFields::ACTION_WEST | IndexedMeshRoutingFields::ACTION_NORTH) == 0b0011,
+    "pack_fwd_key<EAST>(W|N) must select slots {W, N} -> 0b0011");
+
+// Invalid-action checks.
+static_assert(
+    IndexedMeshRoutingFields::action_is_valid<eth_chan_directions::NORTH>(IndexedMeshRoutingFields::ACTION_SOUTH) &&
+        IndexedMeshRoutingFields::action_is_valid<eth_chan_directions::Z>(IndexedMeshRoutingFields::ACTION_EAST),
+    "ordinary non-self outputs must be valid");
+static_assert(
+    !IndexedMeshRoutingFields::action_is_valid<eth_chan_directions::NORTH>(IndexedMeshRoutingFields::ACTION_NORTH) &&
+        !IndexedMeshRoutingFields::action_is_valid<eth_chan_directions::Z>(IndexedMeshRoutingFields::ACTION_Z) &&
+        !IndexedMeshRoutingFields::action_is_valid<eth_chan_directions::EAST>(IndexedMeshRoutingFields::ACTION_EAST),
+    "the self-facing bit must be invalid");
+static_assert(
+    !IndexedMeshRoutingFields::action_is_valid<eth_chan_directions::WEST>(0) &&
+        !IndexedMeshRoutingFields::action_is_valid<eth_chan_directions::SOUTH>(0x80),
+    "empty actions and reserved bits must be invalid");
 
 // Centralized routing encoding functions (stateless, buffer-based primitives)
 namespace routing_encoding {
@@ -436,38 +957,47 @@ inline void encode_2d_unicast(
     using MeshFields = RoutingFieldsConstants::Mesh;
     uint32_t idx = 0;
 
-    // Forward commands based on direction
+    // Forward commands per dimension
     const uint8_t ns_fwd = (ns_dir == 1) ? MeshFields::FORWARD_SOUTH : MeshFields::FORWARD_NORTH;
     const uint8_t ew_fwd = (ew_dir == 1) ? MeshFields::FORWARD_EAST : MeshFields::FORWARD_WEST;
 
-    // Final hop uses OPPOSITE direction to stop packet (destination logic)
-    // If traveling South (ns_dir=1), final command is North (opposite)
-    // If traveling East (ew_dir=1), final command is West (opposite)
+    // Final hop uses OPPOSITE direction to stop the packet at the destination
     const uint8_t ns_write = (ns_dir == 1) ? MeshFields::FORWARD_NORTH : MeshFields::FORWARD_SOUTH;
     const uint8_t ew_write = (ew_dir == 1) ? MeshFields::FORWARD_WEST : MeshFields::FORWARD_EAST;
 
-    if (ns_hops > 0 && ew_hops > 0) {
-        // NS -> EW turn: (ns_hops-1 + prepend) NS forwards, ew_hops EW forwards, 1 EW write
-        for (auto i = 0; i < ns_hops - 1 + prepend_one_hop; ++i) {
-            buffer[idx++] = ns_fwd;
+    // Build the ordered hop-direction list in dimension order (all NS, then all EW).
+    // Each entry is (forward_cmd, write_cmd) for that hop's dimension.
+    uint8_t fwd_list[FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE];
+    uint8_t wr_list[FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE];
+    uint32_t num_hops = 0;
+    const uint32_t total_cardinal = (uint32_t)ns_hops + (uint32_t)ew_hops;
+    for (uint32_t c = 0; c < total_cardinal; ++c) {
+        if (c < ns_hops) {
+            fwd_list[num_hops] = ns_fwd;
+            wr_list[num_hops] = ns_write;
+        } else {
+            fwd_list[num_hops] = ew_fwd;
+            wr_list[num_hops] = ew_write;
         }
-        for (auto i = 0; i < ew_hops; ++i) {
-            buffer[idx++] = ew_fwd;
-        }
-        buffer[idx++] = ew_write;
-    } else if (ns_hops > 0) {
-        // Only NS: (ns_hops-1 + prepend) NS forwards, 1 NS write
-        for (auto i = 0; i < ns_hops - 1 + prepend_one_hop; ++i) {
-            buffer[idx++] = ns_fwd;
-        }
-        buffer[idx++] = ns_write;
-    } else if (ew_hops > 0) {
-        // Only EW: (ew_hops-1 + prepend) EW forwards, 1 EW write
-        for (auto i = 0; i < ew_hops - 1 + prepend_one_hop; ++i) {
-            buffer[idx++] = ew_fwd;
-        }
-        buffer[idx++] = ew_write;
+        ++num_hops;
     }
+
+    if (num_hops == 0) {
+        while (idx < max_buffer_size) {
+            buffer[idx++] = MeshFields::NOOP;
+        }
+        return;
+    }
+
+    // buffer[i] is the action performed at the (i+1)-th chip after the source. The source leaves via
+    // hop 0 (the "initial direction", not encoded here) unless prepend_one_hop is set (router usage),
+    // in which case hop 0's forward is emitted too. Every intermediate chip forwards the *next* hop,
+    // and the destination chip performs the write for the final hop.
+    const uint32_t first_hop = prepend_one_hop ? 0 : 1;
+    for (uint32_t k = first_hop; k < num_hops; ++k) {
+        buffer[idx++] = fwd_list[k];
+    }
+    buffer[idx++] = wr_list[num_hops - 1];
 
     // Fill remainder with NOOP
     while (idx < max_buffer_size) {
@@ -584,6 +1114,26 @@ struct RouterStateManager {
     }
 };
 
+// Destination-major indexed route vectors, sharing the 2D union slot with the legacy compressed table.
+// Raw byte storage because row strides depend on the live mesh shape [Y,X]:
+//   y_vectors: row dst_y at byte offset dst_y * ceil(Y/4), region [0, Y*ceil(Y/4))
+//   x_vectors: row dst_x at byte offset dst_x * ceil(X/4), region [Y*ceil(Y/4), Y*ceil(Y/4) + X*ceil(X/4))
+// Typed accessors and the host-side packer live on IndexedMeshRoutingFields.
+struct __attribute__((packed)) indexed_route_vectors_t {
+    std::uint8_t data[IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES];  // 1028
+
+#if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
+    // Fills the 2-bit vector table for this mesh by probing ControlPlane's first-hop relation along
+    // each axis (implemented in compressed_routing_path.cpp). Signature matches
+    // intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields so the ControlPlane call
+    // site swap is mechanical.
+    void calculate_chip_to_all_routing_fields(const FabricNodeId& src_fabric_node_id, uint16_t num_chips);
+#endif
+};
+static_assert(
+    sizeof(indexed_route_vectors_t) == IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES,
+    "indexed route vectors must be exactly the [64,4] bound");
+
 struct routing_l1_info_t {
     RouterStateManager state_manager{};  // 32 bytes
     uint16_t my_mesh_id = 0;           // Current mesh ID // 2 bytes
@@ -594,16 +1144,29 @@ struct routing_l1_info_t {
     direction_table_t<MAX_MESH_SIZE> intra_mesh_direction_table{};   // 96 bytes
     direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};  // 384 bytes
 
-    // Union overlaps 1D and 2D routing tables at same offset
+    // Union overlaps 1D and 2D routing tables at same offset. indexed_route_vectors and
+    // routing_path_table_2d are never live at once.
     union __attribute__((packed)) {
         intra_mesh_routing_path_t<1, false> routing_path_table_1d;  // 1024 bytes
         intra_mesh_routing_path_t<2, true> routing_path_table_2d;   // 1024 bytes
+        indexed_route_vectors_t indexed_route_vectors;              // 1028 bytes
     };
 
     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};               // 1024 bytes
-    uint8_t padding[12] = {};                                        // pad to 16-byte alignment
+    // This chip's (y, x) coordinates within its mesh, row-major with my_device_id
+    // (y = id / x_size, x = id % x_size). Populated host-side with the rest of the table.
+    std::uint8_t my_mesh_coord_y = 0;
+    std::uint8_t my_mesh_coord_x = 0;
+    uint8_t padding[6] = {};  // pad to 16-byte alignment
 };
 static_assert(offsetof(routing_l1_info_t, routing_path_table_1d) == 516);
+static_assert(
+    offsetof(routing_l1_info_t, exit_node_table) == 516 + IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES,
+    "exit_node_table must follow the 1028-byte 2D union slot");
+static_assert(
+    offsetof(routing_l1_info_t, my_mesh_coord_y) ==
+        516 + IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES + MAX_NUM_MESHES,
+    "my_mesh_coord_y must immediately follow exit_node_table");
 static_assert(offsetof(routing_l1_info_t, state_manager) % 16 == 0);
 static_assert(sizeof(routing_l1_info_t) % 16 == 0);
 
@@ -622,7 +1185,7 @@ static_assert(
 // Verify total struct size
 static_assert(
     sizeof(routing_l1_info_t) == 2576,
-    "routing_l1_info_t must be 2576 bytes: base(516) + union(1024) + exit(1024) + pad(12)");
+    "routing_l1_info_t must be 2576 bytes: base(516) + union(1028) + exit(1024) + coords(2) + pad(6)");
 
 struct worker_routing_l1_info_t {
     routing_l1_info_t routing_info{};

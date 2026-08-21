@@ -201,6 +201,51 @@ public:
     std::optional<RoutingDirection> get_forwarding_direction(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const;
 
+    // Canonical logical route between two chips of one mesh, reconstructed by following the next-hop
+    // relation. Not a substitute for get_fabric_route(), which is conditioned on a source channel.
+    std::vector<FabricNodeId> get_canonical_intramesh_route(
+        FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const;
+
+    // Whether the mesh declares express links and their ring decomposition was validated.
+    // TODO: per-line rings, where a line with dead chords falls back to the base policy, would make a
+    // MeshId-scoped answer ill-defined; this and the ring predicates below would need a per-line form.
+    // Liveness is a PSD question, answerable at derivation time via TopologyMapper's asic id mapping.
+    bool express_routing_enabled(MeshId mesh_id) const;
+
+    // Whether a protected ring family covers this node along the given dimension. Ring state is only
+    // derived for meshes with express links, so check express_routing_enabled before relying on this.
+    // Per-node by design: answers false for a leaf. Never wire this into
+    // need_deadlock_avoidance_support -- that flag also gates first-level ACK and the credit path, so
+    // a per-node answer would elide the guard on leaf chips. The per-mesh axis query below is the one
+    // that feeds it.
+    bool has_protected_ring(FabricNodeId fabric_node_id, RoutingDimension dimension) const;
+
+    // Whether the edge leaving `local` in `egress` belongs to a protected ring.
+    bool is_protected_ring_edge(FabricNodeId local, RoutingDirection egress) const;
+
+    // The ring a direction rides: the express decomposition for an axis hop, the ordinary X ring for
+    // E/W. Null when the mesh has no such ring. Public because the multicast reverse trees are built
+    // from it off the control plane -- a host that must open one connection per canonical root output
+    // has to run the same encoder the worker runs, and that needs this topology.
+    const ExpressRingTopology* ring_for_direction(MeshId mesh_id, RoutingDirection direction) const;
+
+    // For traffic arriving at `local` from its `ingress` neighbor and leaving toward its `egress` one,
+    // whether both hops ride one oriented view of the same ring, i.e. it stays on the ring it is on.
+    bool are_same_directed_ring_edges(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const;
+
+    // For that same turn, whether a non-transit ring acquisition is permitted. A crossing into the
+    // family that may continue is terminal and returns false.
+    bool continuation_allowed(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const;
+
+    // Does the axis that `axis_direction` belongs to (N/S/Z select Y, E/W select X) carry any
+    // protected ring anywhere in this mesh?
+    //
+    // Used to decide whether a router compiles in protected flow control at all, which is a property
+    // of the axis rather than of one chip. Asking the per-node question instead would disable the
+    // guard on leaf chips, and that flag also gates first-level ACK and the credit path, so the
+    // effect would reach beyond flow control.
+    bool mesh_has_protected_ring_in_axis_of(MeshId mesh_id, RoutingDirection axis_direction) const;
+
     // Return eth channels that can forward the data from src to dest.
     // This will be a subset of the active routers in a given direction since some channels could be
     // reserved along the way for tunneling etc.
@@ -359,6 +404,10 @@ private:
     tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
     tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
     tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
+
+    // Coordinate along that ring's axis of the neighbor reached by `direction`.
+    std::optional<int> ring_coord_of_neighbor(
+        const ExpressRingTopology& rings, FabricNodeId local, RoutingDirection direction) const;
 
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;

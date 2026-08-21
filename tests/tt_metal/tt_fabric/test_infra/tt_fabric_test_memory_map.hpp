@@ -79,8 +79,8 @@ struct DynamicMemoryRegion {
  */
 struct CommonMemoryMap {
     // Constants for memory region sizes
-    static constexpr uint32_t RESULT_BUFFER_SIZE = 0x1000;          // 4KB
-    static constexpr uint32_t LOCAL_ARGS_BUFFER_SIZE = 0x4000;      // 16KB
+    static constexpr uint32_t RESULT_BUFFER_SIZE = 0x1000;  // 4KB
+    static constexpr uint32_t LOCAL_ARGS_BUFFER_SIZE = 0x8000;      // 32KB
     static constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = 0x10000;  // 64KB (to accommodate big meshes)
     static constexpr uint32_t MUX_LOCAL_ADDRESSES_SIZE = 0x400;     // 1KB
     static constexpr uint32_t MUX_TERMINATION_SYNC_SIZE = 64;       // Single semaphore with padding
@@ -339,7 +339,7 @@ struct SenderMemoryMap {
 struct ReceiverMemoryMap {
     // Constants for memory region sizes
     static constexpr uint32_t ATOMIC_COUNTER_BUFFER_SIZE = 0x1000;  // 4KB
-    static constexpr uint32_t CREDIT_HEADER_BUFFER_SIZE = 0x400;    // 1KB reserved for credit headers
+    static constexpr uint32_t MAX_PACKET_HEADER_SIZE_BYTES = 128;
 
     // Encapsulated common memory map
     CommonMemoryMap common;
@@ -380,10 +380,15 @@ struct ReceiverMemoryMap {
         current_addr += ATOMIC_COUNTER_BUFFER_SIZE;
         atomic_counters = BaseMemoryRegion(atomic_counter_base, ATOMIC_COUNTER_BUFFER_SIZE);
 
-        // Credit headers - reserved space for credit return packet headers
+        // Credit headers - one credit-return packet header per config on the core. Sized from
+        // num_configs rather than fixed: payload_chunks follows immediately, so a core holding more
+        // configs than a fixed region fits would place headers in payload memory, and the
+        // kernel-side bound in get_credit_header_address is an ASSERT that release kernels compile
+        // out.
         uint32_t credit_header_base = current_addr;
-        current_addr += CREDIT_HEADER_BUFFER_SIZE;
-        credit_headers = BaseMemoryRegion(credit_header_base, CREDIT_HEADER_BUFFER_SIZE);
+        uint32_t credit_header_size_total = MAX_PACKET_HEADER_SIZE_BYTES * num_configs;
+        current_addr += credit_header_size_total;
+        credit_headers = BaseMemoryRegion(credit_header_base, credit_header_size_total);
 
         // Payload chunks - receivers need configurable chunk size based on number of configs
         uint32_t payload_chunk_base = current_addr;

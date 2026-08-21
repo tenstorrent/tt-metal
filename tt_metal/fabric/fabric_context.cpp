@@ -78,6 +78,25 @@ uint32_t FabricContext::get_max_2d_hops_from_topology(const ControlPlane& contro
     return compute_max_2d_hops(mesh_shapes);
 }
 
+// Express meshes carry destination-indexed action maps rather than a hop program, so their route buffer
+// holds rows + cols bytes -- two more than the (rows-1) + (cols-1) Manhattan hop count. Meshes without
+// express links return 0 and are sized by hops alone.
+uint32_t FabricContext::get_max_2d_indexed_route_bytes_from_topology(const ControlPlane& control_plane) const {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+
+    uint32_t max_bytes = 0;
+    for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
+        if (!control_plane.express_routing_enabled(mesh_id)) {
+            continue;
+        }
+        // Must match the shape get_express_kernel_defines emits as FABRIC_EXPRESS_MESH_*_SIZE, GLOBAL
+        // scope included, since that is what the kernel widens against.
+        const auto shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
+        max_bytes = std::max(max_bytes, static_cast<uint32_t>(shape[0]) + static_cast<uint32_t>(shape[1]));
+    }
+    return max_bytes;
+}
+
 uint32_t FabricContext::compute_1d_pkt_hdr_extension_words(uint32_t max_hops) const {
     // Precondition: max_hops validated by compute_packet_specifications()
 
@@ -88,12 +107,12 @@ uint32_t FabricContext::compute_1d_pkt_hdr_extension_words(uint32_t max_hops) co
     return (max_hops - 1) / ROUTING_1D_HOPS_PER_WORD;
 }
 
-uint32_t FabricContext::compute_2d_pkt_hdr_route_buffer_size(uint32_t max_hops) const {
-    // Precondition: max_hops validated by compute_packet_specifications()
-
+// required_route_bytes is the hop count for the legacy hop program, or rows + cols for express indexed
+// maps. Precondition: bounds validated by compute_packet_specifications().
+uint32_t FabricContext::compute_2d_pkt_hdr_route_buffer_size(uint32_t required_route_bytes) const {
     // Route buffer tiers aligned to packet header size boundaries
     for (const auto& tier : ROUTING_2D_BUFFER_TIERS) {
-        if (max_hops <= tier.max_hops) {
+        if (required_route_bytes <= tier.max_hops) {
             return tier.buffer_size;
         }
     }
@@ -127,7 +146,17 @@ void FabricContext::compute_packet_specifications(
             Limits::MAX_2D_HOPS,
             Limits::MAX_2D_ROUTE_BUFFER_SIZE);
 
-        routing_2d_buffer_size_ = compute_2d_pkt_hdr_route_buffer_size(max_2d_hops_);
+        // Size for whichever encoding demands more, so neither can overrun the buffer.
+        const uint32_t required_2d_route_bytes =
+            std::max(max_2d_hops_, get_max_2d_indexed_route_bytes_from_topology(control_plane));
+
+        TT_FATAL(
+            required_2d_route_bytes <= Limits::MAX_2D_ROUTE_BUFFER_SIZE,
+            "2D routing requires a {}B route buffer, exceeding the maximum of {}B.",
+            required_2d_route_bytes,
+            Limits::MAX_2D_ROUTE_BUFFER_SIZE);
+
+        routing_2d_buffer_size_ = compute_2d_pkt_hdr_route_buffer_size(required_2d_route_bytes);
     } else {
         // 1D mode: query topology and validate against limits
         max_1d_hops_ = get_max_1d_hops_from_topology(control_plane);
@@ -291,40 +320,6 @@ bool FabricContext::is_switch_mesh(MeshId mesh_id) const {
     return false;
 }
 
-bool FabricContext::has_z_router_on_device(
-    const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const {
-    // Check if this fabric node has Z router ethernet channels
-    // Query control plane for active channels and check if any have Z direction
-
-    // Every configured fabric node has channel metadata; an absent entry is a topology error.
-    auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
-
-    // If no channels, node doesn't have Z router (or isn't configured yet)
-    if (active_channels.empty()) {
-        log_debug(
-            LogMetal,
-            "Fabric node M{}D{} does NOT have Z router (no active channels)",
-            *fabric_node_id.mesh_id,
-            fabric_node_id.chip_id);
-        return false;
-    }
-    for (const auto& [eth_chan_id, direction] : active_channels) {
-        // direction is eth_chan_directions, compare with eth_chan_directions::Z
-        if (direction == eth_chan_directions::Z) {
-            log_debug(
-                LogMetal,
-                "Fabric node M{}D{} HAS Z router (channel {} has Z direction)",
-                *fabric_node_id.mesh_id,
-                fabric_node_id.chip_id,
-                eth_chan_id);
-            return true;
-        }
-    }
-
-    log_debug(LogMetal, "Fabric node M{}D{} does NOT have Z router", *fabric_node_id.mesh_id, fabric_node_id.chip_id);
-    return false;
-}
-
 // ============ Builder Context Access ============
 
 FabricBuilderContext& FabricContext::get_builder_context() {
@@ -341,7 +336,17 @@ const FabricBuilderContext& FabricContext::get_builder_context() const {
     return *builder_context_;
 }
 
-bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions direction) const {
+bool FabricContext::need_deadlock_avoidance_support(
+    const ControlPlane& control_plane, const FabricNodeId& fabric_node_id, eth_chan_directions direction) const {
+    // The topology token cannot answer this under express routing: express chords can close a protected
+    // ring on an axis the descriptor advertises as a line, so Topology::Torus would drop the bubble on a
+    // ring that needs it. Asked per axis rather than per chip, since a per-node answer would elide the
+    // guard on leaf chips and this flag also selects first-level ACK and the upstream credit path.
+    if (control_plane.express_routing_enabled(fabric_node_id.mesh_id)) {
+        return control_plane.mesh_has_protected_ring_in_axis_of(
+            fabric_node_id.mesh_id, control_plane.eth_direction_to_routing_direction(direction));
+    }
+
     if (topology_ == Topology::Ring) {
         return true;
     }
@@ -359,6 +364,23 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
     }
 
     return false;
+}
+
+std::map<std::string, std::string> FabricContext::get_express_kernel_defines(
+    const ControlPlane& control_plane, MeshId mesh_id) const {
+    // Keyed on express_routing_enabled rather than raw Z-edge presence, since that is the answer route
+    // generation used when it packed the tables these defines make the kernel encode against.
+    if (!is_2D_routing_enabled_ || !control_plane.express_routing_enabled(mesh_id)) {
+        return {};
+    }
+    // GLOBAL scope is required: the L1 vectors are packed against the global shape and indexed by
+    // global chip ids, so a local-scope shape would desync the encode from the table.
+    const auto mesh_shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
+    return {
+        {"FABRIC_EXPRESS_ENABLED", "1"},
+        {"FABRIC_EXPRESS_MESH_Y_SIZE", std::to_string(mesh_shape[0])},
+        {"FABRIC_EXPRESS_MESH_X_SIZE", std::to_string(mesh_shape[1])},
+    };
 }
 
 std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(const ControlPlane& control_plane) const {

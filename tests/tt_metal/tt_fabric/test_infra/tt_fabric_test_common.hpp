@@ -723,23 +723,21 @@ public:
 
     std::unordered_map<RoutingDirection, uint32_t> get_hops_to_chip(
         FabricNodeId src_node_id, FabricNodeId dst_node_id) const override {
-        // Cross-mesh route: prefer a direct Z-link hop when the destination is a Z-neighbor.
-        // The hop map cannot express a cardinal count that means "in the *other* mesh's
-        // coordinate space" — coordinate subtraction across meshes is meaningless — so for
-        // Z-link inter-mesh setups we emit {Z: 1} for direct Z-neighbors. For inter-mesh
-        // setups whose stitching is cardinal (no Z direction assigned in the MGD), fall
-        // through to the displacement-based path so we preserve the prior behavior for
-        // cardinal-stitched multi-mesh topologies.
-        if (src_node_id.mesh_id != dst_node_id.mesh_id) {
-            const auto z_neighbors = get_all_neighbor_node_ids(src_node_id, RoutingDirection::Z);
-            const bool dst_is_direct_z_neighbor =
-                std::find(z_neighbors.begin(), z_neighbors.end(), dst_node_id) != z_neighbors.end();
-            if (dst_is_direct_z_neighbor) {
-                return {{RoutingDirection::Z, 1}};
-            }
-            // Non-Z-neighbor cross-mesh: fall through to displacement. This matches main
-            // for cardinal-stitched multi-mesh and is a known approximation for Z-link
-            // multi-hop cross-mesh (which the 2D routing path doesn't depend on anyway).
+        // A direct Z-neighbor is emitted as {Z: 1}, whether or not it lives in the same mesh. Across
+        // meshes a hop map cannot express a cardinal count at all, since subtracting coordinates in
+        // two different meshes is meaningless. Within a mesh the skip is strictly shorter than the
+        // cardinal ring, so the fabric routing table takes it: a displacement-based map ({S: 3} for
+        // a 3-row skip) would attach the worker to the South router while the fabric routes the
+        // packet over Z, a first-hop mismatch that drops every packet and hangs the flow.
+        //
+        // Everything else -- cardinal-stitched multi-mesh and ordinary intra-mesh routes -- falls
+        // through to the displacement path. get_all_neighbor_node_ids returns empty on
+        // architectures without Z-links, so this is a no-op there.
+        const auto z_neighbors = get_all_neighbor_node_ids(src_node_id, RoutingDirection::Z);
+        const bool dst_is_direct_z_neighbor =
+            std::find(z_neighbors.begin(), z_neighbors.end(), dst_node_id) != z_neighbors.end();
+        if (dst_is_direct_z_neighbor) {
+            return {{RoutingDirection::Z, 1}};
         }
 
         const auto& src_coord = get_device_coord(src_node_id);
@@ -877,6 +875,43 @@ public:
         }
 
         return hops;
+    }
+
+    // The multicasts that cover the anchor's OWN row, which get_full_mcast_hops deliberately does not.
+    std::vector<std::unordered_map<RoutingDirection, uint32_t>> get_anchor_row_mcast_hops(
+        const FabricNodeId& src_node_id) const override {
+        std::vector<std::unordered_map<RoutingDirection, uint32_t>> patterns;
+        const uint32_t x_size = mesh_shape_[EW_DIM];
+        if (x_size <= 1) {
+            return patterns;
+        }
+
+        const auto make_hops = [](RoutingDirection dir, uint32_t count) {
+            std::unordered_map<RoutingDirection, uint32_t> hops;
+            for (const auto& direction : FabricContext::routing_directions) {
+                hops[direction] = 0;
+            }
+            hops[dir] = count;
+            return hops;
+        };
+
+        const auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
+        if (has_flag(fabric_type, FabricType::TORUS_X)) {
+            // One eastward sweep all the way round reaches every other column exactly once.
+            patterns.push_back(make_hops(RoutingDirection::E, x_size - 1));
+            return patterns;
+        }
+
+        const auto src_coord = get_device_coord(src_node_id);
+        const uint32_t east_hops = x_size - src_coord[EW_DIM] - 1;
+        const uint32_t west_hops = src_coord[EW_DIM];
+        if (east_hops > 0) {
+            patterns.push_back(make_hops(RoutingDirection::E, east_hops));
+        }
+        if (west_hops > 0) {
+            patterns.push_back(make_hops(RoutingDirection::W, west_hops));
+        }
+        return patterns;
     }
 
     uint32_t get_full_line_mcast_hops(RoutingDirection direction) const override {

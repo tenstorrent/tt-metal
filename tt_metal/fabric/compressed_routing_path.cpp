@@ -106,54 +106,107 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
         uint8_t ns_direction = 0;
         uint8_t ew_direction = 0;
 
-        auto is_ns = [](RoutingDirection d) { return d == RoutingDirection::N || d == RoutingDirection::S; };
-        auto is_ew = [](RoutingDirection d) { return d == RoutingDirection::E || d == RoutingDirection::W; };
-
         auto make_node = [mesh_id](uint16_t chip) { return tt::tt_fabric::FabricNodeId(mesh_id, chip); };
         auto next_dir = [&](uint16_t from_chip, uint16_t to_chip) {
             return control_plane.get_forwarding_direction(make_node(from_chip), make_node(to_chip));
         };
-        auto ns_bit = [](RoutingDirection d) { return (uint8_t)(d == RoutingDirection::S); };
-        auto ew_bit = [](RoutingDirection d) { return (uint8_t)(d == RoutingDirection::E); };
-        auto it = best_chip_sequence.cbegin();
+
+        bool seen_ns = false;
+        bool seen_ew = false;
         uint16_t prev_chip = src_chip_id;
-        auto consume_axis = [&](auto is_axis, auto dir_to_bit, uint8_t& hops, uint8_t& dir_bit) {
-            if (it == best_chip_sequence.cend()) {
-                return;
-            }
-            uint16_t curr_chip = *it;
+        for (uint16_t curr_chip : best_chip_sequence) {
             auto dir_opt = next_dir(prev_chip, curr_chip);
-            if (!dir_opt.has_value() || dir_opt.value() == RoutingDirection::NONE) {
-                TT_ASSERT(false, "Invalid direction between chips {} and {}", prev_chip, curr_chip);
-            }
-            if (!is_axis(*dir_opt)) {
-                return;  // start of other axis
-            }
-
-            dir_bit = dir_to_bit(*dir_opt);
-            do {
-                ++hops;
-                prev_chip = curr_chip;
-                ++it;
-                if (it == best_chip_sequence.cend()) {
-                    break;
+            TT_ASSERT(
+                dir_opt.has_value() && dir_opt.value() != RoutingDirection::NONE,
+                "Invalid direction between chips {} and {}",
+                prev_chip,
+                curr_chip);
+            const RoutingDirection d = dir_opt.value();
+            if (d == RoutingDirection::N || d == RoutingDirection::S) {
+                const uint8_t bit = (uint8_t)(d == RoutingDirection::S);
+                if (!seen_ns) {
+                    ns_direction = bit;
+                    seen_ns = true;
+                } else {
+                    TT_ASSERT(
+                        ns_direction == bit,
+                        "Non-monotone NS traversal is not supported: chip {} -> {}",
+                        prev_chip,
+                        curr_chip);
                 }
-                curr_chip = *it;
-                dir_opt = next_dir(prev_chip, curr_chip);
-                if (!dir_opt.has_value()) {
-                    break;
+                ++ns_hops;
+            } else if (d == RoutingDirection::E || d == RoutingDirection::W) {
+                const uint8_t bit = (uint8_t)(d == RoutingDirection::E);
+                if (!seen_ew) {
+                    ew_direction = bit;
+                    seen_ew = true;
+                } else {
+                    TT_ASSERT(
+                        ew_direction == bit,
+                        "Non-monotone EW traversal is not supported: chip {} -> {}",
+                        prev_chip,
+                        curr_chip);
                 }
-            } while (dir_opt.has_value() && is_axis(*dir_opt));
-        };
-
-        if (it != best_chip_sequence.cend()) {
-            // Consume NS first (if present), then EW
-            consume_axis(is_ns, ns_bit, ns_hops, ns_direction);
-            consume_axis(is_ew, ew_bit, ew_hops, ew_direction);
+                ++ew_hops;
+            } else {
+                TT_ASSERT(false, "Unexpected routing direction between chips {} and {}", prev_chip, curr_chip);
+            }
+            prev_chip = curr_chip;
         }
 
-        paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, ns_hops);
+        // turn_point marks the NS->EW turn position in the emitted route.
+        const uint8_t turn_point = ns_hops;
+        paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_point);
     }
+}
+
+// Builds the destination-indexed 2D routing table from first-hop directions. Axis decomposition
+// follows DOR: while rows differ the first hop is a Y move (N/S/Z) probed same-column, and once rows
+// match it is an X move (E/W) probed same-row.
+void indexed_route_vectors_t::calculate_chip_to_all_routing_fields(
+    const FabricNodeId& src_fabric_node_id, uint16_t num_chips) {
+    const auto mesh_id = src_fabric_node_id.mesh_id;
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Global mesh geometry: device tables are indexed by global chip ids and id->coord is row-major
+    // (y = id / x_size, x = id % x_size), mirroring compute_and_embed_2d_routing_path_table.
+    const MeshShape mesh_shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
+    const uint32_t y_size = mesh_shape[0];
+    const uint32_t x_size = mesh_shape[1];
+    TT_ASSERT(
+        y_size * x_size == num_chips && num_chips > 0,
+        "Indexed route vectors: mesh {} shape {}x{} does not match {} chips",
+        *mesh_id,
+        y_size,
+        x_size,
+        num_chips);
+
+    // The packer zeroes only the live [y_size,x_size] region; clear the full [64,4] slot so the memcpy
+    // into L1 is deterministic.
+    std::memset(data, 0, sizeof(data));
+
+    auto probe = [&control_plane, mesh_id](uint32_t src_chip, uint32_t dst_chip) {
+        const auto dir =
+            control_plane.get_forwarding_direction(FabricNodeId(mesh_id, src_chip), FabricNodeId(mesh_id, dst_chip));
+        TT_ASSERT(
+            dir.has_value() && dir.value() != RoutingDirection::NONE,
+            "Indexed route vectors: no first-hop direction from chip {} to chip {}",
+            src_chip,
+            dst_chip);
+        return control_plane.routing_direction_to_eth_direction(dir.value());
+    };
+    // Representative column 0 for Y probes, representative row 0 for X probes.
+    auto y_action = [&](uint32_t cur_y, uint32_t dst_y) { return probe(cur_y * x_size, dst_y * x_size); };
+    auto x_action = [&](uint32_t cur_x, uint32_t dst_x) { return probe(cur_x, dst_x); };
+
+    const bool ok = IndexedMeshRoutingFields::pack_indexed_route_vectors(data, y_size, x_size, y_action, x_action);
+    TT_ASSERT(
+        ok,
+        "Indexed route vectors: mesh {} shape {}x{} is not representable in the [64,4] indexed ABI "
+        "(an axis probe returned an off-axis direction, or the shape exceeds the bound)",
+        *mesh_id,
+        y_size,
+        x_size);
 }
 
 }  // namespace tt::tt_fabric

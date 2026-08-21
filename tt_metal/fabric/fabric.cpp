@@ -357,8 +357,12 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 // Template: ProgramDescriptor appends to .defines vector; Program calls add_defines().
 template <typename ProgramOrDescriptor>
 void inject_fabric_kernel_defines(
-    ProgramOrDescriptor& worker_program_or_desc, tt::tt_metal::KernelHandle& kernel_id, FabricApiType api_type) {
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    ProgramOrDescriptor& worker_program_or_desc,
+    tt::tt_metal::KernelHandle& kernel_id,
+    FabricApiType api_type) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
 
     auto add_kernel_defines = [&, kernel_ref = [&]() {
         if constexpr (std::is_same_v<std::decay_t<ProgramOrDescriptor>, tt::tt_metal::ProgramDescriptor>) {
@@ -383,6 +387,15 @@ void inject_fabric_kernel_defines(
     }
     if (fabric_context.is_2D_routing_enabled()) {
         add_kernel_defines({{"FABRIC_2D", "1"}});
+        // Workers in an express mesh produce indexed action maps instead of hop programs. All four
+        // ABI gates (this encode define, the CP table embed, the router decode define and its CT
+        // args) key on express_routing_enabled: the express_links expansion in mesh_graph.cpp is
+        // the only writer of intramesh Z edges, and express_routing_enabled is its validated
+        // echo -- so encode, L1 layout, and decode agree with route generation by construction.
+        for (const auto& [name, value] :
+             fabric_context.get_express_kernel_defines(control_plane, src_fabric_node_id.mesh_id)) {
+            add_kernel_defines({{name, value}});
+        }
     }
 }
 
@@ -489,7 +502,7 @@ void append_routing_plane_connection_manager_rt_args(
         worker_core,
         worker_args,
         core_type);
-    inject_fabric_kernel_defines(worker_program_or_desc, kernel_id, api_type);
+    inject_fabric_kernel_defines(src_fabric_node_id, worker_program_or_desc, kernel_id, api_type);
 }
 
 std::vector<uint32_t> get_forwarding_link_indices(
@@ -689,6 +702,38 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
     }
     if (fabric_context.is_2D_routing_enabled()) {
         defines.push_back({"FABRIC_2D", "1"});
+        // The 2D ABI is selected per mesh, so it cannot be resolved without knowing which mesh the
+        // kernel runs on. Refuse rather than return a set that silently encodes hop programs for a
+        // mesh whose L1 holds indexed vectors.
+        bool any_mesh_uses_express = false;
+        for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
+            any_mesh_uses_express = any_mesh_uses_express || control_plane.express_routing_enabled(mesh_id);
+        }
+        TT_FATAL(
+            !any_mesh_uses_express,
+            "get_fabric_kernel_defines() cannot select the 2D routing ABI on a fabric that has express "
+            "links; call the overload taking the kernel's FabricNodeId");
+    }
+    return defines;
+}
+
+std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id, tt::tt_fabric::FabricApiType api_type) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
+
+    std::vector<std::pair<std::string, std::string>> defines;
+    switch (api_type) {
+        case tt::tt_fabric::FabricApiType::Linear: defines.push_back({"API_TYPE_Linear", "1"}); break;
+        case tt::tt_fabric::FabricApiType::Mesh: defines.push_back({"API_TYPE_Mesh", "1"}); break;
+        default: TT_FATAL(false, "Unsupported FabricApiType: {}", static_cast<int>(api_type));
+    }
+    if (fabric_context.is_2D_routing_enabled()) {
+        defines.push_back({"FABRIC_2D", "1"});
+        for (const auto& [name, value] :
+             fabric_context.get_express_kernel_defines(control_plane, src_fabric_node_id.mesh_id)) {
+            defines.push_back({name, value});
+        }
     }
     return defines;
 }

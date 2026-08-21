@@ -1195,6 +1195,104 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     });
 }
 
+#if defined(FABRIC_EXPRESS_ENABLED)
+// clang-format off
+/**
+ * Splits ONE multicast operation across several connections: builds a single route map and sends an
+ * identical copy of it out every root output. Unlike the route variant above, which builds a
+ * different header per slot.
+ *
+ * Requires one direction-tagged slot and one header per root output, and fail-stops if a slot is
+ * missing rather than delivering to part of the range.
+ *
+ * Delivers locally when the root action carries LOCAL_DELIVER, i.e. when the range covers the source
+ * chip. Returns the root action byte; the caller must not repeat that local delivery.
+ *
+ * | Argument                   | Description                             | Type                                       | Required |
+ * |----------------------------|-----------------------------------------|--------------------------------------------|----------|
+ * | connection_manager         | Routing plane connection manager        | RoutingPlaneConnectionManager&             | True     |
+ * | route_id                   | Route holding one header per root output| uint8_t                                    | True     |
+ * | dst_dev_id                 | Range anchor device id                  | uint16_t                                   | True     |
+ * | dst_mesh_id                | Range anchor mesh id                    | uint16_t                                   | True     |
+ * | ranges                     | Multicast extents (E/W/N/S)             | const MeshMcastRange&                      | True     |
+ * | src_addr                   | Source L1 address                       | uint32_t                                   | True     |
+ * | size                       | Payload size in bytes                   | uint32_t                                   | True     |
+ * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader     | True     |
+ */
+// clang-format on
+FORCE_INLINE uint8_t fabric_multicast_source_inject_noc_unicast_write(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const MeshMcastRange& ranges,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
+    auto [headers, num_headers] = PacketHeaderPool::header_table[route_id];
+
+    // Re-encoded per header rather than copied between them, to avoid copying through volatile L1
+    // pointers.
+    const uint8_t root_action = fabric_set_indexed_mcast_route(
+        headers,
+        dst_dev_id,
+        dst_mesh_id,
+        ranges.e,
+        ranges.w,
+        ranges.n,
+        ranges.s,
+        FABRIC_EXPRESS_MESH_Y_SIZE,
+        FABRIC_EXPRESS_MESH_X_SIZE);
+    const uint8_t root_outputs = root_action & IndexedMeshRoutingFields::ACTION_ETH_MASK;
+
+    uint8_t copy_index = 0;
+    for (uint8_t dir = 0; dir < static_cast<uint8_t>(eth_chan_directions::COUNT); ++dir) {
+        if ((root_outputs & IndexedMeshRoutingFields::action_bit(static_cast<eth_chan_directions>(dir))) == 0) {
+            continue;
+        }
+        ASSERT(copy_index < num_headers);
+        volatile PACKET_HEADER_TYPE* header = headers + copy_index;
+        if (copy_index != 0) {
+            fabric_set_indexed_mcast_route(
+                header,
+                dst_dev_id,
+                dst_mesh_id,
+                ranges.e,
+                ranges.w,
+                ranges.n,
+                ranges.s,
+                FABRIC_EXPRESS_MESH_Y_SIZE,
+                FABRIC_EXPRESS_MESH_X_SIZE);
+        }
+        header->to_noc_unicast_write(noc_unicast_command_header, size);
+
+        bool injected = false;
+        connection_manager.for_each_with_tag(dir, [&](auto& sender, uint32_t, uint32_t) {
+            // One send per output even where several slots share a direction; a second send would
+            // deliver the subtree twice.
+            if (injected) {
+                return;
+            }
+            injected = true;
+            sender.wait_for_empty_write_slot();
+            sender.send_payload_without_header_non_blocking_from_address(src_addr, size);
+            sender.send_payload_flush_non_blocking_from_address(
+                reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
+        });
+        ASSERT(injected);
+        copy_index++;
+    }
+
+    // Injection bypasses the source RX, so no router decodes this chip's own action byte and this
+    // write is the only thing that delivers here. Exactly once, not once per copy.
+    if (root_action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER) {
+        noc_async_write(src_addr, noc_unicast_command_header.noc_address, size);
+    }
+
+    return root_action;
+}
+#endif
+
 // clang-format off
 /**
  * Multicast unicast write (stateful): updates only fields selected by UpdateMask, then submits the payload.
