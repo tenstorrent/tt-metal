@@ -12,11 +12,16 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
+from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.state_store import KdaStateStore
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
@@ -45,6 +50,16 @@ def get_block_timings() -> dict[int, dict[str, list[float]]]:
 # FABRIC_2D_TORUS_Y, where only the SP axis is wrapped into a ring.
 PerAxisTopology = Tuple[ttnn.Topology, ttnn.Topology]
 TopologyArg = Union[ttnn.Topology, PerAxisTopology]
+
+
+def is_kda_layer(model_cfg: type, layer_idx: int) -> bool:
+    """Whether this layer runs KDA linear attention instead of full attention.
+
+    Only a hybrid variant publishes ``mla_layer_ids``; every other model is full-attention
+    throughout, so the absence of that classmethod is the answer rather than a missing case.
+    """
+    mla_layer_ids = getattr(model_cfg, "mla_layer_ids", None)
+    return mla_layer_ids is not None and layer_idx not in mla_layer_ids()
 
 
 class TtPrefillBlock(LightweightModule):
@@ -86,7 +101,10 @@ class TtPrefillBlock(LightweightModule):
 
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm"):
             return False
-        if not ttMLA.check_cache_complete(cache_path, f"{prefix}.mla"):
+        # A KDA layer's attention weights are not checked here: ttKDA.check_cache_complete needs the
+        # mesh device to know the per-device shard shapes, and this check has none. An incomplete KDA
+        # cache is still caught, just later — load_kda_weights raises at block construction.
+        if not is_kda_layer(model_cfg, layer_idx) and not ttMLA.check_cache_complete(cache_path, f"{prefix}.mla"):
             return False
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.ffn_norm"):
             return False
@@ -154,18 +172,28 @@ class TtPrefillBlock(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
         )
 
-        # Build MLA cache
-        ttMLA.build_ttnn_cache(
-            state_dict=state_dict.get("mla_weights", {}),
-            cache_path=cache_path,
-            mesh_device=mesh_device,
-            config=config,
-            layer_idx=layer_idx,
-            seq_len=seq_len,
-            sp_axis=sp_axis,
-            tp_axis=tp_axis,
-            kv_only=kv_only,
-        )
+        # Build attention cache
+        if is_kda_layer(model_cfg, layer_idx):
+            ttKDA.build_ttnn_cache(
+                state_dict.get("kda_weights", {}),
+                cache_path,
+                mesh_device,
+                kimi_k3_kda_config(),
+                layer_idx,
+                tp_axis=tp_axis,
+            )
+        else:
+            ttMLA.build_ttnn_cache(
+                state_dict=state_dict.get("mla_weights", {}),
+                cache_path=cache_path,
+                mesh_device=mesh_device,
+                config=config,
+                layer_idx=layer_idx,
+                seq_len=seq_len,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                kv_only=kv_only,
+            )
 
         if kv_only:
             # The kv-only last layer has no ffn_norm / FFN / MoE.
@@ -280,6 +308,7 @@ class TtPrefillBlock(LightweightModule):
         self.topology = tp_topology  # forward()'s dense-FFN all-gather is on the TP axis (cluster_axis=1)
         self.kv_only = kv_only
         self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
+        self.is_kda = is_kda_layer(model_cfg, layer_idx)
         # The KV pad-zero and layer-ack path in forward() is the block's own: it addresses the
         # cache by global layer index and by the SP geometry of the activation slab, neither of
         # which belongs to whichever attention module a layer happens to build.
@@ -287,12 +316,13 @@ class TtPrefillBlock(LightweightModule):
         self.layer_num = layer_num
         self.sp_axis = sp_axis
         self.sp_factor = mesh_device.shape[sp_axis]
+        self.tp_axis = tp_axis
 
         emb_dim = config.hidden_size
 
         logger.info(
             f"Building TtPrefillBlock layer_idx={layer_idx} "
-            f"({'MoE' if self.is_moe else 'dense'}, kv_only={kv_only})"
+            f"({'MoE' if self.is_moe else 'dense'}, {'KDA' if self.is_kda else 'MLA'}, kv_only={kv_only})"
         )
 
         # --- Attention norm ---
@@ -308,30 +338,55 @@ class TtPrefillBlock(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
         )
 
-        # --- MLA ---
-        # In chunked prefill the MLA's seq_len sizes the gathered-KV ring buffer (= full per-user
-        # cache length), while the block's seq_len is the per-chunk size used by the MoE/FFN dispatch
-        # buffers. They are equal in the single-shot path (max_seq_len is None).
-        self.mla = ttMLA(
-            config,
-            state_dict.get("mla_weights", {}),  # Empty dict if cache exists
-            mesh_device,
-            layer_idx=layer_idx,
-            seq_len=max_seq_len if max_seq_len is not None else seq_len,
-            sp_axis=sp_axis,
-            tp_axis=tp_axis,
-            # Pass the full per-axis topology: MLA's q/kv/wo CCLs use the TP element (cluster_axis=
-            # tp_axis), but its ring-attention SDPA runs on the SP axis and needs the SP element.
-            topology=topology,
-            is_balanced=is_balanced,
-            weight_cache_path=weight_cache_path,
-            is_chunked=is_chunked,
-            active_seq_len=seq_len,
-            slot_num=slot_num,
-            layer_num=layer_num,
-            kv_only=kv_only,
-            sparse_kv_cache_format=sparse_kv_cache_format,
-        )
+        # --- Attention: KDA on a hybrid variant's linear-attention layers, MLA otherwise ---
+        if self.is_kda:
+            assert not kv_only, (
+                f"layer {layer_idx} is a KDA layer and writes no KV slab, so it cannot be the "
+                "kv_only migration layer"
+            )
+            self.mla = None
+            self.kda = ttKDA(
+                mesh_device,
+                kimi_k3_kda_config(),
+                state_dict.get("kda_weights", {}),  # empty dict if cache exists
+                layer_idx=layer_idx,
+                weight_cache_path=weight_cache_path,
+                # One TT_CCL per mesh: its semaphores are hardware resources, so a second instance
+                # alongside the model's own would claim a second set of them.
+                tt_ccl=get_tt_ccl(mesh_device) if mesh_device.shape[tp_axis] > 1 else None,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                # Scalar TP element: KDA's only collective is the output projection's reduce-scatter
+                # on cluster_axis=tp_axis. Passed explicitly because ttKDA reads its topology from
+                # here and NOT from program_config.tp_ccl_topology.
+                topology=tp_topology,
+                program_config=kimi_k3_program_config(tp_ccl_topology=tp_topology),
+            )
+        else:
+            self.kda = None
+            # In chunked prefill the MLA's seq_len sizes the gathered-KV ring buffer (= full per-user
+            # cache length), while the block's seq_len is the per-chunk size used by the MoE/FFN
+            # dispatch buffers. They are equal in the single-shot path (max_seq_len is None).
+            self.mla = ttMLA(
+                config,
+                state_dict.get("mla_weights", {}),  # Empty dict if cache exists
+                mesh_device,
+                layer_idx=layer_idx,
+                seq_len=max_seq_len if max_seq_len is not None else seq_len,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                # Pass the full per-axis topology: MLA's q/kv/wo CCLs use the TP element (cluster_axis=
+                # tp_axis), but its ring-attention SDPA runs on the SP axis and needs the SP element.
+                topology=topology,
+                is_balanced=is_balanced,
+                weight_cache_path=weight_cache_path,
+                is_chunked=is_chunked,
+                active_seq_len=seq_len,
+                slot_num=slot_num,
+                layer_num=layer_num,
+                kv_only=kv_only,
+                sparse_kv_cache_format=sparse_kv_cache_format,
+            )
 
         if kv_only:
             # Last layer: no FFN norm, no FFN/MoE. Forward returns after MLA.
@@ -534,6 +589,7 @@ class TtPrefillBlock(LightweightModule):
         return_indexer_indices: bool = False,
         index_kv_cache: Optional[ttnn.Tensor] = None,
         metadata: Optional[ttnn.Tensor] = None,
+        kda_states: Optional[KdaStateStore] = None,
     ):
         """
         Args:
@@ -572,6 +628,9 @@ class TtPrefillBlock(LightweightModule):
                 sees the ROTATED block-cyclic layout, so the per-chip real-token split depends on
                 BOTH values (see MoeGate.build_padding_config).
             padding_side: "right" or "left"; threaded to the MoE FFN for padding-aware routing.
+            kda_states: the caller's live KDA carries, required on a KDA layer and unused otherwise.
+                This layer reads its own entry and writes back the replacement ttKDA returns, so the
+                store is what makes a second chunk continue the recurrence rather than restart it.
 
         Returns:
             (output_tensor, kv_cache) where kv_cache is a host tensor or None, or
@@ -588,30 +647,42 @@ class TtPrefillBlock(LightweightModule):
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
         seq_len_local = attn_norm_out.shape[2]
-        mla_out = self.mla.forward(
-            attn_norm_out,
-            rope_tensors,
-            kvpe_cache,
-            cache_layer_idx=cache_layer_idx,
-            actual_start=actual_start,
-            cache_user_id=cache_user_id,
-            return_kv_intermediates=return_kv_intermediates,
-            indexer_indices=indexer_indices,
-            return_indexer_indices=return_indexer_indices,
-            index_kv_cache=index_kv_cache,
-            metadata=metadata,
-        )
         kv_intermediates = None
         mla_indices = None  # GLM-5.2 reuse: this layer's top-k indices (full layer) for downstream shared layers
-        # A kv_only layer's MLA returns None (it fills the cache and stops before attention/output), so it
-        # has nothing to unpack; the kv_only short-circuit below returns the matching (None, ...) arity.
-        if not self.kv_only:
-            if return_kv_intermediates and return_indexer_indices:
-                mla_out, kv_intermediates, mla_indices = mla_out
-            elif return_kv_intermediates:
-                mla_out, kv_intermediates = mla_out
-            elif return_indexer_indices:
-                mla_out, mla_indices = mla_out
+        if self.is_kda:
+            assert kda_states is not None, f"layer {self.layer_idx} is a KDA layer and needs kda_states"
+            # A KDA layer's history lives in its recurrent carry, not in a KV slab, so nothing here feeds
+            # the KV-shaped protocols: no cache to ack, no KV stages to surface, no indexer top-k.
+            assert d2h_service is None and on_layer_complete is None, (
+                f"layer {self.layer_idx} is a KDA layer and writes no KV slab; the per-layer KV ack has "
+                "nothing to signal here and the migration path does not cover the recurrent carry"
+            )
+            assert not return_kv_intermediates, f"layer {self.layer_idx} is a KDA layer and has no KV stages"
+            assert not return_indexer_indices, f"layer {self.layer_idx} is a KDA layer and has no indexer"
+            attn_out = self._kda_path(attn_norm_out, kda_states)
+        else:
+            attn_out = self.mla.forward(
+                attn_norm_out,
+                rope_tensors,
+                kvpe_cache,
+                cache_layer_idx=cache_layer_idx,
+                actual_start=actual_start,
+                cache_user_id=cache_user_id,
+                return_kv_intermediates=return_kv_intermediates,
+                indexer_indices=indexer_indices,
+                return_indexer_indices=return_indexer_indices,
+                index_kv_cache=index_kv_cache,
+                metadata=metadata,
+            )
+            # A kv_only layer's MLA returns None (it fills the cache and stops before attention/output), so
+            # it has nothing to unpack; the kv_only short-circuit below returns the matching (None, ...) arity.
+            if not self.kv_only:
+                if return_kv_intermediates and return_indexer_indices:
+                    attn_out, kv_intermediates, mla_indices = attn_out
+                elif return_kv_intermediates:
+                    attn_out, kv_intermediates = attn_out
+                elif return_indexer_indices:
+                    attn_out, mla_indices = attn_out
         ttnn.deallocate(attn_norm_out)
 
         # Chunked-prefill migration handoff. MLA's update_padded_kv_cache wrote this chunk as full
@@ -687,13 +758,13 @@ class TtPrefillBlock(LightweightModule):
                 return None, None, None
             return None, None
 
-        x = ttnn.add(x, mla_out)
-        ttnn.deallocate(mla_out)
+        x = ttnn.add(x, attn_out)
+        ttnn.deallocate(attn_out)
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
             _t_mla = time.perf_counter()
         if return_kv_intermediates:
-            # post-MLA residual (x + mla_out), TP-sharded on hidden.
+            # post-MLA residual (x + attn_out), TP-sharded on hidden.
             kv_intermediates["post_mla_residual"] = ttnn.clone(x)
 
         # --- FFN ---
@@ -739,6 +810,39 @@ class TtPrefillBlock(LightweightModule):
         if return_indexer_indices:
             return x, kv_cache, mla_indices
         return x, kv_cache
+
+    def _kda_path(self, attn_norm_out: ttnn.Tensor, kda_states: KdaStateStore) -> ttnn.Tensor:
+        """KDA linear attention: 4D TP-sharded in, 4D TP-sharded residual-shaped out.
+
+        KDA's input projection is sharded on its INPUT dim, so it needs the whole emb_dim row that a
+        TP-sharded activation only holds a slice of — hence the all_gather, as in the dense FFN path.
+        Its output projection reduce-scatters back onto the block's own sharding, so only the
+        single-TP-device case (no reduce-scatter, no leading unit batch) needs reshaping by hand.
+        """
+        if self.mesh_device.shape[self.tp_axis] > 1:
+            gathered = ttnn.all_gather(
+                attn_norm_out,
+                dim=-1,
+                cluster_axis=self.tp_axis,
+                num_links=self.num_links,
+                topology=self.topology,
+            )
+        else:
+            gathered = attn_norm_out
+        # ttKDA takes [B, T, emb_dim]; the block carries B in a leading 4th dim.
+        hidden = ttnn.squeeze(gathered, dim=0)
+
+        attn_out, new_state = self.kda.forward(hidden, kda_states.get(self.layer_idx))
+        kda_states.replace(self.layer_idx, new_state)
+
+        # `hidden` shares its buffer with `gathered`, so freeing the gather frees both. attn_norm_out is
+        # the caller's and is freed there, so the single-TP-device aliasing is left alone.
+        if gathered is not attn_norm_out:
+            ttnn.deallocate(gathered)
+
+        if len(attn_out.shape) == 3:
+            attn_out = ttnn.unsqueeze(attn_out, dim=0)
+        return attn_out
 
     def _moe_path(
         self,
