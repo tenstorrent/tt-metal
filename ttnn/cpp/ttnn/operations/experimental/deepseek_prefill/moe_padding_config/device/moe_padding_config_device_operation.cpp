@@ -80,6 +80,15 @@ void validate_runtime_args(
     };
     validate_meta(tensor_args.actual_start, "actual_start");
     validate_meta(tensor_args.actual_end, "actual_end");
+    // create_descriptor emits a single TensorAccessorArgs built from actual_start and the kernel uses it
+    // for both metadata reads, so a differing memory config on actual_end would resolve its address
+    // through the wrong bank table.
+    TT_FATAL(
+        tensor_args.actual_start.memory_config() == tensor_args.actual_end.memory_config(),
+        "metadata tensors actual_start and actual_end must share a memory config because one "
+        "TensorAccessor serves both reads (got buffer types {} and {})",
+        tensor_args.actual_start.memory_config().buffer_type(),
+        tensor_args.actual_end.memory_config().buffer_type());
 }
 
 }  // namespace
@@ -124,7 +133,10 @@ ttsl::hash::hash_t MoePaddingConfigDeviceOperation::compute_program_hash(
         config.dtype(),
         config.layout(),
         config.memory_config(),
-        config.padded_shape());
+        config.padded_shape(),
+        // The metadata accessor is baked into the writer's compile-time args, so the bank table it
+        // selects cannot be refreshed on a cache hit; validate_runtime_args pins actual_end to match.
+        tensor_args.actual_start.memory_config());
 }
 
 tt::tt_metal::ProgramDescriptor MoePaddingConfigDeviceOperation::ProgramFactory::create_descriptor(

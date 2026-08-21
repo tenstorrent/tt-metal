@@ -117,6 +117,15 @@ void validate_runtime_args(
         };
         validate_meta(tensor_args.slot_idx.value(), "slot_idx");
         validate_meta(tensor_args.kv_actual_global.value(), "kv_actual_global");
+        // create_descriptor emits a single TensorAccessorArgs built from slot_idx and the writer uses it
+        // for both metadata reads, so a differing memory config on kv_actual_global would resolve its
+        // address through the wrong bank table.
+        TT_FATAL(
+            tensor_args.slot_idx->memory_config() == tensor_args.kv_actual_global->memory_config(),
+            "metadata tensors slot_idx and kv_actual_global must share a memory config because one "
+            "TensorAccessor serves both reads (got buffer types {} and {})",
+            tensor_args.slot_idx->memory_config().buffer_type(),
+            tensor_args.kv_actual_global->memory_config().buffer_type());
     }
 
     if (!tensor_args.slot_idx.has_value()) {
@@ -249,7 +258,11 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         input.memory_config(),
         input.padded_shape(),
         cache.memory_config(),
-        cache.padded_shape());
+        cache.padded_shape(),
+        // On the metadata path the writer bakes a TensorAccessorArgs built from slot_idx into its
+        // compile-time args, so the bank table it selects cannot be refreshed on a cache hit. Only the
+        // config is keyed, never the value; kv_actual_global is pinned to match by validate_runtime_args.
+        tensor_args.slot_idx.has_value() ? tensor_args.slot_idx->memory_config() : MemoryConfig{});
 }
 
 tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(

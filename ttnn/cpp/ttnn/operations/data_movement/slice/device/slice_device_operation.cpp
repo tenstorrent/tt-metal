@@ -335,7 +335,9 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
         operation_attributes.output_mem_config,
         operation_attributes.sub_core_grids,
         factory.index(),
-        tensor_args.start_tensor.has_value());
+        tensor_args.start_tensor.has_value(),
+        tensor_args.end_tensor.has_value(),
+        tensor_args.preallocated_output.has_value());
 
     const auto& input = tensor_args.input;
     hash = ttsl::hash::hash_objects(
@@ -359,6 +361,20 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
             st.memory_config());
     }
 
+    // SliceTileTensorArgsProgramFactory gives the end tensor its own TensorAccessorArgs in the reader's
+    // compile-time args, so its memory config picks the bank table and cannot be refreshed on a hit.
+    if (tensor_args.end_tensor.has_value()) {
+        const auto& et = tensor_args.end_tensor.value();
+        hash = ttsl::hash::hash_objects(
+            hash,
+            et.logical_shape().rank(),
+            et.logical_shape(),
+            et.padded_shape(),
+            et.layout(),
+            et.dtype(),
+            et.memory_config());
+    }
+
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     hash = ttsl::hash::hash_objects(
         hash,
@@ -368,6 +384,22 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
         output_spec.layout(),
         output_spec.data_type(),
         output_spec.memory_config());
+
+    // compute_output_specs derives the spec above from operation_attributes.output_mem_config, but
+    // create_output_tensors hands the program the caller's tensor verbatim when one is supplied, and
+    // every factory bakes a TensorAccessorArgs for that destination buffer into its writer's
+    // compile-time args. Key on the real destination so it cannot alias a differently-placed one.
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto& po = tensor_args.preallocated_output.value();
+        hash = ttsl::hash::hash_objects(
+            hash,
+            po.logical_shape().rank(),
+            po.logical_shape(),
+            po.padded_shape(),
+            po.layout(),
+            po.dtype(),
+            po.memory_config());
+    }
 
     return hash;
 }

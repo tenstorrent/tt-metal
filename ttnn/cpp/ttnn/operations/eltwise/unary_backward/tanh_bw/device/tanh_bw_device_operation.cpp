@@ -136,6 +136,16 @@ ttsl::hash::hash_t TanhBwDeviceOperation::compute_program_hash(
         grad_output.memory_config(),
         input_shape.volume());
 
+    // args only carries the requested output_dtype/output_memory_config; when the caller supplies its
+    // own output tensor that is what the factory actually binds, sizing the destination CB from its
+    // dtype and baking a TensorAccessorArgs for its buffer into the writer's compile-time args. Neither
+    // can be refreshed on a cache hit, so key on the tensor that is really used.
+    if (tensor_args.preallocated_input_grad.has_value()) {
+        const auto& preallocated = tensor_args.preallocated_input_grad.value();
+        hash =
+            ttsl::hash::hash_objects(hash, preallocated.dtype(), preallocated.layout(), preallocated.memory_config());
+    }
+
     return hash;
 }
 
