@@ -506,7 +506,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH
         // Path to a Factory System Descriptor (FSD) textproto describing the as-built/expected topology.
-        // When set, tooling may map against it instead of live-discovering the PSD.
+        // When set, tooling may map against it instead of live-discovering the PSD, and it lets
+        // Fabric 2.0 statically reroute traffic around broken links.
         // Default: unset (fall back to live PSD discovery)
         // Usage: export TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=/path/to/fsd.textproto
         // See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.

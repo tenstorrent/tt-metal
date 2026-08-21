@@ -190,7 +190,8 @@ class RunTimeOptions {
     // plumbed to every rank as the TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH env var (env/RTOptions is the
     // single source of truth for the path). It lets rank-binding generation map against the known-good
     // factory topology instead of relying on live discovery, which is slow and can misbehave on
-    // partially reachable or degraded clusters.
+    // partially reachable or degraded clusters. When provided, it also lets Fabric 2.0 statically
+    // reroute traffic around broken links.
     // See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.
     std::string factory_system_descriptor_path;
 

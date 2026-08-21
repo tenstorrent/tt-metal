@@ -3013,8 +3013,9 @@ def new_mode_flow(
     type=click.Path(path_type=Path),
     help="Path to a Factory System Descriptor (FSD) textproto describing the as-built/expected topology. "
     "The path is exported to every rank via TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH and folded into the Phase 1 "
-    "cache fingerprint. Relative paths are resolved against the launch directory. Falls back to live PSD discovery "
-    "when omitted. See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.",
+    "cache fingerprint. Relative paths are resolved against the launch directory. When provided, it also lets "
+    "Fabric 2.0 statically reroute traffic around broken links. Falls back to live PSD discovery when omitted. "
+    "See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.",
 )
 @click.option(
     "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
