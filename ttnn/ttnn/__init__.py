@@ -130,6 +130,8 @@ from ttnn._ttnn.multi_device import (
     get_size as distributed_context_get_size,
     barrier as distributed_context_barrier,
     allgather_int as distributed_context_allgather_int,
+    send_bytes as distributed_context_send_bytes,
+    recv_bytes as distributed_context_recv_bytes,
     subcontext_id as distributed_context_subcontext_id,
     subcontext_count as distributed_context_subcontext_count,
     subcontext_sizes as distributed_context_subcontext_sizes,
@@ -435,6 +437,7 @@ from ttnn.core import (
     split_work_to_cores,
     grid_to_cores,
     get_current_command_queue_id_for_thread,
+    ttnn_dtype_to_torch_dtype,
 )
 
 tile_size = ttnn._ttnn.tensor.tile_size
@@ -644,6 +647,8 @@ Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
 
 transformer.SparseKVFormat = SparseKVFormat
+
+QkvCausalConv1dSiluProgramConfig = ttnn._ttnn.operations.experimental.kda.QkvCausalConv1dSiluProgramConfig
 
 IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 

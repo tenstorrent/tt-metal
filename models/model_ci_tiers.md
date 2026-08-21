@@ -122,6 +122,13 @@ it is classified differently on different systems.
 | DistilBERT | WH N150 |
 | SqueezeBERT | WH N150 |
 | MNIST MLP classifier | WH N150 |
+| EfficientDet-D0 | WH N150 |
+| MobileNetV3 | WH N150 |
+| RetinaNet | WH N150 |
+| SSD512 | WH N150 |
+| VAD v2 | WH N150 |
+| OpenPDN-MNIST | WH N150 |
+| YuNet | WH N150 |
 
 
 # Pipelines

@@ -164,6 +164,7 @@ enum class SfpuType {
     addcdiv,
     lerp,
     snake_beta,
+    mac,
     xielu,
     lgamma,
     polygamma,

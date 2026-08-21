@@ -59,6 +59,11 @@ public:
     const std::vector<std::uint32_t>& get_bank_ids_from_logical_core(
         BufferType buffer_type, const CoreCoord& logical_core) const;
 
+    // Whether logical_core has a bank of buffer_type. Same lookup as
+    // get_bank_ids_from_logical_core(), but reports absence instead of throwing, for callers
+    // validating a core before they need its bank ids.
+    bool has_bank(BufferType buffer_type, const CoreCoord& logical_core) const;
+
     DeviceAddr get_base_allocator_addr(const HalMemType& mem_type) const;
 
     const AllocatorConfig& get_config() const;
