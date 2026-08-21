@@ -719,18 +719,24 @@ def test_exp_ring_joint_attention_sparse_frames_accuracy(add_last_frame, reset_s
     ring-aligned — the simplest shape that still routes every ring iteration through the mask.
     """
     num_devices = detect_devices_without_opening()
-    sp_size, _tp_size, _arch = calculate_mesh_config(num_devices)
+    sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
+    is_galaxy = arch_type.startswith("galaxy")
 
-    nf = sp_size  # one frame per shard
-    # 8 tiles per frame; also the q/k chunk size. exp requires the streaming-compute path, which
-    # needs qk_in0_num_subblocks > 1 and Sk_chunk_t % (dst_size / qk_out_subblock_h) == 0. A tiny
-    # 2-tile chunk (tokens_per_frame=64) fails both and trips the "Streaming compute must be enabled"
-    # static_assert; Sq=Sk=8 satisfies streaming for dst_size 8 and 16. See use_streaming_compute in
-    # exp_ring_joint_sdpa_program_factory.cpp.
-    tokens_per_frame = 256
+    # The exp op fuses the all-gather into the per-q_chunk loop and places the MUX fabric-writer cores
+    # in the last grid columns. The gather therefore only runs on cores that hold a q_chunk, so the op
+    # only produces correct results when EVERY sdpa core has work: total_q_chunks == num_sdpa_cores,
+    # i.e. num_q_chunks == sdpa_grid.x AND B*NH == sdpa_grid.y. (A small shape leaves the MUX columns
+    # idle -> no gather -> garbage K/V on every device.) So we mirror the tuned dense config's exact
+    # core fill, but impose a one-frame-per-shard block structure on top.
+    sdpa_cols = GALAXY_SDPA_COLS if is_galaxy else NON_GALAXY_SDPA_COLS  # == sdpa_grid.x
+    q_chunk = 256  # Sq=Sk=8 tiles -> streaming-compute path (see use_streaming_compute in the factory)
+    num_q_chunks = sdpa_cols
+    n_local = num_q_chunks * q_chunk  # per-device tokens; num_q_chunks q chunks exactly fill the columns
+    nf = sp_size  # one frame per shard (frame R == device R's local shard)
+    tokens_per_frame = n_local  # each device holds exactly one frame (== its whole local shard)
     window = 3
-    b, nh, d = 1, 8, HEAD_DIM
-    total_seq = nf * tokens_per_frame
+    b, nh, d = 1, HEADS_PER_DEVICE * tp_size, HEAD_DIM  # NH_local == sdpa_grid.y fills the rows
+    total_seq = sp_size * n_local
 
     # Centered window: frame q attends [q-window//2, q+window//2] (clamped), optionally the last frame.
     allow = torch.zeros(nf, nf, dtype=torch.uint8)
@@ -750,8 +756,8 @@ def test_exp_ring_joint_attention_sparse_frames_accuracy(add_last_frame, reset_s
         nh,
         total_seq,
         d,
-        tokens_per_frame,  # q_chunk_size
-        tokens_per_frame,  # k_chunk_size
+        q_chunk,  # q_chunk_size (Sq=8)
+        q_chunk,  # k_chunk_size (Sk=8)
         ttnn.bfloat16,
         tokens_per_frame=tokens_per_frame,
         num_frames_padded=nf,
@@ -763,23 +769,26 @@ def test_exp_ring_joint_attention_sparse_frames_accuracy(add_last_frame, reset_s
 # === TEST 2c: DENSE AT THE SPARSE SHAPE (isolation control) ===
 @pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
 def test_exp_ring_joint_attention_dense_small_shape_accuracy(reset_seeds):
-    """Control for the sparse-frames test: runs the SAME small shape (total_seq = sp*256, q/k chunk
-    256 → Sq=Sk=8) with NO sparse mask, checked against the dense SDPA reference. Isolates whether a
-    PCC failure comes from the sparse logic or from the streaming compute path at this shape (the
-    tuned dense accuracy test uses Sq=7/Sk=16, so Sq=Sk=8 is otherwise unexercised). If THIS fails,
-    the bug is shape/streaming, not sparse; if it passes but the sparse test fails, the bug is sparse.
+    """Control for the sparse-frames test: runs the SAME core-filling shape (num_q_chunks == sdpa_cols,
+    NH_local == grid rows, q/k chunk 256 → Sq=Sk=8) with NO sparse mask, checked against the dense
+    SDPA reference. Isolates the streaming path at Sq=Sk=8 (the tuned accuracy test uses Sq=7/Sk=16)
+    from the sparse logic. If THIS fails, the bug is the streaming path at Sq=8, not sparse; if it
+    passes but the sparse test fails, the bug is the sparse logic.
     """
     num_devices = detect_devices_without_opening()
-    sp_size, _tp_size, _arch = calculate_mesh_config(num_devices)
-    tokens_per_frame = 256
-    total_seq = sp_size * tokens_per_frame
+    sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
+    is_galaxy = arch_type.startswith("galaxy")
+    sdpa_cols = GALAXY_SDPA_COLS if is_galaxy else NON_GALAXY_SDPA_COLS
+    q_chunk = 256
+    n_local = sdpa_cols * q_chunk  # num_q_chunks == sdpa_cols -> fills the grid columns
+    total_seq = sp_size * n_local
     run_exp_ring_joint_sdpa_nightly(
         1,  # b
-        8,  # nh
+        HEADS_PER_DEVICE * tp_size,  # nh -> NH_local == grid rows
         total_seq,
         HEAD_DIM,
-        tokens_per_frame,  # q_chunk_size
-        tokens_per_frame,  # k_chunk_size
+        q_chunk,  # q_chunk_size (Sq=8)
+        q_chunk,  # k_chunk_size (Sk=8)
         ttnn.bfloat16,
     )
 
