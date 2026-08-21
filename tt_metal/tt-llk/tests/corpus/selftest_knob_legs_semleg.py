@@ -365,7 +365,12 @@ def mk_silicon_sweep(ev, perf_values):
         return 0
 
     sw._device_job = fake_device_job
-    sw._perf_value = lambda row, sel, label, leg, tag="silicon": perf_values[sel]
+    # marker/per_tile: the lane-ET dual-metric read (KERNEL cell) goes
+    # through the same stub — kernel == diag values keeps every ratio
+    # assertion unchanged.
+    sw._perf_value = lambda row, sel, label, leg, tag="silicon", marker=None, per_tile=None: perf_values[
+        sel
+    ]
     sw._classify_texts = lambda row, sel, leg, tag="classify": {"math.elf": "x"}
     sw._macro_lb_gate = lambda row, cls, result: None
     sw._issue_slot_check = lambda row, result: None

@@ -19,10 +19,25 @@ Encodes the silicon protocol as executable policy:
      sha256, SHA256SUMS manifest.
 
 Rows/markers/nodes live in sweep_2x2_ops.tsv, never in this file.  Absent
-rows are machine-readable SKIPs.  Metric: post CSV mean(<metric>) at the
-row's marker (KERNEL for fire-and-forget replay-launch shapes, TILE_LOOP for
-eltwise suites) divided by tile_cnt = cycles/tile (per_tile=0 rows keep the
-absolute scoped reading, e.g. the Reduce-SDPA REDUCE_SDPA_BODY pair).
+rows are machine-readable SKIPs.
+
+DUAL METRIC (owner ratification 2026-08-21, lane ET): every perf leg records
+TWO zones from ONE device run —
+  * DIAGNOSTIC zone (result "cells"): post CSV mean(<metric>) at the row's
+    marker column (TILE_LOOP / *_BODY), divided by tile_cnt for per_tile
+    rows (per_tile=0 rows keep the absolute scoped reading).  Mechanism
+    attribution needs it; it NEVER decides a verdict.  The §1 issue-slot
+    lower-bound gate applies to this zone only.
+  * VERDICT zone (result "kernel_cells"): mean(<metric>) at the
+    drain-inclusive KERNEL marker, absolute cycles.  WIN/PARITY/LOSS class,
+    kernel_causal_pct and kernel_vs_hand_pct — and every RED-severity
+    class-transition acceptance check — come from these cells, anchored by
+    the KERNEL-scoped v2 baseline (--kernel-baseline).  The KERNEL zone is
+    structurally drain-inclusive: helpers/src/trisc.cpp wraps run_kernel()
+    AND tensix_sync() in ZONE_SCOPED("KERNEL").
+Both zones come from the same copied post CSV (every perf module emits a
+KERNEL row), so the dual metric costs zero extra device time; adopted
+(--prev-run) cells backfill their kernel cells from the archived CSVs.
 
 Post-review hardening (PULL_ANALYSIS-20260817 §4):
   * the toolchain pin is the CC1PLUS binary (resolved via g++
@@ -850,6 +865,42 @@ CHIP = {"bh": "blackhole", "wh": "wormhole"}
 SELECTORS = ("sem-corr", "sem-perf", "hand-corr", "hand-perf")
 PERF_RUNS = 3
 
+# VERDICT METRIC (owner ratification 2026-08-21, lane ET): WIN/PARITY/LOSS
+# verdicts are decided by END-TO-END DEVICE KERNEL TIME — the drain-inclusive
+# KERNEL profiler marker — for EVERY row.  The row's own `marker` column
+# (TILE_LOOP / *_BODY) stays recorded as the DIAGNOSTIC zone: mechanism
+# attribution needs it, but it never decides a verdict.  Every perf leg
+# records BOTH zones from ONE device run: the post CSV carries a KERNEL
+# marker row for every module (verified across all 14 perf modules of the
+# pin-15 weekly), so the dual metric is purely report-side.  KERNEL cells
+# are ABSOLUTE scoped cycles (no per-tile division: tile normalization
+# cancels in every verdict ratio, and absolute end-to-end time is the
+# ratified quantity).  The issue-slot lower-bound gate applies ONLY to the
+# diagnostic zone — KERNEL is structurally drain-inclusive (the zone closes
+# after the math thread's final drain), so a KERNEL reading can never be the
+# fire-and-forget under-count the §1 caveat guards against.
+KERNEL_MARKER = "KERNEL"
+
+# ES-F1 (lane ET): after any TENSIX TIMED OUT device leg the sweep runs the
+# sanctioned fleet flush (~/fleet/flush.sh — kills stale workloads + resets
+# the local TT devices; owner mandate 2026-08-21) under both flocks, then
+# proves device health with ONE known-good correctness node before any
+# further device work.  Overridable via SWEEP_FLUSH_SH /
+# SWEEP_FLUSH_VERIFY_NODE (sweep_2x2.conf exports them).
+FLUSH_VERIFY_NODE = (
+    "test_sfpu_unary.py::test_eltwise_unary_sfpu"
+    "[formats:Float32->Float32-approx_mode:No-mathop:Expm1-fast_mode:No"
+    "-dest_acc:No-input_dimensions:[64, 64]]"
+)
+
+
+def kernel_scope(row):
+    """Baseline/scoreboard scope string for a row's end-to-end KERNEL cells
+    (the VERDICT zone).  Distinct from row_scope() so v1 (diagnostic) and v2
+    (KERNEL) baseline anchors never collide in the (id, scope, selector)
+    keyspace."""
+    return f"KERNEL_{row.get('metric', 'MATH_ISOLATE')}_E2E"
+
 
 def sha256(path):
     h = hashlib.sha256()
@@ -1060,6 +1111,19 @@ def load_config(path):
                 f"config row {row['op']}: schedule must be 'nightly' or "
                 f"'weekly' (got '{row['schedule']}')"
             )
+        # Optional sem_class column (ops v4, lane ET): '' (auto — the
+        # fresh_cpp node-id recognizer decides) or 'measure-identical'
+        # (force the eqz-class one-leg measurement on a row whose sem
+        # OFF/ON legs are byte-identical BY DESIGN: typed-vs-hand A/Bs
+        # where the flag axis is a control, e.g. the TopK typed selector,
+        # and hand-only kernels whose row exists as a KERNEL-scope anchor
+        # + engagement tripwire).  Data, not a code fork.
+        row["sem_class"] = (row.get("sem_class") or "").strip()
+        if row["sem_class"] not in ("", "measure-identical"):
+            sys.exit(
+                f"config row {row['op']}: sem_class must be '' or "
+                f"'measure-identical' (got '{row['sem_class']}')"
+            )
         if row["kind"] == "pinpair" and not row["pin_flags"]:
             sys.exit(f"config row {row['op']}: kind=pinpair requires pin_flags")
         # Sweep-hardening 2: a perf leg without its own correctness leg
@@ -1111,9 +1175,16 @@ def fresh_body_row(row):
     and fill both sem cells, mirroring the hand OFF==ON byte-identity rule
     verbatim; verdict vs hand computes normally.  Non-fresh rows keep the
     refusal shortcut: their sem arm IS the compiler's engagement vehicle,
-    so byte-identity there means exactly 'planner never fired'."""
+    so byte-identity there means exactly 'planner never fired'.
+
+    Rows may also OPT IN via the ops-TSV sem_class column
+    ('measure-identical', lane ET): same one-leg measurement semantics for
+    typed-vs-hand A/B rows whose sem arm is not a fresh_cpp body but whose
+    OFF==ON identity is likewise the designed end state, not a refusal."""
     if row["kind"] == "pinpair":
         return False
+    if row.get("sem_class") == "measure-identical":
+        return True
     return any(
         "fresh_cpp" in (row["nodes"].get(sel) or "") for sel in ("sem-perf", "sem-corr")
     )
@@ -1176,6 +1247,15 @@ class Sweep:
     # Class default keeps object.__new__-driven selftests (which bypass
     # __init__) on the legacy serial path; __init__ sets the real mode.
     exec_mode = "serial"
+    # ES-F1 device-health state machine (lane ET): 'clean' until a device
+    # leg TENSIX-times-out; 'poisoned' from that moment until a fleet
+    # flush + known-good verify node PASSES.  Every leg that FAILS while
+    # poisoned is marked DEVICE-POISONED (collateral suspect, its RED
+    # carries the marker) — a hung tensix core fails every subsequent job
+    # until reset, and unmarked collateral REDs used to read as real
+    # kernel regressions.  Class attr so object.__new__ selftests see
+    # 'clean'.
+    device_state = "clean"
 
     def __init__(self, args):
         self.a = args
@@ -2525,6 +2605,7 @@ exit $RC
         if self.a.dry_run:
             print(f"DRY-RUN device job: {row['op']}/{sel} {label}-{leg}")
             return 0
+        entered_poisoned = self.device_state == "poisoned"
         subprocess.run(
             [
                 "flock",
@@ -2545,10 +2626,26 @@ exit $RC
         self._hash_build(rt, work / "TEXT_HASHES.txt")
         self._archive_build(rt, work / "elf")
         shutil.rmtree(rt, ignore_errors=True)
-        if rc != 0 or not self._passed(work / "log.txt"):
-            self.reds.append(
-                f"{row['op']}/{sel} {label}-{leg}: device job FAIL rc={rc}"
+        # ES-F1: a TENSIX-timed-out leg triggers flush + verify IMMEDIATELY
+        # (before the next device job); a leg failing while the device is
+        # still unrecovered is marked a DEVICE-POISONED collateral suspect.
+        timed_out = self._scan_device_timeout(work / "log.txt", rc)
+        if timed_out:
+            (work / "DEVICE_TIMEOUT.txt").write_text(
+                "TENSIX timeout detected in this leg (ES-F1 trigger)\n"
             )
+        if rc != 0 or not self._passed(work / "log.txt"):
+            msg = f"{row['op']}/{sel} {label}-{leg}: device job FAIL rc={rc}"
+            if timed_out:
+                msg += " [TENSIX TIMED OUT — flush+verify triggered (ES-F1)]"
+            elif entered_poisoned:
+                why = (
+                    "ran after an unrecovered TENSIX timeout — collateral "
+                    "suspect, not a proven kernel failure"
+                )
+                self._mark_poisoned_leg(work, why)
+                msg += f" [DEVICE-POISONED: {why}]"
+            self.reds.append(msg)
         elif (
             expected_texts is not None
             and self._texts_of(work / "TEXT_HASHES.txt") != expected_texts
@@ -2557,19 +2654,161 @@ exit $RC
                 f"{row['op']}/{sel} {label}-{leg}: device job .text differs "
                 "from this run's classify build (non-deterministic build?)"
             )
+        if timed_out:
+            self._flush_and_verify(f"{row['op']}/{sel} {label}-{leg} ({tag})")
         return rc
 
-    def _perf_value(self, row, sel, label, leg, tag="silicon"):
+    # ---------------- ES-F1: TENSIX-timeout flush + verify ----------------
+    @staticmethod
+    def _scan_device_timeout(log_path, rc):
+        """True when a device leg hit a tensix hang: the harness prints
+        'TENSIX TIMED OUT', or the wrapping `timeout` killed the session
+        (rc 124) — a hung core makes pytest itself hang."""
+        if rc == 124:
+            return True
+        try:
+            return "TENSIX TIMED OUT" in pathlib.Path(log_path).read_text(
+                errors="replace"
+            )
+        except OSError:
+            return False
+
+    @staticmethod
+    def _mark_poisoned_leg(work, why):
+        """Stamp one leg's evidence as a DEVICE-POISONED collateral suspect
+        (marker file + log line); assembly surfaces it in the RED."""
+        work = pathlib.Path(work)
+        try:
+            (work / "DEVICE_POISONED.txt").write_text(why + "\n")
+            with (work / "log.txt").open("a") as f:
+                f.write(f"DEVICE-POISONED: {why}\n")
+        except OSError:
+            pass
+
+    def _flush_and_verify(self, context):
+        """ES-F1: recover a hung device IN-RUN.  Called the moment a device
+        leg is detected TENSIX-timed-out: sets device_state='poisoned', runs
+        the fleet flush under both flocks, then proves health with one
+        known-good correctness node.  Only a verify PASS returns the state
+        to 'clean'; until then every failing leg is marked DEVICE-POISONED.
+        All evidence lands under <ev>/device-flush/."""
+        self.device_state = "poisoned"
+        if self.a.dry_run:
+            return
+        n = getattr(self, "_flush_count", 0) + 1
+        self._flush_count = n
+        fdir = self.ev / "device-flush" / f"flush-{n:02d}"
+        fdir.mkdir(parents=True, exist_ok=True)
+        (fdir / "context.txt").write_text(context + "\n")
+        flush = pathlib.Path(
+            os.environ.get(
+                "SWEEP_FLUSH_SH", str(pathlib.Path.home() / "fleet" / "flush.sh")
+            )
+        )
+        if not flush.is_file():
+            self.reds.append(
+                f"TENSIX timeout ({context}) but the fleet flush script is "
+                f"missing ({flush}) — device stays POISONED; subsequent "
+                "failing legs are collateral suspects"
+            )
+            return
+        print(f"ES-F1: TENSIX timeout ({context}) — flushing device via {flush}")
+        r = subprocess.run(
+            [
+                "flock",
+                "-x",
+                DEVICE_LOCK,
+                "-c",
+                f"flock -x {SILICON_LOCK} -c {shlex.quote(str(flush))}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        (fdir / "flush.log").write_text(
+            f"rc={r.returncode}\n--- stdout ---\n{r.stdout or ''}"
+            f"--- stderr ---\n{r.stderr or ''}"
+        )
+        if r.returncode != 0:
+            self.reds.append(
+                f"device flush FAILED rc={r.returncode} after TENSIX timeout "
+                f"({context}) — device stays POISONED (see {fdir})"
+            )
+            return
+        # Verify: one known-good correctness node, stock flags, own
+        # RUNNER_TEMP, both flocks — device health proof, not a metric.
+        node = os.environ.get("SWEEP_FLUSH_VERIFY_NODE", FLUSH_VERIFY_NODE)
+        vdir = fdir / "verify"
+        vdir.mkdir(parents=True, exist_ok=True)
+        rt = vdir / "rt"
+        rt.mkdir(exist_ok=True)
+        (vdir / "node.txt").write_text(node + "\n")
+        inner = vdir / "inner.sh"
+        inner.write_text(
+            f"""#!/usr/bin/env bash
+cd "{PYDIR}" || exit 97
+mapfile -t NODES < "{vdir}/node.txt"
+env CHIP_ARCH=blackhole LLK_HOME="{LLK}" RUNNER_TEMP="{rt}" \\
+TT_LLK_EXTRA_COMPILER_OPTIONS="{TRUE_DEFAULT_FLAGS}" \\
+timeout 1200 "{self.python}" -m pytest -q -v "${{NODES[@]}}" > "{vdir}/log.txt" 2>&1
+RC=$?
+echo $RC > "{vdir}/rc.txt"
+exit $RC
+"""
+        )
+        inner.chmod(0o755)
+        subprocess.run(
+            [
+                "flock",
+                "-x",
+                DEVICE_LOCK,
+                "-c",
+                f"flock -x {SILICON_LOCK} -c {shlex.quote(str(inner))}",
+            ],
+            check=False,
+        )
+        vrc = (
+            int((vdir / "rc.txt").read_text().strip() or 99)
+            if (vdir / "rc.txt").is_file()
+            else 99
+        )
+        shutil.rmtree(rt, ignore_errors=True)
+        if vrc == 0 and self._passed(vdir / "log.txt"):
+            self.device_state = "clean"
+            self.notes = getattr(self, "notes", [])
+            self.notes.append(
+                f"ES-F1: device flushed + verify PASS after TENSIX timeout "
+                f"({context}); run resumed on a proven-healthy device "
+                f"(evidence {fdir})"
+            )
+            print("ES-F1: post-flush verify PASS — device recovered")
+        else:
+            self.reds.append(
+                f"post-flush device verify FAILED rc={vrc} ({context}) — "
+                f"device stays POISONED; subsequent failing legs are "
+                f"collateral suspects (see {vdir})"
+            )
+
+    def _perf_value(
+        self, row, sel, label, leg, tag="silicon", marker=None, per_tile=None
+    ):
         """Parse the row's scoped metric from the copied post CSV (lock long
         released).  per_tile rows divide by tile_cnt (cycles/tile); absolute
-        rows (e.g. Reduce-SDPA REDUCE_SDPA_BODY) sum the marker's rows."""
+        rows (e.g. Reduce-SDPA REDUCE_SDPA_BODY) sum the marker's rows.
+
+        marker/per_tile override the row's columns for the DUAL-METRIC read
+        (lane ET): the KERNEL cell is the SAME copied CSV parsed at
+        marker=KERNEL_MARKER, per_tile=False — one device run, two zones,
+        zero extra device time."""
+        marker = row["marker"] if marker is None else marker
+        per_tile = row["per_tile"] if per_tile is None else per_tile
         work = self.ev / row["op"] / tag / sel / f"{label}-{leg}"
         col = f"mean({row['metric']})"
         for post in sorted(work.glob("perf_data/*/*.post.csv")):
             total, tiles, seen = 0.0, 1.0, False
             with post.open() as f:
                 for rec in csv.DictReader(f):
-                    if rec.get("marker") != row["marker"] or col not in rec:
+                    if rec.get("marker") != marker or col not in rec:
                         continue
                     total += float(rec[col])
                     if not seen:
@@ -2579,8 +2818,16 @@ exit $RC
                             tiles = 1.0
                     seen = True
             if seen:
-                return total / (tiles or 1.0) if row["per_tile"] else total
+                return total / (tiles or 1.0) if per_tile else total
         return None
+
+    def _kernel_value(self, row, sel, label, leg, tag="silicon"):
+        """The row's end-to-end VERDICT cell: mean(<metric>) at the
+        drain-inclusive KERNEL marker, absolute scoped cycles (see the
+        KERNEL_MARKER block comment for the ratified semantics)."""
+        return self._perf_value(
+            row, sel, label, leg, tag=tag, marker=KERNEL_MARKER, per_tile=False
+        )
 
     def _result_skeleton(self, row, classifications):
         return {
@@ -2589,8 +2836,13 @@ exit $RC
             "kind": row["kind"],
             "marker": row["marker"],
             "scope": row_scope(row),
+            # Dual-metric (lane ET): cells = the row's DIAGNOSTIC zone
+            # (marker column); kernel_cells = the drain-inclusive KERNEL
+            # zone that DECIDES the verdict (owner ratification 2026-08-21).
+            "kernel_scope": kernel_scope(row),
             "classify": classifications,
             "cells": {},
+            "kernel_cells": {},
             "runs": {},
             "notes": [],
         }
@@ -2655,15 +2907,23 @@ exit $RC
             result["notes"].append(msg)
 
     def _issue_slot_check(self, row, result):
-        """HANDOFF §1 metric caveat as code: a BODY-family reading on a
-        macro-launch shape must be >= the payload's issue-slot lower bound
-        (issue_slot_lb, cycles/tile), else the marker reading is INVALID and
-        the KERNEL marker is required.  The check result is recorded either
-        way so every measured cell carries its validity evidence."""
+        """HANDOFF §1 metric caveat as code, DIAGNOSTIC-ZONE ONLY (owner
+        ratification 2026-08-21): a BODY-family reading on a macro-launch
+        shape must be >= the payload's issue-slot lower bound
+        (issue_slot_lb, cycles/tile), else the DIAGNOSTIC cell is
+        INVALID_MARKER.  KERNEL cells are exempt by construction — the
+        KERNEL zone is structurally drain-inclusive, so it can never be the
+        fire-and-forget under-count this gate guards against.  Verdicts are
+        decided by the KERNEL cells, so a diag-invalid reading with a
+        parsable KERNEL twin is a recorded diagnostic loss (note), not a
+        run-blocking RED; only a diag-invalid cell WITHOUT a KERNEL twin
+        still escalates (the row would otherwise book no valid metric at
+        all)."""
         lb = row["issue_slot_lb"]
         if lb is None:
             return
         cells = result["cells"]
+        kcells = result.get("kernel_cells") or {}
         checked, invalid = [], []
         for cell, val in list(cells.items()):
             if not isinstance(val, (int, float)):
@@ -2671,18 +2931,28 @@ exit $RC
             if val < lb:
                 cells[cell] = "INVALID_MARKER"
                 invalid.append(f"{cell}={val:.2f}")
-                self.reds.append(
-                    f"{row['op']}/{cell}: INVALID_MARKER — {row['marker']} "
-                    f"reading {val:.2f} < issue-slot lower bound {lb:g}; "
-                    "KERNEL marker required"
-                )
+                if isinstance(kcells.get(cell), (int, float)):
+                    result["notes"].append(
+                        f"{cell}: diagnostic-zone INVALID_MARKER — "
+                        f"{row['marker']} reading {val:.2f} < issue-slot "
+                        f"lower bound {lb:g}; diag cell invalidated, verdict "
+                        "decided by the KERNEL cell (drain-inclusive by "
+                        "construction, ratified 2026-08-21)"
+                    )
+                else:
+                    self.reds.append(
+                        f"{row['op']}/{cell}: INVALID_MARKER — {row['marker']} "
+                        f"reading {val:.2f} < issue-slot lower bound {lb:g} "
+                        "AND no parsable KERNEL cell — the row books no "
+                        "valid metric"
+                    )
             else:
                 checked.append(f"{cell}={val:.2f}")
         if invalid:
             result["notes"].append(
                 f"issue-slot check FAIL ({', '.join(invalid)} < {lb:g}): "
-                f"{row['marker']} is not a valid metric zone for this "
-                "macro-launch shape — re-measure with the KERNEL marker"
+                f"{row['marker']} is not a valid DIAGNOSTIC zone for this "
+                "macro-launch shape (KERNEL cells carry the verdict)"
             )
         elif checked:
             result["notes"].append(
@@ -2690,6 +2960,29 @@ exit $RC
                 f"issue-slot lower bound {lb:g} cycles/tile "
                 f"({row['marker']} reading valid for this macro-launch shape)"
             )
+
+    def _kernel_cell_gate(self, row, result):
+        """Fail-closed dual-metric integrity (lane ET): a measured leg whose
+        diagnostic cell parsed but whose KERNEL cell did not means the
+        VERDICT zone is missing from the copied CSV — a marker rename /
+        harness drift that must never let the row silently fall back to the
+        diagnostic metric.  RED, never silent.  (Refusal/None cells and
+        dry runs are exempt — nothing was measured.)"""
+        if self.a.dry_run:
+            return
+        kcells = result.get("kernel_cells") or {}
+        for cell, val in (result.get("cells") or {}).items():
+            if not isinstance(val, (int, float)):
+                continue
+            if not isinstance(kcells.get(cell), (int, float)):
+                msg = (
+                    f"{row['op']}/{cell}: diagnostic cell measured "
+                    f"({val:.2f}) but the KERNEL cell is unparsable — the "
+                    "verdict zone is missing from the perf CSV (marker "
+                    "drift?): RED"
+                )
+                self.reds.append(msg)
+                result["notes"].append(msg)
 
     # ---------------- batched silicon executor (laneBU) ----------------
     # See the module docstring "Batched silicon execution" for the protocol
@@ -3078,9 +3371,15 @@ exit $RC
         except ValueError:
             rc = 99
         if rc != 0 or not self._passed(work / "log.txt"):
-            self.reds.append(
-                f"{row['op']}/{sel} {label}-{leg}: device job FAIL rc={rc}"
-            )
+            msg = f"{row['op']}/{sel} {label}-{leg}: device job FAIL rc={rc}"
+            if (work / "DEVICE_POISONED.txt").is_file():
+                # ES-F1: the executor marked this leg a collateral suspect
+                # (it failed in/after a TENSIX-timed-out session).
+                why_lines = (
+                    (work / "DEVICE_POISONED.txt").read_text().strip().splitlines()
+                )
+                msg += f" [DEVICE-POISONED: {why_lines[0] if why_lines else ''}]"
+            self.reds.append(msg)
             return rc or 99
         try:
             cached_key = json.loads((work / "jobkey.json").read_text())
@@ -3463,6 +3762,7 @@ exit $RC
             f"batched session {gdir.name}/{name}: {len(nodes)} node(s), "
             f"{len(jobs)} leg(s)"
         )
+        entered_poisoned = self.device_state == "poisoned"
         subprocess.run(
             [
                 "flock",
@@ -3479,6 +3779,34 @@ exit $RC
             else 99
         )
         self._split_batch_session(sdir, jobs, session_rc, gctx)
+        # ES-F1: a TENSIX timeout anywhere in this session poisons the
+        # device for every co-scheduled leg — mark this session's FAILED
+        # legs as collateral suspects (a hung core fails everything after
+        # it), flush + verify before the next session.  A session entered
+        # on an already-poisoned (unrecovered) device marks its failed
+        # legs the same way.
+        timed_out = self._scan_device_timeout(sdir / "log.txt", session_rc)
+        if timed_out or entered_poisoned:
+            why = (
+                "TENSIX timeout in this batched session — co-scheduled "
+                "failure is a collateral suspect, not a proven kernel failure"
+                if timed_out
+                else "session ran after an unrecovered TENSIX timeout — "
+                "collateral suspect, not a proven kernel failure"
+            )
+            for job in jobs:
+                rcf = job["work"] / "rc.txt"
+                try:
+                    jrc = int(rcf.read_text().strip() or 99) if rcf.is_file() else 99
+                except ValueError:
+                    jrc = 99
+                if jrc != 0 or not self._passed(job["work"] / "log.txt"):
+                    self._mark_poisoned_leg(job["work"], why)
+        if timed_out:
+            (sdir / "DEVICE_TIMEOUT.txt").write_text(
+                "TENSIX timeout detected in this session (ES-F1 trigger)\n"
+            )
+            self._flush_and_verify(f"batched session {gdir.name}/{name}")
 
     def _batched_silicon(self, gated, wave=None):
         """Executor entry: gated = [(row, classifications)] rows the silicon
@@ -3661,6 +3989,7 @@ exit $RC
                 result["notes"].append(f"STOP: {sel} correctness failed; perf withheld")
                 return result
         samples = {sel: [] for sel in ("sem-perf", "hand-perf")}
+        ksamples = {sel: [] for sel in ("sem-perf", "hand-perf")}
         for r in range(1, PERF_RUNS + 1):
             for sel in ("sem-perf", "hand-perf"):  # alternating gen/hand
                 if not row["nodes"][sel]:
@@ -3676,15 +4005,26 @@ exit $RC
                 val = self._perf_value(row, sel, f"r{r}", "default")
                 if val is not None:
                     samples[sel].append(val)
+                kval = self._kernel_value(row, sel, f"r{r}", "default")
+                if kval is not None:
+                    ksamples[sel].append(kval)
         for sel, cell in PINPAIR_CELLS.items():
             src = samples[sel]
+            ksrc = ksamples[sel]
             result["runs"][f"{sel}/{cell}_samples"] = src
+            result["runs"][f"{sel}/{cell}_kernel_samples"] = ksrc
             result["cells"][cell] = (sum(src) / len(src)) if src else None
+            result["kernel_cells"][cell] = (sum(ksrc) / len(ksrc)) if ksrc else None
         self._issue_slot_check(row, result)
         c = result["cells"]
         gen, hand = c.get("generated"), c.get("handwritten_replay")
         if isinstance(gen, (int, float)) and isinstance(hand, (int, float)) and hand:
             result["vs_hand_pct"] = 100.0 * (gen - hand) / hand
+        kc = result["kernel_cells"]
+        kgen, khand = kc.get("generated"), kc.get("handwritten_replay")
+        if isinstance(kgen, (int, float)) and isinstance(khand, (int, float)) and khand:
+            result["kernel_vs_hand_pct"] = 100.0 * (kgen - khand) / khand
+        self._kernel_cell_gate(row, result)
         self._measured_flags_gate(row, classifications, result)
         return result
 
@@ -3737,6 +4077,8 @@ exit $RC
             cls = classifications.get(sel, {})
             if cls.get("status") == "COMPILE_FAIL":
                 result["cells"][cells[0]] = result["cells"][cells[1]] = None
+                result["kernel_cells"][cells[0]] = None
+                result["kernel_cells"][cells[1]] = None
                 result["notes"].append(f"{sel}: COMPILE_FAIL — perf blocked")
                 continue
             identical = cls.get("all") == "IDENTICAL"
@@ -3745,6 +4087,9 @@ exit $RC
                     "sem-perf OFF/ON byte-identical: recorded refusal, no device run"
                 )
                 result["cells"]["sem_off"] = result["cells"]["sem_on"] = (
+                    "REFUSAL_BYTE_IDENTICAL"
+                )
+                result["kernel_cells"]["sem_off"] = result["kernel_cells"]["sem_on"] = (
                     "REFUSAL_BYTE_IDENTICAL"
                 )
                 continue
@@ -3765,6 +4110,7 @@ exit $RC
                     f"{sel}: OFF==ON byte-identical — one physical leg fills both cells"
                 )
             samples = {leg: [] for leg in legs}
+            ksamples = {leg: [] for leg in legs}
             for r in range(1, PERF_RUNS + 1):
                 for leg in legs:  # alternating OFF/ON inside each round
                     self._device_job(
@@ -3778,19 +4124,38 @@ exit $RC
                     val = self._perf_value(row, sel, f"r{r}", leg)
                     if val is not None:
                         samples[leg].append(val)
+                    # Dual metric: the KERNEL cell from the SAME copied CSV.
+                    kval = self._kernel_value(row, sel, f"r{r}", leg)
+                    if kval is not None:
+                        ksamples[leg].append(kval)
             for leg, cell in zip(("off", "on"), cells):
                 src = samples[leg] if leg in samples else samples["off"]
+                ksrc = ksamples[leg] if leg in ksamples else ksamples["off"]
                 result["runs"][f"{sel}/{cell}_samples"] = src
+                result["runs"][f"{sel}/{cell}_kernel_samples"] = ksrc
                 result["cells"][cell] = (sum(src) / len(src)) if src else None
+                result["kernel_cells"][cell] = (sum(ksrc) / len(ksrc)) if ksrc else None
         # marker validity first: an INVALID_MARKER cell must not feed a ratio
         self._issue_slot_check(row, result)
-        # derived ratios
+        # derived ratios — the kernel_* pair DECIDES the row's verdict class
+        # (owner ratification 2026-08-21); the diagnostic-zone pair stays
+        # recorded for mechanism attribution.
         c = result["cells"]
         num = lambda x: isinstance(x, (int, float))
         if num(c.get("sem_off")) and num(c.get("sem_on")) and c["sem_off"]:
             result["causal_pct"] = 100.0 * (c["sem_on"] - c["sem_off"]) / c["sem_off"]
         if num(c.get("sem_on")) and num(c.get("hand_on")) and c["hand_on"]:
             result["vs_hand_pct"] = 100.0 * (c["sem_on"] - c["hand_on"]) / c["hand_on"]
+        kc = result["kernel_cells"]
+        if num(kc.get("sem_off")) and num(kc.get("sem_on")) and kc["sem_off"]:
+            result["kernel_causal_pct"] = (
+                100.0 * (kc["sem_on"] - kc["sem_off"]) / kc["sem_off"]
+            )
+        if num(kc.get("sem_on")) and num(kc.get("hand_on")) and kc["hand_on"]:
+            result["kernel_vs_hand_pct"] = (
+                100.0 * (kc["sem_on"] - kc["hand_on"]) / kc["hand_on"]
+            )
+        self._kernel_cell_gate(row, result)
         self._measured_flags_gate(row, classifications, result)
         return result
 
@@ -3949,6 +4314,7 @@ exit $RC
                 continue
             # 5. perf: 3 fresh processes per leg, alternating OFF/knob.
             samples = {"off": [], "knob": []}
+            ksamples = {"off": [], "knob": []}
             for r in range(1, PERF_RUNS + 1):
                 for leg, flags in legs_spec:
                     self._device_job(
@@ -3965,9 +4331,22 @@ exit $RC
                     val = self._perf_value(row, sel, f"r{r}", leg, tag=tag)
                     if val is not None:
                         samples[leg].append(val)
+                    kval = self._kernel_value(row, sel, f"r{r}", leg, tag=tag)
+                    if kval is not None:
+                        ksamples[leg].append(kval)
             cell = {leg: (sum(v) / len(v)) if v else None for leg, v in samples.items()}
             if cell["off"] and cell["knob"]:
                 cell["delta_pct"] = 100.0 * (cell["knob"] - cell["off"]) / cell["off"]
+            # Dual metric (lane ET): the knob's end-to-end effect, from the
+            # same device runs, report-side.
+            for leg, v in ksamples.items():
+                cell[f"kernel_{leg}"] = (sum(v) / len(v)) if v else None
+            if cell["kernel_off"] and cell["kernel_knob"]:
+                cell["kernel_delta_pct"] = (
+                    100.0
+                    * (cell["kernel_knob"] - cell["kernel_off"])
+                    / cell["kernel_off"]
+                )
             if knob in LICENSED_KNOBS:
                 cell["licensed"] = True  # never merge into unlicensed cells
             entry["cells"] = cell
@@ -4013,6 +4392,24 @@ exit $RC
                         f"{cell_selector(r, cell)}\t{cyc}\t{status}\t"
                         f"{cc1}\t{sim_sha}\t{self.ev.name}\n"
                     )
+                # Dual metric: KERNEL (verdict) cells under their own scope
+                # string — these rows are the seeding source for the
+                # KERNEL-scoped v2 baseline.
+                kscope = r.get("kernel_scope")
+                if not kscope:
+                    continue
+                for cell, val in (r.get("kernel_cells") or {}).items():
+                    status = (
+                        "measured"
+                        if isinstance(val, (int, float))
+                        else (val or "missing")
+                    )
+                    cyc = f"{val}" if isinstance(val, (int, float)) else ""
+                    f.write(
+                        f"{r['corpus_id']}\tbh\tdevice_cycles\t{kscope}\t"
+                        f"{cell_selector(r, cell)}\t{cyc}\t{status}\t"
+                        f"{cc1}\t{sim_sha}\t{self.ev.name}\n"
+                    )
         lines = [
             "# 2x2 sweep scoreboard",
             "",
@@ -4020,22 +4417,29 @@ exit $RC
             f"- cc1plus sha256 (primary pin): `{self.info['cc1plus_sha256']}`",
             f"- driver sha256 (secondary): `{self.info['compiler_sha256']}`",
             "",
-            "| op | marker | sem OFF | sem ON | causal | hand | vs hand | notes |",
-            "|---|---|---:|---:|---:|---:|---:|---|",
+            "| op | marker | sem OFF | sem ON | causal | hand | vs hand "
+            "| e2e sem ON | e2e hand | e2e causal | e2e vs hand | notes |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
         ]
         fmt = lambda v: f"{v:.3f}" if isinstance(v, (int, float)) else (v or "—")
         for r in results:
             c = r.get("cells", {})
+            kc = r.get("kernel_cells") or {}
             if r["kind"] == "pinpair":
                 # gen-vs-hand pair at the row's pinned flag set: the generated
                 # cell rides the "sem ON" column, hand is hand.
                 so, sn = "—", fmt(c.get("generated"))
                 h = fmt(c.get("handwritten_replay"))
+                ksn = fmt(kc.get("generated"))
+                kh = fmt(kc.get("handwritten_replay"))
             else:
                 so, sn = fmt(c.get("sem_off")), fmt(c.get("sem_on"))
                 h = fmt(c.get("hand_on", c.get("hand_off")))
+                ksn = fmt(kc.get("sem_on"))
+                kh = fmt(kc.get("hand_on", kc.get("hand_off")))
             lines.append(
-                "| {op} | {m} | {so} | {sn} | {cz} | {h} | {vh} | {n} |".format(
+                "| {op} | {m} | {so} | {sn} | {cz} | {h} | {vh} "
+                "| {ksn} | {kh} | {kcz} | {kvh} | {n} |".format(
                     op=r["op"],
                     m=r["marker"],
                     so=so,
@@ -4043,11 +4447,26 @@ exit $RC
                     cz=f"{r['causal_pct']:+.2f}%" if "causal_pct" in r else "—",
                     h=h,
                     vh=f"{r['vs_hand_pct']:+.2f}%" if "vs_hand_pct" in r else "—",
+                    ksn=ksn,
+                    kh=kh,
+                    kcz=(
+                        f"{r['kernel_causal_pct']:+.2f}%"
+                        if "kernel_causal_pct" in r
+                        else "—"
+                    ),
+                    kvh=(
+                        f"{r['kernel_vs_hand_pct']:+.2f}%"
+                        if "kernel_vs_hand_pct" in r
+                        else "—"
+                    ),
                     n="; ".join(r.get("notes", [])),
                 )
             )
         for s in skips:
-            lines.append(f"| {s['op']} | — | — | — | — | — | — | {s['reason']} |")
+            lines.append(
+                f"| {s['op']} | — | — | — | — | — | — | — | — | — | — | "
+                f"{s['reason']} |"
+            )
         (self.ev / "SCOREBOARD.md").write_text("\n".join(lines) + "\n")
 
     def emit_sha256sums(self):
@@ -4109,11 +4528,14 @@ exit $RC
         return cycles, classes
 
     @staticmethod
-    def _derived_class(baseline, r):
+    def _derived_class(baseline, r, scope=None):
         """win/parity/loss from the baseline's measured sem cells (schema-1
-        fallback when no expected_class column exists)."""
-        off = baseline.get((r["corpus_id"], r["scope"], cell_selector(r, "sem_off")))
-        on = baseline.get((r["corpus_id"], r["scope"], cell_selector(r, "sem_on")))
+        fallback when no expected_class column exists).  `scope` overrides
+        the result's diagnostic scope (e.g. the KERNEL scope for the v2
+        baseline)."""
+        scope = scope or r["scope"]
+        off = baseline.get((r["corpus_id"], scope, cell_selector(r, "sem_off")))
+        on = baseline.get((r["corpus_id"], scope, cell_selector(r, "sem_on")))
         if not (off and on and min(off)):
             return None
         pct = 100.0 * (min(on) - min(off)) / min(off)
@@ -4130,28 +4552,67 @@ exit $RC
         return a if cls._RAG_ORDER[a] >= cls._RAG_ORDER[b] else b
 
     @staticmethod
-    def _row_class(r):
-        """WIN/PARITY/LOSS band for a row's streamed verdict (the sem-vs-hand
-        sign convention the scoreboard uses: <-0.5% win, <=+0.5% parity)."""
+    def _band(v):
+        """The sem-vs-hand sign convention the scoreboard uses:
+        <-0.5% win, <=+0.5% parity."""
+        return "WIN" if v < -0.5 else ("PARITY" if v <= 0.5 else "LOSS")
+
+    @classmethod
+    def _row_class(cls, r):
+        """WIN/PARITY/LOSS band for a row's streamed verdict, DECIDED BY THE
+        KERNEL (end-to-end) ratio — owner ratification 2026-08-21.  Results
+        without a kernel_cells key (pre-dual-metric evidence replayed by
+        selftests/old scoreboards) keep the legacy diagnostic banding."""
+        c = r.get("cells") or {}
+        if any(v == "REFUSAL_BYTE_IDENTICAL" for v in c.values()):
+            return "REFUSAL"
+        v = r.get("kernel_vs_hand_pct")
+        if isinstance(v, (int, float)):
+            return cls._band(v)
+        if "kernel_cells" not in r:  # legacy result payload
+            v = r.get("vs_hand_pct")
+            if isinstance(v, (int, float)):
+                return cls._band(v)
+        return "UNMEASURED"
+
+    @classmethod
+    def _diag_row_class(cls, r):
+        """The DIAGNOSTIC-zone band (the row's marker column) — recorded for
+        the verdict-metric DELTA report, never a verdict."""
         c = r.get("cells") or {}
         if any(v == "REFUSAL_BYTE_IDENTICAL" for v in c.values()):
             return "REFUSAL"
         v = r.get("vs_hand_pct")
         if isinstance(v, (int, float)):
-            return "WIN" if v < -0.5 else ("PARITY" if v <= 0.5 else "LOSS")
+            return cls._band(v)
         return "UNMEASURED"
 
-    def _row_verdict(self, r, baseline, base_classes, prev):
+    def _row_verdict(
+        self, r, baseline, base_classes, prev, kbaseline=None, kbase_classes=None
+    ):
         """The per-row acceptance computation of report(), factored out so
         the silicon phase can STREAM each row's verdict the moment its
         cells complete (ROW-VERDICT.json) and the final REPORT.md is an
         aggregation of the IDENTICAL logic — the row line is byte-equal
         whether computed at completion time or at the end.  Pure over
-        (result row, baseline, prev): no self.reds side effects, so
+        (result row, baselines, prev): no self.reds side effects, so
         streaming + final aggregation never double-book a RED.
+
+        DUAL-METRIC ACCEPTANCE (owner ratification 2026-08-21, lane ET):
+        kbaseline/kbase_classes are the KERNEL-scoped (v2) baseline maps —
+        the VERDICT anchors.  Class transitions (win→loss flip, win→parity
+        erosion, loss growth) and per-cell absolute drift carry RED
+        severity on the KERNEL cells/ratios; the diagnostic-zone checks
+        stay recorded but are CAPPED AT YELLOW (prefixed 'diag') once the
+        row has any KERNEL baseline anchor.  HANDOVER RULE: a row with NO
+        kernel anchors yet (v2 baseline unseeded, or a legacy result
+        payload) keeps the legacy full-severity diagnostic checks — the
+        drift tripwire never goes dark during the v1→v2 migration.
 
         Returns {'scope', 'verdicts', 'col', 'rag'} (rag is row-local;
         report() folds it into the run verdict with _worst_rag)."""
+        kbaseline = kbaseline or {}
+        kbase_classes = kbase_classes or {}
         max_abs_drift_pct = getattr(self.a, "max_abs_drift_pct", 10.0)
         red_loss_growth_pct = getattr(self.a, "red_loss_growth_pct", 5.0)
         max_drift_pct = getattr(self.a, "max_drift_pct", 5.0)
@@ -4159,10 +4620,21 @@ exit $RC
         verdicts = []
         rag = "GREEN"
         c = r.get("cells", {})
+        kc = r.get("kernel_cells") if isinstance(r.get("kernel_cells"), dict) else {}
         scope = r.get("scope") or f"{r['marker']}_MATH_ISOLATE_PER_TILE"
         r = dict(r, scope=scope)
-        expected = base_classes.get((r["corpus_id"], scope)) or self._derived_class(
-            baseline, r
+        kscope = r.get("kernel_scope")
+        has_kernel_anchor = bool(kscope) and (
+            (r["corpus_id"], kscope) in kbase_classes
+            or any(k[0] == r["corpus_id"] and k[1] == kscope for k in kbaseline)
+        )
+        expected_kernel = (
+            kbase_classes.get((r["corpus_id"], kscope)) if kscope else None
+        ) or (self._derived_class(kbaseline, r, scope=kscope) if kscope else None)
+        expected = (
+            expected_kernel
+            or base_classes.get((r["corpus_id"], scope))
+            or self._derived_class(baseline, r)
         )
         # acceptance 1 (class-aware, D4): a refusal is GREEN only when the
         # baseline class is refusal (or the row has no baseline history).
@@ -4200,13 +4672,28 @@ exit $RC
             )
             if rag == "GREEN":
                 rag = "YELLOW"
-        # acceptance 1b: INVALID_MARKER cells can never gate GREEN.
-        if any(v == "INVALID_MARKER" for v in c.values()):
-            verdicts.append(
-                "INVALID_MARKER cell(s) — reading below the payload "
-                "issue-slot lower bound (KERNEL marker required): RED"
-            )
-            rag = "RED"
+        # acceptance 1b: INVALID_MARKER diagnostic cells.  With a numeric
+        # KERNEL twin for every invalidated cell the verdict zone is intact
+        # (KERNEL is drain-inclusive by construction): the diagnostic loss
+        # is YELLOW, recorded.  Any invalidated cell WITHOUT a KERNEL twin
+        # (incl. legacy payloads without kernel_cells) keeps the RED — the
+        # row would otherwise book no valid metric at all.
+        invalid_diag = [k for k, v in c.items() if v == "INVALID_MARKER"]
+        if invalid_diag:
+            if all(isinstance(kc.get(k), (int, float)) for k in invalid_diag):
+                verdicts.append(
+                    "diag INVALID_MARKER cell(s) — diagnostic reading below "
+                    "the payload issue-slot lower bound; verdict decided by "
+                    "the KERNEL cells (drain-inclusive): YELLOW"
+                )
+                if rag == "GREEN":
+                    rag = "YELLOW"
+            else:
+                verdicts.append(
+                    "INVALID_MARKER cell(s) — reading below the payload "
+                    "issue-slot lower bound (KERNEL marker required): RED"
+                )
+                rag = "RED"
         # acceptance 1d (enforcement layer): a macro-launch row with an
         # EMPTY issue_slot_lb is RED — the §1 issue-slot check silently
         # no-ops on empty lb, under exactly the fire-and-forget shapes
@@ -4248,97 +4735,179 @@ exit $RC
                     "every cell is unparsable/None: RED"
                 )
                 rag = "RED"
+            # kernel twin of acceptance 1c: a dead KERNEL cell with v2
+            # baseline history is a verdict-zone measurement failure.
+            kdead = sorted(
+                cell
+                for cell, v in kc.items()
+                if v is None
+                and kscope
+                and kbaseline.get((r["corpus_id"], kscope, cell_selector(r, cell)))
+            )
+            if kdead:
+                verdicts.append(
+                    f"INVALID_METRIC — KERNEL cell(s) {', '.join(kdead)} have "
+                    "v2 baseline history but produced no parsable metric "
+                    "(verdict zone missing from the CSV?): RED"
+                )
+                rag = "RED"
+
         # acceptance 2a (findings sweep_2x2.py:1222/:1181): per-cell
         # ABSOLUTE cycle drift vs the baseline's min-aggregated cycles.
         # Ratio-only acceptance is blind to uniform slowdowns (both legs
         # +50% keeps every ratio) and never checks the hand leg on
         # refusal rows.  Slowdowns beyond --max-abs-drift-pct are RED;
         # improvements beyond it are YELLOW (stale baseline — reviewed
-        # update needed), never silently blessed.
-        for cell in sorted(c):
-            val = c[cell]
-            if not isinstance(val, (int, float)):
-                continue
-            base = baseline.get((r["corpus_id"], scope, cell_selector(r, cell)))
-            if not base or not min(base):
-                continue
-            abs_pct = 100.0 * (val - min(base)) / min(base)
-            if abs_pct > max_abs_drift_pct:
-                verdicts.append(
-                    f"{cell} ABS CYCLES {min(base):g}→{val:g} "
-                    f"({abs_pct:+.2f}% > {max_abs_drift_pct:g}%): RED"
-                )
-                rag = "RED"
-            elif abs_pct < -max_abs_drift_pct:
-                verdicts.append(
-                    f"{cell} abs cycles improved {min(base):g}→{val:g} "
-                    f"({abs_pct:+.2f}%; baseline stale — reviewed update "
-                    "needed): YELLOW"
-                )
-                if rag == "GREEN":
-                    rag = "YELLOW"
-        # acceptance 2: win-sign preservation vs baseline
-        for name, key in (("causal", "causal_pct"), ("vs_hand", "vs_hand_pct")):
-            if key not in r:
-                continue
-            base_pair = None
-            if r["kind"] == "pinpair":
-                if name == "causal":
+        # update needed), never silently blessed.  Runs on BOTH zones:
+        # KERNEL cells vs the v2 anchors at full severity; diagnostic
+        # cells vs the v1 anchors — full severity only until the row has
+        # kernel anchors (handover rule), then capped YELLOW as 'diag'.
+        def abs_drift(cells_map, bmap, bscope, prefix, demote):
+            nonlocal rag
+            for cell in sorted(cells_map):
+                val = cells_map[cell]
+                if not isinstance(val, (int, float)):
                     continue
-                on = baseline.get((r["corpus_id"], scope, "generated"))
-                hand = baseline.get((r["corpus_id"], scope, "handwritten_replay"))
-                base_pair = (min(hand), min(on)) if on and hand else None
-            elif name == "causal":
-                off = baseline.get((r["corpus_id"], scope, cell_selector(r, "sem_off")))
-                on = baseline.get((r["corpus_id"], scope, cell_selector(r, "sem_on")))
-                base_pair = (min(off), min(on)) if off and on else None
-            else:
-                on = baseline.get((r["corpus_id"], scope, cell_selector(r, "sem_on")))
-                hand = baseline.get(
-                    (r["corpus_id"], scope, cell_selector(r, "hand_on"))
-                )
-                base_pair = (min(hand), min(on)) if on and hand else None
-            if not base_pair or not base_pair[0]:
-                verdicts.append(f"{name} {r[key]:+.2f}% (no baseline row)")
-                continue
-            base_pct = 100.0 * (base_pair[1] - base_pair[0]) / base_pair[0]
-            drift = abs(r[key] - base_pct)
-            if base_pct < 0 <= r[key]:  # win-sign flip (causal or vs-hand)
-                verdicts.append(
-                    f"{name} WIN→LOSS FLIP {base_pct:+.2f}%→{r[key]:+.2f}%: RED"
-                )
-                rag = "RED"
-            elif base_pct <= -0.5 and r[key] > -0.5:
-                # Finding sweep_2x2.py:1259 (fixture C): a real win
-                # (class band <= -0.5%) eroding into the parity band is a
-                # regression, not drift — RED by default; a full flip to
-                # >= 0 is caught above.
-                tag = "YELLOW" if allow_win_to_parity else "RED"
-                verdicts.append(
-                    f"{name} WIN→PARITY {base_pct:+.2f}%→{r[key]:+.2f}%: {tag}"
-                )
-                if tag == "RED":
-                    rag = "RED"
-                elif rag == "GREEN":
-                    rag = "YELLOW"
-            elif base_pct > 0.5 and (r[key] - base_pct) > red_loss_growth_pct:
-                # Finding sweep_2x2.py:1259 (fixture D): an existing loss
-                # growing beyond --red-loss-growth-pct percentage points
-                # is RED (exit 1), not an unalertable YELLOW.
-                verdicts.append(
-                    f"{name} LOSS GREW {base_pct:+.2f}%→{r[key]:+.2f}% "
-                    f"(+{r[key] - base_pct:.2f}pp > "
-                    f"{red_loss_growth_pct:g}pp): RED"
-                )
-                rag = "RED"
-            elif drift > max_drift_pct:
-                verdicts.append(f"{name} drift {base_pct:+.2f}%→{r[key]:+.2f}%: YELLOW")
-                if rag == "GREEN":
-                    rag = "YELLOW"
-            else:
-                verdicts.append(
-                    f"{name} {r[key]:+.2f}% vs baseline {base_pct:+.2f}%: GREEN"
-                )
+                base = bmap.get((r["corpus_id"], bscope, cell_selector(r, cell)))
+                if not base or not min(base):
+                    continue
+                abs_pct = 100.0 * (val - min(base)) / min(base)
+                if abs_pct > max_abs_drift_pct:
+                    tag = "YELLOW" if demote else "RED"
+                    verdicts.append(
+                        f"{prefix}{cell} ABS CYCLES {min(base):g}→{val:g} "
+                        f"({abs_pct:+.2f}% > {max_abs_drift_pct:g}%): {tag}"
+                    )
+                    if tag == "RED":
+                        rag = "RED"
+                    elif rag == "GREEN":
+                        rag = "YELLOW"
+                elif abs_pct < -max_abs_drift_pct:
+                    verdicts.append(
+                        f"{prefix}{cell} abs cycles improved {min(base):g}→{val:g} "
+                        f"({abs_pct:+.2f}%; baseline stale — reviewed update "
+                        "needed): YELLOW"
+                    )
+                    if rag == "GREEN":
+                        rag = "YELLOW"
+
+        if kscope:
+            abs_drift(kc, kbaseline, kscope, "kernel ", demote=False)
+        abs_drift(
+            c,
+            baseline,
+            scope,
+            "diag " if has_kernel_anchor else "",
+            demote=has_kernel_anchor,
+        )
+
+        # acceptance 2: win-sign preservation vs baseline — the KERNEL
+        # ratios vs the v2 anchors carry the RED severity (they DECIDE the
+        # class); the diagnostic ratios stay recorded, capped YELLOW once
+        # kernel anchors exist (handover rule above).
+        def sign_checks(pairs, bmap, bscope, demote):
+            nonlocal rag
+            for name, key, ratio in pairs:
+                if not isinstance(r.get(key), (int, float)):
+                    continue
+                base_pair = None
+                if r["kind"] == "pinpair":
+                    if ratio == "causal":
+                        continue
+                    on = bmap.get((r["corpus_id"], bscope, "generated"))
+                    hand = bmap.get((r["corpus_id"], bscope, "handwritten_replay"))
+                    base_pair = (min(hand), min(on)) if on and hand else None
+                elif ratio == "causal":
+                    off = bmap.get(
+                        (r["corpus_id"], bscope, cell_selector(r, "sem_off"))
+                    )
+                    on = bmap.get((r["corpus_id"], bscope, cell_selector(r, "sem_on")))
+                    base_pair = (min(off), min(on)) if off and on else None
+                else:
+                    on = bmap.get((r["corpus_id"], bscope, cell_selector(r, "sem_on")))
+                    hand = bmap.get(
+                        (r["corpus_id"], bscope, cell_selector(r, "hand_on"))
+                    )
+                    base_pair = (min(hand), min(on)) if on and hand else None
+                if not base_pair or not base_pair[0]:
+                    verdicts.append(f"{name} {r[key]:+.2f}% (no baseline row)")
+                    continue
+                base_pct = 100.0 * (base_pair[1] - base_pair[0]) / base_pair[0]
+                drift = abs(r[key] - base_pct)
+                if base_pct < 0 <= r[key]:  # win-sign flip (causal or vs-hand)
+                    tag = "YELLOW" if demote else "RED"
+                    verdicts.append(
+                        f"{name} WIN→LOSS FLIP {base_pct:+.2f}%→{r[key]:+.2f}%: {tag}"
+                    )
+                    if tag == "RED":
+                        rag = "RED"
+                    elif rag == "GREEN":
+                        rag = "YELLOW"
+                elif base_pct <= -0.5 and r[key] > -0.5:
+                    # Finding sweep_2x2.py:1259 (fixture C): a real win
+                    # (class band <= -0.5%) eroding into the parity band is a
+                    # regression, not drift — RED by default; a full flip to
+                    # >= 0 is caught above.
+                    tag = "YELLOW" if (allow_win_to_parity or demote) else "RED"
+                    verdicts.append(
+                        f"{name} WIN→PARITY {base_pct:+.2f}%→{r[key]:+.2f}%: {tag}"
+                    )
+                    if tag == "RED":
+                        rag = "RED"
+                    elif rag == "GREEN":
+                        rag = "YELLOW"
+                elif base_pct > 0.5 and (r[key] - base_pct) > red_loss_growth_pct:
+                    # Finding sweep_2x2.py:1259 (fixture D): an existing loss
+                    # growing beyond --red-loss-growth-pct percentage points
+                    # is RED (exit 1), not an unalertable YELLOW.
+                    tag = "YELLOW" if demote else "RED"
+                    verdicts.append(
+                        f"{name} LOSS GREW {base_pct:+.2f}%→{r[key]:+.2f}% "
+                        f"(+{r[key] - base_pct:.2f}pp > "
+                        f"{red_loss_growth_pct:g}pp): {tag}"
+                    )
+                    if tag == "RED":
+                        rag = "RED"
+                    elif rag == "GREEN":
+                        rag = "YELLOW"
+                elif drift > max_drift_pct:
+                    verdicts.append(
+                        f"{name} drift {base_pct:+.2f}%→{r[key]:+.2f}%: YELLOW"
+                    )
+                    if rag == "GREEN":
+                        rag = "YELLOW"
+                else:
+                    verdicts.append(
+                        f"{name} {r[key]:+.2f}% vs baseline {base_pct:+.2f}%: GREEN"
+                    )
+
+        if kscope:
+            sign_checks(
+                (
+                    ("kernel causal", "kernel_causal_pct", "causal"),
+                    ("kernel vs_hand", "kernel_vs_hand_pct", "vs_hand"),
+                ),
+                kbaseline,
+                kscope,
+                demote=False,
+            )
+        sign_checks(
+            (
+                (
+                    "diag causal" if has_kernel_anchor else "causal",
+                    "causal_pct",
+                    "causal",
+                ),
+                (
+                    "diag vs_hand" if has_kernel_anchor else "vs_hand",
+                    "vs_hand_pct",
+                    "vs_hand",
+                ),
+            ),
+            baseline,
+            scope,
+            demote=has_kernel_anchor,
+        )
         if r["op"] in prev and "causal_pct" in r and "causal_pct" in prev[r["op"]]:
             verdicts.append(
                 f"prev-run causal {prev[r['op']]['causal_pct']:+.2f}%→{r['causal_pct']:+.2f}%"
@@ -4374,29 +4943,110 @@ exit $RC
             baseline, base_classes = self._load_baseline(
                 getattr(self.a, "baseline", None)
             )
-            self._stream_ctx = (baseline, base_classes, self._load_prev_results())
-        baseline, base_classes, prev = self._stream_ctx
-        row = self._row_verdict(result, baseline, base_classes, prev)
+            kbaseline, kbase_classes = self._load_baseline(
+                getattr(self.a, "kernel_baseline", None)
+            )
+            self._stream_ctx = (
+                baseline,
+                base_classes,
+                kbaseline,
+                kbase_classes,
+                self._load_prev_results(),
+            )
+        baseline, base_classes, kbaseline, kbase_classes, prev = self._stream_ctx
+        row = self._row_verdict(
+            result, baseline, base_classes, prev, kbaseline, kbase_classes
+        )
         payload = {
             "op": result["op"],
             "corpus_id": result.get("corpus_id"),
             "scope": row["scope"],
+            # DUAL METRIC (ratified 2026-08-21): kernel_cells DECIDE the
+            # class; the diagnostic zone is exposed as diag_cells (cells is
+            # kept as an alias for downstream readers).
+            "kernel_scope": result.get("kernel_scope"),
+            "kernel_cells": result.get("kernel_cells", {}),
+            "diag_cells": result.get("cells", {}),
             "cells": result.get("cells", {}),
             "runs": result.get("runs", {}),
             "notes": result.get("notes", []),
             "causal_pct": result.get("causal_pct"),
             "vs_hand_pct": result.get("vs_hand_pct"),
+            "kernel_causal_pct": result.get("kernel_causal_pct"),
+            "kernel_vs_hand_pct": result.get("kernel_vs_hand_pct"),
             "class": self._row_class(result),
+            "diag_class": self._diag_row_class(result),
             "verdict": row["col"],
             "rag": row["rag"],
             "details": row["verdicts"],
             "baseline": str(getattr(self.a, "baseline", "") or ""),
+            "kernel_baseline": str(getattr(self.a, "kernel_baseline", "") or ""),
             "report_row": self._report_row_line(result, row),
         }
         out = self.ev / result["op"] / "ROW-VERDICT.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(payload, indent=2) + "\n")
         return payload
+
+    def _kernel_delta_section(self, results):
+        """The verdict-metric DELTA (lane ET task 4): every row whose class
+        band CHANGES between the KERNEL-decided verdict and the legacy
+        diagnostic-zone banding, with both ratios.  Pre-registered
+        expectation (owner, 2026-08-21): shared unpack/pack + per-kernel
+        fixed overhead is identical in both arms, so kernel deltas COMPRESS
+        toward zero vs body-zone deltas — wins stay wins but shrink, some
+        parities become indistinguishable.  That compression is the truth
+        the metric change was ordered to expose, not a regression.  Also
+        written standalone as KERNEL-DELTA.md."""
+        fmtp = lambda v: f"{v:+.2f}%" if isinstance(v, (int, float)) else "—"
+        changed, rows = [], []
+        for r in results:
+            kcls = self._row_class(r)
+            dcls = self._diag_row_class(r)
+            line = (
+                f"| {r['op']} | {dcls} | {fmtp(r.get('vs_hand_pct'))} | "
+                f"{kcls} | {fmtp(r.get('kernel_vs_hand_pct'))} |"
+            )
+            rows.append(line)
+            if kcls != dcls:
+                changed.append(line)
+        lines = [
+            "",
+            "## Verdict-metric DELTA (KERNEL-decided vs diagnostic zone)",
+            "",
+            "| op | diag class | diag vs-hand | KERNEL class | KERNEL vs-hand |",
+            "|---|---|---:|---|---:|",
+        ]
+        if changed:
+            lines += changed
+            lines += [
+                "",
+                f"{len(changed)} row(s) change class under the KERNEL metric.",
+            ]
+        else:
+            lines += ["", "No row changes class under the KERNEL metric this run."]
+        # Standalone full table (every row, changed or not).
+        (self.ev / "KERNEL-DELTA.md").write_text(
+            "\n".join(
+                [
+                    "# Verdict-metric delta — KERNEL (end-to-end) vs diagnostic zone",
+                    "",
+                    "Verdicts are decided by the KERNEL class (owner "
+                    "ratification 2026-08-21); the diagnostic class is the "
+                    "legacy body-zone banding, kept for attribution.",
+                    "",
+                    "| op | diag class | diag vs-hand | KERNEL class | KERNEL vs-hand |",
+                    "|---|---|---:|---|---:|",
+                ]
+                + rows
+                + [
+                    "",
+                    f"Class changes: {len(changed)}",
+                ]
+            )
+            + "\n"
+        )
+        return lines
 
     def _load_prev_results(self):
         """Previous-run results for the report's drift annotation: the
@@ -4414,6 +5064,9 @@ exit $RC
 
     def report(self, results, skips):
         baseline, base_classes = self._load_baseline(self.a.baseline)
+        kbaseline, kbase_classes = self._load_baseline(
+            getattr(self.a, "kernel_baseline", None)
+        )
         prev = self._load_prev_results()
         prev_desc = ",".join(str(p) for p in self._prev_roots()) or "none"
         lines = [
@@ -4421,7 +5074,12 @@ exit $RC
             "",
             f"- run: `{self.ev}`",
             f"- baseline: `{self.a.baseline or 'none'}`",
+            f"- kernel baseline (v2, VERDICT anchors): "
+            f"`{getattr(self.a, 'kernel_baseline', None) or 'none'}`",
             f"- previous run: `{prev_desc}`",
+            f"- verdict metric: end-to-end device KERNEL time (drain-"
+            "inclusive KERNEL marker; owner ratification 2026-08-21); the "
+            "row marker column is the DIAGNOSTIC zone",
             f"- {craq_gate_taint(getattr(self.a, 'skip_craq_gate', False))}",
             "",
             "| op | verdict | detail |",
@@ -4432,11 +5090,14 @@ exit $RC
             # Per-row verdict via the SAME factored computation the silicon
             # phase streams into ROW-VERDICT.json at row completion — the
             # final report is an aggregation of those verdicts, byte-equal.
-            row = self._row_verdict(r, baseline, base_classes, prev)
+            row = self._row_verdict(
+                r, baseline, base_classes, prev, kbaseline, kbase_classes
+            )
             rag = self._worst_rag(rag, row["rag"])
             lines.append(self._report_row_line(r, row))
         for s in skips:
             lines.append(f"| {s['op']} | SKIP | {s['reason']} |")
+        lines += self._kernel_delta_section(results)
         if self.reds:
             rag = "RED"
             lines += ["", "## RED events", ""] + [f"- {x}" for x in self.reds]
@@ -4886,7 +5547,19 @@ def main():
     ap.add_argument(
         "--baseline",
         type=pathlib.Path,
-        help="chip-class device baseline TSV for --phases report",
+        help="chip-class device baseline TSV for --phases report "
+        "(v1, DIAGNOSTIC-zone anchors)",
+    )
+    ap.add_argument(
+        "--kernel-baseline",
+        type=pathlib.Path,
+        default=None,
+        help="KERNEL-scoped (v2) baseline TSV — the VERDICT anchors "
+        "(end-to-end device kernel time, owner ratification 2026-08-21). "
+        "Absent (v2 unseeded): kernel ratios report '(no baseline row)' "
+        "and the diagnostic checks keep legacy full severity (handover "
+        "rule); present: kernel checks carry RED severity and diagnostic "
+        "checks cap at YELLOW on anchored rows",
     )
     ap.add_argument(
         "--prev-run",
