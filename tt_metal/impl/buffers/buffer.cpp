@@ -657,7 +657,26 @@ void Buffer::deallocate_impl() {
                     tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), static_cast<uint32_t>(address_));
                 }
             }
-            allocator_->deallocate_buffer(this);
+            // `allocator_` is a raw AllocatorImpl*, but IDevice owns its AllocatorImpl
+            // through a unique_ptr. A buffer that outlives an allocator swap on a device
+            // that is still initialized therefore holds a dangling pointer, and
+            // deallocate_buffer() then blocks forever inside the destroyed mutex. The
+            // device_->is_initialized() check above guards the DEVICE, not the ALLOCATOR,
+            // so it does not catch this case. Recompute the owning allocator the same way
+            // the constructor did (see Buffer::Buffer) and skip the free when it is gone:
+            // the ranges it tracked died with it.
+            const AllocatorImpl* live_allocator = sub_device_id_.has_value()
+                                                      ? device_->allocator_impl(*sub_device_id_).get()
+                                                      : device_->allocator_impl().get();
+            if (allocator_ != live_allocator) {
+                log_warning(
+                    tt::LogMetal,
+                    "Buffer {} (type {}) outlived the allocator it was created from; skipping deallocation.",
+                    unique_id_,
+                    enchantum::to_string(buffer_type_));
+            } else {
+                allocator_->deallocate_buffer(this);
+            }
         }
 
         // Capture deallocates here instead of higher levels.
