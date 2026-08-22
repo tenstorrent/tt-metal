@@ -38,7 +38,10 @@ def setup(device):
 
     args = Qwen36ModelArgs(mesh_device=device)
     raw = {}
-    for path in sorted(glob.glob(f"{args.CKPT_DIR}/model.safetensors-*.safetensors")):
+    # Standard HF shard naming is model-XXXXX-of-XXXXX.safetensors (also matches a
+    # single-file model.safetensors); the old model.safetensors-* pattern matched
+    # zero files for such checkpoints, yielding an empty state dict.
+    for path in sorted(glob.glob(f"{args.CKPT_DIR}/*.safetensors")):
         with safe_open(path, framework="pt", device="cpu") as f:
             for key in f.keys():
                 raw[key] = f.get_tensor(key)

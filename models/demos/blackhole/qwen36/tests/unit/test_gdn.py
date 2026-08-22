@@ -30,7 +30,7 @@ def test_deltanet_pcc(device, setup, request):
     B, T = 1, 4
 
     prefix = f"layers.{layer_num}.linear_attn"
-    x = torch.randn(B, T, 4096, dtype=torch.bfloat16)
+    x = torch.randn(B, T, args.dim, dtype=torch.bfloat16)
 
     # Torch reference (note: torch uses [out, in] convention, no transpose).
     # Cast all weights to float32 to avoid dtype mismatch in the torch reference.
@@ -38,14 +38,16 @@ def test_deltanet_pcc(device, setup, request):
         return t.float() if t is not None else None
 
     # The split q/k/v_proj keys were removed; derive them by slicing the combined
-    # qkv_proj.weight [8192, 4096] = [q(2048)+k(2048)+v(4096), in]. These slices are
+    # qkv_proj.weight [q+k+v, in] (q = k = linear_q_dim, v = linear_v_dim — e.g.
+    # 2048/2048/4096 for the 9B, 2048/2048/6144 for Qwen3.8-27B). These slices are
     # byte-identical to the old split keys, so the PCC is unchanged.
-    qkv_w = sd[f"{prefix}.qkv_proj.weight"]  # [8192, 4096] = [q(2048)+k(2048)+v(4096), in]
+    qk = args.linear_q_dim
+    qkv_w = sd[f"{prefix}.qkv_proj.weight"]  # [q(qk)+k(qk)+v(linear_v_dim), in]
     ref_out, _ = gated_deltanet_forward(
         hidden_states=x.float(),
-        q_proj_weight=to_f32(qkv_w[:2048, :]),
-        k_proj_weight=to_f32(qkv_w[2048:4096, :]),
-        v_proj_weight=to_f32(qkv_w[4096:, :]),
+        q_proj_weight=to_f32(qkv_w[:qk, :]),
+        k_proj_weight=to_f32(qkv_w[qk : 2 * qk, :]),
+        v_proj_weight=to_f32(qkv_w[2 * qk :, :]),
         a_proj_weight=to_f32(sd[f"{prefix}.in_proj_a.weight"]),
         b_proj_weight=to_f32(sd[f"{prefix}.in_proj_b.weight"]),
         o_proj_weight=to_f32(sd[f"{prefix}.out_proj.weight"]),
@@ -59,11 +61,11 @@ def test_deltanet_pcc(device, setup, request):
         dt_bias=to_f32(sd[f"{prefix}.dt_bias"]),
         o_norm_weight=to_f32(sd[f"{prefix}.norm.weight"]),
         g_proj_weight=to_f32(sd[f"{prefix}.in_proj_z.weight"]),
-        num_heads=16,
-        num_v_heads=32,
-        head_k_dim=128,
-        head_v_dim=128,
-        conv_kernel_size=4,
+        num_heads=args.linear_num_key_heads,
+        num_v_heads=args.linear_num_value_heads,
+        head_k_dim=args.linear_key_head_dim,
+        head_v_dim=args.linear_value_head_dim,
+        conv_kernel_size=args.linear_conv_kernel_dim,
         use_gate=True,
         norm_eps=1e-6,
         mode="fused_recurrent",
