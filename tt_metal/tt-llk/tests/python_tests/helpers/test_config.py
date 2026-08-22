@@ -378,7 +378,7 @@ class TestConfig:
 
     @staticmethod
     def resolve_artefacts_path() -> Path:
-        """Use $RUNNER_TEMP/tt-llk-build in GHA, else the system temp directory."""
+        """Use $RUNNER_TEMP/tt-llk-build in GHA, else tempfile.gettempdir()/tt-llk-build."""
         runner_temp = os.environ.get("RUNNER_TEMP")
         if runner_temp:
             return Path(runner_temp) / "tt-llk-build"
