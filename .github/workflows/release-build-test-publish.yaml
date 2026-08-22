@@ -201,7 +201,7 @@ jobs:
       detail: ${{ steps.rtl-sim.outputs.detail }}
       url: ${{ steps.rtl-sim.outputs.url }}
     steps:
-      # create_jira_issue.py needs .github/actions.
+      # jira_client.py needs .github/actions.
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -290,7 +290,7 @@ jobs:
             echo "::notice::JIRA_RELEASE_* secrets not configured; skipping Jira filing."
             exit 0
           fi
-          python3 .github/actions/scripts/file_rtl_sim_jira.py
+          python3 .github/actions/scripts/create_jira.py
 
       - name: Re-assert sim failure
         if: ${{ always() && steps.rtl-sim.outputs.sim-failed == 'true' }}
