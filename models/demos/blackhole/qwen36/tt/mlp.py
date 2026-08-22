@@ -188,6 +188,8 @@ class Qwen36MLP:
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
         self._fuse_gateup_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices)
+        # CCL diet (decode): fused w2 down-proj matmul + reduce-scatter (w2 is always interleaved).
+        self._ccl_diet_w2 = self.num_devices > 1 and "mlp_rs" in tpc.ccl_diet_sites()
         self.weights = load_mlp_weights(mesh_device, state_dict, tensor_cache_path, args=args)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
@@ -328,6 +330,14 @@ class Qwen36MLP:
                 hidden = ttnn.mul(w1_act, w3_out, memory_config=mc_out)
                 ttnn.deallocate(w1_act)
             ttnn.deallocate(w3_out)
+        # CCL diet decode: fused down-proj matmul + reduce-scatter replaces the w2 linear +
+        # tt_all_reduce pair below (hides the RS launch/fabric latency under the matmul).
+        if self._ccl_diet_w2 and hidden.shape[-2] <= ttnn.TILE_SIZE:
+            out = tpc.matmul_reduce_scatter_out_proj_decode(
+                hidden, w.w2, self.tt_ccl, ckc, args.ccl_topology(), self.num_devices
+            )
+            ttnn.deallocate(hidden)
+            return out
         # Prefill w2: 2D progcfg on (8,10); decode (M<=32) keeps ttnn-auto.
         w2_pc = None
         if self._mlp_1d_decode and hidden.shape[-2] <= ttnn.TILE_SIZE:

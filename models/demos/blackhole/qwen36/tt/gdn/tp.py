@@ -195,6 +195,10 @@ class TPGatedDeltaNet:
         # Fuse prefill norm-allgather + qkvzab in-proj into all_gather_minimal_matmul_async.
         # Requires the folded qkvzab weight; norm's post-AG is disabled in layer.py (GDN, prefill).
         self._fuse_agmm = self._fuse_ab
+        # CCL diet (decode): fused out-proj matmul + reduce-scatter. Needs the interleaved out
+        # weight (the fused op's 2D-mcast matmul can't read a width-sharded weight). Serves both
+        # the composite and the QWEN36_GDN_FUSED_DECODE paths (see _out_proj_reduce_decode).
+        self._ccl_diet_out = "gdn_rs" in tpc.ccl_diet_sites() and not self._out_sharded
         # PREFILL out-proj fusion (matmul_reduce_scatter, (8,8) grid). Slight TTFT cost at small ISL
         # (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL (e.g.
         # 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul.
@@ -420,6 +424,26 @@ class TPGatedDeltaNet:
             self.args.act_shard_gdn_value,
             self.args.prefill_progcfg,
             self.args.gdn_value_dim_tp,
+        )
+
+    def _out_proj_reduce_decode(self, gated, B):
+        """Decode out-proj + cross-device reduce: fused matmul+RS under the CCL diet, else the
+        matmul + tt_all_reduce pair. Does NOT deallocate gated (the fused-decode path hands in
+        its persistent scratch)."""
+        if self._ccl_diet_out:
+            return tpc.matmul_reduce_scatter_out_proj_decode(
+                gated, self.tw["out"], self.tt_ccl, self.cfg, self.args.ccl_topology(), self.args.num_devices
+            )
+        partial = self._row_proj(gated, self.tw["out"])
+        partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
+        return tt_all_reduce(
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _project_qkvzab(self, x, S, out_mc=None):
@@ -1096,17 +1120,7 @@ class TPGatedDeltaNet:
         )
         ttnn.deallocate(qkvzab)
 
-        partial = self._row_proj(gated, tw["out"])
-        partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
-        return tt_all_reduce(
-            partial,
-            self.mesh,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=3,
-            topology=self.args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        return self._out_proj_reduce_decode(gated, B)
 
     def forward_decode(self, x):
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
@@ -1208,16 +1222,6 @@ class TPGatedDeltaNet:
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
 
-        partial = self._row_proj(gated, tw["out"])
+        out = self._out_proj_reduce_decode(gated, B)
         ttnn.deallocate(gated)
-        partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
-        out = tt_all_reduce(
-            partial,
-            self.mesh,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=3,
-            topology=self.args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
         return out

@@ -144,6 +144,9 @@ class TPAttention:
         # Fuse prefill norm-allgather + fused-QKV in-proj (all_gather_minimal_matmul_async).
         # Norm's prefill post-AG disabled in layer.py; decode path unchanged.
         self._fuse_agmm = self._fused_qkv
+        # CCL diet (decode): fused wo matmul + reduce-scatter. Needs the interleaved wo (the
+        # fused op's 2D-mcast matmul can't read a width-sharded weight).
+        self._ccl_diet_wo = "attn_rs" in tpc.ccl_diet_sites() and not self._wo_sharded
         # Decode head split/merge via nlp_create/concat_heads_decode (the batched-decode idiom).
         self._use_nlp_decode_heads = True
         self.k_caches = None
@@ -653,6 +656,12 @@ class TPAttention:
         else:
             gated_flat = ttnn.reshape(gated, (1, B, NH * HD))
             ttnn.deallocate(gated)
+        if self._ccl_diet_wo:
+            out = tpc.matmul_reduce_scatter_out_proj_decode(
+                gated_flat, tw["wo"], self.tt_ccl, self.compute_cfg, self.args.ccl_topology(), self.args.num_devices
+            )
+            ttnn.deallocate(gated_flat)
+            return out
         wo_partial = self._wo_proj(gated_flat, tw["wo"])
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))

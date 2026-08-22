@@ -6,6 +6,7 @@ Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
 import math
+import os
 
 import torch
 
@@ -429,6 +430,28 @@ def all_gather_swiglu_prefill(
     )[0]
 
 
+# CCL diet (decode): fuse each row-parallel out-proj matmul with its reduce-scatter so the
+# RS's ~22us launch/fabric latency overlaps the matmul instead of serializing after it.
+_CCL_DIET_ALL_SITES = frozenset({"attn_rs", "gdn_rs", "mlp_rs"})
+
+
+def ccl_diet_sites():
+    """Active decode CCL-diet sites from QWEN36_CCL_DIET.
+
+    '' / '0' -> off (default); '1' / 'all' -> every fused-RS site; else a comma list drawn
+    from {attn_rs, gdn_rs, mlp_rs} so each site can be A/B'd on device independently."""
+    v = os.environ.get("QWEN36_CCL_DIET", "0").strip()
+    if v in ("", "0"):
+        return frozenset()
+    if v in ("1", "all"):
+        return _CCL_DIET_ALL_SITES
+    sites = frozenset(t.strip() for t in v.split(",") if t.strip())
+    unknown = sites - _CCL_DIET_ALL_SITES
+    if unknown:
+        raise ValueError(f"QWEN36_CCL_DIET: unknown site(s) {sorted(unknown)}; valid: {sorted(_CCL_DIET_ALL_SITES)}")
+    return sites
+
+
 def build_mmrs_decode_state(mesh_device, M, K_local, N, nd, dtype=ttnn.bfloat16):
     """Build (progcfg, intermediate_buffer, output_buffer) for a decode matmul_reduce_scatter out-proj.
 
@@ -492,6 +515,39 @@ def matmul_reduce_scatter_decode(
     # rs_out IS the persistent output buffer; clone so the caller can deallocate its copy while the
     # persistent buffer survives for the next token (else layer.py's deallocate frees it -> corruption).
     return ttnn.clone(rs_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _mmrs_decode_shared_state(tt_ccl, M, K_local, N, nd, dtype):
+    """Lazily build (and cache on tt_ccl) one (progcfg, interm, out) set per decode out-proj shape.
+
+    Same sharing argument as _mmrs_prefill_shared_bufs: layers run sequentially and each op's
+    output is cloned before the next layer reuses the buffers, so one set per
+    (M, K_local, N, nd, dtype) serves all layers. First use must be an EAGER pass (the decode
+    trace's compile run) so the buffers exist before capture bakes their addresses."""
+    cache = getattr(tt_ccl, "_qwen36_mmrs_decode_state", None)
+    if cache is None:
+        cache = {}
+        tt_ccl._qwen36_mmrs_decode_state = cache
+    key = (M, K_local, N, nd, str(dtype))
+    if key not in cache:
+        pc, interm, out_buf = build_mmrs_decode_state(tt_ccl.mesh_device, M, K_local, N, nd, dtype=dtype)
+        cache[key] = (pc, interm, out_buf)
+    return cache[key]
+
+
+def matmul_reduce_scatter_out_proj_decode(x, weight, tt_ccl, compute_cfg, topology, nd):
+    """CCL-diet decode out-proj: matmul_reduce_scatter_decode with cached persistent buffers.
+
+    Drop-in for the matmul + tt_all_reduce pair on a decode activation x [., M, K_local]
+    (M <= TILE) against an INTERLEAVED row-parallel weight [K_local, N]. Buffers are keyed by
+    x.dtype so the fp32 GDN partials stay fp32 through the RS (bf16 partial sums tank GDN
+    PCC — see matmul_reduce_scatter_prefill). Returns [1,1,M,N/nd] fractured, DRAM (a clone;
+    caller may deallocate it freely)."""
+    M, K_local = x.shape[-2], x.shape[-1]
+    N = weight.shape[-1]
+    progcfg, interm, out_buf = _mmrs_decode_shared_state(tt_ccl, M, K_local, N, nd, x.dtype)
+    x4 = ttnn.reshape(x, (1, 1, M, K_local))
+    return matmul_reduce_scatter_decode(x4, weight, tt_ccl, interm, out_buf, progcfg, compute_cfg, topology)
 
 
 def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
