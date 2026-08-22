@@ -28,6 +28,12 @@ Knobs (env):
                               so this is the fast iteration mode; TTFT is not
                               reported and generated tokens are meaningless.
     QWEN38_BENCH_REAL_PROMPT  1 = corpus prompts instead of tiled local text
+    QWEN36_ASYNC_DECODE_STEP  1 = device-resident stepping (traced+shard only): the
+                              trace itself picks the winning token across shards,
+                              feeds it back as the next input, and advances
+                              pos/rope on device — a step is execute_trace + sync
+                              + one tiny token readback, no host input staging.
+                              (tt/async_decode.py; greedy-exact vs the stock path.)
 """
 
 import os
@@ -60,6 +66,7 @@ _MODE = os.environ.get("QWEN38_BENCH_MODE", "traced")
 _SYNTH = os.environ.get("QWEN38_BENCH_SYNTH_STATE") == "1"
 _REPLAY_TRIALS = int(os.environ.get("QWEN38_BENCH_REPLAY_TRIALS", "3"))
 _REPLAY_ITERS = int(os.environ.get("QWEN38_BENCH_REPLAY_ITERS", "32"))
+_ASYNC = os.environ.get("QWEN36_ASYNC_DECODE_STEP") == "1"
 
 
 @run_for_blackhole()
@@ -78,8 +85,11 @@ def test_bench_decode(mesh_device):
 
     # Per-user contiguous block range covering prompt + all decode steps. Round to a
     # multiple of 8 blocks: chunked SDPA reads each page-table row as an int32 stick
-    # that must be 32-byte aligned (same constraint text_demo enforces).
-    bpu = max(8, -(-(ISL + total_steps + 8) // BLOCK_SIZE))
+    # that must be 32-byte aligned (same constraint text_demo enforces). Async
+    # stepping keeps advancing positions during the replay-only ceiling bursts, so
+    # those replays need block coverage too.
+    replay_margin = _REPLAY_TRIALS * _REPLAY_ITERS + 8 if _ASYNC else 0
+    bpu = max(8, -(-(ISL + total_steps + replay_margin + 8) // BLOCK_SIZE))
     bpu = ((bpu + 7) // 8) * 8
     max_seq_len = bpu * BLOCK_SIZE
 
@@ -181,6 +191,16 @@ def test_bench_decode(mesh_device):
         copy_host_to_device(host[:3], device_tensors=dev[:3])
 
     eager = _MODE == "eager"
+    assert not (_ASYNC and eager), "QWEN36_ASYNC_DECODE_STEP is a traced-mode feature"
+    assert not _ASYNC or use_shard, "QWEN36_ASYNC_DECODE_STEP requires the on-device sampler (model.sampling)"
+    stepper = None
+    if _ASYNC:
+        from models.demos.blackhole.qwen36.tt.async_decode import AsyncDecodeStep
+
+        # Allocates its persistent/static device tensors — must precede capture
+        # (same alloc-under-trace rule as stage_gdn_tp below).
+        stepper = AsyncDecodeStep(model, dev[0], dev[1], dev[2], batch=B, table_len=max_seq_len)
+
     trace_id = tt_logits = tt_idx = tt_val = None
     signpost("compile_decode")
     if eager:
@@ -201,6 +221,11 @@ def test_bench_decode(mesh_device):
         warm = _fwd()
         if use_shard:
             wi, wv = _argmax_dev_b(warm, warm.shape[2])
+            if stepper is not None:
+                # Compile pass for every step-tail program (plus_one, CCLs, copies):
+                # loading new binaries during trace capture is fatal.
+                stepper.emit_step_tail(wi, wv)
+                ttnn.synchronize_device(mesh)
             ttnn.deallocate(wi)
             ttnn.deallocate(wv)
         trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
@@ -209,18 +234,26 @@ def test_bench_decode(mesh_device):
             # Fold per-shard argmax+max into the trace: tiny [num_devices, padded_B]
             # readback per step instead of full [B,1,vocab] logits.
             tt_idx, tt_val = _argmax_dev_b(tt_logits, tt_logits.shape[2])
+            if stepper is not None:
+                # Winner-pick + token feedback + pos/rope advance, all in-trace.
+                stepper.emit_step_tail(tt_idx, tt_val)
         ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
         # Alloc-free restore (pure ttnn.copy into live buffers). Keep gdn_staging
         # alive for the whole measured loop so its space is never recycled under
         # the trace.
         restore_gdn_tp_staged(model, gdn_staging)
+        if stepper is not None:
+            # The warm + capture passes advanced the device-side tokens/pos/rope;
+            # reseed them with the true post-prefill values.
+            stepper.resync(nxt, pos)
 
     generated = [[t] for t in nxt]
     step_times = []
     signpost("inference_decode")
     for _ in range(total_steps):
         t_step = time.time()
-        _update([g[-1] for g in generated], pos)
+        if stepper is None:
+            _update([g[-1] for g in generated], pos)
         if eager:
             out = _fwd()
             if use_shard:
@@ -230,7 +263,9 @@ def test_bench_decode(mesh_device):
         else:
             ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh)
-        if use_shard:
+        if stepper is not None:
+            toks = stepper.read_tokens()
+        elif use_shard:
             toks = _read_tok_b(tt_idx, tt_val, tt_idx.shape[-1])
         else:
             logits_step = model.process_output_decode(tt_logits, B)
@@ -254,6 +289,8 @@ def test_bench_decode(mesh_device):
             trials.append((time.time() - t0) / _REPLAY_ITERS)
         replay_ms = round(min(trials) * 1000.0, 3)
         ttnn.release_trace(mesh, trace_id)
+    if stepper is not None:
+        stepper.release()
 
     st = stats_ms(step_times[_WARMUP:])
     median_s = st["median_ms"] / 1000.0
@@ -271,7 +308,8 @@ def test_bench_decode(mesh_device):
         "warmup": _WARMUP,
         "mode": _MODE,
         "synth_state": _SYNTH,
-        "readback": "shard" if use_shard else "host",
+        "async_step": _ASYNC,
+        "readback": "device_loop" if _ASYNC else ("shard" if use_shard else "host"),
         "n_layers": len(model.layers),
         "num_devices": model.num_devices,
     }
