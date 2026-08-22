@@ -151,17 +151,19 @@ ALWI void process_tile(
         // unpacker reads, so use copy_tile_to_dst_init_short (which reprograms the unpacker descriptor)
         // to point at each operand before its copy_tile loop. matches_metal_v2_slice requires lhs and rhs
         // to share a data format, so the data-format reconfig the WH/BH _with_dt path performs is not needed.
-        copy_tile_to_dst_init_short(dfb_post_lhs_id);
+        copy_init(dfb_post_lhs_id);
 #else
-        copy_tile_to_dst_init_short_with_dt(dfb_post_rhs_id, dfb_post_lhs_id);
+        reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
+        copy_init(dfb_post_lhs_id);
 #endif
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_post_lhs_id, i, i * 2);
         }
 #ifdef ARCH_QUASAR
-        copy_tile_to_dst_init_short(dfb_post_rhs_id);
+        copy_init(dfb_post_rhs_id);
 #else
-        copy_tile_to_dst_init_short_with_dt(dfb_post_lhs_id, dfb_post_rhs_id);
+        reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
+        copy_init(dfb_post_rhs_id);
 #endif
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
@@ -237,7 +239,8 @@ void kernel_main() {
     constexpr auto dfb_post_rhs_id = dfb_pre_rhs_id;
 #endif
 
-    unary_op_init_common(dfb_post_lhs_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
+    copy_init(dfb_post_lhs_id);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif

@@ -25,7 +25,8 @@
 using namespace ckernel;
 
 void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
-    init_sfpu(dfb_id, dfb_id);
+    compute_kernel_hw_startup(dfb_id, dfb_id);
+    copy_init(dfb_id);
 
     DataflowBuffer dfb_obj(dfb_id);
 
@@ -156,7 +157,7 @@ void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     // Postcondition: in_cb has num_tiles produced
     DataflowBuffer in_dfb_obj(in_dfb);
 
-    copy_tile_to_dst_init_short(in_dfb);
+    copy_init(in_dfb);
     recip_tile_init();
 
     in_dfb_obj.wait_front(num_tiles);
@@ -295,12 +296,14 @@ void top_k() {
                 uint32_t right_ind = left_ind + (1 << m_iter);
                 tile_regs_acquire();
 
-                copy_tile_to_dst_init_short_with_dt(index_transposed_dfb_index, input_transposed_dfb_index);
+                reconfig_data_format_srca(index_transposed_dfb_index, input_transposed_dfb_index);
+                copy_init(input_transposed_dfb_index);
                 copy_tile(input_transposed_dfb_index, left_ind, input_dest_start);
                 copy_tile(input_transposed_dfb_index, right_ind, input_dest_end);
 
                 // unpack indices into dest
-                copy_tile_to_dst_init_short_with_dt(input_transposed_dfb_index, index_transposed_dfb_index);
+                reconfig_data_format_srca(input_transposed_dfb_index, index_transposed_dfb_index);
+                copy_init(index_transposed_dfb_index);
                 copy_tile(index_transposed_dfb_index, left_ind, index_dest_start);
                 copy_tile(index_transposed_dfb_index, right_ind, index_dest_end);
 

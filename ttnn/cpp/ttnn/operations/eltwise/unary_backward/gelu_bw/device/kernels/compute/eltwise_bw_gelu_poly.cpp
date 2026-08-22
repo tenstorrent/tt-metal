@@ -29,7 +29,8 @@ void kernel_main() {
     CircularBuffer cb_input_cb(cb_input);
     CircularBuffer cb_grad_in_cb(cb_grad_in);
 
-    unary_op_init_common(cb_grad_out, cb_grad_in);
+    compute_kernel_hw_startup(cb_grad_out, cb_grad_in);
+    copy_init(cb_grad_out);
     gelu_derivative_tile_init<false>();
     mul_binary_tile_init();
 

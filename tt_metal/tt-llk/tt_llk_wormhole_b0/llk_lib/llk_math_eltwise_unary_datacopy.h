@@ -65,7 +65,7 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
 
         // The 32b hi16/lo16 MOVB2D below must not flush datums with a zero low byte; own the Src
         // zero-substitution flag via the math state tracker.
-        math::_configure_mov_ops_zero_flag_state_();
+        math::_configure_preserve_zero_flag_state_();
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
         {
@@ -191,11 +191,9 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         }
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
 
-        // This 32b hi16/lo16 MOV sequence drove the Src zero-substitution flag (and the SrcA format
-        // override bank) directly for the duration of the block; invalidate the tracked state so the
-        // next configurator re-applies the flag from a known baseline instead of taking its
-        // skip-if-set fast path (matches the Blackhole path).
-        math::_invalidate_src_zero_flag_state_();
+        // The sequence above only touches the SrcA format-override bank, not the zero-flag: no
+        // instruction can change ALU_ACC_CTRL_Zero_Flag_disabled_src as a side effect (it moves only on
+        // an explicit cfg write), so the tracked value is still coherent -- no invalidate needed.
     }
     else
     {
