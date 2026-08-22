@@ -5,25 +5,37 @@ the split-sampling terminal path (Sampling1D greedy top-k(k=1) + force-argmax) a
 token->embedding feedback. Prints tensor shapes so the generator can be written against the real
 contract. NOT a correctness gate — just shape/behaviour discovery.
 
-Run:
-  cd /tmp && TT_METAL_HOME=/home/ttuser/.local/lib/model-bringup/tt-metal \
-    PYTHONPATH=/home/ttuser/dev/tt-metal python -m \
-    models.autoports.poolside_laguna_xs_2_1.tests.probe_full_model
+Run with ``--profile p150|p150x2|p150x4`` (or ``LAGUNA_PROFILE``).
 """
 from __future__ import annotations
+
+import argparse
+import json
 
 import torch
 
 import ttnn
+from models.autoports.poolside_laguna_xs_2_1.tests.laguna_test_utils import (
+    add_profile_args,
+    close_mesh,
+    open_mesh,
+    profile_from_args,
+    profile_summary,
+)
 from models.autoports.poolside_laguna_xs_2_1.tt.model import LagunaModel
 from models.common.modules.sampling.sampling_1d import Sampling1D
 
 
 def main():
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=200_000_000)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--max-seq-len", type=int, default=2048)
+    add_profile_args(parser, default_trace_region_size=200_000_000)
+    args = parser.parse_args()
+    profile = profile_from_args(args)
+    print("PROFILE", json.dumps(profile_summary(profile), sort_keys=True))
+    mesh = open_mesh(ttnn, profile)
     try:
-        model = LagunaModel.from_pretrained(mesh, max_seq_len=2048, num_layers=[0, 1, 4])
+        model = LagunaModel.from_pretrained(mesh, max_seq_len=args.max_seq_len, num_layers=[0, 1, 4])
         print(
             "MODEL built. layers:",
             model.meta["layer_indices"],
@@ -108,8 +120,7 @@ def main():
 
         print("PROBE_DONE")
     finally:
-        ttnn.close_mesh_device(mesh)
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        close_mesh(ttnn, mesh)
 
 
 if __name__ == "__main__":

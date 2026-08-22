@@ -9,12 +9,13 @@ import torch
 import ttnn
 from models.autoports.poolside_laguna_xs_2_1.tests import laguna_reference as R
 from models.autoports.poolside_laguna_xs_2_1.tests import laguna_weights as W
+from models.autoports.poolside_laguna_xs_2_1.tests.laguna_test_utils import DOC_DIR
 from models.autoports.poolside_laguna_xs_2_1.tt.functional_decoder import FunctionalDecoder
 
 LAYER = int(sys.argv[1]) if len(sys.argv) > 1 else 4
 SEQ = int(sys.argv[2]) if len(sys.argv) > 2 else 16384
 HIDDEN = 2048
-ART = "/home/ttuser/dev/tt-metal/models/autoports/poolside_laguna_xs_2_1/doc/functional_decoder"
+ART = DOC_DIR / "functional_decoder"
 
 dev = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
 try:
@@ -44,12 +45,12 @@ try:
     }
     print("CAPACITY_RESULT", json.dumps(res))
     try:
-        with open(f"{ART}/prefill_capacity.json") as f:
+        with open(ART / "prefill_capacity.json") as f:
             allres = json.load(f)
     except Exception:
         allres = []
     allres.append(res)
-    with open(f"{ART}/prefill_capacity.json", "w") as f:
+    with open(ART / "prefill_capacity.json", "w") as f:
         json.dump(allres, f, indent=2)
 except Exception as e:
     import traceback

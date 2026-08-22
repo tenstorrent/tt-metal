@@ -1,148 +1,674 @@
 {
+  "schema_version": 3,
+  "as_of": "2026-08-21",
   "hf_model": "poolside/Laguna-XS-2.1",
-  "hf_advertised_context": 262144,
-  "current_supported_context": 131072,
-  "capability_reduction": "advertised serving context lowered 262144 -> 131072: advertised MUST equal servable, and end-to-end serving on the P150x4 config OOMs at 262144.",
-  "limiting_reason": "The 2026-07-31 P150x4 vLLM serving sweep OOMs at ISL 262144 (both OSL 128 and 1024) while ISL 131072 serves (12.1 t/s/u). tt/generator_vllm.py:ADVERTISED_MAX_CONTEXT is now 131072 so the model never accepts a context it cannot serve. See serving_verified. NOTE: the per-stage analytic sections below estimate a ~12 GB/device single-user footprint at 262144 (which would fit); the empirical OOM comes from the serving path's additional pressure (prefill activation peak, vLLM block-pool sizing at max_num_seqs=32, fabric/trace buffers, the [1,seq,H] pipelined-prefill reassembly output at seq=262144) not captured by the single-user analytic. Restoring 262144 is future work: hybrid-KV per-device KV 5.4->1.5 GB (already flag-enabled but not re-verified for the full 262144 serve) + shared-RoPE frees ~4.7 GB transient.",
-  "serving_verified": {
-    "mesh": "Blackhole P150x4 (1x4), FABRIC_1D_RING, TP=4/EP=4",
-    "date": "2026-07-31",
-    "tool": "vllm bench serve (.venv_benchmarks_vllm)",
-    "served_isl": [128, 4096, 32768, 65536, 131072],
-    "oom_isl": [262144],
-    "advertised_now": 131072,
-    "hf_config_declares": 262144,
-    "source": "doc/vllm_integration/sweep_vllm.tsv"
+  "terminology": {
+    "p150": "one Blackhole ASIC/device as enumerated by tt-smi",
+    "p150x2": "two independently enumerated Blackhole ASIC/devices in a 1x2 mesh; on the qualification host these are one physical P300 card",
+    "p150x4": "four independently enumerated Blackhole ASIC/devices in a 1x4 mesh"
   },
-  "device": "Analytic per-stage capacity below is for a single Blackhole p300c chip (1x1). Serving runs on the P150x4 (1x4) mesh; see serving_verified for the empirically measured limit.",
-  "device_dram_total_bytes_per_chip": 34178731008,
-  "device_dram_note": "bank_size 4272341376 B x 8 banks = 34.18 GB, from allocator OOM logs (bank_manager.cpp)",
-  "prefill": {
-    "supported_context": 262144,
-    "pcc_validated_up_to": 2048,
-    "pcc_bar": 0.995,
-    "chunked_path_validated": "test_prefill_chunked_matches_hf and test_prefill_pipelined_matches_hf force small chunk sizes and reproduce HF (PCC>=0.995) at seq 1500 and 2048 for all layer kinds, incl. non-128/non-tile-aligned lengths.",
-    "long_prefill_mechanism": "Prompts beyond ~8192 (single-shot Q/K/V activation exceeds DRAM: e.g. 64 heads * 128 * 262144 * 2 B = 4.3 GB for the sliding-layer Q alone) are processed as a sequence-pipelined stream of block-aligned chunks. Full-attention chunks attend over the paged cache (chunked SDPA); sliding chunks use a rolling window. Peak activation stays bounded to one chunk, so the full 262144 context prefills within DRAM. The public prefill API accepts any seq_len <= 262144.",
-    "capacity_run_full_context": {
-      "seq": 262144,
-      "sliding_layer_1_wall_s": 39.3,
-      "full_attention_layer_4_wall_s": 104.8,
-      "finite_output": true,
-      "out_std": 0.498,
-      "evidence": "doc/functional_decoder/prefill_capacity.json"
-    }
+  "context_semantics": {
+    "hf_config_declares_tokens": 262144,
+    "serving_limit_includes_input_and_output": true,
+    "policy": "A selected serving profile may advertise only its end-to-end qualified context. Component-level cache addressability is not serving qualification.",
+    "hf_262144_status": "not advertised by any current profile"
   },
-  "decode": {
-    "supported_context": 262144,
-    "traced_execution_validated": "test_decode_traced_pcc captures the decode graph once, then replays it over 4 steps updating input/cur_pos/rope_idx device tensors in place and compares each replayed output to HF at PCC>=0.995 (all 3 layer kinds). Proves traced correctness + cur_pos propagation, not just eager forward.",
-    "value_weighting_pcc_validated_up_to": 2048,
-    "value_weighting_pcc_bar": 0.995,
-    "value_weighting_note": "Real-weight/real-input decode value-weighting (softmax over cached V) validated by test_decode_pcc at pos {32,513,2048}: PCC 0.99973-0.99999. Not directly PCC-checked with real semantics beyond 2048 (HF reference cost).",
-    "full_context_addressing": {
-      "decode_position": 262143,
-      "test": "test_full_context_decode",
-      "pcc_bar": 0.995,
-      "scope": "Validates full-context cache fill/read, page-table over 8192 blocks, and int32 cur_pos + RoPE addressing at the advertised 262144 ONLY. Seeds varied K + ZERO cached V so the output direction equals the freshly-decoded token's value and PCC is invariant to the long-context softmax-weighting floor. This test does NOT validate value-weighting numerics at 262144.",
-      "synthetic_value_weighting_floor_measured": "With nonzero constant cached V0 (isolates value-read over the full context) the full-attention 262143 decode measures PCC ~0.985-0.991 across seeds (sliding >0.995); this is the bf16-vs-fp32 accumulation floor for a near-uniform softmax over 262144 UNCORRELATED synthetic keys, not a decoder defect. Real activations produce peaked attention (validated at 2048: 0.9997)."
-    }
+  "launcher_default": {
+    "profile": "p150x2",
+    "reason": "D1 is ruled out by full-model weight OOM. D2 passes topology, correctness, full 131K KV/trace, memory, cold API, online decode, exact-cap, and canonical prefix-cache gates. D4 remains the explicit regression profile."
   },
-  "multichip": {
-    "impl": "tt/multichip_decoder.py (MultichipDecoder)",
-    "target_mesh": "Blackhole p300c x4, 1x4 mesh (P150x4), cluster_axis 1 = TP/EP axis, FABRIC_1D_RING",
-    "strategy": "1D tensor parallel (TP=4) for attention+dense; expert parallel (EP=4) for routed MoE; replicated residual with 2 all_reduce/layer",
-    "capability_reduction": "none",
-    "limiting_reason": "none",
-    "advertised_context": 262144,
-    "supported_context": 262144,
-    "context_note": "TP=4 + EP=4 INCREASE per-device headroom (they do not reduce capability): per-device KV cache is 1/4 (2 of 8 KV heads local) and per-device MoE expert weight is 1/4 (64 of 256 experts local). Advertised = supported = 262144, with more DRAM margin than single-chip.",
-    "per_device_kv_cache_bytes_full_context": {
-      "value": 140509184,
-      "calc": "blocks_per_user=ceil(262144/32)=8192; k=[8192,2,32,128] bfp8 ~= 67MB; k+v ~= 134MB PER LAYER PER DEVICE (1 user). x40 layers = 5.4 GB/device.",
-      "single_chip_equivalent_per_layer": "8 KV heads -> ~537MB/layer -> 21.5 GB for 40 layers on one chip"
-    },
-    "per_device_moe_expert_bytes_per_layer": {
-      "value": 105000000,
-      "calc": "64 experts x 3 x (2048x512) params x ~0.5 B (bfp4) ~= 100MB/device/layer; 39 MoE layers = ~3.9 GB/device.",
-      "single_chip_equivalent": "256 experts -> ~402MB/layer -> ~15.7 GB for 39 layers on one chip"
-    },
-    "reserved_trace_activation_estimate_bytes": 200000000,
-    "full_model_fit": "Per-device full-model footprint (40 layers, full 262144 ctx, 1 user) ~= 5.4 GB KV + 3.9 GB experts + ~0.5 GB attn/dense/norm weights + trace/activation ~= ~10 GB << 34.18 GB/chip. Single-chip full-model footprint (~21.5 GB KV + ~15.7 GB experts = ~37 GB) EXCEEDS 34.18 GB, so the 4-chip mesh is what makes the full 262144-context model fit; the decoder stage validates one layer at a time but the sharding is what enables the full stack.",
-    "validated": "tests/test_multichip_decoder.py (vs HF, PCC>=0.995, all 3 layer kinds) + tests/mc_compare.py (vs single-chip TTNN optimized baseline, PCC>=0.9996 prefill+decode). Traced decode replay on the mesh validated (CCL + EP in-trace).",
-    "non_aligned_preserved": "All sharding is on head/expert/hidden weight axes; none on the logical sequence. Prefill accepts any seq<=262144 (non-aligned 100/513/1500 pass); decode any cur_pos. No seq%k==0 public restriction.",
-    "optimized_multichip_note": "the gate+up matmul packing (MultichipDecoder.PACK_GATE_UP in tt/multichip_decoder.py, default on) preserves this contract UNCHANGED: it only concatenates the same-input gate/up projections into one matmul (split + SiLU on device), which does not alter KV-cache dtype/layout (BFP8, local 2 KV heads), activation sharding, trace buffers, CCL buffers, or per-device weight/memory footprint. advertised = supported = 262144, capability_reduction none."
-  },
-  "optimized": {
-    "impl": "tt/optimized_decoder.py (OptimizedDecoder)",
-    "capability_reduction": "none",
-    "kv_cache_dtype": "bfloat8_b",
-    "kv_cache_note": "Optimized decoder changes the persistent paged KV-cache dtype from BF16 (functional) to BFP8. This HALVES cache bytes/token, so the advertised 262144 context still fits with more DRAM headroom \u2014 no capability reduction. Prefill fill tensors are cast to BFP8 before paged_fill_cache; decode paged_update_cache inputs stay BF16. Advertised = supported = 262144 for prefill and decode.",
-    "weight_dtype_policy": "BF16 activations/norms; BFP8 attn(packed-QKV/O/gate)+dense-MLP+shared-expert weights (LoFi; gate HiFi2); BFP4 MoE routed-expert gate/up/down weights (LoFi); BF16 router (HiFi2). SDPA kept fp32/HiFi4 exp_approx=False for long-context accuracy.",
-    "validated": "test_optimized_decoder.py \u2014 65 passed / 0 failed at PCC>=0.995 (all 3 layer kinds), incl. test_full_context_decode at pos 262143 with the BFP8 cache (cache fill/read, page-table over 8192 blocks, int32 cur_pos + RoPE addressing). Decode PCC 0.9995-0.99999; prefill 0.9999.",
-    "non_aligned_preserved": "Public prefill API still accepts any seq_len <= 262144 (non-128/non-tile-aligned included: seq 100/513/1500 pass); internal chunking/padding unchanged. No public seq_len % chunk == 0 restriction.",
-    "perf": "See doc/optimized_decoder/ (perf_summary.json, perf_walltime_layer{0,1,4}.json, tracy/). Persisted clean-run traced decode ms/tok: L0 0.956->0.582, L1 2.655->1.722, L4 2.608->1.715. Warmed prefill ms: L0 6.28->6.26, L1 60.3->46.4, L4 61.7->47.07."
-  },
-  "full_model": {
-    "impl": "tt/model.py (LagunaModel) + tt/generator.py (LagunaGenerator)",
-    "block_stack": "40x tt/multichip_decoder.py (MultichipDecoder, PACK_GATE_UP gate+up packing) on the 1x4 Blackhole p300c mesh (P150x4), FABRIC_1D_RING",
-    "layer_kinds": "10 full_attention + 30 sliding_attention; layer 0 dense MLP, layers 1-39 EP-sharded MoE (256 experts, 64 local/device, top-8, shared expert)",
-    "advertised_context": 262144,
-    "supported_context": 262144,
-    "capability_reduction": "none",
-    "limiting_reason": "none",
-    "carried_forward_decoder_contract": "UNCHANGED from the optimized multichip decoder: replicated BF16 inter-layer residual [1,seq,H]/[1,1,B,H] (NO inter-layer collective), 2 ring all_reduce/layer intra-layer, TP=4 attention/dense, EP=4 routed MoE (BFP4 experts, packed gate+up), local 2-KV-head BFP8 paged cache, BF16 activations/norms, BFP8 attn/dense/shared weights, HiFi2 router (BF16), precise fp32/HiFi4 SDPA. paged-cache dtype split (prefill fill cast to BFP8; decode paged_update_cache inputs BF16) preserved. rejection ledger (async/fused/persistent CCL, sharded residual, router/attention LoFi) preserved.",
-    "terminal_path_added": "replicated token embedding [100352,2048] bf16; final RMSNorm on the replicated hidden (exact locally); COLUMN-SHARDED LM head [2048, 25088]/device bf16 so each device produces its own vocab shard; canonical split sampling (Sampling1D top-k(k=1) greedy) all-gathers only the 4x32 candidate set, NOT the 100352-wide vocab. No inter-layer collective added; terminal norm/LM-head/sampling localized to the last step.",
-    "per_device_weight_bytes_full_stack": {
-      "value": 5190000000,
-      "calc": "routed experts 39 MoE layers x 64 local x 3 x (2048x512) x 0.5B(BFP4) = 3.93 GB; attn(packed-QKV/O/gate)+dense+shared BFP8 (il+ds copies) ~0.55 GB; embed_tokens replicated [100352,2048] bf16 = 0.41 GB; LM head sharded [2048,25088] bf16 = 0.10 GB; RoPE tables (shared per kind: full rd=64 + sliding rd=128, cos+sin) = 0.20 GB. Total ~5.19 GB/device."
-    },
-    "per_device_kv_cache_bytes_full_context": {
-      "value": 5400000000,
-      "calc": "40 layers x ~134 MB/layer/device (local 2 KV heads, BFP8, blocks_per_user=ceil(262144/32)=8192, k+v) = 5.4 GB/device for 1 user at the full 262144 context (from the multichip decoder contract, x40 layers)."
-    },
-    "reserved_trace_activation_estimate_bytes": 1500000000,
-    "full_model_fit": "Per-device full-model footprint at the full 262144 context, 1 user ~= 5.19 GB weights + 5.4 GB KV + ~1.5 GB trace/activation ~= ~12.1 GB << 34.18 GB/chip. The 4-chip mesh is what makes the full 262144-context model fit (single-chip weights+KV ~= 37 GB exceeds 34.18 GB). Runtime-VERIFIED: the full 40-layer model builds and runs prefill+traced decode on the mesh (tests/smoke_full_model.py; build ~380 s one-time, then generation). Full-context (262144) fit is analytic from the per-layer decoder numbers x40 (the decoder stage validated full-context single-layer addressing at pos 262143); runtime accuracy is validated at the readiness prompt length (prompt 192 + gen 100).",
-    "prompt_length_contract": "The public generator accepts any prompt length up to 262144, including non-tile/non-block-aligned lengths (the decoder chunks/pads internally: single-shot <=8192, sequence-pipelined beyond; MoE prefill chunked at 256). No seq%k==0 public restriction. Smoke uses non-aligned prompt length 100.",
-    "batch_contract": "batch-1 single-user is the primary latency path; the low-level prefill_forward/decode_forward and cache/page-table/positions are batch-general (decoder validated batch up to 32 with permuted page tables). Traced generate runs batch-1; larger-batch traced decode is exposed through the same low-level API for vLLM.",
-    "validated": "tests/probe_full_model.py (terminal/sampling shapes), tests/probe_generate.py + tests/smoke_full_model.py (traced device split-sampling == host argmax control), tests/test_split_sampling_trace.py (feedback/position/page-table), tests/full_model_checks.py (prefill + teacher-forcing top-k vs AIME24 reference, autoregressive)."
-  },
-  "optimized_full_model": {
-    "impl": "tt/model.py (LagunaModel, lm_head_dtype=ttnn.bfloat8_b default) + tt/generator.py (LagunaGenerator)",
-    "advertised_context": 262144,
-    "supported_context": 262144,
-    "capability_reduction": "none",
-    "limiting_reason": "none",
-    "delta_vs_full_model": "The ONLY change vs the full_model stage is the column-sharded LM-head weight dtype: BF16 -> BFP8 (LagunaModel.from_pretrained lm_head_dtype default now ttnn.bfloat8_b; pass ttnn.bfloat16 for the BF16 baseline). The LM head is the largest DRAM-bound terminal matmul (32x2048x25088, 73.8% DRAM util, 98 cores); halving its weight bytes is the one material full-model-only decode lever. Everything else on the terminal + orchestration path was measured already-optimal (logits-only decode at the decoder-layer-stack floor; sampler <1%).",
-    "lm_head_dram_bytes_per_device": {
-      "before_bf16": 100000000,
-      "after_bfp8": 50000000,
-      "calc": "column-sharded LM head [2048,25088]/device: bf16 ~0.10 GB -> bfp8 ~0.05 GB. Per-device full-stack weights ~5.19 GB -> ~5.14 GB; full-model fit headroom improves (still ~12 GB << 34.18 GB/chip)."
-    },
-    "carried_forward_contract": "UNCHANGED from full_model: replicated BF16 inter-layer residual (no inter-layer collective), 2 ring all_reduce/layer intra-layer, TP=4 attn/dense, EP=4 routed MoE (BFP4 experts, packed gate+up), local 2-KV-head BFP8 paged cache, BF16 activations/norms, BFP8 attn/dense/shared weights, HiFi2 router (BF16), fp32/HiFi4 SDPA, paged-cache dtype split, replicated token embedding, final RMSNorm, canonical on-device traced split sampling (tt_out_tok feedback + device plus_one position/RoPE advance, changed-only page tables, greedy=top-k(k=1)). Rejection ledger preserved (async/fused/persistent CCL, sharded residual, router/attention LoFi, force-argmax).",
-    "non_aligned_preserved": "Public generator still accepts any prompt length <= 262144 including non-tile/non-block-aligned; decoder chunking/padding unchanged. No seq%k==0 restriction.",
-    "perf": "Warmed batch-1 prompt128/gen128, A/B vs BF16 baseline, only lm_head_dtype differs: TTFT 115.1->114.6 ms; logits-only decode 32.841->32.726 ms/tok (30.45->30.56 t/s/u); token-out decode 33.098->32.977 ms/tok (30.21->30.32 t/s/u); sampler+feedback 0.257->0.252 ms/tok (0.78->0.76%). logits-only sits at the multichip layer-stack floor ~33.54 ms/tok. Isolated LM-head A/B: BF16 279.5 us -> BFP8 163.0 us (41.7% faster), greedy token preserved, logits PCC 0.99976.",
-    "validated": "BFP8-LM-head accuracy gates meet top-5>=98%/top-100=100% with no regression: official run_teacher_forcing top1 0.95/top5 1.00/top100 1.00; official run_prefill_check + harness prefill top1 0.94/top5 1.00/top100 1.00 (vs AIME24[0] chat, 192 prompt + 100 gen). Degeneracy clean. Runtime fallback-clean on the measured path + device-watcher-clean (10 dumps, 0 bad signatures)."
-  },
-  "datatype_sweep": {
-    "impl": "tt/optimized_decoder.py (PrecisionPolicy: weight dtypes + per-group compute fidelity + CCL/KV/logits dtypes, to_dict/from_dict) + tt/model.py (load_selected_precision_policy -> from_pretrained consumes doc/datatype_sweep/selected_precision_config.json by default) + tt/generator.py (build_generator threads precision_policy/precision_config_path)",
-    "selected_config": "C0_baseline (see doc/datatype_sweep/selected_precision_config.json)",
-    "advertised_context": 262144,
-    "supported_context": 262144,
-    "capability_reduction": "none",
-    "limiting_reason": "none",
-    "kv_cache_dtype_selected": "bfloat8_b",
-    "kv_cache_capacity_analysis": {
-      "selected_kv_dtype": "bfloat8_b (UNCHANGED from optimized_full_model)",
-      "effect_on_capacity": "none - KV-cache dtype/layout is identical to the optimized_full_model stage, so per-device KV bytes/context and the advertised 262144 context are unchanged (per-device KV ~5.4 GB at 262144, 1 user; full-model footprint ~12.1 GB << 34.18 GB/chip).",
-      "kv_dtype_candidates_evaluated": {
-        "bfloat8_b (SELECTED)": "per-device KV ~5.4 GB @262144; advertised=supported=262144.",
-        "bfloat16 (C1, evaluated, REJECTED)": "would DOUBLE per-device KV to ~10.8 GB @262144 (full-model ~17.5 GB, still < 34.18 GB/chip so 262144 would STILL fit) but gives identical full-model accuracy (top1 0.95) and identical decode t/s/u while using 2x the cache memory -> rejected; not selected, so no capacity recompute needed for it. Recorded here for completeness: even the higher-memory BF16 KV candidate would not have reduced the advertised 262144 capability.",
-        "bfloat4_b": "not evaluated (would INCREASE capacity headroom, not reduce it; high accuracy risk on long-context value-weighting; decode KV-read is a small fraction of decode at batch-1 so no material perf win expected). Not selected."
+  "profiles": {
+    "p150": {
+      "device_count": 1,
+      "mesh_shape": [1, 1],
+      "configured_context_tokens": 65536,
+      "max_num_seqs": 1,
+      "fabric_config": "DISABLED",
+      "ccl_topology": null,
+      "ccl_num_links": 0,
+      "mesh_graph_descriptor": "tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto",
+      "decode_sdpa_program_config_enabled": false,
+      "decode_sdpa_env": "TT_LAGUNA_DECODE_SDPA_PC=0",
+      "kv_policy": "uniform_bfloat8_b",
+      "prefix_cache_enabled": false,
+      "qualification_status": "rejected_full_model_weights_oom_at_lm_head",
+      "qualification_artifact": null,
+      "topology_measurement": {
+        "date": "2026-08-21",
+        "tt_visible_devices": "0",
+        "mesh_graph_descriptor": "tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto",
+        "open_close_cycles": 3,
+        "eager_check": "passed",
+        "traced_check": "passed",
+        "scope": "mesh/topology only",
+        "evidence": "reported bring-up run; committed raw artifact pending"
       },
-      "recompute_note": "The selected KV-cache dtype (BFP8) does not change memory capacity vs the prior stage, so the advertised/supported context remains 262144 with capability_reduction none. No advertised capability was lowered by the sweep."
+      "max_context_serving_gate": {
+        "input_tokens": 64512,
+        "output_tokens": 1024
+      }
     },
-    "non_aligned_preserved": "Selected config keeps BFP8 KV + identical cache layout/paged-op contract + trace buffers, so prefill chunking is unchanged. Re-verified on the selected config: non-tile/non-block/non-MoE-chunk-aligned prompt lengths (100, 129, 257, 513) + traced/eager decode, all finite and in-vocab. No seq%k==0 restriction introduced.",
-    "consumed_by_default": "LagunaModel.from_pretrained / build_generator load selected_precision_config.json by default (propagation verified field-by-field). The vLLM adapter uses the same build_generator factory, so it inherits the selected weight/activation/CCL/KV/compute-fidelity policy.",
-    "perf": "Selected config == the prior-stage baseline: warmed batch-1 prompt128/gen128 token-out ~30.3 t/s/u, teacher-forcing traced decode ~26 t/s/u, top1 0.95 / top5 1.00 / top100 1.00.",
-    "note": "The sweep found NO lower-precision/lower-fidelity config faster than the baseline beyond a +/-0.7% token-out measurement-noise band, because decode is dominated by the already-BFP4 routed-expert matmuls; several lower-precision moves cost top-1. Baseline retained. Selecting a lower-precision config would not have changed capacity (KV dtype unchanged)."
-  }
+    "p150x2": {
+      "device_count": 2,
+      "mesh_shape": [1, 2],
+      "configured_context_tokens": 131072,
+      "max_num_seqs": 1,
+      "fabric_config": "FABRIC_1D_RING",
+      "ccl_candidates": [
+        {"topology": "linear", "num_links": 1},
+        {"topology": "linear", "num_links": 2},
+        {"topology": "ring", "num_links": 1},
+        {"topology": "ring", "num_links": 2}
+      ],
+      "selected_physical_pair": {
+        "tt_visible_devices": "0,1",
+        "host_board_relationship": "one physical P300 card containing two Blackhole ASICs"
+      },
+      "selected_ccl": {"topology": "ring", "num_links": 2},
+      "mesh_graph_descriptor": null,
+      "decode_sdpa_program_config_enabled": true,
+      "decode_sdpa_env": "TT_LAGUNA_DECODE_SDPA_PC=1",
+      "kv_policy": "uniform_bfloat8_b",
+      "prefix_cache_enabled": true,
+      "prefix_cache_profile_default": 1,
+      "prefix_cache_policy": "qualified",
+      "prefix_cache_quantum_tokens": 8192,
+      "prefix_cache_physical_block_tokens": 64,
+      "prefix_cache_admission": "complete_canonical_prompt_chunks",
+      "prefix_cache_operator_rollback": "TT_LAGUNA_PREFIX_CACHE=0",
+      "qualification_status": "qualified_selected_default",
+      "qualification_artifact": "/home/ttuser/laguna-qualification/p150x2-qualified-noalloc-20260821T123447",
+      "prefix_cache_qualification_artifact": "/home/ttuser/laguna-qualification/p150x2-prefix-cache-20260821/cache-on-canonical-8k/results/full_qualification.json",
+      "topology_measurements": [
+        {
+          "date": "2026-08-21",
+          "tt_visible_devices": "0,1",
+          "topology": "ring",
+          "num_links": 2,
+          "open_close_cycles": 3,
+          "eager_check": "passed",
+          "traced_check": "passed"
+        },
+        {
+          "date": "2026-08-21",
+          "tt_visible_devices": "2,3",
+          "topology": "ring",
+          "num_links": 2,
+          "open_close_cycles": 3,
+          "eager_check": "passed",
+          "traced_check": "passed"
+        },
+        {
+          "date": "2026-08-21",
+          "tt_visible_devices": "0,1",
+          "topology": "linear",
+          "num_links": 2,
+          "open_close_cycles": 3,
+          "eager_check": "passed",
+          "traced_check": "passed"
+        }
+      ],
+      "topology_evidence_note": "reported bring-up runs; committed raw artifacts pending",
+      "max_context_serving_gate": {
+        "input_tokens": 130048,
+        "output_tokens": 1024,
+        "passed": true
+      }
+    },
+    "p150x4": {
+      "device_count": 4,
+      "mesh_shape": [1, 4],
+      "configured_context_tokens": 131072,
+      "max_num_seqs": 8,
+      "fabric_config": "FABRIC_1D_RING",
+      "ccl_topology": "ring",
+      "ccl_num_links": 2,
+      "mesh_graph_descriptor": null,
+      "decode_sdpa_program_config_enabled": true,
+      "decode_sdpa_env": "TT_LAGUNA_DECODE_SDPA_PC=1",
+      "kv_policy": "uniform_bfloat8_b",
+      "prefix_cache_enabled": false,
+      "qualification_status": "legacy_measured_regression_profile",
+      "qualification_artifact": null,
+      "artifact_note": "The previous contract cited doc/vllm_integration/sweep_vllm.tsv, but that raw file is absent from this checkout. Produce a fresh D4 artifact before applying the 10% regression gate."
+    }
+  },
+  "unsupported_or_disabled": {
+    "prefix_cache_outside_qualified_p150x2": {
+      "profiles": ["p150", "p150x4"],
+      "required_production_env": "TT_LAGUNA_PREFIX_CACHE=0",
+      "status": "disabled_and_unqualified",
+      "reason": "The runtime-offset implementation and frozen-cache warm set are qualified only for the p150x2 two-chip, max-num-seqs-1 serving envelope. Model initialization rejects enabled prefix caching on any other device count."
+    },
+    "hybrid_kv": {
+      "required_env": "TT_LAGUNA_HYBRID_KV=0",
+      "status": "unsafe_and_disabled",
+      "reason": "The current vLLM/plugin grouped allocator does not preserve Laguna's 10 full-attention and 30 sliding-window logical-to-physical group mapping. All profile qualification must use uniform KV."
+    },
+    "scheduler_chunked_prefill": {
+      "status": "required_disabled_for_p150x2_prefix_cache",
+      "note": "Laguna's internal bounded/pipelined prefill remains enabled and is not vLLM scheduler-level chunked prefill."
+    },
+    "context_262144": {
+      "status": "out_of_scope",
+      "reason": "Historical D4 serving reported OOM at this length, and D1/D2 are scoped to 65536/131072 respectively."
+    }
+  },
+  "prefill_runtime_contract": {
+    "production_prefix_cache_profiles": ["p150x2"],
+    "operator_rollback": "TT_LAGUNA_PREFIX_CACHE=0 is always accepted without an experimental acknowledgement and passes --no-enable-prefix-caching",
+    "resume_support_status": "production_qualified_on_p150x2",
+    "cache_admission": {
+      "physical_kv_block_tokens": 64,
+      "canonical_quantum_tokens": 8192,
+      "lookup_policy": "floor raw candidate hits to complete canonical prompt chunks before references are acquired",
+      "insertion_policy": "cache only complete canonical prompt checkpoints; exclude partial prompt chunks and generated decode KV",
+      "ownership_safety": "rejected tail blocks remain fresh and writable",
+      "kv_group_policy": "exactly one uniform FullAttentionSpec group",
+      "max_num_seqs": 1,
+      "scheduler_chunked_prefill": false,
+      "speculative_decode": false,
+      "external_kv_connectors": false
+    },
+    "prefix_resume_range": "vLLM supplies full tokens, absolute exclusive prompt_lens, and absolute cached-prefix start_pos; Laguna uploads only tokens[start_pos:prompt_lens]",
+    "bucket_length_basis": "prompt_lens - start_pos",
+    "model_position_basis": "absolute start_pos",
+    "resume_alignment": "the scheduler admits start_pos only at the 8192-token canonical quantum; the model additionally validates 64-token KV-block alignment",
+    "runtime_start_inputs": {
+      "paged_fill": "each request row is host-rebased so column zero represents start_pos; device slices use only fixed relative pipeline offsets",
+      "rope": "absolute position ids are copied into persistent inputs and indexed embedding writes persistent cos/sin outputs",
+      "sdpa": "chunk_start_idx_tensor carries the absolute start as runtime data"
+    },
+    "private_scratch_kv": {
+      "physical_blocks_per_layer": 1,
+      "logical_capacity_increase": 0,
+      "block_id": "the first physical block outside vLLM's logical block-id range",
+      "attention_padding": "a persistent prefill-only attention table maps whole padding blocks to the zero-initialized scratch block",
+      "fill_padding": "a separate persistent paged-fill table maps padding to -1, the paged_fill_cache write-skip sentinel, so writer cores cannot race on scratch",
+      "purpose": "prevent zero-filled scheduler columns from aliasing physical block 0 without allowing concurrent padding writes to race on scratch",
+      "decode_page_table_modified": false
+    },
+    "extended_private_prefill_addressability": {
+      "page_table_horizon": "max_model_len + largest_bucket",
+      "rope_horizon": "max_model_len + largest_bucket",
+      "p150_horizon_tokens": 131072,
+      "p150x2_horizon_tokens": 262144,
+      "advertised_context_changed": false
+    },
+    "warmup": {
+      "plugin_calls_prefill_warmup_twice": true,
+      "full_bucket_ladder_passes": 1,
+      "mechanism": "Laguna's private _prefill_programs_warmed latch survives the plugin's public-flag reset and suppresses the redundant second full-model pass",
+      "runtime_offset_slots_preallocated": true,
+      "program_cache_frozen_after_trace": true,
+      "program_cache_misses_allowed_after_trace": false
+    },
+    "terminal_row_selection": {
+      "index": "prompt_lens - start_pos - 1",
+      "selector": "host one-hot copied into a persistent per-bucket device buffer",
+      "output": "persistent one-row device buffer",
+      "program_compilation": "once per bucket during the single full ladder warmup",
+      "persistent_selector_and_output_buffers": true,
+      "allocation_claim_scope": "no per-request selector/output buffer; this is not a global allocation-free prefill claim"
+    },
+    "device_free_contract_tests": [
+      "tests/test_generator_vllm_prefix_resume.py",
+      "tests/test_prefill_page_table.py",
+      "tests/test_prefill_runtime.py",
+      "vllm_ext/tests/test_prefix_cache_quantum.py"
+    ],
+    "device_contract_test": "tests/test_prefix_cache_hardware.py",
+    "end_to_end_qualification_client": "tests/prefix_cache_qualification.py"
+  },
+  "qualification_gates": {
+    "topology": {
+      "process_isolation": "Reset devices and use a new Python process for every device selection, mesh size, topology, and link-count attempt.",
+      "required_checks": [
+        "three clean mesh open/close cycles",
+        "correct eager reduction",
+        "correct traced reduction with three replays",
+        "no watcher, timeout, CCL, or reset errors"
+      ]
+    },
+    "memory": {
+      "initial_trace_region_size_bytes": 1500000000,
+      "min_total_dram_free_fraction": 0.1,
+      "min_largest_contiguous_free_bytes_per_bank": 134217728,
+      "required_snapshots": [
+        "weights_loaded",
+        "uniform_kv_allocated_at_profile_context",
+        "maximum_context_warmup_complete",
+        "decode_trace_captured_and_replayed"
+      ],
+      "trace_calibration": "Reduce the trace reservation only if the measured margin fails, then repeat trace capture/replay and all downstream gates."
+    },
+    "accuracy": {
+      "representative_layers": [0, 1, 4],
+      "min_layer_pcc": 0.995,
+      "min_full_model_top1": 0.9,
+      "min_full_model_top5": 0.98,
+      "required_full_model_top100": 1.0,
+      "autoregressive_smoke": "must be valid and nondegenerate"
+    },
+    "serving": {
+      "p150x2_prefix_cache_default_enabled": true,
+      "operator_rollback_verification_required": true,
+      "allocator_warning_policy": "Record active-trace warnings. TT's warning is thread-local and once-only, so warning presence alone is not failure; corruption, allocator error, device death, or decode-replay failure is failure.",
+      "required": [
+        "health endpoint",
+        "models endpoint with profile context",
+        "deterministic chat completion",
+        "deterministic repeated cold request plus successful decode replay afterward",
+        "automatic poolside_v1 tool call",
+        "pool coding-agent smoke",
+        "profile maximum-context input plus 1024 output tokens"
+      ]
+    },
+    "prefix_cache": {
+      "qualified_profile": "p150x2",
+      "production_default": "TT_LAGUNA_PREFIX_CACHE=1",
+      "engine_must_report_enabled": true,
+      "operator_rollback": "TT_LAGUNA_PREFIX_CACHE=0",
+      "cache_off_oracle_required": true,
+      "cache_on_repetitions": 3,
+      "canonical_quantum_tokens": 8192,
+      "physical_kv_block_tokens": 64,
+      "partial_expected_cached_tokens": [0, 32768, 65536, 122880],
+      "full_expected_cached_tokens": [24576, 57344],
+      "poison_order_expected_cached_tokens": [0, 0, 24576],
+      "decode_boundary_expected_cached_tokens": 0,
+      "minimum_metric_hit_tokens": 491520,
+      "performance": {
+        "full_32768_minimum_ttft_speedup": 3.0,
+        "full_65536_minimum_ttft_speedup": 2.0,
+        "hit_ttft_must_improve_candidate_cold": true,
+        "cache_on_cold_ttft_max_oracle_ratio": 1.05,
+        "cache_on_cold_and_hit_tpot_max_oracle_ratio": 1.02
+      },
+      "required_safety": [
+        "cold and hit output token ids exactly match the cache-off oracle",
+        "canonical cached-token counts and Prometheus hit totals match",
+        "oldest-hash and decode-produced-KV poisoning regressions pass",
+        "flexible SDPA, indexed RoPE, and full/sliding representative layers change runtime offsets with program-cache misses forbidden",
+        "program cache is frozen after trace and the server records no miss or critical fault",
+        "post-trace DRAM margin passes and final health remains good"
+      ],
+      "promotion_gate": true,
+      "status": "passed_and_promoted"
+    },
+    "performance": {
+      "base_decode_acceptance_tool": "vllm bench serve",
+      "prefix_cache_acceptance_tool": "tests/prefix_cache_qualification.py raw-token two-phase client",
+      "decode_metric_definition": "decode_tokens_per_second = 1000 / mean_tpot_ms",
+      "aggregate_output_throughput_is_gate": false,
+      "report_ttft_and_aggregate_output_throughput": true,
+      "max_concurrency": 1,
+      "benchmark_warmups": 0,
+      "measured_requests_per_workload": 3,
+      "fixed_output_tokens": 128,
+      "workloads": [
+        {"input_tokens": 1024, "min_median_decode_tokens_per_second": 15.0},
+        {"input_tokens": 32768, "min_median_decode_tokens_per_second": 10.0}
+      ],
+      "max_absolute_deviation_from_median_fraction": 0.05,
+      "min_individual_run_fraction_of_threshold": 0.9,
+      "p150x4_comparison": "not a D2 selection gate because D4 uses twice as many ASICs; D4 remains an explicit regression profile and must be remeasured before changing its path"
+    }
+  },
+  "selection_policy": {
+    "preferred": "p150x2",
+    "p150_status": "Rejected: the full 40-layer model OOMs at the final LM-head allocation even at max_seq_len=4096, before KV allocation or warmup.",
+    "selected_configuration": "p150x2 ring/two-link on TT_VISIBLE_DEVICES=0,1",
+    "p150x2_acceptance": "Passed: exact-cap, cold API, memory, correctness, decode, and canonical prefix-cache gates pass; the server advertises 131072 with qualified prefix caching enabled by default.",
+    "no_candidate_passes": "Keep p150x4 as default and report failed gates without lowering context or thresholds."
+  },
+  "planning_estimates_not_measurements": {
+    "source": "Static tensor-sharding and KV/trace accounting from bring-up analysis; values are approximate decimal GB and do not replace allocator snapshots.",
+    "device_dram_total_bytes": 34178731008,
+    "p150": {
+      "estimated_weights_gb_per_device": 21.76,
+      "estimated_total_gb_per_device_at_65536": 28.9
+    },
+    "p150x2": {
+      "estimated_weights_gb_per_device": 11.11,
+      "estimated_total_gb_per_device_at_131072": 18.3
+    },
+    "p150x4": {
+      "estimated_weights_gb_per_device": 5.79
+    },
+    "uncertainty": "Prefill activation peaks, allocator fragmentation, fabric buffers, and implementation overhead may not be fully represented. The measured memory gate is authoritative."
+  },
+  "measured_results": {
+    "p150": {
+      "status": "rejected_full_model_weight_capacity",
+      "topology": "Device 0 passed three eager+traced/open-close cycles on 2026-08-21.",
+      "representative_packed_tests": {
+        "passed": 10,
+        "total": 12,
+        "initial_status": "10 of 12 with custom k64 decode SDPA",
+        "failure_scope": "two long-position cases with the custom k64 decode SDPA program configuration",
+        "diagnostic": "Both failed cases pass with TT_LAGUNA_DECODE_SDPA_PC=0, which is now automatic for D1."
+      },
+      "full_model_load": {
+        "status": "oom_at_final_lm_head",
+        "max_seq_len_tokens": 4096,
+        "failure_phase": "weights; before KV allocation or warmup",
+        "dram_per_bank_mib_approx": {
+          "allocated": 2692.0,
+          "free": 80.1,
+          "largest_contiguous_free": 26.27,
+          "requested_allocation": 27.30
+        },
+        "conclusion": "The current D1 weight layout cannot load the model. Reducing context cannot fix this failure."
+      },
+      "note": "D1 performance and serving qualification were not run after the decisive weight-capacity failure."
+    },
+    "p150x2": {
+      "status": "qualified_selected_default",
+      "artifact_root": "/home/ttuser/laguna-qualification/p150x2-qualified-noalloc-20260821T123447",
+      "topology": "Ring/two-link passed three cycles on pairs 0,1 and 2,3; linear/two-link passed three cycles on pair 0,1 on 2026-08-21.",
+      "selected_configuration": {
+        "tt_visible_devices": "0,1",
+        "topology": "ring",
+        "num_links": 2,
+        "context_tokens": 131072,
+        "max_num_seqs": 1,
+        "prefix_cache_enabled": true,
+        "prefix_cache_policy": "qualified",
+        "prefix_cache_quantum_tokens": 8192,
+        "kv_block_size_tokens": 64,
+        "scheduler_chunked_prefill": false,
+        "kv_group_policy": "single_uniform_full_attention",
+        "clean_environment_launcher_config_verified": true
+      },
+      "representative_packed_tests": {
+        "passed": 12,
+        "total": 12,
+        "layers": [0, 1, 4],
+        "decode_positions": [32, 513, 2048],
+        "path_active_checks_included": true
+      },
+      "direct_traced_decode_sdpa_boundaries": {
+        "passed": 1,
+        "total": 1,
+        "nondegenerate_nonzero_v": true,
+        "page_block_size": 64,
+        "k_chunk_size": 64,
+        "positions": [62, 63, 64, 126, 127, 128, 131070, 131071]
+      },
+      "full_model_131k_smoke": {
+        "layers": 40,
+        "uniform_kv_tokens": 131072,
+        "prefill": "passed",
+        "trace_replay": "passed",
+        "device_vs_host_greedy": {"passed": 8, "total": 8},
+        "status": "passed"
+      },
+      "post_trace_memory_prior_build": {
+        "free_fraction": 0.2239,
+        "largest_contiguous_free_mib_per_bank": 544.8,
+        "gate_passed": true,
+        "note": "First live D2 server before private scratch KV and the doubled private RoPE/prefill horizon; preserve exact byte counters from the raw log."
+      },
+      "intermediate_scratch_extended_pt_boot": {
+        "implementation": "one private scratch KV block per layer plus private prefill page-table and RoPE horizon through 262144",
+        "status": "passed_memory_health_and_models_but_predates_final_trace_safe_selector_and_race_free_fill_page_table",
+        "weights": {"free_fraction": 0.4899, "largest_contiguous_free_mib_per_bank": 1273.4},
+        "uniform_kv": {"free_fraction": 0.2325, "largest_contiguous_free_mib_per_bank": 609.7},
+        "prefill_warmup": {"free_fraction": 0.2194, "largest_contiguous_free_mib_per_bank": 526.2},
+        "trace": {"free_fraction": 0.2193, "largest_contiguous_free_mib_per_bank": 526.0},
+        "prefill_full_ladder_passes": 1,
+        "engine_init_seconds": 532.01,
+        "compilation_seconds": 502.74,
+        "health_http_status": 200,
+        "models_max_model_len": 131072,
+        "qualification_scope": "intermediate only; repeat after final selector and fill-page-table changes"
+      },
+      "authoritative_post_fix_cache_off_server": {
+        "prefix_cache_enabled": false,
+        "prefill_full_ladder_passes": 1,
+        "engine_init_seconds": 527.76,
+        "compilation_seconds": 499.24,
+        "memory": {
+          "weights": {"free_fraction": 0.4899, "largest_contiguous_free_mib_per_bank": 1273.4},
+          "uniform_kv": {"free_fraction": 0.2325, "largest_contiguous_free_mib_per_bank": 609.7},
+          "prefill_warmup": {"free_fraction": 0.2194, "largest_contiguous_free_mib_per_bank": 526.1},
+          "trace": {"free_fraction": 0.2193, "largest_contiguous_free_mib_per_bank": 525.8},
+          "gate_passed": true
+        },
+        "cold_api": {
+          "health_http_status": 200,
+          "models_max_model_len": 131072,
+          "raw_129_plus_1_first_seconds": 0.251,
+          "raw_repeat_exact": true,
+          "chat_exact": true,
+          "tool_call_valid": true,
+          "pool_coding_agent_smoke": {
+            "passed": true,
+            "shell_tool": "pwd",
+            "tool_exit_code": 0,
+            "final_text": "LAGUNA_POOL_OK",
+            "overall_exit_code": 0,
+            "duration_seconds": 21.78,
+            "artifact": "api/pool_smoke.log"
+          },
+          "decode_replay_128_exact": true,
+          "decode_replay_seconds_each_approx": 6.42,
+          "decode_replay_tokens_per_second_approx": 19.9
+        },
+        "allocator_observation": {
+          "active_trace_warnings": 1,
+          "scope": "expected thread-local once-only warning on first eager prefill",
+          "allocator_error": false,
+          "corruption": false,
+          "device_death": false,
+          "decode_replay_failure": false
+        },
+        "cold_chat_latency_sweep": {
+          "date": "2026-08-21",
+          "artifact": "doc/vllm_integration/p150x2_latency_sweep_20260821.tsv",
+          "method": "OpenAI chat endpoint, OSL 512, concurrency 1, prefix cache off, one boot-warmed measured request per requested ISL",
+          "requested_input_tokens": [128, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 130048],
+          "actual_prompt_tokens": [82, 1066, 1939, 4138, 8234, 16426, 32810, 65578, 130090],
+          "decode_tokens_per_second": [19.9653, 19.8161, 19.8038, 19.7738, 19.7165, 19.5999, 19.3775, 18.9479, 18.1471],
+          "completed": 9,
+          "failed": 0,
+          "runtime_compile_or_retrace": false,
+          "final_health_http_status": 200,
+          "passed": true
+        }
+      },
+      "canonical_prefix_cache_qualification": {
+        "status": "passed_and_promoted_default",
+        "date": "2026-08-21",
+        "artifact_root": "/home/ttuser/laguna-qualification/p150x2-prefix-cache-20260821",
+        "cache_off_oracle_artifact": "/home/ttuser/laguna-qualification/p150x2-prefix-cache-20260821/cache-off-oracle.json",
+        "cache_on_candidate_artifact": "/home/ttuser/laguna-qualification/p150x2-prefix-cache-20260821/cache-on-canonical-8k/results/full_qualification.json",
+        "cache_on_server_log": "/home/ttuser/laguna-qualification/p150x2-prefix-cache-20260821/cache-on-canonical-8k/logs/laguna_serve_20260821-165119.log",
+        "hardware_junit_artifact": "/home/ttuser/laguna-qualification/p150x2-prefix-cache-20260821/hardware-kernel-layer-canonical-admission.xml",
+        "run_id": "canonical-8k-final-20260821",
+        "configuration": {
+          "device_count": 2,
+          "max_num_seqs": 1,
+          "uniform_kv": true,
+          "kv_group_policy": "single_uniform_full_attention",
+          "physical_kv_block_tokens": 64,
+          "canonical_quantum_tokens": 8192,
+          "cache_admission_policy": "complete_canonical_prompt_chunks",
+          "scheduler_chunked_prefill": false,
+          "internal_prefill_chunk_tokens": 8192,
+          "speculative_decode": false,
+          "external_kv_connectors": false
+        },
+        "initialization": {
+          "engine_init_seconds": 524.97,
+          "compilation_seconds": 497.13,
+          "prefill_full_ladder_passes": 1
+        },
+        "memory": {
+          "weights": {"free_fraction": 0.4899, "largest_contiguous_free_mib_per_bank": 1273.4},
+          "uniform_kv": {"free_fraction": 0.2325, "largest_contiguous_free_mib_per_bank": 609.7},
+          "prefill_warmup": {"free_fraction": 0.2145, "largest_contiguous_free_mib_per_bank": 511.0},
+          "trace": {"free_fraction": 0.2144, "largest_contiguous_free_mib_per_bank": 510.8},
+          "gate_passed": true
+        },
+        "program_cache": {
+          "entries_frozen_after_trace": 889,
+          "misses_allowed_after_trace": false,
+          "serving_time_miss_or_compile": false
+        },
+        "hardware_runtime_offset_tests": {
+          "passed": 5,
+          "total": 5,
+          "flexible_sdpa": true,
+          "indexed_rope_cos_sin": true,
+          "representative_full_and_sliding_layers": true,
+          "program_cache_misses_forbidden_during_changed_offsets": true
+        },
+        "correctness": {
+          "cache_off_oracle_passed": true,
+          "cache_on_cold_and_hit_exact_output_ids": true,
+          "partial_prefix_tokens": [2048, 32768, 65536, 129984],
+          "partial_expected_and_observed_cached_tokens": [0, 32768, 65536, 122880],
+          "full_prompt_tokens": [32768, 65536],
+          "full_raw_candidate_cached_tokens": [32704, 65472],
+          "full_expected_and_observed_cached_tokens": [24576, 57344],
+          "poison_order_expected_and_observed_cached_tokens": [0, 0, 24576],
+          "decode_boundary_potential_hit_tokens": 8192,
+          "decode_boundary_expected_and_observed_cached_tokens": 0,
+          "passed": true
+        },
+        "metrics": {
+          "query_token_delta": 1472572,
+          "hit_token_delta": 491520,
+          "minimum_expected_hit_tokens": 491520,
+          "cache_off_hit_token_delta": 0,
+          "passed": true
+        },
+        "latency": {
+          "repetitions_per_state": 3,
+          "input_32768_output_128": {
+            "oracle_median_ttft_ms": 52681.834343,
+            "oracle_median_tpot_ms": 51.51042,
+            "oracle_median_e2e_ms": 59226.832179,
+            "candidate_cold_median_ttft_ms": 52654.972804,
+            "candidate_cold_median_e2e_ms": 59199.313229,
+            "hit_median_ttft_ms": 15889.831831,
+            "hit_median_e2e_ms": 22433.116685,
+            "candidate_cold_median_tpot_ms": 51.547527,
+            "hit_median_tpot_ms": 51.521505,
+            "hit_speedup_vs_candidate_cold": 3.3137526793250047,
+            "cold_ttft_ratio_vs_oracle": 0.9994901176214724,
+            "cold_tpot_ratio_vs_oracle": 1.0007203785175893,
+            "hit_tpot_ratio_vs_oracle": 1.0002151991771762,
+            "gate_passed": true
+          },
+          "input_65536_output_128": {
+            "oracle_median_ttft_ms": 134040.18885,
+            "oracle_median_tpot_ms": 52.58734,
+            "oracle_median_e2e_ms": 140718.561505,
+            "candidate_cold_median_ttft_ms": 133891.980817,
+            "candidate_cold_median_e2e_ms": 140572.885361,
+            "hit_median_ttft_ms": 23011.513614,
+            "hit_median_e2e_ms": 29692.112205,
+            "candidate_cold_median_tpot_ms": 52.605116,
+            "hit_median_tpot_ms": 52.604568,
+            "hit_speedup_vs_candidate_cold": 5.8184777873777636,
+            "cold_ttft_ratio_vs_oracle": 0.9988943015205248,
+            "cold_tpot_ratio_vs_oracle": 1.0003380281261613,
+            "hit_tpot_ratio_vs_oracle": 1.0003276073670964,
+            "gate_passed": true
+          },
+          "passed": true
+        },
+        "health": {
+          "initial": true,
+          "final": true,
+          "models_max_model_len": 131072
+        },
+        "allocator_and_faults": {
+          "known_once_per_thread_active_trace_warnings": 1,
+          "critical_faults": 0,
+          "program_cache_misses": 0,
+          "corruption": false,
+          "device_death": false
+        },
+        "operator_rollback": {
+          "env": "TT_LAGUNA_PREFIX_CACHE=0",
+          "requires_experimental_acknowledgement": false,
+          "launcher_status": "operator_rollback_disabled",
+          "cli_arg": "--no-enable-prefix-caching",
+          "verified": true
+        },
+        "overall_passed": true
+      },
+      "standalone_warm_prompt128_generate128": {
+        "ttft_ms": 190.7,
+        "logits_only": {"milliseconds_per_token": 39.203, "tokens_per_second": 25.51},
+        "device_token_output": {"milliseconds_per_token": 49.949, "tokens_per_second": 20.02},
+        "including_host_readback": {"milliseconds_per_token": 50.634, "tokens_per_second": 19.75},
+        "acceptance_artifact": false
+      },
+      "cold_online_performance": {
+        "tool": "vllm bench serve",
+        "max_concurrency": 1,
+        "benchmark_warmups": 0,
+        "requests_per_workload": 3,
+        "input_1024_output_128": {
+          "completed": 3,
+          "errors": 0,
+          "mean_ttft_ms": 1278.96,
+          "mean_tpot_ms": 50.46,
+          "decode_tokens_per_second": 19.82,
+          "per_request_decode_tokens_per_second": [19.81544, 19.81317, 19.82272],
+          "max_deviation_from_median_fraction": 0.00037,
+          "aggregate_output_tokens_per_second": 16.650,
+          "decode_gate_tokens_per_second": 15.0,
+          "decode_gate_passed": true
+        },
+        "input_32768_output_128": {
+          "completed": 3,
+          "errors": 0,
+          "mean_ttft_ms": 53546.66,
+          "mean_tpot_ms": 51.53,
+          "decode_tokens_per_second": 19.41,
+          "per_request_decode_tokens_per_second": [19.40947, 19.39730, 19.41004],
+          "max_deviation_from_median_fraction": 0.00063,
+          "aggregate_output_tokens_per_second": 2.130,
+          "decode_gate_tokens_per_second": 10.0,
+          "decode_gate_passed": true,
+          "cold_prefill_caveat": "53.55 second TTFT for this cache-off baseline; qualified canonical-prefix hits reduce repeated-prefix TTFT"
+        },
+        "exact_cap_input_130048_output_1024": {
+          "completed": 1,
+          "errors": 0,
+          "sum_input_and_output_tokens": 131072,
+          "ttft_ms": 381378.79,
+          "mean_tpot_ms": 55.2128,
+          "decode_tokens_per_second": 18.11,
+          "aggregate_output_tokens_per_second": 2.3386,
+          "duration_seconds": 437.862,
+          "peak_kv_occupancy_fraction": 1.0,
+          "post_request_kv_occupancy_fraction": 0.0,
+          "post_request_health_http_status": 200,
+          "new_warning_count": 0,
+          "fault_markers": 0,
+          "capacity_gate_passed": true,
+          "cold_prefill_caveat": "381.38 second TTFT for this cache-off capacity request; no reusable prefix was seeded"
+        },
+        "status": "decode_and_exact_cap_gates_passed"
+      },
+      "pending": []
+    },
+    "p150x4_historical": {
+      "status": "reported_measurement_without_raw_artifact_in_checkout",
+      "date": "2026-07-31",
+      "reported_served_input_lengths": [128, 4096, 32768, 65536, 131072],
+      "reported_oom_input_length": 262144,
+      "reported_decode_tokens_per_second_at_isl_131072": 12.1,
+      "reported_decode_tokens_per_second_at_isl_1024_range": [27.0, 29.0],
+      "provenance": "Carried forward from the previous README/context contract. Its cited doc/vllm_integration/sweep_vllm.tsv is not present, so remeasure D4 for an auditable regression comparison."
+    }
+  },
+  "runbook": "doc/bringup_profiles.md"
 }

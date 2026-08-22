@@ -1,10 +1,9 @@
 """Warmed prefill + traced warmed decode performance harness for one Laguna layer.
 
 Run under Tracy to emit an ops CSV with signposted measured windows:
-    cd /tmp && TT_METAL_HOME=/home/ttuser/.local/lib/model-bringup/tt-metal \
-      PYTHONPATH=/home/ttuser/dev/tt-metal \
-      python -m tracy -r -p -v -o <outdir> \
-      /home/ttuser/dev/tt-metal/models/autoports/poolside_laguna_xs_2_1/tests/perf_trace.py <layer> <prefill_len> <decode_iters>
+    python -m tracy -r -p -v -o <outdir> -m \
+      models.autoports.poolside_laguna_xs_2_1.tests.perf_trace \
+      <layer> <prefill_len> <decode_iters>
 
 Signposts: PERF_PREFILL/PERF_PREFILL_END around the warmed prefill; PERF_DECODE/
 PERF_DECODE_END around the measured traced decode replays. Wall-clock latencies are
@@ -19,6 +18,7 @@ import torch
 import ttnn
 from models.autoports.poolside_laguna_xs_2_1.tests import laguna_reference as R
 from models.autoports.poolside_laguna_xs_2_1.tests import laguna_weights as W
+from models.autoports.poolside_laguna_xs_2_1.tests.laguna_test_utils import DOC_DIR
 from models.autoports.poolside_laguna_xs_2_1.tt.functional_decoder import FunctionalDecoder
 
 try:
@@ -33,7 +33,7 @@ LAYER = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 PREFILL_LEN = int(sys.argv[2]) if len(sys.argv) > 2 else 512
 DECODE_ITERS = int(sys.argv[3]) if len(sys.argv) > 3 else 20
 HIDDEN = 2048
-ART = "/home/ttuser/dev/tt-metal/models/autoports/poolside_laguna_xs_2_1/doc/functional_decoder"
+ART = DOC_DIR / "functional_decoder"
 
 
 def main():
@@ -103,7 +103,7 @@ def main():
             "decode_ms_per_token_traced": round(decode_ms, 4),
             "decode_iters": DECODE_ITERS,
         }
-        with open(f"{ART}/perf_walltime_layer{LAYER}.json", "w") as f:
+        with open(ART / f"perf_walltime_layer{LAYER}.json", "w") as f:
             json.dump(res, f, indent=2)
         print("PERF_RESULT", json.dumps(res))
     finally:

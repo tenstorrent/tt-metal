@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Full-model performance on the 1x4 Blackhole mesh (batch-1, prompt128/gen128 by default = the vLLM
-primary single-user profile). Three decode metrics, each a genuinely different captured trace, one
+"""Full-model performance on a selected P150 D=1/2/4 profile.
+
+Batch-1 prompt128/gen128 is the default vLLM single-user profile. Three decode metrics, each a
+genuinely different captured trace, are measured with one
 trace resident at a time (capture -> measure -> release):
 
   * logits-only decode  — embed -> 40 layers -> final norm -> LM head (sampler-ready logits), NO
@@ -30,6 +32,16 @@ import torch
 
 import ttnn
 from models.autoports.poolside_laguna_xs_2_1.tt.generator import LagunaGenerator
+from models.autoports.poolside_laguna_xs_2_1.tests.laguna_test_utils import (
+    add_profile_args,
+    assert_memory_margin,
+    close_mesh,
+    open_mesh,
+    parse_layers,
+    print_memory_snapshot,
+    profile_from_args,
+    profile_summary,
+)
 
 
 def _capture(mesh, body):
@@ -47,22 +59,44 @@ def main():
     ap.add_argument("--prompt", type=int, default=128)
     ap.add_argument("--gen", type=int, default=128)
     ap.add_argument("--layers", type=str, default=None)
+    ap.add_argument(
+        "--max-seq-len",
+        type=int,
+        default=None,
+        help="KV/context allocation (default: selected profile's qualified maximum)",
+    )
+    ap.add_argument("--enforce-memory-margin", action="store_true")
+    ap.add_argument("--batch2-smoke", action="store_true", help="run the out-of-contract batch-2 diagnostic")
     ap.add_argument("--out", type=str, default=None)
+    add_profile_args(ap)
     args = ap.parse_args()
-    layers = [int(x) for x in args.layers.split(",")] if args.layers else None
+    layers = parse_layers(args.layers)
+    profile = profile_from_args(args)
+    max_seq_len = args.max_seq_len or profile.max_context
+    print("PROFILE", json.dumps(profile_summary(profile), sort_keys=True))
 
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=1_500_000_000)
+    mesh = open_mesh(ttnn, profile)
+    gen = None
+    memory = []
+
+    def snapshot(label):
+        value = print_memory_snapshot(ttnn, mesh, label)
+        memory.append(value)
+        if args.enforce_memory_margin:
+            assert_memory_margin(value)
+
     try:
-        gen = LagunaGenerator.from_pretrained(
-            mesh, max_seq_len=max(4096, args.prompt + 4 * args.gen + 64), num_layers=layers
-        )
+        if max_seq_len < args.prompt + 4 * args.gen + 64:
+            raise ValueError("max-seq-len is too small for prompt plus performance iterations")
+        gen = LagunaGenerator.from_pretrained(mesh, max_seq_len=max_seq_len, num_layers=layers)
+        snapshot("weights")
         P, G = args.prompt, args.gen
         m = gen.model
         torch.manual_seed(0)
         prompt = torch.randint(0, gen.vocab, (P,), dtype=torch.int64).tolist()
-        gen._ensure_cache(1, P + 4 * G + 64)
+        gen._ensure_cache(1, max_seq_len)
         kv, pt = gen._kv_cache, gen._page_table
+        snapshot("uniform_kv")
 
         def prefill_ttft():
             x = m.embed_prefill(gen._tokens_to_device(torch.tensor(prompt)))
@@ -73,6 +107,7 @@ def main():
             return tb
 
         chosen_tb = prefill_ttft()  # warm
+        snapshot("prefill_warmup")
         ttnn.synchronize_device(mesh)
         t0 = time.perf_counter()
         prefill_ttft()
@@ -121,6 +156,7 @@ def main():
         # --- logits-only trace (capture -> warm -> measure -> release) ---
         stage(P)
         tid_l = _capture(mesh, step_logits)
+        snapshot("logits_trace_capture")
         stage(P)
         for _ in range(8):
             ttnn.execute_trace(mesh, tid_l, cq_id=0, blocking=True)
@@ -131,6 +167,7 @@ def main():
         # --- token-out trace (with Sampling1D + feedback) ---
         stage(P)
         tid_t = _capture(mesh, step_tokenout)
+        snapshot("token_trace_capture")
         stage(P)
         for _ in range(8):
             ttnn.execute_trace(mesh, tid_t, cq_id=0, blocking=True)
@@ -139,25 +176,28 @@ def main():
         tokenout_rb_ms = measure(tid_t, blocking=True, readback=True)
         ttnn.release_trace(mesh, tid_t)
 
-        # --- batch>1 low-level smoke (fresh cache; traces released so buffer alloc is safe) ---
+        # Batch one is the qualified contract; batch two remains an opt-in diagnostic.
         B = 2
-        batch_ok = None
-        try:
-            kv2 = m.alloc_kv_cache(max_users=B, max_seq_len=P + 8, block_size=32)
-            pt2 = m.make_page_table(B, kv2[0]["blocks_per_user"])
-            for u in range(B):
-                logits_u = gen.prefill_forward(
-                    tokens=torch.tensor([prompt[:64]]), page_table=pt2, kv_cache=kv2, prompt_lens=[64], user_id=u
+        batch_ok = "not-run (batch-1 qualification profile)"
+        if args.batch2_smoke:
+            try:
+                kv2 = m.alloc_kv_cache(max_users=B, max_seq_len=P + 8, block_size=32)
+                pt2 = m.make_page_table(B, kv2[0]["blocks_per_user"])
+                for u in range(B):
+                    gen.prefill_forward(
+                        tokens=torch.tensor([prompt[:64]]), page_table=pt2, kv_cache=kv2, prompt_lens=[64], user_id=u
+                    )
+                dec = gen.decode_forward(
+                    torch.tensor([[prompt[0]], [prompt[1]]]), torch.tensor([64, 64]), page_table=pt2, kv_cache=kv2
                 )
-            dec = gen.decode_forward(
-                torch.tensor([[prompt[0]], [prompt[1]]]), torch.tensor([64, 64]), page_table=pt2, kv_cache=kv2
-            )
-            batch_ok = bool(torch.as_tensor(dec).numel() == B and torch.isfinite(torch.as_tensor(dec).float()).all())
-        except Exception as e:
-            batch_ok = f"FAILED: {repr(e)[:160]}"
+                batch_ok = bool(torch.as_tensor(dec).numel() == B and torch.isfinite(torch.as_tensor(dec).float()).all())
+            except Exception as e:
+                batch_ok = f"FAILED: {repr(e)[:160]}"
 
         res = {
+            **profile_summary(profile),
             "layers": layers or "all-40",
+            "max_seq_len": max_seq_len,
             "workload": f"prompt{P}/gen{G}",
             "ttft_ms": round(ttft_ms, 1),
             "logits_only_decode_ms_tok": round(logits_only_ms, 3),
@@ -169,17 +209,18 @@ def main():
             "sampler_plus_feedback_ms_tok": round(tokenout_ms - logits_only_ms, 3),
             "readback_ms_tok": round(tokenout_rb_ms - tokenout_ms, 3),
             "batch2_lowlevel_prefill_decode_ok": batch_ok,
+            "memory": memory,
         }
         print("PERF", json.dumps(res))
         if args.out:
             Path(args.out).write_text(json.dumps(res, indent=2))
     finally:
         try:
-            gen.teardown()
+            if gen is not None:
+                gen.teardown()
         except Exception:
             pass
-        ttnn.close_mesh_device(mesh)
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        close_mesh(ttnn, mesh)
 
 
 if __name__ == "__main__":

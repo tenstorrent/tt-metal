@@ -15,8 +15,7 @@ boundaries, batch>1, multi-step decode, determinism, and full advertised context
 ENVIRONMENT: run against the installed ttnn tree from a non-repo cwd so tt-metal
 does not auto-detect the dev git root (which triggers a JIT header/source
 mismatch):
-    cd /tmp && TT_METAL_HOME=/home/ttuser/.local/lib/model-bringup/tt-metal \
-        PYTHONPATH=/home/ttuser/dev/tt-metal python -m pytest <thisfile> -q
+    python -m pytest models/autoports/poolside_laguna_xs_2_1/tests/test_functional_decoder.py -q
 """
 from __future__ import annotations
 

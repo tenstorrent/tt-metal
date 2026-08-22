@@ -34,6 +34,8 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+from .prefill_page_table import single_shot_fill_page_table
+
 TILE = 32
 
 
@@ -968,17 +970,47 @@ class OptimizedDecoder(LightweightModule):
         the larger PREFILL_FAST_CHUNK to cut the redundant KV-prefix re-read on long cold prefills."""
         return self.PREFILL_FAST_CHUNK if self.PREFILL_FAST else self.PIPE_CHUNK
 
-    def prefill_forward(self, x_BSH, kv_cache, page_table, *, user_id=0, start_pos=0, rope_mats=None):
+    def prefill_forward(
+        self,
+        x_BSH,
+        kv_cache,
+        page_table,
+        *,
+        fill_page_table=None,
+        fill_page_table_base_pos=0,
+        user_id=0,
+        start_pos=0,
+        rope_mats=None,
+        runtime_offsets=None,
+    ):
+        if runtime_offsets is not None:
+            raise ValueError("runtime-offset prefill is supported only by the P150x2 multichip decoder")
+        fill_page_table = page_table if fill_page_table is None else fill_page_table
         seq = x_BSH.shape[-2]
         if seq > self.PIPE_CHUNK:
-            return self._prefill_pipelined(x_BSH, kv_cache, page_table, user_id, start_pos)
+            return self._prefill_pipelined(
+                x_BSH,
+                kv_cache,
+                page_table,
+                fill_page_table,
+                user_id,
+                start_pos,
+                fill_page_table_base_pos=fill_page_table_base_pos,
+            )
         cfg = self.cfg
         residual = x_BSH
         ln = self._rms(x_BSH, self.w["input_ln"])
         q, k, v = self._qkv_roped(ln, seq, start_pos, rope=rope_mats)
         cdt = kv_cache["dtype"]
-        ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(k, cdt), page_table, batch_idx=user_id)
-        ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(v, cdt), page_table, batch_idx=user_id)
+        fill_pt = single_shot_fill_page_table(
+            fill_page_table,
+            start_pos=start_pos,
+            seq_len=seq,
+            block_size=kv_cache["block_size"],
+            fill_page_table_base_pos=fill_page_table_base_pos,
+        )
+        ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(k, cdt), fill_pt, batch_idx=user_id)
+        ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(v, cdt), fill_pt, batch_idx=user_id)
         attn = self._prefill_attention(q, k, v, kv_cache, page_table, user_id, start_pos, seq)
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, (1, seq, cfg.num_heads * cfg.head_dim))
@@ -990,7 +1022,17 @@ class OptimizedDecoder(LightweightModule):
         mlp_out = ttnn.reshape(mlp_out, (1, seq, cfg.hidden))
         return ttnn.add(h, mlp_out)
 
-    def _prefill_pipelined(self, x_BSH, kv_cache, page_table, user_id, start_pos):
+    def _prefill_pipelined(
+        self,
+        x_BSH,
+        kv_cache,
+        page_table,
+        fill_page_table,
+        user_id,
+        start_pos,
+        *,
+        fill_page_table_base_pos=0,
+    ):
         cfg = self.cfg
         seq = x_BSH.shape[-2]
         bs = kv_cache["block_size"]
@@ -999,6 +1041,11 @@ class OptimizedDecoder(LightweightModule):
         win = cfg.sliding_window
         k_tail = v_tail = None
         outs = []
+        fill_base = int(fill_page_table_base_pos)
+        if int(start_pos) < fill_base or (int(start_pos) - fill_base) % bs:
+            raise ValueError(
+                f"prefill start {start_pos} and fill page-table base {fill_base} are not block aligned"
+            )
         for c in range(0, seq, CH):
             ch = min(CH, seq - c)
             gpos = start_pos + c
@@ -1006,9 +1053,13 @@ class OptimizedDecoder(LightweightModule):
             residual = xc
             ln = self._rms(xc, self.w["input_ln"])
             q, k, v = self._qkv_roped(ln, ch, gpos)
-            col0 = gpos // bs
+            col0 = (gpos - fill_base) // bs
             ncol = (ch + bs - 1) // bs
-            chunk_pt = ttnn.slice(page_table, [0, col0], [page_table.shape[0], col0 + ncol])
+            chunk_pt = ttnn.slice(
+                fill_page_table,
+                [0, col0],
+                [fill_page_table.shape[0], col0 + ncol],
+            )
             ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(k, cdt), chunk_pt, batch_idx=user_id)
             ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(v, cdt), chunk_pt, batch_idx=user_id)
             if not cfg.is_sliding:
@@ -1058,7 +1109,19 @@ class OptimizedDecoder(LightweightModule):
             outs.append(ttnn.add(h, mlp_out))
         return ttnn.concat(outs, dim=1)
 
-    def _prefill_attention(self, q, k, v, kv_cache, page_table, user_id, start_pos, seq):
+    def _prefill_attention(
+        self,
+        q,
+        k,
+        v,
+        kv_cache,
+        page_table,
+        user_id,
+        start_pos,
+        seq,
+        *,
+        chunk_start_idx_tensor=None,
+    ):
         cfg = self.cfg
         base = {"scale": cfg.scaling, "compute_kernel_config": self._sdpa_compute}
         if seq <= self.PREFILL_SDPA_CHUNK:
@@ -1078,14 +1141,22 @@ class OptimizedDecoder(LightweightModule):
             # chunk_start_idx (a multiple of block_size) is valid.
             user_pt = ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[1]])
             kw = {
-                "chunk_start_idx": start_pos,
                 "program_config": self._sdpa_pc_chunked,
                 "compute_kernel_config": self._sdpa_compute,
             }
+            if chunk_start_idx_tensor is None:
+                kw["chunk_start_idx"] = start_pos
+            else:
+                kw["chunk_start_idx_tensor"] = chunk_start_idx_tensor
             if cfg.is_sliding:
                 kw["sliding_window_size"] = cfg.sliding_window
             return ttnn.transformer.chunked_scaled_dot_product_attention(q, kv_cache["k"], kv_cache["v"], user_pt, **kw)
         CH = self.PREFILL_SDPA_CHUNK
+        if chunk_start_idx_tensor is not None:
+            raise ValueError(
+                "runtime-offset single-shot prefill cannot use the inner Q-chunk path; "
+                "set PIPE_CHUNK <= PREFILL_SDPA_CHUNK"
+            )
         outs = []
         if not cfg.is_sliding:
             user_pt = ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[1]])
@@ -1120,6 +1191,19 @@ class OptimizedDecoder(LightweightModule):
         rd = self.cfg.rotary_dim
         sliced = ttnn.slice(table, [start_pos, 0], [start_pos + seq, rd])
         return ttnn.to_layout(ttnn.reshape(sliced, (1, 1, seq, rd)), ttnn.TILE_LAYOUT)
+
+    def _rope_prefill_indexed(self, position_ids, sin=False, output_tensor=None):
+        """Gather prefill RoPE rows from runtime uint32 IDs into a persistent TILE output."""
+        table = self.sin_2d if sin else self.cos_2d
+        rd = self.cfg.rotary_dim
+        seq = int(position_ids.shape[-1])
+        gathered = ttnn.embedding(
+            position_ids,
+            table,
+            layout=ttnn.TILE_LAYOUT,
+            output_tensor=output_tensor,
+        )
+        return ttnn.reshape(gathered, (1, 1, seq, rd))
 
     # ---- decode ------------------------------------------------------------ #
     def decode_forward(self, x_1BH, cur_pos, rope_idx, page_table, kv_cache, sequential_kv_write=False, rope_mats=None):

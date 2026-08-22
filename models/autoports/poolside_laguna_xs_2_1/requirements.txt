@@ -3,8 +3,8 @@
 #
 # Not a plain `pip install -r` target: vLLM must be built from sdist with
 # VLLM_TARGET_DEVICE=empty (the PyPI wheel is CUDA) against the CPU torch index,
-# and the install needs --override overrides.txt. setup_vllm.sh reads the pins
-# from here and applies both. Bump versions here, not in the script.
+# and the install needs --override overrides.txt. setup_vllm.sh reads and
+# installs the pins from here. Bump versions here, not in the script.
 #
 # ttnn is deliberately NOT pinned here: it is installed editable from THIS
 # checkout, which carries a tt-metal change no released wheel has — SDPA's
@@ -16,4 +16,10 @@
 vllm==0.24.0
 
 # Public plugin: provides the `tt` platform + EXTRA_MODELS_DIR model registration.
-vllm-tt-plugin @ git+https://github.com/tenstorrent/vllm-tt-plugin@main
+# Pin the validated commit: the plugin monkeypatches vLLM internals, so following
+# a moving branch makes otherwise identical Laguna environments non-reproducible.
+vllm-tt-plugin @ git+https://github.com/tenstorrent/vllm-tt-plugin@c127c17d80d66ee83d23064d3a62ac844a1170de
+
+# Device-free compatibility tests run as part of setup verification.
+pytest==9.0.3
+pytest-timeout==2.4.0

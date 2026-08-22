@@ -1,10 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""tt-metal-owned vLLM general plugin for Laguna-XS-2.1
-(stock vLLM 0.24.0 + public vllm-tt-plugin).
+"""tt-metal-owned vLLM general plugin for Laguna-XS-2.1.
 
 Registered via the ``vllm.general_plugins`` entry point (see pyproject.toml), so vLLM imports and calls
 ``register()`` in every process that loads plugins — crucially the API-server / frontend process, which is
-where tool-call parsing runs.
+where tool-call parsing runs, and before ``VllmConfig`` calls the TT platform's config hook.
 
 Why this exists
 ---------------
@@ -24,9 +23,16 @@ swaps in a newline-TOLERANT detail regex that parses BOTH the newline-free (Lagu
 registration lands in ToolParserManager.tool_parsers, which get_tool_parser() checks BEFORE the stock lazy
 entry — so existing serve flags (--tool-call-parser poolside_v1) keep working unchanged. The reasoning parser
 is unaffected (the tool call lands in content, not reasoning_content).
+
+The public TT plugin commit pinned by this model also disables prefix caching for every model with a
+sliding window. Laguna's p150x2 profile qualifies that combination with canonical 8192-token cache
+admission, runtime-stable resume inputs, and a frozen post-trace program cache.
+``TT_LAGUNA_PREFIX_CACHE=1`` advertises both model capabilities and lets this wrapper restore the
+requested setting. Models without both capabilities retain the public plugin's behavior unchanged.
 """
 
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -52,15 +58,39 @@ except Exception:  # pragma: no cover - defensive: never break plugin loading
 
 
 def register() -> None:
+    # General plugins are loaded before VllmConfig invokes the active platform's
+    # check_and_update_config hook. Install the model-capability wrapper here so
+    # it is present in the API, engine-core, and worker processes.
+    try:
+        from .prefix_cache import install_sliding_window_prefix_cache_patch
+        from .prefix_cache_quantum import install_prefix_cache_quantum_patch
+
+        install_sliding_window_prefix_cache_patch()
+        install_prefix_cache_quantum_patch()
+    except Exception:
+        logger.exception(
+            "laguna_vllm_ext: failed to install prefix-cache support"
+        )
+        # Cache admission is a correctness boundary, not an optional
+        # optimization. An explicitly enabled Laguna profile must fail closed.
+        if os.environ.get("TT_LAGUNA_PREFIX_CACHE", "0") == "1":
+            raise
+
     if not _IMPORT_OK:
-        logger.warning("laguna_vllm_ext: poolside_v1 tool parser unavailable; override NOT installed")
+        logger.warning(
+            "laguna_vllm_ext: poolside_v1 tool parser unavailable; override NOT installed"
+        )
         return
     try:
         from vllm.tool_parsers import ToolParserManager
 
         # Immediate/eager registration (module=...): stores the class object directly in
         # ToolParserManager.tool_parsers, which get_tool_parser() resolves before the stock lazy entry.
-        ToolParserManager.register_module("poolside_v1", module=PoolsideV1LagunaToolParser)
-        logger.info("laguna_vllm_ext: registered newline-tolerant poolside_v1 tool parser override")
+        ToolParserManager.register_module(
+            "poolside_v1", module=PoolsideV1LagunaToolParser
+        )
+        logger.info(
+            "laguna_vllm_ext: registered newline-tolerant poolside_v1 tool parser override"
+        )
     except Exception:
         logger.exception("laguna_vllm_ext: failed to register poolside_v1 override")

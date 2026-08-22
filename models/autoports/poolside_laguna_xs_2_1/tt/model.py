@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Full autoregressive TTNN model for poolside/Laguna-XS-2.1 (Blackhole p300c ×4, 1×4 mesh).
+"""Full autoregressive TTNN model for poolside/Laguna-XS-2.1 on a 1×D Blackhole mesh.
 
-Assembles the multichip decoder (``tt/multichip_decoder.py``, ``MultichipDecoder`` — TP=4
-attention/dense + EP=4 routed MoE, replicated BF16 residual, 2 ring ``all_reduce``/layer, BFP8 local
+Assembles the topology-generic decoder (``tt/multichip_decoder.py``, ``MultichipDecoder`` — TP=D
+attention/dense + EP=D routed MoE, replicated BF16 residual, 2 ``all_reduce``/layer for D>1, BFP8 local
 KV cache, packed gate+up via ``PACK_GATE_UP``) into the whole 40-layer autoregressive path: token
 embedding, the layer stack, final RMSNorm, and the LM head.
 
@@ -11,10 +11,10 @@ Design contract carried forward from the decoder stage (do NOT weaken):
   * **Inter-layer residual is replicated BF16** ``[1,seq,H]`` (prefill) / ``[1,1,B,H]`` (decode),
     H=2048. No gather/reshard/all-reduce between layers — layers stack directly.
   * Each layer keeps its own EP-sharded MoE experts, TP-sharded attention/dense, local 2-KV-head
-    BFP8 paged cache, and the 2 intra-layer ring all_reduce. This wrapper adds NO inter-layer
+    BFP8 paged cache, and the 2 intra-layer all-reduces for D>1. This wrapper adds NO inter-layer
     collective.
   * The **LM head is column-sharded across the mesh** (device d owns vocab shard
-    ``[d·V/4:(d+1)·V/4]``), so the token-out path can do local top-k per device and all-gather only
+    ``[d·V/D:(d+1)·V/D]``), so the token-out path can do local top-k per device and all-gather only
     the small top-k candidate set (canonical split sampling) instead of a full-vocab all-gather.
     The final norm runs on the replicated hidden (exact locally, like the decoder RMSNorms).
   * Token **embedding is replicated** (every device can look up any token id), so the decode token
@@ -110,7 +110,7 @@ class ModelConfig:
 
 
 class LagunaModel:
-    """40-layer TTNN Laguna-XS-2.1 on the 1×4 Blackhole mesh."""
+    """40-layer TTNN Laguna-XS-2.1 on a supported 1×D Blackhole mesh."""
 
     def __init__(self, hf_config, layers, embed_w, norm_w, lm_head_w, lm_head_ds, meta, mesh_device):
         self.hf_config = hf_config
@@ -174,6 +174,13 @@ class LagunaModel:
         """
         from models.autoports.poolside_laguna_xs_2_1.tests import laguna_weights as W
 
+        D = mesh_device.get_num_devices()
+        mesh_shape = tuple(mesh_device.shape)
+        if D not in (1, 2, 4):
+            raise ValueError(f"Laguna supports D=1, 2, or 4 devices; got D={D}")
+        if mesh_shape != (1, D):
+            raise ValueError(f"Laguna requires a 1×D mesh; got shape={mesh_shape} for D={D}")
+
         if precision_policy is None:
             precision_policy, _ = load_selected_precision_policy(precision_config_path)
         if lm_head_dtype is None:
@@ -217,7 +224,6 @@ class LagunaModel:
         # Top-level tensors.
         top = load_top_level_tensors(["model.embed_tokens.weight", "model.norm.weight", "lm_head.weight"])
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
-        D = mesh_device.get_num_devices()
         # Top-level weights are disk-cached the same way per-layer weights are (plan Stage 0).
         # layer_idx="top"; mesh tag encodes the mapping + device count D. See
         # optimized_decoder._cached_device_tensor / weight_cache_key.
@@ -313,35 +319,94 @@ class LagunaModel:
             ctx[kind] = (cos, sin)
         return ctx
 
-    def _build_prefill_rope(self, start_pos, seq):
+    def _build_prefill_rope(self, start_pos, seq, runtime_offsets=None):
         """Compute the two distinct single-shot prefill RoPE contexts (one per attention
-        kind) ONCE. Returns {attention_type: (cos, sin)} ([1,1,seq,rotary_dim] TILE)."""
+        kind) ONCE. Runtime-offset mode returns one preallocated pair per outer chunk;
+        scalar fallback returns the historical single ``(cos, sin)`` pair."""
         ctx = {}
         for dec in self.layers:
             kind = dec.cfg.attention_type
             if kind in ctx:
                 continue
-            cos = dec._rope_prefill(start_pos, seq)
-            sin = dec._rope_prefill(start_pos, seq, sin=True)
-            ctx[kind] = (cos, sin)
+            if runtime_offsets is None:
+                cos = dec._rope_prefill(start_pos, seq)
+                sin = dec._rope_prefill(start_pos, seq, sin=True)
+                ctx[kind] = (cos, sin)
+                continue
+            if int(runtime_offsets.bucket_len) != int(seq):
+                raise ValueError(
+                    f"prefill runtime bucket {runtime_offsets.bucket_len} does not match hidden seq {seq}"
+                )
+            outputs = runtime_offsets.rope_outputs.get(kind)
+            if outputs is None:
+                raise ValueError(f"prefill runtime has no RoPE output slots for attention kind {kind!r}")
+            mats = []
+            for position_ids, (cos_out, sin_out) in zip(runtime_offsets.position_ids, outputs):
+                cos = dec._rope_prefill_indexed(position_ids, output_tensor=cos_out)
+                sin = dec._rope_prefill_indexed(position_ids, sin=True, output_tensor=sin_out)
+                mats.append((cos, sin))
+            ctx[kind] = tuple(mats)
         return ctx
 
-    def prefill_layers(self, hidden_1SH, kv_cache, page_table, *, user_id=0, start_pos=0):
-        # ``page_table`` may be a single tensor (uniform/legacy) OR a per-layer list (hybrid KV: full
-        # vs sliding groups have distinct block tables) — index per layer when a list is given.
+    def prefill_layers(
+        self,
+        hidden_1SH,
+        kv_cache,
+        page_table,
+        *,
+        fill_page_table=None,
+        fill_page_table_base_pos=0,
+        user_id=0,
+        start_pos=0,
+        runtime_offsets=None,
+    ):
+        # Attention and paged-fill tables are distinct during bucketed vLLM prefill. Either may be a
+        # single tensor (uniform KV) or a per-layer list (hybrid KV). Direct/non-vLLM callers omit the
+        # fill table and retain the historical behavior of using ``page_table`` for both operations.
+        if fill_page_table is None:
+            fill_page_table = page_table
         per_layer = isinstance(page_table, (list, tuple))
+        fill_per_layer = isinstance(fill_page_table, (list, tuple))
+        if per_layer and len(page_table) < len(self.layers):
+            raise ValueError(
+                f"prefill attention page table has {len(page_table)} entries for {len(self.layers)} layers"
+            )
+        if fill_per_layer and len(fill_page_table) < len(self.layers):
+            raise ValueError(
+                f"prefill fill page table has {len(fill_page_table)} entries for {len(self.layers)} layers"
+            )
         seq = hidden_1SH.shape[-2]
-        # shared per-kind RoPE for the single-shot prefill (one chunk == whole seq). The
-        # pipelined path (seq > PIPE_CHUNK) chunks internally with per-chunk positions the model can't
-        # precompute, so it keeps computing RoPE locally (rope_mats=None). TT_LAGUNA_NO_ROPE_HOIST=1
-        # forces the per-layer local compute (A/B diagnostic).
+        # Shared per-kind RoPE for legacy single-shot prefill. Runtime-offset D2 prefills always use
+        # the pipeline implementation (including small resumed buckets), so their context remains a
+        # tuple with one preallocated pair per outer chunk. Legacy pipelines compute RoPE locally.
+        # TT_LAGUNA_NO_ROPE_HOIST=1 forces the legacy per-layer local compute (A/B diagnostic).
         _no_hoist = os.environ.get("TT_LAGUNA_NO_ROPE_HOIST") == "1"
-        rope_ctx = None if (_no_hoist or seq > self.layers[0].PIPE_CHUNK) else self._build_prefill_rope(start_pos, seq)
+        if runtime_offsets is not None:
+            # Indexed RoPE is mandatory for the arbitrary-offset serving path. Every output is
+            # preallocated and built once per attention kind/chunk, then reused by all layers.
+            rope_ctx = self._build_prefill_rope(start_pos, seq, runtime_offsets=runtime_offsets)
+        else:
+            rope_ctx = (
+                None
+                if (_no_hoist or seq > self.layers[0].PIPE_CHUNK)
+                else self._build_prefill_rope(start_pos, seq)
+            )
         h = hidden_1SH
         for i, (dec, kv) in enumerate(zip(self.layers, kv_cache)):
             pt = page_table[i] if per_layer else page_table
+            fill_pt = fill_page_table[i] if fill_per_layer else fill_page_table
             rm = rope_ctx[dec.cfg.attention_type] if rope_ctx is not None else None
-            h = dec.prefill_forward(h, kv, pt, user_id=user_id, start_pos=start_pos, rope_mats=rm)
+            h = dec.prefill_forward(
+                h,
+                kv,
+                pt,
+                fill_page_table=fill_pt,
+                fill_page_table_base_pos=fill_page_table_base_pos,
+                user_id=user_id,
+                start_pos=start_pos,
+                rope_mats=rm,
+                runtime_offsets=runtime_offsets,
+            )
         return h
 
     def decode_layers(self, hidden_1BH, cur_pos, rope_idx, page_table, kv_cache, sequential_kv_write=False):

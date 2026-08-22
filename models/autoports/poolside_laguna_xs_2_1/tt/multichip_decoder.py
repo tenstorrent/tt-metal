@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Multichip TTNN decoder for poolside/Laguna-XS-2.1 (Blackhole p300c ×4, 1×4 mesh).
+"""TTNN decoder for poolside/Laguna-XS-2.1 on a 1×D Blackhole mesh (D=1, 2, or 4).
 
 Parallelizes the single-chip optimized decoder (``tt/optimized_decoder.py``,
-``OptimizedDecoder``) across a 1×4 Blackhole mesh with **1D tensor parallelism (TP=4)**
-for the dense/attention path and **expert parallelism (EP=4)** for the routed MoE. The
+``OptimizedDecoder``) across a 1×D Blackhole mesh with **1D tensor parallelism (TP=D)**
+for the dense/attention path and **expert parallelism (EP=D)** for the routed MoE. The
 optimized decoder is the single-chip baseline: this class subclasses it and reuses every
 optimized helper (precision policy, packed-QKV split, RMSNorm, RoPE, SDPA config, the
 DRAM-sharded matmul helper, and the sparse-expert program configs). Only weight placement
@@ -15,25 +15,29 @@ Scheme:
     exact locally — no distributed norm needed.
   * Attention: WQKV column-parallel (packed, reordered so device d owns Q heads
     [d·lqh:(d+1)·lqh) and KV heads [2d:2d+2)); per-head QK-norm/RoPE/SDPA local; KV cache
-    holds the device-local 2 KV heads; softplus gate g_proj column-parallel; WO row-parallel
+    holds the device-local KV heads; softplus gate g_proj column-parallel; WO row-parallel
     → partial → one all_reduce.
   * Dense MLP (layer 0): gate/up column-parallel, down row-parallel → partial → all_reduce.
-  * MoE (layers 1-39): router runs replicated; expert weights EP-sharded (64 experts/device);
+  * MoE (layers 1-39): router runs replicated; expert weights EP-sharded (256/D experts/device);
     a mesh-sharded selection-matmul turns the replicated 256-wide router output into device d's
     contiguous 64-wide scores/sparsity; ``ttnn.sparse_matmul`` (nnz=None, Blackhole-required)
     over the local experts; shared expert TP; routed_local + shared_partial → one all_reduce.
 
-Collectives: exactly **2 all_reduce / layer** (attn out, MLP/MoE out), cluster_axis=1,
-Ring topology, 2 links. Decoder-layer input and output share the replicated ``[1,1,B,H]`` /
+Collectives: exactly **2 all_reduce / layer** for D>1 (attn out, MLP/MoE out), cluster_axis=1.
+Topology and link count are selected with ``TT_LAGUNA_CCL_TOPOLOGY`` and
+``TT_LAGUNA_CCL_NUM_LINKS``; D=1 bypasses collectives. Decoder-layer input and output share
+the replicated ``[1,1,B,H]`` /
 ``[1,seq,H]`` layout, so layers stack with no inter-layer reshard.
 
 Public API matches OptimizedDecoder/FunctionalDecoder (``from_state_dict``, ``alloc_kv_cache``,
 ``make_page_table``, ``prefill_forward``, ``decode_forward``) — the tensors must live on the
-1×4 mesh (replicated inputs). Set ``FABRIC_1D_RING`` before ``open_mesh_device``.
+1×D mesh (replicated inputs). Enable a matching fabric before opening a multi-device mesh;
+fabric must remain disabled for D=1.
 """
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -50,12 +54,14 @@ from .optimized_decoder import (
     _sparse_pc,
     weight_cache_key,
 )
+from .prefill_page_table import single_shot_fill_page_table
 
 
 class MultichipDecoder(OptimizedDecoder):
-    """Multichip TTNN decoder for Laguna-XS-2.1 (Blackhole p300c ×4, 1×4 mesh): TP=4 attention/dense +
-    EP=4 routed MoE, replicated BF16 residual, exactly two ring ``all_reduce``s per layer (comm-optimal for
-    this small hidden H=2048).
+    """Laguna decoder for a 1×D Blackhole mesh: TP=D attention/dense + EP=D routed MoE,
+    replicated BF16 residual, and exactly two ``all_reduce``s per layer for D>1. On D=1 the same
+    packed production path is used, but both reductions and the expert-selector projection are
+    identities.
 
     ``PACK_GATE_UP`` (default True) enables the decode gate/up matmul-packing optimization: the two
     same-input gate/up projections (routed-expert MoE, dense MLP, shared expert) are concatenated at load
@@ -73,20 +79,46 @@ class MultichipDecoder(OptimizedDecoder):
         self.D = meta["mesh_devices"]
         self.global_experts = meta["global_experts"]
         self.local_experts = meta["local_experts"]
-        # 1×4 Blackhole (P150x4): TP/EP live on cluster_axis 1; 2 ethernet links/axis.
+        # On a 1×1 MeshDevice, TTNN's explicit parallel decode-SDPA program is inaccurate once
+        # the cache crosses long/non-aligned boundaries (observed PCC ~= 0 at positions 513/2048).
+        # The default decode op is accurate at the same positions. Keep the proven explicit k64
+        # program on D=2/4; callers may still opt D1 back into a future-qualified program explicitly.
+        if self.D == 1 and "TT_LAGUNA_DECODE_SDPA_PC" not in os.environ:
+            self._decode_use_sdpa_pc = False
+        # TP/EP live on cluster_axis 1 for every supported 1×D profile.
         self.tp_axis = 1
-        self.ccl_topology = ttnn.Topology.Ring
-        self.num_links = meta.get("num_links", 2)
+        if self.D == 1:
+            self.ccl_topology = None
+            self.num_links = 0
+        else:
+            topology_name = os.environ.get("TT_LAGUNA_CCL_TOPOLOGY", "ring").strip().lower()
+            topologies = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}
+            if topology_name not in topologies:
+                raise ValueError(
+                    "TT_LAGUNA_CCL_TOPOLOGY must be 'ring' or 'linear' for a multi-device Laguna profile; "
+                    f"got {topology_name!r} for D={self.D}"
+                )
+            try:
+                num_links = int(os.environ.get("TT_LAGUNA_CCL_NUM_LINKS", str(meta.get("num_links", 2))))
+            except ValueError as exc:
+                raise ValueError("TT_LAGUNA_CCL_NUM_LINKS must be an integer") from exc
+            if num_links not in (1, 2):
+                raise ValueError(f"TT_LAGUNA_CCL_NUM_LINKS must be 1 or 2 for D={self.D}; got {num_links}")
+            self.ccl_topology = topologies[topology_name]
+            self.num_links = num_links
 
     # ---- collective ------------------------------------------------------- #
     def _reduce(self, x):
-        """Ring all_reduce over the TP axis to turn a row-parallel partial into the
-        replicated residual layout. Traceable (verified).
+        """Reduce a row-parallel partial into the replicated residual layout.
+
+        D=1 is an identity. D>1 uses the profile-selected all-reduce and is traceable.
 
         The all_reduce payload dtype is ``policy.ccl`` (default BF16 == the replicated
         residual, so the path is byte-identical to the BF16 baseline). A lower CCL
         dtype casts the partial before the collective and casts the reduced result back to
         BF16 for the residual add — swept as a yes/no switch in the datatype sweep."""
+        if self.D == 1:
+            return x
         ccl = getattr(self.policy, "ccl", ttnn.bfloat16)
         if ccl == ttnn.bfloat16:
             return ttnn.all_reduce(x, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links)
@@ -101,6 +133,11 @@ class MultichipDecoder(OptimizedDecoder):
         policy = policy or PrecisionPolicy()
         dev = mesh_device
         D = mesh_device.get_num_devices()
+        mesh_shape = tuple(mesh_device.shape)
+        if D not in (1, 2, 4):
+            raise ValueError(f"Laguna supports D=1, 2, or 4 devices; got D={D}")
+        if mesh_shape != (1, D):
+            raise ValueError(f"Laguna requires a 1×D mesh; got shape={mesh_shape} for D={D}")
         dram_cores = mesh_device.dram_grid_size().x
 
         replicate = ttnn.ReplicateTensorToMesh(dev)
@@ -188,6 +225,8 @@ class MultichipDecoder(OptimizedDecoder):
         )
 
         global_experts = cfg.num_experts
+        if cfg.is_moe and global_experts % D != 0:
+            raise ValueError(f"experts must divide mesh {D}: experts={global_experts}")
         local_experts = global_experts // D if cfg.is_moe else 0
 
         if cfg.is_moe:
@@ -197,9 +236,10 @@ class MultichipDecoder(OptimizedDecoder):
             w["e_bias"] = rep_tt(
                 "e_bias", lambda: g("mlp.experts.e_score_correction_bias").reshape(1, 1, 1, E), ttnn.bfloat16
             )
-            # mesh-sharded selection matrix: identity[E,E] shard(dim3) -> device d gets [1,1,E,local_E]
-            # so matmul(scores[1,1,T,E], sel[1,1,E,local_E]) == scores[..., 64d:64d+64] (SPMD-safe slice).
-            w["ep_sel"] = shard_tt("ep_sel", lambda: torch.eye(E).reshape(1, 1, E, E), 3, ttnn.bfloat16)
+            # For D>1, a mesh-sharded identity selects device d's contiguous local expert scores.
+            # D=1 already owns every score, so avoid the large identity weight and selector matmul.
+            if D > 1:
+                w["ep_sel"] = shard_tt("ep_sel", lambda: torch.eye(E).reshape(1, 1, E, E), 3, ttnn.bfloat16)
 
             # expert weights EP-sharded on the expert dim (dim1): device d holds experts [64d:64d+64].
             # The 256-expert torch.stack is the dominant boot cost, so build it lazily
@@ -219,6 +259,8 @@ class MultichipDecoder(OptimizedDecoder):
             )
             # shared expert TP (col/col/row); down produces a partial folded into the routed all_reduce
             gsh = cfg.shared_intermediate
+            if gsh % D != 0:
+                raise ValueError(f"shared intermediate must divide mesh {D}: shared_intermediate={gsh}")
             local_sh = gsh // D
             store_shard(
                 "sh_gate",
@@ -247,6 +289,8 @@ class MultichipDecoder(OptimizedDecoder):
             cfg.shared_intermediate = local_sh  # local for _glu_mlp
         else:
             II = cfg.intermediate
+            if II % D != 0:
+                raise ValueError(f"dense intermediate must divide mesh {D}: intermediate={II}")
             local_II = II // D
             store_shard(
                 "mlp_gate", g("mlp.gate_proj.weight").t().contiguous(), H, local_II, policy.dense_ff13, mesh_dim=1
@@ -386,7 +430,9 @@ class MultichipDecoder(OptimizedDecoder):
         if cfg.routed_scaling != 1.0:
             wsel = ttnn.multiply(wsel, cfg.routed_scaling)
         dense = ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)
-        dense_local = ttnn.matmul(dense, self.w["ep_sel"], compute_kernel_config=self._ck_router)
+        dense_local = dense if self.D == 1 else ttnn.matmul(
+            dense, self.w["ep_sel"], compute_kernel_config=self._ck_router
+        )
         union = ttnn.sum(dense_local, dim=2, keepdim=True)
         sparsity = ttnn.to_layout(union, ttnn.ROW_MAJOR_LAYOUT)
         a = ttnn.reshape(ln_flat, (1, 1, T, H))
@@ -451,7 +497,11 @@ class MultichipDecoder(OptimizedDecoder):
             wsel = ttnn.multiply(wsel, cfg.routed_scaling)
         dense = ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)  # [1,1,T,GE] replicated
         # --- EP selection: replicated 256-wide -> device-local contiguous 64-wide (SPMD-safe matmul) ---
-        dense_local = ttnn.matmul(dense, self.w["ep_sel"], compute_kernel_config=self._ck_router)  # [1,1,T,LE]
+        dense_local = (
+            dense
+            if self.D == 1
+            else ttnn.matmul(dense, self.w["ep_sel"], compute_kernel_config=self._ck_router)
+        )  # [1,1,T,LE]
         union = ttnn.sum(dense_local, dim=2, keepdim=True)  # [1,1,1,LE]
         sparsity = ttnn.to_layout(union, ttnn.ROW_MAJOR_LAYOUT)
         a = ttnn.reshape(ln_flat, (1, 1, T, H))
@@ -539,28 +589,79 @@ class MultichipDecoder(OptimizedDecoder):
         return ttnn.concat(outs, dim=2)
 
     # ---- prefill (single shot): reuse optimized body + all_reduce after WO --- #
-    def prefill_forward(self, x_BSH, kv_cache, page_table, *, user_id=0, start_pos=0, rope_mats=None):
+    def prefill_forward(
+        self,
+        x_BSH,
+        kv_cache,
+        page_table,
+        *,
+        fill_page_table=None,
+        fill_page_table_base_pos=0,
+        user_id=0,
+        start_pos=0,
+        rope_mats=None,
+        runtime_offsets=None,
+    ):
+        fill_page_table = page_table if fill_page_table is None else fill_page_table
         seq = x_BSH.shape[-2]
-        if seq > self.PIPE_CHUNK:
-            return self._prefill_pipelined(x_BSH, kv_cache, page_table, user_id, start_pos)
+        # Runtime offsets identify the qualified D2 path (cold pipeline or a resumed suffix).
+        # Route even a small resumed bucket through the pipeline implementation so cached and cold
+        # prefixes use the same flexible chunked-SDPA kernel family. In particular, this avoids the
+        # single-shot q32/k64 program diverging from the pipeline's q32/k32 numerics after a cache hit.
+        # Cold single-shot and all D1/D4 calls have runtime_offsets=None and remain byte-for-byte on
+        # the established local-SDPA branch below.
+        if runtime_offsets is not None or seq > self.PIPE_CHUNK:
+            return self._prefill_pipelined(
+                x_BSH,
+                kv_cache,
+                page_table,
+                fill_page_table,
+                user_id,
+                start_pos,
+                fill_page_table_base_pos=fill_page_table_base_pos,
+                rope_mats=rope_mats,
+                runtime_offsets=runtime_offsets,
+            )
         cfg = self.cfg
         residual = x_BSH
         ln = self._rms(x_BSH, self.w["input_ln"])
         q, k, v = self._qkv_roped(ln, seq, start_pos, rope=rope_mats)
         cdt = kv_cache["dtype"]
-        # paged_fill_cache writes k/v into the blocks listed in the page table
-        # starting at its first column, so the table must be offset to the block
+        # paged_fill_cache writes k/v into the blocks listed in its dedicated table
+        # starting at its first column. Bucket-padding entries are -1 (skip); the
+        # attention table remains scratch-mapped and is never passed to the writer.
+        # The fill table must be offset to the block
         # containing start_pos. Cold prefill (start_pos=0) => col0=0 (unchanged);
         # a prefix-cache suffix prefill (start_pos>0) must NOT write at position 0
         # (that would clobber the cached prefix's first blocks). Mirrors the
         # per-chunk slicing in _prefill_pipelined.
-        bs = kv_cache["block_size"]
-        col0 = start_pos // bs
-        ncol = (seq + bs - 1) // bs
-        fill_pt = ttnn.slice(page_table, [0, col0], [page_table.shape[0], col0 + ncol])
+        fill_pt = single_shot_fill_page_table(
+            fill_page_table,
+            start_pos=start_pos,
+            seq_len=seq,
+            block_size=kv_cache["block_size"],
+            fill_page_table_base_pos=fill_page_table_base_pos,
+        )
         ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(k, cdt), fill_pt, batch_idx=user_id)
         ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(v, cdt), fill_pt, batch_idx=user_id)
-        attn = self._prefill_attention(q, k, v, kv_cache, page_table, user_id, start_pos, seq)
+        chunk_start_idx_tensor = None
+        if runtime_offsets is not None:
+            if tuple(runtime_offsets.chunk_lengths) != (int(seq),):
+                raise ValueError(
+                    f"single-shot runtime chunks {runtime_offsets.chunk_lengths} do not match seq {seq}"
+                )
+            chunk_start_idx_tensor = runtime_offsets.chunk_start_idxs[0]
+        attn = self._prefill_attention(
+            q,
+            k,
+            v,
+            kv_cache,
+            page_table,
+            user_id,
+            start_pos,
+            seq,
+            chunk_start_idx_tensor=chunk_start_idx_tensor,
+        )
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, (1, seq, cfg.num_heads * cfg.head_dim))
         attn = self._gate(attn, ln)
@@ -571,7 +672,19 @@ class MultichipDecoder(OptimizedDecoder):
         mlp_out = ttnn.reshape(self._mlp(ln2, seq, sharded=False), (1, seq, cfg.hidden))
         return ttnn.add(h, mlp_out)
 
-    def _prefill_pipelined(self, x_BSH, kv_cache, page_table, user_id, start_pos):
+    def _prefill_pipelined(
+        self,
+        x_BSH,
+        kv_cache,
+        page_table,
+        fill_page_table,
+        user_id,
+        start_pos,
+        *,
+        fill_page_table_base_pos=0,
+        rope_mats=None,
+        runtime_offsets=None,
+    ):
         cfg = self.cfg
         seq = x_BSH.shape[-2]
         bs = kv_cache["block_size"]
@@ -579,26 +692,55 @@ class MultichipDecoder(OptimizedDecoder):
         CH = (self._prefill_pipe_chunk // bs) * bs  # env-gated outer chunk (TT_LAGUNA_PREFILL_FAST)
         win = cfg.sliding_window
         outs = []
-        for c in range(0, seq, CH):
+        expected_chunks = tuple(min(CH, seq - c) for c in range(0, seq, CH))
+        if runtime_offsets is not None and tuple(runtime_offsets.chunk_lengths) != expected_chunks:
+            raise ValueError(
+                f"pipelined runtime chunks {runtime_offsets.chunk_lengths} do not match {expected_chunks}"
+            )
+        if rope_mats is not None and len(rope_mats) != len(expected_chunks):
+            raise ValueError(f"pipelined RoPE has {len(rope_mats)} chunks, expected {len(expected_chunks)}")
+        fill_base = int(fill_page_table_base_pos)
+        if int(start_pos) < fill_base or (int(start_pos) - fill_base) % bs:
+            raise ValueError(
+                f"prefill start {start_pos} and fill page-table base {fill_base} are not block aligned"
+            )
+        for chunk_idx, c in enumerate(range(0, seq, CH)):
             ch = min(CH, seq - c)
             gpos = start_pos + c
             xc = ttnn.slice(x_BSH, [0, c, 0], [1, c + ch, cfg.hidden])
             residual = xc
             ln = self._rms(xc, self.w["input_ln"])
-            q, k, v = self._qkv_roped(ln, ch, gpos)
-            col0 = gpos // bs
+            q, k, v = self._qkv_roped(
+                ln,
+                ch,
+                gpos,
+                rope=(rope_mats[chunk_idx] if rope_mats is not None else None),
+            )
+            col0 = (gpos - fill_base) // bs
             ncol = (ch + bs - 1) // bs
-            chunk_pt = ttnn.slice(page_table, [0, col0], [page_table.shape[0], col0 + ncol])
+            chunk_pt = ttnn.slice(
+                fill_page_table,
+                [0, col0],
+                [fill_page_table.shape[0], col0 + ncol],
+            )
             ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(k, cdt), chunk_pt, batch_idx=user_id)
             ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(v, cdt), chunk_pt, batch_idx=user_id)
             user_pt = ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[1]])
+            start_tensor = (
+                runtime_offsets.chunk_start_idxs[chunk_idx] if runtime_offsets is not None else None
+            )
+            start_kw = (
+                {"chunk_start_idx_tensor": start_tensor}
+                if start_tensor is not None
+                else {"chunk_start_idx": gpos}
+            )
             if not cfg.is_sliding:
                 attn = ttnn.transformer.chunked_scaled_dot_product_attention(
                     q,
                     kv_cache["k"],
                     kv_cache["v"],
                     user_pt,
-                    chunk_start_idx=gpos,
+                    **start_kw,
                     compute_kernel_config=self._sdpa_compute,
                 )
             else:
@@ -616,7 +758,7 @@ class MultichipDecoder(OptimizedDecoder):
                     kv_cache["k"],
                     kv_cache["v"],
                     user_pt,
-                    chunk_start_idx=gpos,
+                    **start_kw,
                     sliding_window_size=win,
                     compute_kernel_config=self._sdpa_compute,
                 )
@@ -678,7 +820,10 @@ class MultichipDecoder(OptimizedDecoder):
         }
         if cfg.is_sliding:
             sdpa_kwargs["sliding_window_size"] = cfg.sliding_window
-        if sequential_kv_write:  # spec-decode verify. k_chunk via TT_LAGUNA_VERIFY_K (default 64 = accurate SDPA)
+        if sequential_kv_write and self._decode_use_sdpa_pc:
+            # Spec-decode verify. k_chunk via TT_LAGUNA_VERIFY_K (default 64). D=1 uses the same
+            # accurate TTNN fallback as normal decode; the explicit parallel program has the same
+            # partial-context reduction hazard in verify mode.
             # ACCURACY FIX (2026-08-06): this is the LIVE served decode_forward (overrides OptimizedDecoder's);
             # it previously ran _sdpa_pc (k128) — the SAME config proven LOSSY on normal decode (teacher top1
             # 0.95→0.58). Committed spec tokens ARE this verify's argmax, so k128 made spec-decode inherit the

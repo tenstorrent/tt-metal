@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "laguna-vllm-ext"
-version = "0.1.0"
-description = "tt-metal-owned vLLM general plugin for Laguna-XS-2.1: newline-tolerant poolside_v1 tool-parser override for stock vLLM 0.24.0 + the public vllm-tt-plugin."
+version = "0.2.0"
+description = "tt-metal-owned vLLM compatibility hooks for Laguna-XS-2.1 on stock vLLM 0.24.0 + the public vllm-tt-plugin."
 requires-python = ">=3.10"
 
 # Loaded by vLLM in every process that loads plugins (incl. the API-server frontend where tool parsing runs).

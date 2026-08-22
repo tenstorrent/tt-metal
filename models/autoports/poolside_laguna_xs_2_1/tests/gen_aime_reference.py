@@ -9,7 +9,7 @@ this model's tokenizer returns a dict from ``apply_chat_template(tokenize=True)`
 key), which the shared CLI's list-comprehension can't consume — we extract ``input_ids`` here.
 
 Usage:
-  cd /tmp && PYTHONPATH=/home/ttuser/dev/tt-metal python -m \
+  python -m \
     models.autoports.poolside_laguna_xs_2_1.tests.gen_aime_reference --output <path> --gen-len 100 --top-k 100
 """
 from __future__ import annotations

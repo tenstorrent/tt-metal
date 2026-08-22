@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build the self-contained vLLM serving env for Laguna-XS-2.1: stock vLLM 0.24.0 + the public
-# tenstorrent/vllm-tt-plugin + this model's vllm_ext, on a PyPI ttnn wheel (no tt-metal build).
+# tenstorrent/vllm-tt-plugin + this model's vllm_ext, with ttnn built and installed from this checkout.
 #   Setup:  ./setup_vllm.sh            (into ./.venv; --force to rebuild from scratch)
 #   Serve:  ./serve_vllm.sh            (runs this automatically if the env is missing)
 # Pins live in requirements.txt; the numpy/opencv overrides live in overrides.txt.
@@ -17,9 +17,16 @@ FORCE=0
 req() { grep -m1 "^$1" "$MODEL_DIR/requirements.txt" | sed 's/[[:space:]]*#.*//'; }
 VLLM_PIN=$(req 'vllm==')
 PLUGIN_PIN=$(req 'vllm-tt-plugin @')
-for p in "$VLLM_PIN" "$PLUGIN_PIN"; do
+PYTEST_PIN=$(req 'pytest==')
+PYTEST_TIMEOUT_PIN=$(req 'pytest-timeout==')
+for p in "$VLLM_PIN" "$PLUGIN_PIN" "$PYTEST_PIN" "$PYTEST_TIMEOUT_PIN"; do
   [ -n "$p" ] || { echo "ERROR: could not read pins from $MODEL_DIR/requirements.txt"; exit 1; }
 done
+PLUGIN_SHA="${PLUGIN_PIN##*@}"
+[[ "$PLUGIN_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "ERROR: vllm-tt-plugin must be pinned to a full commit SHA in $MODEL_DIR/requirements.txt"
+  exit 1
+}
 
 echo "=============================================================================="
 echo " Laguna-XS-2.1 vLLM env -> $VLLM_ENV"
@@ -84,20 +91,39 @@ uv pip uninstall --python "$PY" torchaudio >/dev/null 2>&1 || true
 echo "==> [4/6] public vllm-tt-plugin (tt platform + EXTRA_MODELS_DIR registration)"
 uv pip install --python "$PY" "$PLUGIN_PIN"
 
-echo "==> [5/6] this model's vllm_ext (newline-tolerant poolside_v1 tool-parser override)"
+echo "==> [5/6] this model's vllm_ext compatibility hooks + device-free test dependency"
 uv pip install --python "$PY" -e "$MODEL_DIR/vllm_ext"
+uv pip install --python "$PY" "$PYTEST_PIN" "$PYTEST_TIMEOUT_PIN"
 
 # ---- verify -------------------------------------------------------------------------------
 echo "==> [6/6] verifying the env"
-PYTHONPATH="$REPO_ROOT" "$PY" - <<'EOF'
+EXPECTED_PLUGIN_SHA="$PLUGIN_SHA" PYTHONPATH="$REPO_ROOT" "$PY" - <<'EOF'
 
-import ttnn, vllm, vllm_tt_plugin
+import importlib.metadata
+import json
+import os
+
+import ttnn
+import vllm
+import vllm_tt_plugin
 
 # vLLM must be the stock install, not a vLLM checkout vendored inside a tt-metal tree.
 assert "/tt-metal/vllm" not in vllm.__file__, f"vllm resolves into a tt-metal tree: {vllm.__file__}"
 print("  vllm", vllm.__version__)
 print("  ttnn", getattr(ttnn, "__version__", "(no __version__)"), "->", ttnn.__file__)
 print("  plugin", vllm_tt_plugin.__file__)
+
+# The TT plugin monkeypatches vLLM internals, so a moving branch is unsafe. Verify
+# the installed PEP 610 source metadata, not just the package's static version.
+plugin_dist = importlib.metadata.distribution("vllm-tt-plugin")
+direct_url_text = plugin_dist.read_text("direct_url.json")
+assert direct_url_text, "vllm-tt-plugin has no direct_url.json; expected the pinned git install"
+plugin_commit = json.loads(direct_url_text).get("vcs_info", {}).get("commit_id")
+expected_plugin_commit = os.environ["EXPECTED_PLUGIN_SHA"]
+assert plugin_commit == expected_plugin_commit, (
+    f"vllm-tt-plugin commit mismatch: installed {plugin_commit!r}, expected {expected_plugin_commit}"
+)
+print("  plugin commit", plugin_commit)
 
 # CPU torch, not the CUDA default: there is no NVIDIA device here, and the CUDA build drags in
 # ~4 GB of nvidia-*-cu13 wheels. Catches a dropped --extra-index-url.
@@ -125,9 +151,48 @@ assert not missing, (
 )
 print("  ttnn SDPA sliding_window_size: present on all three entry points")
 
+# Prefix-resume replays update the suffix start through a device scalar without recompiling the
+# chunked SDPA program. Verify the named runtime tensor survived the local TTNN build/install.
+chunked_sdpa_doc = ttnn.transformer.chunked_scaled_dot_product_attention.__doc__ or ""
+assert "chunk_start_idx_tensor" in chunked_sdpa_doc, (
+    "this ttnn build's chunked_scaled_dot_product_attention does not accept "
+    "chunk_start_idx_tensor; runtime-stable prefix resume is unavailable"
+)
+print("  ttnn chunked SDPA chunk_start_idx_tensor: present")
+
+# Trace replay writes embeddings into a stable preallocated buffer. A build that lacks this argument
+# silently forces a new output allocation and cannot satisfy the prefix-cache trace contract.
+embedding_doc = ttnn.embedding.__doc__ or ""
+assert "output_tensor" in embedding_doc, (
+    "this ttnn build's embedding does not accept output_tensor; stable trace replay is unavailable"
+)
+print("  ttnn embedding output_tensor: present")
+
+# Qualification checks program-cache cardinality across changing resume offsets. Keep setup
+# device-free by verifying the bound MeshDevice methods rather than opening a device here.
+program_cache_methods = (
+    "enable_program_cache",
+    "disable_and_clear_program_cache",
+    "num_program_cache_entries",
+    "set_program_cache_misses_allowed",
+)
+missing_program_cache_methods = [
+    name for name in program_cache_methods if not hasattr(ttnn.MeshDevice, name)
+]
+assert not missing_program_cache_methods, (
+    "this ttnn build is missing MeshDevice program-cache API(s): "
+    + ", ".join(missing_program_cache_methods)
+)
+print("  ttnn MeshDevice program-cache APIs: present")
+
 # What EXTRA_MODELS_DIR will resolve at serve time (needs PYTHONPATH=<repo root>).
-from models.autoports.poolside_laguna_xs_2_1.tt.generator_vllm import LagunaForCausalLM  # noqa: F401
-print("  generator_vllm: importable")
+from models.autoports.poolside_laguna_xs_2_1.tt.generator_vllm import LagunaForCausalLM
+capabilities = LagunaForCausalLM.model_capabilities
+assert "supports_prefix_caching_with_sliding_window" in capabilities
+expected_prefix_capability = os.environ.get("TT_LAGUNA_PREFIX_CACHE", "0") == "1"
+assert capabilities["supports_prefix_caching"] is expected_prefix_capability
+assert capabilities["supports_prefix_caching_with_sliding_window"] is expected_prefix_capability
+print("  generator_vllm: importable; prefix capability:", expected_prefix_capability)
 
 # The stock poolside_v1 tool parser misses this checkpoint's newline-free <tool_call> grammar,
 # so `auto` tool-calling silently returns finish_reason=stop unless vllm_ext wins registration.
@@ -136,14 +201,49 @@ from vllm.tool_parsers import ToolParserManager as M
 mod = M.get_tool_parser("poolside_v1").__module__
 assert mod == "laguna_vllm_ext", f"poolside_v1 override NOT active (resolved to {mod})"
 print("  poolside_v1 override active ->", mod)
+
+# The model-local general plugin must wrap the TT platform before VllmConfig's
+# config hook runs. The wrapper is capability-gated, so other TT models retain
+# the pinned public plugin's sliding-window policy.
+from laguna_vllm_ext.prefix_cache import sliding_window_prefix_cache_patch_is_installed
+assert sliding_window_prefix_cache_patch_is_installed(), "sliding-window prefix-cache wrapper NOT active"
+print("  sliding-window prefix-cache capability wrapper: active")
+
+# Canonical cache admission is a correctness boundary: the plugin must patch
+# KVCacheManager even in this cache-off setup check, so a later cache-on launch
+# cannot silently run stock arbitrary-block admission.
+from laguna_vllm_ext.prefix_cache_quantum import (
+    DEFAULT_PREFIX_QUANTUM,
+    QUALIFIED_KV_BLOCK_SIZE,
+    prefix_cache_quantum_patch_is_installed,
+)
+assert prefix_cache_quantum_patch_is_installed(), "canonical prefix-cache admission patch NOT active"
+assert DEFAULT_PREFIX_QUANTUM == 8192
+assert QUALIFIED_KV_BLOCK_SIZE == 64
+print(
+    "  canonical prefix-cache admission patch: active "
+    f"(quantum={DEFAULT_PREFIX_QUANTUM}, block={QUALIFIED_KV_BLOCK_SIZE})"
+)
+
+import pytest
+import pytest_timeout  # noqa: F401
+print(
+    "  pytest",
+    pytest.__version__,
+    "+ pytest-timeout",
+    importlib.metadata.version("pytest-timeout"),
+)
 EOF
+
+PYTHONPATH="$MODEL_DIR/vllm_ext:$REPO_ROOT" "$PY" -m pytest -q "$MODEL_DIR/vllm_ext/tests"
 
 # Weights are gated; a missing snapshot only shows up ~10 min into a boot otherwise.
 HF_HUB="${HF_HUB_CACHE:-${HF_HOME:-$HOME/.cache/huggingface}/hub}"
 if [ ! -d "$HF_HUB/models--poolside--Laguna-XS-2.1" ]; then
   echo
   echo "NOTE: poolside/Laguna-XS-2.1 is not in $HF_HUB."
-  echo "      It is a gated repo (~63 GB): run 'huggingface-cli login', then serving will fetch it."
+  echo "      It is a gated repo (~63 GB): run 'hf auth login', then serving will fetch it."
+  echo "      ('huggingface-cli' is removed in huggingface_hub >= 1.0 — 'hf' replaces it.)"
 fi
 
 echo

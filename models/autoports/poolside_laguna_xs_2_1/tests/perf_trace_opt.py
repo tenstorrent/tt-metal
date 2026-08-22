@@ -2,9 +2,9 @@
 
 Mirrors tests/perf_trace.py (functional) but drives OptimizedDecoder, so before/after
 numbers use the same harness. Run under Tracy for the ops CSV:
-    cd /tmp && TT_METAL_HOME=/home/ttuser/.local/lib/model-bringup/tt-metal \
-      PYTHONPATH=/home/ttuser/dev/tt-metal python -m tracy -r -p -v -o <outdir> \
-      .../tests/perf_trace_opt.py <layer> <prefill_len> <decode_iters>
+    python -m tracy -r -p -v -o <outdir> -m \
+      models.autoports.poolside_laguna_xs_2_1.tests.perf_trace_opt \
+      <layer> <prefill_len> <decode_iters>
 Signposts: PERF_PREFILL/_END, PERF_DECODE/_END. Wall-clock → perf_walltime_layer<L>.json
 in doc/optimized_decoder.
 """
@@ -17,6 +17,7 @@ import torch
 import ttnn
 from models.autoports.poolside_laguna_xs_2_1.tests import laguna_reference as R
 from models.autoports.poolside_laguna_xs_2_1.tests import laguna_weights as W
+from models.autoports.poolside_laguna_xs_2_1.tests.laguna_test_utils import DOC_DIR
 from models.autoports.poolside_laguna_xs_2_1.tt.optimized_decoder import OptimizedDecoder
 
 try:
@@ -31,7 +32,7 @@ LAYER = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 PREFILL_LEN = int(sys.argv[2]) if len(sys.argv) > 2 else 512
 DECODE_ITERS = int(sys.argv[3]) if len(sys.argv) > 3 else 20
 HIDDEN = 2048
-ART = "/home/ttuser/dev/tt-metal/models/autoports/poolside_laguna_xs_2_1/doc/optimized_decoder"
+ART = DOC_DIR / "optimized_decoder"
 
 
 def main():
@@ -97,7 +98,8 @@ def main():
             "decode_ms_per_token_traced": round(decode_ms, 4),
             "decode_iters": DECODE_ITERS,
         }
-        with open(f"{ART}/perf_walltime_layer{LAYER}.json", "w") as f:
+        ART.mkdir(parents=True, exist_ok=True)
+        with open(ART / f"perf_walltime_layer{LAYER}.json", "w") as f:
             json.dump(res, f, indent=2)
         print("PERF_RESULT", json.dumps(res))
     finally:

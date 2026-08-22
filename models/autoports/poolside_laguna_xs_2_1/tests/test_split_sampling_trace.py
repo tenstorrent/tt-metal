@@ -18,9 +18,19 @@ Run: cd /tmp && TT_METAL_HOME=<tree> PYTHONPATH=<repo> python -u -m \
 """
 from __future__ import annotations
 
+import argparse
+import json
+
 import torch
 
 import ttnn
+from models.autoports.poolside_laguna_xs_2_1.tests.laguna_test_utils import (
+    add_profile_args,
+    close_mesh,
+    open_mesh,
+    profile_from_args,
+    profile_summary,
+)
 from models.autoports.poolside_laguna_xs_2_1.tt.generator import LagunaGenerator
 
 FAIL = []
@@ -33,8 +43,14 @@ def check(cond, msg):
 
 
 def main():
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=400_000_000)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--max-seq-len", type=int, default=2048)
+    add_profile_args(parser, default_trace_region_size=400_000_000)
+    args = parser.parse_args()
+    profile = profile_from_args(args)
+    print("PROFILE", json.dumps(profile_summary(profile), sort_keys=True))
+    mesh = open_mesh(ttnn, profile)
+    gen = None
 
     def read(t):
         return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))[0].flatten().tolist()
@@ -48,7 +64,7 @@ def main():
         )
 
     try:
-        gen = LagunaGenerator.from_pretrained(mesh, max_seq_len=2048, num_layers=[0, 1, 4])
+        gen = LagunaGenerator.from_pretrained(mesh, max_seq_len=args.max_seq_len, num_layers=[0, 1, 4])
         torch.manual_seed(3)
         P, K = 40, 6
         prompt = torch.randint(0, gen.vocab, (P,), dtype=torch.int64).tolist()
@@ -158,11 +174,11 @@ def main():
         print("SPLIT_SAMPLING_TRACE:", "ALL PASS" if not FAIL else f"{len(FAIL)} FAILURES: {FAIL}", flush=True)
     finally:
         try:
-            gen.teardown()
+            if gen is not None:
+                gen.teardown()
         except Exception:
             pass
-        ttnn.close_mesh_device(mesh)
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        close_mesh(ttnn, mesh)
 
 
 if __name__ == "__main__":

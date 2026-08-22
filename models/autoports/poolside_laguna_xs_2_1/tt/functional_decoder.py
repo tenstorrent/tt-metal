@@ -24,10 +24,11 @@ mesh_device, max_seq_len, ...)`` builds the device module. Weight conversion,
 RoPE-table construction and paged-cache allocation all happen at setup; the
 runtime prefill/decode paths stay on device (no torch / from_torch / to_torch).
 
-* ``prefill_forward(x_BSH, kv_cache, page_table, *, user_id=0, start_pos=0)``
+* ``prefill_forward(x_BSH, kv_cache, page_table, *, fill_page_table=None, user_id=0, start_pos=0)``
   processes one user's prompt ``x`` of shape ``[1, seq, hidden]`` (any logical
   ``seq``; internal chunking owns padding/masking), fills that user's paged KV
-  slot and returns ``[1, seq, hidden]``.
+  slot and returns ``[1, seq, hidden]``. ``fill_page_table`` can carry ``-1``
+  write-skip padding while ``page_table`` remains valid for attention reads.
 * ``decode_forward(x_1BH, cur_pos, rope_idx, page_table, kv_cache)`` processes one
   token for a batch of ``B`` users (``x`` shape ``[1, 1, B, hidden]``), updates the
   cache at the per-user ``cur_pos`` (int32 device tensor, traceable) and returns
@@ -46,6 +47,8 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+from .prefill_page_table import single_shot_fill_page_table
 
 TILE = 32
 
@@ -447,17 +450,47 @@ class FunctionalDecoder(LightweightModule):
         k = self._apply_rope(k, cos, sin)
         return q, k, v
 
-    def prefill_forward(self, x_BSH, kv_cache, page_table, *, user_id=0, start_pos=0):
+    def prefill_forward(
+        self,
+        x_BSH,
+        kv_cache,
+        page_table,
+        *,
+        fill_page_table=None,
+        fill_page_table_base_pos=0,
+        user_id=0,
+        start_pos=0,
+        rope_mats=None,
+        runtime_offsets=None,
+    ):
+        if runtime_offsets is not None:
+            raise ValueError("runtime-offset prefill is supported only by the P150x2 multichip decoder")
+        fill_page_table = page_table if fill_page_table is None else fill_page_table
         seq = x_BSH.shape[-2]
         if seq > self.PIPE_CHUNK:
-            return self._prefill_pipelined(x_BSH, kv_cache, page_table, user_id, start_pos)
+            return self._prefill_pipelined(
+                x_BSH,
+                kv_cache,
+                page_table,
+                fill_page_table,
+                user_id,
+                start_pos,
+                fill_page_table_base_pos=fill_page_table_base_pos,
+            )
         cfg = self.cfg
         residual = x_BSH
         ln = self._rms(x_BSH, self.w["input_ln"])  # [1,seq,H]
         q, k, v = self._qkv_roped(ln, seq, start_pos)
         # fill paged cache for decode continuation
-        ttnn.experimental.paged_fill_cache(kv_cache["k"], k, page_table, batch_idx=user_id)
-        ttnn.experimental.paged_fill_cache(kv_cache["v"], v, page_table, batch_idx=user_id)
+        fill_pt = single_shot_fill_page_table(
+            fill_page_table,
+            start_pos=start_pos,
+            seq_len=seq,
+            block_size=kv_cache["block_size"],
+            fill_page_table_base_pos=fill_page_table_base_pos,
+        )
+        ttnn.experimental.paged_fill_cache(kv_cache["k"], k, fill_pt, batch_idx=user_id)
+        ttnn.experimental.paged_fill_cache(kv_cache["v"], v, fill_pt, batch_idx=user_id)
         # attention (chunk Q for lengths beyond the single-shot SDPA op limit)
         attn = self._prefill_attention(q, k, v, kv_cache, page_table, user_id, start_pos, seq)  # [1,nh,seq,hd]
         attn = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), (1, seq, cfg.num_heads * cfg.head_dim))
@@ -470,7 +503,17 @@ class FunctionalDecoder(LightweightModule):
         mlp_out = ttnn.reshape(mlp_out, (1, seq, cfg.hidden))
         return ttnn.add(h, mlp_out)
 
-    def _prefill_pipelined(self, x_BSH, kv_cache, page_table, user_id, start_pos):
+    def _prefill_pipelined(
+        self,
+        x_BSH,
+        kv_cache,
+        page_table,
+        fill_page_table,
+        user_id,
+        start_pos,
+        *,
+        fill_page_table_base_pos=0,
+    ):
         cfg = self.cfg
         seq = x_BSH.shape[-2]
         bs = kv_cache["block_size"]
@@ -478,6 +521,11 @@ class FunctionalDecoder(LightweightModule):
         win = cfg.sliding_window
         k_tail = v_tail = None  # rolling window K/V for sliding layers
         outs = []
+        fill_base = int(fill_page_table_base_pos)
+        if int(start_pos) < fill_base or (int(start_pos) - fill_base) % bs:
+            raise ValueError(
+                f"prefill start {start_pos} and fill page-table base {fill_base} are not block aligned"
+            )
         for c in range(0, seq, CH):
             ch = min(CH, seq - c)
             gpos = start_pos + c
@@ -486,9 +534,13 @@ class FunctionalDecoder(LightweightModule):
             ln = self._rms(xc, self.w["input_ln"])
             q, k, v = self._qkv_roped(ln, ch, gpos)
             # fill this chunk's cache slot: page-table columns for blocks [gpos/bs : (gpos+ch)/bs]
-            col0 = gpos // bs
+            col0 = (gpos - fill_base) // bs
             ncol = (ch + bs - 1) // bs
-            chunk_pt = ttnn.slice(page_table, [0, col0], [page_table.shape[0], col0 + ncol])
+            chunk_pt = ttnn.slice(
+                fill_page_table,
+                [0, col0],
+                [fill_page_table.shape[0], col0 + ncol],
+            )
             ttnn.experimental.paged_fill_cache(kv_cache["k"], k, chunk_pt, batch_idx=user_id)
             ttnn.experimental.paged_fill_cache(kv_cache["v"], v, chunk_pt, batch_idx=user_id)
             # attention for this chunk's queries

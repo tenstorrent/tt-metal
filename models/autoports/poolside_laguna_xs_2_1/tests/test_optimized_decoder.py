@@ -15,8 +15,7 @@ full advertised context (262144) decode addressing, repeated-run stress, and an 
 that the measured path is the optimized (non-fallback) one.
 
 ENVIRONMENT (installed self-consistent tree from a non-repo cwd; see functional README):
-    cd /tmp && TT_METAL_HOME=/home/ttuser/.local/lib/model-bringup/tt-metal \
-        PYTHONPATH=/home/ttuser/dev/tt-metal python -m pytest <thisfile> -q
+    python -m pytest models/autoports/poolside_laguna_xs_2_1/tests/test_optimized_decoder.py -q
 """
 from __future__ import annotations
 
