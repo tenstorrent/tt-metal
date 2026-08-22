@@ -28,7 +28,8 @@ def my_reward(completions, answer, **kwargs):
     return [2.0 if c.strip().lower().startswith(a) else -1.0
             for c, a in zip(completions, answer)]
 
-# 4. Train.
+# 4. Train — the trainer auto-appends a `GRPOMonitor` from `GRPOConfig`, so
+#    `output_dir/grpo_metrics.csv` and per-step console lines come for free.
 trainer = GRPOTrainer(
     completer=completer,
     dataset=dataset,
@@ -39,11 +40,16 @@ trainer = GRPOTrainer(
         gradient_accumulation_steps=4,
         prompts_to_train=1600,
         logging_steps=1,
+        # Logging surface (all optional):
+        log_completions=True,
+        num_completions_to_print=2,
+        report_to="none",                # or "wandb" — the built-in GRPOMonitor calls wandb.init() for you
+        run_name=None,                   # optional wandb run name; project/entity/mode come from WANDB_* env vars
     ),
     reward_func=my_reward,
     optimizer_dict={"type": "MorehAdamW", "lr": 5.0e-6},
-    callbacks=[],                    # optional; see "Callbacks" below
-    model_source="...",              # used only for HF config in checkpoints
+    callbacks=[],                        # optional; see "Callbacks" below
+    model_source="...",                  # used only for HF config in checkpoints
 )
 trainer.train()
 ```
@@ -192,7 +198,12 @@ from ttml.trainers import GRPOConfig
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |
 | `checkpoint_interval` | `int` | — | *(use `save_steps`)* | Save a checkpoint every *N* optimizer steps (when `checkpointing=True`). |
-| `logging_steps` | `int` | — | `logging_steps` | Fire `on_step_end` callbacks every *N* optimizer steps (0 or negative to disable). The trainer has no built-in logging; all output is callback-driven. |
+| `logging_steps` | `int` | — | `logging_steps` | Fire `on_step_end` callbacks every *N* optimizer steps (0 or negative to disable). The trainer's only built-in logging is the auto-added `GRPOMonitor` (see [Built-in GRPOMonitor](#built-in-grpomonitor)); everything else is callback-driven. |
+| `log_completions` | `bool` | `False` | `log_completions` | When `True`, the built-in [`GRPOMonitor`](#built-in-grpomonitor) prints a sample of `(prompt, completion, reward)` triples every logging step (and, if `report_to == "wandb"`, logs them as a `wandb.Table`). |
+| `num_completions_to_print` | `int` | `0` | `num_completions_to_print` | Upper bound on how many completions per step the monitor prints when `log_completions=True`. `0` disables the sample dump even when `log_completions` is set (a warning is emitted). |
+| `report_to` | `str` | `"none"` | `report_to` | Where the built-in monitor forwards scalar metrics and the optional completions table. Only `"none"` and `"wandb"` are accepted in this framework (TRL takes a list; here it must be a single string). When `"wandb"` is set, the built-in `GRPOMonitor` calls `wandb.init(...)` itself in `on_train_begin` (matching the TRL / `transformers` `WandbCallback` convention); `project` / `entity` / `mode` come from the `WANDB_PROJECT` / `WANDB_ENTITY` / `WANDB_MODE` env vars, and `name` from `run_name` below. If the caller already opened a wandb run before constructing the trainer, the monitor logs into it and leaves its lifecycle alone. |
+| `run_name` | `str \| None` | `None` | `run_name` | Optional wandb run name, forwarded to `wandb.init` when the monitor opens the run. `None` lets wandb auto-generate one. |
+| `disable_default_monitor` | `bool` | `False` | *(no direct equivalent)* | Opt out of the auto-appended `GRPOMonitor`. Use this if you need a fully custom logging pipeline; you can still pass your own callbacks via the trainer constructor. |
 
 ---
 
@@ -278,43 +289,96 @@ only explicitly named parameters are passed.
 
 ---
 
+## Built-in GRPOMonitor
+
+`ttml.trainers.GRPOMonitor` is the framework's default step logger. `GRPOTrainer`
+auto-appends one to its callback list unless `GRPOConfig.disable_default_monitor`
+is set, so you do not need to construct one yourself.
+
+At `on_train_begin` it opens `<output_dir>/grpo_metrics.csv` and writes a
+header. The columns are frozen at that point and consist of a fixed base set:
+
+```
+step, reward_mean, reward_std, mean_completion_len, min_completion_len,
+max_completion_len, lr, step_time_s, generation_time_s
+```
+
+...followed by one `<CallbackClassName>_time_s` column per callback present at
+`on_train_begin`. Those extra columns record how long that callback's
+`on_step_end` took — but they are **lagged one step**: the trainer times each
+callback in place and stashes the elapsed times, then merges them into the
+NEXT step's metrics dict. As a result step 1's row has `nan` for every
+`<ClassName>_time_s` column.
+
+When `report_to == "wandb"`, the monitor calls `wandb.init(...)` itself in
+`on_train_begin` (matching the TRL / `transformers` `WandbCallback`
+convention). `project` / `entity` / `mode` are read from the `WANDB_PROJECT` /
+`WANDB_ENTITY` / `WANDB_MODE` env vars, `name` comes from `GRPOConfig.run_name`,
+and the `config` payload is the full `GRPOConfig` (plus `model_source` and the
+optimizer dict). If the caller already opened a run before constructing the
+trainer, the monitor logs into that existing run and does **not** call
+`wandb.finish()` at the end — the caller owns the lifecycle.
+
+Every numeric scalar metric is forwarded to wandb under the `grpo/` namespace
+(`grpo/reward_mean`, `grpo/step_time_s`, `grpo/EvalCallback_time_s`, ...). If
+`log_completions=True` and `num_completions_to_print > 0`, the first *K*
+`(prompt, completion, reward)` triples for the step are printed via
+`logging.info` and also logged as a `wandb.Table` under `grpo/completions`.
+
+If the `wandb` package is not installed, the monitor logs a one-time warning
+and quietly falls back to console + CSV only.
+
 ## Callbacks
 
-Subclass `TrainerCallback` and override any hooks you need:
+Subclass `TrainerCallback` and override any hooks you need. In practice most
+users write a small callback that computes an auxiliary metric and injects it
+into the CSV — like the reverse-text example's eval callback:
 
 ```python
-import csv
-import os
+from difflib import SequenceMatcher
 from ttml.trainers import TrainerCallback
 
-class GRPOMonitor(TrainerCallback):
-    def __init__(self, output_dir):
-        self.file_path = os.path.join(output_dir, "grpo_metrics.csv")
-        os.makedirs(output_dir, exist_ok=True)
-        with open(self.file_path, mode="w", newline="") as f:
-            csv.writer(f).writerow(["step", "reward", "avg_length"])
+class EvalCallback(TrainerCallback):
+    def __init__(self, completer, ctx, dataset, num_examples):
+        rows = dataset.select(range(min(num_examples, len(dataset))))
+        self.completer = completer
+        self.ctx = ctx
+        self.prompts = list(rows["prompt"])
+        self.answers = list(rows["answer"])
 
     def on_step_end(self, trainer, step, **kwargs):
-        reward = kwargs["reward_mean"]
-        length = kwargs["mean_completion_len"]
-        print(f"Step {step} | Reward: {reward:.4f} | Len: {length:.2f} tokens")
-        with open(self.file_path, mode="a", newline="") as f:
-            csv.writer(f).writerow([step, reward, length])
+        similarity = self._greedy_similarity()
+        # `trainer.metrics` is a mutable dict populated by the trainer for
+        # this step. Any scalar you write here lands in the CSV row that the
+        # built-in GRPOMonitor writes AFTER this callback runs.
+        trainer.metrics["eval_similarity"] = similarity
 
-trainer = GRPOTrainer(..., callbacks=[GRPOMonitor(output_dir)])
+trainer = GRPOTrainer(..., callbacks=[EvalCallback(...)])   # GRPOMonitor is auto-added
 ```
+
+Two contracts are worth calling out:
+
+- **`trainer.metrics` is mutable and shared**: callbacks earlier in
+  `trainer.callbacks` can add scalar columns by writing into it, and any
+  callback later in the list (including the built-in `GRPOMonitor`) will read
+  the merged view. The dict is rebuilt at the top of every logging step, so
+  writes do not leak between steps.
+- **Column-set freeze**: `GRPOMonitor` snapshots the CSV column set at
+  `on_train_begin`. New keys added mid-run log a one-time warning instead of
+  churning the schema. If you know upfront that your callback will emit a new
+  scalar, register it there (or wrap it in a callback that runs before
+  `on_train_begin` completes).
 
 | Hook | Signature | When |
 |------|-----------|------|
 | `on_train_begin` | `(trainer)` | Before the first batch. |
-| `on_step_end` | `(trainer, step, **kwargs)` | Every `logging_steps` optimizer steps. Keyword args include `reward_mean`, `reward_std`, `mean_completion_len`, `min_completion_len`, `max_completion_len`, `lr`, `step_time_s`, and `generation_time_s`. |
+| `on_step_end` | `(trainer, step, **kwargs)` | Every `logging_steps` optimizer steps. Keyword args are the current contents of `trainer.metrics`: `reward_mean`, `reward_std`, `mean_completion_len`, `min_completion_len`, `max_completion_len`, `lr`, `step_time_s`, `generation_time_s`, one `<CallbackClassName>_time_s` per callback (from the PREVIOUS step; `nan` on step 1), and — when `log_completions=True` — truncated `prompts` / `completions` / `rewards` lists. |
 | `on_before_optimizer_step` | `(trainer)` | After gradient accumulation, before `optimizer.step()`. |
 | `on_save` | `(trainer, step, path)` | After a checkpoint is saved. `path` is the checkpoint directory. |
 | `on_train_end` | `(trainer)` | After the final batch. |
 
-The trainer has no built-in logging. All monitoring, CSV writing, and console
-output is handled through callbacks. The `trainer` argument gives callbacks
-access to `trainer.model` and `trainer.config`.
+The only built-in logging is the auto-added `GRPOMonitor`; other CSV writing,
+progress bars, or dashboards belong in additional callbacks.
 
 > **Cross-rank weight transfer**: a completer that runs generation on
 > a peer MPI rank can use a `TrainerCallback` to push freshly-updated
@@ -515,6 +579,7 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 | **Device setup** | Handled by HF Accelerate | Caller opens the mesh from a YAML `device_config:` block and hands it to the completer |
 | **KL penalty** | `beta` parameter | Not implemented (equivalent to `beta=0.0`) |
 | **Callbacks** | HF `TrainerCallback` with `on_log(args, state, control, logs)` | `TrainerCallback` with `on_step_end(trainer, step, **kwargs)` |
+| **`report_to`** | List of tracker names (`"wandb"`, `"tensorboard"`, `"trackio"`, ...) | Single string, only `"none"` or `"wandb"` accepted (no list form) |
 
 ---
 
@@ -547,7 +612,7 @@ Each task lives in its own subdirectory; the model-specific completers in
 
 [`boolq/boolq_training_example.py`](boolq/boolq_training_example.py) — trains
 Llama-3.2-1B-Instruct on BoolQ using `GRPOTrainer` with a custom reward
-function, CSV logging via `GRPOMonitor` callback, and DDP on 2 devices.
+function, CSV logging via the framework's built-in `GRPOMonitor`, and DDP on 2 devices.
 
 ```bash
 python3 boolq/boolq_training_example.py
@@ -588,10 +653,10 @@ python3 reverse_text/reverse_text_training_example.py
 
 #### Plotting
 
-[`boolq/boolq_plot_example.py`](boolq/boolq_plot_example.py) — plots any column of the `grpo_metrics.csv` written by a `GRPOMonitor` callback.
+[`boolq/boolq_plot_example.py`](boolq/boolq_plot_example.py) — plots any column of the `grpo_metrics.csv` written by the built-in `GRPOMonitor`.
 
 ```bash
-python3 boolq/boolq_plot_example.py <output_dir>/grpo_metrics.csv reward
+python3 boolq/boolq_plot_example.py <output_dir>/grpo_metrics.csv reward_mean
 ```
 
 [`reverse_text/reverse_text_plot_example.py`](reverse_text/reverse_text_plot_example.py) —
