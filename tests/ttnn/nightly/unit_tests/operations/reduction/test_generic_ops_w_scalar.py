@@ -127,7 +127,7 @@ def _run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
         # variance is the same as for round-to-nearest. Per-op behavior:
         #   - max/min: output relative error <= eps_TF32 ~ 1e-3 (one input selected).
         #   - sum of N values: 1-sigma random walk eps_TF32 / (2*sqrt(3)) * sqrt(N) *
-        #     |scalar| ~ 0.49 for N=177408, |scalar|_max=4; plus a deterministic
+        #     |scalar| ~ 0.30 for N=177408, |scalar|_max=2.43; plus a deterministic
         #     bias eps_TF32 / 2 * |sum| (scales with the output, like rtol).
         #   - mean: same relative behavior as sum; absolute error is sum_error / N.
         #
@@ -141,13 +141,13 @@ def _run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
             # samples). mean = sum/N preserves relative errors, so both share the
             # same error distribution. Using the model from above, the 1-sigma
             # random walk on the sum is eps_TF32 / (2*sqrt(3)) * sqrt(N) * |scalar|
-            # ~ 0.49 (3-sigma ~ 1.46) for N=177408, |scalar|_max=4. The systematic
+            # ~ 0.30 (3-sigma ~ 0.89) for N=177408, |scalar|_max=2.43. The systematic
             # bias is eps_TF32/2 * |sum|, which scales with |sum| and is absorbed
             # by rtol for typical |sum|. bf16 with the same random-walk formula
-            # gives 1-sigma ~ 3.89; the user's atol=1.5 covers ~0.4-sigma. Here
-            # atol=0.3 covers ~0.6-sigma -- same tuning style (rtol*|y| carries
+            # gives 1-sigma ~ 2.36; the user's atol=1.5 covers ~0.6-sigma. Here
+            # atol=0.3 covers ~1-sigma -- same tuning style (rtol*|y| carries
             # typical |sum|). Mean inherits the default atol since its absolute
-            # error is sum_error/N ~ 3e-6.
+            # error is sum_error/N ~ 2e-6.
             #
             # Frobenius on a scalar output degenerates to |error|/|y|, and |y|
             # follows a zero-mean Gaussian (sqrt(N)*|scalar|-stddev for sum,
@@ -160,18 +160,18 @@ def _run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
             # Tensor-output sum on the largest shape. Per-element error scales
             # with sqrt(N_reduce); the worst non-None reduction is dim=(0,-2,-1)
             # (N_reduce=5544) with 1-sigma random walk eps_TF32 * sqrt(N_reduce)
-            # * |scalar|_max / (2*sqrt(3)) ~ 0.086, so 3-sigma ~ 0.26. Output
+            # * |scalar|_max / (2*sqrt(3)) ~ 0.052, so 3-sigma ~ 0.16. Output
             # elements can land near zero by randn cancellation, so atol (not
             # rtol*|y|) must absorb that per-element error: atol = 0.3 covers
-            # ~3-sigma. Frobenius is RMS-style on tensor output and stays at
-            # ~eps_TF32, so the default threshold applies.
+            # >3-sigma with margin. Frobenius is RMS-style on tensor output and
+            # stays at ~eps_TF32, so the default threshold applies.
             atol = 0.3
             frobenius_threshold = 5e-3
         else:
             # Smaller shapes (N <= 60), or non-sum ops on the largest shape:
             # max/min absolute error bounded by eps_TF32 * 3 * |scalar|_max ~
-            # 0.012; sum on smaller shapes bounded by 1-sigma random walk
-            # eps_TF32 * sqrt(N_max) * |scalar|_max / (2*sqrt(3)) ~ 9e-3 for
+            # 7.3e-3; sum on smaller shapes bounded by 1-sigma random walk
+            # eps_TF32 * sqrt(N_max) * |scalar|_max / (2*sqrt(3)) ~ 5.5e-3 for
             # N=60; mean on the largest shape with a non-None dim has
             # per-element error sum_error / N_reduce, smaller still. atol = 5e-2
             # covers all with margin. Per-element relative error of ~eps_TF32
@@ -230,9 +230,19 @@ def _run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
 
 # Test that generic reduction ops work correctly with a scalar applied to the input.
 # Split into two parts to avoid large test count from full cross product.
+#
+# The scalar VALUE is a compile-time arg in the reduce program factories (bit-cast into the
+# reader's compile args on the W path, and into the Welford compute kernel's post-mul /
+# correction args), so every distinct value mints a fresh kernel binary. Two values per part
+# cover every behavior class the previous three did: 1.0 (identity, and the scalar==1.0 dispatch
+# boundary that keeps sum eligible for fast_reduce_nc -- kept in BOTH parts because that
+# dispatch depends on shape/dim), plus one non-identity representative: -2.0 (negative sign,
+# bf16-exact mantissa) on part 1 and 2.43 (positive, NOT exactly representable -- the
+# strictest rounding case) on part 2.
+#
 # Simple powers of two run with reduced set of dim parameters.
 @pytest.mark.parametrize("op, correction", OP_CORRECTION)
-@pytest.mark.parametrize("scalar", [1.0, -2.0, 2.0])
+@pytest.mark.parametrize("scalar", [1.0, -2.0])
 @pytest.mark.parametrize("shape, dim", VALID_SHAPE_DIMS_PART1)
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_generic_ops_w_scalar_part1(device, op, scalar, correction, dim, shape, dtype):
@@ -241,7 +251,7 @@ def test_generic_ops_w_scalar_part1(device, op, scalar, correction, dim, shape, 
 
 # Non-powers of two and a slightly larger power of two run with full set of dim parameters.
 @pytest.mark.parametrize("op, correction", OP_CORRECTION)
-@pytest.mark.parametrize("scalar", [-2.43, 2.43, 4.0])
+@pytest.mark.parametrize("scalar", [1.0, 2.43])
 @pytest.mark.parametrize("shape, dim", VALID_SHAPE_DIMS_PART2)
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_generic_ops_w_scalar_part2(device, op, scalar, correction, dim, shape, dtype):
