@@ -16,6 +16,8 @@ Env:
   PREFILL_CHUNKED     "1" -> chunked (SP ring cache-read for every chunk); "0" -> one-shot           [default 0]
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode only)                             [default 5120]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement                   [default 1]
+  PREFILL_TOP1        "1" -> also run the top-1 / logits sign-off vs golden (one-shot only)  [default 0]
+  GPT_OSS_TOP1_MIN    fail if top-1 agreement < this fraction (CI gate; needs reference_top1) [default unset]
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs) [default: all]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8"                        [default bf4]
   GPT_OSS_WEIGHTS_FROM_CACHE  "1" -> pass an empty state_dict (load tilized weights from the TTNN cache)
@@ -200,6 +202,62 @@ def main():
         if _pcc_min is not None and min_pcc < float(_pcc_min):
             print(f"[prefill-pcc] FAIL: min KV PCC {min_pcc:.5f} < GPT_OSS_KV_PCC_MIN={_pcc_min}", flush=True)
             return 1
+
+        # --- functional sign-off: top-1 / logits agreement vs golden (one-shot only) ---
+        # PREFILL_TOP1=1 runs one extra forward with the LM head, gathers the SP-seq + TP-vocab sharded
+        # logits, argmaxes per position, and compares to the golden's reference_top1 (HF argmax). This
+        # is the definitive "does prefill predict the right tokens" check (KV PCC is only a proxy).
+        # Gate on GPT_OSS_TOP1_MIN when set (CI); needs the golden to carry reference_top1.safetensors.
+        if os.getenv("PREFILL_TOP1", "0") == "1":
+            _top1_min = os.environ.get("GPT_OSS_TOP1_MIN")
+            if n_chunks != 1:
+                # Top-1 is one-shot only; a chunked run can't exercise it. Fail loudly rather than
+                # silently no-op, so a CI job that asked for the sign-off can't go green without it.
+                print(
+                    f"[prefill-pcc] FAIL: PREFILL_TOP1 is one-shot only — set PREFILL_CHUNKED=0 "
+                    f"(got n_chunks={n_chunks})",
+                    flush=True,
+                )
+                return 1
+            inp = runtime.make_chunk_input(padded[:chunk])
+            out = runtime.prefill_chunk(inp, slot_id=0, actual_start=0, actual_end=n_tokens, skip_lm_head=False)
+            our_top1 = runtime.logits_top1_oneshot(out, n_tokens)
+            out.deallocate(True)
+            try:
+                agree, ncmp, gen_match = runtime.top1_check(our_top1, golden_dir)
+                print(
+                    f"[prefill-pcc] TOP-1 agreement vs golden: {agree * 100:.2f}% over {ncmp} positions "
+                    f"(gen-token match={gen_match})",
+                    flush=True,
+                )
+                if _top1_min is not None and agree < float(_top1_min):
+                    print(f"[prefill-pcc] FAIL: TOP-1 {agree:.4f} < GPT_OSS_TOP1_MIN={_top1_min}", flush=True)
+                    return 1
+            except FileNotFoundError as e:
+                # A configured gate must not pass without an HF comparison.
+                if _top1_min is not None:
+                    print(
+                        f"[prefill-pcc] FAIL: GPT_OSS_TOP1_MIN={_top1_min} set but no golden reference ({e})",
+                        flush=True,
+                    )
+                    return 1
+                # Ungated bring-up: report our own prediction so the device path is still validated.
+                tok0, gen = int(our_top1[0]), int(our_top1[-1])
+                dec0 = dec_gen = ""
+                try:
+                    from transformers import AutoTokenizer
+
+                    _tk = AutoTokenizer.from_pretrained(os.environ["HF_MODEL"])
+                    dec0, dec_gen = repr(_tk.decode([tok0])), repr(_tk.decode([gen]))
+                except Exception:
+                    pass
+                print(
+                    f"[prefill-pcc] TOP1: no golden reference ({e}); device path OK "
+                    f"({our_top1.numel()} positions). pos0 pred id={tok0} {dec0}; "
+                    f"generation (after prompt) id={gen} {dec_gen}",
+                    flush=True,
+                )
+
         print("[prefill-pcc] DONE", flush=True)
     finally:
         ttnn.close_mesh_device(mesh)
