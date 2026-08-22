@@ -171,6 +171,14 @@ target_link_libraries(
         ttml
         TTNN::TTNN
 )
+
+add_executable(swiglu_packed_benchmark benchmark/swiglu_packed_benchmark.cpp)
+target_link_libraries(
+    swiglu_packed_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
 ############################################################################################################################
 # Benchmark tests (using Google Benchmark)
 # Only available when building via tt-metal (Build from tt-train would require adding new dependency)
