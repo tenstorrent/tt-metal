@@ -70,7 +70,12 @@ def test_bench_prefill(mesh_device):
     model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=max_seq_len)
     load_s = time.time() - t0
     logger.info(f"model load {load_s:.1f}s ({len(model.layers)} layers, {model.num_devices} devices)")
-    assert _should_use_chunked_trace(model), "chunk-seq GDN prefill must be enabled"
+    # _should_use_chunked_trace inspects layer.attention.weights.use_chunk_seq_prefill,
+    # which only the SINGLE-DEVICE GDN module exposes (text_demo asserts it only in its
+    # single-device traced path). The TP module builds chunk_seq_masks unconditionally —
+    # chunked prefill is always available at TP, so only gate the single-device case.
+    if model.num_devices == 1:
+        assert _should_use_chunked_trace(model), "chunk-seq GDN prefill must be enabled"
 
     mesh = model.mesh_device
     vocab = model.args.vocab_size
