@@ -35,6 +35,8 @@ requires; users do not need to pre-format inputs.
 | Values   | `bfloat16`, `float32`, `uint16` |
 | Indices  | `uint16`, `uint32` (auto-promoted to `uint32` when the sort dim ≥ 65 535) |
 
+**NaN input is unsupported (undefined ordering) for `bfloat16`.** The `bfloat16` datapath canonicalizes NaN to same-sign infinity before any comparison (measured on silicon: NaN merges into the `+inf`/`-inf` tie class), so NaN placement deviates from `torch.sort`'s NaN-last ordering in both values and indices. Callers who need torch NaN semantics must mask or replace NaNs before sorting.
+
 #### Supported layouts
 
 | Layout       | Supported | Notes                                                                                |
