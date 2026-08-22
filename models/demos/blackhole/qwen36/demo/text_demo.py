@@ -1027,6 +1027,10 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
     # Identity page table
     page_table = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
 
+    # TT_SPEC_DECODE=1: MTP speculative decode (single device, greedy) — see docs/mtp_design.md.
+    if os.environ.get("TT_SPEC_DECODE", "0") == "1":
+        return _run_spec_generation(model, tokenizer, token_ids, page_table, max_generated_tokens, num_blocks)
+
     signpost("inference_prefill")
     t0 = time.time()
     logits = model.prefill_paged(token_ids, page_table)
@@ -1065,6 +1069,59 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
 
     avg_decode = sum(decode_times) / len(decode_times) if decode_times else float("inf")
     return generated, {"ttft": ttft, "avg_decode_s": avg_decode, "decode_steps": len(decode_times)}
+
+
+def _run_spec_generation(model, tokenizer, token_ids, page_table, max_generated_tokens, num_blocks):
+    """MTP speculative generation (TT_SPEC_DECODE=1): drafter head + verify loop.
+
+    The MTP weights are read straight from the checkpoint's safetensors (the
+    backbone loader drops mtp.*), the head shares the target's embedding + LM
+    head, and the spec decoder owns prefill (segmented masked buckets with
+    hidden capture for drafter seeding). Returns (generated, perf_dict) in the
+    _run_paged_generation format plus accept-rate stats.
+    """
+    from models.demos.blackhole.qwen36.tt.mtp import Qwen36MTPHead
+    from models.demos.blackhole.qwen36.tt.spec_decode import Qwen36SpeculativeDecoder
+    from models.demos.blackhole.qwen36.tt.weight_mapping import checkpoint_has_mtp, load_qwen36_mtp_state_dict
+
+    ckpt = model.args.CKPT_DIR
+    if not checkpoint_has_mtp(ckpt):
+        pytest.skip(f"checkpoint {ckpt} has no mtp.* weights (TT_SPEC_DECODE=1 needs the 3.8 checkpoint)")
+
+    logger.info("Loading MTP head weights from safetensors...")
+    mtp_sd = load_qwen36_mtp_state_dict(ckpt)
+    mtp = Qwen36MTPHead(
+        model.mesh_device,
+        model.args,
+        mtp_sd,
+        embedding=model.embd,
+        lm_head_weight=model.lm_head_weight,
+        rope=model.rope,
+        tensor_cache_path=model.args.weight_cache_path(),
+    )
+    mtp.allocate_kv_cache(num_blocks)
+
+    draft_len = int(os.environ.get("TT_SPEC_DRAFT_LEN", 4))
+    spec = Qwen36SpeculativeDecoder(model, mtp, page_table, draft_len=draft_len, stop_tokens=[tokenizer.eos_token_id])
+
+    signpost("inference_prefill")
+    t0 = time.time()
+    spec.prefill(token_ids)
+    ttft = time.time() - t0
+
+    signpost("inference_decode")
+    t0 = time.time()
+    generated, stats = spec.generate(max_generated_tokens)
+    decode_s = time.time() - t0
+    mtp.free_kv_cache()
+
+    avg_decode = decode_s / len(generated) if generated else float("inf")
+    logger.info(
+        f"[spec K={draft_len}] {len(generated)} tokens in {stats['iterations']} iterations "
+        f"({stats['tokens_per_iteration']:.2f} tok/iter, accept rate {stats['accept_rate']:.2f}); "
+        f"{avg_decode * 1000:.1f} ms/token"
+    )
+    return generated, {"ttft": ttft, "avg_decode_s": avg_decode, "decode_steps": stats["iterations"], **stats}
 
 
 def _save_tp_benchmark(perf, model, seqlen, prompt_len, num_generated):
