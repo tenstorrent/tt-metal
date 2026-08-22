@@ -176,6 +176,23 @@ jobs:
             echo "::warning::Report file not found: $REPORT_FILE"
           fi
 
+  # Op-level validation of the packaged artifacts: install the debs and run
+  # the validation-basic gtest binaries. Same tests as in the merge gate,
+  # but run against the actual release packages.
+  release-op-validation:
+    needs: [build-artifact]
+    strategy:
+      fail-fast: false
+      matrix:
+        product: [tt-metalium, tt-nn]
+    uses: ./.github/workflows/basic.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      enabled-skus: ALL_SKUS_IN_TESTS
+      per-test-timeout: 15 # max minutes for any SKU timeout in the basic tests yamls
+      product: ${{ matrix.product }}
+
   # Polls the "RTL Sim CI test" GitHub check on stable HEAD (posted by the
   # tt-umd-simulators polling agent -- GitLab issue #71). Runs in parallel
   # with release-demo-tests so other tests still surface failures, and is
