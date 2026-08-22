@@ -27,6 +27,8 @@ file(
     fold/device/kernels/*.cpp
     gather/device/kernels/*.cpp
     gather/device/kernels/*.hpp
+    gather/codegen/kernels/*.cpp
+    gather/codegen/kernels/*.hpp
     copy/device/kernels/*.cpp
     indexed_fill/device/kernels/*.cpp
     moe_expert_token_remap/device/kernels/*.cpp
