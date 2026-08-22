@@ -401,6 +401,8 @@ class LinearDecode(DeepSeekV4Module):
         global_cb=None,
         global_cb_page_bytes: Optional[int] = None,
         keep_weights_in_l1: bool = False,
+        packed_weight_tensor: Optional[ttnn.Tensor] = None,
+        packed_weight_spec=None,
     ):
         self.partial_width_sharded = partial_width_sharded
         self.num_inputA_cores = num_inputA_cores
@@ -412,6 +414,8 @@ class LinearDecode(DeepSeekV4Module):
         self.global_cb = None
         self.gcb_k_blocks = 1
         self.prefetch_queued = False
+        self.packed_weight_tensor = packed_weight_tensor
+        self.packed_weight_spec = packed_weight_spec
 
         if keep_weights_in_l1 and use_prefetcher:
             raise ValueError(
@@ -429,6 +433,16 @@ class LinearDecode(DeepSeekV4Module):
         num_inputB_cores, shard_shape, preferred_width = decode_weight_layout(
             K, N, partial_width_sharded, k_blocks, n_blocks
         )
+        if packed_weight_tensor is not None:
+            if use_prefetcher or keep_weights_in_l1 or packed_weight_spec is None:
+                raise ValueError("packed weights require a spec and are mutually exclusive with other weight paths")
+            # The packed placement may deliberately use a different legal cut than
+            # DECODE_LAYOUTS (for example kv_proj is full-width on Z2 rather than
+            # partial-K). The packed spec is the source of truth for this path.
+            self.partial_width_sharded = packed_weight_spec.k_blocks > 1
+            self.k_blocks = packed_weight_spec.k_blocks
+            self.n_blocks = packed_weight_spec.n_blocks
+            return
 
         if use_prefetcher:
             self._init_prefetched_weight(
@@ -647,6 +661,8 @@ class LinearDecode(DeepSeekV4Module):
         self.prefetch_queued = True
 
     def fetch_weights(self):
+        if self.packed_weight_tensor is not None:
+            return
         if self.use_prefetcher:
             self._queue_prefetch()
             return
@@ -655,12 +671,12 @@ class LinearDecode(DeepSeekV4Module):
         self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         # self.weight.deallocate()
 
-    def get_input_memory_config(self, m: int, k: int) -> ttnn.MemoryConfig:
+    def get_input_memory_config(self, m: int, k: int, tile_height: int = ttnn.TILE_SIZE) -> ttnn.MemoryConfig:
         a_core_range_set = ttnn.num_cores_to_corerangeset(
             self.num_inputA_cores, self.device.compute_with_storage_grid_size(), row_wise=True
         )
         a_memory_config = ttnn.create_sharded_memory_config(
-            (32, k // self.num_inputA_cores),
+            (((m + tile_height - 1) // tile_height) * tile_height, k // self.num_inputA_cores),
             core_grid=a_core_range_set,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -669,6 +685,42 @@ class LinearDecode(DeepSeekV4Module):
         return a_memory_config
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if self.packed_weight_tensor is not None:
+            # Packed placement is the source of truth: a preceding packed projection may
+            # have left this activation on a different zone/core count.
+            tile_height = x.get_tile().tile_shape[0]
+            input_memory_config = self.get_input_memory_config(x.shape[-2], x.shape[-1], tile_height)
+            same_core_grid = x.is_sharded() and (
+                tile_height < ttnn.TILE_SIZE
+                or _receiver_cores_in_order(x.memory_config().shard_spec.grid)
+                == _receiver_cores_in_order(input_memory_config.shard_spec.grid)
+            )
+            if not same_core_grid:
+                x = ttnn.to_memory_config(x, input_memory_config)
+            m_padded = ((x.shape[-2] + tile_height - 1) // tile_height) * tile_height
+            if self.partial_width_sharded:
+                receiver_cores = _receiver_cores_in_order(self.packed_weight_spec.cores)
+                output_cores = _coalesced_core_range_set(receiver_cores[: self.n_blocks])
+                output_num_cores = self.n_blocks
+            else:
+                output_cores = self.packed_weight_spec.cores
+                output_num_cores = self.packed_weight_spec.num_cores
+            output_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    output_cores,
+                    [m_padded, self.N // output_num_cores],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            return ttnn.experimental.matmul_decode(
+                x,
+                self.packed_weight_tensor,
+                partial_width_sharded=self.partial_width_sharded,
+                output_mem_config=output_memory_config,
+                packed_weight=self.packed_weight_spec,
+            )
         if self.use_prefetcher:
             if not x.is_sharded():
                 x = ttnn.to_memory_config(x, self.get_input_memory_config(x.shape[-2], x.shape[-1]))
@@ -780,6 +832,8 @@ class BatchedLinearDecode(DeepSeekV4Module):
         num_prefetch_slabs: Optional[int] = None,
         global_cb=None,
         global_cb_page_bytes: Optional[int] = None,
+        packed_weight_tensor: Optional[ttnn.Tensor] = None,
+        packed_weight_spec=None,
     ):
         self.device = device
         self.dtype = dtype
@@ -791,6 +845,8 @@ class BatchedLinearDecode(DeepSeekV4Module):
         self.global_cb = None
         self.gcb_k_blocks = 1
         self.prefetch_queued = False
+        self.packed_weight_tensor = packed_weight_tensor
+        self.packed_weight_spec = packed_weight_spec
 
         # One batch per core row (Bc = 1) by default; widen N across as many cores as the grid
         # allows while keeping each N-shard tile-aligned.
@@ -807,6 +863,10 @@ class BatchedLinearDecode(DeepSeekV4Module):
         assert N % self.n_blocks == 0, "n_blocks must divide N"
         self.bc = batch // self.b_blocks
         self.nc = N // self.n_blocks
+        if packed_weight_tensor is not None:
+            if use_prefetcher or packed_weight_spec is None:
+                raise ValueError("packed weights require a spec and are mutually exclusive with the prefetcher")
+            return
 
         def fold(w):
             # [batch, K, N] -> [b_blocks, Bc, K, N] -> [Bc, K, b_blocks, N] -> [1, 1, Bc*K, b_blocks*N].
@@ -939,15 +999,17 @@ class BatchedLinearDecode(DeepSeekV4Module):
         self.prefetch_queued = True
 
     def fetch_weights(self):
+        if self.packed_weight_tensor is not None:
+            return
         if self.use_prefetcher:
             self._queue_prefetch()
 
     def deallocate(self):
         pass
 
-    def get_input_memory_config(self, m: int) -> ttnn.MemoryConfig:
+    def get_input_memory_config(self, m: int, tile_height: int = ttnn.TILE_SIZE) -> ttnn.MemoryConfig:
         # Activation A is width(K)-sharded: shard [batch * m_padded, K / num_inputA_cores].
-        m_padded = ((m + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        m_padded = ((m + tile_height - 1) // tile_height) * tile_height
         a_core_range_set = ttnn.num_cores_to_corerangeset(
             self.num_inputA_cores, self.device.compute_with_storage_grid_size(), row_wise=True
         )
@@ -963,6 +1025,16 @@ class BatchedLinearDecode(DeepSeekV4Module):
         # x: rank-4 [d0, d1, M, K] with d0*d1 == batch. Reshard to the width(K)-sharded L1 layout,
         # then run the batched matmul_decode (b_blocks / n_blocks are inferred from the shapes).
         m = x.shape[-2]
+        if self.packed_weight_tensor is not None:
+            input_memory_config = self.get_input_memory_config(m, x.get_tile().tile_shape[0])
+            same_core_grid = x.is_sharded() and (
+                x.get_tile().tile_shape[0] < ttnn.TILE_SIZE
+                or _receiver_cores_in_order(x.memory_config().shard_spec.grid)
+                == _receiver_cores_in_order(input_memory_config.shard_spec.grid)
+            )
+            if not same_core_grid:
+                x = ttnn.to_memory_config(x, input_memory_config)
+            return ttnn.experimental.matmul_decode(x, self.packed_weight_tensor, packed_weight=self.packed_weight_spec)
         if not x.is_sharded():
             x = ttnn.to_memory_config(x, self.get_input_memory_config(m))
         if self.use_prefetcher:

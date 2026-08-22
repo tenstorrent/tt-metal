@@ -142,6 +142,9 @@ profiles:
       # On-device weight precision for the whole stack.
       # env: DEEPSEEK_V4_WEIGHT_DTYPE
       weight_dtype: bfloat4_b
+      # Pack all non-expert decoder-layer matmul weights into one BF4,
+      # height-sharded L1 tensor per chip. env: DEEPSEEK_V4_PACKED_L1_WEIGHTS
+      packed_l1_weights: false
       # Paged KV block size in rows; must be a multiple of the 32-row tile.
       # env: DEEPSEEK_V4_BLOCK_SIZE
       block_size: 32
@@ -229,6 +232,8 @@ profiles:
       depth: 4
 
     prefetcher:
+      # Packed L1 attention weights replace the streamed GCB path.
+      enabled: false
       # Each chip holds far fewer layers, so its DRAM read stream per step is
       # shorter and a deeper ring has more slack to hide the hops. Retune with
       # tools/analyze_profile.py: too deep starves the activation multicast.
@@ -242,6 +247,7 @@ profiles:
 
     decode:
       # ~4x the aggregate DRAM, so the KV budget scales with it.
+      packed_l1_weights: true
       batch: 1
       num_users: 8
       max_context: 524288

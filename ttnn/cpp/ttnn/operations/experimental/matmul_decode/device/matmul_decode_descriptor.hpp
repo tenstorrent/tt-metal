@@ -34,6 +34,9 @@ struct MatmulDecodeParams {
     int n_blocks = 1;
     std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
     uint32_t global_cb_k_blocks = 1;
+    // Fused-weight path: where this op's weight lives inside a larger height-sharded weight
+    // tensor (see packed_weight_spec.hpp). Mutually exclusive with global_cb.
+    std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec> packed_weight = std::nullopt;
 };
 
 struct MatmulDecodeInputs {

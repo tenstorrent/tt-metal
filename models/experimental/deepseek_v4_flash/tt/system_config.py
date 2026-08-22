@@ -200,6 +200,9 @@ class DecodeSettings:
     """Precision, paging and how many users a step serves."""
 
     weight_dtype: str = "bfloat4_b"
+    # Pack every non-expert decoder-layer matmul weight into one BF4 L1 tensor
+    # per chip. Enabled only by the Galaxy32 profile.
+    packed_l1_weights: bool = False
     block_size: int = 32
     batch: int = 1
     num_users: int = 2
@@ -227,6 +230,11 @@ class DecodeSettings:
     def resolve_num_layers(self, num_hidden_layers: int) -> int:
         """The layer cap, with 0 meaning the whole checkpoint stack."""
         return min(self.num_layers or num_hidden_layers, num_hidden_layers)
+
+    def resolve_packed_l1_weights(self, use_prefetcher: bool) -> bool:
+        if self.packed_l1_weights and use_prefetcher:
+            raise ValueError("decode.packed_l1_weights is incompatible with the weight prefetcher")
+        return self.packed_l1_weights
 
 
 @dataclass(frozen=True)
@@ -479,6 +487,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, Callable[[str], Any]], ...] = (
     ("attention", "sdpa_max_cores_per_head_batch", "DEEPSEEK_V4_SDPA_MAX_CORES_PER_HEAD", int),
     ("attention", "keep_qa_kv_weights_in_l1", "DEEPSEEK_V4_KEEP_WEIGHTS_IN_L1", _env_bool),
     ("attention", "fuse_qa_kv_proj", "DEEPSEEK_V4_FUSE_QA_KV", _env_tristate),
+    ("decode", "packed_l1_weights", "DEEPSEEK_V4_PACKED_L1_WEIGHTS", _env_bool),
     ("decode", "weight_dtype", "DEEPSEEK_V4_WEIGHT_DTYPE", str),
     ("decode", "block_size", "DEEPSEEK_V4_BLOCK_SIZE", int),
     ("decode", "batch", "DEEPSEEK_V4_DECODE_BATCH", int),

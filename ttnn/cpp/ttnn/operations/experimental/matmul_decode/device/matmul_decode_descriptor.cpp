@@ -31,6 +31,7 @@ RealOp::operation_attributes_t to_real_attributes(const MatmulDecodeParams& p) {
         p.n_blocks,
         p.global_cb,
         p.global_cb_k_blocks,
+        p.packed_weight,
     };
 }
 

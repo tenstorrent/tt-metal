@@ -149,7 +149,9 @@ def rectangular_core_range_set(num_cores: int, device) -> ttnn.CoreRangeSet:
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))})
 
 
-def width_sharded_l1_config(height: int, width: int, device, num_cores: int | None = None) -> ttnn.MemoryConfig:
+def width_sharded_l1_config(
+    height: int, width: int, device, num_cores: int | None = None, tile_height: int = ttnn.TILE_SIZE
+) -> ttnn.MemoryConfig:
     """Width-sharded L1 config: one tile-width (32 cols) per core over ``width // TILE_SIZE`` cores.
 
     Mirror of :func:`_rope_height_sharded_config` along the width axis: for a
@@ -165,6 +167,6 @@ def width_sharded_l1_config(height: int, width: int, device, num_cores: int | No
         num_cores //= 2
     shard_width = width // num_cores
     grid = rectangular_core_range_set(num_cores, device)
-    height_padded = ((height + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    height_padded = ((height + tile_height - 1) // tile_height) * tile_height
     shard_spec = ttnn.ShardSpec(grid, [height_padded, shard_width], ttnn.ShardOrientation.ROW_MAJOR)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
