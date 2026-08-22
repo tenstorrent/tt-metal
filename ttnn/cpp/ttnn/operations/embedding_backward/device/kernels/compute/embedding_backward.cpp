@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/reshuffle.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
@@ -26,6 +27,13 @@ void kernel_main() {
     CircularBuffer cb_out(cb_out_idx);
 
     unary_op_init_common(cb_grad_idx, cb_out_idx);
+
+    // cb_grad carries the incoming gradient in its public dtype (BF16/BFP8) while
+    // cb_out_intermed and cb_out hold the accumulator. When the accumulator is
+    // FLOAT32 the two differ, so the packer must be told which format it writes;
+    // the unpacker is reconfigured per copy_tile below. Without these calls the
+    // data is treated as 16-bit even with fp32_dest_acc_en enabled.
+    pack_reconfig_data_format(cb_out_idx);
 
     for (uint32_t i = 0; i < input_height; ++i) {
         cb_grad.wait_front(max_tiles_per_core);
@@ -52,8 +60,14 @@ void kernel_main() {
                 tile_regs_acquire();
                 tile_regs_wait();
 
+                // A single unpacker configuration cannot serve both source CBs
+                // once their formats diverge, so reconfigure around each copy.
+                reconfig_data_format_srca(cb_grad_idx);
+                copy_tile_to_dst_init_short(cb_grad_idx);
                 copy_tile(cb_grad_idx, hidden_dim, 0);
 
+                reconfig_data_format_srca(cb_out_intermed_idx);
+                copy_tile_to_dst_init_short(cb_out_intermed_idx);
                 copy_tile(cb_out_intermed_idx, hidden_dim, 1);
 
                 reshuffle_rows_tile_init();
