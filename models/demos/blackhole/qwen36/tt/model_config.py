@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Qwen3.5-9B config for Blackhole P150.
+"""Config for the Qwen3.5 / 3.6 family on Blackhole (9B single-device, 27B / 35B-A3B TP).
 
 Subclasses tt_transformers.ModelArgs. HF_MODEL env var is canonical (hub id or local dir);
 hub ids are snapshot_download'd first (AutoConfig on bare hub id is unreliable here).
 Qwen3.5-specific params (GDN, partial RoPE, layer types) come from HF text config.
 load_state_dict/weight_cache_path override the base meta-key (wq/wk/wv) scheme.
 """
+
 import os
 from pathlib import Path
 
@@ -17,7 +18,7 @@ GDN_CONV1D_L1_SMALL_SIZE = 24576
 
 
 class Qwen36ModelArgs(ModelArgs):
-    """Qwen3.5-9B ModelArgs for Blackhole P150."""
+    """ModelArgs for the Qwen3.5 / 3.6 family on Blackhole (9B / 27B / 35B-A3B; dense + MoE)."""
 
     # Opt into base ModelArgs TP > n_kv_heads path; attention/tp.py replicates via replicate_kv_weight.
     SUPPORTS_KV_REPLICATION = True
@@ -85,6 +86,22 @@ class Qwen36ModelArgs(ModelArgs):
         self.linear_k_dim = self.linear_num_key_heads * self.linear_key_head_dim
         self.linear_v_dim = self.linear_num_value_heads * self.linear_value_head_dim
 
+        # ------------------------------------------------------------------
+        # MoE (Qwen3.5-MoE / Qwen3-Next sparse layers). All read from the parsed
+        # HF text config. Absent on the dense 9B/27B, where num_experts defaults
+        # to 0 → is_moe_layer() is False everywhere and the validated dense
+        # Qwen36MLP path is byte-for-byte unchanged. For the 35B-A3B every layer
+        # is MoE (decoder_sparse_step=1, mlp_only_layers=[]) with a gated shared
+        # expert; see tt/moe/.
+        # ------------------------------------------------------------------
+        self.moe_num_experts = getattr(text_config, "num_experts", 0) or 0
+        self.moe_top_k = getattr(text_config, "num_experts_per_tok", 0) or 0
+        self.moe_intermediate_size = getattr(text_config, "moe_intermediate_size", 0) or 0
+        self.moe_shared_intermediate_size = getattr(text_config, "shared_expert_intermediate_size", None)
+        self.moe_norm_topk_prob = bool(getattr(text_config, "norm_topk_prob", True))
+        self.moe_decoder_sparse_step = getattr(text_config, "decoder_sparse_step", 1) or 1
+        self.mlp_only_layers = set(getattr(text_config, "mlp_only_layers", None) or [])
+
         # Lazy import for CPU-only testing.
         if mesh_device is not None:
             import ttnn
@@ -125,10 +142,16 @@ class Qwen36ModelArgs(ModelArgs):
         assert self.gdn_nk % tp == 0 and self.gdn_nv % tp == 0, "GDN head counts must divide by TP"
         self.n_local_heads = self.n_heads // tp
         self.n_local_kv_heads = max(1, self.n_kv_heads // tp)
-        self.kv_replication = tp > self.n_kv_heads  # False at TP=4 (4 KV heads)
+        # 35B-A3B has 2 KV heads on 4 devices -> True (each KV head replicated across tp/n_kv_heads
+        # devices); dense 27B has n_kv_heads >= tp -> False (even shard).
+        self.kv_replication = tp > self.n_kv_heads
         self.gdn_nk_tp = self.gdn_nk // tp
         self.gdn_nv_tp = self.gdn_nv // tp
         self.gdn_qkv_dim_tp = self.gdn_qkv_dim // tp
+        # Native depthwise conv1d (prefill) keeps all qkv_dim_tp channels resident per core (L1_FULL);
+        # the 35B-A3B channel count overflows L1 on BH. Split the conv over N channel chunks (exact —
+        # depthwise is per-channel-independent) so each call fits. 27B (chunks=1) is unchanged.
+        self.gdn_conv_channel_chunks = 2 if self.moe_num_experts > 0 else 1
         self.gdn_z_dim_tp = self.gdn_z_dim // tp
         self.gdn_qkvz_dim_tp = (self.gdn_qkv_dim + self.gdn_z_dim) // tp
         # Per-device width of the [qkv|z|a|b] fused in-projection: folding the tiny a/b (decay/beta)
@@ -231,6 +254,12 @@ class Qwen36ModelArgs(ModelArgs):
         # Prefill matmul factory (M = seq_len)
         self._prefill_grid = tpc.prefill_grid_default()
         self.prefill_tuning = tpc.prefill_tuning(tp)
+        if self.moe_num_experts > 0:
+            # The dense TP=4 tuning picks in0_block_w = min(cap, k_tiles // grid), which the
+            # 35B-A3B's attention/GDN prefill K dims don't divide (Kt % in0_block_w != 0). Force
+            # the divisor path (largest divisor of k_tiles ≤ cap) so the block always divides;
+            # dense 9B/27B keep their tuned block.
+            self.prefill_tuning = {**self.prefill_tuning, "in0_block_w_divisor": True}
         self.prefill_progcfg = lambda seq_len, k, n: tpc.create_prefill_matmul_program_config(
             seq_len, k, n, grid_size=self._prefill_grid, tuning=self.prefill_tuning
         )
@@ -257,11 +286,53 @@ class Qwen36ModelArgs(ModelArgs):
         self.trust_remote_code_hf = True
         super()._set_hf_params(checkpoint_dir)
 
+    def _set_params_from_dict(self, config):
+        # Qwen3.5-MoE checkpoints have NO dense `intermediate_size` (every layer is
+        # sparse MoE), but the base ModelArgs still requires it (or ffn_dim_multiplier)
+        # to derive the dense `hidden_dim`. That hidden_dim is vestigial here — MoE
+        # layers route through tt/moe, not the dense MLP memcfgs — so inject the
+        # per-expert intermediate as a tile-aligned stand-in purely to satisfy the
+        # base. The dense 9B/27B carry a real intermediate_size and are untouched.
+        if not config.get("intermediate_size") and config.get("moe_intermediate_size"):
+            config = {**config, "intermediate_size": config["moe_intermediate_size"]}
+        super()._set_params_from_dict(config)
+
     def is_full_attention_layer(self, layer_idx: int) -> bool:
         return self.attention_type_list[layer_idx] == "full_attention"
 
     def is_deltanet_layer(self, layer_idx: int) -> bool:
         return self.attention_type_list[layer_idx] == "linear_attention"
+
+    def is_moe_layer(self, layer_idx: int) -> bool:
+        """True when this layer uses the sparse MoE MLP instead of the dense SwiGLU.
+
+        Follows the HF Qwen3-Next / Qwen3.5-MoE rule: a layer is MoE when there
+        are experts, it is not forced dense (mlp_only_layers), and it falls on
+        the decoder_sparse_step cadence. On the dense 9B/27B num_experts==0 so
+        this is always False and the Qwen36MLP path is byte-for-byte unchanged.
+        """
+        if self.moe_num_experts <= 0:
+            return False
+        if layer_idx in self.mlp_only_layers:
+            return False
+        return (layer_idx + 1) % self.moe_decoder_sparse_step == 0
+
+    def is_distributed_norm(self, mode):
+        """Force the distributed-norm path for multi-device MoE prefill.
+
+        The prefill norm-all-gather fusion (all_gather_minimal_matmul_async in-proj) needs the norm
+        to honor enable_all_gather and leave its output hidden-fractured for the fused matmul to
+        gather. The base enables the distributed-norm path only for dim>4096 (an L1 heuristic the
+        dense 27B's 5120 hits but the MoE 35B-A3B's 2048 misses) — on the miss it force-gathers the
+        norm output, so the AGMM in-proj double-gathers (K mismatch). Only the MoE configs need this
+        override (dense variants either hit the dim>4096 heuristic like the 27B, or are validated on
+        the base path), so gate it on moe_num_experts to avoid diverging the dense path from base.
+        """
+        from models.tt_transformers.tt.common import Mode
+
+        if self.moe_num_experts > 0 and self.is_multichip and mode == Mode.PREFILL:
+            return True
+        return super().is_distributed_norm(mode)
 
     def weight_cache_path(self, dtype=None):
         """Weight tensor cache dir, rooted at model_cache_path (TT_CACHE_PATH + device), NOT the HF
@@ -309,14 +380,23 @@ class Qwen36ModelArgs(ModelArgs):
         # Qwen3_5TextConfig.from_pretrained picks the `text_config` sub-dict on composite
         # (3.6 VLM) checkpoints via base_config_key, and reads a text-only (3.5) config.json
         # as-is, so both checkpoint layouts land on the config Qwen3_5ForCausalLM expects.
-        from transformers.models.qwen3_5 import Qwen3_5ForCausalLM, Qwen3_5TextConfig
+        # The 35B-A3B is a Qwen3.5-MoE checkpoint (model_type qwen3_5_moe): its sparse experts and
+        # gated shared expert live under the MoE config that the dense Qwen3_5TextConfig silently
+        # drops — that class would build a dense mlp.gate_proj and leave mlp.shared_expert/experts
+        # unloaded. Pick the MoE text class for MoE configs; the dense/vision path keeps Qwen3_5.
+        if self.moe_num_experts > 0:
+            from transformers.models.qwen3_5_moe import Qwen3_5MoeForCausalLM as _HFForCausalLM
+            from transformers.models.qwen3_5_moe import Qwen3_5MoeTextConfig as _HFTextConfig
+        else:
+            from transformers.models.qwen3_5 import Qwen3_5ForCausalLM as _HFForCausalLM
+            from transformers.models.qwen3_5 import Qwen3_5TextConfig as _HFTextConfig
 
-        text_config = Qwen3_5TextConfig.from_pretrained(self.CKPT_DIR)
+        text_config = _HFTextConfig.from_pretrained(self.CKPT_DIR)
         assert text_config.vocab_size == self.vocab_size and text_config.hidden_size == self.dim, (
             f"HF text config disagrees with model args: vocab_size {text_config.vocab_size} vs "
             f"{self.vocab_size}, hidden_size {text_config.hidden_size} vs {self.dim}"
         )
-        model = Qwen3_5ForCausalLM.from_pretrained(self.CKPT_DIR, config=text_config, dtype="auto")
+        model = _HFForCausalLM.from_pretrained(self.CKPT_DIR, config=text_config, dtype="auto")
         state_dict = remap_qwen36_state_dict(model.state_dict())
         del model
         return state_dict

@@ -63,7 +63,9 @@ class Qwen36DecoderLayer:
         # Prefill: ff_norm skips AG (fused into gate/up AGMM); decode gathers pre-norm so this is a no-op there.
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
-        self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices)
+        # MoE layers gather in the norm (the sparse MoE + shared expert need full/replicated
+        # hidden and do NOT run the fused gate/up AGMM), so only fuse for the dense MLP.
+        self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and not args.is_moe_layer(layer_num)
         self.ffn_norm = self._make_norm(
             mesh_device,
             args,
@@ -106,7 +108,17 @@ class Qwen36DecoderLayer:
 
         mlp_state = substate(state_dict, f"layers.{layer_num}.mlp")
         mlp_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
-        self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
+        if args.is_moe_layer(layer_num):
+            # Sparse MoE MLP (Qwen3.5-MoE). Qwen36MoE.forward(x) keeps the same
+            # single-in/single-out signature + fractured-hidden output as Qwen36MLP,
+            # so the forward below and the model/trace-capture loops are unchanged.
+            from models.demos.blackhole.qwen36.tt.moe import MoEConfig, Qwen36MoE
+
+            self.feed_forward = Qwen36MoE(
+                mesh_device, MoEConfig.from_args(args), mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl
+            )
+        else:
+            self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
 
     def _make_norm(
         self,
@@ -249,7 +261,7 @@ class Qwen36DecoderLayer:
 
         ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
-        ff_output = self.feed_forward.forward(ff_input)
+        ff_output = self.feed_forward.forward(ff_input, mode=mode)
         ttnn.deallocate(ff_input)
 
         output = ttnn.add(h, ff_output)
