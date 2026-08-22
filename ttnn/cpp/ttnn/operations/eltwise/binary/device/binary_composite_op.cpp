@@ -568,14 +568,16 @@ Tensor floor_div(
 }
 
 Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor temp = ttnn::div(input_a, input_b, false, std::nullopt, std::nullopt, output_mem_config);
-    Tensor result = ttnn::div(input_a, input_b, false, "floor", std::nullopt, output_mem_config);
-    // floor(inf, -inf) = inf, -inf. isinf tests both in a single SFPU pass,
-    // replacing two eq's and a logical_or. The dropped eq(temp, nan) term was
-    // always false under IEEE, so NaN selects the floored value here exactly as
-    // it did before; isinf (rather than !isfinite) keeps that branch identical
-    // without relying on floor propagating NaN.
-    return ttnn::where(ttnn::isinf(temp, output_mem_config), temp, result);
+    // The Inf guard this replaces computed the quotient a second time, unrounded,
+    // only to ask whether it was infinite and, if so, return it in place of the
+    // floored one. It never selected a different value: on the float path
+    // div(..., "floor") is a divide followed by ttnn::floor, and floor leaves an
+    // infinity alone, so the guarded and unguarded results agree wherever the
+    // guard could fire. That is not an assumption here; the correctness table in
+    // the change that introduced this form of the guard already showed
+    // floor(temp) matching the guarded result on inf, -inf and nan, and
+    // test_floor_div_infinite_quotient pins it.
+    return ttnn::div(input_a, input_b, false, "floor", std::nullopt, output_mem_config);
 }
 
 // outer(a, b) treats each input's last dim as a vector and broadcasts the
