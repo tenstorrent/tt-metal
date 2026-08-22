@@ -3,16 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <bit>
+#include <cmath>
+#include <filesystem>
 #include <string>
 #include <vector>
 
 #include "moreh_layer_norm_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
+#include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 
 namespace ttnn::operations::moreh::moreh_layer_norm {
+
+namespace m2 = tt::tt_metal::experimental;
 
 inline uint32_t find_divisor_with_max_block_size(uint32_t val, uint32_t max_block_size) {
     uint32_t divisor{1};
@@ -25,7 +38,7 @@ inline uint32_t find_divisor_with_max_block_size(uint32_t val, uint32_t max_bloc
     return divisor;
 }
 
-tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts MorehLayerNormOperation::ProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
@@ -39,19 +52,15 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     const auto& mean_inp = tensor_args.mean;
     const auto& rstd_inp = tensor_args.rstd;
 
-    const std::optional<const Tensor>& output = output_tensor.at(0);
-
     std::optional<Tensor> mean = std::nullopt;
     if (mean_inp.has_value()) {
         mean = output_tensor.at(1);
     }
-    const std::optional<const Tensor> mean_as_tensor = mean ? std::optional<const Tensor>(mean.value()) : std::nullopt;
 
     std::optional<Tensor> rstd = std::nullopt;
     if (rstd_inp.has_value()) {
         rstd = output_tensor.at(2);
     }
-    const std::optional<const Tensor> rstd_as_tensor = rstd ? std::optional<const Tensor>(rstd.value()) : std::nullopt;
 
     auto normalized_dims = operation_attributes.normalized_dims;
     auto eps = operation_attributes.eps;
@@ -128,7 +137,7 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     const uint32_t block_size = find_divisor_with_max_block_size(num_inner, MAX_BLOCK_SIZE);
 
     ////////////////////////////////////////////////////////////////////////////
-    //                         CircularBuffer Setup
+    //                         DataflowBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     uint32_t in0_t = num_inner;                                   // input
     const uint32_t in1_t = 1;                                     // scaler
@@ -172,169 +181,379 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
         log_info(tt::LogTest, "Small moreh_layer_norm algorithm is selected.");
     }
 
-    ProgramDescriptor desc;
+    ////////////////////////////////////////////////////////////////////////////
+    //                    Metal 2.0 resource names
+    ////////////////////////////////////////////////////////////////////////////
+    // DFB specs (one per legacy CB index). Optional ones are only pushed when present, matching the
+    // legacy push_cb skip-zero-size behavior.
+    const m2::DFBSpecName INPUT_DFB{"moreh_ln_input"};           // c_0
+    const m2::DFBSpecName SCALER_DFB{"moreh_ln_scaler"};         // c_1
+    const m2::DFBSpecName EPS_DFB{"moreh_ln_eps"};               // c_2
+    const m2::DFBSpecName GAMMA_DFB{"moreh_ln_gamma"};           // c_3
+    const m2::DFBSpecName BETA_DFB{"moreh_ln_beta"};             // c_4
+    const m2::DFBSpecName MASK_H_DFB{"moreh_ln_mask_h"};         // c_5
+    const m2::DFBSpecName MASK_W_DFB{"moreh_ln_mask_w"};         // c_6
+    const m2::DFBSpecName OUT_DFB{"moreh_ln_out"};               // c_16
+    const m2::DFBSpecName MEAN_DFB{"moreh_ln_mean"};             // c_17
+    const m2::DFBSpecName RSTD_DFB{"moreh_ln_rstd"};             // c_18
+    const m2::DFBSpecName EX_DFB{"moreh_ln_ex"};                 // c_24
+    const m2::DFBSpecName XMM_DFB{"moreh_ln_xmm"};               // c_25
+    const m2::DFBSpecName XMM2_DFB{"moreh_ln_xmm2"};             // c_26
+    const m2::DFBSpecName XMM2SUM_DFB{"moreh_ln_xmm2sum"};       // c_27
+    const m2::DFBSpecName VAR_DFB{"moreh_ln_var"};               // c_28
+    const m2::DFBSpecName RECIP_STD_DFB{"moreh_ln_recipstd"};    // c_29
+    const m2::DFBSpecName GAMMA_BETA_DFB{"moreh_ln_gammabeta"};  // c_30
+    const m2::DFBSpecName XSUM_DFB{"moreh_ln_xsum"};             // c_31
 
-    // ---- Circular buffers ----
-    // Helper to push a CB with a given index, num_tiles, and data format.
-    auto push_cb = [&](uint8_t cb_index, uint32_t num_tiles, tt::DataFormat fmt) {
+    const m2::TensorParamName INPUT_T{"moreh_ln_input_t"};
+    const m2::TensorParamName GAMMA_T{"moreh_ln_gamma_t"};
+    const m2::TensorParamName BETA_T{"moreh_ln_beta_t"};
+    const m2::TensorParamName OUTPUT_T{"moreh_ln_output_t"};
+    const m2::TensorParamName MEAN_T{"moreh_ln_mean_t"};
+    const m2::TensorParamName RSTD_T{"moreh_ln_rstd_t"};
+
+    const m2::KernelSpecName READER{"moreh_ln_reader"};
+    const m2::KernelSpecName WRITER{"moreh_ln_writer"};
+    const m2::KernelSpecName COMPUTE_G1{"moreh_ln_compute_g1"};
+    const m2::KernelSpecName COMPUTE_G2{"moreh_ln_compute_g2"};
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                    DataflowBufferSpecs
+    ////////////////////////////////////////////////////////////////////////////
+    std::vector<m2::DataflowBufferSpec> dfbs;
+    auto push_dfb = [&](const m2::DFBSpecName& name, uint32_t num_tiles, tt::DataFormat fmt) {
         if (num_tiles == 0) {
-            // Preserve original behavior: skip zero-size CBs.
+            // Preserve original behavior: skip zero-size (absent optional) buffers.
             return;
         }
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = num_tiles * tile_size(fmt),
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = cb_index,
-                .data_format = fmt,
-                .page_size = tile_size(fmt),
-            }}},
+        dfbs.push_back(m2::DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = static_cast<uint32_t>(tile_size(fmt)),
+            .num_entries = num_tiles,
+            .data_format_metadata = fmt,
         });
     };
 
-    push_cb(static_cast<uint8_t>(CBIndex::c_0), in0_t, cb_data_format);       // input
-    push_cb(static_cast<uint8_t>(CBIndex::c_1), in1_t, cb_data_format);       // scaler
-    push_cb(static_cast<uint8_t>(CBIndex::c_2), in2_t, cb_data_format);       // epsilon
-    push_cb(static_cast<uint8_t>(CBIndex::c_3), in3_t, cb_data_format);       // gamma
-    push_cb(static_cast<uint8_t>(CBIndex::c_4), in4_t, cb_data_format);       // beta
-    push_cb(static_cast<uint8_t>(CBIndex::c_5), in5_t, cb_data_format);       // mask_h
-    push_cb(static_cast<uint8_t>(CBIndex::c_6), in6_t, cb_data_format);       // mask_w
-    push_cb(static_cast<uint8_t>(CBIndex::c_16), out0_t, cb_data_format);     // output
-    push_cb(static_cast<uint8_t>(CBIndex::c_17), out1_t, cb_data_format);     // mean
-    push_cb(static_cast<uint8_t>(CBIndex::c_18), out2_t, cb_data_format);     // rstd
-    push_cb(static_cast<uint8_t>(CBIndex::c_24), im0_t, intermed_cb_format);  // E[x]
-    push_cb(static_cast<uint8_t>(CBIndex::c_25), im1_t, intermed_cb_format);  // x - E[x]
-    push_cb(static_cast<uint8_t>(CBIndex::c_26), im2_t, intermed_cb_format);  // (x - E[x])^2
-    push_cb(static_cast<uint8_t>(CBIndex::c_27), im3_t, intermed_cb_format);  // Sum[(x - E[x])^2]
-    push_cb(static_cast<uint8_t>(CBIndex::c_28), im4_t, intermed_cb_format);  // E[(x - E[x])^2] = Var[x]
-    push_cb(static_cast<uint8_t>(CBIndex::c_29), im5_t, intermed_cb_format);  // 1.0/(sqrt(Var[x] + eps))
-    push_cb(static_cast<uint8_t>(CBIndex::c_30), im6_t, intermed_cb_format);  // y * gamm + beta
-    push_cb(static_cast<uint8_t>(CBIndex::c_31), im7_t, intermed_cb_format);  // Sum[x]
+    push_dfb(INPUT_DFB, in0_t, cb_data_format);
+    push_dfb(SCALER_DFB, in1_t, cb_data_format);
+    push_dfb(EPS_DFB, in2_t, cb_data_format);
+    push_dfb(GAMMA_DFB, in3_t, cb_data_format);
+    push_dfb(BETA_DFB, in4_t, cb_data_format);
+    push_dfb(MASK_H_DFB, in5_t, cb_data_format);
+    push_dfb(MASK_W_DFB, in6_t, cb_data_format);
+    push_dfb(OUT_DFB, out0_t, cb_data_format);
+    push_dfb(MEAN_DFB, out1_t, cb_data_format);
+    push_dfb(RSTD_DFB, out2_t, cb_data_format);
+    push_dfb(EX_DFB, im0_t, intermed_cb_format);
+    push_dfb(XMM_DFB, im1_t, intermed_cb_format);
+    push_dfb(XMM2_DFB, im2_t, intermed_cb_format);
+    push_dfb(XMM2SUM_DFB, im3_t, intermed_cb_format);
+    push_dfb(VAR_DFB, im4_t, intermed_cb_format);
+    push_dfb(RECIP_STD_DFB, im5_t, intermed_cb_format);
+    push_dfb(GAMMA_BETA_DFB, im6_t, intermed_cb_format);
+    push_dfb(XSUM_DFB, im7_t, intermed_cb_format);
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      DataMovementKernel SetUp
+    //                    Kernel sources (small / large selection)
     ////////////////////////////////////////////////////////////////////////////
-    KernelDescriptor::CompileTimeArgs reader_compile_time_args{block_size};
-    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
-
-    KernelDescriptor::CompileTimeArgs writer_compile_time_args{
-        static_cast<uint32_t>(mean_has_value), static_cast<uint32_t>(rstd_has_value), block_size};
-    tt::tt_metal::TensorAccessorArgs(output->buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(mean_as_tensor ? mean_as_tensor->buffer() : nullptr)
-        .append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(rstd_as_tensor ? rstd_as_tensor->buffer() : nullptr)
-        .append_to(writer_compile_time_args);
-
-    std::map<std::string, std::string> reader_defines_map{};
-    std::map<std::string, std::string> compute_defines_map{};
-    if (gamma_has_value) {
-        reader_defines_map["GAMMA_HAS_VALUE"] = "1";
-    }
-    if (beta_has_value) {
-        reader_defines_map["BETA_HAS_VALUE"] = "1";
-    }
-    if (do_mask_h) {
-        reader_defines_map["DO_MASK_H"] = "1";
-    }
-    if (do_mask_w) {
-        reader_defines_map["DO_MASK_W"] = "1";
-    }
-    compute_defines_map["REDUCE_OP"] = "PoolType::AVG";
-    if (is_lastdim_layer_norm) {
-        compute_defines_map["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
-    } else {
-        compute_defines_map["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
-    }
-    if (fp32_dest_acc_en) {
-        reader_defines_map["FP32_DEST_ACC_EN"] = "1";
-        compute_defines_map["FP32_DEST_ACC_EN"] = "1";
-    }
-
-    KernelDescriptor::Defines reader_defines(reader_defines_map.begin(), reader_defines_map.end());
-    KernelDescriptor::Defines compute_defines(compute_defines_map.begin(), compute_defines_map.end());
-
-    const auto* const reader_kernel_file =
+    const char* reader_kernel_file =
         use_large_algorithm
             ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/reader_moreh_layer_norm_large.cpp"
             : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/reader_moreh_layer_norm_small.cpp";
-    const auto* const writer_kernel_file =
+    const char* writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/writer_moreh_layer_norm.cpp";
+    // Metal 2.0 forks of the compute kernels. The legacy compute sources are still borrowed by file
+    // path by moreh_group_norm (not yet ported), so they are left untouched; these _metal2 copies
+    // carry the DFB / named-arg / #ifdef conversion.
+    const char* compute_kernel_file = use_large_algorithm
+                                          ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/"
+                                            "moreh_layer_norm_large_kernel_metal2.cpp"
+                                          : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/"
+                                            "moreh_layer_norm_small_kernel_metal2.cpp";
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = reader_kernel_file;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.defines = reader_defines;
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = writer_kernel_file;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    const auto* const compute_kernel_file =
-        use_large_algorithm
-            ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp"
-            : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp";
-
-    KernelDescriptor compute_desc_1;
-    compute_desc_1.kernel_source = compute_kernel_file;
-    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc_1.core_ranges = core_group_1;
-    compute_desc_1.compile_time_args = {
-        num_rows_per_core_group_1,
-        origin_H,
-        origin_W,
-        num_inner,
-        block_size,
-        static_cast<uint32_t>(gamma_has_value),
-        static_cast<uint32_t>(beta_has_value),
-        static_cast<uint32_t>(mean_has_value),
-        static_cast<uint32_t>(rstd_has_value),
-        static_cast<uint32_t>(is_lastdim_layer_norm),
-        static_cast<uint32_t>(is_groupnorm)};
-    compute_desc_1.defines = compute_defines;
-    compute_desc_1.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode,
-    };
-
-    KernelDescriptor compute_desc_2;
-    const bool has_core_group_2 = !core_group_2.ranges().empty();
-    if (has_core_group_2) {
-        compute_desc_2.kernel_source = compute_kernel_file;
-        compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc_2.core_ranges = core_group_2;
-        compute_desc_2.compile_time_args = {
-            num_rows_per_core_group_2,
-            origin_H,
-            origin_W,
-            num_inner,
-            block_size,
-            static_cast<uint32_t>(gamma_has_value),
-            static_cast<uint32_t>(beta_has_value),
-            static_cast<uint32_t>(mean_has_value),
-            static_cast<uint32_t>(rstd_has_value),
-            static_cast<uint32_t>(is_lastdim_layer_norm),
-            static_cast<uint32_t>(is_groupnorm)};
-        compute_desc_2.defines = compute_defines;
-        compute_desc_2.config = ComputeConfigDescriptor{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
-            .math_approx_mode = math_approx_mode,
-        };
+    ////////////////////////////////////////////////////////////////////////////
+    //                    Defines
+    ////////////////////////////////////////////////////////////////////////////
+    m2::KernelSpec::CompilerOptions::Defines reader_defines;
+    m2::KernelSpec::CompilerOptions::Defines compute_defines;
+    m2::KernelSpec::CompilerOptions::Defines writer_defines;
+    if (gamma_has_value) {
+        reader_defines.emplace("GAMMA_HAS_VALUE", "1");
+        compute_defines.emplace("GAMMA_HAS_VALUE", "1");
+    }
+    if (beta_has_value) {
+        reader_defines.emplace("BETA_HAS_VALUE", "1");
+        compute_defines.emplace("BETA_HAS_VALUE", "1");
+    }
+    if (gamma_has_value || beta_has_value) {
+        // Gate for the c_30 (gamma*+beta) intermediate DFB and the cb_gamma_beta_or_out selection.
+        compute_defines.emplace("GAMMA_OR_BETA", "1");
+    }
+    if (do_mask_h) {
+        reader_defines.emplace("DO_MASK_H", "1");
+        compute_defines.emplace("DO_MASK_H", "1");
+    }
+    if (do_mask_w) {
+        reader_defines.emplace("DO_MASK_W", "1");
+        compute_defines.emplace("DO_MASK_W", "1");
+    }
+    if (mean_has_value) {
+        compute_defines.emplace("MEAN_HAS_VALUE", "1");
+        writer_defines.emplace("MEAN_HAS_VALUE", "1");
+    }
+    if (rstd_has_value) {
+        compute_defines.emplace("RSTD_HAS_VALUE", "1");
+        writer_defines.emplace("RSTD_HAS_VALUE", "1");
+    }
+    compute_defines.emplace("REDUCE_OP", "PoolType::AVG");
+    if (is_lastdim_layer_norm) {
+        compute_defines.emplace("REDUCE_DIM", "ReduceDim::REDUCE_ROW");
+    } else {
+        compute_defines.emplace("REDUCE_DIM", "ReduceDim::REDUCE_SCALAR");
+    }
+    if (fp32_dest_acc_en) {
+        reader_defines.emplace("FP32_DEST_ACC_EN", "1");
+        compute_defines.emplace("FP32_DEST_ACC_EN", "1");
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      RuntimeArgs SetUp
+    //                    Reader / Writer KernelSpecs
+    ////////////////////////////////////////////////////////////////////////////
+    m2::Group<m2::DFBBinding> reader_dfb_bindings = {
+        m2::DFBBinding{
+            .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+        m2::DFBBinding{
+            .dfb_spec_name = SCALER_DFB, .accessor_name = "scaler", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+        m2::DFBBinding{
+            .dfb_spec_name = EPS_DFB, .accessor_name = "eps", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+    };
+    m2::Group<m2::TensorBinding> reader_tensor_bindings = {
+        m2::TensorBinding{.tensor_parameter_name = INPUT_T, .accessor_name = "input"},
+    };
+    if (gamma_has_value) {
+        reader_dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = GAMMA_DFB, .accessor_name = "gamma", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        reader_tensor_bindings.push_back(m2::TensorBinding{.tensor_parameter_name = GAMMA_T, .accessor_name = "gamma"});
+    }
+    if (beta_has_value) {
+        reader_dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = BETA_DFB, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        reader_tensor_bindings.push_back(m2::TensorBinding{.tensor_parameter_name = BETA_T, .accessor_name = "beta"});
+    }
+    if (do_mask_h) {
+        reader_dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = MASK_H_DFB, .accessor_name = "mask_h", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+    }
+    if (do_mask_w) {
+        reader_dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = MASK_W_DFB, .accessor_name = "mask_w", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+    }
+
+    m2::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = std::filesystem::path(reader_kernel_file),
+        .compiler_options = {.defines = reader_defines},
+        .dfb_bindings = reader_dfb_bindings,
+        .tensor_bindings = reader_tensor_bindings,
+        .compile_time_args = {{"block_size", block_size}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"num_rows_per_core", "num_inner", "tile_offset", "scaler", "eps", "mask_h", "mask_w"}},
+        .hw_config = ttnn::create_reader_datamovement_config(arch),
+    };
+
+    m2::Group<m2::DFBBinding> writer_dfb_bindings = {
+        m2::DFBBinding{
+            .dfb_spec_name = OUT_DFB, .accessor_name = "output", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+    };
+    m2::Group<m2::TensorBinding> writer_tensor_bindings = {
+        m2::TensorBinding{.tensor_parameter_name = OUTPUT_T, .accessor_name = "output"},
+    };
+    if (mean_has_value) {
+        writer_dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = MEAN_DFB, .accessor_name = "mean", .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        writer_tensor_bindings.push_back(m2::TensorBinding{.tensor_parameter_name = MEAN_T, .accessor_name = "mean"});
+    }
+    if (rstd_has_value) {
+        writer_dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = RSTD_DFB, .accessor_name = "rstd", .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        writer_tensor_bindings.push_back(m2::TensorBinding{.tensor_parameter_name = RSTD_T, .accessor_name = "rstd"});
+    }
+
+    m2::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = std::filesystem::path(writer_kernel_file),
+        .compiler_options = {.defines = writer_defines},
+        .dfb_bindings = writer_dfb_bindings,
+        .tensor_bindings = writer_tensor_bindings,
+        .compile_time_args = {{"block_size", block_size}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"num_rows_per_core",
+                  "num_inner",
+                  "tile_offset",
+                  "mean_rstd_height",
+                  "mean_rstd_width",
+                  "normalized_dims"}},
+        .hw_config = ttnn::create_writer_datamovement_config(arch),
+    };
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                    Compute KernelSpecs (one per work-split group)
+    ////////////////////////////////////////////////////////////////////////////
+    // Compute config: Style A — the op resolves a TTNN ComputeKernelConfig, so translate it with
+    // to_compute_hardware_config (fpu_math_fidelity / sfpu_precision_mode / enable_32_bit_dest /
+    // double_buffer_dest). This reproduces the legacy ComputeConfigDescriptor's four knobs exactly.
+    auto compute_hw = ttnn::to_compute_hardware_config(
+        arch,
+        ttnn::ComputeKernelConfig{
+            .math_fidelity = math_fidelity,
+            .math_approx_mode = math_approx_mode,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+        });
+
+    // unpack_modes: the validator requires an explicit entry for every Float32 DFB the compute kernel
+    // consumes when enable_32_bit_dest (fp32_dest_acc_en) is true. The legacy op set no
+    // unpack_to_dest_mode (all Default) → UnpackToSrc. Only the intermediate DFBs are Float32 (and only
+    // when fp32_dest_acc_en); the bfloat16 input/scaler/etc DFBs need no entry.
+    if (fp32_dest_acc_en) {
+        m2::ComputeUnpackModes unpack_modes;
+        unpack_modes.emplace(EX_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        unpack_modes.emplace(XMM_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        unpack_modes.emplace(XMM2_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        unpack_modes.emplace(XMM2SUM_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        unpack_modes.emplace(VAR_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        unpack_modes.emplace(RECIP_STD_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        unpack_modes.emplace(XSUM_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        if (gamma_has_value || beta_has_value) {
+            unpack_modes.emplace(GAMMA_BETA_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
+        std::visit([&](auto& cfg) { cfg.unpack_modes = unpack_modes; }, compute_hw);
+    }
+
+    auto make_compute_dfb_bindings = [&]() {
+        m2::Group<m2::DFBBinding> b = {
+            m2::DFBBinding{
+                .dfb_spec_name = INPUT_DFB, .accessor_name = "x", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{
+                .dfb_spec_name = SCALER_DFB, .accessor_name = "scaler", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{
+                .dfb_spec_name = EPS_DFB, .accessor_name = "eps", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{
+                .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+        };
+        if (gamma_has_value) {
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = GAMMA_DFB, .accessor_name = "gamma", .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
+        if (beta_has_value) {
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = BETA_DFB, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
+        if (do_mask_h) {
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = MASK_H_DFB,
+                .accessor_name = "mask_h",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
+        if (do_mask_w) {
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = MASK_W_DFB,
+                .accessor_name = "mask_w",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
+        if (mean_has_value) {
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = MEAN_DFB, .accessor_name = "mean", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        }
+        if (rstd_has_value) {
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RSTD_DFB, .accessor_name = "rstd", .endpoint_type = m2::DFBEndpointType::PRODUCER});
+        }
+        // Self-loop intermediates: each compute KernelSpec both produces and consumes them.
+        auto self_loop = [&](const m2::DFBSpecName& name, const char* acc) {
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = name, .accessor_name = acc, .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = name, .accessor_name = acc, .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        };
+        self_loop(EX_DFB, "ex");
+        self_loop(XMM_DFB, "xmm");
+        self_loop(XMM2_DFB, "xmm2");
+        self_loop(XMM2SUM_DFB, "xmm2sum");
+        self_loop(VAR_DFB, "var");
+        self_loop(RECIP_STD_DFB, "recip_std");
+        if (gamma_has_value || beta_has_value) {
+            self_loop(GAMMA_BETA_DFB, "gamma_beta");
+        }
+        self_loop(XSUM_DFB, "xsum");
+        return b;
+    };
+
+    auto make_compute = [&](const m2::KernelSpecName& id, uint32_t num_rows_per_core_group) {
+        return m2::KernelSpec{
+            .unique_id = id,
+            .source = std::filesystem::path(compute_kernel_file),
+            .compiler_options = {.defines = compute_defines},
+            .dfb_bindings = make_compute_dfb_bindings(),
+            .compile_time_args =
+                {{"num_rows_per_core", num_rows_per_core_group},
+                 {"origin_H", static_cast<uint32_t>(origin_H)},
+                 {"origin_W", static_cast<uint32_t>(origin_W)},
+                 {"num_inner", num_inner},
+                 {"block_size", block_size},
+                 {"is_lastdim_layernorm", static_cast<uint32_t>(is_lastdim_layer_norm)},
+                 {"is_groupnorm", static_cast<uint32_t>(is_groupnorm)}},
+            .hw_config = compute_hw,
+        };
+    };
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                    Assemble kernels + work units
+    ////////////////////////////////////////////////////////////////////////////
+    m2::Group<m2::KernelSpec> kernels = {reader_spec, writer_spec};
+    m2::Group<m2::WorkUnitSpec> work_units;
+
+    kernels.push_back(make_compute(COMPUTE_G1, num_rows_per_core_group_1));
+    work_units.push_back(
+        m2::WorkUnitSpec{.name = "moreh_ln_g1", .kernels = {READER, WRITER, COMPUTE_G1}, .target_nodes = core_group_1});
+
+    const bool has_core_group_2 = !core_group_2.ranges().empty();
+    if (has_core_group_2) {
+        kernels.push_back(make_compute(COMPUTE_G2, num_rows_per_core_group_2));
+        work_units.push_back(m2::WorkUnitSpec{
+            .name = "moreh_ln_g2", .kernels = {READER, WRITER, COMPUTE_G2}, .target_nodes = core_group_2});
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                    TensorParameters
+    ////////////////////////////////////////////////////////////////////////////
+    // Bind against the real io tensors (from tensor_args / output_tensor) — the framework matches a
+    // TensorArgument back to its parameter by MeshTensor identity, so a copy (e.g. the local
+    // optional<const Tensor> views above) must not be used here.
+    const Tensor& output_ref = output_tensor.at(0).value();
+    m2::Group<m2::TensorParameter> tensor_parameters = {
+        m2::TensorParameter{.unique_id = INPUT_T, .spec = input.tensor_spec()},
+        m2::TensorParameter{.unique_id = OUTPUT_T, .spec = output_ref.tensor_spec()},
+    };
+    if (gamma_has_value) {
+        tensor_parameters.push_back(m2::TensorParameter{.unique_id = GAMMA_T, .spec = gamma->tensor_spec()});
+    }
+    if (beta_has_value) {
+        tensor_parameters.push_back(m2::TensorParameter{.unique_id = BETA_T, .spec = beta->tensor_spec()});
+    }
+    if (mean_has_value) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = MEAN_T, .spec = output_tensor.at(1).value().tensor_spec()});
+    }
+    if (rstd_has_value) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = RSTD_T, .spec = output_tensor.at(2).value().tensor_spec()});
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                    RuntimeArgs (name-first, per node)
     ////////////////////////////////////////////////////////////////////////////
     float scaler_f = 0.0f;
     if (normalized_dims == 1) {
@@ -349,25 +568,13 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
         scaler_f = 1.0f / std::sqrt(static_cast<float>(reduce_size));
     }
     const uint32_t scaler_u = std::bit_cast<uint32_t>(scaler_f);
-
     const uint32_t e_u = std::bit_cast<uint32_t>(eps);  // epsilon
 
-    auto* const input_buf = input.buffer();
-    auto* const output_buf = output->buffer();
-
-    // Pass tensor buffers as Buffer* (nullptr when the optional is absent) so the
-    // ProgramDescriptor framework registers them as BufferBindings and patches their
-    // addresses on program-cache hits. Raw uint32_t addresses here would be baked in on
-    // the first dispatch and go stale once these tensors are reallocated on a later call,
-    // because the presence of the input/output Buffer* bindings already puts this op on
-    // the fast cache-hit path (which skips create_descriptor() and only patches bindings).
-    auto* const gamma_buf = gamma_has_value ? gamma.value().buffer() : nullptr;
-    auto* const beta_buf = beta_has_value ? beta.value().buffer() : nullptr;
-    auto* const mean_buf = mean_has_value ? mean.value().buffer() : nullptr;
-    auto* const rstd_buf = rstd_has_value ? rstd.value().buffer() : nullptr;
+    m2::KernelRunArgs::RuntimeArgValues reader_args, writer_args;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        const m2::NodeCoord node{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)};
 
         uint32_t num_rows_per_core;
         if (core_group_1.contains(core)) {
@@ -378,33 +585,62 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
             TT_THROW("Core not in specified core ranges.");
         }
 
-        reader_desc.emplace_runtime_args(
-            core,
-            {input_buf, gamma_buf, beta_buf, num_rows_per_core, num_inner, tile_offset, scaler_u, e_u, mask_h, mask_w});
+        reader_args["num_rows_per_core"][node] = num_rows_per_core;
+        reader_args["num_inner"][node] = num_inner;
+        reader_args["tile_offset"][node] = tile_offset;
+        reader_args["scaler"][node] = scaler_u;
+        reader_args["eps"][node] = e_u;
+        reader_args["mask_h"][node] = mask_h;
+        reader_args["mask_w"][node] = mask_w;
 
-        writer_desc.emplace_runtime_args(
-            core,
-            {output_buf,
-             mean_buf,
-             rstd_buf,
-             num_rows_per_core,
-             num_inner,
-             tile_offset,
-             mean_rstd_height,
-             mean_rstd_width,
-             normalized_dims});
+        writer_args["num_rows_per_core"][node] = num_rows_per_core;
+        writer_args["num_inner"][node] = num_inner;
+        writer_args["tile_offset"][node] = tile_offset;
+        writer_args["mean_rstd_height"][node] = mean_rstd_height;
+        writer_args["mean_rstd_width"][node] = mean_rstd_width;
+        writer_args["normalized_dims"][node] = normalized_dims;
 
         tile_offset += num_rows_per_core * num_inner;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc_1));
-    if (has_core_group_2) {
-        desc.kernels.push_back(std::move(compute_desc_2));
+    ////////////////////////////////////////////////////////////////////////////
+    //                    Assemble ProgramSpec + ProgramRunArgs
+    ////////////////////////////////////////////////////////////////////////////
+    m2::ProgramSpec spec{
+        .name = "moreh_layer_norm",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dfbs),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = std::move(work_units),
+    };
+
+    m2::ProgramRunArgs run_params;
+    run_params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = READER, .runtime_arg_values = std::move(reader_args)},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = WRITER, .runtime_arg_values = std::move(writer_args)},
+    };
+
+    run_params.tensor_args.emplace(INPUT_T, m2::ProgramRunArgs::TensorArgument{input.mesh_tensor()});
+    run_params.tensor_args.emplace(OUTPUT_T, m2::ProgramRunArgs::TensorArgument{output_ref.mesh_tensor()});
+    if (gamma_has_value) {
+        run_params.tensor_args.emplace(GAMMA_T, m2::ProgramRunArgs::TensorArgument{gamma->mesh_tensor()});
+    }
+    if (beta_has_value) {
+        run_params.tensor_args.emplace(BETA_T, m2::ProgramRunArgs::TensorArgument{beta->mesh_tensor()});
+    }
+    if (mean_has_value) {
+        run_params.tensor_args.emplace(
+            MEAN_T, m2::ProgramRunArgs::TensorArgument{output_tensor.at(1).value().mesh_tensor()});
+    }
+    if (rstd_has_value) {
+        run_params.tensor_args.emplace(
+            RSTD_T, m2::ProgramRunArgs::TensorArgument{output_tensor.at(2).value().mesh_tensor()});
     }
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_params),
+    };
 }
 
 }  // namespace ttnn::operations::moreh::moreh_layer_norm
