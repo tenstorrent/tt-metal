@@ -54,12 +54,11 @@ _GRPO_EXAMPLES_DIR = os.path.join(
     "tt-train",
     "sources",
     "examples",
-    "grpo",
 )
 if _GRPO_EXAMPLES_DIR not in sys.path:
     sys.path.insert(0, _GRPO_EXAMPLES_DIR)
 
-from utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter  # noqa: E402
+from grpo.utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter  # noqa: E402
 
 
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
@@ -178,7 +177,7 @@ class _RecordingCallback(TrainerCallback):
 @pytest.fixture
 def patch_llama_weight_loading(monkeypatch):
     """Skip the HF download / safetensors load so the tiny model keeps random init."""
-    from utils import llama_completer
+    from grpo.utils import llama_completer
 
     monkeypatch.setattr(llama_completer, "snapshot_download", lambda *args, **kwargs: "/tmp/unused")
     monkeypatch.setattr(llama_completer, "load_from_safetensors", lambda *args, **kwargs: None)

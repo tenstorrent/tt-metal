@@ -17,11 +17,11 @@ import ttml
 import ttnn
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, load_config
-from utils.llama_ttt_presets import (
+from grpo_remote_rollout.utils.llama_ttt_presets import (
     bf16_attn_bfp8_mlp_optimizations,
     llama_stop_and_pad,
 )
-from utils.ttt_generation_worker import TttGenerationWorker
+from grpo_remote_rollout.utils.ttt_generation_worker import TttGenerationWorker
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_1dev.yaml"
