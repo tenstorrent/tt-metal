@@ -38,8 +38,9 @@ template <
     int num_total_experts = 256,
     bool zero_tail = false,
     bool full_sort = false,
-    bool generate_indices = true>
-ALWI void generic_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale) {
+    bool generate_indices = true,
+    bool do_extra_scale = false>
+ALWI void generic_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale, uint32_t extra_scale = 0) {
     static_assert(num_selected_experts >= 1 && num_selected_experts <= 16);
 
     // Copy add (FPU)
@@ -54,7 +55,8 @@ ALWI void generic_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t 
           num_total_experts,
           zero_tail,
           full_sort,
-          generate_indices>(eps, scale)));
+          generate_indices,
+          do_extra_scale>(eps, scale, extra_scale)));
 }
 
 #endif

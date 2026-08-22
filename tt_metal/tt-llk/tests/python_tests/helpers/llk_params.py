@@ -806,6 +806,14 @@ class TopKXLChunkBaseMode(Enum):
     Runtime = 2
 
 
+class TopKXLSortMode(Enum):
+    """Which local-sort entry point the topk_xl kernel calls."""
+
+    Dispatch = 0
+    Generic = 1
+    EarlyExitK64 = 2
+
+
 class VectorMode(Enum):
     """Mirrors ckernel::VectorMode in tt_llk_quasar/llk_lib/llk_defs.h.
 
