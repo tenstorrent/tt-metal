@@ -233,14 +233,16 @@ std::vector<Tensor> post_topk_transform_tensor(
 // input width; every other stage works on [rows, k_rounded <= 2048] tensors
 // (topk_route_finish reads 64 B per selected element, not whole rows).
 
-// k <= 64 keeps the device op's fast multi-core bitonic path when that path
-// is eligible (padded width in [8192, 65535), power of two, cost check).
+// k <= 64 is the device op's multi-core bitonic regime when that path is
+// eligible (padded width in [8192, 65535), power of two, cost check).
 // When it is NOT eligible the stock op falls to the single-core factory,
 // which is linear in width (~137 ns/elem measured on p150a: 695 us at
 // W=5000, 1.38 ms at 10000, 6.87 ms at 50000, 9.49 ms at 65536) while the
-// routed composite is tens of microseconds. The small-k arm below therefore
-// routes exactly the structurally-ineligible cells; eligible pow2 cells keep
-// the bitonic path unchanged.
+// routed composite is tens of microseconds. The small-k arm below routes
+// two regions: (a) the structurally-ineligible cells (wide arm), and (b) the
+// bitonic-eligible pow2 [8192, 65535) band itself (bitonic-band arm), where
+// the routed composite also measures faster than the bitonic because the
+// bitonic's final gather-merge stage is serial (see the arm comments below).
 constexpr uint32_t large_k_route_min_k_exclusive = 64;
 // Small-k arm floor (on the tile-padded width): below this the single-core
 // fallback is already sub-ms and the routed composite's fixed envelope is
@@ -310,7 +312,16 @@ bool should_route_to_topk_large_indices(
                                                        !is_pow2 ||
                                                        padded_width < ttnn::prim::constants::multi_core_min_width;
         const bool wide_arm = multicore_structurally_ineligible && padded_width >= small_k_route_min_padded_width;
-        if (!wide_arm) {
+        // Bitonic-band arm: pow2 widths in [8192, 65535) with k <= 64 ARE
+        // eligible for the stock multi-core bitonic, but the routed composite
+        // measures faster there as well (p150a, Tracy device kernel duration,
+        // 3 trials, full prep+op+finish+slice chain): 32x8192 k=50 263.5 ->
+        // 67.4 us, 32x32768 k=64 333.8 -> 178.6 us. The bitonic's serial
+        // final gather-merge stage scales with num_cores * k while the routed
+        // chain stays column-parallel end to end.
+        const bool bitonic_band_arm = is_pow2 && padded_width >= ttnn::prim::constants::multi_core_min_width &&
+                                      padded_width < std::numeric_limits<uint16_t>::max();
+        if (!wide_arm && !bitonic_band_arm) {
             return false;
         }
     }
@@ -537,12 +548,14 @@ std::vector<Tensor> topk(
     Tensor transformed_tensor = ::reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
 
     // Blackhole routing onto ttnn::experimental::topk_large_indices covers
-    // two regions that otherwise land on the linear single-core factory:
-    // k in (64, 2048] (off the multi-core k <= 64 gate), and k <= 64 rows
-    // whose padded width is structurally ineligible for the multi-core
-    // bitonic (>= 65535, non-pow2, or pow2 below the 8192 multi-core floor)
-    // at padded width >= 4096. See the comment block on
-    // should_route_to_topk_large_indices for the full predicate and contract.
+    // three regions: k in (64, 2048] (off the multi-core k <= 64 gate, would
+    // land on the linear single-core factory), k <= 64 rows whose padded
+    // width is structurally ineligible for the multi-core bitonic (>= 65535,
+    // non-pow2, or pow2 below the 8192 multi-core floor) at padded width
+    // >= 4096, and k <= 64 rows in the bitonic-eligible pow2 [8192, 65535)
+    // band where the routed composite outruns the bitonic itself. See the
+    // comment block on should_route_to_topk_large_indices for the full
+    // predicate and contract.
     if (operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::should_route_to_topk_large_indices(
             transformed_tensor,
             k,

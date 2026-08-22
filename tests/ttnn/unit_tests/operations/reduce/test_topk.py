@@ -549,16 +549,22 @@ def test_topk_multicore_values_beyond_first_tile_row(num_rows, largest, device):
 
 
 # ---------------------------------------------------------------------------
-# Large-k Blackhole routing: ttnn.topk with bf16, dim=-1, largest=True,
-# stable=False and 64 < k <= 2048 is routed at the composite level through
-# ttnn.experimental.topk_large_indices (fused untilize+clamp to lowest-finite
-# bf16 — the private topk_route_prep device op, exercised by EVERY routed
-# call below -> op -> fused gather of the ORIGINAL values straight from the
-# TILE source + TILE assembly of both outputs + index dtype emit — the
-# private topk_route_finish device op, also exercised by EVERY routed call;
-# a slice pair only when k is not a multiple of 16), bypassing the
-# single-core cliff (the device op's own multi-core path is gated at
-# k <= 64 + pow2 width + width < 65536).
+# Blackhole routing suite: ttnn.topk with bf16, dim=-1, largest=True,
+# stable=False is routed at the composite level through
+# ttnn.experimental.topk_large_indices for two k regions:
+#   * large-k: 64 < k <= 2048, bypassing the single-core cliff (the device
+#     op's own multi-core path is gated at k <= 64 + pow2 width +
+#     width < 65536);
+#   * small-k (k <= 64): widths structurally ineligible for the multi-core
+#     bitonic (>= 65535, non-pow2, or pow2 below 8192, at padded width
+#     >= 4096) PLUS the bitonic-eligible pow2 [8192, 65535) band, where the
+#     routed composite measured faster than the bitonic (see topk.cpp).
+# The routed chain is the same in both regions: fused untilize+clamp to
+# lowest-finite bf16 — the private topk_route_prep device op, exercised by
+# EVERY routed call below -> op -> fused gather of the ORIGINAL values
+# straight from the TILE source + TILE assembly of both outputs + index
+# dtype emit — the private topk_route_finish device op, also exercised by
+# EVERY routed call; a slice pair only when k is not a multiple of 16.
 #
 # Tie semantics on the routed path: the returned index SET is a correct top-k
 # set with deterministic-but-unspecified tie order, so these tests assert
@@ -613,6 +619,16 @@ def run_topk_large_k_routed_test(N, C, H, W, k, device):
 def test_topk_large_k_routed(k, W, device):
     # All combos take the routed (topk_large_indices) path: bf16, dim=-1,
     # largest=True, stable=False, 64 < k <= 2048, W <= 2^19.
+    run_topk_large_k_routed_test(1, 1, 32, W, k, device)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="large-k routing is Blackhole-only")
+@pytest.mark.parametrize("k, W", [(32, 8192), (50, 8192), (64, 32768)])
+def test_topk_small_k_routed_bitonic_band(k, W, device):
+    # Bitonic-band arm of the small-k route: pow2 widths in [8192, 65535) with
+    # k <= 64 are eligible for the stock multi-core bitonic but route to the
+    # topk_large_indices composite (measured faster; see topk.cpp). k=50
+    # exercises the k % 16 != 0 rounding tail inside the band.
     run_topk_large_k_routed_test(1, 1, 32, W, k, device)
 
 
@@ -784,8 +800,17 @@ def test_topk_large_k_routing_engages(device):
     ttnn.topk(ttnn_input, 96, dim=-1, largest=True, sorted=True)
     assert ran_large_indices(ttnn.graph.end_graph_capture())
 
-    # Stock shape (k=32, pow2 width >= 8192 -> multi-core bitonic eligible):
-    # the routed op must NOT appear.
+    # Bitonic-band shape (k=32, pow2 width in [8192, 65535)): eligible for the
+    # stock multi-core bitonic, but the bitonic-band arm routes it too.
     ttnn.graph.begin_graph_capture()
     ttnn.topk(ttnn_input, 32, dim=-1, largest=True, sorted=True)
+    assert ran_large_indices(ttnn.graph.end_graph_capture())
+
+    # Stock probe: an explicit sub_core_grids request declines routing (the
+    # routed pipeline ignores custom core grids), so the same shape must run
+    # the stock device op.
+    grid = device.compute_with_storage_grid_size()
+    full_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    ttnn.graph.begin_graph_capture()
+    ttnn.topk(ttnn_input, 32, dim=-1, largest=True, sorted=True, sub_core_grids=full_grid)
     assert not ran_large_indices(ttnn.graph.end_graph_capture())
