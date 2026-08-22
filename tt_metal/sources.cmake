@@ -235,6 +235,9 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_realtime_profiler_push.cpp
     impl/dispatch/kernels/device_print_dispatch.h
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
+    fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp
+    fabric/impl/kernels/edm_fabric/fabric_router_relay_extension.cpp
+    fabric/impl/kernels/edm_fabric/fabric_router_udm_mux_extension.cpp
     fabric/impl/kernels/tt_fabric_mux.cpp
     fabric/impl/kernels/tt_fabric_mux_v2.cpp
     fabric/impl/kernels/tt_fabric_mux_v2_forwarder.hpp
