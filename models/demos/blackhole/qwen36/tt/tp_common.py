@@ -6,6 +6,7 @@ Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
 import math
+import os
 
 import torch
 
@@ -481,7 +482,9 @@ def matmul_reduce_scatter_decode(
         multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
         reduce_scatter_core_grid_offset=rs_offset,
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-        num_links=1,
+        # CCL-5 sweep knob: decode RS messages are ~80KB; link count is a pure config
+        # trade (default 1 = the measured baseline).
+        num_links=int(os.environ.get("QWEN36_DECODE_RS_LINKS", "1")),
         memory_config_rs=ttnn.DRAM_MEMORY_CONFIG,
         topology=topology,
         subdevice_id=None,
