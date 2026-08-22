@@ -1514,6 +1514,81 @@ def test_sort_unstable_mergesort_tree_all_ones(width, device):
         assert torch.equal(dev_indices, expected_perm)
 
 
+@pytest.mark.parametrize("stable", [False, True])
+@pytest.mark.parametrize("height", [1, 33])
+@pytest.mark.parametrize("width", [2048, 8192])
+def test_sort_mergesort_h_edges(width, height, stable, device):
+    """Non-multiple-of-32 heights through the composite H-pad onto the mergesort engine
+    (fast path at W=2048, staged tree at W=8192), both stabilities. The padded rows are
+    sorted as real work and discarded by the slice; every real row must be exact."""
+    levels = [-1.5, -0.5, -0.5, 0.0, 0.5, 1.5]
+    input_tensor = _tie_heavy_tensor([height, width], levels, seed=139 + width + height + int(stable))
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, stable=stable)
+
+    dev_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+    if stable or is_blackhole():
+        assert_equal(torch_indices, dev_indices)
+    else:
+        assert_equal(torch_values, torch.gather(input_tensor, -1, dev_indices))
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("width", [6000, 33000])
+def test_sort_mergesort_tree_nonpow2_padded(width, descending, device):
+    """Non-pow2 user widths padding ONTO the merge tree (6000 -> 8192, 33000 -> 65536):
+    thousands of ±inf pad sentinels tie with real ±inf levels across chunk boundaries; the
+    structural stability argument (real tags < pad tags) must hold through every staged
+    level and the slice must recover exactly the real columns."""
+    levels = [float("-inf"), -1.0, -1.0, 0.5, float("inf")]
+    input_tensor = _tie_heavy_tensor([32, width], levels, seed=149 + width + int(descending))
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_unstable_prealloc_u16_mergesort(descending, device):
+    """Unstable + preallocated UINT16 index tensors at W=4096 ride the mergesort engine
+    (the narrowing writer serves them — unlike the STABLE prealloc-u16 caller, who opts
+    out because the stable contract there is UINT32). Previously these cells got CrossCore's
+    #54043 duplicate indices; on Blackhole they must now be the torch-stable permutation."""
+    levels = [-1.5, -0.5, -0.5, 0.5, 1.5]
+    input_tensor = _tie_heavy_tensor([32, 4096], levels, seed=151 + int(descending))
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    out_values = ttnn.zeros_like(ttnn_input)
+    out_indices = ttnn.zeros((32, 4096), dtype=ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+    ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=False, out=(out_values, out_indices))
+
+    assert out_indices.dtype == ttnn.uint16
+    dev_indices = ttnn.to_torch(out_indices).to(torch.int64)
+    assert_equal(torch_values, ttnn.to_torch(out_values))
+    if is_blackhole():
+        assert_equal(torch_indices, dev_indices)
+    else:
+        assert_equal(torch_values, torch.gather(input_tensor, -1, dev_indices))
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_fp32_w8192_decline(descending, device):
+    """fp32 at a merge-tree width: the mergesort engine is bf16-only (fp32 values have no
+    free lo16 tag bits), so this declines to the comparator engines with UINT32 indices and
+    must stay torch-stable exact."""
+    levels = [-3.25, -1.0, -0.0, 0.0, 0.0, 1.0]
+    input_tensor = _tie_heavy_tensor([32, 8192], levels, seed=157, dtype=torch.float32)
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    assert ttnn_indices.dtype == ttnn.uint32
+    assert_equal(torch_indices, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values, dtype=torch.float32))
+
+
 @pytest.mark.parametrize("descending", [False, True])
 def test_sort_stable_mergesort_tree_multi_tile_row(descending, device):
     """H=96 at W=8192: three run-buffer generations per core, checking row-loop reuse of the
