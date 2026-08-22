@@ -1417,6 +1417,23 @@ bool topology_sat_search(
     // embedding -- a Hamiltonian-cycle search -- thrash). The assumption is only a hint: if it makes the instance
     // UNSAT we re-solve without it, so this never turns a solvable instance UNSAT regardless of graph shape.
     auto solve_with_symmetry_break = [&](TopologySatSolver& solver, const TopologySatHardEncoding& enc) -> int {
+        // EXPERIMENT hook (ONESHOT_EXTERNAL_SAT_EXPERIMENT.md): dump the fully-encoded CNF to DIMACS so it can be
+        // fed to an external parallel / clause-sharing SAT solver (gimsatul, ...). This funnel is reached by BOTH
+        // the no-preferred path (solve_hard_only) and the preferred path (after the at-least-k cardinality clause
+        // is appended), so the dumped CNF is feature-complete (embedding + injectivity + pinnings + preferred).
+        // Gated on size (>5000 vars) to skip the tiny per-mesh intra solves and capture the big inter-mesh one.
+        // Dumps then aborts the mapping (returns kUnsat) -- we only want the CNF, not a solution.
+        if (const char* dp = std::getenv("TT_TOPO_SAT_DUMP_DIMACS");
+            dp != nullptr && dp[0] != '\0' && solver.num_variables() > 5000) {
+            const bool ok = solver.write_dimacs(dp);
+            log_info(
+                tt::LogFabric,
+                "[topo-sat] TT_TOPO_SAT_DUMP_DIMACS: wrote CNF to {} ({}), {} vars",
+                dp,
+                ok ? "ok" : "FAILED",
+                solver.num_variables());
+            return TopologySatSolver::kUnsat;
+        }
         const int assumption = topology_sat_symmetry_assumption_lit(graph_data, enc);
         if (assumption != 0) {
             solver.assume(assumption);

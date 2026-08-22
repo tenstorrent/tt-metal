@@ -1,0 +1,6 @@
+stages  1st_sol  total_s    sols     rc     note
+128     101s     2402       1        124    TIMEOUT@2400s
+96      6s       2402       4        124    TIMEOUT@2400s
+112     390s     2402       3        124    TIMEOUT@2400s
+144     63s      64         1        0      done
+[19:29:00] GIMFIRST ENUM DONE
