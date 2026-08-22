@@ -1564,6 +1564,29 @@ def test_sort_mergesort_pad_rider_stable_prealloc_u16_opt_out(descending, device
 
 
 @pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("width", [8192, 16384, 32768])
+def test_sort_stable_mergesort_tree_prealloc_u16_opt_out(width, descending, device):
+    """The STABLE preallocated-UINT16-index caller at the merge-tree widths opts out of
+    the mergesort engine (its stable contract there is UINT32) and routes to the
+    comparator engines (CrossCore at W=8192, the MultiCore DRAM factory above its
+    capacity), which honor the caller's u16 index transport. The result must stay
+    torch-stable exact with u16 indices. W=65536 is excluded by construction: a u16
+    index cannot address position 65535+ (issue #54050 item 1)."""
+    levels = [-1.5, -0.5, -0.5, 0.0, 0.5, 1.5]
+    input_tensor = _tie_heavy_tensor([32, width], levels, seed=163 + width + int(descending))
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    out_values = ttnn.zeros_like(ttnn_input)
+    out_indices = ttnn.zeros((32, width), dtype=ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+    ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True, out=(out_values, out_indices))
+
+    assert out_indices.dtype == ttnn.uint16
+    assert_equal(torch_indices, ttnn.to_torch(out_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(out_values))
+
+
+@pytest.mark.parametrize("descending", [False, True])
 def test_sort_small_ht_cross_core_reroute_fp32(descending, device):
     """fp32 unstable input at the small-Ht shape: stays on the single-core engine (the reroute
     is stable-only) with UINT32 indices (the fp32 dtype rule is routing-independent)."""
@@ -1710,6 +1733,56 @@ def test_sort_stable_program_cache(shape, device):
     device.disable_and_clear_program_cache()
     # Two distinct programs total (stable and unstable), each compiled exactly once.
     assert entries[-1] == 2, f"Expected 2 program cache entries (stable + unstable), found {entries[-1]}"
+
+
+def test_sort_stable_prealloc_u16_vs_default_program_cache(device):
+    """Cache-poison hunt (issue #54050 item 1): W=8192 stable bf16 is the only shape
+    where prealloc-u16 vs default differ ONLY through the optional output tensors —
+    prealloc-u16 opts out to the comparator engines with u16 indices while the default
+    rides the mergesort merge tree with u32 indices (on Blackhole). Their hash
+    separation therefore relies on `output_tensors` participating in the default
+    tensor_args hash. Alternate the two modes on one shape in one process: a hash that
+    ignored the preallocated outputs would replay the mergesort program against the
+    caller's u16 buffers on run 3 (or the comparator program on run 4). Expect exactly
+    2 cache entries and bit-identical per-mode results across reruns."""
+    levels = [-1.5, -0.5, -0.5, 0.0, 0.5, 1.5]
+    input_tensor = _tie_heavy_tensor([32, 8192], levels, seed=167)
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=True, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    default_index_dtype = ttnn.uint32 if is_blackhole() else ttnn.uint16
+
+    first_run = {}  # mode -> (values, indices) torch tensors from the compile run
+    entries = []
+    for mode in ["prealloc_u16", "default", "prealloc_u16", "default"]:
+        if mode == "prealloc_u16":
+            out_values = ttnn.zeros_like(ttnn_input)
+            out_indices = ttnn.zeros((32, 8192), dtype=ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+            with device.cache_entries_counter.measure():
+                ttnn.sort(ttnn_input, dim=-1, descending=True, stable=True, out=(out_values, out_indices))
+            ttnn_values, ttnn_indices = out_values, out_indices
+            assert ttnn_indices.dtype == ttnn.uint16
+        else:
+            with device.cache_entries_counter.measure():
+                ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=True, stable=True)
+            assert ttnn_indices.dtype == default_index_dtype
+
+        dev_values = ttnn.to_torch(ttnn_values)
+        dev_indices = ttnn.to_torch(ttnn_indices)
+        # Both modes are torch-stable exact on every run.
+        assert_equal(torch_indices, dev_indices.to(torch.int64))
+        assert_equal(torch_values, dev_values)
+        # Cache-hit reruns must be bit-identical to the compile run of the same mode.
+        if mode in first_run:
+            assert torch.equal(first_run[mode][0], dev_values), f"{mode} values drifted on cache hit"
+            assert torch.equal(first_run[mode][1], dev_indices), f"{mode} indices drifted on cache hit"
+        else:
+            first_run[mode] = (dev_values, dev_indices)
+        ttnn.synchronize_device(device)
+        entries.append(device.cache_entries_counter.total)
+
+    device.disable_and_clear_program_cache()
+    assert entries[-1] == 2, f"Expected 2 program cache entries (prealloc-u16 + default), found {entries[-1]}"
 
 
 @pytest.mark.parametrize("stable", [True, False])
