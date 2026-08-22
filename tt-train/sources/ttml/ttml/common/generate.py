@@ -104,11 +104,11 @@ def generate(
     generated_tokens = prompt_tokens.copy()
     prompt_len = len(prompt_tokens)
 
+    # Built lazily on the first step: the mask must match the LOGITS dtype (the sampler rejects a
+    # mismatch), and the logits dtype is only knowable from an actual forward pass.
     logits_mask_tensor = None
     vocab_size = transformer_config.vocab_size
     padded_vocab_size = round_up_to_tile(vocab_size)
-    if padded_vocab_size != vocab_size:
-        logits_mask_tensor = build_logits_mask(vocab_size, padded_vocab_size)
 
     # Generate tokens one by one
     for step in range(max_seq_len - prompt_len):
@@ -132,6 +132,9 @@ def generate(
         mask = create_causal_mask_kv_cache(len(input_tokens), processed_tokens)
         new_tokens = len(input_tokens)
         logits = model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
+
+        if logits_mask_tensor is None and padded_vocab_size != vocab_size:
+            logits_mask_tensor = build_logits_mask(vocab_size, padded_vocab_size, logits.get_value().dtype)
 
         # Sample next token
         # The logits tensor has shape [1, 1, seq_len, vocab_size] where seq_len may be padded
