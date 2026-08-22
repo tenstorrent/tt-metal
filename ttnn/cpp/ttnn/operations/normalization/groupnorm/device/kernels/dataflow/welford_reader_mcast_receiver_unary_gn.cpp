@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
+#include "ckernel.h"
 #include "noc_parameters.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -182,6 +183,13 @@ void kernel_main() {
             auto p_global_vars = reinterpret_cast<volatile stats_write_t*>(global_vars_ptr);
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
+
+            // Drain both stores into their L1 banks before signalling; the sender NoC-reads these
+            // exact addresses back, and a baby-RISC store retires before its write-request is
+            // processed (MemoryOrdering.md). A blocking load starting at the store's exact byte
+            // address orders after it and stalls until the stored value has landed.
+            ckernel::load_blocking(reinterpret_cast<volatile uint32_t*>(p_global_means));
+            ckernel::load_blocking(reinterpret_cast<volatile uint32_t*>(p_global_vars));
 
             // Signal to sender that our partial data is ready
             reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
