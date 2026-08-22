@@ -385,7 +385,12 @@ models:
   demo:
     wh_galaxy_perf: 125
     bh_galaxy: 470
-    bh_sc1: 488
+    # 488 -> 495 for the first Mistral-Small-4-119B leg in blaze-models-prefill-tests (MoE module,
+    # 14 min). The Blaze prefill matrix alone already summed to 479 of 488, so there was not room
+    # for it. NOTE: this line needs the budget owner's sign-off (#tt-metal-infra); if the increase
+    # is refused, the leg can be squeezed to a 9 min timeout and fit under 488 unchanged, at the
+    # cost of only ~1.5x headroom over its measured cold runtime.
+    bh_sc1: 495
     bh_sc1_high_power: 166
     wh_n150: 500
     wh_n150_civ2: 300
