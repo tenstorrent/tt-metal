@@ -14,6 +14,16 @@ rewrites every polluted position before anything attends past it.
 Runs single-device or TP (B=1); on TP the drafter head executes fully
 replicated (see tt/mtp.py).
 
+TP runs TRACED by default (TT_SPEC_TRACE=0 for eager): the verify chunk and the
+drafter step are captured once and replayed per iteration, with every varying
+quantity carried as data in persistent device buffers (tokens, RoPE window,
+chunk page table, device chunk_start, the row-select one-hot, and the GDN
+valid_len masks — the trace-safe form of the masked bucket). Capture ordering
+is strict: prefill + the eager first verify (+ a 32-row extraction warm)
+compile every program BEFORE any capture, the drafter trace captures first,
+then the verify trace — so no compile ever happens after a trace is parked.
+Commit chunks stay eager (amortized ~1/64 of iterations).
+
 Committed tokens are ALWAYS produced by the target verify rows, so greedy
 spec decode matches plain greedy decode up to bf16 chunk-vs-decode numerics.
 
@@ -53,6 +63,13 @@ def commit_advance(pending_len):
     if pending_len <= BLOCK:
         return 0
     return BLOCK * ((pending_len - 1) // BLOCK)
+
+
+def adaptive_draft_len(accept_ema, k_max):
+    """Drafts worth proposing given the recent-accept EMA: one more than the
+    expected accepts (each iteration commits accepts+1 tokens), clamped to
+    [1, k_max]. Purely data-driven, so it is trace-compatible."""
+    return max(1, min(int(k_max), int(accept_ema + 0.5) + 1))
 
 
 def greedy_accept(drafts, target_ids):
@@ -114,6 +131,17 @@ class Qwen36SpeculativeDecoder:
         if self._tp:
             for dn in self._dns:
                 assert getattr(dn, "_stable_state", False), "TP spec decode needs in-place GDN state (allocate first)"
+        # Traced loop (TT_SPEC_TRACE=0 falls back to eager). TP-only: the traced
+        # verify needs the fused-chunk valid_masks path, which the single-device
+        # masked bucket (seq adapter) does not have.
+        self._use_trace = self._tp and os.environ.get("TT_SPEC_TRACE", "1") == "1"
+        # Adaptive draft length (TT_SPEC_ADAPTIVE_K=1): shrink K toward the
+        # recent accept EMA so rejected drafts stop paying drafter steps.
+        self._adaptive_k = os.environ.get("TT_SPEC_ADAPTIVE_K", "0") == "1"
+        self._k_ema = float(self.draft_len)
+        self.k_used = []  # drafts proposed per iteration (stats)
+        self._vt = None  # traced-verify persistent I/O (built lazily)
+        self._snap_bufs = None  # persistent TP GDN snapshot buffers (allocation-free loop)
 
         self.committed = []  # token ids 0..c (prompt + generated)
         self.a = 0  # block-aligned state anchor: GDN state reflects tokens 0..a-1
@@ -138,13 +166,22 @@ class Qwen36SpeculativeDecoder:
         decode, so nothing reads it.)
         """
         if self._tp:
-            return [
-                (
-                    ttnn.clone(dn.rec_state, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-                    ttnn.clone(dn.conv_carry, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-                )
-                for dn in self._dns
-            ]
+            # Persistent snapshot buffers: allocated once (before any trace is
+            # captured), refreshed by ttnn.copy — the traced loop must stay
+            # allocation-free between replays.
+            if self._snap_bufs is None:
+                self._snap_bufs = [
+                    (
+                        ttnn.clone(dn.rec_state, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                        ttnn.clone(dn.conv_carry, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                    )
+                    for dn in self._dns
+                ]
+            else:
+                for dn, (rec, conv) in zip(self._dns, self._snap_bufs):
+                    ttnn.copy(dn.rec_state, rec)
+                    ttnn.copy(dn.conv_carry, conv)
+            return self._snap_bufs
         return self._gdn_handles()
 
     def _gdn_restore(self, snap):
@@ -153,8 +190,6 @@ class Qwen36SpeculativeDecoder:
             for dn, (rec, conv) in zip(self._dns, snap):
                 ttnn.copy(rec, dn.rec_state)
                 ttnn.copy(conv, dn.conv_carry)
-                ttnn.deallocate(rec)
-                ttnn.deallocate(conv)
             return
         for dn, s in zip(self._dns, snap):
             for attr, old in s.items():
@@ -245,6 +280,162 @@ class Qwen36SpeculativeDecoder:
         ttnn.deallocate(normed)
         return logits_host, hid
 
+    # ── traced verify (TP) ───────────────────────────────────────────────────
+    _VERIFY_BUCKET = 128
+    _VERIFY_ROWS = 32
+
+    def _init_verify_trace(self):
+        """Persistent device I/O for the traced verify chunk (alloc once, pre-capture).
+
+        Everything that varies per iteration is DATA in these buffers — token
+        ids, RoPE tables for the window, the 2-block chunk page table, the
+        device chunk_start, the row-select one-hot, and the GDN valid_len masks
+        (conv one-hot + beta/g/qkv zero masks). Shapes are fixed by the bucket.
+        """
+        model = self.model
+        mesh = model.device
+        B = self._VERIFY_BUCKET
+        rd = model.args.rope_head_dim
+        conv_k = self._dns[0].K  # GDN conv kernel size
+        rep = dict(mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+
+        def dev(t, dtype, layout):
+            return ttnn.from_torch(t, dtype=dtype, layout=layout, device=mesh, **rep)
+
+        rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
+        self._vt = {
+            "tok": dev(torch.zeros(1, B, dtype=torch.int64), ttnn.uint32, rm),
+            "cos": dev(torch.zeros(1, 1, B, rd, dtype=torch.bfloat16), ttnn.bfloat16, tile),
+            "sin": dev(torch.zeros(1, 1, B, rd, dtype=torch.bfloat16), ttnn.bfloat16, tile),
+            "full_pt": dev(self.page_table.to(torch.int32), ttnn.int32, rm),  # constant
+            "chunk_pt": dev(torch.zeros(1, 2, dtype=torch.int32), ttnn.int32, rm),
+            "csi": dev(torch.zeros(1, dtype=torch.int32), ttnn.int32, rm),
+            "sel": dev(torch.zeros(1, 1, self._VERIFY_ROWS, B, dtype=torch.float32), ttnn.bfloat16, tile),
+            "conv_sel": dev(torch.zeros(1, conv_k - 1, (conv_k - 1) + B, dtype=torch.float32), ttnn.bfloat16, tile),
+            "mask_f32": dev(torch.zeros(1, B, 1, dtype=torch.float32), ttnn.float32, tile),
+            "mask_bf16": dev(torch.zeros(1, B, 1, dtype=torch.float32), ttnn.bfloat16, tile),
+        }
+
+    def _stage_verify_inputs(self, tokens, chunk_start, valid_len, row_start):
+        """Refresh the persistent verify inputs (host build + copy, no allocs on device)."""
+        model, vt = self.model, self._vt
+        B = self._VERIFY_BUCKET
+        n = len(tokens)
+        assert n <= B and valid_len <= B
+        conv_k = self._dns[0].K
+        blk0 = chunk_start // BLOCK
+        assert blk0 + 2 <= self.page_table.shape[1], "verify window exceeds the page-table block budget"
+
+        tok = torch.zeros(1, B, dtype=torch.int64)
+        tok[0, :n] = torch.tensor(tokens, dtype=torch.int64)
+        cos_t, sin_t = model._rope_tp_cos_sin_torch(chunk_start, B)  # [1,1,B,rd] bf16
+        sel = torch.zeros(1, 1, self._VERIFY_ROWS, B, dtype=torch.float32)
+        for j in range(min(self._VERIFY_ROWS, valid_len - row_start)):
+            sel[0, 0, j, row_start + j] = 1.0
+        conv_sel = torch.zeros(1, conv_k - 1, (conv_k - 1) + B, dtype=torch.float32)
+        for j in range(conv_k - 1):
+            conv_sel[0, j, valid_len + j] = 1.0
+        mask = torch.zeros(1, B, 1, dtype=torch.float32)
+        mask[0, :valid_len, 0] = 1.0
+
+        rep = dict(mesh_mapper=ttnn.ReplicateTensorToMesh(self.model.device))
+        rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
+        for host_t, dtype, layout, dst in (
+            (tok, ttnn.uint32, rm, "tok"),
+            (cos_t, ttnn.bfloat16, tile, "cos"),
+            (sin_t, ttnn.bfloat16, tile, "sin"),
+            (self.page_table[:, blk0 : blk0 + 2].to(torch.int32).contiguous(), ttnn.int32, rm, "chunk_pt"),
+            (torch.tensor([chunk_start], dtype=torch.int32), ttnn.int32, rm, "csi"),
+            (sel, ttnn.bfloat16, tile, "sel"),
+            (conv_sel, ttnn.bfloat16, tile, "conv_sel"),
+            (mask, ttnn.float32, tile, "mask_f32"),
+            (mask, ttnn.bfloat16, tile, "mask_bf16"),
+        ):
+            src = ttnn.from_torch(host_t, dtype=dtype, layout=layout, **rep)
+            ttnn.copy_host_to_device_tensor(src, vt[dst])
+
+    def _verify_trace_body(self):
+        """The verify-chunk op graph over the persistent buffers (compile + capture).
+
+        Mirrors _forward_prefill_chunk_masked_tp with the GDN valid_len masks fed
+        as device tensors, plus the in-trace row-select + final norm + LM head.
+        Returns the persistent output handles (logits, normed rows).
+        """
+        model, vt = self.model, self._vt
+        B = self._VERIFY_BUCKET
+        vm = {"conv_sel": vt["conv_sel"], "f32": vt["mask_f32"], "bf16": vt["mask_bf16"]}
+        x = model.embd(vt["tok"])
+        x = ttnn.reshape(x, (1, 1, B, x.shape[-1]))
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        for layer in model.layers:
+            if layer.is_full_attention:
+                x_new = layer.forward(
+                    x,
+                    cos=vt["cos"],
+                    sin=vt["sin"],
+                    mode="prefill",
+                    page_table=vt["full_pt"],
+                    chunk_page_table=vt["chunk_pt"],
+                    chunk_start_idx_tensor=vt["csi"],
+                )
+            else:
+                x_new = layer.forward(
+                    x, mode="prefill", chunk_size=model.args.gdn_chunk_size, valid_len=None, valid_masks=vm
+                )
+            ttnn.deallocate(x)
+            x = x_new
+        rows = ttnn.matmul(vt["sel"], x)  # [1,1,ROWS,dim/tp] fractured
+        ttnn.deallocate(x)
+        rows = ttnn.to_memory_config(rows, ttnn.DRAM_MEMORY_CONFIG)
+        normed = model.norm(rows, mode=Mode.PREFILL)  # replicated [1,1,ROWS,dim]
+        ttnn.deallocate(rows)
+        logits = model._lm_head(normed)  # replicated [1,1,ROWS,vocab]
+        return logits, normed
+
+    def _verify_traced(self, tokens, chunk_start, valid_len, row_start, n_rows):
+        """Traced verify: refresh inputs, replay, read the accept rows.
+
+        Lazy capture on the first call — by then every program in the body is
+        warm (prefill segments, the eager first verify, and _warm_extract32),
+        so the compile run compiles nothing and cannot clobber the parked
+        drafter trace (#48536 class).
+        """
+        mesh = self.model.device
+        assert chunk_start % BLOCK == 0
+        first = self._vt is None
+        if first:
+            self._init_verify_trace()
+        self._stage_verify_inputs(tokens, chunk_start, valid_len, row_start)
+        if first:
+            # Compile + capture both advance GDN state (non-idempotent) — roll
+            # back to the pre-verify snapshot between and after them so the
+            # first real replay starts from the correct state.
+            snap = self._gdn_snapshot()
+            logits, normed = self._verify_trace_body()
+            ttnn.synchronize_device(mesh)
+            ttnn.deallocate(logits)
+            ttnn.deallocate(normed)
+            self._gdn_restore(snap)
+            tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+            logits, normed = self._verify_trace_body()
+            ttnn.end_trace_capture(mesh, tid, cq_id=0)
+            self._gdn_restore(snap)
+            self._vt.update({"id": tid, "logits": logits, "normed": normed})
+            logger.info("spec verify trace captured (bucket 128)")
+        ttnn.execute_trace(mesh, self._vt["id"], cq_id=0, blocking=False)
+        lh = self._rows_to_host(self._vt["logits"], n_rows)
+        hh = self._rows_to_host(self._vt["normed"], n_rows)
+        return lh, hh
+
+    def release_traces(self):
+        """Release the verify + drafter traces (call before freeing KV caches)."""
+        if self._vt is not None and "id" in self._vt:
+            ttnn.release_trace(self.model.device, self._vt["id"])
+        self._vt = None
+        release = getattr(self.mtp, "release_step_trace", None)
+        if release is not None:
+            release()
+
     def _maybe_commit(self):
         """Advance the GDN anchor by whole blocks once enough tokens committed."""
         k = commit_advance(len(self.committed) - self.a)
@@ -293,7 +484,9 @@ class Qwen36SpeculativeDecoder:
             self._gdn_commit_done(ctx)
 
         # Seed the drafter KV over the (windowed) prompt: pair (h_i, t_{i+1}) at
-        # drafter position i.
+        # drafter position i. Always EAGER — this doubles as the drafter program
+        # warmup, and no trace may be captured before the eager first verify has
+        # compiled every target-side program (post-park compiles clobber traces).
         for i in range(seed_from, a0):
             self.mtp.step(self.committed[i + 1], prompt_hidden[i], i)
         logger.info(f"spec prefill: T={T} anchor a0={a0} drafter seeded on [{seed_from}, {a0})")
@@ -306,8 +499,24 @@ class Qwen36SpeculativeDecoder:
         snap = self._gdn_snapshot()
         hidden, bucket = self._chunk_forward(self.committed[self.a :], self.a, tail_len)
         logits, hid = self._extract_rows(hidden, bucket, 0, tail_len)
+        if self._use_trace and ((tail_len + 31) // 32) * 32 != self._VERIFY_ROWS:
+            # Warm the 32-row extraction programs (row-select matmul, norm, LM
+            # head at 32 rows) NOW, while no trace is parked: the traced verify's
+            # compile run must not compile anything after the drafter trace is
+            # captured (a post-park compile can clobber a parked trace).
+            self._extract_rows(hidden, bucket, 0, 1)
         ttnn.deallocate(hidden)
         self._gdn_restore(snap)
+        if self._use_trace and tail_len < BLOCK + 1:
+            # Warm the 2-block paged_fill_cache program the traced verify bakes in
+            # (its chunk page table is FIXED at 2 blocks; the eager tail above
+            # spans only 1). Throwaway pass: state restored, and the garbage K/V
+            # in the second block sits at future positions that every later chunk
+            # rewrites before attending.
+            pad = self.committed[self.a :] + [self.committed[-1]] * (BLOCK + 1 - tail_len)
+            hidden, _ = self._chunk_forward(pad, self.a, BLOCK + 1)
+            ttnn.deallocate(hidden)
+            self._gdn_restore(snap)
 
         first_token = int(logits[tail_len - 1].argmax())
         c = len(self.committed) - 1  # last prompt position
@@ -331,30 +540,47 @@ class Qwen36SpeculativeDecoder:
 
         while len(out) < max_new_tokens:
             # 1. Drafter catch-up over pending pairs; the last pair's logits are
-            # draft 1, then chain K-1 steps on the drafter's own hidden.
-            for tok, hid_row, pos in self._pending[:-1]:
-                self.mtp.step(tok, hid_row, pos)
-            d_logits, g = self.mtp.step(*self._pending[-1])
+            # draft 1, then chain K-1 steps on the drafter's own hidden. The
+            # traced drafter keeps the chained hidden on device.
+            k_t = adaptive_draft_len(self._k_ema, K) if self._adaptive_k else K
+            self.k_used.append(k_t)
             last_pos = self._pending[-1][2]
+            if self._use_trace:
+                for tok, hid_row, pos in self._pending[:-1]:
+                    self.mtp.step_traced(tok, hid_row, pos)
+                d_logits = self.mtp.step_traced(*self._pending[-1])
+            else:
+                for tok, hid_row, pos in self._pending[:-1]:
+                    self.mtp.step(tok, hid_row, pos)
+                d_logits, g = self.mtp.step(*self._pending[-1])
             self._pending = []
             drafts = [int(d_logits.argmax())]
-            for j in range(1, K):
-                d_logits, g = self.mtp.step(drafts[-1], g, last_pos + j)
+            for j in range(1, k_t):
+                if self._use_trace:
+                    d_logits = self.mtp.step_traced(drafts[-1], None, last_pos + j, chain_hidden=True)
+                else:
+                    d_logits, g = self.mtp.step(drafts[-1], g, last_pos + j)
                 drafts.append(int(d_logits.argmax()))
 
-            # 2. Verify chunk [t_a..t_c, drafts] at positions a..c+K.
+            # 2. Verify chunk [t_a..t_c, drafts] at positions a..c+k_t.
             c = len(self.committed) - 1
             snap = self._gdn_snapshot()
             chunk_tokens = self.committed[self.a :] + drafts
-            hidden, bucket = self._chunk_forward(chunk_tokens, self.a, len(chunk_tokens))
-            logits, hid = self._extract_rows(hidden, bucket, c - self.a, K + 1)
-            ttnn.deallocate(hidden)
+            if self._use_trace:
+                logits, hid = self._verify_traced(chunk_tokens, self.a, len(chunk_tokens), c - self.a, k_t + 1)
+            else:
+                hidden, bucket = self._chunk_forward(chunk_tokens, self.a, len(chunk_tokens))
+                logits, hid = self._extract_rows(hidden, bucket, c - self.a, k_t + 1)
+                ttnn.deallocate(hidden)
 
             # 3. Accept, then ALWAYS roll the GDN state back to the anchor.
-            target_ids = [int(logits[j].argmax()) for j in range(K + 1)]
+            target_ids = [int(logits[j].argmax()) for j in range(k_t + 1)]
             m, new_tokens = greedy_accept(drafts, target_ids)
             self.accepts.append(m)
-            logger.debug(f"spec iter {len(self.accepts)}: c={c} a={self.a} drafts={drafts} targets={target_ids} m={m}")
+            self._k_ema = 0.7 * self._k_ema + 0.3 * m
+            logger.debug(
+                f"spec iter {len(self.accepts)}: c={c} a={self.a} K={k_t} drafts={drafts} targets={target_ids} m={m}"
+            )
             self._gdn_restore(snap)
 
             # 4. Commit tokens + arm the next catch-up pairs (true target hiddens).
@@ -376,10 +602,13 @@ class Qwen36SpeculativeDecoder:
     def _stats(self):
         iters = len(self.accepts)
         total = sum(self.accepts)
+        proposed = sum(self.k_used) if self.k_used else iters * self.draft_len
         return {
             "iterations": iters,
             "accepted_drafts": total,
-            "accept_rate": (total / (iters * self.draft_len)) if iters else 0.0,
+            "accept_rate": (total / proposed) if proposed else 0.0,
             "tokens_per_iteration": ((total + iters) / iters) if iters else 0.0,
             "accepts": list(self.accepts),
+            "k_used": list(self.k_used),
+            "traced": self._use_trace,
         }

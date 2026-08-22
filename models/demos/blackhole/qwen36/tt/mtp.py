@@ -154,6 +154,7 @@ class Qwen36MTPHead:
         self._k_cache = None
         self._v_cache = None
         self._page_table_tt = None
+        self._step_trace = None  # persistent traced-step I/O (capture on first step_traced)
 
     def allocate_kv_cache(self, num_blocks, block_size=64, dtype=ttnn.bfloat16):
         """Own paged KV (one layer) + identity page table over its own blocks."""
@@ -173,6 +174,7 @@ class Qwen36MTPHead:
     def free_kv_cache(self):
         if self._k_cache is None:
             return
+        self.release_step_trace()
         for t in (self._k_cache, self._v_cache, self._page_table_tt):
             ttnn.deallocate(t)
         self._k_cache = self._v_cache = self._page_table_tt = None
@@ -201,11 +203,6 @@ class Qwen36MTPHead:
             device=self.device,
             **self._mesh_kwargs,
         )
-        emb = self.embedding(tok)  # [1,1,dim]
-        ttnn.deallocate(tok)
-        e_n = rms_norm_ttnn(emb, self.pre_fc_norm_embedding, eps=self.norm_eps, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(emb)
-
         h_in = ttnn.from_torch(
             hidden_row.reshape(1, 1, -1).to(torch.bfloat16),
             dtype=ttnn.bfloat16,
@@ -213,8 +210,37 @@ class Qwen36MTPHead:
             device=self.device,
             **self._mesh_kwargs,
         )
+        cos, sin = self.rope.get_rot_mats(torch.tensor([[position]], dtype=torch.long))
+        cur_pos = ttnn.from_torch(
+            torch.tensor([position], dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            **self._mesh_kwargs,
+        )
+        logits, normed = self._step_graph(tok, h_in, cur_pos, cos, sin)
+        for t in (tok, h_in, cur_pos):
+            ttnn.deallocate(t)
+
+        logits_host = self._logits_to_host(logits)
+        if self.num_devices > 1:
+            hidden_host = ttnn.to_torch(ttnn.get_device_tensors(normed)[0]).reshape(-1).float()
+        else:
+            hidden_host = ttnn.to_torch(normed).reshape(-1).float()
+        ttnn.deallocate(normed)
+        ttnn.deallocate(logits)
+        return logits_host, hidden_host
+
+    def _step_graph(self, tok, h_in, cur_pos, cos, sin):
+        """The drafter-step op graph over device inputs. Returns (logits, normed).
+
+        Shared by the eager step() and the trace capture/replay path — everything
+        here is device ops only (trace-capture safe).
+        """
+        emb = self.embedding(tok)  # [1,1,dim]
+        e_n = rms_norm_ttnn(emb, self.pre_fc_norm_embedding, eps=self.norm_eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(emb)
         h_n = rms_norm_ttnn(h_in, self.pre_fc_norm_hidden, eps=self.norm_eps, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(h_in)
 
         fused = ttnn.concat([e_n, h_n], dim=-1)  # [1,1,2*dim] — embedding first (vLLM order)
         ttnn.deallocate(e_n)
@@ -225,18 +251,9 @@ class Qwen36MTPHead:
         ttnn.deallocate(fused)
 
         # Decoder block (decode-mode residual pattern, as in Qwen36DecoderLayer).
-        cos, sin = self.rope.get_rot_mats(torch.tensor([[position]], dtype=torch.long))
-        cur_pos = ttnn.from_torch(
-            torch.tensor([position], dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            **self._mesh_kwargs,
-        )
         attn_in = self.attention_norm(x, mode=Mode.DECODE, norm_config={"output_mem_config": ttnn.L1_MEMORY_CONFIG})
         attn_out = self.attention.forward(attn_in, cos, sin, position_tensor=cur_pos, page_table=self._page_table_tt)
         ttnn.deallocate(attn_in)
-        ttnn.deallocate(cur_pos)
         h1 = ttnn.add(x, attn_out)
         ttnn.deallocate(x)
         ttnn.deallocate(attn_out)
@@ -251,20 +268,128 @@ class Qwen36MTPHead:
         normed = rms_norm_ttnn(out, self.final_norm, eps=self.norm_eps, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(out)
         logits = ttnn.linear(normed, self.lm_head_weight, compute_kernel_config=self.compute_kernel_config)
+        return logits, normed
 
+    def _logits_to_host(self, logits):
         if self.num_devices > 1:
-            hidden_host = ttnn.to_torch(ttnn.get_device_tensors(normed)[0]).reshape(-1).float()
             if self.lm_head_sharded:
-                logits_host = (
+                return (
                     ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=-1))
                     .reshape(-1)
                     .float()
                 )
-            else:
-                logits_host = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).reshape(-1).float()
-        else:
-            hidden_host = ttnn.to_torch(normed).reshape(-1).float()
-            logits_host = ttnn.to_torch(logits).reshape(-1).float()
-        ttnn.deallocate(normed)
+            return ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).reshape(-1).float()
+        return ttnn.to_torch(logits).reshape(-1).float()
+
+    # ── traced step ──────────────────────────────────────────────────────────
+    def _host_step_inputs(self, token_id, position):
+        """Host-side (tok, pos, cos, sin) tensors for copy_host_to_device_tensor."""
+        # int64 host source for the uint32 tensor avoids the int32->uint32
+        # row-major conversion warning (#18536).
+        tok = ttnn.from_torch(
+            torch.tensor([[token_id]], dtype=torch.int64), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        pos = ttnn.from_torch(
+            torch.tensor([position], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        cos = ttnn.from_torch(
+            self.rope.cos_cpu[position : position + 1].unsqueeze(0).contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        sin = ttnn.from_torch(
+            self.rope.sin_cpu[position : position + 1].unsqueeze(0).contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        return tok, pos, cos, sin
+
+    def _capture_step_trace(self, token_id, hidden_row, position):
+        """Capture the drafter step at the REAL first-call inputs.
+
+        Persistent inputs get stable addresses; the compile + capture runs write
+        the SAME KV slot with the SAME values as the first replay, so the writes
+        are idempotent. Must run before any other trace is parked (an eager
+        compile after a parked trace can clobber it — the spec loop guarantees
+        this by capturing the drafter before the verify trace).
+        """
+        mk = self._mesh_kwargs
+        tr = {
+            "tok": ttnn.from_torch(
+                torch.tensor([[token_id]], dtype=torch.int64),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                **mk,
+            ),
+            "pos": ttnn.from_torch(
+                torch.tensor([position], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                **mk,
+            ),
+            "cos": ttnn.from_torch(
+                self.rope.cos_cpu[position : position + 1].unsqueeze(0).contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                **mk,
+            ),
+            "sin": ttnn.from_torch(
+                self.rope.sin_cpu[position : position + 1].unsqueeze(0).contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                **mk,
+            ),
+            "h": ttnn.from_torch(
+                hidden_row.reshape(1, 1, -1).to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                **mk,
+            ),
+        }
+        # Compile run (warm the program cache), then capture.
+        logits, normed = self._step_graph(tr["tok"], tr["h"], tr["pos"], tr["cos"], tr["sin"])
+        ttnn.synchronize_device(self.device)
         ttnn.deallocate(logits)
-        return logits_host, hidden_host
+        ttnn.deallocate(normed)
+        tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+        logits, normed = self._step_graph(tr["tok"], tr["h"], tr["pos"], tr["cos"], tr["sin"])
+        ttnn.end_trace_capture(self.device, tid, cq_id=0)
+        tr.update({"id": tid, "logits": logits, "normed": normed})
+        self._step_trace = tr
+
+    def step_traced(self, token_id, hidden_row, position, chain_hidden=False):
+        """Traced drafter step: refresh persistent inputs, replay, read logits.
+
+        chain_hidden=True feeds the PREVIOUS traced step's output hidden (kept on
+        device — ttnn.copy into the persistent input, no host round-trip); else
+        hidden_row (torch [dim]) is uploaded. Returns host logits [vocab].
+        """
+        if self._step_trace is None:
+            self._capture_step_trace(token_id, hidden_row if not chain_hidden else torch.zeros(self.args.dim), position)
+            # fall through: replay with the real inputs
+        tr = self._step_trace
+        tok_h, pos_h, cos_h, sin_h = self._host_step_inputs(token_id, position)
+        ttnn.copy_host_to_device_tensor(tok_h, tr["tok"])
+        ttnn.copy_host_to_device_tensor(pos_h, tr["pos"])
+        ttnn.copy_host_to_device_tensor(cos_h, tr["cos"])
+        ttnn.copy_host_to_device_tensor(sin_h, tr["sin"])
+        if chain_hidden:
+            # Recurrence stays on device: previous replay's normed output -> input.
+            ttnn.copy(tr["normed"], tr["h"])
+        else:
+            h_h = ttnn.from_torch(
+                hidden_row.reshape(1, 1, -1).to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            ttnn.copy_host_to_device_tensor(h_h, tr["h"])
+        ttnn.execute_trace(self.device, tr["id"], cq_id=0, blocking=False)
+        return self._logits_to_host(tr["logits"])
+
+    def release_step_trace(self):
+        if self._step_trace is not None:
+            ttnn.release_trace(self.device, self._step_trace["id"])
+            self._step_trace = None

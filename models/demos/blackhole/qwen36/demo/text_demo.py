@@ -1201,11 +1201,12 @@ def _run_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_
     t0 = time.time()
     generated, stats = spec.generate(max_generated_tokens)
     decode_s = time.time() - t0
+    spec.release_traces()
     mtp.free_kv_cache()
 
     avg_decode = decode_s / len(generated) if generated else float("inf")
     logger.info(
-        f"[spec K={draft_len}] {len(generated)} tokens in {stats['iterations']} iterations "
+        f"[spec K={draft_len} traced={stats['traced']}] {len(generated)} tokens in {stats['iterations']} iterations "
         f"({stats['tokens_per_iteration']:.2f} tok/iter, accept rate {stats['accept_rate']:.2f}); "
         f"{avg_decode * 1000:.1f} ms/token"
     )

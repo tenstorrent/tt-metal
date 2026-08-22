@@ -252,3 +252,31 @@ def test_loop_emulation_wrong_drafter_still_matches_target(monkeypatch):
     assert out == [_tok(100 + i) for i in range(len(out))]
     assert len(out) >= 40
     assert all(m == 0 for m in spec.accepts)
+
+
+class TestAdaptiveDraftLen:
+    def test_clamps_to_range(self):
+        from models.demos.blackhole.qwen36.tt.spec_decode import adaptive_draft_len
+
+        assert adaptive_draft_len(0.0, 4) == 1
+        assert adaptive_draft_len(10.0, 4) == 4
+        assert adaptive_draft_len(0.0, 1) == 1
+
+    @pytest.mark.parametrize("ema,expected", [(0.4, 1), (0.6, 2), (1.4, 2), (1.6, 3), (2.5, 4), (3.0, 4)])
+    def test_one_more_than_expected_accepts(self, ema, expected):
+        from models.demos.blackhole.qwen36.tt.spec_decode import adaptive_draft_len
+
+        assert adaptive_draft_len(ema, 4) == expected
+
+    def test_emulation_with_adaptive_k(self, monkeypatch):
+        """The real generate() under adaptive K still emits exactly the target
+        sequence (correctness is K-independent) with a shrunken draft budget."""
+        monkeypatch.setenv("TT_SPEC_ADAPTIVE_K", "1")
+        fake_cls = _make_fake_spec(4, 100, monkeypatch)
+        spec = fake_cls(_OracleDrafter(correct=False))
+        spec.seed()
+        out, stats = spec.generate(40)
+        assert out == [_tok(100 + i) for i in range(len(out))]
+        # All-rejected: the EMA collapses and K shrinks to 1.
+        assert stats["k_used"][-1] == 1
+        assert sum(stats["k_used"]) < 4 * stats["iterations"]

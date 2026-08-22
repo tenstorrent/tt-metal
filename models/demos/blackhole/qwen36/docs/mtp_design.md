@@ -104,16 +104,40 @@ first token. Per-segment post-norm hiddens are captured to host to seed the
 drafter KV over the prompt (window-capped via `TT_SPEC_SEED_WINDOW`, default
 2048 — earlier drafter slots stay zero, an accepted accuracy trade).
 
-## Trace compatibility
+## Traced loop (TP, default; TT_SPEC_TRACE=0 for eager)
 
-v1 runs eager. The verify/commit chunks use only masked-bucket programs (a
-bounded, warmup-compilable set — the same property that made the serving path
-trace-safe), and the drafter is a fixed-shape T=1 step, so a later fused
-per-iteration trace (gemma4 `_capture_fused_trace` style: persistent inputs,
-on-device argmax/re-embed, one `execute_trace` per iteration) is the natural
-next step. Drafting inside the existing decode trace is not attempted: the
-decode trace is a single-token program, while spec decode replaces single-token
-decode entirely.
+Two traces, captured lazily and replayed every iteration:
+
+- **Verify trace** — the full masked-bucket-128 chunk (all 64 layers) plus the
+  in-trace row-select + final norm + LM head. Everything that varies is DATA in
+  persistent replicated buffers refreshed by `copy_host_to_device_tensor`:
+  tokens, the RoPE window for `chunk_start..+128`, a FIXED 2-block chunk page
+  table, the device `chunk_start`, the 32-row select one-hot, and the GDN
+  `valid_len` masks. The masks are the key enabler: the eager masked path
+  builds them host-side per call (`from_torch` — illegal under capture), so
+  `valid_masks` plumbing (`layer.forward` → `TPGatedDeltaNet.forward_prefill` →
+  `_causal_conv1d_fir(valid_sel=...)` / fused-chunk adapter) feeds them as
+  caller-owned device tensors instead. GDN state carry is already in-place
+  (`_stable_state`), so replays mutate fixed addresses and the spec loop's
+  persistent-buffer snapshot/restore keeps the verify-never-commits contract.
+- **Drafter trace** — one T=1 step (persistent tok/pos/cos/sin/hidden inputs),
+  replayed for catch-up and chained drafts; the chained hidden recurrence stays
+  on device (`ttnn.copy(normed → h_in)` between replays). No CCL in this trace
+  (the head is fully replicated), which sidesteps the distinct-CCL-trace
+  interleaving deadlock gemma4 hit.
+
+Capture ordering is load-bearing (#48536: a compile after a trace is parked can
+clobber it): prefill segments + eager drafter seeding + the eager first verify
+(+ explicit warms for the 32-row extraction and the 2-block fill) compile every
+program FIRST; the drafter trace captures at iteration 1's first step, the
+verify trace right after — its compile run compiles nothing new. Commit chunks
+stay eager (amortized ~1/64 of iterations; all-warm programs). Compile and
+capture runs advance GDN state non-idempotently, so the loop restores the
+snapshot between and after them.
+
+Adaptive draft length (TT_SPEC_ADAPTIVE_K=1): K_t = clamp(round(EMA(accepts))+1,
+1, K). Purely data-driven — chunk `valid_len`, the masks, and the accept-row
+count all ride the same buffers, so it works traced and eager.
 
 ## TP (P150x4 / P150x8), B=1 — built
 
