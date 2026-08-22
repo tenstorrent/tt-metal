@@ -10,6 +10,7 @@
 # plus every QWEN38_BENCH_* / QWEN38_PREFILL_* knob from the bench scripts.
 #
 #SBATCH --job-name=qwen38-meas
+#SBATCH --propagate=NONE
 #SBATCH --dependency=singleton
 #SBATCH --nice=10000
 #SBATCH --time=04:00:00
@@ -39,15 +40,25 @@ cd "$QWEN38_WORKSPACE"
 sweep_local_caches() {
     rm -rf "$HOME/.cache/tt-metal-cache" "$HOME/.cache/huggingface" /tmp/"${USER}"-* 2>/dev/null || true
 }
-# tt-metal#53281: a torn-down process can leave BH eth cores unresettable and the next
-# init times out ("waiting for active ethernet core XX-25"). Prologue: kill stale
-# /dev/tenstorrent holders + board reset; exit trap: reset again so the node is left
-# clean for whoever comes next. TT_METAL_DISABLE_MULTI_AERISC=1 (set in env.sh)
-# prevents the wedge and fixes the fabric local handshake on this cluster's eth fw.
-trap 'sweep_local_caches; tt-smi -r >/dev/null 2>&1 || true' EXIT
+# Board-reset discipline (learned the hard way — "eth core (28,25) base fw not ready"):
+# a reset needs ~30s before the next mesh init, or that init dies inside the eth-fw
+# boot window. So: (a) NEVER reset routinely — with TT_METAL_DISABLE_MULTI_AERISC=1
+# clean exits don't wedge (tt-metal#53281's trigger is gone); reset only when the
+# payload FAILED or the board looks unhealthy; (b) every reset stamps /tmp/tt_last_reset
+# (node-local) and every job settles out the remainder of the 30s before its payload.
+reset_board() { tt-smi -r >/dev/null 2>&1 || true; date +%s > /tmp/tt_last_reset 2>/dev/null || true; }
+settle_after_reset() {
+    local t d
+    t=$(cat /tmp/tt_last_reset 2>/dev/null || echo 0)
+    d=$(( $(date +%s) - t ))
+    if [[ "$t" == 0 ]]; then sleep 35; elif (( d < 30 )); then sleep $((30 - d)); fi
+}
+PAYLOAD_RC=1  # pessimistic until the payload proves itself
+trap 'sweep_local_caches; [[ "$PAYLOAD_RC" != 0 ]] && reset_board' EXIT
 fuser -k /dev/tenstorrent/* 2>/dev/null || true
 sleep 2
-tt-smi -r >/dev/null 2>&1 || echo "WARN: prologue tt-smi -r failed"
+tt-smi -ls >/dev/null 2>&1 || { echo "prologue: SMI unhealthy -> board reset"; reset_board; }
+settle_after_reset
 
 # NFS budget guard: /data is a shared, nearly-full volume. A first-time weight-cache
 # generation writes tens of GB — refuse it when free space is scarce.
@@ -116,3 +127,5 @@ grep -q "BENCH_JSON" "$BENCHLOG" || { echo "BENCH_PRODUCED_NO_JSON"; exit 1; }
 "$QWEN38_PYTHON" models/demos/blackhole/qwen36/campaign/parse_bench.py "$BENCHLOG" \
     --ref "$SHA" --node "${SLURMD_NODENAME:-$(hostname)}" \
     --append /data/ayerofieiev/qwen38/results.jsonl
+
+PAYLOAD_RC=0  # clean run: exit trap skips the board reset (no self-wedge of the next job)
