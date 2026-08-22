@@ -81,6 +81,7 @@ For information on initial model procedures, please see [Model Bring-Up and Test
 - [ViT Implementation in TT-NN on GS](./tech_reports/ViT-TTNN/vit.md)  (updated Sept 22nd, 2024)
 - [LLMs Bring up in TT-NN](./tech_reports/LLMs/llms.md)  (updated Oct 29th, 2024)
 - [CNN Bring up & Optimization in TT-NN](./tech_reports/CNNs/cnn_optimizations.md) (updated Jan 22nd, 2025)
+- [The Tensor Prefetcher on Blackhole](./tech_reports/TensorPrefetcher/TensorPrefetcher.md) (updated July 15th, 2026)
 
 ## Benchmarks
 
