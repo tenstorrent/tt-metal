@@ -247,7 +247,7 @@ void Cluster::detect_arch_and_target() {
     this->arch_ = tt_metal::get_platform_architecture(rtoptions_);
 
     if (this->target_type_ == tt::TargetDevice::Mock) {
-        log_warning(tt::LogDevice, "Currently using mock cluster descriptor, all device driver calls will be mocked");
+        log_debug(tt::LogDevice, "Currently using mock cluster descriptor, all device driver calls will be mocked");
     }
     if (this->target_type_ == tt::TargetDevice::Emule) {
         log_warning(tt::LogDevice, "Using emulated device mode with memory-backed I/O");
