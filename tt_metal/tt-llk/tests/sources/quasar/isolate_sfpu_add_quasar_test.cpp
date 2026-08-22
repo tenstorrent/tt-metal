@@ -105,6 +105,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Implied math format disable for SrcS and sfpmem mod selection
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
 
+    // Program ALU_ACC_CTRL_SFPU_Fp32 so sfpmem::DEFAULT loads/stores decode SrcS datums as 32-bit
+    // when dest accumulation puts SrcS in 32-bit mode (Tf32/Float32 unpack_S_dst).
+    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
+
     // -------------------------------------------------------------------------
     // SFPU configuration and execution
     // -------------------------------------------------------------------------
