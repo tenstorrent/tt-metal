@@ -4,6 +4,7 @@
 #include "argmax_device_operation.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -11,7 +12,15 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-logger/tt-logger.hpp>
+
+#include <algorithm>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace ttnn::prim {
 
@@ -212,11 +221,62 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     const auto src_page_size = round_up_to_mul32(red_dim_units * input_unit_size);
     const auto dst_page_size = round_up_to_mul32(output_last_dim * output_unit_size);
 
+    const auto inner_dim_units = output_last_dim;
+    const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
+
+    // Hoisted above CB creation: the L1 budget check below needs these sizes.
+    const auto red_idxs_page_size = round_up_to_mul32(output_last_dim * output_unit_size) * num_total_cores;
+    const auto red_vals_page_size = round_up_to_mul32(output_last_dim * input_unit_size) * num_total_cores;
+
+    const auto src_cb_page_size0 = round_up_to_mul32(red_dim_units0 * input_unit_size);
+    const auto src_cb_page_size1 = num_cores1 > 0 ? round_up_to_mul32(red_dim_units1 * input_unit_size) : 0u;
+
+    // Doubling src_cb is the only extra L1 cost, but it has to be charged against the region the
+    // CBs actually get: base allocator address up to lowest_occupied_compute_l1_address(), with
+    // each CB rounded to the DRAM alignment (see ProgramImpl::allocate_circular_buffers).
+    const uint32_t cb_alignment = device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
+    const auto cb_alloc_size = [cb_alignment](uint64_t cb_size) {
+        return tt::align(cb_size, static_cast<uint64_t>(cb_alignment));
+    };
+
+    // A core belongs to exactly one src_cb group, so charge the larger group.
+    const uint64_t shared_cb_bytes =
+        cb_alloc_size(dst_page_size) + cb_alloc_size(red_idxs_page_size) + cb_alloc_size(red_vals_page_size);
+    const uint64_t dual_src_cb_bytes =
+        std::max(cb_alloc_size(2ull * src_cb_page_size0), cb_alloc_size(2ull * src_cb_page_size1));
+
+    const auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address();
+    const uint64_t cb_region_end =
+        lowest_occupied_l1.has_value() ? lowest_occupied_l1.value() : device->l1_size_per_core();
+    const uint64_t cb_region_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint64_t l1_available_for_cbs = cb_region_end > cb_region_base ? cb_region_end - cb_region_base : 0;
+
+    const bool l1_fits_secondary_dm = (dual_src_cb_bytes + shared_cb_bytes) <= l1_available_for_cbs;
+
+    // Split the inner (j) loop across both data movement processors; a single kernel leaves
+    // RISCV_0 idle. The halves fill disjoint entries of this core's partial slot, so the cross-core
+    // protocol is unchanged. reduce_all is excluded: its accumulator spans the whole j range, so it
+    // would need a value merge rather than a partition.
+    const bool use_secondary_dm = (not reduce_all) && (inner_dim_units >= 2) && l1_fits_secondary_dm;
+    const uint32_t src_cb_copies = use_secondary_dm ? 2 : 1;
+
+    // Even split, biased to the secondary when odd. The split point is a compile time arg shared
+    // by a whole core group, so it cannot be tuned per core.
+    const uint32_t primary_j_end = use_secondary_dm ? (inner_dim_units / 2) : inner_dim_units;
+
+    log_debug(
+        tt::LogOp,
+        "argmax multicore: cores={} inner_dim_units={} red_dim_units={} secondary_dm={} primary_j_end={}",
+        num_total_cores,
+        inner_dim_units,
+        red_dim_units,
+        use_secondary_dm,
+        primary_j_end);
+
     // Create input CB to read reduction dim worth of data at once (split across all cores)
     const uint32_t src_cb_idx = tt::CBIndex::c_0;
-    const auto src_cb_page_size0 = round_up_to_mul32(red_dim_units0 * input_unit_size);
     desc.cbs.push_back(CBDescriptor{
-        .total_size = src_cb_page_size0,
+        .total_size = src_cb_copies * src_cb_page_size0,
         .core_ranges = cores0,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src_cb_idx),
@@ -227,9 +287,8 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
 
     // We only create the second CB if there are some cores assigned to the second group
     if (num_cores1 > 0) {
-        const auto src_cb_page_size1 = round_up_to_mul32(red_dim_units1 * input_unit_size);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = src_cb_page_size1,
+            .total_size = src_cb_copies * src_cb_page_size1,
             .core_ranges = cores1,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(src_cb_idx),
@@ -253,7 +312,6 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
 
     // Create intermediate CB for indices based on number of cores and output shape's last dimension
     const uint32_t red_idxs_cb_idx = tt::CBIndex::c_2;
-    const auto red_idxs_page_size = round_up_to_mul32(output_last_dim * output_unit_size) * num_total_cores;
     desc.cbs.push_back(CBDescriptor{
         .total_size = red_idxs_page_size,
         .core_ranges = all_cores,
@@ -266,7 +324,6 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
 
     // Create intermediate CB for values based on number of cores and output shape's last dimension
     const uint32_t red_vals_cb_idx = tt::CBIndex::c_3;
-    const auto red_vals_page_size = round_up_to_mul32(output_last_dim * input_unit_size) * num_total_cores;
     desc.cbs.push_back(CBDescriptor{
         .total_size = red_vals_page_size,
         .core_ranges = all_cores,
@@ -276,9 +333,6 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
             .page_size = red_vals_page_size,
         }}},
     });
-
-    const auto inner_dim_units = output_last_dim;
-    const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
 
     // Get physical coordinates of the reduce core that collates the intermediate outputs
     const uint32_t reduce_core_id = 0;  // We can do perf optimization by tuning this in the future
@@ -300,6 +354,9 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     // Allocate two semaphores for synchronization (cores -> reducer core) and (reducer core -> cores)
     const uint32_t start_sem_idx = 0;
     const uint32_t done_sem_idx = 1;
+    // Secondary -> primary handoff, local to one core. Always allocated so semaphore ids do not
+    // depend on use_secondary_dm.
+    const uint32_t partial_ready_sem_idx = 2;
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = start_sem_idx,
         .core_type = tt::CoreType::WORKER,
@@ -308,6 +365,12 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     });
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = done_sem_idx,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = all_cores,
+        .initial_value = 0,
+    });
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = partial_ready_sem_idx,
         .core_type = tt::CoreType::WORKER,
         .core_ranges = all_cores,
         .initial_value = 0,
@@ -337,9 +400,9 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     const auto src_read_size_last0 = red_dim_units_last0 * input_unit_size;
     const auto src_read_size_last1 = red_dim_units_last1 * input_unit_size;
 
-    // Common compile time args for all cores
+    // Common compile time args for all cores and both data movement processors
     // Refer to the kernel code for explanation of the args
-    std::vector<uint32_t> reader_compile_args = {
+    const std::vector<uint32_t> base_compile_args = {
         src_cb_idx,
         dst_cb_idx,
         red_idxs_cb_idx,
@@ -370,69 +433,127 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
         start_sem_idx,
         done_sem_idx,
     };
-    tt::tt_metal::TensorAccessorArgs(input).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(output).append_to(reader_compile_args);
 
-    KernelDescriptor reader_desc0;
-    reader_desc0.kernel_source =
+    const std::string kernel_path =
         "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp";
-    reader_desc0.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc0.core_ranges = cores0;
-    reader_desc0.compile_time_args = reader_compile_args;
-    reader_desc0.config = DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-        .noc = tt::tt_metal::NOC::RISCV_1_default,
+
+    // Per-instance args: this processor's j sub-range, its half of src_cb, and whether it owns the
+    // cross-core reduction.
+    const auto make_compile_args = [&](uint32_t j_start, uint32_t j_end, uint32_t src_cb_offset, bool owns_reduction) {
+        std::vector<uint32_t> args = base_compile_args;
+        args.push_back(partial_ready_sem_idx);
+        args.push_back(j_start);
+        args.push_back(j_end);
+        args.push_back(src_cb_offset);
+        args.push_back(static_cast<uint32_t>(owns_reduction));
+        args.push_back(static_cast<uint32_t>(use_secondary_dm));
+        tt::tt_metal::TensorAccessorArgs(input).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(output).append_to(args);
+        return args;
     };
+
+    const auto make_kernel = [&](const CoreRangeSet& kernel_cores,
+                                 tt::tt_metal::DataMovementProcessor processor,
+                                 tt::tt_metal::NOC noc,
+                                 std::vector<uint32_t> args) {
+        KernelDescriptor k;
+        k.kernel_source = kernel_path;
+        k.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        k.core_ranges = kernel_cores;
+        k.compile_time_args = std::move(args);
+        k.config = DataMovementConfigDescriptor{.processor = processor, .noc = noc};
+        return k;
+    };
+
+    // RISCV_1 owns the cross-core protocol (start_sem multicast, done_sem, partial-slot write,
+    // final reduction); its NOC1 pinning is asserted in the kernel. RISCV_0 only scans its j
+    // sub-range and hands off through partial_ready_sem.
+    const auto make_primary = [&](const CoreRangeSet& kernel_cores) {
+        return make_kernel(
+            kernel_cores,
+            tt::tt_metal::DataMovementProcessor::RISCV_1,
+            tt::tt_metal::NOC::RISCV_1_default,
+            make_compile_args(0, primary_j_end, 0, /*owns_reduction=*/true));
+    };
+    const auto make_secondary = [&](const CoreRangeSet& kernel_cores, uint32_t src_cb_offset) {
+        return make_kernel(
+            kernel_cores,
+            tt::tt_metal::DataMovementProcessor::RISCV_0,
+            tt::tt_metal::NOC::RISCV_0_default,
+            make_compile_args(primary_j_end, inner_dim_units, src_cb_offset, /*owns_reduction=*/false));
+    };
+
+    // Both processors on a core take identical runtime args; only their compile time args differ.
+    const auto emplace_core_args = [&](KernelDescriptor& kernel,
+                                       const CoreCoord& core,
+                                       uint32_t core_index,
+                                       uint32_t src_offset,
+                                       uint32_t red_dim_offset,
+                                       uint32_t read_size,
+                                       uint32_t units_this_core) {
+        kernel.emplace_runtime_args(
+            core, {input, output, core_index, src_offset, red_dim_offset, read_size, units_this_core});
+    };
+
+    KernelDescriptor reader_desc0 = make_primary(cores0);
+    std::optional<KernelDescriptor> secondary_desc0;
+    if (use_secondary_dm) {
+        secondary_desc0 = make_secondary(cores0, src_cb_page_size0);
+    }
 
     const auto cores_coords0 = corerange_to_cores(cores0, num_cores0, true);
     const auto cores_coords1 = corerange_to_cores(cores1, num_cores1, true);
 
     // Set runtime args for cores0 and cores1, only offsets (src and red_dim_units) are different
-    // Refer to the kernel code for explanation of the args
+    // Refer to the kernel code for explanation of the args.
     for (uint32_t i = 0; i < num_cores0; ++i) {
         const CoreCoord& core = cores_coords0.at(i);
-        reader_desc0.emplace_runtime_args(
-            core,
-            {input,
-             output,
-             i,
-             static_cast<uint32_t>(i * src_read_size0),
-             i * red_dim_units0,
-             static_cast<uint32_t>((i == num_cores0 - 1) ? src_read_size_last0 : src_read_size0),
-             (i == num_cores0 - 1) ? red_dim_units_last0 : red_dim_units0});
+        const bool is_last = (i == num_cores0 - 1);
+        const uint32_t read_size = static_cast<uint32_t>(is_last ? src_read_size_last0 : src_read_size0);
+        const uint32_t units = is_last ? red_dim_units_last0 : red_dim_units0;
+        const uint32_t src_offset = static_cast<uint32_t>(i * src_read_size0);
+        const uint32_t red_dim_offset = i * red_dim_units0;
+
+        emplace_core_args(reader_desc0, core, i, src_offset, red_dim_offset, read_size, units);
+        if (secondary_desc0.has_value()) {
+            emplace_core_args(*secondary_desc0, core, i, src_offset, red_dim_offset, read_size, units);
+        }
     }
 
     desc.kernels.push_back(std::move(reader_desc0));
+    if (secondary_desc0.has_value()) {
+        desc.kernels.push_back(std::move(*secondary_desc0));
+    }
 
     if (num_cores1 > 0) {
-        KernelDescriptor reader_desc1;
-        reader_desc1.kernel_source =
-            "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp";
-        reader_desc1.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        reader_desc1.core_ranges = cores1;
-        reader_desc1.compile_time_args = std::move(reader_compile_args);
-        reader_desc1.config = DataMovementConfigDescriptor{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
-        };
+        KernelDescriptor reader_desc1 = make_primary(cores1);
+        std::optional<KernelDescriptor> secondary_desc1;
+        if (use_secondary_dm) {
+            secondary_desc1 = make_secondary(cores1, src_cb_page_size1);
+        }
 
         const uint32_t src_offset1 = static_cast<uint32_t>(src_read_size0 * num_cores0);
         const uint32_t red_dim_offset1 = static_cast<uint32_t>(red_dim_units0 * num_cores0);
 
         for (uint32_t i = 0; i < num_cores1; ++i) {
             const CoreCoord& core = cores_coords1.at(i);
-            reader_desc1.emplace_runtime_args(
-                core,
-                {input,
-                 output,
-                 static_cast<uint32_t>(num_cores0 + i),
-                 static_cast<uint32_t>(src_offset1 + (i * src_read_size1)),
-                 red_dim_offset1 + (i * red_dim_units1),
-                 static_cast<uint32_t>((i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1),
-                 (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
+            const bool is_last = (i == num_cores1 - 1);
+            const uint32_t core_index = static_cast<uint32_t>(num_cores0 + i);
+            const uint32_t read_size = static_cast<uint32_t>(is_last ? src_read_size_last1 : src_read_size1);
+            const uint32_t units = is_last ? red_dim_units_last1 : red_dim_units1;
+            const uint32_t src_offset = static_cast<uint32_t>(src_offset1 + (i * src_read_size1));
+            const uint32_t red_dim_offset = red_dim_offset1 + (i * red_dim_units1);
+
+            emplace_core_args(reader_desc1, core, core_index, src_offset, red_dim_offset, read_size, units);
+            if (secondary_desc1.has_value()) {
+                emplace_core_args(*secondary_desc1, core, core_index, src_offset, red_dim_offset, read_size, units);
+            }
         }
 
         desc.kernels.push_back(std::move(reader_desc1));
+        if (secondary_desc1.has_value()) {
+            desc.kernels.push_back(std::move(*secondary_desc1));
+        }
     }
 
     return desc;
