@@ -23,7 +23,7 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "combine_fabric2d_sender_ct_args.hpp"
 
-// Forwarded tokens between semaphore bumps to the downstream reader. A bump always follows a sentinel
+// Forwarded tokens between semaphore bumps to the downstream reader. A chunk's last page forces a bump
 // regardless, so this only sets how finely that reader can pipeline within a chunk.
 constexpr uint32_t FWD_BUMP_EVERY = 32;
 constexpr cmbf2d::SenderCtArgs ct{};
@@ -63,8 +63,8 @@ uint32_t wait_for_filled(uint32_t sent) {
     }
 }
 
-// Tell the downstream reader how far its quarter is filled. A sentinel always forces a bump: it is the chunk
-// boundary that reader switches on, so leaving it uncounted would strand it.
+// Tell the downstream reader how far its quarter is filled. A chunk's last page always forces a bump: that
+// reader consumes a whole chunk before moving on, so leaving the tail uncounted would strand it.
 template <typename FabricSender>
 void bump_downstream(FabricSender& fabric, uint32_t count) {
     volatile PACKET_HEADER_TYPE* hdr_bump = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_drain_addr);
@@ -84,7 +84,7 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump
     if (cmd == cmbf2d::CMD_END) {
         return cmd;
     }
-    const bool forwarding = (cmd == cmbf2d::CMD_FORWARD);
+    const bool forwarding = (cmd == cmbf2d::CMD_FORWARD || cmd == cmbf2d::CMD_FORWARD_END);
     const uint32_t payload_bytes = forwarding ? (ct.token_size_bytes + cmbf2d::FWD_EXTRA_BYTES) : ct.token_size_bytes;
 
     volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot);
@@ -102,7 +102,7 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump
 
     if (forwarding) {
         fwd_since_bump++;
-        if (metadata->dst_chip == cmbf2d::SENTINEL_DST_CHIP || fwd_since_bump >= FWD_BUMP_EVERY) {
+        if (cmd == cmbf2d::CMD_FORWARD_END || fwd_since_bump >= FWD_BUMP_EVERY) {
             bump_downstream(fabric, fwd_since_bump);
             fwd_since_bump = 0;
         }

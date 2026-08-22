@@ -67,8 +67,4 @@ constexpr uint32_t relay_chunks_per_stream(uint32_t ring_extent) {
     return m * (m - 1) / 2;
 }
 
-constexpr uint32_t relay_chunks_per_mesh(uint32_t ring_extent, uint32_t num_links) {
-    return relay_chunks_per_stream(ring_extent) * stream_count(num_links);
-}
-
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
