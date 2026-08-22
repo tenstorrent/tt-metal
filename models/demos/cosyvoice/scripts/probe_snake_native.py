@@ -15,7 +15,7 @@ before `03_plan.md` was written, as a ternary SFPU op at
 broadcasting contract -- alpha and beta non-1 only on the **last** dimension -- is
 exactly the channels-last `[B, T, C]` layout `conv.py` already uses.
 
-So P1 is not a bounty to propose. The question that replaces it is whether swapping the
+So P1 is not a contribution to propose. The question that replaces it is whether swapping the
 composed five-op form for the native one is worth anything, at the two shapes HiFT
 actually runs: after the first upsample (256 channels, 2256 frames) and after the second
 (128 channels, 18048 frames). 48 activations per vocoder call.

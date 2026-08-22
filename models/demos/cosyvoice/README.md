@@ -33,10 +33,10 @@ Every command in this file assumes these paths:
 
 ```bash
 export TT_METAL_HOME=/path/to/tt-metal
-export COSYVOICE_REF=/mnt/CosyVoice                 # the upstream checkout
-export COSYVOICE_ENV=/mnt/cosyvoice_env             # the reference venv
+export COSYVOICE_REPO=/mnt/CosyVoice            # the upstream checkout
+export COSYVOICE_ENV=/mnt/cosyvoice_env         # the reference venv
 export COSYVOICE_PY=$COSYVOICE_ENV/bin/python
-export COSYVOICE_PYTHONPATH=$COSYVOICE_REF:$COSYVOICE_REF/third_party/Matcha-TTS
+export COSYVOICE_PYTHONPATH=$COSYVOICE_REPO:$COSYVOICE_REPO/third_party/Matcha-TTS
 ```
 
 From a clean checkout to a `.wav`:
@@ -48,9 +48,9 @@ cd $TT_METAL_HOME/models/demos/cosyvoice
 uv venv --python 3.10 $COSYVOICE_ENV
 VIRTUAL_ENV=$COSYVOICE_ENV uv pip install -r requirements-reference.txt
 
-git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git $COSYVOICE_REF
-git -C $COSYVOICE_REF checkout 074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc
-git -C $COSYVOICE_REF submodule update --init --recursive
+git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git $COSYVOICE_REPO
+git -C $COSYVOICE_REPO checkout 074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc
+git -C $COSYVOICE_REPO submodule update --init --recursive
 
 # 2. checkpoints (~6.9 GB)
 $COSYVOICE_PY scripts/download_model.py --skip-onnx-trt
@@ -153,12 +153,12 @@ $COSYVOICE_PY scripts/eval_wer_sim.py --run-dir /tmp/ref
 
 The front-end — text normalisation, the Whisper-family tokenizer, and the two **ONNX**
 encoders (`speech_tokenizer_v1.onnx`, `campplus.onnx`) — stays on host by design: three
-of the four are ONNX blobs, and none is on the bounty's critical path. `prepare_inputs.py`
-writes a flat `.npz` the device side loads without importing cosyvoice or onnxruntime —
-the same boundary `export_weights.py` draws.
+of the four are ONNX blobs, and none is on the critical path for this port.
+`prepare_inputs.py` writes a flat `.npz` the device side loads without importing
+CosyVoice or `onnxruntime` — the same boundary `export_weights.py` draws.
 
 `tt/flow/reference.py` and `tt/llm/reference.py` reimplement their stages in plain torch
-from the flat weight export alone — no cosyvoice, no diffusers, no device. Both reproduce
+from the flat weight export alone — no CosyVoice, no `diffusers`, no device. Both reproduce
 the captured goldens to PCC 0.9999999, which is what lets a device bring-up start from
 "the graph is right" instead of bisecting eighty blocks on rented silicon.
 
@@ -249,7 +249,7 @@ models/demos/cosyvoice/
 │   ├── common.py                golden loading, PCC, weight_norm folding
 │   ├── llm/                     text encoder, AR decoder, rel-pos attention, RAS
 │   ├── flow/                    conformer encoder, length regulator, CFM, estimator
-│   └── hifigan/
+│   └── hifigan/                 upstream's path name; the model is HiFTNet
 │       └── istft.py             the iSTFT identity  <- the enabling result
 └── tests/
     ├── golden/                  captured .npz + manifest.json
