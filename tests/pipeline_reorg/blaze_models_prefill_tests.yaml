@@ -1108,6 +1108,14 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_dispatch.py -k "mistral4-perf_no_pcc and 8x4" -vvv --tb=short
     ' || rc=1
     exit $rc
+    # KNOWN HOLLOW ON THIS BRANCH: measured on CI run 32567382271, this leg reported green with
+    # 44 + 16 skipped and ZERO tests run. Upstream rewrote mesh_configs.py so the only 8x4 row
+    # carrying the mesh-8x4 topology marker is fabric2d-torus-xy-8x4-2link, and TorusXY skips on the
+    # bh_sc1 galaxy ("Wrapped fabric requires a compatible physical ring ... cabling-certified
+    # allocation"). Unlike the block/transformer tests, the mesh row here comes from mesh_configs,
+    # not from this test, so it cannot be fixed by choosing a different profile locally. Treat this
+    # leg's green as NO SIGNAL until mesh_configs regains a non-torus 8x4 row. On
+    # ssalice/mistral4-119b-prefill the same entry genuinely runs 8 cases.
   test_type: mistral4_moe_ops
   test_group: module
   skus:

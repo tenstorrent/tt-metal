@@ -37,7 +37,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Confi
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4 import mistral4_decoder_layer_reference, rms_norm
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_119b_config import Mistral4Small119BConfig
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
@@ -1431,22 +1431,29 @@ def _mistral4_reference_snapshots(config, state_dict: dict, token_ids, num_layer
     [
         pytest.param(
             (8, 4),
-            # (sp, tp) = (8, 4): SP 8 on axis 0, TP 4 on axis 1 — the whole-galaxy shape the mistral4
-            # long-seq matmul configs were tuned on. The production TorusXY profile, sized to this
-            # model's own FABRIC_PAYLOAD_SIZE (4096 == hidden), matching its dense-MLA + MoE family
-            # (test_kimi_prefill_transformer) rather than GLM's. The per-axis CCL topology is derived from
-            # the fabric by per_axis_topology in the body, as every sibling case does.
+            # (sp, tp) = (8, 4): SP 8 on axis 0, TP 4 on axis 1 -- the whole-galaxy shape the mistral4
+            # long-seq matmul configs were tuned on. The per-axis CCL topology is derived from the
+            # fabric by per_axis_topology in the body, as every sibling case does.
+            #
+            # fabric2d, NOT torus_xy, and this deliberately DEVIATES from the sibling 8x4 rows
+            # (DeepSeek/Kimi/GLM all use torus_xy here). Reason, measured: on CI run 32567382271
+            # every torus_xy mistral4 case SKIPPED with "Wrapped fabric requires a compatible
+            # physical ring; Galaxy TorusXY additionally requires an explicit ring/ring descriptor
+            # and a cabling-certified allocation". A skipped leg reports green, so torus_xy here buys
+            # zero coverage while looking like success. FABRIC_2D is what these same tests ran under
+            # on ssalice/mistral4-119b-prefill, where they genuinely passed on CI. Move back to
+            # torus_xy once the bh_sc1 galaxy is ring-cabled and descriptor-certified.
             #
             # l1_small_size is the adapter's, verbatim: routing_use_l1_small_for_semaphores=True
-            # (below) puts the MoE routing all-gather's semaphores in L1_SMALL. Routing consumes
-            # 512 B; the remaining 256 B is for MLA high-bandwidth-gather semaphores.
-            torus_xy_device_params(
+            # puts the MoE routing all-gather's semaphores in L1_SMALL. Routing consumes 512 B; the
+            # remaining 256 B is for MLA high-bandwidth-gather semaphores.
+            fabric2d_device_params(
                 fabric_payload_size=Mistral4Small119BConfig.FABRIC_PAYLOAD_SIZE,
                 l1_small_size=768,
             ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4",
+            id="fabric2d-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
