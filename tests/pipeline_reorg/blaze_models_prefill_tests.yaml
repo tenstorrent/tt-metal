@@ -959,43 +959,90 @@
 # Mistral-Small-4-119B prefill (dense MLA + MoE-every-layer, SP=8 / TP=4 on a 32-chip Blackhole
 # galaxy). Bring-up branch: ssalice/mistral4-119b-prefill.
 #
-# STAGING REQUIRED before these can go green on CI. Nothing for this model exists under
-# /mnt/models yet (verified). Two mounts are needed:
-#   MISTRAL4_HF_MODEL              -> the fp8 checkpoint (per-tensor scheme, scalar
-#                                     weight_scale_inv -- NOT the [128,128] block scheme)
-#   TT_MISTRAL4_PREFILL_TTNN_CACHE -> a WRITABLE tilized weight-cache dir. The adapter's
-#                                     ttnn_cache_default is "" (mistral_small_4_119b.py:39), so
-#                                     without this every run re-converts weights from fp8.
-# The paths below follow the house convention; adjust to wherever the weights actually land.
-# Locally these tests were validated against /data/kmabee/models/Mistral-Small-4-119B-2603.
+# STAGING: exactly ONE thing has to be staged, and only for "Blaze - Mistral4 MLA":
+#   MISTRAL4_MLA_REF_CACHE -> the host-reference cache for test_mistral4_mla. Without it that
+#                             test hard-asserts on CI. File names + source path: see that entry.
+# The other six entries need NOTHING staged: their config comes from the adapter's hand-built
+# config_builder (mistral_small_4_119b.py:56-60 -- conftest._resolve_config_only returns the
+# builder before it ever looks at MISTRAL4_HF_MODEL) and their weights from the random_weights
+# fixture. The inert MISTRAL4_HF_MODEL / TT_MISTRAL4_PREFILL_TTNN_CACHE exports were therefore
+# deleted from mistral4_kv_cache_table / mistral4_prefill_block / mistral4_moe /
+# mistral4_prefill_transformer: leaving them there only hid which entries really need staging.
+# Two residuals are kept deliberately and documented in place -- the MLA entry still records the
+# checkpoint path (unreached on its random-only -k) and both MLA entries still record the ttnn
+# cache dir (never written, see CORRECTION below). Both are safe to delete as well.
+#
+# NO fp8 CHECKPOINT IS NEEDED. Pretrained-weight coverage is deliberately EXCLUDED from CI (see
+# the two MLA entries): nothing for this model exists under /mnt/models (verified), and
+# deepseek_v3_d_p/tests/conftest.py:563-604 resolves weights as env var -> default_local_path -> shared_path ->
+# snapshot_download. This variant sets neither middle option, so a pretrained case falls through
+# to snapshot_download("mistralai/Mistral-Small-4-119B-2603") -- a gated 113 GB pull (401, or a
+# multi-hundred-GB fetch) -- and the fixture RAISES rather than skipping. Pretrained weights are
+# validated locally instead, against /data/kmabee/models/Mistral-Small-4-119B-2603.
+#
+# CORRECTION: an earlier version of this block claimed TT_MISTRAL4_PREFILL_TTNN_CACHE was
+# required or that without it "every run re-converts weights from fp8". That is false for these
+# seven tests -- none of them ever writes the tilized ttnn weight cache. After a full local
+# validation run with the variable set, that directory contained ZERO files: the pretrained path
+# goes through pretrained_transformer_weights (a torch state-dict extract + fp8 dequant), not the
+# ttnn.as_tensor cache the variable feeds.
+#
+# BUDGET PREREQUISITE FOR MERGING: .github/time_budget.yaml `demo.bh_sc1` (line 388 on this
+# branch) must be raised from 488 to 555. Do NOT edit that file from here -- it is another team's
+# budget (last touched by Janko Mitrovic, 2026-08-18, "DeepSeek V4 HCA: functional prefill
+# (#52008)"). verify_time_budget.py runs in the load-test-matrix job that multihost-tests depends
+# on (blaze-models-prefill-tests-impl.yaml:142), so an over-budget sum blocks ALL 40 legs of this
+# pipeline -- every pre-existing entry included, not just these seven. The pre-existing entries
+# already sum to 479 of the 488; the seven below add 76.
 #
 # owner_id below is the models-team default -- reassign to the Mistral-4 owner before enabling.
 # ---------------------------------------------------------------------------------------------
 
 - name: "Blaze - Mistral4 MLA"
   cmd: |
+    # Pretrained-weight coverage is deliberately EXCLUDED from CI: no Mistral-Small-4 checkpoint is
+    # staged, so a `-pretrained` case falls through deepseek_v3_d_p/tests/conftest.py:563-604 to a gated 113 GB
+    # snapshot_download and RAISES (it does not skip). The -k below is narrowed from "8x4" to
+    # "8x4 and random" for exactly that reason; pretrained weights are validated locally. The export
+    # below is consequently unreached here -- use_pretrained is False-only after the narrowing, and
+    # the config comes from the adapter's config_builder, not from this path -- and is kept only to
+    # record where the checkpoint would live. Do NOT widen the -k without staging it first.
     export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603/
+    # Never written by any of these tests; see the CORRECTION in the header block above.
     export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/Mistral-Small-4-119B-Cache/prefill_ttnn
+
+    # MUST BE STAGED -- this one is a genuine prerequisite. test_mla.py:293-295 hard-asserts
+    #   assert not ((is_ci_env or is_ci_v2_env) and not scale_down_sl)
+    # whenever the host-reference cache file is missing, and test_mistral4_mla is parametrized
+    # scale_down_sl=False ("max_sl") + skip_host_comparison=False ("check_pcc"), so EVERY selected
+    # case reaches it. The directory is read from MISTRAL4_MLA_REF_CACHE (variant.mla_ref_cache_env,
+    # test_mla.py:281-283) and the file names must be EXACTLY
+    #   {random|pretrained}_seq{seq_len}.pt
+    # After the narrowing above only the two random ones are needed:
+    #   random_seq5120.pt   random_seq25600.pt
+    # Copy them from /tmp/mistral_small_4_119b_mla_ref_cache/, where they exist today. Any other
+    # name is simply not found and the assert fires anyway. This is the same reason the
+    # "Blaze - MLA" entry above exports
+    # DEEPSEEK_V3_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/test_mla_output.
+    export MISTRAL4_MLA_REF_CACHE=/mnt/models/mistral4-prefill-cache/test_mla_output
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla -k "8x4" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla -k "8x4 and random" -vvv --tb=short
     '
   test_type: mistral4_mla
   test_group: module
   skus:
     bh_sc1:
-      # 4 cases (random/pretrained x seq5k/seq25k); 91 s locally with a warm cache.
-      timeout: 20
+      # 2 cases (random x seq5k/seq25k) now that the pretrained pair is dropped; ~30 s locally
+      # with the reference cache in place -- ~20x headroom for a cold CI container over NFS.
+      timeout: 10
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
 
 - name: "Blaze - Mistral4 KV Cache Table"
   cmd: |
-    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603/
-    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/Mistral-Small-4-119B-Cache/prefill_ttnn
-
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_mistral4_kv_cache_table -vvv --tb=short
@@ -1004,8 +1051,9 @@
   test_group: module
   skus:
     bh_sc1:
-      # Single case; 38 s locally. The kvpe latent is 320 wide (256 + 64), not DeepSeek's 576.
-      timeout: 12
+      # Single case; 42 s locally. Nothing staged (config_builder + random_weights). The kvpe
+      # latent is 320 wide (256 + 64), not DeepSeek's 576.
+      timeout: 8
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -1016,7 +1064,13 @@
 # number is a bookkeeping check, not a fidelity statement. Widen this -k once that lands.
 - name: "Mistral4 MLA Chunked"
   cmd: |
-    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603/
+    # There is deliberately NO MISTRAL4_HF_MODEL export here, and this is counter-intuitive:
+    # test_mla.py:1083-1084 flips use_pretrained=True whenever reference == "cpu" AND that variable
+    # is set. The -k below selects `cpu`, so merely exporting it is what would force this entry onto
+    # the pretrained path -- i.e. onto the gated 113 GB snapshot_download described in the header
+    # block, which raises rather than skips. Pretrained-weight coverage is deliberately excluded
+    # from CI (no staged checkpoint) and is validated locally instead. Do not re-add the export.
+    # The line below is never written by any of these tests; see the CORRECTION in the header.
     export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/Mistral-Small-4-119B-Cache/prefill_ttnn
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -1027,8 +1081,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # 3 cases; 117 s locally.
-      timeout: 20
+      # 3 cases, random weights now that the pretrained flip is disarmed; 61 s locally.
+      timeout: 10
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -1054,18 +1108,22 @@
   test_group: module
   skus:
     bh_sc1:
-      # 44 + 16 cases (upstream's fp8_scaled_in / fp8_out axes doubled both); the
-      # requires_mesh_topology marks deselect everything but the 8x4 rows on a galaxy.
-      timeout: 20
+      # 44 + 16 collected (upstream's fp8_scaled_in / fp8_out axes doubled both); the
+      # requires_mesh_topology marks deselect everything but the 8x4 rows on a galaxy, leaving
+      # 4 + 16 running -- fewer in CI, where run_dispatch_combine skips ROW_MAJOR
+      # (test_ttnn_dispatch_combine.py:70-71). Measured 52 s + 67 s on the bring-up branch, whose
+      # running split was 8 + 8 -- re-measure here before trusting the headroom.
+      # Coverage gap, made explicit: -k "mistral4-640-avg" carries NO mesh filter, so it collects
+      # all 11 ALL_MESH_CONFIGS rows and the 40 non-8x4 cases skip GREEN. Note also that the one
+      # surviving row on this branch is fabric2d-torus-xy-8x4-2link, i.e. TORUS-XY: after the
+      # upstream mesh_configs rewrite there is no plain-FABRIC_2D 8x4 coverage in this test at all.
+      timeout: 12
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
 
 - name: "Blaze - Mistral4 Prefill Block"
   cmd: |
-    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603/
-    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/Mistral-Small-4-119B-Cache/prefill_ttnn
-
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_mistral4_prefill_block -vvv --tb=short
@@ -1074,8 +1132,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # dense 41 s + moe 147 s locally, random weights, seq 5120.
-      timeout: 20
+      # 4 cases (device_fp32/gpt_device x dense/moe), random weights, seq 5120; ~4 min locally.
+      timeout: 12
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -1087,9 +1145,6 @@
 # rule. See mistral4_bringup/test_wiring/FINDINGS.md F0.
 - name: "Blaze - Mistral4 MoE"
   cmd: |
-    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603/
-    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/Mistral-Small-4-119B-Cache/prefill_ttnn
-
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_mistral4_moe -vvv --tb=short
@@ -1098,8 +1153,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # 98 s locally; ~13 GB host RAM for the fp32 expert weights.
-      timeout: 20
+      # 134 s locally; ~13 GB host RAM for the fp32 expert weights.
+      timeout: 12
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -1119,9 +1174,6 @@
 #   python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_mistral4_prefill_transformer -k "pcc-random" -vvv --tb=short
 - name: "Blaze - Mistral4 Prefill Transformer Smoke"
   cmd: |
-    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603/
-    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/Mistral-Small-4-119B-Cache/prefill_ttnn
-
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_mistral4_prefill_transformer -k "smoke-random" -vvv --tb=short
@@ -1130,8 +1182,9 @@
   test_group: module
   skus:
     bh_sc1:
-      # 2-layer smoke 92 s locally; the 5-layer smoke case is also selected by this -k.
-      timeout: 25
+      # 2 cases -- both the 2-layer and the 5-layer smoke are selected by this -k -- 92 s each
+      # locally.
+      timeout: 12
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
