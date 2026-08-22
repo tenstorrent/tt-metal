@@ -40,7 +40,17 @@
 #   7. Bumped, because these ARE imported, to a version clearing their advisories:
 #      diffusers (matcha's decoder needs get_activation), lightning (matcha.utils.pylogger
 #      drags it in), modelscope, gdown, pyarrow (a module-level pyarrow.parquet in
-#      cosyvoice/dataset/processor.py), protobuf, transformers, torch/torchaudio.
+#      cosyvoice/dataset/processor.py), protobuf, transformers, torch/torchaudio,
+#      hydra-core.
+#
+#      hydra-core 1.3.2 -> 1.3.4 clears CVE-2026-68508 (GHSA-2cp2-2r3c-7p7r, HIGH:
+#      hydra.utils.instantiate executes code from an untrusted config). It is imported,
+#      though only as a side effect: matcha/utils/__init__.py imports instantiators,
+#      which imports hydra, and cosyvoice/flow/flow_matching.py reaches that package
+#      through matcha.utils.pylogger. instantiate itself is called only from
+#      matcha/train.py, which the reference never runs, so the exposure was already
+#      nil -- but 1.3.4 is a patch bump holding omegaconf<2.4,>=2.2, the same range
+#      1.3.2 held, so there is no reason to carry the finding.
 #
 #      transformers goes to 5.5.0, clearing all eight of its advisories. The reference
 #      touches two corners of it -- Qwen2ForCausalLM in cosyvoice/llm/llm.py, and
@@ -82,7 +92,7 @@
 conformer==0.3.2
 diffusers==0.38.0
 gdown==5.2.2
-hydra-core==1.3.2
+hydra-core==1.3.4
 HyperPyYAML==1.2.3
 inflect==7.3.1
 librosa==0.10.2

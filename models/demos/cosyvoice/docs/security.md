@@ -1,7 +1,8 @@
 # Dependency and input-handling review (R6)
 
 `pip-audit` run 2026-08-05; re-worked 2026-08-12 against the Cycode scan on the PR, which
-flagged 38 advisories across 10 pinned packages plus one SAST finding. The conclusion depends
+flagged 38 advisories across 10 pinned packages plus one SAST finding. A 39th arrived on
+2026-08-22 against `hydra-core` and is closed the same way, by a bump. The conclusion depends
 on a distinction the two-environment split already enforces, so it is stated first.
 
 ## The port adds no runtime dependencies
@@ -41,10 +42,10 @@ help. So the pins moved.
 | | advisories | disposition |
 |---|---|---|
 | removed with the package | 1 CRITICAL, 10 HIGH, 6 MEDIUM | `gradio`, `onnx` — never imported |
-| fixed by a version bump | 3 CRITICAL, 8 HIGH, 7 MEDIUM | `torch`, `lightning`, `diffusers`, `pyarrow`, `protobuf`, `modelscope`, `gdown`, `transformers` |
+| fixed by a version bump | 3 CRITICAL, 9 HIGH, 7 MEDIUM | `torch`, `lightning`, `diffusers`, `pyarrow`, `protobuf`, `modelscope`, `gdown`, `transformers`, `hydra-core` |
 | **outstanding** | **3 MEDIUM** | `torch` ×3 |
 
-**35 of 38 closed, including every CRITICAL and every HIGH.** The three that remain are all
+**36 of 39 closed, including every CRITICAL and every HIGH.** The three that remain are all
 `torch` MEDIUM local-DoS: CVE-2025-2998 has no fixed version at any release, and CVE-2025-3730
 and CVE-2025-2999 need torch ≥ 2.8, which breaks this venv twice over — torch ≥ 2.8's inductor
 imports `triton.backends`, which the `triton` that `openai-whisper` pins does not have, and
@@ -62,6 +63,13 @@ goldens bit-for-bit, which closed three advisories that had been written up as u
 What made the bumps safe to take is that they are checked, not asserted: regenerating the full
 golden set on the new pins reproduces all 29 files at **PCC ≥ 0.9999993**, e2e waveform
 `max|diff|` 3.5e-04. The reference the TTNN port is measured against did not move.
+
+The 39th, CVE-2026-68508 against `hydra-core` (HIGH, `hydra.utils.instantiate` running code
+from an untrusted config), is closed by 1.3.2 -> 1.3.4. `hydra` is imported on the reference
+path, but only as a side effect of `matcha/utils/__init__.py`; `instantiate` is called only
+from `matcha/train.py`, which the reference never runs. The bump is a patch release holding
+the same `omegaconf` range, so it costs nothing to take. Checked the same way as the others:
+regenerating the golden set on 1.3.4 reproduces all 29 files **bit-exact**, 139/139 arrays.
 
 One pin is held *back* for the same reason. `onnxruntime` has no advisory, but 1.23.2 emits a
 different token sequence from `speech_tokenizer_v1.onnx` than 1.18.0 does; that reroutes the LLM
