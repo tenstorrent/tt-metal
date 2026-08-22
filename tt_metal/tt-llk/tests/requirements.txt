@@ -9,6 +9,7 @@ tt-exalens==0.3.31
 tt-smi==3.1.1
 
 coverage[toml]==7.10.5
+duckdb==1.5.5
 exceptiongroup==1.3.0
 filelock==3.20.3
 fsspec==2025.7.0
