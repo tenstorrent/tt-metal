@@ -281,4 +281,14 @@ Tensor situ_glu(
     float beta2,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
+Tensor logaddexp(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+Tensor logaddexp2(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
 }  // namespace ttnn

@@ -957,4 +957,32 @@ Tensor situ_glu(
     return ttnn::multiply(situ_a, up_half, std::nullopt, out_mem);
 }
 
+Tensor logaddexp(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    // Numerically stable logaddexp identity: max(a, b) + log1p(exp(-abs(a - b)))
+    Tensor max_ab = ttnn::maximum(input_a, input_b, std::nullopt, output_mem_config);
+    Tensor diff = ttnn::abs(ttnn::subtract(input_a, input_b, std::nullopt, output_mem_config), output_mem_config);
+    Tensor neg_diff = ttnn::neg(diff, output_mem_config);
+    Tensor exp_neg_diff = ttnn::exp(neg_diff, false, output_mem_config);
+    Tensor log1p_term = ttnn::log1p(exp_neg_diff, output_mem_config);
+    return ttnn::add(max_ab, log1p_term, std::nullopt, output_mem_config);
+}
+
+Tensor logaddexp2(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    // Numerically stable logaddexp2 identity: max(a, b) + log2(1 + exp2(-abs(a - b)))
+    Tensor max_ab = ttnn::maximum(input_a, input_b, std::nullopt, output_mem_config);
+    Tensor diff = ttnn::abs(ttnn::subtract(input_a, input_b, std::nullopt, output_mem_config), output_mem_config);
+    Tensor neg_diff = ttnn::neg(diff, output_mem_config);
+    Tensor exp2_neg_diff = ttnn::exp2(neg_diff, false, output_mem_config);
+    Tensor one_plus = ttnn::add(exp2_neg_diff, 1.0f, std::nullopt, output_mem_config);
+    Tensor log2_term = ttnn::log2(one_plus, output_mem_config);
+    return ttnn::add(max_ab, log2_term, std::nullopt, output_mem_config);
+}
+
 }  // namespace ttnn
+
