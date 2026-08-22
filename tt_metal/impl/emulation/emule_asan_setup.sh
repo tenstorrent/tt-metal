@@ -1,12 +1,16 @@
 # =============================================================================
-# emule_setup.sh — tt-emule + ASAN environment for emulated test runs
+# emule_asan_setup.sh — tt-emule + ASAN environment for emulated test runs
 #
-#   USAGE:  source tt_metal/impl/emulation/emule_setup.sh   (from the tt-metal repo
-#           root; source it — do NOT execute — so the exports persist)
+#   USAGE:  source tt_metal/impl/emulation/emule_asan_setup.sh   (from the
+#           tt-metal repo root; source it — do NOT execute — so the exports
+#           persist)
 #
 # Routes tt-metal at the tt-emule software emulator (instead of a physical WH
 # card) and arms the host-side ASAN sanitizers. After sourcing, emule_preflight
 # runs automatically to confirm the build + environment are emule-ready.
+#
+# To undo everything this script does and return to your previous environment:
+#   source tt_metal/impl/emulation/emule_asan_teardown.sh
 #
 # This file only configures emule. Activate your Python venv and set up the
 # normal tt-metal environment (e.g. via create_venv.sh) before sourcing it.
@@ -14,9 +18,27 @@
 
 # Refuse to be executed instead of sourced (exports would be lost).
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-    echo "ERROR: source this file, do not execute it:  source tt_metal/impl/emulation/emule_setup.sh"
+    echo "ERROR: source this file, do not execute it:  source tt_metal/impl/emulation/emule_asan_setup.sh"
     exit 1
 fi
+
+# Snapshot the pre-existing values of every variable this script exports, so
+# emule_asan_teardown.sh can restore them exactly. Guarded so re-sourcing this
+# file does not overwrite the snapshot with emule values.
+_EMULE_ASAN_ENV_VARS="TT_METAL_HOME ARCH_NAME TT_METAL_EMULE_MODE TT_METAL_SLOW_DISPATCH_MODE TT_METAL_MOCK_CLUSTER_DESC_PATH TT_METAL_EMULE_ASAN"
+if [ -z "${_EMULE_ASAN_ENV_SAVED:-}" ]; then
+    for _v in $_EMULE_ASAN_ENV_VARS; do
+        if [ -n "${!_v+x}" ]; then
+            export "_EMULE_ASAN_HAD_$_v=1"
+            export "_EMULE_ASAN_SAVED_$_v=${!_v}"
+        else
+            unset "_EMULE_ASAN_HAD_$_v" "_EMULE_ASAN_SAVED_$_v"
+        fi
+    done
+    unset _v
+    export _EMULE_ASAN_ENV_SAVED=1
+fi
+unset _EMULE_ASAN_ENV_VARS
 
 # Anchors the mock cluster descriptor path below.
 export TT_METAL_HOME="$(pwd)"
@@ -50,7 +72,7 @@ emule_preflight() {
     if [ "${sym_count:-0}" -eq 0 ]; then
         echo "[preflight] FATAL: libtt_metal.so is not an EMULE build (missing emule::execute_program_emulated)"; ok=0
     fi
-    [ "$ok" = "1" ] || { echo "[preflight] environment NOT ready — fix the above and re-source emule_setup.sh"; return 1; }
+    [ "$ok" = "1" ] || { echo "[preflight] environment NOT ready — fix the above and re-source emule_asan_setup.sh"; return 1; }
     echo "[preflight] OK: emule build + emule mode + slow dispatch + ASAN all set."
     return 0
 }
