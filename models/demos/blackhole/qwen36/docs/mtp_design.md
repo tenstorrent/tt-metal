@@ -150,27 +150,64 @@ Adaptive draft length (TT_SPEC_ADAPTIVE_K=1): K_t = clamp(round(EMA(accepts))+1,
 1, K). Purely data-driven — chunk `valid_len`, the masks, and the accept-row
 count all ride the same buffers, so it works traced and eager.
 
-## Decode-shaped sequential verify — deferred (fit correction)
+## Fused decode-width verify — ACTIVE (contract v1, user-directed)
 
-The 41337 headline (113.7 ms/token) charged the chunk verify for costs that a
-clean K-sweep re-attributed: with in-window capture pollution removed, the fit
-is ~26 ms per draft leg and ~123 ms iteration-fixed, of which the verify chunk
-itself is only ~30-45 ms — the rest was per-iteration eager dispatch (the
-~2x48-layer GDN snapshot/restore copy storm) and per-leg host I/O (per-leg
-cos/sin uploads + a full 8-shard logits readback per draft). v3 removes those
-on the host side (self-restoring verify trace, window drafter, on-device
-scores); the chunk verify STAYS.
+Promoted from deferred design after three capture-discipline failures on
+bespoke traces: this path rides ONLY proven machinery — the production
+decode-width bucket traces (width 8x(K+1)=40 <= 64) — and needs no new trace
+capture. Verify = ONE production-shaped decode step over pseudo-user rows.
 
-If a future measurement shows the remaining verify floor (~30-45 ms) gating,
-the decode-shaped verify remains the designed next step: gemma4 batch-alias
-attention (W=K+1 pseudo-users, replicated page-table row) + a GDN W-step
-no-commit recurrence with per-row state stashes (composition first via the
-non-in-place `recurrent_gated_delta_rule_decode_ttnn`; then a `seq_rows`
-compile-time mode on the fused `recurrence` generic_op from gdn-decode-fused —
-one core per v-head loops the W rows in-kernel, state resident in L1, per-row
-stash, no writeback). Commit becomes a host-selected
-`ttnn.copy(state_stash[m] -> rec_state)`, which would retire the block-anchor
-machinery entirely.
+**Row layout**: width W_total = B x W rows, W = K+1; row u*W + t = user u's
+candidate t (t=0 is the anchor t_c, then drafts d_1..d_K) at position c_u + t.
+
+**Attention (no kernel work)**: gemma4 batch-alias through the existing batched
+decode path — pseudo-user page table rows = user u's row replicated W times,
+per-row positions c_u..c_u+K, per-row rope. KV writes land at the candidates'
+true slots in the user's own blocks; rejected rows are rewritten next
+iteration before anything attends past them (the standing invariant).
+
+**GDN `seq_rows` mode on the fused `recurrence` generic_op** (gdn-decode-fused;
+one core per (user, v-head) — 48 cores at TP=8, exactly the B=8 decode
+mapping):
+- compile-time arg `seq_rows=W` (0 = today's per-row-slot behavior).
+- The (u, vh) core loads `rec_state[u, vh]` (the user's ANCHOR state) into L1
+  ONCE, then loops t = 0..W-1 over activation rows u*W+t: decay/delta-rule
+  update on the LOCAL copy, per-row gated output exactly as today, and after
+  each row writes the local state to `state_stash[u, t, vh]` (new io_tensor,
+  [B, W, Nv_tp, Dk, Dv] fp32 ~15 MB/device at W=5) via TensorAccessor —
+  the SAME mechanism as today's in-place writeback, different destination.
+  `rec_state` itself is NEVER written (no-commit).
+- Runtime args add the stash base address; CB plan unchanged (state stays the
+  ~64 KB fp32 L1 block; the loop reuses it).
+- Conv leg v1 stays composite: per-user 4-tap FIR over the W rows seeded from
+  `_batched_conv_carry[u]` (the masked-bucket FIR at T=W, one-hot windows),
+  producing a per-row conv stash [B, W, K-1, D_tp] the same way. A
+  `seq_rows` variant of `conv_shift_silu` is the later fusion.
+
+**Commit-by-select (replaces commit chunks — and with them the 49490
+alloc-under-trace hazard class entirely)**: the host learns m_u from the accept
+compare, then per GDN layer: row-write `state_stash[u, m_u] -> rec_state[u]`
+and the conv stash row -> `_batched_conv_carry[u]` (`_write_index`, outside any
+trace). No re-processing, no block-aligned anchors, no snapshot/restore: the
+anchor IS the committed state, advanced only by selects. Prefill reverts to
+the standard full-prompt paths.
+
+**Scores/accept**: per-row per-shard argmax/max exactly as the batched loop
+does today (rows <= 32 per user; scores can run per user or on the padded
+64-row block).
+
+**Cost model**: one width-40 decode step ~28-35 ms (weight-bound,
+width-independent) + drafter legs; ~35-50 ms/iter at c8 => ~2-3 ms/token/user
+verify-side — an order under the chunk verify, and u=1 inherits the same path
+at width K+1.
+
+Shared with the chunk-verify loop: SpecSlot bookkeeping, greedy_accept,
+adaptive_draft_len, the drafter (traced windows or eager), and the
+prompt-file/uniform correctness gates.
+
+The chunk-shaped verify loops below (u=1 and batched) are the measured path
+and remain the fallback while the fused verify lands; whichever cleanly clears
+the per-iteration budget on silicon wins.
 
 ## TP (P150x4 / P150x8), B=1 — built
 
