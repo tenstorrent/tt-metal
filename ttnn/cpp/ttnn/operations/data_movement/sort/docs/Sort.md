@@ -195,7 +195,8 @@ The TTNN Sort operation provides three sorting strategies, each optimized for di
   * The **number of available cores**.
   * The **L1 memory size** of each core.
 * **Single Row Multi Core** is the **most scalable and robust** strategy. It guarantees sorting of **tensors of any size**, regardless of how large they are, though it may be slower due to increased synchronization and DRAM involvement. This strategy ensures that even extremely large tensors are always supported.
-* **Single Row Single Core** is efficient for small tensors where the entire sort fits easily within one core's working memory.
+* **Single Row Single Core** is efficient for small tensors where the entire sort fits easily within one core's working memory — provided there are enough tile-rows (`Ht`) to occupy the grid. Each core sorts whole tile-rows, so at small `Ht` the rest of the grid idles while one core pays the full tile-network cost.
+* **Small-`Ht` reroute**: cells in the single-core width band (`Wt` in `[16, 64]`, TILE layout, non-UINT16) with `Ht <= Wt/8` are routed to **Cross Core Data Exchange** instead, which splits the tile-row across `~Wt/2` cores (measured 5–12× faster on those cells; e.g. a `32×2048` stable bfloat16 sort drops from 1.98 ms to ~0.19 ms). The index-dtype rules are unaffected by this reroute — stable bfloat16 sorts in the single-core width band return `uint32` indices on either factory.
 
 ## Strategies description
 

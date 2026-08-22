@@ -1081,9 +1081,11 @@ def test_sort_stable_row_major(descending, device):
 
 @pytest.mark.parametrize("descending", [False, True])
 def test_sort_stable_single_core_fused_dtype(descending, device):
-    """Single-core-factory stable bf16 sorts (Wt <= 64) run the FUSED true-index-tag engine in
-    32-bit DEST, so their index output dtype is UINT32 (the same rule fp32/u16 inputs follow).
-    Tie-heavy parity at the widest single-core shape."""
+    """Stable bf16 sorts in the single-core width band (Wt <= 64) return UINT32 indices — the
+    32-bit-DEST rule the fused true-index-tag engine requires (same rule fp32/u16 inputs follow).
+    The dtype contract holds regardless of which factory the router picks: this Ht=1 cell is
+    rerouted to the CrossCore comparator for speed, the large-Ht sibling test below runs the
+    fused single-core engine, and both must produce UINT32 indices and torch-stable exactness."""
     levels = [-1.5, -0.5, -0.5, 0.5, 1.5]
     input_tensor = _tie_heavy_tensor([32, 2048], levels, seed=31)
 
@@ -1094,6 +1096,69 @@ def test_sort_stable_single_core_fused_dtype(descending, device):
     assert ttnn_indices.dtype == ttnn.uint32
     assert_equal(torch_indices, ttnn.to_torch(ttnn_indices).to(torch.int64))
     assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_single_core_fused_large_ht(descending, device):
+    """Large-Ht guard for the small-Ht CrossCore reroute: Ht=9 exceeds the Wt/8=8 cutoff at
+    Wt=64, so this shape stays on the single-core factory and runs the FUSED true-index-tag
+    engine (per-core tile-row fanning is optimal there). UINT32 indices + stable exactness."""
+    levels = [-1.5, -0.5, -0.5, 0.5, 1.5]
+    input_tensor = _tie_heavy_tensor([9 * 32, 2048], levels, seed=37)
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    assert ttnn_indices.dtype == ttnn.uint32
+    assert_equal(torch_indices, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("stable", [False, True])
+@pytest.mark.parametrize("width", [512, 1024, 2048])
+def test_sort_small_ht_cross_core_reroute(width, stable, descending, device):
+    """Small-Ht cells in the single-core width band (Wt in [16, 64], Ht <= Wt/8) reroute to the
+    CrossCore factory (measured 5-12x faster there; the single-core factory would idle the rest
+    of the grid). Exactness parity on tie-heavy input for both stability modes."""
+    levels = [-1.5, -0.5, -0.5, 0.5, 1.5]
+    input_tensor = _tie_heavy_tensor([32, width], levels, seed=41 + width + int(descending))
+
+    if stable:
+        _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16)
+        return
+
+    torch_values, _ = torch.sort(input_tensor, dim=-1, descending=descending)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+
+    dev_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+    # Unstable contract (same checks as test_sort_standard): exact values, and the indices
+    # gather the sorted values. The CrossCore comparator-less network may emit duplicate
+    # indices inside tie groups (pre-existing behavior at the widths it already owned:
+    # measured non-permutation index output at W=4096/8192 on tie-heavy input), so no
+    # permutation assertion here.
+    gathered = torch.gather(input_tensor, -1, dev_indices)
+    assert_equal(torch_values, gathered)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_small_ht_cross_core_reroute_fp32(descending, device):
+    """fp32 input in the rerouted band: CrossCore with UINT32 indices (the fp32 dtype rule)."""
+    torch.manual_seed(53)
+    input_tensor = torch.randn([32, 2048], dtype=torch.float32)
+
+    torch_values, _ = torch.sort(input_tensor, dim=-1, descending=descending)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+
+    assert ttnn_indices.dtype == ttnn.uint32
+    dev_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values, dtype=torch.float32))
+    gathered = torch.gather(input_tensor, -1, dev_indices)
+    assert_equal(torch_values, gathered)
 
 
 @pytest.mark.parametrize("descending", [False, True])

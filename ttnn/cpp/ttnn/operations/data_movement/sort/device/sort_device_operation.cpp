@@ -52,8 +52,33 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
         (is_uint16 && is_row_major) ? SORT_WT_THRESHOLD_UINT16_ROW_MAJOR : SORT_WT_THRESHOLD;
 
     if (Wt <= single_core_wt_threshold) {
-        // Single-core implementation
-        return SortProgramFactorySingleRowSingleCore{};
+        // Small-Ht wide-tile reroute (#33492 roadmap, routing fix): the single-core factory
+        // processes one full tile-row's bitonic tile network per core per loop (all 32 tensor
+        // rows of a tile-row ride the SFPU lanes concurrently), so its wall time is
+        // ceil(Ht / num_cores) x T_sc(Wt) and the grid idles when Ht is small. The CrossCore
+        // factory splits the same tile-row's Wt tiles over ~Wt/2 cores and costs
+        // Ht x T_cc(Wt). Measured on p150a (tie-heavy bf16, Tracy device-kernel duration,
+        // n=10, spread < 0.5%):
+        //   Wt=64: T_sc 1982 us (stable) / 1562 (unstable) vs T_cc 170-186 / 150  (10-12x)
+        //   Wt=32: T_sc  805 (stable)                      vs T_cc  97          (8x)
+        //   Wt=16: T_sc  314 (stable)                      vs T_cc  66          (5x)
+        // Route to CrossCore only where it wins with margin: Ht <= Wt/8 keeps every routed
+        // cell >= 2x under the single-core wall at the measured ratios, and leaves large-Ht
+        // workloads (where per-core tile-row fanning is already optimal) untouched. UINT16
+        // stays single-core (the CrossCore factory has no u16<->fp32 conversion path);
+        // ROW_MAJOR keeps the existing routing (the CrossCore RM path is unmeasured at
+        // these widths). The index-dtype contract in compute_output_specs is deliberately
+        // NOT routing-dependent: stable bf16 cells at Wt <= 64 keep UINT32 indices on both
+        // factories so the dtype a user sees never depends on Ht.
+        const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
+        const auto& pshape = tensor_args.input_tensor.padded_shape();
+        const uint32_t Ht = (pshape[0] * pshape[1] * pshape[2]) / tile_height;
+        const bool cross_core_wins_small_ht = !is_uint16 && !is_row_major && Wt >= 16 && Ht <= Wt / 8;
+        if (!cross_core_wins_small_ht) {
+            // Single-core implementation
+            return SortProgramFactorySingleRowSingleCore{};
+        }
+        // Fall through to the CrossCore eligibility check below.
     }
     // UINT16 support in the CrossCore factory would require Float32 intermediate,
     // peer, and rm_value_output CBs (c_4, c_6, c_8, c_13) plus reader/writer
@@ -190,9 +215,12 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
     //   • stable BFLOAT16 on the SingleRowSingleCore factory (issue #33492): the fused-key
     //     stable engine tags the value words with the true index and needs the 32-bit DEST; its
     //     index tiles ride the proven UINT32 transport (the u16-index-in-32-bit-DEST combination
-    //     has no working pack path — the tile-size rationale above). The width guard mirrors
-    //     select_program_factory's single-core routing: wider stable sorts run the comparator on
-    //     the DM-bound factories with their ordinary index dtype.
+    //     has no working pack path — the tile-size rationale above). The width guard uses the
+    //     single-core width threshold, NOT the exact factory routing: small-Ht cells inside this
+    //     width band may be rerouted to the CrossCore factory for speed (see
+    //     select_program_factory), and those keep UINT32 indices too so the index dtype a user
+    //     sees never depends on Ht. Wider stable sorts run the comparator on the DM-bound
+    //     factories with their ordinary index dtype.
     const bool input_is_fp32 = (tensor_args.input_tensor.dtype() == DataType::FLOAT32);
     const bool input_is_uint16 = (tensor_args.input_tensor.dtype() == DataType::UINT16);
     const bool input_is_row_major = (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR);
