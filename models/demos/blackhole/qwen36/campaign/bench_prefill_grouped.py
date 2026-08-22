@@ -88,8 +88,14 @@ def _serial_prefill_instrumented(model, mesh, token_list, page_table, lens, tag)
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-@pytest.mark.parametrize("B, isl", [(8, 1024), (8, 2048)], ids=["b8-isl1k", "b8-isl2k"])
+@pytest.mark.parametrize(
+    "B, isl", [(8, 1024), (8, 2048), (8, "ragged")], ids=["b8-isl1k", "b8-isl2k", "b8-ragged"]
+)
 def test_bench_prefill_grouped(mesh_device, B, isl, monkeypatch, reset_seeds, ensure_gc):
+    # "ragged": mixed per-user lengths (alternating 1k/2k) — the serving-realistic case.
+    ragged = isl == "ragged"
+    if ragged:
+        isl = 2048  # bucket/KV sizing uses the max
     nd = mesh_device.get_num_devices()
     assert nd > 1, "grouped prefill is the TP (num_devices>1) path"
     n_layers = int(os.environ["QWEN36_BENCH_LAYERS"]) if os.environ.get("QWEN36_BENCH_LAYERS") else None
@@ -108,9 +114,9 @@ def test_bench_prefill_grouped(mesh_device, B, isl, monkeypatch, reset_seeds, en
     _mark(f"model ready ({len(model.layers)} layers, grid_cap={grid_cap})")
 
     torch.manual_seed(0)
-    lens = [isl] * B
+    lens = [1024 if u % 2 == 0 else 2048 for u in range(B)] if ragged else [isl] * B
     token_list = [
-        torch.tensor([torch.randint(0, args.vocab_size, (isl,)).tolist()], dtype=torch.long) for _ in range(B)
+        torch.tensor([torch.randint(0, args.vocab_size, (L,)).tolist()], dtype=torch.long) for L in lens
     ]
 
     monkeypatch.setenv("QWEN36_GDN_MAX_BG", str(B))
