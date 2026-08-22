@@ -106,7 +106,8 @@ constants that cannot be read off a tensor shape. `weight_norm` is folded at exp
 # host tier: no device, no silicon, ~40 s. 111 tests.
 pytest models/demos/cosyvoice/tests/ -k "not device"
 
-# device tier: needs /dev/tenstorrent. 41 tests.
+# device tier: needs /dev/tenstorrent. 35 device tests here, 11 more in perf below;
+# the host tier lives in tests/pcc/ and runs here too, so this collects 146.
 pytest models/demos/cosyvoice/tests/pcc/ models/demos/cosyvoice/tests/e2e/ -v
 
 # performance -- see PERF.md for what the numbers mean
@@ -280,7 +281,7 @@ models/demos/cosyvoice/
 │   ├── download_model.py        stdlib-only, resumable checkpoint fetch
 │   ├── gen_golden.py            capture per-module goldens from the reference
 │   ├── run_reference.py         4 modes x 5 languages, with tok/s + RTF
-│   └── eval_wer_sim.py          WER/CER + speaker similarity (R9)
+│   └── eval_wer_sim.py          WER/CER + speaker similarity
 ├── tt/
 │   ├── model_config.py          every dtype, memcfg and shape constant
 │   ├── common.py                golden loading, PCC, weight_norm folding

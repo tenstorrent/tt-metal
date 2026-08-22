@@ -1,7 +1,10 @@
-# Raw validation logs (R4)
+# Raw validation logs
 
 Unedited pytest output, kept raw rather than summarised so every result can be checked
 at source.
+
+Counts are as they stood on `2026-08-05`, when these runs were taken. The suite has grown
+since; current counts are in [`../../PERF.md`](../../PERF.md) under *Test counts*.
 
 | file | tier | result |
 |---|---|---|
