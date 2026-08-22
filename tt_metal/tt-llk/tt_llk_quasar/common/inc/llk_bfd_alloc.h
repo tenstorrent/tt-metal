@@ -51,6 +51,7 @@ enum class BfdResource : std::uint8_t
     Unp1,
     Pack0,
     Pack1,
+    UnpS,
     Count
 };
 
@@ -69,6 +70,7 @@ constexpr bool bfd_engine_owned_by_trisc(const BfdResource engine, const std::ui
         case BfdResource::Pack0:
             return trisc == 2;
         case BfdResource::Pack1:
+        case BfdResource::UnpS:
             return trisc == 3;
         default:
             return false;

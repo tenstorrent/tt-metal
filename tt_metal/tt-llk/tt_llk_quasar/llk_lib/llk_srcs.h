@@ -115,3 +115,75 @@ inline void _llk_pack_srcs_config_for_tile_(const bool srcs_32bit_mode)
         _llk_pack_srcs_config_<INSTRN_COUNT, srcs_dims::slice_count(false)>();
     }
 }
+
+/**
+ * @brief Builds the MOP for unpacking one operand to SrcS (UNP_S).
+ *
+ * Bakes @p buf_desc_id into UNPACR2. Inner loop issues one UNPACR2 per SrcS slice so a single
+ * execute covers one 32x32 tile. UNP_S auto-loop must be programmed to 1 iteration so each MOP
+ * instruction runs once.
+ *
+ * PACK1 cannot use a MOP (it requires autoloop); pair with @ref _llk_pack_srcs_config_for_tile_
+ * / @ref _llk_pack_srcs_.
+ *
+ * @param buf_desc_id: Buffer descriptor id for the L1 input; allocated from the TRISC3 partition
+ *        at op-init time (see llk_bfd_alloc.h)
+ * @param num_slices: SrcS slices per 32x32 tile (srcs_dims::slice_count)
+ * @note @ref _llk_unpack_srcs_unary_ is the matching execute call on this thread.
+ */
+inline void _llk_unpack_srcs_unary_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_slices)
+{
+    constexpr std::uint32_t MOP_OUTER_LOOP = 1;
+    const std::uint32_t MOP_INNER_LOOP     = num_slices;
+
+    std::uint32_t unpack_instrn = TT_OP_UNPACR2_TILE_INC(0b0, 0b1 /*L1 inc*/, buf_desc_id, 0b1 /*Set dvalid*/);
+
+    ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_instrn);
+    temp.program_bank0_sw_cntl(instrn_buffer);
+}
+
+/**
+ * @brief Unpacks one 32x32 tile to SrcS using the MOP programmed by
+ *        @ref _llk_unpack_srcs_unary_mop_config_.
+ *
+ * @param start_l1_tile_idx: Tile index into the L1 input buffer to start unpacking from
+ */
+inline void _llk_unpack_srcs_unary_(const std::uint32_t start_l1_tile_idx)
+{
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, start_l1_tile_idx);
+    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+}
+
+/**
+ * @brief Builds the MOP for unpacking two operands to adjacent SrcS slices through UNP_S.
+ *
+ * One engine, two buffer descriptors: inner loop is UNPACR2(id0) then UNPACR2(id1). Auto-loop
+ * cannot alternate descriptors (tt-llk #1635), so UNP_S auto-loop must be 1 iteration and the
+ * matching execute runs this MOP once per slice.
+ *
+ * @param buf_desc_id_0: Buffer descriptor id for L1 input 0 (SrcS slice 0)
+ * @param buf_desc_id_1: Buffer descriptor id for L1 input 1 (SrcS slice 1)
+ * @note @ref _llk_unpack_srcs_binary_ is the matching execute call on this thread.
+ */
+inline void _llk_unpack_srcs_binary_mop_config_(const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1)
+{
+    constexpr std::uint32_t MOP_OUTER_LOOP = 1;
+    constexpr std::uint32_t MOP_INNER_LOOP = 1;
+
+    std::uint32_t unpack_instrn0 = TT_OP_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_0, 0b0 /*no dvalid*/);
+    std::uint32_t unpack_instrn1 = TT_OP_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_1, 0b1 /*Set dvalid*/);
+
+    ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_instrn0, unpack_instrn1);
+    temp.program_bank0_sw_cntl(instrn_buffer);
+}
+
+/**
+ * @brief Unpacks one SrcS slice pair (in0 then in1) using the MOP programmed by
+ *        @ref _llk_unpack_srcs_binary_mop_config_.
+ *
+ * Caller sets the UNP_S L1 tile index once per 32x32 tile before the per-slice loop.
+ */
+inline void _llk_unpack_srcs_binary_()
+{
+    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+}
