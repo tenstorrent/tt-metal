@@ -9,6 +9,7 @@
 # plus every QWEN38_BENCH_* / QWEN38_PREFILL_* knob from the bench scripts.
 #
 #SBATCH --job-name=qwen38-meas
+#SBATCH --propagate=NONE
 #SBATCH --dependency=singleton
 #SBATCH --nice=10000
 #SBATCH --time=04:00:00
