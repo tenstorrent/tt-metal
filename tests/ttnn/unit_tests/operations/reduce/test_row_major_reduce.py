@@ -229,7 +229,6 @@ def test_min_row_major(device, input_shape, dim, keepdim):
     )
 
 
-@pytest.mark.skip(reason="Skipping std test due to issue #32830")
 @pytest.mark.parametrize(
     "input_shape, dim",
     [
@@ -255,18 +254,18 @@ def test_std_row_major(device, input_shape, dim):
     output_tensor = ttnn.to_torch(output_tensor)
 
     # test for equivalance
+    # Tolerances match the TILE-layout welford std/var tests in test_reduction.py;
+    # bf16 outputs cannot meet 1e-06/1e-09 (sub-ULP) bounds.
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.99,
-        rtol=1e-06,
-        atol=1e-06,
-        frobenius_threshold=1e-09,
-        check_ulp=True,
+        rtol=0.01,
+        atol=0.01,
+        frobenius_threshold=0.007,
     )
 
 
-@pytest.mark.skip(reason="Skipping var test due to issue #32830")
 @pytest.mark.parametrize(
     "input_shape, dim",
     [
@@ -292,14 +291,15 @@ def test_var_row_major(device, input_shape, dim):
     output_tensor = ttnn.to_torch(output_tensor)
 
     # test for equivalance
+    # Tolerances match the TILE-layout welford std/var tests in test_reduction.py;
+    # bf16 outputs cannot meet 1e-06/1e-09 (sub-ULP) bounds.
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.99,
-        rtol=1e-06,
-        atol=1e-06,
-        frobenius_threshold=1e-09,
-        check_ulp=True,
+        rtol=0.01,
+        atol=0.01,
+        frobenius_threshold=0.007,
     )
 
 
