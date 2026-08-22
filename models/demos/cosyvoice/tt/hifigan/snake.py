@@ -16,7 +16,7 @@ dilations); there are 2 stages x 3 kernels = 6 main ResBlocks plus 2 source
 ResBlocks = 8 ResBlocks, so ~48 Snake activations per vocoder call, i.e. ~240
 dispatches and ~192 intermediates at 512 channels and audio-rate length.
 
-That is the case for a native `ttnn.snake` (03_plan.md P1) -- and the case is
+That is the case for a native `ttnn.snake` -- and the case is
 broader than CosyVoice: Snake is the standard activation in BigVGAN and its
 derivatives, so any HiFi-GAN-family vocoder brought up on Tenstorrent pays this.
 This module is written so a native op can replace `__call__` without touching

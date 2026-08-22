@@ -5,7 +5,7 @@
 
 This is the baseline the TTNN port is measured against: it produces the audio
 that `eval_wer_sim.py` scores, and the tok/s + RTF numbers that make the Stage 1
-perf gates (R8: >= 30 tok/s, RTF < 0.5) meaningful rather than absolute.
+perf gates (>= 30 tok/s, RTF < 0.5) meaningful rather than absolute.
 
 RUN THIS IN THE CosyVoice VENV:
 
@@ -193,7 +193,9 @@ def main() -> int:
     ap.add_argument("--langs", default="zh,en,ja,yue,ko")
     ap.add_argument("--seed", type=int, default=SEED)
     ap.add_argument("--threads", type=int, default=os.cpu_count())
-    ap.add_argument("--stream", action="store_true", help="also run each mode in streaming mode (R3 baseline)")
+    ap.add_argument(
+        "--stream", action="store_true", help="also run each mode in streaming mode (the streaming baseline)"
+    )
     args = ap.parse_args()
 
     root = args.cosyvoice_root

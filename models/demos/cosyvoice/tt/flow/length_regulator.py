@@ -21,7 +21,7 @@ The head/mid/tail split is preserved exactly. The reference interpolates the
 first 20 and last 20 tokens separately from the middle whenever the segment
 exceeds 40 tokens, so that streaming chunks have a clean seam. Collapsing that
 into one resample would change the output at the boundaries — subtly, and only
-in streaming, which is precisely the failure R3 exists to catch.
+in streaming, which is precisely the failure the streaming test exists to catch.
 """
 from __future__ import annotations
 

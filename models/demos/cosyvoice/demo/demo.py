@@ -63,7 +63,7 @@ def write_run_dir(run_dir: str, wav: torch.Tensor, seconds: float) -> None:
 
     That identity is the point. A separate scoring path for the port would make
     any WER difference ambiguous between "the model is worse" and "the harness
-    differs", which is precisely the ambiguity R9 exists to remove.
+    differs", which is precisely the ambiguity the scoring path exists to remove.
     """
     import json
 

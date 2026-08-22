@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Score synthesised speech for intelligibility (WER/CER) and speaker similarity.
 
-This is the measurement path for R9 of the bring-up plan -- "WER < 3.0, speaker
-similarity > 60". It is deliberately framework-agnostic: it scores a directory of
+This is the measurement path for the bring-up's speech-quality bar -- "WER < 3.0,
+speaker similarity > 60". It is deliberately framework-agnostic: it scores a directory of
 wavs plus the results.json that produced them, so the identical command scores the
 PyTorch reference and the TTNN port, and the two are directly comparable.
 
@@ -350,8 +350,8 @@ def aggregate(run: dict) -> dict:
         "tokens_per_second_mean": mean([r.get("tokens_per_second") for r in ok]),
     }
 
-    # R9 / R8 gates, evaluated but never enforced here -- the pytest perf suite owns
-    # enforcement. This is the number, stated plainly.
+    # Quality and perf gates, evaluated but never enforced here -- the pytest perf
+    # suite owns enforcement. This is the number, stated plainly.
     def gate(value, ok):
         """A metric that was not measured is 'n/a', NOT a failure.
 

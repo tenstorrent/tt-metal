@@ -5,7 +5,7 @@
 
 The host tier here is doing real work, not just shape checking: it pins the
 numerical claim that float32 is sufficient for the audio-rate phase integration,
-which is the finding that removed `02_plan.md` sec.3.4 from the risk register.
+which is the finding that took this cumsum off the risk register.
 """
 from __future__ import annotations
 

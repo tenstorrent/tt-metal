@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""P1: the iSTFT identity, on host and on device.
+"""The iSTFT identity, on host and on device.
 
 Two tiers, deliberately separated:
 
@@ -144,8 +144,8 @@ needs_l1_small = pytest.mark.parametrize("device_params", [{"l1_small_size": 327
 @needs_l1_small
 @pytest.mark.parametrize("n_frames", [64, 512])
 def test_device_istft_matches_host(device, n_frames):
-    """conv_transpose2d at H=1, in_ch=16, k=16, stride=4 -- the shape P1 exists
-    to de-risk. Compared against the host reference, not the golden, so a failure
+    """conv_transpose2d at H=1, in_ch=16, k=16, stride=4 -- the shape this test
+    exists to de-risk. Compared against the host reference, not the golden, so a failure
     here is unambiguously about TTNN op behaviour."""
     import ttnn
     from models.demos.cosyvoice.tt.hifigan.istft import TtIStft, periodic_hann
@@ -169,7 +169,7 @@ def test_device_istft_matches_host(device, n_frames):
 @needs_golden
 @needs_l1_small
 def test_device_istft_matches_golden(device):
-    """End of P1: the same PCC the host achieves, reproduced on silicon against
+    """The same PCC the host achieves, reproduced on silicon against
     the real captured vocoder tensors."""
     import ttnn
     from models.demos.cosyvoice.tt.hifigan.istft import TtIStft

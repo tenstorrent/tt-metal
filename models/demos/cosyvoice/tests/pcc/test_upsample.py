@@ -11,7 +11,7 @@ with a degenerate height. These tests pin the two shape families that matters:
     iSTFT OLA  k=16, stride=4, padding=0    (see test_istft.py)
 
 If the H=1 path turns out to carry large constant overhead, that measurement is
-the case for proposing a native ttnn.conv_transpose1d (03_plan.md P3).
+the case for proposing a native ttnn.conv_transpose1d.
 """
 from __future__ import annotations
 

@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""P2's exit criterion: mel -> waveform through the whole HiFT vocoder on device.
+"""The vocoder's exit criterion: mel -> waveform through the whole HiFT vocoder on device.
 
-`02_plan.md` P2 exits on "mel → waveform PCC ≥ 0.99, **zero host ops**". This is
-that test. It feeds the exact mel and excitation the reference consumed --
+The bar is "mel → waveform PCC ≥ 0.99, **zero host ops**". This is that test. It feeds the exact mel and excitation the reference consumed --
 captured in `hift.decode` -- and compares the waveform it produced.
 
 Weights come from `scripts/export_weights.py`, not from a live CosyVoice module,
