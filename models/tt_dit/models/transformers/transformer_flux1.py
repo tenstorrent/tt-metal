@@ -16,7 +16,13 @@ from models.common.utility_functions import is_blackhole
 from ...blocks.attention import Attention
 from ...blocks.transformer_block import TransformerBlock, _chunk_time3d
 from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings
-from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepare_chunked_linear_output
+from ...layers.linear import (
+    ColParallelLinear,
+    Linear,
+    LoRAColParallelLinear,
+    RowParallelLinear,
+    prepare_chunked_linear_output,
+)
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
 from ...utils import cache
@@ -44,6 +50,7 @@ class Flux1SingleTransformerBlock(Module):
         padding_config: PaddingConfig | None,
         attention_k_chunk_size: int = 512,
         attention_q_chunk_size: int = 128,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -67,6 +74,7 @@ class Flux1SingleTransformerBlock(Module):
             use_spatial_weights_for_prompt=True,
             k_chunk_size=attention_k_chunk_size,
             q_chunk_size=attention_q_chunk_size,
+            lora_enabled=lora_enabled,
         )
 
         self.norm = DistributedLayerNorm(
@@ -88,7 +96,10 @@ class Flux1SingleTransformerBlock(Module):
         )
 
         # Shard output, since size of input dimension << size of output dimension.
-        self.proj_mlp = ColParallelLinear(
+        # proj_mlp is a LoRA target (single-block FF-in); swap to the LoRA-aware
+        # variant when enabled so the adapter loader can register/bind it.
+        ProjMlpCls = LoRAColParallelLinear if lora_enabled else ColParallelLinear
+        self.proj_mlp = ProjMlpCls(
             dim,
             mlp_hidden_dim,
             mesh_device=mesh_device,
@@ -254,6 +265,7 @@ class Flux1Transformer(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -309,6 +321,7 @@ class Flux1Transformer(Module):
                 mesh_device=mesh_device,
                 attention_k_chunk_size=k_chunk_size,
                 attention_q_chunk_size=q_chunk_size,
+                lora_enabled=lora_enabled,
             )
             for i in range(num_layers)
         )
@@ -324,6 +337,7 @@ class Flux1Transformer(Module):
                 mesh_device=mesh_device,
                 attention_k_chunk_size=k_chunk_size,
                 attention_q_chunk_size=q_chunk_size,
+                lora_enabled=lora_enabled,
             )
             for i in range(num_single_layers)
         )
@@ -428,8 +442,16 @@ class Flux1Transformer(Module):
 class Flux1Checkpoint:
     """A Flux.1 checkpoint: fetches weights and builds loaded transformers."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, lora_path: str | None = None, lora_scale: float = 1.0) -> None:
         self._name = name
+        # LoRA is applied through the shared tt-dit LoRA framework (LoRA-aware
+        # Linears + adapter loader), fused into the on-device weights at build
+        # time — NOT via a diffusers host-side fuse. So the extracted state dict
+        # is always the base transformer; the adapter delta is merged after the
+        # base weights are loaded (see `build`). The base weights therefore cache
+        # once and are shared across every LoRA variant.
+        self._lora_path = lora_path
+        self._lora_scale = lora_scale
         torch_transformer = FluxTransformer2DModel.from_pretrained(
             name,
             subfolder="transformer",
@@ -467,6 +489,7 @@ class Flux1Checkpoint:
         else:
             padding_config = None
 
+        lora_enabled = self._lora_path is not None
         model = Flux1Transformer(
             patch_size=c.patch_size,
             in_channels=c.in_channels,
@@ -483,6 +506,7 @@ class Flux1Checkpoint:
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
+            lora_enabled=lora_enabled,
         )
         cache.load_model(
             model,
@@ -493,4 +517,21 @@ class Flux1Checkpoint:
             mesh_shape=tuple(device.shape),
             mesh_device=device,
         )
+        if lora_enabled:
+            self._load_and_bind_lora(model)
         return model
+
+    def _load_and_bind_lora(self, model: Flux1Transformer) -> None:
+        """Register the configured LoRA adapter into the (LoRA-aware) transformer
+        and bind it in fuse mode, merging the delta into the on-device base
+        weights. Runs after the base weights are loaded so ``bind_active`` has a
+        materialized ``weight.data`` to add the delta into."""
+        from loguru import logger
+
+        from ...experimental.lora.flux_adapter_loader import _path_to_module, load_flux_adapter_into
+
+        logger.info(f"loading FLUX LoRA adapter {self._lora_path!r} (scale={self._lora_scale}) via tt-dit framework...")
+        handle = load_flux_adapter_into(model, self._lora_path, scale=self._lora_scale, name="active")
+        for dotted, bank_idx in handle.target_indices.items():
+            _path_to_module(model, dotted).bind_active(bank_idx)
+        logger.info(f"bound LoRA into {len(handle.target_indices)} modules (rank≤{handle.rank}).")
