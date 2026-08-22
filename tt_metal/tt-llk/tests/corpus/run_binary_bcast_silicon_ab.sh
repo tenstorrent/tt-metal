@@ -27,7 +27,8 @@ run_pytest() {
 }
 
 archive_math_elf() {
-    local run_dir=$1 elf hash archive_dir="$run_dir/elf"
+    local run_dir=$1 elf hash
+    local archive_dir="$run_dir/elf"
     mkdir -p "$archive_dir"
     elf="$(find "$run_dir/temp" -name math.elf -type f | sort | tail -1)"
     test -n "$elf" || { echo "no math.elf under $run_dir/temp" >&2; exit 1; }

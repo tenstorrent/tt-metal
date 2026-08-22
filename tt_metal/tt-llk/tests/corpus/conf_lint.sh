@@ -16,6 +16,9 @@
 #       leaves the prose lying about what the pin is);
 #   R3  the PIN HISTORY has exactly one "(CURRENT)" entry, it is the
 #       highest-numbered entry, and its sha prefix equals the cc1plus pin;
+#   R3b the PIN HISTORY entries' leading sha prefixes are pairwise distinct
+#       (a duplicated sha = an in-place overwrite / global sha replace, the
+#       wave-14 audit-corruption class — history is append-only);
 #   R4  the sim pins' 12-hex prefixes appear in the conf prose (same rule as
 #       the compiler pins);
 #   R5  the baseline TSV header names the conf's cc1plus pin as CURRENT via
@@ -153,6 +156,24 @@ if [ -n "$CC1" ]; then
       show "$CONF" '\(CURRENT\)'
     fi
   fi
+fi
+
+# ---- R3b: PIN HISTORY entry shas are pairwise distinct (wave-14
+# audit-corruption class: a global sha search-replace during a re-pin
+# ceremony rewrites OLD history entries' shas IN PLACE — the corrupted
+# entry then duplicates another pin's sha and the superseded pin vanishes
+# from the audit trail; repair commit e3770bb54c).  A legitimate ceremony
+# APPENDS a new entry with a new sha; a duplicated sha across numbered
+# entries is always an in-place overwrite. ----
+HIST_DUPES=$(printf '%s\n' "$CONF_PROSE" \
+  | grep -E '^[0-9]+:#\s+[0-9]+\.\s+[0-9a-f]{12}' \
+  | sed -E 's/^[0-9]+:#\s+[0-9]+\.\s+([0-9a-f]{12}).*/\1/' \
+  | sort | uniq -d)
+if [ -n "$HIST_DUPES" ]; then
+  for _dup in $HIST_DUPES; do
+    fail R3b "PIN HISTORY sha prefix ${_dup}… leads MORE THAN ONE numbered history entry — in-place overwrite / global sha replace (the wave-14 audit-corruption class; history is APPEND-ONLY):"
+    show "$CONF" "#\s+[0-9]+\.\s+${_dup}"
+  done
 fi
 
 # ---- R4: sim pin prose ----
