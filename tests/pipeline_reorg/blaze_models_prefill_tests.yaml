@@ -874,8 +874,13 @@
   cmd: |
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_mistral4_prefill_transformer -k "smoke-random" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_mistral4_prefill_transformer -k "smoke-random and gpt_device" -vvv --tb=short
     '
+    # Smoke is narrowed to the gpt_device gate mode. The gate-mode axis (device_fp32 / gpt_device /
+    # gpt_host) multiplied "smoke-random" from 2 cases to 6, and the 12 min timeout was measured for
+    # 2 -- CI run 32562083327 timed this step out at 12 min 13 s. gpt_device is the mode worth
+    # smoking because it is the one that implements Mistral's actual (softmax) routing rule; both
+    # device modes are still covered side by side by mistral4_prefill_block.
   test_type: mistral4_prefill_transformer
   test_group: module
   skus:
