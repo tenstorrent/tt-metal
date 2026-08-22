@@ -14,21 +14,17 @@
 
 // split REDUCE across cores
 void kernel_main() {
-    using MidMcastArgs = dataflow_kernel_lib::McastArgs<0, 0>;
-    using FirstMcastArgs = dataflow_kernel_lib::
-        McastArgs<MidMcastArgs::next_compile_time_args_offset(), MidMcastArgs::next_runtime_args_offset()>;
-    using LastMcastArgs = dataflow_kernel_lib::
-        McastArgs<FirstMcastArgs::next_compile_time_args_offset(), FirstMcastArgs::next_runtime_args_offset()>;
+    constexpr uint32_t num_batch_group = get_compile_time_arg_val(0);
+
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(1);
+    const uint32_t per_core_N_bytes = get_compile_time_arg_val(2);
+    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(3);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(4);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(5);
+
+    constexpr uint32_t operation_ct_args_end = 6;
+    using MidMcastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, 0>;
     constexpr MidMcastArgs mid_mcast_args;
-    constexpr uint32_t post_mcast_ct_offset = LastMcastArgs::next_compile_time_args_offset();
-
-    constexpr uint32_t num_batch_group = get_compile_time_arg_val(post_mcast_ct_offset);
-
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(post_mcast_ct_offset + 1);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(post_mcast_ct_offset + 2);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(post_mcast_ct_offset + 3);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(post_mcast_ct_offset + 4);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(post_mcast_ct_offset + 5);
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;

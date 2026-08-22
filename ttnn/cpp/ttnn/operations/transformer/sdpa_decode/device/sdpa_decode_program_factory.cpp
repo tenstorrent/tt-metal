@@ -655,7 +655,6 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     } else {
         k_mcasts.emplace_back(device, CoreRangeSet(CoreRange({0, 0}, {0, 0})), CoreCoord{0, 0}, k_mcast_config);
     }
-    const auto k_mcast_compile_time_args = k_mcasts.front().compile_time_args();
 
     // If q is sharded, directly read in q_chunk_size_bytes if q is row major or tilized but with full tiles
     // If q is tilized and want to use tiny tiles, this is ignored since we need to skip bottom half of tiles
@@ -699,8 +698,6 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         original_block_size,
     };
     reader_compile_time_args_common.insert(
-        reader_compile_time_args_common.end(), k_mcast_compile_time_args.begin(), k_mcast_compile_time_args.end());
-    reader_compile_time_args_common.insert(
         reader_compile_time_args_common.end(),
         {
             static_cast<uint32_t>(q_locally_available),
@@ -721,6 +718,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     } else {
         tt_metal::TensorAccessorArgs(static_cast<const Buffer*>(nullptr)).append_to(reader_compile_time_args_common);
     }
+    k_mcasts.front().append_compile_time_args_to(reader_compile_time_args_common);
 
     std::vector<uint32_t> writer_compile_time_args_common = {
         B,
@@ -926,9 +924,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         const uint32_t mcast_index = use_col_major_group_indexing ? core.x * (grid_size.y / q_heads_parallel_factor) +
                                                                         core.y / q_heads_parallel_factor
                                                                   : 0;
-        reader_rt_args.append(k_mcasts[mcast_index].runtime_args(core));
         reader_rt_args.append(output_core_physical_xs);
         reader_rt_args.append(output_core_physical_ys);
+        k_mcasts[mcast_index].append_runtime_args_to(reader_rt_args, core);
 
         // writer runtime args (do_reduce is NOT included — writer doesn't use it)
         // The output address is passed as Buffer* (BufferBinding) so it is re-patched on the fast
@@ -998,8 +996,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             log_debug(tt::LogOp, "Setting core {} to idle", core);
 
             // Reader runtime args
-            // Base arguments, including the K-multicast role and opaque helper block.
-            KernelDescriptor::CoreRuntimeArgs reader_rt_args(20, 0);
+            // Operation prefix, followed by an inactive opaque K-multicast tail.
+            const auto k_mcast_runtime_arg_count = k_mcasts.front().runtime_args(CoreCoord{0, 0}).size();
+            KernelDescriptor::CoreRuntimeArgs reader_rt_args(16 + 2 * num_output_cores + k_mcast_runtime_arg_count, 0);
 
             // Writer runtime args - need to match the size with tree reduction params
             // Base args (10) + tree params (6) + children_per_round (MAX_TREE_REDUCTION_ROUNDS) + group coords

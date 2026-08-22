@@ -13,9 +13,6 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 void kernel_main() {
-    constexpr auto in0_mcast_args = dataflow_kernel_lib::McastArgs<4, 0>();
-    constexpr uint32_t in0_post_mcast_ct_offset = in0_mcast_args.next_compile_time_args_offset();
-
     // COMPILE TIME ARGS
     // in0 block args
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(0);
@@ -24,10 +21,12 @@ void kernel_main() {
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(2);
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(3);
     // batch args
-    constexpr uint32_t batch = get_compile_time_arg_val(in0_post_mcast_ct_offset);
+    constexpr uint32_t batch = get_compile_time_arg_val(4);
     // sparsity args
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(in0_post_mcast_ct_offset + 1);
+    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(5);
+
+    constexpr auto in0_mcast_args = dataflow_kernel_lib::McastArgs<6, 0>();
 
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
 

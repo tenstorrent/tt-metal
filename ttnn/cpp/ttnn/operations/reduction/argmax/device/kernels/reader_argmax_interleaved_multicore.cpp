@@ -282,13 +282,15 @@ void kernel_main() {
     // Semaphore to fire when intermediate outputs for one page are ready
     constexpr uint32_t done_sem_idx = get_compile_time_arg_val(17);
 
-    constexpr dataflow_kernel_lib::McastArgs<18, 7> group0_start_args;
-    constexpr dataflow_kernel_lib::
-        McastArgs<group0_start_args.next_compile_time_args_offset(), group0_start_args.next_runtime_args_offset()>
-            group1_start_args;
-
-    constexpr auto s_src_args = TensorAccessorArgs<group1_start_args.next_compile_time_args_offset()>();
+    constexpr auto s_src_args = TensorAccessorArgs<18>();
     constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
+    constexpr uint32_t operation_compile_time_args_end = s_dst_args.next_compile_time_args_offset();
+
+    using Group0StartArgs = dataflow_kernel_lib::McastArgs<operation_compile_time_args_end, 7>;
+    constexpr Group0StartArgs group0_start_args;
+    using Group1StartArgs = dataflow_kernel_lib::
+        McastArgs<group0_start_args.next_compile_time_args_offset(), group0_start_args.next_runtime_args_offset()>;
+    constexpr Group1StartArgs group1_start_args;
 
     //-------------------------------------------------------------------------
     // Flag to identify if this core will collate intermediate outputs
@@ -336,10 +338,10 @@ void kernel_main() {
 
     // The two fixed Counter wires share the start semaphore but target disjoint rectangles. Keeping
     // both sender views and the selected receiver view alive preserves their state across rounds.
-    using Group0Sender = decltype(group0_start_args.sender(noc));
-    using Group1Sender = decltype(group1_start_args.sender(noc));
-    using Group0Receiver = decltype(group0_start_args.receiver(noc));
-    using Group1Receiver = decltype(group1_start_args.receiver(noc));
+    using Group0Sender = Group0StartArgs::SenderPipe;
+    using Group1Sender = Group1StartArgs::SenderPipe;
+    using Group0Receiver = Group0StartArgs::ReceiverPipe;
+    using Group1Receiver = Group1StartArgs::ReceiverPipe;
     std::optional<Group0Sender> group0_start_sender;
     std::optional<Group1Sender> group1_start_sender;
     std::optional<Group0Receiver> group0_start_receiver;

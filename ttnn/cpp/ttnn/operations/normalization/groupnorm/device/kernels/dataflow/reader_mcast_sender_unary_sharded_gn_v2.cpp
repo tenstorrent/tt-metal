@@ -16,23 +16,13 @@
 
 // split REDUCE across cores
 void kernel_main() {
-    using MidMcastArgs = dataflow_kernel_lib::McastArgs<0, 0>;
-    using FirstMcastArgs = dataflow_kernel_lib::
-        McastArgs<MidMcastArgs::next_compile_time_args_offset(), MidMcastArgs::next_runtime_args_offset()>;
-    using LastMcastArgs = dataflow_kernel_lib::
-        McastArgs<FirstMcastArgs::next_compile_time_args_offset(), FirstMcastArgs::next_runtime_args_offset()>;
-    constexpr MidMcastArgs mid_mcast_args;
-    constexpr FirstMcastArgs first_mcast_args;
-    constexpr LastMcastArgs last_mcast_args;
-    constexpr uint32_t post_mcast_ct_offset = LastMcastArgs::next_compile_time_args_offset();
+    constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(0);
+    constexpr uint32_t num_batch_group = get_compile_time_arg_val(1);
 
-    constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(post_mcast_ct_offset);
-    constexpr uint32_t num_batch_group = get_compile_time_arg_val(post_mcast_ct_offset + 1);
-
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(post_mcast_ct_offset + 2);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(post_mcast_ct_offset + 3);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(post_mcast_ct_offset + 4);
-    constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(post_mcast_ct_offset + 5);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(2);
+    const uint32_t per_core_N_bytes = get_compile_time_arg_val(3);
+    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(4);
+    constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(5);
     // Per-core slots in dfb_ex_external are hardcoded to a dfb_ex_external_slot_pitch_bytes
     // pitch (see the `l1_write_addr_external += dfb_ex_external_slot_pitch_bytes`
     // increments below). Each NOC read writes datum_size_bytes into its slot, so
@@ -43,13 +33,21 @@ void kernel_main() {
         datum_size_bytes <= dfb_ex_external_slot_pitch_bytes,
         "dfb_ex_external slot pitch is hardcoded; "
         "datum_size_bytes must be <= dfb_ex_external_slot_pitch_bytes or per-slot writes will overflow");
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(post_mcast_ct_offset + 6);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(post_mcast_ct_offset + 7);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(6);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(7);
 
-    tt_l1_ptr uint32_t* noc_coord_x =
-        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(LastMcastArgs::next_runtime_args_offset()));
-    tt_l1_ptr uint32_t* noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(
-        get_arg_addr(LastMcastArgs::next_runtime_args_offset() + num_mcast_cores));
+    tt_l1_ptr uint32_t* noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(0));
+    tt_l1_ptr uint32_t* noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(num_mcast_cores));
+
+    constexpr uint32_t operation_rt_args_end = 2 * num_mcast_cores;
+    using MidMcastArgs = dataflow_kernel_lib::McastArgs<8, operation_rt_args_end>;
+    using FirstMcastArgs = dataflow_kernel_lib::
+        McastArgs<MidMcastArgs::next_compile_time_args_offset(), MidMcastArgs::next_runtime_args_offset()>;
+    using LastMcastArgs = dataflow_kernel_lib::
+        McastArgs<FirstMcastArgs::next_compile_time_args_offset(), FirstMcastArgs::next_runtime_args_offset()>;
+    constexpr MidMcastArgs mid_mcast_args;
+    constexpr FirstMcastArgs first_mcast_args;
+    constexpr LastMcastArgs last_mcast_args;
 
     Noc noc;
     Semaphore<> reduce_receiver_sem(MidMcastArgs::consumer_ready);

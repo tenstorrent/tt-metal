@@ -1,14 +1,14 @@
 # `mcast_pipe` helper rollout
 
 Start here. This directory records the design and repository-wide rollout of the
-kernel `mcast_pipe` helper and its paired host helper. The rollout is paused; do
-not start migration or change ledger status unless the user explicitly resumes it.
+kernel `mcast_pipe` helper and its paired host helper. The rollout was explicitly
+resumed for the 2026-08-22 migration-feedback pass.
 
-- Reviewed: 2026-08-14
-- Branch/head after experimental rollback: `sjovic/mcast-migration` / `9d870bf2da9`
-- Baseline: `origin/llk_helper_library` at `4a1d6a97ca9`
-- Materialized helper API: v11
-- Ledger write-back API: v10
+- Reviewed: 2026-08-22
+- Branch/head at feedback intake: `sjovic/mcast-migration` / `cea14afbea9`
+- Recorded branch baseline: `llk_helper_library` at `dc9282be7d5`
+- Materialized helper API: v13
+- Ledger write-back API: v13
 
 ## Four files that matter first
 
@@ -29,38 +29,34 @@ text inventory matched the ledger exactly and has now been folded into it:
 
 | State | Kernels | Host bindings |
 |---|---:|---:|
-| migrated, recorded at v10 | 17 | 14 |
-| pending | 3 | 9 |
+| migrated, verified at v13 | 31 | 27 |
+| pending | 2 | 5 |
 | deferred | 71 | 0 |
 | quarantined | 0 | 0 |
 
-The migrated fleet is paper-stale because the helper is v11; this does not mean
-the current source is known broken. The 2026-08-14 intake host build, 32
-host-helper tests, and 80 helper device/wire tests passed before the experimental
-Conv rollback. Current rollback validation is recorded in the changelog. These
-checks do not replace mapped per-operation validation required for write-back.
+The migrated fleet was updated to the v13 tagged, operation-first ABI and
+append-style host bindings during the 2026-08-22 feedback pass. The host build,
+36 helper host tests, all 80 helper device/wire tests under `--dev`, all 26
+source audits, and focused sequential device gates passed. The v13-specific
+gates cover present, absent, and chained helper blocks.
+Exact evidence is recorded in `migration_feedback_tracker.md`.
 
-Three pending kernels are already integrated in source: Matmul in0 sender,
-receiver, and block-sharded hybrid. Their nine required factory bindings are
-represented explicitly in the ledger and test map. Two migrated kernels also
-carry `needs_recheck`; see
-[`migration/ledger.md`](migration/ledger.md).
+Two pending kernels and five pending host bindings retain their existing status;
+the feedback pass did not broaden the approved migration inventory.
 
-## Next logical action — only when migration resumes
+## Current handoff
 
-Re-enter the apply workflow from the reconciled v11 state. First verify/stamp the
-v10 fleet and clear the two `needs_recheck` flags, then validate the pending
-Matmul units under their mapped inventories. The block-sharded Conv activation
-reader remains deferred on the R4 streaming design gap. No apply run is currently
-approved and no run mode has been selected.
+All items in `migration_feedback.md` are resolved and tracked. The block-sharded
+Conv activation reader and all other deferred/pending units retain their prior
+dispositions; resolving review feedback did not authorize migrating those units.
 
 Current human views:
 
 - [`migration/ledger.md`](migration/ledger.md) — concise ledger explanation.
 
-Generated tier and rollout reports are intentionally absent while migration is
-paused. `apply-dm-helper` must regenerate them from the current ledger and test
-map after its intake and planning gates.
+Generated tier and rollout reports remain intentionally absent. The active
+machine state is the v13 ledger plus test map, while the feedback tracker is the
+execution record for this pass.
 
 ## Supporting evidence
 

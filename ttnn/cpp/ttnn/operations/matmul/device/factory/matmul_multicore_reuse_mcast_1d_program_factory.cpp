@@ -40,6 +40,18 @@ namespace ttnn::prim {
 
 namespace reuse_mcast_1d_optimized_helpers {
 
+constexpr MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t::McastIn0RuntimeArgIndices
+mcast_in0_runtime_arg_indices() {
+    constexpr uint32_t in1_tensor_runtime_arg_count = 2;
+    constexpr uint32_t sparsity_runtime_arg_count = 1;
+    constexpr uint32_t out_tensor_runtime_arg_count = 2;
+    constexpr uint32_t padding_runtime_arg_count = 9;
+    return {
+        .sender_out_addr = in1_tensor_runtime_arg_count + sparsity_runtime_arg_count,
+        .sender_bias_addr = in1_tensor_runtime_arg_count + sparsity_runtime_arg_count + out_tensor_runtime_arg_count +
+                            padding_runtime_arg_count};
+}
+
 uint32_t get_preferred_noc(
     const ttnn::CoreCoord src,
     const ttnn::CoreCoord dst,
@@ -306,14 +318,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             : ttnn::kernel_lib::host::Mcast2D(
                   device, CoreRangeSet(in0_mcast_rect), start_core, in0_mcast_config, num_cores - 1);
     ttnn::kernel_lib::host::create_owned_semaphores(program, in0_mcast.owned_semaphores());
-    const auto in0_mcast_compile_time_args = in0_mcast.compile_time_args();
-    const ttnn::kernel_lib::host::Mcast2D in1_mcast(
-        device,
-        CoreRangeSet(CoreRange(start_core, start_core)),
-        start_core,
-        ttnn::kernel_lib::host::McastConfig{
-            .noc = in1_noc, .handshake = false, .base_sem_id = in0_mcast.next_base_sem_id()});
-    const auto in1_mcast_compile_time_args = in1_mcast.compile_time_args();
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -356,8 +360,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             (std::uint32_t)out_num_blocks_x,  // num_blocks_x
             (std::uint32_t)out_num_blocks_y,  // num_blocks_y
         };
-        in0_sender_compile_time_args.insert(
-            in0_sender_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
         in0_sender_compile_time_args.insert(
             in0_sender_compile_time_args.end(),
             {in0_shard_width_in_tiles,
@@ -402,12 +404,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 (std::uint32_t)false   // get_batch_from_reader
             });
         in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
-        in0_sender_compile_time_args.insert(
-            in0_sender_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
         tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
         tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
         in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
     }
+    in0_mcast.append_compile_time_args_to(in0_sender_compile_time_args);
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -425,10 +426,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
     };
-    in1_sender_writer_compile_time_args.insert(
-        in1_sender_writer_compile_time_args.end(),
-        in1_mcast_compile_time_args.begin(),
-        in1_mcast_compile_time_args.end());
     in1_sender_writer_compile_time_args.insert(
         in1_sender_writer_compile_time_args.end(),
         {                             // batch args
@@ -469,6 +466,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     if (bias_tensor.has_value()) {
         tt::tt_metal::TensorAccessorArgs(*bias_tensor).append_to(in1_sender_writer_compile_time_args);
     }
+    ttnn::kernel_lib::host::append_absent_mcast_compile_time_args_to(in1_sender_writer_compile_time_args);
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         // in0 block args
@@ -477,16 +475,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         (std::uint32_t)num_blocks,        // num_blocks
         (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
+        // batch args
+        (std::uint32_t)B,     // batch
+        (std::uint32_t)false  // get_batch_from_reader
     };
-    in0_receiver_compile_time_args.insert(
-        in0_receiver_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
-    in0_receiver_compile_time_args.insert(
-        in0_receiver_compile_time_args.end(),
-        {
-            // batch args
-            (std::uint32_t)B,     // batch
-            (std::uint32_t)false  // get_batch_from_reader
-        });
+    in0_mcast.append_compile_time_args_to(in0_receiver_compile_time_args);
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
@@ -937,13 +930,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
         if (in0_is_sharded) {
             std::vector<uint32_t> mm_in0_sender_args = {i};
-            const auto in0_mcast_runtime_args = in0_mcast.runtime_args(core);
-            mm_in0_sender_args.insert(
-                mm_in0_sender_args.end(), in0_mcast_runtime_args.begin(), in0_mcast_runtime_args.end());
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
+            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
 
             if (i < num_cores_with_work) {
                 tt_metal::SetRuntimeArgs(
@@ -958,19 +949,16 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         }
         // in0 sender and in1 sender
         else if (core == start_core) {
-            const auto in0_mcast_runtime_args = in0_mcast.runtime_args(core);
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
                 (std::uint32_t)in0_tensor.address(),
                 (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
                 (std::uint32_t)in0_last_out_block_h,                            // last_block_h
                 (std::uint32_t)0};                                              // sparsity_addr
-            mm_in0_sender_args.insert(
-                mm_in0_sender_args.end(), in0_mcast_runtime_args.begin(), in0_mcast_runtime_args.end());
-
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
+            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
 
             tt_metal::SetRuntimeArgs(
                 program,
@@ -980,19 +968,18 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         }
         // in0 receiver and in 1 sender
         else {
+            std::vector<uint32_t> mm_in0_receiver_args;
+            in0_mcast.append_runtime_args_to(mm_in0_receiver_args, core);
             tt_metal::SetRuntimeArgs(
-                program, mm_kernel_in0_receiver_id, core, in0_mcast.runtime_args(core));  // RISCV_1_default
+                program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);  // RISCV_1_default
         }
         if (i < num_cores_with_work) {
-            const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);
             std::vector<uint32_t> mm_in1_sender_writer_args = {
                 // READER
                 // in1 tensor args
                 (std::uint32_t)in1_tensor.address(),
                 (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id
             };
-            mm_in1_sender_writer_args.insert(
-                mm_in1_sender_writer_args.end(), in1_mcast_runtime_args.begin(), in1_mcast_runtime_args.end());
             mm_in1_sender_writer_args.insert(
                 mm_in1_sender_writer_args.end(),
                 {                   // sparsity args
@@ -1061,7 +1048,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         start_core,
         cores,
         num_cores_with_work,
-        ttnn::prim::Matmul1DType::MCAST_IN0};
+        ttnn::prim::Matmul1DType::MCAST_IN0,
+        {},
+        mcast_in0_runtime_arg_indices()};
 }
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_program_and_create_override_variables(
@@ -1267,20 +1256,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .base_sem_id = 0},
         num_cores - 1);
     ttnn::kernel_lib::host::create_owned_semaphores(program, in1_mcast.owned_semaphores());
-    const ttnn::kernel_lib::host::Mcast2D in0_mcast(
-        device,
-        CoreRangeSet(CoreRange(start_core, start_core)),
-        start_core,
-        ttnn::kernel_lib::host::McastConfig{
-            .noc = in0_noc, .handshake = false, .base_sem_id = in1_mcast.next_base_sem_id()});
-    const uint32_t in1_mcast_runtime_arg_count = in1_mcast.runtime_args(start_core).size();
-    const uint32_t in1_sender_operation_args_offset = 2 + in1_mcast_runtime_arg_count;
-    const uint32_t in1_receiver_operation_args_offset = in1_mcast_runtime_arg_count;
     const MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t::McastIn1RuntimeArgIndices
-        mcast_in1_runtime_arg_indices{
-            .sender_out_addr = in1_sender_operation_args_offset + 1,
-            .sender_bias_addr = in1_sender_operation_args_offset + 12,
-            .receiver_out_addr = in1_receiver_operation_args_offset};
+        mcast_in1_runtime_arg_indices{.sender_out_addr = 3, .sender_bias_addr = 14, .receiver_out_addr = 0};
 
     const auto& a_padded_shape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
     const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();
@@ -1328,14 +1305,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)false  // get_batch_from_reader
     };
     in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
-    const auto in0_mcast_compile_time_args = in0_mcast.compile_time_args();
-    in0_sender_compile_time_args.insert(
-        in0_sender_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
     tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
     in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
+    ttnn::kernel_lib::host::append_absent_mcast_compile_time_args_to(in0_sender_compile_time_args);
 
-    const auto in1_mcast_compile_time_args = in1_mcast.compile_time_args();
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
         // in1 tensor args
@@ -1352,10 +1326,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y   // out_num_blocks_y
     };
-    in1_sender_writer_compile_time_args.insert(
-        in1_sender_writer_compile_time_args.end(),
-        in1_mcast_compile_time_args.begin(),
-        in1_mcast_compile_time_args.end());
     in1_sender_writer_compile_time_args.insert(
         in1_sender_writer_compile_time_args.end(),
         {
@@ -1399,6 +1369,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     if (bias_tensor.has_value()) {
         tt::tt_metal::TensorAccessorArgs(*bias_tensor).append_to(in1_sender_writer_compile_time_args);
     }
+    in1_mcast.append_compile_time_args_to(in1_sender_writer_compile_time_args);
 
     std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
         // READER
@@ -1409,10 +1380,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y   // out_num_blocks_y
     };
-    in1_receiver_writer_compile_time_args.insert(
-        in1_receiver_writer_compile_time_args.end(),
-        in1_mcast_compile_time_args.begin(),
-        in1_mcast_compile_time_args.end());
     in1_receiver_writer_compile_time_args.insert(
         in1_receiver_writer_compile_time_args.end(),
         {
@@ -1442,6 +1409,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     }
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
     tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(in1_receiver_writer_compile_time_args);
+    in1_mcast.append_compile_time_args_to(in1_receiver_writer_compile_time_args);
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_defines;
@@ -1812,15 +1780,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
         // in0 sender and in1 sender
         if (core == start_core) {
-            const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);
             std::vector<uint32_t> mm_in1_sender_writer_args = {
                 // READER
                 // in1 tensor args
                 (std::uint32_t)in1_tensor.address(),
                 (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x  // in1_tensor_start_tile_id
             };
-            mm_in1_sender_writer_args.insert(
-                mm_in1_sender_writer_args.end(), in1_mcast_runtime_args.begin(), in1_mcast_runtime_args.end());
             mm_in1_sender_writer_args.insert(
                 mm_in1_sender_writer_args.end(),
                 {                   // sparsity args
@@ -1856,16 +1821,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
             if (!output_is_sharded) {
                 mm_in1_sender_writer_args.push_back(out_num_blocks_x);
             }
+            in1_mcast.append_runtime_args_to(mm_in1_sender_writer_args, core);
 
             tt_metal::SetRuntimeArgs(
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_1_default
         }
         // in0 sender and in1 receiver
         else {
-            const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);
             std::vector<uint32_t> mm_in1_receiver_writer_args;
-            mm_in1_receiver_writer_args.insert(
-                mm_in1_receiver_writer_args.end(), in1_mcast_runtime_args.begin(), in1_mcast_runtime_args.end());
             mm_in1_receiver_writer_args.insert(
                 mm_in1_receiver_writer_args.end(),
                 {
@@ -1908,6 +1871,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                     mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
                 }
             }
+            in1_mcast.append_runtime_args_to(mm_in1_receiver_writer_args, core);
             tt_metal::SetRuntimeArgs(
                 program,
                 mm_kernel_in1_receiver_writer_id,
@@ -1920,9 +1884,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
             (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
             (std::uint32_t)per_core_M,                                      // last_block_h
             (std::uint32_t)0};                                              // sparsity_addr
-        const auto in0_mcast_runtime_args = in0_mcast.runtime_args(core);
-        mm_in0_sender_args.insert(
-            mm_in0_sender_args.end(), in0_mcast_runtime_args.begin(), in0_mcast_runtime_args.end());
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_1_default
     }
     return MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t{
@@ -2878,9 +2839,10 @@ static void override_mcast_in0_program_parameters(
 
         // in1 sender
         writer_runtime_args[0] = src_b_tensor.address();
-        writer_runtime_args[7] = dst_tensor.address();
+        writer_runtime_args[override_variables.mcast_in0_runtime_arg_indices.sender_out_addr] = dst_tensor.address();
         if (bias_tensor.has_value()) {
-            writer_runtime_args[18] = bias_mesh_tensor->address();
+            writer_runtime_args[override_variables.mcast_in0_runtime_arg_indices.sender_bias_addr] =
+                bias_mesh_tensor->address();
         }
     }
 
@@ -3174,14 +3136,6 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             ? ttnn::kernel_lib::host::Mcast2D(device, CoreRangeSet(in0_mcast_rect), in0_mcast_senders, in0_mcast_config)
             : ttnn::kernel_lib::host::Mcast2D(
                   device, CoreRangeSet(in0_mcast_rect), start_core, in0_mcast_config, num_cores - 1);
-    const auto in0_mcast_compile_time_args = in0_mcast.compile_time_args();
-    const ttnn::kernel_lib::host::Mcast2D in1_mcast(
-        device,
-        CoreRangeSet(CoreRange(start_core, start_core)),
-        start_core,
-        ttnn::kernel_lib::host::McastConfig{
-            .noc = in1_noc, .handshake = false, .base_sem_id = in0_mcast.next_base_sem_id()});
-    const auto in1_mcast_compile_time_args = in1_mcast.compile_time_args();
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -3224,8 +3178,6 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             (std::uint32_t)out_num_blocks_x,  // num_blocks_x
             (std::uint32_t)out_num_blocks_y,  // num_blocks_y
         };
-        in0_sender_compile_time_args.insert(
-            in0_sender_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
         in0_sender_compile_time_args.insert(
             in0_sender_compile_time_args.end(),
             {in0_shard_width_in_tiles,
@@ -3270,12 +3222,11 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
                 (std::uint32_t)false   // get_batch_from_reader
             });
         in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
-        in0_sender_compile_time_args.insert(
-            in0_sender_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
         tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
         tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
         in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
     }
+    in0_mcast.append_compile_time_args_to(in0_sender_compile_time_args);
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -3293,10 +3244,6 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
     };
-    in1_sender_writer_compile_time_args.insert(
-        in1_sender_writer_compile_time_args.end(),
-        in1_mcast_compile_time_args.begin(),
-        in1_mcast_compile_time_args.end());
     in1_sender_writer_compile_time_args.insert(
         in1_sender_writer_compile_time_args.end(),
         {                             // batch args
@@ -3337,6 +3284,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     if (bias_tensor.has_value()) {
         tt::tt_metal::TensorAccessorArgs(*bias_tensor).append_to(in1_sender_writer_compile_time_args);
     }
+    ttnn::kernel_lib::host::append_absent_mcast_compile_time_args_to(in1_sender_writer_compile_time_args);
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         // in0 block args
@@ -3345,16 +3293,11 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         (std::uint32_t)num_blocks,        // num_blocks
         (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
+        // batch args
+        (std::uint32_t)in0_B,  // batch
+        (std::uint32_t)false   // get_batch_from_reader
     };
-    in0_receiver_compile_time_args.insert(
-        in0_receiver_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
-    in0_receiver_compile_time_args.insert(
-        in0_receiver_compile_time_args.end(),
-        {
-            // batch args
-            (std::uint32_t)in0_B,  // batch
-            (std::uint32_t)false   // get_batch_from_reader
-        });
+    in0_mcast.append_compile_time_args_to(in0_receiver_compile_time_args);
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
@@ -3801,13 +3744,11 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
         if (in0_is_sharded) {
             std::vector<uint32_t> mm_in0_sender_args = {i};
-            const auto in0_mcast_runtime_args = in0_mcast.runtime_args(core);
-            mm_in0_sender_args.insert(
-                mm_in0_sender_args.end(), in0_mcast_runtime_args.begin(), in0_mcast_runtime_args.end());
 
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
+            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
 
             if (i < num_cores_with_work) {
                 in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
@@ -3817,19 +3758,16 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         }
         // in0 sender and in1 sender
         else if (core == start_core) {
-            const auto in0_mcast_runtime_args = in0_mcast.runtime_args(core);
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
                 (std::uint32_t)in0_tensor.address(),
                 (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
                 (std::uint32_t)in0_last_out_block_h,                            // last_block_h
                 (std::uint32_t)0};                                              // sparsity_addr
-            mm_in0_sender_args.insert(
-                mm_in0_sender_args.end(), in0_mcast_runtime_args.begin(), in0_mcast_runtime_args.end());
-
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
+            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
 
             {
                 std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in0_sender_variant(
@@ -3840,18 +3778,17 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         }
         // in0 receiver and in 1 sender
         else {
-            in0_receiver_kernel_desc.runtime_args.emplace_back(core, in0_mcast.runtime_args(core));
+            std::vector<uint32_t> mm_in0_receiver_args;
+            in0_mcast.append_runtime_args_to(mm_in0_receiver_args, core);
+            in0_receiver_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in0_receiver_args));
         }
         if (i < num_cores_with_work) {
-            const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);
             std::vector<uint32_t> mm_in1_sender_writer_args = {
                 // READER
                 // in1 tensor args
                 (std::uint32_t)in1_tensor.address(),
                 (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id
             };
-            mm_in1_sender_writer_args.insert(
-                mm_in1_sender_writer_args.end(), in1_mcast_runtime_args.begin(), in1_mcast_runtime_args.end());
             mm_in1_sender_writer_args.insert(
                 mm_in1_sender_writer_args.end(),
                 {                   // sparsity args
@@ -3891,7 +3828,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
                 mm_in1_sender_writer_args.push_back(0);
             }
 
-            // Bias base address placeholder; rebound to a tensor binding via in1_sender_variant[18] below.
+            // Bias base address placeholder; rebound to a tensor binding below.
             mm_in1_sender_writer_args.push_back(
                 bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);  // smuggled-rta-ok
             mm_in1_sender_writer_args.push_back(
@@ -3911,10 +3848,11 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             {
                 std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in1_sender_variant(
                     mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
+                constexpr auto runtime_arg_indices = mcast_in0_runtime_arg_indices();
                 in1_sender_variant[0] = in1_tensor;
-                in1_sender_variant[7] = out_tensor;
+                in1_sender_variant[runtime_arg_indices.sender_out_addr] = out_tensor;
                 if (bias_tensor.has_value()) {
-                    in1_sender_variant[18] = *bias_tensor;
+                    in1_sender_variant[runtime_arg_indices.sender_bias_addr] = *bias_tensor;
                 }
                 in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
             }
@@ -4127,12 +4065,6 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         start_core,
         ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .base_sem_id = 0},
         num_cores - 1);
-    const ttnn::kernel_lib::host::Mcast2D in0_mcast(
-        device,
-        CoreRangeSet(CoreRange(start_core, start_core)),
-        start_core,
-        ttnn::kernel_lib::host::McastConfig{
-            .noc = in0_noc, .handshake = false, .base_sem_id = in1_mcast.next_base_sem_id()});
 
     const auto& a_padded_shape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
     const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();
@@ -4184,14 +4116,11 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         (std::uint32_t)false  // get_batch_from_reader
     };
     in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
-    const auto in0_mcast_compile_time_args = in0_mcast.compile_time_args();
-    in0_sender_compile_time_args.insert(
-        in0_sender_compile_time_args.end(), in0_mcast_compile_time_args.begin(), in0_mcast_compile_time_args.end());
     tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
     in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
+    ttnn::kernel_lib::host::append_absent_mcast_compile_time_args_to(in0_sender_compile_time_args);
 
-    const auto in1_mcast_compile_time_args = in1_mcast.compile_time_args();
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
         // in1 tensor args
@@ -4208,10 +4137,6 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y   // out_num_blocks_y
     };
-    in1_sender_writer_compile_time_args.insert(
-        in1_sender_writer_compile_time_args.end(),
-        in1_mcast_compile_time_args.begin(),
-        in1_mcast_compile_time_args.end());
     in1_sender_writer_compile_time_args.insert(
         in1_sender_writer_compile_time_args.end(),
         {
@@ -4255,6 +4180,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     if (bias_tensor.has_value()) {
         tt::tt_metal::TensorAccessorArgs(*bias_tensor).append_to(in1_sender_writer_compile_time_args);
     }
+    in1_mcast.append_compile_time_args_to(in1_sender_writer_compile_time_args);
 
     std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
         // READER
@@ -4265,10 +4191,6 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y   // out_num_blocks_y
     };
-    in1_receiver_writer_compile_time_args.insert(
-        in1_receiver_writer_compile_time_args.end(),
-        in1_mcast_compile_time_args.begin(),
-        in1_mcast_compile_time_args.end());
     in1_receiver_writer_compile_time_args.insert(
         in1_receiver_writer_compile_time_args.end(),
         {
@@ -4298,6 +4220,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     }
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
     tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(in1_receiver_writer_compile_time_args);
+    in1_mcast.append_compile_time_args_to(in1_receiver_writer_compile_time_args);
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_defines;
@@ -4682,15 +4605,12 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 
         // in0 sender and in1 sender
         if (core == start_core) {
-            const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);
             std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> mm_in1_sender_writer_args = {
                 // READER
                 // in1 tensor args
                 in1_tensor,
                 (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x  // in1_tensor_start_tile_id
             };
-            mm_in1_sender_writer_args.insert(
-                mm_in1_sender_writer_args.end(), in1_mcast_runtime_args.begin(), in1_mcast_runtime_args.end());
             mm_in1_sender_writer_args.insert(
                 mm_in1_sender_writer_args.end(),
                 {                   // sparsity args
@@ -4725,15 +4645,13 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
             if (!output_is_sharded) {
                 mm_in1_sender_writer_args.push_back(out_num_blocks_x);
             }
+            in1_mcast.append_runtime_args_to(mm_in1_sender_writer_args, core);
 
             in1_sender_writer_kernel_desc.emplace_runtime_args(core, mm_in1_sender_writer_args);
         }
         // in0 sender and in1 receiver
         else {
-            const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);
             std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> mm_in1_receiver_writer_args;
-            mm_in1_receiver_writer_args.insert(
-                mm_in1_receiver_writer_args.end(), in1_mcast_runtime_args.begin(), in1_mcast_runtime_args.end());
             mm_in1_receiver_writer_args.insert(
                 mm_in1_receiver_writer_args.end(),
                 {
@@ -4776,6 +4694,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
                     mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
                 }
             }
+            in1_mcast.append_runtime_args_to(mm_in1_receiver_writer_args, core);
             in1_receiver_writer_kernel_desc.emplace_runtime_args(core, mm_in1_receiver_writer_args);
         }
         std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> mm_in0_sender_args = {
@@ -4784,10 +4703,6 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
             (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
             (std::uint32_t)per_core_M,                                      // last_block_h
             (std::uint32_t)0};                                              // sparsity_addr
-        const auto in0_mcast_runtime_args = in0_mcast.runtime_args(core);
-        for (const auto arg : in0_mcast_runtime_args) {
-            mm_in0_sender_args.emplace_back(arg);
-        }
         {
             std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in0_sender_variant(
                 mm_in0_sender_args.begin(), mm_in0_sender_args.end());

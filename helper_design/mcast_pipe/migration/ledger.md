@@ -1,23 +1,23 @@
-# `mcast_pipe` migration ledger — inventory reconciled 2026-08-16
+# `mcast_pipe` migration ledger — rollout state updated 2026-08-22
 
 Machine source of truth: `ledger.json`. Test dispatch is in `test_map.json`; per-unit evidence is in
 `log/`. The current static audit is archived at
 `../archive/reconciliation/reconcile_2026-08-16-plan-inventory.md`; the preceding rebase audit is
 `../archive/reconciliation/reconcile_2026-08-14-rebase-dc9282.md`.
 
-- Branch: `sjovic/mcast-migration`; approved rollout plan materialized at `830190c9721`.
+- Branch: `sjovic/mcast-migration`; feedback intake head `cea14afbea9`.
 - Baseline: `origin/llk_helper_library` at `dc9282be7d5`.
-- Ledger API: v11.
-- Materialized helper API: v11.
+- Ledger API: v13.
+- Materialized helper API: v13.
 
-Tier 0 API-v11 verification/write-back completed on 2026-08-16. Tier 0.1 remains pending only because
-its plan-mandated historical matched performance baseline requires a separately authorized checkout.
+The 2026-08-22 feedback pass verified and wrote back the existing migrated fleet
+at API v13. It did not change the pending/deferred inventory dispositions.
 
 ## Current paper state
 
 | State | Kernels | Host bindings |
 |---|---:|---:|
-| migrated at ledger API v11 | 31 | 27 |
+| migrated at ledger API v13 | 31 | 27 |
 | pending | 2 | 5 |
 | deferred | 71 | 0 |
 | quarantined | 0 | 0 |
@@ -30,7 +30,17 @@ and four Quasar Conv receivers. The production and Quasar `conv_reader_common.hp
 atomic-scope support dependencies, not false call-site rows. Deferred factories are mapped in the reconcile
 report; `host_bindings` retains its convention of migrated or source-integrated pending bindings only.
 
-## API-v11 verified migrated units
+API-v13 verification added an intrinsic compile-time presence tag to each
+opaque helper block, removed the optional decoder type, normalized operation
+arguments before helper tails, converted every migrated host binding to
+append-style emission, and exposed direct sender/receiver pipe aliases for
+mixed-role storage. The host build, 36/36 host gtests, 80/80 helper device tests
+under `--dev`, 26/26 source audits, and sequential focused operation gates
+passed. Detailed evidence and the known unrelated Watcher C++17 compile
+exceptions are recorded in
+`../migration_feedback_tracker.md`.
+
+## API-v13 verified migrated units
 
 | Unit | Kernels | Bindings | Existing evidence |
 |---|---:|---:|---|
@@ -43,28 +53,32 @@ report; `host_bindings` retains its convention of migrated or source-integrated 
 | `topk-multicore-final-readiness` | 2 | 1 | exact JIT, 14 passed / 12 expected xfails |
 | `layernorm-sharded-pre-allgather` | 2 | 1 | pre 126, post 136, sharded 208 |
 
-These units are stamped at API v11. Tier 0.2 `matmul-in0-mcast-block-sharded` is also migrated at v11:
+These units are stamped at API v13. Tier 0.2 `matmul-in0-mcast-block-sharded` is also migrated at v13:
 its exact zero-hit-cache probe, complete mapped inventory, and inherited matched performance evidence
 passed on 2026-08-16.
 
-Tier 1.6 `deepseek-b1-sampling-loop-barrier` is migrated at v11 in `2840fc28361`. Four 101-core
+Tier 1.6 `deepseek-b1-sampling-loop-barrier` is stamped at v13; its original migration commit is
+`2840fc28361`. Four 101-core
 argmax nodes passed, including cold and warm JIT paths. The Blackhole top-k test remains skipped for
 its pre-existing selection mismatch; when temporarily unskipped, its 100-iteration barrier completed
 and reproduced the raw implementation's exact `p_scores` failure signature. Matched device-kernel
 durations were +0.25% for argmax and -0.05% for top-k.
 
-Tier 2.7 DRAM-sharded Matmul remains deferred because API v11 cannot preserve both its forced
+Tier 2.7 DRAM-sharded Matmul remains deferred because API v13 still cannot preserve both its forced
 sender-only EXCLUDE-source data path and its type-2 signal-only INCLUDE-source path; API expansion was
-not authorized. Tier 2.8 `group-attn-matmul-rotating-mcast` is migrated at v11 in `6e8eb763885`.
+not authorized. Tier 2.8 `group-attn-matmul-rotating-mcast` is stamped at v13; its original migration
+commit is `6e8eb763885`.
 Fresh-JIT and complete correctness passed (322 passed / 132 categorized expected skips), as did the
 helper/source/host guards. Matched 800 MHz q16 and q48 device-kernel medians improved 32.20% and 27.31%.
 
-Tier 2.9 `conv3d-weight-sharing-mcast` is migrated at v11 in `a290ce20281`. The fixed-sender group
+Tier 2.9 `conv3d-weight-sharing-mcast` is stamped at v13; its original migration commit is
+`a290ce20281`. The fixed-sender group
 strips now use independent `Mcast2D` objects with an unconditional four-word runtime ABI; Chain and
 Disabled paths remain unchanged. Fresh-JIT, focused and complete correctness, and all helper guards
 passed. Matched 800 MHz non-grouped and grouped medians improved 0.815% and 0.298%.
 
-Tier 2.10 `layernorm-sharded-post-allgather` is migrated at v11 in `6cc49825476`. Dense `mcast_1d`
+Tier 2.10 `layernorm-sharded-post-allgather` is stamped at v13; its original migration commit is
+`6cc49825476`. Dense `mcast_1d`
 uses helper loopback; each non-1D line uses an outside-sender remote pipe plus an operation-owned local
 copy. Build, exact fresh JIT, all 136 post, 126 pre, and 208 plain-sharded cases, plus helper and host
 guards passed. Matched 800 MHz LayerNorm and RMSNorm medians improved 3.2% and 10.0%. The operation's
@@ -73,17 +87,18 @@ line; the outside-sender geometry is host-tested and required no helper API expa
 
 Tier 2.11 plain sharded LayerNorm remains deferred after its migrated single-stage path exceeded the
 mandatory performance gate by 0.086 percentage points; the experiment was reverted. Tier 2.12
-interleaved GroupNorm is migrated at v11 in `40e209daad9`, Tier 2.13 SDPA-decode `read_k` in
+interleaved GroupNorm is stamped at v13 (original migration commit `40e209daad9`), Tier 2.13
+SDPA-decode `read_k` in
 `f760425fe06`, Tier 2.14 Argmax control in `5aaaf5b5aa5`, and Tier 2.15 Move overlap in
 `a25603ae2c0`. Their complete correctness, fresh-JIT, helper/source guards, production-LOC, and matched
 performance evidence is recorded in the per-unit logs and `helper_design/tracker.md`.
 
 Tier 2.16 reached terminal deferrals without production edits. Routed-expert FFN needs two linked data
-stages under one ACK and one final signal, which API v11 cannot express. Persistent H2D/D2H target
-cross-program GlobalSemaphore L1 addresses that API-v11 program-semaphore binding cannot address;
+stages under one ACK and one final signal, which API v13 still cannot express. Persistent H2D/D2H target
+cross-program GlobalSemaphore L1 addresses that API-v13 program-semaphore binding cannot address;
 H2D additionally separates metadata and worker-ready publication across its completion boundary. The
 service twins do not satisfy the unrelated-family API-extension gate, and their worker-sync tests
-require Galaxy/UBB hardware unavailable on the current single-chip machine. Helper API remains v11.
+require Galaxy/UBB hardware unavailable on the current single-chip machine. Helper API is v13.
 
 ## Closed `needs_recheck`
 

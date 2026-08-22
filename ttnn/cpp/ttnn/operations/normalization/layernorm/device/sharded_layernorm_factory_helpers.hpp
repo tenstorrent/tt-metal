@@ -131,6 +131,18 @@ public:
 
     std::vector<uint32_t> compile_time_args() const;
     std::vector<uint32_t> runtime_args(const CoreCoord& core) const;
+    template <typename Args>
+    void append_compile_time_args_to(Args& destination) const {
+        std::visit(
+            [&destination](const auto& channel) { channel.append_compile_time_args_to(destination); },
+            channels_.front());
+    }
+    template <typename Args>
+    void append_runtime_args_to(Args& destination, const CoreCoord& core) const {
+        std::visit(
+            [&destination, &core](const auto& channel) { channel.append_runtime_args_to(destination, core); },
+            channel(core));
+    }
     uint32_t ack_count() const;
 
 private:

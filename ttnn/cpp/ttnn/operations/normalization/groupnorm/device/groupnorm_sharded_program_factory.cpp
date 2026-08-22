@@ -551,14 +551,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args;
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args;
-    for (const auto& mcast : representative_group_mcasts) {
-        const auto sender_mcast_args = mcast.compile_time_args(/*pre_handshake=*/false);
-        reader_mcast_sender_compile_time_args.insert(
-            reader_mcast_sender_compile_time_args.end(), sender_mcast_args.begin(), sender_mcast_args.end());
-        const auto receiver_mcast_args = mcast.compile_time_args(/*pre_handshake=*/true);
-        reader_mcast_receiver_compile_time_args.insert(
-            reader_mcast_receiver_compile_time_args.end(), receiver_mcast_args.begin(), receiver_mcast_args.end());
-    }
     reader_mcast_sender_compile_time_args.insert(
         reader_mcast_sender_compile_time_args.end(),
         {
@@ -592,6 +584,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         reader_mcast_receiver_compile_time_args.push_back(num_groups_per_core);
         reader_mcast_receiver_compile_time_args.push_back(tile_width);
         reader_mcast_receiver_compile_time_args.push_back(static_cast<uint32_t>(stats_is_fp32));
+    }
+    for (const auto& mcast : representative_group_mcasts) {
+        mcast.append_compile_time_args_to(reader_mcast_sender_compile_time_args, /*pre_handshake_override=*/false);
+        mcast.append_compile_time_args_to(reader_mcast_receiver_compile_time_args, /*pre_handshake_override=*/true);
     }
 
     // reader sender kernel
@@ -1226,10 +1222,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         for (size_t j = 0; j < group.size(); ++j) {
             CoreCoord core = group[j];
             std::vector<uint32_t> reader_mcast_args;
-            for (const auto& mcast : group_mcasts) {
-                const auto mcast_args = mcast.runtime_args(core);
-                reader_mcast_args.insert(reader_mcast_args.end(), mcast_args.begin(), mcast_args.end());
-            }
 
             if (j == 0) {  // mcast sender
                 // add all coords within a group
@@ -1241,6 +1233,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                     CoreCoord coord = device->worker_core_from_logical_core(gcore);
                     reader_mcast_args.push_back(coord.y);
                 }
+            }
+            for (const auto& mcast : group_mcasts) {
+                mcast.append_runtime_args_to(reader_mcast_args, core);
+            }
+            if (j == 0) {  // mcast sender
                 reader_mcast_sender_desc.runtime_args.emplace_back(core, std::move(reader_mcast_args));
 
             } else {  // mcast receiver

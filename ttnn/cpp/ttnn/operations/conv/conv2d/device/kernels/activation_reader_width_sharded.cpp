@@ -57,16 +57,15 @@ void kernel_main() {
     constexpr uint32_t num_input_cores = get_compile_time_arg_val(9);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(11);
-    constexpr dataflow_kernel_lib::McastArgs<12, 3> act_mcast_args;
-    constexpr uint32_t act_post_mcast_ct_offset = act_mcast_args.next_compile_time_args_offset();
-    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(act_post_mcast_ct_offset);
-    constexpr uint32_t num_output_cores = get_compile_time_arg_val(act_post_mcast_ct_offset + 1);
+    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(12);
+    constexpr uint32_t num_output_cores = get_compile_time_arg_val(13);
 
-    constexpr uint32_t cb_id_act = get_compile_time_arg_val(act_post_mcast_ct_offset + 3);
-    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(act_post_mcast_ct_offset + 4);
-    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(act_post_mcast_ct_offset + 5);
-    constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(act_post_mcast_ct_offset + 7);
-    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(act_post_mcast_ct_offset + 8);
+    constexpr uint32_t cb_id_act = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(17);
+    constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(19);
+    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(20);
+    constexpr auto config_tensor_args = TensorAccessorArgs<23>();
 
     constexpr uint32_t num_mcast_cores = num_input_cores > num_output_cores ? num_input_cores : num_output_cores;
     uint32_t i = 0;  // Runtime arg index
@@ -79,6 +78,9 @@ void kernel_main() {
     // Num of cols of compute cores. (Total Cores, not active cores.)
     uint32_t num_cores_x = get_arg_val<uint32_t>(i);
     i += 1;
+
+    using ActMcastArgs = dataflow_kernel_lib::McastArgs<config_tensor_args.next_compile_time_args_offset(), 3>;
+    constexpr ActMcastArgs act_mcast_args;
 
     // Equivalent to Core Index.
     uint32_t this_core_id = this_core_x + (num_cores_x * this_core_y);
@@ -95,8 +97,8 @@ void kernel_main() {
     DataflowBuffer sharded_act_dfb(cb_id_sharded_act);
     Noc noc;
 
-    using ActSendPipe = decltype(act_mcast_args.sender(noc));
-    using ActRecvPipe = decltype(act_mcast_args.receiver(noc));
+    using ActSendPipe = ActMcastArgs::SenderPipe;
+    using ActRecvPipe = ActMcastArgs::ReceiverPipe;
     std::optional<ActSendPipe> act_send_pipe;
     std::optional<ActRecvPipe> act_recv_pipe;
     if (act_mcast_args.can_send()) {
@@ -106,11 +108,7 @@ void kernel_main() {
         act_recv_pipe.emplace(act_mcast_args.receiver(noc));
     }
 
-    load_config_tensor_if_in_dram<
-        act_post_mcast_ct_offset + 9,
-        act_post_mcast_ct_offset + 10,
-        act_post_mcast_ct_offset + 11,
-        cb_reader_indices>(noc, reader_indices_dfb, 0);
+    load_config_tensor_if_in_dram<21, 22, 23, cb_reader_indices>(noc, reader_indices_dfb, 0);
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_dfb.get_write_ptr());

@@ -1,9 +1,9 @@
 {
   "_comment": "Coverage and dispatch map for the current production tree. Inventory definitions are durable; status-like fields in entries preserve historical coverage context and are not rollout state. Use ledger.json for current status. Execution results and JIT evidence are maintained in per-unit logs and report.md.",
-  "helper_version": 11,
+  "helper_version": 13,
   "baseline": "dc9282be7d5e9d5a4b9137c1bf327de8d923e18e",
   "machine": "single-chip Blackhole p100a",
-  "updated": "2026-08-16",
+  "updated": "2026-08-22",
   "mapping_rules": [
     "Run one compile-focused parameter before the complete mapped inventory.",
     "A passing operation test counts as kernel coverage only when JIT evidence identifies the named kernel path.",

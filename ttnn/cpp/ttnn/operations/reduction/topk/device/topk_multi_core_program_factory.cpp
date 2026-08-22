@@ -381,16 +381,14 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Final reader - Local TopK Results Aggregation Coordinator
     // Responsibility: Coordinate reception of TopK results from all local cores
     // Uses semaphore protocol to synchronize with multiple sender cores
-    std::vector<uint32_t> reader_final_compile_time_args = final_readiness_mcast.compile_time_args();
-    reader_final_compile_time_args.insert(
-        reader_final_compile_time_args.end(),
-        {
-            static_cast<std::uint32_t>(sender_semaphore_id),  // Semaphore for tracking transmission completion
-            static_cast<std::uint32_t>(Ht),                   // Height tiles to process
-            static_cast<std::uint32_t>(Wt_final),             // Total aggregated width tiles
-            gathered_values_cb_index,                         // Final TopK values destination
-            gathered_indices_cb_index                         // Final TopK indices destination
-        });
+    std::vector<uint32_t> reader_final_compile_time_args = {
+        static_cast<std::uint32_t>(sender_semaphore_id),  // Semaphore for tracking transmission completion
+        static_cast<std::uint32_t>(Ht),                   // Height tiles to process
+        static_cast<std::uint32_t>(Wt_final),             // Total aggregated width tiles
+        gathered_values_cb_index,                         // Final TopK values destination
+        gathered_indices_cb_index                         // Final TopK indices destination
+    };
+    final_readiness_mcast.append_compile_time_args_to(reader_final_compile_time_args);
 
     KernelDescriptor reader_final_desc;
     reader_final_desc.kernel_source =
@@ -400,26 +398,25 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     reader_final_desc.compile_time_args = reader_final_compile_time_args;
     reader_final_desc.config = ReaderConfigDescriptor{};
     KernelDescriptor::RTArgList reader_final_runtime_args;
-    reader_final_runtime_args.append(final_readiness_mcast.runtime_args(final_core));
+    final_readiness_mcast.append_runtime_args_to(reader_final_runtime_args, final_core);
     reader_final_desc.emplace_runtime_args(final_core, reader_final_runtime_args);
 
     // Local writer - Local TopK Results Transmission
     // Responsibility: Send local TopK results from each core to final aggregation core
     // Implements sender side of semaphore-based synchronization protocol
     const CoreCoord final_cores_physical = device->worker_core_from_logical_core(final_core);
-    std::vector<uint32_t> writer_local_compile_time_args = final_readiness_mcast.compile_time_args();
-    writer_local_compile_time_args.insert(
-        writer_local_compile_time_args.end(),
-        {static_cast<std::uint32_t>(sender_semaphore_id),     // Semaphore to signal transmission completion
-         static_cast<std::uint32_t>(final_cores_physical.x),  // Target final core NoC coordinates
-         static_cast<std::uint32_t>(final_cores_physical.y),
-         Ht,                           // Height tiles to send
-         args.k,                       // TopK value
-         Kt,                           // TopK in tile units
-         values_cb_index,              // Local TopK values source
-         output_ind_cb_index,          // Local TopK indices source
-         gathered_values_cb_index,     // Final TopK values destination
-         gathered_indices_cb_index});  // Final TopK indices destination
+    std::vector<uint32_t> writer_local_compile_time_args = {
+        static_cast<std::uint32_t>(sender_semaphore_id),     // Semaphore to signal transmission completion
+        static_cast<std::uint32_t>(final_cores_physical.x),  // Target final core NoC coordinates
+        static_cast<std::uint32_t>(final_cores_physical.y),
+        Ht,                          // Height tiles to send
+        args.k,                      // TopK value
+        Kt,                          // TopK in tile units
+        values_cb_index,             // Local TopK values source
+        output_ind_cb_index,         // Local TopK indices source
+        gathered_values_cb_index,    // Final TopK values destination
+        gathered_indices_cb_index};  // Final TopK indices destination
+    final_readiness_mcast.append_compile_time_args_to(writer_local_compile_time_args);
 
     KernelDescriptor writer_local_desc;
     writer_local_desc.kernel_source =
@@ -552,8 +549,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
 
         // Local writer
         KernelDescriptor::RTArgList writer_local_runtime_args;
-        writer_local_runtime_args.append(final_readiness_mcast.runtime_args(core));
         writer_local_runtime_args.push_back(core_id);  // Width position for placement in final aggregation buffer
+        final_readiness_mcast.append_runtime_args_to(writer_local_runtime_args, core);
         writer_local_desc.emplace_runtime_args(core, writer_local_runtime_args);
 
         // Local compute

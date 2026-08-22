@@ -141,8 +141,7 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
     compile_time_args.push_back(return_semaphore_id);
     compile_time_args.push_back(num_cores - 1);
     for (const auto& mcast : release_mcasts) {
-        const auto mcast_compile_args = mcast.compile_time_args();
-        compile_time_args.insert(compile_time_args.end(), mcast_compile_args.begin(), mcast_compile_args.end());
+        mcast.append_compile_time_args_to(compile_time_args);
     }
 
     const std::string kernel_path =
@@ -192,7 +191,7 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
             runtime_args.push_back(aligned_page_size);
         }
         for (const auto& mcast : release_mcasts) {
-            runtime_args.append(mcast.runtime_args(core));
+            mcast.append_runtime_args_to(runtime_args, core);
         }
         reader_desc.emplace_runtime_args(core, runtime_args);
         pages_handled_per_core += num_pages_per_core;

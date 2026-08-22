@@ -53,17 +53,15 @@ void kernel_main() {
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(30);
     constexpr uint32_t original_block_size = get_compile_time_arg_val(31);
     constexpr bool has_block_padding = is_paged_attention && original_block_size > 0 && original_block_size < 32;
-    using KMcastArgs = dataflow_kernel_lib::McastArgs<32, 16>;
-    constexpr KMcastArgs k_mcast_args;
-    constexpr bool q_locally_available = get_compile_time_arg_val(KMcastArgs::next_compile_time_args_offset()) == 1;
-    constexpr bool use_k_mcast = get_compile_time_arg_val(KMcastArgs::next_compile_time_args_offset() + 1) == 1;
-    constexpr uint32_t Bmask = get_compile_time_arg_val(KMcastArgs::next_compile_time_args_offset() + 2);
+    constexpr bool q_locally_available = get_compile_time_arg_val(32) == 1;
+    constexpr bool use_k_mcast = get_compile_time_arg_val(33) == 1;
+    constexpr uint32_t Bmask = get_compile_time_arg_val(34);
     // 0 = unbounded cache (legacy); nonzero = wrap virtual tile index mod this value
     // before page_table lookup. Value is in TILE rows (= cache_position_modulo /
     // TILE_HEIGHT). Validated to be a multiple of block_size_t at op level.
-    constexpr uint32_t capacity_t = get_compile_time_arg_val(KMcastArgs::next_compile_time_args_offset() + 3);
+    constexpr uint32_t capacity_t = get_compile_time_arg_val(35);
 
-    constexpr auto q_args = TensorAccessorArgs<KMcastArgs::next_compile_time_args_offset() + 4>();
+    constexpr auto q_args = TensorAccessorArgs<36>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -101,7 +99,14 @@ void kernel_main() {
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
     const bool do_k_mcast = get_arg_val<uint32_t>(arg_idx++);
-    arg_idx = KMcastArgs::next_runtime_args_offset();
+    tt_l1_ptr uint32_t* all_output_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_output_cores;
+    tt_l1_ptr uint32_t* all_output_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_output_cores;
+
+    using KMcastArgs =
+        dataflow_kernel_lib::McastArgs<attention_sink_args.next_compile_time_args_offset(), 16 + 2 * num_output_cores>;
+    constexpr KMcastArgs k_mcast_args;
 
     // idle core
     if (q_addr == 0) {
@@ -178,10 +183,6 @@ void kernel_main() {
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done
     }
-
-    tt_l1_ptr uint32_t* all_output_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
-    arg_idx += num_output_cores;
-    tt_l1_ptr uint32_t* all_output_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx++));
 
     uint32_t output_core_noc_x = all_output_noc_x[cur_batch];
     uint32_t output_core_noc_y = all_output_noc_y[cur_batch];

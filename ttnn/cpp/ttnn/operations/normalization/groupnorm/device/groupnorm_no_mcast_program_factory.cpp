@@ -661,17 +661,16 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
 
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_1;
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_2;
-    for (const auto& mcast : representative_mcasts) {
-        const auto args = mcast.compile_time_args(/*pre_handshake=*/false);
-        reader_mcast_sender_compile_time_args_group_1.insert(
-            reader_mcast_sender_compile_time_args_group_1.end(), args.begin(), args.end());
-        reader_mcast_sender_compile_time_args_group_2.insert(
-            reader_mcast_sender_compile_time_args_group_2.end(), args.begin(), args.end());
-    }
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_2);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_2);
+    for (const auto& mcast : representative_mcasts) {
+        mcast.append_compile_time_args_to(
+            reader_mcast_sender_compile_time_args_group_1, /*pre_handshake_override=*/false);
+        mcast.append_compile_time_args_to(
+            reader_mcast_sender_compile_time_args_group_2, /*pre_handshake_override=*/false);
+    }
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
     std::string reader_kernel_path =
@@ -1490,9 +1489,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                                per_core_Nt * virtual_core.x;
             }
             tt::tt_metal::KernelDescriptor::RTArgList reader_args;
-            for (const auto& mcast : group_mcasts) {
-                reader_args.append(mcast.runtime_args(core));
-            }
             reader_args.push_back(a.buffer());
             reader_args.push_back(output.buffer());
             reader_args.push_back(in0_start_id);
@@ -1503,6 +1499,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             }
             for (const auto& gcore : group) {
                 reader_args.push_back(device->worker_core_from_logical_core(gcore).y);
+            }
+            for (const auto& mcast : group_mcasts) {
+                mcast.append_runtime_args_to(reader_args, core);
             }
             if (equal_batches_per_core || virtual_core.y <= last_row_with_extra_batch) {
                 reader_mcast_sender_desc_g1.emplace_runtime_args(core, reader_args);

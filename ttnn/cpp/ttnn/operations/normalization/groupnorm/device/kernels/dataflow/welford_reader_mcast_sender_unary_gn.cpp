@@ -15,16 +15,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
-    using MidMcastArgs = dataflow_kernel_lib::McastArgs<0, 0>;
-    using FirstMcastArgs = dataflow_kernel_lib::
-        McastArgs<MidMcastArgs::next_compile_time_args_offset(), MidMcastArgs::next_runtime_args_offset()>;
-    using LastMcastArgs = dataflow_kernel_lib::
-        McastArgs<FirstMcastArgs::next_compile_time_args_offset(), FirstMcastArgs::next_runtime_args_offset()>;
-    constexpr MidMcastArgs mid_mcast_args;
-    constexpr FirstMcastArgs first_mcast_args;
-    constexpr LastMcastArgs last_mcast_args;
-    constexpr uint32_t ct_base = LastMcastArgs::next_compile_time_args_offset();
-    constexpr uint32_t rt_base = LastMcastArgs::next_runtime_args_offset();
     constexpr uint32_t reduce_receiver_semaphore_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
     constexpr uint32_t num_mcast_cores = get_named_compile_time_arg_val("num_cores_per_mcast_group");
     constexpr uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");
@@ -48,19 +38,14 @@ void kernel_main() {
     constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
     constexpr uint32_t num_rows_per_group = get_named_compile_time_arg_val("num_rows_per_group");
 
-    constexpr auto src0_args = TensorAccessorArgs<ct_base>();
+    constexpr auto src0_args = TensorAccessorArgs<0>();
+    constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(rt_base);
-    const uint32_t start_id = get_arg_val<uint32_t>(rt_base + 2);
-    const uint32_t num_channels_tiles = get_arg_val<uint32_t>(rt_base + 4);
-    tt_l1_ptr uint32_t* noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(rt_base + 5));
-    tt_l1_ptr uint32_t* noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(rt_base + 5 + num_mcast_cores));
-
-    Noc noc;
-    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    auto mid_pipe = mid_mcast_args.sender(noc);
-    auto first_pipe = first_mcast_args.sender(noc);
-    auto last_pipe = last_mcast_args.sender(noc);
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);
+    const uint32_t start_id = get_arg_val<uint32_t>(2);
+    const uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
+    tt_l1_ptr uint32_t* noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(5));
+    tt_l1_ptr uint32_t* noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_mcast_cores));
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
@@ -78,6 +63,23 @@ void kernel_main() {
     // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16, and the cross-core stride
     // is in fp32 elements.
     constexpr bool stats_is_fp32 = get_named_compile_time_arg_val("stats_is_fp32") != 0;
+
+    constexpr uint32_t operation_rt_args_end = 5 + 2 * num_mcast_cores;
+    using MidMcastArgs =
+        dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>;
+    using FirstMcastArgs = dataflow_kernel_lib::
+        McastArgs<MidMcastArgs::next_compile_time_args_offset(), MidMcastArgs::next_runtime_args_offset()>;
+    using LastMcastArgs = dataflow_kernel_lib::
+        McastArgs<FirstMcastArgs::next_compile_time_args_offset(), FirstMcastArgs::next_runtime_args_offset()>;
+    constexpr MidMcastArgs mid_mcast_args;
+    constexpr FirstMcastArgs first_mcast_args;
+    constexpr LastMcastArgs last_mcast_args;
+
+    Noc noc;
+    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
+    auto mid_pipe = mid_mcast_args.sender(noc);
+    auto first_pipe = first_mcast_args.sender(noc);
+    auto last_pipe = last_mcast_args.sender(noc);
 
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);

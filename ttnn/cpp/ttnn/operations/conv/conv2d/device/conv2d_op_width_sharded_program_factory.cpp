@@ -518,24 +518,16 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         (uint32_t)act_block_num_tiles,
         (uint32_t)input_num_cores,
         (uint32_t)num_blocks_act_h_per_core,
-        (uint32_t)per_core_num_blocks_act_w};
-    auto activation_mcast_compile_args = activation_mcast.compile_time_args();
-    activation_kernel_compile_args.insert(
-        activation_kernel_compile_args.end(),
-        activation_mcast_compile_args.begin(),
-        activation_mcast_compile_args.end());
-    activation_kernel_compile_args.insert(
-        activation_kernel_compile_args.end(),
-        {(uint32_t)act_block_num_tiles * tt::tile_size(tilized_act_df),
-         (uint32_t)output_num_cores,
-         (uint32_t)all_reader_cores.size(),
-         get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
-         get_cb_info_by_name(cb_info, Conv2dCb::ACT_SHARDED).index,
-         get_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).index,
-         get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index,
-         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
-         get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index});
-
+        (uint32_t)per_core_num_blocks_act_w,
+        (uint32_t)act_block_num_tiles * tt::tile_size(tilized_act_df),
+        (uint32_t)output_num_cores,
+        (uint32_t)all_reader_cores.size(),
+        get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
+        get_cb_info_by_name(cb_info, Conv2dCb::ACT_SHARDED).index,
+        get_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).index,
+        get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index,
+        get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
+        get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index};
     std::vector<uint32_t> weights_kernel_compile_args = {
         get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,          // cb_id_weight
         act_block_w_ntiles / (filter_h * filter_w),                     // core_in_channels_ntiles
@@ -558,7 +550,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         activation_kernel_compile_args.push_back(conv_reader_indices_buffer->address());  // smuggled-rta-ok
         activation_kernel_compile_args.push_back(conv_reader_indices_buffer->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(activation_kernel_compile_args);
+    } else {
+        activation_kernel_compile_args.push_back(0);
+        activation_kernel_compile_args.push_back(0);
+        tt::tt_metal::TensorAccessorArgs(static_cast<const Buffer*>(nullptr)).append_to(activation_kernel_compile_args);
     }
+    activation_mcast.append_compile_time_args_to(activation_kernel_compile_args);
 
     for (uint32_t index = 0; index < activation_kernel_compile_args.size(); index++) {
         log_debug(tt::LogOp, "activation_kernel_compile_args[{}] = {}", index, activation_kernel_compile_args[index]);
@@ -621,8 +618,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
             core_y,
             full_core_grid.x,  // num_cores_x
         };
-        auto activation_mcast_rt_args = activation_mcast.runtime_args(CoreCoord(core_x, core_y));
-        rt_args.insert(rt_args.end(), activation_mcast_rt_args.begin(), activation_mcast_rt_args.end());
+        activation_mcast.append_runtime_args_to(rt_args, CoreCoord(core_x, core_y));
 
         act_kernel_desc.runtime_args.emplace_back(CoreCoord(core_x, core_y), std::move(rt_args));
 

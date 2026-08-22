@@ -30,17 +30,15 @@ void kernel_main() {
     constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(5);
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(6);
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(7);
-    constexpr auto in0_mcast_args = McastArgs<8, 1>();
-    constexpr uint32_t post_mcast_ct_offset = in0_mcast_args.next_compile_time_args_offset();
-    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(post_mcast_ct_offset);
-    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(post_mcast_ct_offset + 1);
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(post_mcast_ct_offset + 2);
-    constexpr uint32_t in0_block_h = get_compile_time_arg_val(post_mcast_ct_offset + 3);
-    constexpr uint32_t batch = get_compile_time_arg_val(post_mcast_ct_offset + 4);
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(post_mcast_ct_offset + 5);
+    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(9);
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(10);
+    constexpr uint32_t in0_block_h = get_compile_time_arg_val(11);
+    constexpr uint32_t batch = get_compile_time_arg_val(12);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(13);
 
-    const uint32_t sender_id = get_arg_val<uint32_t>(0);
-    uint32_t rt_args_idx = in0_mcast_args.next_runtime_args_offset();
+    uint32_t operation_rt_args_idx = 0;
+    const uint32_t sender_id = get_arg_val<uint32_t>(operation_rt_args_idx++);
 
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t dfb_id_in2 = get_named_compile_time_arg_val("cb_in0_sharded");  // Sharded cb
@@ -57,11 +55,27 @@ void kernel_main() {
     constexpr uint32_t shard_read_width = in0_single_tile_size_bytes * in0_block_w;
     constexpr uint32_t in0_tensor_next_h_dim_block_stride = shard_read_stride * in0_block_h;
 
+    constexpr uint32_t num_remote_senders = (num_blocks_inner_dim + num_blocks_per_shard - 1) / num_blocks_per_shard;
+
+    MatmulOpReceiver fused_op_receiver;
+    if constexpr (fuse_op) {
+        fused_op_receiver = MatmulOpReceiver(
+            sender_id < num_remote_senders, /* wait_for_op_signal */
+            operation_rt_args_idx,
+            num_blocks_inner_dim,
+            in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
+        );
+    }
+
+    using In0McastArgs = McastArgs<14, 0>;
+    const In0McastArgs in0_mcast_args(operation_rt_args_idx);
+    static_assert(num_remote_senders <= in0_mcast_args.num_senders);
+
     Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
     DataflowBuffer dfb_in2(dfb_id_in2);
-    using In0SenderPipe = decltype(in0_mcast_args.sender(noc));
-    using In0ReceiverPipe = decltype(in0_mcast_args.receiver(noc));
+    using In0SenderPipe = In0McastArgs::SenderPipe;
+    using In0ReceiverPipe = In0McastArgs::ReceiverPipe;
     std::optional<In0SenderPipe> in0_sender_pipe;
     std::optional<In0ReceiverPipe> in0_receiver_pipe;
     if (in0_mcast_args.can_send()) {
@@ -71,23 +85,10 @@ void kernel_main() {
         in0_receiver_pipe.emplace(in0_mcast_args.receiver(noc));
     }
 
-    constexpr uint32_t num_remote_senders = (num_blocks_inner_dim + num_blocks_per_shard - 1) / num_blocks_per_shard;
-    static_assert(num_remote_senders <= in0_mcast_args.num_senders);
-
     dfb_in2.reserve_back(batch * in0_block_num_tiles);
 
     uint32_t in0_tensor_shard_read_addr = dfb_in2.get_read_ptr();
     uint32_t in0_tensor_read_addr = 0;
-
-    MatmulOpReceiver fused_op_receiver;
-    if constexpr (fuse_op) {
-        fused_op_receiver = MatmulOpReceiver(
-            sender_id < num_remote_senders, /* wait_for_op_signal */
-            rt_args_idx,
-            num_blocks_inner_dim,
-            in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
-        );
-    }
 
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in0_tensor_current_h_dim_block_start_addr = in0_tensor_shard_read_addr;

@@ -14,7 +14,28 @@
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
-    using MidMcastArgs = dataflow_kernel_lib::McastArgs<0, 0>;
+    constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(0);
+    constexpr uint32_t num_batches = get_compile_time_arg_val(1);
+
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(2);
+    const uint32_t per_core_N_bytes = get_compile_time_arg_val(3);
+    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(4);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(6);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(7);
+
+    // These are numbers in absolute terms, on a per group, per batch, per core with tiling
+    constexpr uint32_t block_hw = get_compile_time_arg_val(8);
+    constexpr uint32_t num_groups = get_compile_time_arg_val(9);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(10);
+    // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16, and the cross-core stride
+    // is in fp32 elements.
+    constexpr bool stats_is_fp32 = get_compile_time_arg_val(11) != 0;
+
+    tt_l1_ptr uint32_t* noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(0));
+    tt_l1_ptr uint32_t* noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(num_mcast_cores));
+
+    constexpr uint32_t operation_rt_args_end = 2 * num_mcast_cores;
+    using MidMcastArgs = dataflow_kernel_lib::McastArgs<12, operation_rt_args_end>;
     using FirstMcastArgs = dataflow_kernel_lib::
         McastArgs<MidMcastArgs::next_compile_time_args_offset(), MidMcastArgs::next_runtime_args_offset()>;
     using LastMcastArgs = dataflow_kernel_lib::
@@ -22,29 +43,6 @@ void kernel_main() {
     constexpr MidMcastArgs mid_mcast_args;
     constexpr FirstMcastArgs first_mcast_args;
     constexpr LastMcastArgs last_mcast_args;
-    constexpr uint32_t post_mcast_ct_offset = LastMcastArgs::next_compile_time_args_offset();
-
-    constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(post_mcast_ct_offset);
-    constexpr uint32_t num_batches = get_compile_time_arg_val(post_mcast_ct_offset + 1);
-
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(post_mcast_ct_offset + 2);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(post_mcast_ct_offset + 3);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(post_mcast_ct_offset + 4);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(post_mcast_ct_offset + 6);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(post_mcast_ct_offset + 7);
-
-    // These are numbers in absolute terms, on a per group, per batch, per core with tiling
-    constexpr uint32_t block_hw = get_compile_time_arg_val(post_mcast_ct_offset + 8);
-    constexpr uint32_t num_groups = get_compile_time_arg_val(post_mcast_ct_offset + 9);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(post_mcast_ct_offset + 10);
-    // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16, and the cross-core stride
-    // is in fp32 elements.
-    constexpr bool stats_is_fp32 = get_compile_time_arg_val(post_mcast_ct_offset + 11) != 0;
-
-    tt_l1_ptr uint32_t* noc_coord_x =
-        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(LastMcastArgs::next_runtime_args_offset()));
-    tt_l1_ptr uint32_t* noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(
-        get_arg_addr(LastMcastArgs::next_runtime_args_offset() + num_mcast_cores));
 
     Noc noc;
 

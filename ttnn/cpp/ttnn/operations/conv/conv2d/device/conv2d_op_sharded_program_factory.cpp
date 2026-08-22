@@ -1071,10 +1071,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
-    const auto weights_mcast_compile_time_args =
-        block_sharded ? weights_mcast_1d->compile_time_args() : weights_mcast_2d->compile_time_args();
-    writer_compile_time_args.insert(
-        writer_compile_time_args.end(), weights_mcast_compile_time_args.begin(), weights_mcast_compile_time_args.end());
+    if (block_sharded) {
+        weights_mcast_1d->append_compile_time_args_to(writer_compile_time_args);
+    } else {
+        weights_mcast_2d->append_compile_time_args_to(writer_compile_time_args);
+    }
 
     const bool check_skip_compute = input_cores != output_cores;
 
@@ -1314,16 +1315,16 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         for (const CoreCoord& core : core_range) {
             if (populate_skipped_work_cores && !output_cores.contains(core)) {
                 // Pad-out path uses the exact 2D sender layout: weight/bias, tile offsets,
-                // rectangle, is_sender_core, skip_work. Weight/bias are unused on skipped cores.
+                // is_sender_core, skip_work, rectangle. Weight/bias are unused on skipped cores.
                 KernelDescriptor::RTArgList args;
-                args.reserve(10);
+                args.reserve(6);
                 args.push_back(uint32_t{0});  // 0: weight addr (unused for skipped cores)
                 args.push_back(uint32_t{0});  // 1: bias addr (unused)
-                for (int i = 2; i < 8; ++i) {
+                for (int i = 2; i < 4; ++i) {
                     args.push_back(uint32_t{0});
                 }
-                args.push_back(uint32_t{1});  // 8: is_sender_core, always true for input_cores
-                args.push_back(uint32_t{1});  // 9: skip_work
+                args.push_back(uint32_t{1});  // 4: is_sender_core, always true for input_cores
+                args.push_back(uint32_t{1});  // 5: skip_work
                 writer_mcast_sender_desc.emplace_runtime_args(core, args);
                 continue;
             }
@@ -1351,23 +1352,22 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
             if (block_sharded) {
                 const bool is_sender_core = input_cores.contains(core);
-                sender_rt_args.append(weights_mcast_1d->runtime_args(core));
                 sender_rt_args.push_back(static_cast<uint32_t>(is_sender_core));
                 sender_rt_args.push_back(uint32_t{0});  // skip_work
+                weights_mcast_1d->append_runtime_args_to(sender_rt_args, core);
                 writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
             } else {
-                // 1D multicast setup
-                sender_rt_args.append(weights_mcast_2d->runtime_args(core));
+                uint32_t writer_remaining_tiles_to_push = 0;
                 if (enable_activation_reuse) {
-                    uint32_t writer_remaining_tiles_to_push = 0;
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
                         writer_remaining_tiles_to_push =
                             activation_reuse_config.partial_core_writer_remaining_tiles_to_push_to_push;
                     } else if (activation_reuse_config.cores_with_non_meaningful_work.contains(core)) {
                         writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
                     }
-                    sender_rt_args.push_back(writer_remaining_tiles_to_push);
                 }
+                sender_rt_args.push_back(writer_remaining_tiles_to_push);
+                weights_mcast_2d->append_runtime_args_to(sender_rt_args, core);
                 writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
             }
         }
@@ -1379,17 +1379,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             for (const CoreCoord& core : core_range) {
                 std::vector<uint32_t> receiver_args;
                 if (block_sharded) {
-                    receiver_args = weights_mcast_1d->runtime_args(core);
                     const bool is_sender_core = input_cores.contains(core);
                     receiver_args.push_back(static_cast<uint32_t>(is_sender_core));
+                    weights_mcast_1d->append_runtime_args_to(receiver_args, core);
                 } else {
                     bool is_no_op_core = !input_cores.contains(core);
                     receiver_args.push_back(static_cast<uint32_t>(is_no_op_core));
-                    const auto weights_mcast_runtime_args = weights_mcast_2d->runtime_args(core);
-                    receiver_args.insert(
-                        receiver_args.end(), weights_mcast_runtime_args.begin(), weights_mcast_runtime_args.end());
+                    uint32_t writer_remaining_tiles_to_push = 0;
                     if (enable_activation_reuse) {
-                        uint32_t writer_remaining_tiles_to_push = 0;
                         if (activation_reuse_config.has_partial_core &&
                             core == activation_reuse_config.partial_work_core) {
                             writer_remaining_tiles_to_push =
@@ -1397,8 +1394,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                         } else if (activation_reuse_config.cores_with_non_meaningful_work.contains(core)) {
                             writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
                         }
-                        receiver_args.push_back(writer_remaining_tiles_to_push);
                     }
+                    receiver_args.push_back(writer_remaining_tiles_to_push);
+                    weights_mcast_2d->append_runtime_args_to(receiver_args, core);
                 }
                 writer_mcast_receiver_desc.runtime_args.emplace_back(core, std::move(receiver_args));
             }

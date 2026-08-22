@@ -466,13 +466,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
 
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_1;
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args_group_1;
+    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
     for (const auto& mcast : representative_mcasts) {
-        const auto sender_args = mcast.compile_time_args(/*pre_handshake=*/false);
-        reader_mcast_sender_compile_time_args_group_1.insert(
-            reader_mcast_sender_compile_time_args_group_1.end(), sender_args.begin(), sender_args.end());
-        const auto receiver_args = mcast.compile_time_args(/*pre_handshake=*/use_welford);
-        reader_mcast_receiver_compile_time_args_group_1.insert(
-            reader_mcast_receiver_compile_time_args_group_1.end(), receiver_args.begin(), receiver_args.end());
+        mcast.append_compile_time_args_to(
+            reader_mcast_sender_compile_time_args_group_1, /*pre_handshake_override=*/false);
+        mcast.append_compile_time_args_to(
+            reader_mcast_receiver_compile_time_args_group_1, /*pre_handshake_override=*/use_welford);
     }
     std::unordered_map<std::string, uint32_t> reader_mcast_sender_named_compile_time_args = {
         {"reduce_receiver_semaphore_id", reduce_receiver_semaphore_id},
@@ -508,8 +510,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
     };
 
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
     std::unordered_map<std::string, uint32_t> reader_mcast_receiver_named_compile_time_args = {
         {"reduce_receiver_semaphore_id", reduce_receiver_semaphore_id},
         {"reduce_sender_semaphore_id", reduce_sender_semaphore_id},
@@ -543,8 +543,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
     };
 
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
     std::string reader_sender_kernel_path =
@@ -1195,9 +1193,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             uint32_t in0_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
             uint32_t out_tile_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
             tt::tt_metal::KernelDescriptor::RTArgList reader_args;
-            for (const auto& mcast : group_mcasts) {
-                reader_args.append(mcast.runtime_args(core));
-            }
             reader_args.push_back(a.buffer());
             reader_args.push_back(output.buffer());
             reader_args.push_back(in0_start_id);
@@ -1211,6 +1206,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                 for (const auto& gcore : group) {
                     reader_args.push_back(device->worker_core_from_logical_core(gcore).y);
                 }
+            }
+            for (const auto& mcast : group_mcasts) {
+                mcast.append_runtime_args_to(reader_args, core);
+            }
+            if (j == 0) {
                 reader_mcast_sender_desc.emplace_runtime_args(core, reader_args);
             } else {
                 reader_mcast_receiver_desc.emplace_runtime_args(core, reader_args);

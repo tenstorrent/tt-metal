@@ -128,7 +128,6 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
         CoreRangeSet(mcast_receiver_cores_bounding_box),
         in1_mcast_senders,
         ttnn::kernel_lib::host::McastConfig{.noc = reader_noc, .rotating_sender = true, .base_sem_id = 0});
-    const auto in1_mcast_compile_time_args = in1_mcast.compile_time_args();
     for (const auto& sem : in1_mcast.owned_semaphores()) {
         desc.semaphores.push_back(sem);
     }
@@ -232,8 +231,7 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
         operation_attributes.out_subblock_w,
     };
     tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
-    reader_compile_time_args.insert(
-        reader_compile_time_args.end(), in1_mcast_compile_time_args.begin(), in1_mcast_compile_time_args.end());
+    in1_mcast.append_compile_time_args_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(output_cb_index),
@@ -359,9 +357,7 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
             in1_last_block_addr_skip,
             in1_mcast_num_dests,
         };
-        const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);
-        reader_runtime_args.insert(
-            reader_runtime_args.end(), in1_mcast_runtime_args.begin(), in1_mcast_runtime_args.end());
+        in1_mcast.append_runtime_args_to(reader_runtime_args, core);
         reader_desc.emplace_runtime_args(core, reader_runtime_args);
 
         writer_desc.emplace_runtime_args(

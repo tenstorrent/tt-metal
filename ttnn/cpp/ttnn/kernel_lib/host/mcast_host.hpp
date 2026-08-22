@@ -31,9 +31,10 @@
 // layout the one McastArgs<CT_BASE, RT_BASE> decoder self-parses — so the two version in
 // lockstep. See helper_design/NEW_HOST_HELPER/{API_SKETCH,IMPL_PLAN}.md.
 //
-//   CT (per family, contiguous, 6 words):
-//                                [ has_receivers, data_ready_sem_id, consumer_ready_sem_id, ack_count, flags,
-//                                  rotating_span ]
+//   CT, PRESENT (per family, contiguous, 7 words):
+//                                [ present, has_receivers, data_ready_sem_id, consumer_ready_sem_id, ack_count,
+//                                  flags, rotating_span ]
+//   CT, ABSENT (per family, contiguous, 1 word): [ present = 0 ]
 //                                flags bit0 = pre_handshake, bit1 = data-ready signal (0 Flag / 1 Counter)
 //                                rotating_span = 0 fixed; sender count when rotating
 //   RT, FIXED (per family, 6 words):
@@ -141,7 +142,7 @@ inline std::pair<uint32_t, uint32_t> virt_coord(tt::tt_metal::IDevice* device, c
     return {static_cast<uint32_t>(w.x), static_cast<uint32_t>(w.y)};
 }
 
-// The `flags` CT word (5th word of every mcast CT block) the kernel's McastArgs decodes:
+// The `flags` CT word (6th word of every present mcast CT block) the kernel's McastArgs decodes:
 //   bit0 = pre_handshake — this face gates on the receiver->sender readiness ack.
 //   bit1 = data-ready signal — 0 = Flag, 1 = Counter (== cfg.data_ready).
 // Baking these onto the wire is what lets the kernel's sender()/receiver() take no behaviour knobs.
@@ -158,6 +159,15 @@ inline uint32_t mcast_flags(const McastConfig& cfg, std::optional<bool> pre_hand
         f |= 0x2u;
     }
     return f;
+}
+
+template <typename Args>
+inline void append_args_to(Args& destination, const std::vector<uint32_t>& args) {
+    if constexpr (requires { destination.append(args); }) {
+        destination.append(args);
+    } else {
+        destination.insert(destination.end(), args.begin(), args.end());
+    }
 }
 
 inline void append_role_args(
@@ -185,6 +195,13 @@ inline std::vector<uint32_t> noc_ordered_bbox(
 }
 
 }  // namespace detail
+
+inline std::vector<uint32_t> absent_mcast_compile_time_args() { return {0u}; }
+
+template <typename Args>
+void append_absent_mcast_compile_time_args_to(Args& destination) {
+    detail::append_args_to(destination, absent_mcast_compile_time_args());
+}
 
 // =============================================================================
 // Mcast1D — one row- or column-family of mcasts over a rectangular grid.
@@ -373,9 +390,9 @@ public:
         return out;
     }
 
-    // Uniform (grid-wide) config, spliced into the reader CT list. Fixed 6-word block the kernel's
+    // Uniform (grid-wide) config, spliced into the reader CT list. Fixed 7-word block the kernel's
     // McastArgs<CT, RT> self-parses:
-    // [has_receivers, data_ready, consumer_ready, ack_count, flags, rotating_span].
+    // [present, has_receivers, data_ready, consumer_ready, ack_count, flags, rotating_span].
     // `consumer_ready` is UNUSED_SEM_ID with no handshake; `ack_count` is the sender's ack wait-count
     // (or ACK_EQUALS_FANOUT for an independent sequence containing both inside and outside senders);
     // `flags` carries pre_handshake + the data-ready signal (see detail::mcast_flags). rotating_span
@@ -388,12 +405,18 @@ public:
     // off ONE object. Omit it for the common case (all faces = cfg.handshake).
     std::vector<uint32_t> compile_time_args(std::optional<bool> pre_handshake = std::nullopt) const {
         return {
+            1u,
             has_receivers_ ? 1u : 0u,
             data_ready_id_,
             consumer_ready_id_,
             ack_count(),
             detail::mcast_flags(cfg_, pre_handshake),
             cfg_.rotating_sender ? span_ : 0u};
+    }
+
+    template <typename Args>
+    void append_compile_time_args_to(Args& destination, std::optional<bool> pre_handshake = std::nullopt) const {
+        detail::append_args_to(destination, compile_time_args(pre_handshake));
     }
 
     // Sender's handshake ACK policy on the wire. The default line family uses its dense EXCLUDE
@@ -417,6 +440,11 @@ public:
         }
         detail::append_role_args(args, is_sender(core), is_receiver_(core), sender_round_(core));
         return args;
+    }
+
+    template <typename Args>
+    void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
+        detail::append_args_to(destination, runtime_args(core));
     }
 
     // ---- queryables (not args) ----------------------------------------------
@@ -828,21 +856,27 @@ public:
         return out;
     }
 
-    // Uniform (grid-wide) config, spliced into the reader CT list. 6-word block the kernel's
+    // Uniform (grid-wide) config, spliced into the reader CT list. 7-word block the kernel's
     // McastArgs<CT, RT> self-parses:
-    // [has_receivers, data_ready, consumer_ready, ack_count, flags, rotating_span].
+    // [present, has_receivers, data_ready, consumer_ready, ack_count, flags, rotating_span].
     // ack_count is the sender's ack wait-count (receiver ignores it); flags carries pre_handshake +
     // the data-ready signal (see detail::mcast_flags). `pre_handshake` overrides the flags bit for THIS
     // emission (one semantic mcast whose faces pick their own handshake per kernel — e.g. a divergent
     // ack-count where some receivers ack and some don't, off ONE object).
     std::vector<uint32_t> compile_time_args(std::optional<bool> pre_handshake = std::nullopt) const {
         return {
+            1u,
             has_receivers_ ? 1u : 0u,
             data_ready_id_,
             consumer_ready_id_,
             ack_count_,
             detail::mcast_flags(cfg_, pre_handshake),
             cfg_.rotating_sender ? (independent_rotating_senders_ ? senders_.size() : area_) : 0u};
+    }
+
+    template <typename Args>
+    void append_compile_time_args_to(Args& destination, std::optional<bool> pre_handshake = std::nullopt) const {
+        detail::append_args_to(destination, compile_time_args(pre_handshake));
     }
 
     // Per-core topology followed by [role flags, sender phase].
@@ -862,6 +896,11 @@ public:
         }
         detail::append_role_args(args, is_sender(core), is_receiver_(core), sender_round_(core));
         return args;
+    }
+
+    template <typename Args>
+    void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
+        detail::append_args_to(destination, runtime_args(core));
     }
 
     // ---- queryables (not args) ----------------------------------------------

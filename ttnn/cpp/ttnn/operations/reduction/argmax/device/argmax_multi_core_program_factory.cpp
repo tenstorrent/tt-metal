@@ -346,14 +346,10 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
         num_cores0,
         done_sem_idx,
     };
-    const auto group0_start_compile_args = group0_start_mcast.compile_time_args();
-    reader_compile_args.insert(
-        reader_compile_args.end(), group0_start_compile_args.begin(), group0_start_compile_args.end());
-    const auto group1_start_compile_args = group1_start_mcast.compile_time_args();
-    reader_compile_args.insert(
-        reader_compile_args.end(), group1_start_compile_args.begin(), group1_start_compile_args.end());
     tt::tt_metal::TensorAccessorArgs(input).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output).append_to(reader_compile_args);
+    group0_start_mcast.append_compile_time_args_to(reader_compile_args);
+    group1_start_mcast.append_compile_time_args_to(reader_compile_args);
 
     KernelDescriptor reader_desc0;
     reader_desc0.kernel_source =
@@ -382,8 +378,8 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
         reader_runtime_args.push_back(
             static_cast<uint32_t>((i == num_cores0 - 1) ? src_read_size_last0 : src_read_size0));
         reader_runtime_args.push_back((i == num_cores0 - 1) ? red_dim_units_last0 : red_dim_units0);
-        reader_runtime_args.append(group0_start_mcast.runtime_args(core));
-        reader_runtime_args.append(group1_start_mcast.runtime_args(core));
+        group0_start_mcast.append_runtime_args_to(reader_runtime_args, core);
+        group1_start_mcast.append_runtime_args_to(reader_runtime_args, core);
         reader_desc0.emplace_runtime_args(core, reader_runtime_args);
     }
 
@@ -415,8 +411,8 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
             reader_runtime_args.push_back(
                 static_cast<uint32_t>((i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1));
             reader_runtime_args.push_back((i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1);
-            reader_runtime_args.append(group0_start_mcast.runtime_args(core));
-            reader_runtime_args.append(group1_start_mcast.runtime_args(core));
+            group0_start_mcast.append_runtime_args_to(reader_runtime_args, core);
+            group1_start_mcast.append_runtime_args_to(reader_runtime_args, core);
             reader_desc1.emplace_runtime_args(core, reader_runtime_args);
         }
 

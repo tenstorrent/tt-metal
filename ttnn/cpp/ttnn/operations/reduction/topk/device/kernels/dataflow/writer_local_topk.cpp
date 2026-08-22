@@ -11,21 +11,20 @@
 
 void kernel_main() {
     // Compile time args
-    constexpr dataflow_kernel_lib::McastArgs<0, 0> readiness_mcast_args;
-    constexpr uint32_t post_mcast_ct_offset = readiness_mcast_args.next_compile_time_args_offset();
-    constexpr uint32_t sender_sem_id = get_compile_time_arg_val(post_mcast_ct_offset);  // Arrival counter
-    constexpr uint32_t noc_final_x = get_compile_time_arg_val(post_mcast_ct_offset + 1);
-    constexpr uint32_t noc_final_y = get_compile_time_arg_val(post_mcast_ct_offset + 2);
-    constexpr uint32_t Ht = get_compile_time_arg_val(post_mcast_ct_offset + 3);
-    constexpr uint32_t K = get_compile_time_arg_val(post_mcast_ct_offset + 4);
-    constexpr uint32_t Kt = get_compile_time_arg_val(post_mcast_ct_offset + 5);
-    constexpr uint32_t values_dfb_index = get_compile_time_arg_val(post_mcast_ct_offset + 6);
-    constexpr uint32_t output_ind_dfb_index = get_compile_time_arg_val(post_mcast_ct_offset + 7);
-    constexpr uint32_t final_values_dfb_index = get_compile_time_arg_val(post_mcast_ct_offset + 8);
-    constexpr uint32_t final_indices_dfb_index = get_compile_time_arg_val(post_mcast_ct_offset + 9);
+    constexpr uint32_t sender_sem_id = get_compile_time_arg_val(0);  // Arrival counter
+    constexpr uint32_t noc_final_x = get_compile_time_arg_val(1);
+    constexpr uint32_t noc_final_y = get_compile_time_arg_val(2);
+    constexpr uint32_t Ht = get_compile_time_arg_val(3);
+    constexpr uint32_t K = get_compile_time_arg_val(4);
+    constexpr uint32_t Kt = get_compile_time_arg_val(5);
+    constexpr uint32_t values_dfb_index = get_compile_time_arg_val(6);
+    constexpr uint32_t output_ind_dfb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t final_values_dfb_index = get_compile_time_arg_val(8);
+    constexpr uint32_t final_indices_dfb_index = get_compile_time_arg_val(9);
 
     // Runtime args
-    const uint32_t start_wt = get_arg_val<uint32_t>(readiness_mcast_args.next_runtime_args_offset());
+    const uint32_t start_wt = get_arg_val<uint32_t>(0);
+    constexpr dataflow_kernel_lib::McastArgs<10, 1> readiness_mcast_args;
 
     // Constants
     constexpr uint32_t onetile = 1;

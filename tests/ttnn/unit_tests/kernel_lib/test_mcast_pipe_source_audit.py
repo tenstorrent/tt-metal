@@ -12,6 +12,20 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 LEDGER_PATH = REPO_ROOT / "helper_design/mcast_pipe/migration/ledger.json"
 
 
+def test_mcast_args_owns_its_compile_time_presence_tag():
+    helper = (REPO_ROOT / "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp").read_text()
+    host = (REPO_ROOT / "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp").read_text()
+
+    assert "OptionalMcastArgs" not in helper
+    assert "McastArgsImpl<(get_compile_time_arg_val(CT_BASE) != 0)" in helper
+    assert "return CT_BASE + 7;" in helper
+    assert "return CT_BASE + 1;" in helper
+    assert "McastArgs::sender() cannot be used when the presence tag is false" in helper
+    assert "McastArgs::receiver() cannot be used when the presence tag is false" in helper
+    assert "return {0u};" in host
+    assert host.count("            1u,\n            has_receivers_ ? 1u : 0u,") == 2
+
+
 def _migrated_sources():
     ledger = json.loads(LEDGER_PATH.read_text())
     kernels = [REPO_ROOT / entry["kernel"] for entry in ledger["entries"] if entry["status"] == "migrated"]
@@ -27,6 +41,8 @@ def test_migrated_host_bindings_treat_helper_outputs_as_opaque_ranges():
 
     violations = []
     for factory in factories:
+        if factory.suffix != ".cpp":
+            continue
         source = factory.read_text()
         helper_outputs = {
             name
@@ -40,6 +56,31 @@ def test_migrated_host_bindings_treat_helper_outputs_as_opaque_ranges():
     assert not violations, "Helper argument vectors must be copied as complete ranges:\n" + "\n".join(violations)
 
 
+def test_migrated_host_bindings_use_append_style_helper_tails():
+    _, factories = _migrated_sources()
+    allowed_queries = {
+        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp": 2,
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.cpp": 4,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp": 1,
+    }
+
+    violations = []
+    for factory in factories:
+        if factory.suffix != ".cpp":
+            continue
+        source = factory.read_text()
+        getter_calls = len(re.findall(r"\.(?:compile_time_args|runtime_args)\(", source))
+        if "kernel_lib::host::Mcast" not in source and getter_calls == 0:
+            continue
+        relative = str(factory.relative_to(REPO_ROOT))
+        if getter_calls != allowed_queries.get(relative, 0):
+            violations.append(f"{relative} has {getter_calls} non-append helper getter calls")
+        if "append_compile_time_args_to" not in source or "append_runtime_args_to" not in source:
+            violations.append(f"{relative} does not emit both helper tails through append APIs")
+
+    assert not violations, "Migrated producers must append complete helper tails:\n" + "\n".join(violations)
+
+
 def test_migrated_kernels_do_not_repeat_rotating_span_as_a_template_argument():
     kernels, _ = _migrated_sources()
     third_template_argument = re.compile(r"\bMcastArgs\s*<\s*[^,>]+\s*,\s*[^,>]+\s*,")
@@ -49,6 +90,37 @@ def test_migrated_kernels_do_not_repeat_rotating_span_as_a_template_argument():
     ]
 
     assert not violations, "McastArgs rotating span must come only from the v10 CT wire:\n" + "\n".join(violations)
+
+
+def test_mixed_role_kernels_use_direct_mcast_pipe_aliases():
+    helper = (REPO_ROOT / "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp").read_text()
+    assert re.search(r"using SenderPipe\s*=\s*SenderPipeFor<noc_index>;", helper)
+    assert re.search(r"using ReceiverPipe\s*=\s*dataflow_kernel_lib::ReceiverPipe<", helper)
+
+    kernels, _ = _migrated_sources()
+    expression_recovery = re.compile(r"decltype\([^\n]*\.(?:sender|receiver)\(")
+    violations = [
+        str(kernel.relative_to(REPO_ROOT)) for kernel in kernels if expression_recovery.search(kernel.read_text())
+    ]
+    assert not violations, "Mixed-role pipe storage must use McastArgs aliases:\n" + "\n".join(violations)
+
+    mixed_role_kernels = [
+        REPO_ROOT / "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+        "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+        REPO_ROOT / "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp",
+        REPO_ROOT / "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
+        REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/"
+        "reader_mcast_transformer_group_attn_matmul.cpp",
+    ]
+    for kernel in mixed_role_kernels:
+        source = kernel.read_text()
+        assert "::SenderPipe" in source
+        assert "::ReceiverPipe" in source
+        assert "std::optional<" in source
+
+    group_attention = mixed_role_kernels[-1].read_text()
+    assert "if (in1_mcast_args.can_send())" in group_attention
+    assert "if (in1_mcast_args.can_receive())" in group_attention
 
 
 def test_sort_row_start_readiness_is_pipe_owned():
@@ -69,16 +141,6 @@ def test_sort_row_start_readiness_is_pipe_owned():
 OPAQUE_BOUNDARY_RULES = {
     "reader_bmm_tile_layout_in1_sender_writer_padding.cpp": [
         (r"rt_args_idx\s*\+=\s*4", "manual runtime skip assumes the helper wire width"),
-    ],
-    "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp": [
-        (r"get_compile_time_arg_val\((?:1[0-9]|2[0-2])\)", "fixed compile-time tail bypasses McastArgs"),
-    ],
-    "activation_reader_width_sharded.cpp": [
-        (
-            r"get_compile_time_arg_val\((?:17|18|20|21|22|24|25|26|27|28)\)",
-            "fixed compile-time tail bypasses McastArgs",
-        ),
-        (r"load_config_tensor_if_in_dram<(?:26|27|28)", "fixed config tail bypasses McastArgs"),
     ],
     "reader_mcast_sender_unary_sharded_gn_v2.cpp": [
         (r"get_compile_time_arg_val\((?:1[5-9]|2[0-2])\)", "fixed operation tail bypasses the mcast chain"),
@@ -124,25 +186,58 @@ def test_matmul_migration_has_one_unconditional_mcast_abi():
 
 def test_matmul_in0_padding_appends_mcast_after_fixed_operation_args():
     kernel = MATMUL_MCAST_SOURCES[2].read_text()
-    assert "McastArgs<24, 4>()" in kernel
-    assert "TensorAccessorArgs<in0_post_mcast_ct_offset>()" in kernel
+    accessor = kernel.index("constexpr auto in0_args = TensorAccessorArgs<24>();")
+    operation_end = kernel.index("constexpr uint32_t operation_ct_args_end")
+    helper = kernel.index("McastArgs<operation_ct_args_end, 0>")
+    assert accessor < operation_end < helper
+    assert "const In0McastArgs in0_mcast_args(rt_args_idx);" in kernel
 
     factory_sources = "\n".join(path.read_text() for path in MATMUL_MCAST_SOURCES[:2])
     assert "begin() + 15" not in factory_sources
 
 
-def test_matmul_1d_in1_bindings_use_helper_generated_blocks_even_when_inactive():
+def test_matmul_1d_inactive_operands_emit_only_tagged_absent_mcast_blocks():
     source = MATMUL_MCAST_SOURCES[0].read_text()
-    assert source.count("const auto in1_mcast_compile_time_args = in1_mcast.compile_time_args();") == 4
-    assert source.count("const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);") == 6
+    assert source.count("const ttnn::kernel_lib::host::Mcast2D in0_mcast") == 2
+    assert source.count("const ttnn::kernel_lib::host::Mcast2D in1_mcast") == 2
+    assert source.count("in1_mcast.append_compile_time_args_to(") == 4
+    assert source.count("in1_mcast.append_runtime_args_to(") == 4
+    assert source.count("append_absent_mcast_compile_time_args_to(") == 4
     assert "in1_mcast_dest_noc_start_x" not in source
     assert "in1_mcast_num_dests" not in source
 
+    in0_kernel = MATMUL_MCAST_SOURCES[2].read_text()
+    in1_kernel = MATMUL_MCAST_SOURCES[3].read_text()
+    assert "McastArgs<operation_ct_args_end, 0>" in in0_kernel
+    assert "McastArgs<operation_ct_args_end, 0>" in in1_kernel
+    assert "OptionalMcastArgs" not in in0_kernel + in1_kernel
+    all_sources = "".join(path.read_text() for path in MATMUL_MCAST_SOURCES)
+    assert "mcast_args_present" not in all_sources
+    assert all_sources.count("append_absent_mcast_compile_time_args_to(") == 5
+    assert "#ifndef SKIP_MCAST\n    constexpr auto in0_mcast_args" not in in0_kernel
+    assert "#ifndef SKIP_MCAST\n    constexpr auto in1_mcast_args" not in in1_kernel
 
-def test_sparse_matmul_bindings_preserve_fixed_abi_and_use_inactive_helper_block():
+
+def test_matmul_1d_partial_rectangles_preserve_divergent_ack_counts():
+    source = MATMUL_MCAST_SOURCES[0].read_text()
+    assert source.count("in0_mcast_config, num_cores - 1") == 2
+    assert len(re.findall(r"McastConfig\{\.noc = in1_noc, \.base_sem_id = 0\},\s*num_cores - 1", source)) == 2
+
+
+def test_matmul_in0_common_helper_tails_are_appended_once_after_each_branch():
+    append = "in0_mcast.append_compile_time_args_to(in0_sender_compile_time_args);"
+    after_conditional = re.compile(r"^    }\n    " + re.escape(append), re.MULTILINE)
+
+    for path in MATMUL_MCAST_SOURCES[:2]:
+        source = path.read_text()
+        assert source.count(append) == 2
+        assert len(after_conditional.findall(source)) == 2
+
+
+def test_sparse_matmul_bindings_put_accessors_before_the_active_helper_tail():
     source = MATMUL_MCAST_SOURCES[4].read_text()
 
-    in0_ct_helper = source.index("const auto in0_mcast_compile_time_args")
+    in0_ct_helper = source.index("in0_mcast.append_compile_time_args_to(in0_sender_compile_time_args)")
     fixed_tail_matches = [
         match.start()
         for match in re.finditer(r"\(std::uint32_t\)false,\s*// fuse_op", source)
@@ -151,14 +246,14 @@ def test_sparse_matmul_bindings_preserve_fixed_abi_and_use_inactive_helper_block
     assert fixed_tail_matches
     in0_ct_fixed_tail = fixed_tail_matches[-1]
     in0_ct_accessor = source.index("TensorAccessorArgs(*in0_buffer)")
-    assert in0_ct_fixed_tail < in0_ct_helper < in0_ct_accessor
+    assert in0_ct_fixed_tail < in0_ct_accessor < in0_ct_helper
 
     in0_rt_fixed_tail = source.index("(std::uint32_t)sparsity_buffer->address()};")
-    in0_rt_helper = source.index("in0_mcast_runtime_args.begin()")
+    in0_rt_helper = source.index("in0_mcast.append_runtime_args_to(mm_in0_sender_args, core)")
     assert in0_rt_fixed_tail < in0_rt_helper
 
-    assert "const auto in1_mcast_compile_time_args = in1_mcast.compile_time_args();" in source
-    assert "const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);" in source
+    assert "const auto in1_mcast_compile_time_args = in1_mcast.compile_time_args();" not in source
+    assert "const auto in1_mcast_runtime_args = in1_mcast.runtime_args(core);" not in source
     assert "in1_mcast_dest_noc_start_x" not in source
     assert "in1_mcast_num_dests" not in source
 
@@ -188,14 +283,18 @@ def test_block_sharded_matmul_keeps_receiver_geometry_separate_from_sender_span(
     assert not re.search(r"Mcast[12]D\([^;]+CoreRangeSet\(all_cores\)", factory_2d, re.DOTALL)
 
 
-def test_conv3d_mcast_preserves_fixed_abi_and_scoped_weight_share_modes():
+def test_conv3d_mcast_uses_a_dynamic_operation_prefix_and_scoped_weight_share_modes():
     factory = (REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp").read_text()
     kernel = (REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp").read_text()
 
-    assert "using WeightMcastArgs = McastArgs<bias_args.next_compile_time_args_offset(), 19>;" in kernel
-    assert "argidx = WeightMcastArgs::next_runtime_args_offset();" in kernel
-    assert "writer_args.append(weights_mcast_runtime_args);" in factory
-    assert "weights_mcast_template.runtime_args(core)" in factory
+    assert "using WeightMcastArgs = McastArgs<bias_args.next_compile_time_args_offset(), 0>;" in kernel
+    assert "const WeightMcastArgs weights_mcast_args(argidx);" in kernel
+    assert kernel.index("const uint32_t mcast_num_iters") < kernel.index("const WeightMcastArgs weights_mcast_args")
+    assert "weights_mcast.append_runtime_args_to(writer_args, core);" in factory
+    assert factory.index("writer_args.push_back(cw.mcast_num_iters);") < factory.index(
+        "weights_mcast.append_runtime_args_to(writer_args, core);"
+    )
+    assert ": weights_mcast_template;" in factory
     assert "mcast_bbox_start_x" not in factory + kernel
     assert "mcast_num_dests" not in factory + kernel
 
@@ -222,11 +321,17 @@ def test_interleaved_groupnorm_uses_three_opaque_helper_wires_and_preserves_lega
     welford_receiver = (kernel_base / "welford_reader_mcast_receiver_unary_gn.cpp").read_text()
 
     for source in (legacy_sender, legacy_receiver, welford_sender, welford_receiver):
-        assert source.count("using ") >= 3
-        assert "LastMcastArgs::next_compile_time_args_offset()" in source
-        assert "LastMcastArgs::next_runtime_args_offset()" in source
         assert "mcast_dest_noc" not in source
         assert "num_mcast_cores_mid_group" not in source
+
+    for source in (legacy_sender, welford_sender):
+        assert source.count("using ") >= 3
+        assert "MidMcastArgs::next_compile_time_args_offset()" in source
+        assert "MidMcastArgs::next_runtime_args_offset()" in source
+        assert "FirstMcastArgs::next_compile_time_args_offset()" in source
+        assert "FirstMcastArgs::next_runtime_args_offset()" in source
+    for source in (legacy_receiver, welford_receiver):
+        assert "using MidMcastArgs" in source
 
     assert legacy_sender.count("_pipe.send_signal();") == 3
     assert legacy_sender.count("_pipe.send(l1_read_addr_ex") == 3
@@ -237,10 +342,10 @@ def test_interleaved_groupnorm_uses_three_opaque_helper_wires_and_preserves_lega
     assert "reduce_pipe.receive();" in welford_receiver
 
     mcast_factory, no_mcast_factory = factories
-    assert "compile_time_args(/*pre_handshake=*/use_welford)" in mcast_factory
-    assert mcast_factory.count("reader_args.append(mcast.runtime_args(core));") == 1
-    assert "compile_time_args(/*pre_handshake=*/false)" in no_mcast_factory
-    assert no_mcast_factory.count("reader_args.append(mcast.runtime_args(core));") == 1
+    assert "/*pre_handshake_override=*/use_welford" in mcast_factory
+    assert mcast_factory.count("mcast.append_runtime_args_to(reader_args, core);") == 1
+    assert "/*pre_handshake_override=*/false" in no_mcast_factory
+    assert no_mcast_factory.count("mcast.append_runtime_args_to(reader_args, core);") == 1
     for source in factories:
         assert "std::vector<ttnn::kernel_lib::host::Mcast2D>" in source
         assert "mcast_dest_noc" not in source
@@ -260,11 +365,10 @@ def test_sdpa_decode_read_k_uses_opaque_fixed_star_and_keeps_blackhole_completio
     assert "k_pipe.receive();" in read_k
     assert "noc.async_write_barrier();" in read_k
     assert "noc.async_atomic_barrier();" in read_k
-    assert "McastArgs<32, 16>" in reader
-    assert "KMcastArgs::next_runtime_args_offset()" in reader
+    assert "McastArgs<attention_sink_args.next_compile_time_args_offset(), 16 + 2 * num_output_cores>" in reader
     assert "mcast_x" not in reader + factory
     assert "std::vector<ttnn::kernel_lib::host::Mcast2D> k_mcasts" in factory
-    assert "reader_rt_args.append(k_mcasts[mcast_index].runtime_args(core));" in factory
+    assert "k_mcasts[mcast_index].append_runtime_args_to(reader_rt_args, core);" in factory
 
 
 def test_argmax_multicore_composes_two_counter_wires_and_keeps_done_fanin():
@@ -272,7 +376,8 @@ def test_argmax_multicore_composes_two_counter_wires_and_keeps_done_fanin():
     kernel = (base / "kernels/reader_argmax_interleaved_multicore.cpp").read_text()
     factory = (base / "argmax_multi_core_program_factory.cpp").read_text()
 
-    assert "McastArgs<18, 7>" in kernel
+    assert "McastArgs<operation_compile_time_args_end, 7>" in kernel
+    assert kernel.index("TensorAccessorArgs<18>()") < kernel.index("McastArgs<operation_compile_time_args_end, 7>")
     assert "group0_start_args.next_compile_time_args_offset()" in kernel
     assert "group0_start_args.next_runtime_args_offset()" in kernel
     assert kernel.count("send_signal();") == 2
@@ -280,8 +385,31 @@ def test_argmax_multicore_composes_two_counter_wires_and_keeps_done_fanin():
     assert "set_multicast" not in kernel
     assert "done_sem.up(" in kernel and "done_sem.wait(num_cores)" in kernel
     assert factory.count("DataReadyMode::Counter") == 1
-    assert factory.count("reader_runtime_args.append(group0_start_mcast.runtime_args(core));") == 2
-    assert factory.count("reader_runtime_args.append(group1_start_mcast.runtime_args(core));") == 2
+    assert factory.count("group0_start_mcast.append_runtime_args_to(reader_runtime_args, core);") == 2
+    assert factory.count("group1_start_mcast.append_runtime_args_to(reader_runtime_args, core);") == 2
+
+
+def test_migrated_kernels_read_positional_operation_args_before_declaring_helper_decoders():
+    kernels, _ = _migrated_sources()
+    violations = []
+
+    for path in kernels:
+        source = path.read_text()
+        if "McastArgs<" not in source:
+            continue
+
+        helper = source.index("McastArgs<")
+        first_pipe_matches = list(re.finditer(r"\.(?:sender|receiver)\(", source))
+        setup_end = first_pipe_matches[0].start() if first_pipe_matches else len(source)
+        positional_ct = [match.start() for match in re.finditer(r"get_compile_time_arg_val\(", source[:setup_end])]
+        positional_rt = [match.start() for match in re.finditer(r"get_arg_(?:val|addr)\(", source[:setup_end])]
+
+        if positional_ct and helper < positional_ct[-1]:
+            violations.append(f"{path.relative_to(REPO_ROOT)} declares McastArgs before its last operation CT read")
+        if positional_rt and helper < positional_rt[-1]:
+            violations.append(f"{path.relative_to(REPO_ROOT)} declares McastArgs before its last operation RT read")
+
+    assert not violations, "Operation arguments must be read before helper decoders:\n" + "\n".join(violations)
 
 
 def test_move_overlap_composes_three_release_wires_and_keeps_return_counter():
@@ -301,8 +429,8 @@ def test_move_overlap_composes_three_release_wires_and_keeps_return_counter():
         assert "set_multicast" not in kernel
 
     assert "std::vector<ttnn::kernel_lib::host::Mcast2D> release_mcasts" in factory
-    assert factory.count("mcast.compile_time_args()") == 1
-    assert factory.count("runtime_args.append(mcast.runtime_args(core));") == 1
+    assert factory.count("mcast.append_compile_time_args_to(compile_time_args);") == 1
+    assert factory.count("mcast.append_runtime_args_to(runtime_args, core);") == 1
     assert "mcast_dest_noc" not in factory
     assert "case MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP" in cache_override
     assert "a[0] = src_addr;" in cache_override and "a[1] = dst_addr;" in cache_override

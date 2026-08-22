@@ -757,10 +757,9 @@ ReaderCompileTimeArgs build_common_reader_compile_time_args(const CompileTimeArg
 ReaderCompileTimeArgs build_distributed_reader_compile_time_args(const CompileTimeArgsContext& ctx) {
     TT_FATAL(ctx.distributed_mcast != nullptr, "Distributed reader arguments require a multicast wire");
     auto args = build_common_reader_compile_time_args(ctx);
-    const auto mcast_args = ctx.distributed_mcast->compile_time_args();
-    args.sender.insert(args.sender.begin(), mcast_args.begin(), mcast_args.end());
-    args.receiver_all_to_all.insert(args.receiver_all_to_all.begin(), mcast_args.begin(), mcast_args.end());
-    args.receiver.insert(args.receiver.begin(), mcast_args.begin(), mcast_args.end());
+    ctx.distributed_mcast->append_compile_time_args_to(args.sender);
+    ctx.distributed_mcast->append_compile_time_args_to(args.receiver_all_to_all);
+    ctx.distributed_mcast->append_compile_time_args_to(args.receiver);
     return args;
 }
 
@@ -1075,12 +1074,19 @@ void add_kernel_descriptors(
         compute_cb_named_args);
 
     // Reader sender kernel
+    const uint32_t sender_operation_rt_args =
+        grid.mcast_1d ? 6 + core_ranges.num_cores_x_mcast + core_ranges.num_cores_y_mcast
+                      : 7 + (grid.row_wise ? core_ranges.num_cores_x_mcast : core_ranges.num_cores_y_mcast);
+    const uint32_t receiver_all_to_all_operation_rt_args =
+        grid.mcast_1d ? 5 + core_ranges.num_cores_x_mcast + core_ranges.num_cores_y_mcast
+                      : 6 + (grid.row_wise ? core_ranges.num_cores_x_mcast : core_ranges.num_cores_y_mcast);
     KernelDescriptor reader_sender_kernel_desc;
     reader_sender_kernel_desc.kernel_source = kernel_config.reader_sender_path;
     reader_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_sender_kernel_desc.core_ranges = core_ranges.sender_cores;
     reader_sender_kernel_desc.compile_time_args = std::move(kernel_config.reader_sender_ct_args);
     reader_sender_kernel_desc.named_compile_time_args = reader_cb_named_args;
+    reader_sender_kernel_desc.named_compile_time_args.emplace_back("mcast_operation_rt_args", sender_operation_rt_args);
     reader_sender_kernel_desc.defines = std::move(kernel_config.reader_sender_defines);
     reader_sender_kernel_desc.runtime_args = std::move(kernel_config.reader_sender_rt_args);
     reader_sender_kernel_desc.config = DataMovementConfigDescriptor{
@@ -1098,6 +1104,8 @@ void add_kernel_descriptors(
         reader_receiver_all_to_all_kernel_desc.compile_time_args =
             std::move(kernel_config.reader_receiver_all_to_all_ct_args);
         reader_receiver_all_to_all_kernel_desc.named_compile_time_args = reader_cb_named_args;
+        reader_receiver_all_to_all_kernel_desc.named_compile_time_args.emplace_back(
+            "mcast_operation_rt_args", receiver_all_to_all_operation_rt_args);
         reader_receiver_all_to_all_kernel_desc.defines = kernel_config.reader_receiver_defines;
         reader_receiver_all_to_all_kernel_desc.runtime_args =
             std::move(kernel_config.reader_receiver_all_to_all_rt_args);
@@ -1116,6 +1124,7 @@ void add_kernel_descriptors(
         reader_receiver_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
         reader_receiver_kernel_desc.compile_time_args = std::move(kernel_config.reader_receiver_ct_args);
         reader_receiver_kernel_desc.named_compile_time_args = reader_cb_named_args;
+        reader_receiver_kernel_desc.named_compile_time_args.emplace_back("mcast_operation_rt_args", 7);
         reader_receiver_kernel_desc.defines = std::move(kernel_config.reader_receiver_defines);
         reader_receiver_kernel_desc.runtime_args = std::move(kernel_config.reader_receiver_rt_args);
         reader_receiver_kernel_desc.config = DataMovementConfigDescriptor{
@@ -1652,10 +1661,7 @@ std::vector<uint32_t> build_reader_sender_args(
     }
 
     std::vector<uint32_t> args;
-    if (ctx.distributed_mcast != nullptr) {
-        args = ctx.distributed_mcast->runtime_args(core);
-    }
-    args.reserve(args.size() + 7 + ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size());
+    args.reserve(7 + ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size());
     args.push_back(mcast_start.x);
     args.push_back(mcast_start.y);
     args.push_back(mcast_end.x);
@@ -1679,16 +1685,16 @@ std::vector<uint32_t> build_reader_sender_args(
             args.insert(args.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
         }
     }
+    if (ctx.distributed_mcast != nullptr) {
+        ctx.distributed_mcast->append_runtime_args_to(args, core);
+    }
     return args;
 }
 
 std::vector<uint32_t> build_reader_receiver_all_to_all_args(
     const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx) {
     std::vector<uint32_t> args;
-    if (ctx.distributed_mcast != nullptr) {
-        args = ctx.distributed_mcast->runtime_args(core);
-    }
-    args.reserve(args.size() + 6 + ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size());
+    args.reserve(6 + ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size());
 
     bool is_last_all_to_all_worker;
     if (ctx.grid.use_two_stage_reduce) {
@@ -1721,16 +1727,16 @@ std::vector<uint32_t> build_reader_receiver_all_to_all_args(
             args.insert(args.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
         }
     }
+    if (ctx.distributed_mcast != nullptr) {
+        ctx.distributed_mcast->append_runtime_args_to(args, core);
+    }
     return args;
 }
 
 std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(
     const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx) {
     std::vector<uint32_t> args;
-    if (ctx.distributed_mcast != nullptr) {
-        args = ctx.distributed_mcast->runtime_args(core);
-    }
-    args.reserve(args.size() + 7);
+    args.reserve(7);
     args.push_back(false);  // is_last_all_to_all_worker
     args.push_back(idx.all_to_all_worker_tile_offset_bytes);
     args.push_back(0);  // is_second_stage_reader
@@ -1748,6 +1754,9 @@ std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(
             args.push_back(ctx.mcast_noc_x[idx.height_index]);
             args.push_back(ctx.mcast_noc_y[0]);
         }
+    }
+    if (ctx.distributed_mcast != nullptr) {
+        ctx.distributed_mcast->append_runtime_args_to(args, core);
     }
     return args;
 }

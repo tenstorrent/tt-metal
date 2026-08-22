@@ -9,9 +9,10 @@ without changing the surrounding operation-specific arguments.
 
 ## 2. Treat host-generated argument blocks as opaque
 
-Insert the complete ranges returned by `compile_time_args()` and `runtime_args(core)` at one contiguous ABI boundary.
-Never extract helper words with numeric indexing such as `[0]` or `[1]`, because callers must not depend on the
-helper's internal encoding.
+Append complete helper blocks through `append_compile_time_args_to()` and
+`append_runtime_args_to()` at one contiguous ABI boundary. Never extract helper
+words with numeric indexing such as `[0]` or `[1]`, because callers must not
+depend on the helper's internal encoding.
 
 ## 3. Let the helper own its protocol semaphores
 
@@ -58,3 +59,13 @@ as-is so the diff exposes only the changes needed to adopt the helper.
 Do not expand a multicast rectangle merely because a larger uniform geometry is easier to express with the helper.
 Every added destination increases data, signaling, and acknowledgement traffic and can change synchronization; preserve
 the original receiver set, and treat an API that cannot represent it as a helper limitation to resolve.
+
+## 11. Represent an absent helper with its tagged one-word block
+
+When a shared kernel ABI has an inactive multicast role, append the helper-owned
+false presence tag and no multicast runtime words. This is the deliberate
+library-wide exception to a zero-width inactive helper: the tag lets ordinary
+`McastArgs` select its absent compile-time specialization, derive its actual
+one-word/zero-word boundaries, and reject sender or receiver construction at
+compile time. Do not add an operation-owned presence flag, a synthetic multicast
+geometry, or a separate optional decoder type.

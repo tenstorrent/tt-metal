@@ -62,15 +62,14 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_in1_obj(cb_id_in1);
     CircularBuffer cb_in2_obj(cb_id_in2);
-    using In1SenderPipe = SenderPipe<
-        noc_index,
-        In1McastArgs::data_ready,
-        In1McastArgs::pre_handshake,
-        In1McastArgs::consumer_ready,
-        In1McastArgs::signal,
-        In1McastArgs::rotating>;
-    In1SenderPipe in1_sender_pipe(noc, in1_mcast_args.rect(), in1_mcast_num_dests);
-    auto in1_receiver_pipe = in1_mcast_args.receiver(noc);
+    std::optional<In1McastArgs::SenderPipe> in1_sender_pipe;
+    std::optional<In1McastArgs::ReceiverPipe> in1_receiver_pipe;
+    if (in1_mcast_args.can_send()) {
+        in1_sender_pipe.emplace(in1_mcast_args.sender(noc));
+    }
+    if (in1_mcast_args.can_receive()) {
+        in1_receiver_pipe.emplace(in1_mcast_args.receiver(noc));
+    }
 
     constexpr uint32_t num_rows_in_one_tile = 32;
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
@@ -196,11 +195,11 @@ void kernel_main() {
 #endif
 
                                 if (mcast_in1_to_local_cb) {  // directly mcast data in in1 sharded cb
-                                    in1_sender_pipe.send(
+                                    in1_sender_pipe->send(
                                         in1_sharded_cb_addr, l1_write_addr_in1, in1_block_num_tiles * in1_tile_bytes);
                                 } else {  // mcast from l1_write_addr_in1 which is populated locally by copying from in1
                                           // sharded or interleaved
-                                    in1_sender_pipe.send(
+                                    in1_sender_pipe->send(
                                         l1_write_addr_in1, l1_write_addr_in1, in1_block_num_tiles * in1_tile_bytes);
                                 }
                             } else if (in1_sender_in_receiver_grid) {
@@ -208,7 +207,7 @@ void kernel_main() {
                                 // All cores in mcast grid needs to participate in receiving otherwise data corruption
                                 // since we mcast from and to the same CB
 
-                                in1_receiver_pipe.receive(tile_row_id);
+                                in1_receiver_pipe->receive(tile_row_id);
                             }
                             if (has_work_for_q_heads_bool) {
                                 cb_in1_obj.push_back(in1_block_num_tiles);

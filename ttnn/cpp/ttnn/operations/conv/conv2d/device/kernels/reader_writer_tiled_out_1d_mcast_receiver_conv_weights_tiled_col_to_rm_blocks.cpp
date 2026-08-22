@@ -52,14 +52,17 @@ void kernel_main() {
     constexpr auto s_weight_args = TensorAccessorArgs<39>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
     constexpr uint32_t mcast_sem_args_base = s_bias_args.next_compile_time_args_offset();
-    constexpr auto weights_mcast_args = dataflow_kernel_lib::McastArgs<mcast_sem_args_base, 1>();
-
     uint32_t i = 0;
-    uint32_t noop = get_arg_val<uint32_t>(i++);
+    const uint32_t noop = get_arg_val<uint32_t>(i++);
+    const uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(i++);
 
     if (noop) {
         return;
     }
+
+    constexpr uint32_t operation_runtime_args_end = 2;
+    constexpr auto weights_mcast_args =
+        dataflow_kernel_lib::McastArgs<mcast_sem_args_base, operation_runtime_args_end>();
 
     // Experimental API objects
     Noc noc;
@@ -77,10 +80,6 @@ void kernel_main() {
     DataflowBuffer dfb_sharded_act_obj(cb_id_sharded_act);
 
     auto weights_pipe = weights_mcast_args.receiver(noc);
-
-    const uint32_t remaining_tiles_to_push = split_reader_enabled && activation_reuse_enabled
-                                                 ? get_arg_val<uint32_t>(weights_mcast_args.next_runtime_args_offset())
-                                                 : 0;
 
     // Split reader configuration
     if constexpr (split_reader_enabled) {

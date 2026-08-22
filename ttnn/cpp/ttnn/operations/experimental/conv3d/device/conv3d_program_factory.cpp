@@ -854,9 +854,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
         .append_to(writer_compile_time_args);
+    weights_mcast_template.append_compile_time_args_to(writer_compile_time_args);
     const auto weights_mcast_compile_time_args = weights_mcast_template.compile_time_args();
-    writer_compile_time_args.insert(
-        writer_compile_time_args.end(), weights_mcast_compile_time_args.begin(), weights_mcast_compile_time_args.end());
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp";
@@ -1232,10 +1231,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         writer_args.push_back(cw.weight_src_noc_y);
         writer_args.push_back(cw.chain_succ_noc_x);
         writer_args.push_back(cw.chain_succ_noc_y);
-        const auto weights_mcast_runtime_args = weight_share_mode == WeightShareMode::Mcast
-                                                    ? weights_mcasts.at(cw.mcast_group_id).runtime_args(core)
-                                                    : weights_mcast_template.runtime_args(core);
-        writer_args.append(weights_mcast_runtime_args);
         writer_args.push_back(cw.mcast_num_iters);
         writer_args.push_back(num_workers);
 
@@ -1249,6 +1244,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 writer_args.push_back(v);
             }
         }
+
+        const auto& weights_mcast =
+            weight_share_mode == WeightShareMode::Mcast ? weights_mcasts.at(cw.mcast_group_id) : weights_mcast_template;
+        weights_mcast.append_runtime_args_to(writer_args, core);
 
         log_debug(
             tt::LogOp,

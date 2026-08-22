@@ -1757,12 +1757,8 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     coordinator_compile_time_args.push_back(W_tile_bytes);
     coordinator_compile_time_args.push_back(W_index_bytes);
     coordinator_compile_time_args.push_back(tile_width);
-    const auto row_start_compile_time_args = row_start_mcast.compile_time_args();
-    coordinator_compile_time_args.insert(
-        coordinator_compile_time_args.end(), row_start_compile_time_args.begin(), row_start_compile_time_args.end());
-    const auto substage_compile_time_args = substage_mcast.compile_time_args();
-    coordinator_compile_time_args.insert(
-        coordinator_compile_time_args.end(), substage_compile_time_args.begin(), substage_compile_time_args.end());
+    row_start_mcast.append_compile_time_args_to(coordinator_compile_time_args);
+    substage_mcast.append_compile_time_args_to(coordinator_compile_time_args);
 
     KernelDescriptor coordinator_desc;
     coordinator_desc.kernel_source =
@@ -1775,8 +1771,8 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     coordinator_runtime_args.push_back(input_buffer);
     coordinator_runtime_args.push_back(value_buffer);
     coordinator_runtime_args.push_back(index_buffer);
-    coordinator_runtime_args.append(row_start_mcast.runtime_args(coordinator_core));
-    coordinator_runtime_args.append(substage_mcast.runtime_args(coordinator_core));
+    row_start_mcast.append_runtime_args_to(coordinator_runtime_args, coordinator_core);
+    substage_mcast.append_runtime_args_to(coordinator_runtime_args, coordinator_core);
     coordinator_desc.emplace_runtime_args(coordinator_core, coordinator_runtime_args);
 
     std::vector<uint32_t> reader_compile_time_args = {
@@ -1801,16 +1797,8 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     // to Float32 in software (see reader_single_row_multi_core.cpp).
     reader_compile_time_args.push_back(static_cast<uint32_t>(is_uint16_input));
     reader_compile_time_args.push_back(uint16_input_stage_cb_index);
-    const auto row_start_reader_compile_time_args = row_start_mcast.compile_time_args();
-    reader_compile_time_args.insert(
-        reader_compile_time_args.end(),
-        row_start_reader_compile_time_args.begin(),
-        row_start_reader_compile_time_args.end());
-    const auto substage_reader_compile_time_args = substage_mcast.compile_time_args();
-    reader_compile_time_args.insert(
-        reader_compile_time_args.end(),
-        substage_reader_compile_time_args.begin(),
-        substage_reader_compile_time_args.end());
+    row_start_mcast.append_compile_time_args_to(reader_compile_time_args);
+    substage_mcast.append_compile_time_args_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -1856,8 +1844,8 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
             KernelDescriptor::RTArgList reader_runtime_args;
             reader_runtime_args.push_back(value_buffer);
             reader_runtime_args.push_back(index_buffer);
-            reader_runtime_args.append(row_start_mcast.runtime_args(core));
-            reader_runtime_args.append(substage_mcast.runtime_args(core));
+            row_start_mcast.append_runtime_args_to(reader_runtime_args, core);
+            substage_mcast.append_runtime_args_to(reader_runtime_args, core);
             reader_desc.emplace_runtime_args(core, reader_runtime_args);
             writer_desc.emplace_runtime_args(
                 core,

@@ -19,20 +19,6 @@
 #include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 void kernel_main() {
-    constexpr auto in0_mcast_args = dataflow_kernel_lib::McastArgs<24, 4>();
-    constexpr uint32_t in0_post_mcast_ct_offset = in0_mcast_args.next_compile_time_args_offset();
-    constexpr uint32_t in0_post_mcast_rt_offset = in0_mcast_args.next_runtime_args_offset();
-
-    uint32_t rt_args_idx = 0;
-    // in0 tensor args
-    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
-    // padding args
-    const uint32_t last_block_h = get_arg_val<uint32_t>(rt_args_idx++);
-    // sparsity args
-    const uint32_t sparsity_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    rt_args_idx = in0_post_mcast_rt_offset;
-
     // COMPILE TIME ARGS
     // in0 tensor args
     constexpr uint32_t in0_tensor_stride_w = get_compile_time_arg_val(0);
@@ -71,7 +57,7 @@ void kernel_main() {
 
     constexpr bool fuse_op = (bool)get_compile_time_arg_val(23);
 
-    constexpr auto in0_args = TensorAccessorArgs<in0_post_mcast_ct_offset>();
+    constexpr auto in0_args = TensorAccessorArgs<24>();
 
     constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 
@@ -86,6 +72,15 @@ void kernel_main() {
     // See https://github.com/tenstorrent/tt-metal/issues/45943.
     [[maybe_unused]] constexpr uint32_t num_batch_compute =
         get_compile_time_arg_val(sparsity_args.next_compile_time_args_offset());
+    constexpr uint32_t operation_ct_args_end = sparsity_args.next_compile_time_args_offset() + 1;
+    uint32_t rt_args_idx = 0;
+    // in0 tensor args
+    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    // padding args
+    const uint32_t last_block_h = get_arg_val<uint32_t>(rt_args_idx++);
+    // sparsity args
+    const uint32_t sparsity_addr = get_arg_val<uint32_t>(rt_args_idx++);
 
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
     // 0x1 is used to specify "VALID" state, i.e. when the batch is valid.
@@ -104,6 +99,8 @@ void kernel_main() {
             in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
         );
     }
+    using In0McastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, 0>;
+    const In0McastArgs in0_mcast_args(rt_args_idx);
 
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);

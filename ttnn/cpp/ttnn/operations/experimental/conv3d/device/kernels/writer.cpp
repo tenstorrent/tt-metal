@@ -69,9 +69,6 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<26>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
-    using WeightMcastArgs = McastArgs<bias_args.next_compile_time_args_offset(), 19>;
-    constexpr WeightMcastArgs weights_mcast_args;
-
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t weight_addr = get_arg_val<uint32_t>(argidx++);
@@ -93,7 +90,6 @@ void kernel_main() {
     const uint32_t weight_src_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t chain_succ_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t chain_succ_noc_y = get_arg_val<uint32_t>(argidx++);
-    argidx = WeightMcastArgs::next_runtime_args_offset();
     const uint32_t mcast_num_iters = get_arg_val<uint32_t>(argidx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(argidx++);
 
@@ -118,7 +114,10 @@ void kernel_main() {
         worker_core_xs = (tt_l1_ptr uint32_t*)(get_arg_addr(argidx));
         argidx += num_workers;
         worker_core_ys = (tt_l1_ptr uint32_t*)(get_arg_addr(argidx));
+        argidx += num_workers;
     }
+    using WeightMcastArgs = McastArgs<bias_args.next_compile_time_args_offset(), 0>;
+    const WeightMcastArgs weights_mcast_args(argidx);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
     constexpr uint32_t partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled);

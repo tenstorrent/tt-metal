@@ -18,32 +18,33 @@ struct RemoteCoord {
 
 // split REDUCE across cores
 void kernel_main() {
-    using ReduceMcastArgs = dataflow_kernel_lib::McastArgs<0, 0>;
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
+    constexpr uint32_t block_h = get_compile_time_arg_val(3);
+    const bool is_all_to_all_worker = get_compile_time_arg_val(4) == 1;
+    constexpr uint32_t num_all_to_all_workers = get_compile_time_arg_val(5);
+    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(6);
+    constexpr uint32_t num_tiles_per_worker_last = get_compile_time_arg_val(7);
+    constexpr bool row_major = (bool)get_compile_time_arg_val(8);
+    constexpr uint32_t num_x = get_compile_time_arg_val(9);
+    constexpr uint32_t num_y = get_compile_time_arg_val(10);
+    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(11);
+    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(12);
+    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
+    constexpr uint32_t reduce_second_stage_sem_id = get_compile_time_arg_val(14);
+    constexpr bool rms_norm = get_compile_time_arg_val(15) == 1;
+
+    const bool is_last_all_to_all_worker = get_arg_val<uint32_t>(0);
+    const uint32_t all_to_all_tile_offset_bytes = get_arg_val<uint32_t>(1);
+    const bool is_second_stage_reader = get_arg_val<uint32_t>(2);
+    const uint32_t start_x = get_arg_val<uint32_t>(3);
+    const uint32_t start_y = get_arg_val<uint32_t>(4);
+    volatile tt_l1_ptr uint32_t* in0_remote_noc_x = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(5));
+    volatile tt_l1_ptr uint32_t* in0_remote_noc_y = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_x));
+
+    constexpr uint32_t operation_ct_args_end = 17;
+    constexpr uint32_t operation_rt_args_end = get_named_compile_time_arg_val("mcast_operation_rt_args");
+    using ReduceMcastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end>;
     constexpr ReduceMcastArgs reduce_mcast_args;
-    constexpr uint32_t ct_base = ReduceMcastArgs::next_compile_time_args_offset();
-    constexpr uint32_t rt_base = ReduceMcastArgs::next_runtime_args_offset();
-
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(ct_base + 2);
-    constexpr uint32_t block_h = get_compile_time_arg_val(ct_base + 3);
-    const bool is_all_to_all_worker = get_compile_time_arg_val(ct_base + 4) == 1;
-    constexpr uint32_t num_all_to_all_workers = get_compile_time_arg_val(ct_base + 5);
-    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(ct_base + 6);
-    constexpr uint32_t num_tiles_per_worker_last = get_compile_time_arg_val(ct_base + 7);
-    constexpr bool row_major = (bool)get_compile_time_arg_val(ct_base + 8);
-    constexpr uint32_t num_x = get_compile_time_arg_val(ct_base + 9);
-    constexpr uint32_t num_y = get_compile_time_arg_val(ct_base + 10);
-    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(ct_base + 11);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(ct_base + 12);
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(ct_base + 13);
-    constexpr bool rms_norm = get_compile_time_arg_val(ct_base + 15) == 1;
-
-    const bool is_last_all_to_all_worker = get_arg_val<uint32_t>(rt_base + 0);
-    const uint32_t all_to_all_tile_offset_bytes = get_arg_val<uint32_t>(rt_base + 1);
-    const bool is_second_stage_reader = get_arg_val<uint32_t>(rt_base + 2);
-    const uint32_t start_x = get_arg_val<uint32_t>(rt_base + 3);
-    const uint32_t start_y = get_arg_val<uint32_t>(rt_base + 4);
-    volatile tt_l1_ptr uint32_t* in0_remote_noc_x = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_base + 5));
-    volatile tt_l1_ptr uint32_t* in0_remote_noc_y = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_base + 5 + num_x));
 
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
 
@@ -52,7 +53,7 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_external2 = tt::CBIndex::c_13;
 
     Noc noc;
-    Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(ct_base + 14));
+    Semaphore<> reduce_second_stage_sem(reduce_second_stage_sem_id);
     UnicastEndpoint remote_ep;
 
     const uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial2);

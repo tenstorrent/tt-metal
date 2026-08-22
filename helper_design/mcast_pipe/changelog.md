@@ -6,6 +6,55 @@ feedback round lands.
 
 ---
 
+## Round 33 — tagged optional helper ABI and final feedback cleanup (2026-08-22)
+
+- Bumped the helper to API v13. Every present multicast compile-time block now
+  starts with a true presence tag and contains seven words total; an absent
+  block contains only a false tag and no runtime payload.
+- Folded optionality into `McastArgs` with compile-time present/absent
+  specializations. The absent form reads no payload, advances the actual encoded
+  offsets, and compile-time rejects sender or receiver construction.
+  `OptionalMcastArgs` and operation-owned Matmul presence flags were removed.
+- Applied tagged serialization to the complete migrated fleet and replaced the
+  five inactive Matmul/Sparse shared-kernel bindings with the opaque absent
+  helper block. Present, absent, and chained Matmul routes passed under Watcher.
+- Moved identical in0 helper tails outside the sharded/interleaved conditionals
+  in both 1D Matmul builders. The cross-operation audit found and fixed the same
+  duplication in both 2D builders; a source test now enforces all four sites.
+- Validation passed: release host build, 36/36 host helper gtests, 80/80 helper
+  device tests under `--dev`, 26/26 source audits, asymmetric 1D Matmul, Sparse
+  Matmul, and 2D Matmul focused gates. The existing 31 migrated kernels and 27
+  migrated bindings are stamped v13; pending and deferred inventory is unchanged.
+
+---
+
+## Round 32 — migration feedback and API-v12 fleet write-back (2026-08-22)
+
+- Normalized every migrated kernel ABI to operation-owned compile/runtime
+  prefixes followed by opaque multicast tails. Added a dynamic runtime base and
+  `OptionalMcastArgs` so variable and inactive paths do not split the ABI or emit
+  synthetic helper blocks. The v12 wire format remains self-describing.
+- Added `Mcast1D`/`Mcast2D` append-style host APIs and converted every migrated
+  producer, including legacy, descriptor, cache-reuse, optional, and multiple-pipe
+  paths. A host gtest verifies exact equivalence with the getter form.
+- Added concrete `McastArgs::SenderPipe`/`ReceiverPipe` aliases and converted all
+  mixed-role storage. This exposed and fixed Group Attention Matmul constructing
+  a receiver on sender-only cores; role asserts remain enabled.
+- Preserved explicit divergent ACK-count overrides where partial bounding boxes
+  contain inactive landing cores. The review suggestion to derive a dense count
+  was corrected after the exact uneven-width route reproducibly hung without
+  the override and passed after restoration.
+- Validation passed: release host build, focused host gtest, 80/80 helper device
+  tests under `--dev`, 24/24 source audits, and sequential focused gates spanning
+  all migrated operation families. Three exact routes hit the known unrelated
+  Watcher C++17 `ASSERT` compilation incompatibility in other kernels and passed
+  unchanged through the safe wrapper without `--dev`.
+- The existing 31 migrated kernel rows and 27 migrated host bindings are written
+  back at API v12. The 2 pending kernels, 5 pending bindings, and 71 deferred
+  kernels retain their prior dispositions.
+
+---
+
 ## Round 31 — Tier 2.10 post-allgather LayerNorm (2026-08-16)
 
 - Production commit `6cc49825476` migrates the post-allgather sender/receiver pair at API v11. Dense

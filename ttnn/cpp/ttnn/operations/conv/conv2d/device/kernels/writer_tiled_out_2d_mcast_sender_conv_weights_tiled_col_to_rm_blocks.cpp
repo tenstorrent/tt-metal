@@ -76,14 +76,18 @@ void kernel_main() {
     constexpr auto s_weight_args = TensorAccessorArgs<ct_arg_idx>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
     constexpr uint32_t mcast_sem_args_base = s_bias_args.next_compile_time_args_offset();
-    constexpr auto weights_mcast_args = dataflow_kernel_lib::McastArgs<mcast_sem_args_base, 4>();
-
     uint32_t i = 0;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i++);
     // Bias arg. Unused if bias fusion is not enabled.
     const uint32_t bias_addr = get_arg_val<uint32_t>(i++);
     const uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i++);
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i++);
+    const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
+    const bool skip_work = get_arg_val<uint32_t>(i++) > 0;
+
+    constexpr uint32_t operation_runtime_args_end = 6;
+    constexpr auto weights_mcast_args =
+        dataflow_kernel_lib::McastArgs<mcast_sem_args_base, operation_runtime_args_end>();
 
     // Experimental API objects
     Noc noc;
@@ -91,10 +95,6 @@ void kernel_main() {
     DataflowBuffer dfb_bias_obj(bias_cb_id);
     DataflowBuffer dfb_reader_indices_obj(cb_reader_indices);
     DataflowBuffer dfb_sharded_act_obj(cb_id_sharded_act);
-
-    i = weights_mcast_args.next_runtime_args_offset();
-    const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
-    const bool skip_work = get_arg_val<uint32_t>(i++) > 0;
 
     if (skip_work && !split_reader_enabled) {
         return;

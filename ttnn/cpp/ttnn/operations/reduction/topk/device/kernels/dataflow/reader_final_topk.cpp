@@ -11,13 +11,12 @@
 
 void kernel_main() {
     // Compile time args
-    constexpr dataflow_kernel_lib::McastArgs<0, 0> readiness_mcast_args;
-    constexpr uint32_t post_mcast_ct_offset = readiness_mcast_args.next_compile_time_args_offset();
-    constexpr uint32_t sender_sem_id = get_compile_time_arg_val(post_mcast_ct_offset);  // Arrival counter
-    constexpr uint32_t Ht = get_compile_time_arg_val(post_mcast_ct_offset + 1);
-    constexpr uint32_t Wt_final = get_compile_time_arg_val(post_mcast_ct_offset + 2);
-    constexpr uint32_t final_values_dfb_index = get_compile_time_arg_val(post_mcast_ct_offset + 3);
-    constexpr uint32_t final_indices_dfb_index = get_compile_time_arg_val(post_mcast_ct_offset + 4);
+    constexpr uint32_t sender_sem_id = get_compile_time_arg_val(0);  // Arrival counter
+    constexpr uint32_t Ht = get_compile_time_arg_val(1);
+    constexpr uint32_t Wt_final = get_compile_time_arg_val(2);
+    constexpr uint32_t final_values_dfb_index = get_compile_time_arg_val(3);
+    constexpr uint32_t final_indices_dfb_index = get_compile_time_arg_val(4);
+    constexpr dataflow_kernel_lib::McastArgs<5, 0> readiness_mcast_args;
 
     Noc noc;
     auto readiness_pipe = readiness_mcast_args.sender(noc);

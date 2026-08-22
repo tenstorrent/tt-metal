@@ -18,32 +18,33 @@ struct RemoteCoord {
 
 // split REDUCE across cores
 void kernel_main() {
-    using ReduceMcastArgs = dataflow_kernel_lib::McastArgs<0, 0>;
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
+    constexpr uint32_t block_h = get_compile_time_arg_val(3);
+    constexpr uint32_t block_h_size_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t num_all_to_all_workers_first_stage = get_compile_time_arg_val(5);
+    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(6);
+    constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(7);
+    constexpr uint32_t num_tiles_per_worker_last = get_compile_time_arg_val(8);
+    constexpr uint32_t num_tiles_per_worker_last_bytes = get_compile_time_arg_val(9);
+    constexpr bool row_major = (bool)get_compile_time_arg_val(10);
+    constexpr uint32_t num_x = get_compile_time_arg_val(11);
+    constexpr uint32_t num_y = get_compile_time_arg_val(12);
+    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(13);
+    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(14);
+    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(15);
+    constexpr uint32_t reduce_second_stage_sem_id = get_compile_time_arg_val(16);
+    constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
+
+    const uint32_t start_x = get_arg_val<uint32_t>(4);
+    const uint32_t start_y = get_arg_val<uint32_t>(5);
+
+    tt_l1_ptr uint32_t* in0_remote_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(6));
+    tt_l1_ptr uint32_t* in0_remote_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(6 + num_x));
+
+    constexpr uint32_t operation_ct_args_end = 20;
+    constexpr uint32_t operation_rt_args_end = get_named_compile_time_arg_val("mcast_operation_rt_args");
+    using ReduceMcastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end>;
     constexpr ReduceMcastArgs reduce_mcast_args;
-    constexpr uint32_t ct_base = ReduceMcastArgs::next_compile_time_args_offset();
-    constexpr uint32_t rt_base = ReduceMcastArgs::next_runtime_args_offset();
-
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(ct_base + 2);
-    constexpr uint32_t block_h = get_compile_time_arg_val(ct_base + 3);
-    constexpr uint32_t block_h_size_bytes = get_compile_time_arg_val(ct_base + 4);
-    constexpr uint32_t num_all_to_all_workers_first_stage = get_compile_time_arg_val(ct_base + 5);
-    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(ct_base + 6);
-    constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(ct_base + 7);
-    constexpr uint32_t num_tiles_per_worker_last = get_compile_time_arg_val(ct_base + 8);
-    constexpr uint32_t num_tiles_per_worker_last_bytes = get_compile_time_arg_val(ct_base + 9);
-    constexpr bool row_major = (bool)get_compile_time_arg_val(ct_base + 10);
-    constexpr uint32_t num_x = get_compile_time_arg_val(ct_base + 11);
-    constexpr uint32_t num_y = get_compile_time_arg_val(ct_base + 12);
-    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(ct_base + 13);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(ct_base + 14);
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(ct_base + 15);
-    constexpr bool rms_norm = get_compile_time_arg_val(ct_base + 17) == 1;
-
-    const uint32_t start_x = get_arg_val<uint32_t>(rt_base + 4);
-    const uint32_t start_y = get_arg_val<uint32_t>(rt_base + 5);
-
-    tt_l1_ptr uint32_t* in0_remote_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(rt_base + 6));
-    tt_l1_ptr uint32_t* in0_remote_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(rt_base + 6 + num_x));
 
     constexpr uint32_t dfb_ex_partial2 = tt::CBIndex::c_11;
     constexpr uint32_t dfb_ex2 = tt::CBIndex::c_12;
@@ -51,7 +52,7 @@ void kernel_main() {
     constexpr uint32_t dfb_ex2_global = tt::CBIndex::c_14;
 
     Noc noc;
-    Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(ct_base + 16));
+    Semaphore<> reduce_second_stage_sem(reduce_second_stage_sem_id);
     UnicastEndpoint remote_ep;
     auto reduce_pipe = reduce_mcast_args.sender(noc);
 

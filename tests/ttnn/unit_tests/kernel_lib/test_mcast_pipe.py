@@ -142,7 +142,7 @@ def _run_pipe(
 
     # ---- sender kernel ----
     # CT: [cb_src, cb_dst] + McastArgs block
-    # [active, data_ready, consumer_ready, ack_count, flags, rotating_span] + scalars.
+    # [present, active, data_ready, consumer_ready, ack_count, flags, rotating_span] + scalars.
     # pre_handshake + signal are in the mcast block (flags word) now — no separate pre_handshake CT word.
     sender_ct = [cb_src, cb_dst]
     sender_ct += list(mc.compile_time_args())
@@ -638,7 +638,7 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
 
     # sender kernel (writes its own shard 0)
     # CT: [cb_src, cb_dst] + McastArgs block
-    # [active, data_ready, consumer_ready(UNUSED), ack_count, flags, rotating_span].
+    # [present, active, data_ready, consumer_ready(UNUSED), ack_count, flags, rotating_span].
     # handshake=False -> flags pre_handshake bit clear, so the sender/receiver run without the ack.
     sender_ct = [cb_src, cb_dst]
     sender_ct += list(mc.compile_time_args())
@@ -765,7 +765,7 @@ def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_i
             sender_lines,
             ttnn.McastConfig(rotating_sender=True),
         )
-    assert mc.compile_time_args()[5] == span, f"expected {span} sender rounds"
+    assert mc.compile_time_args()[6] == span, f"expected {span} sender rounds"
     semaphores = mc.owned_semaphores()
 
     cb = 0  # one CB per core: mcast source (in place) + landing region
@@ -779,7 +779,7 @@ def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_i
         ),
     ]
 
-    # CT: [cb] + McastArgs<1,4> block (6 words) + [num_rounds, payload_pages, page_bytes] + TA(in) + TA(out)
+    # CT: [cb] + McastArgs<1,4> block (7 words) + [num_rounds, payload_pages, page_bytes] + TA(in) + TA(out)
     ct = [cb] + list(mc.compile_time_args()) + [span, payload_pages, page_bytes]
     ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
@@ -902,7 +902,7 @@ def _run_fixed_line(
             sender_placement=sender_placement,
             config=ttnn.McastConfig(),
         )
-    assert mc.compile_time_args()[5] == 0, "fixed mode has no rotating span"
+    assert mc.compile_time_args()[6] == 0, "fixed mode has no rotating span"
     if sender_placement == ttnn.Mcast1DSenderPlacement.Diagonal:
         for Y in range(GR):
             expected_sender = ttnn.CoreCoord((starting_sender_index + Y) % GC, Y)
@@ -920,7 +920,7 @@ def _run_fixed_line(
         ),
     ]
 
-    # CT: [cb] + McastArgs<1,4> block (6 words) + [num_blocks, payload_pages, page_bytes] + TA(in) + TA(out)
+    # CT: [cb] + McastArgs<1,4> block (7 words) + [num_blocks, payload_pages, page_bytes] + TA(in) + TA(out)
     ct = [cb] + list(mc.compile_time_args()) + [NB, payload_pages, page_bytes]
     ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
