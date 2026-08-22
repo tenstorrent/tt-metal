@@ -1833,6 +1833,12 @@ class Qwen36Model:
         for layer in self.layers:
             if not layer.is_full_attention:
                 layer.attention.remap_slots(remap)
+        # Device-resident decode stepping (AsyncDecodeStep) keeps tokens/pos/rope on
+        # device PER SLOT; a condense permutes slots under it, so its state is stale
+        # until the owner resync()s from host.
+        hook = getattr(self, "_async_decode_step", None)
+        if hook is not None:
+            hook.invalidate("gdn slot remap (batch condense)")
 
     def prefill_chunked_peruser(self, token_ids_list, page_table, valid_lens=None):
         """Batched per-user LONG-prefill (TP, eager). Runs the single-user chunk-outer path

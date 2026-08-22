@@ -6,6 +6,7 @@
 #
 # Env passthrough knobs: REF (git ref to bench; default = workspace HEAD),
 # SKIP_BUILD=1 (kernel-only change, JIT recompiles), SKIP_GATE=1, RUN_PREFILL=1,
+# RUN_ASYNC_GATE=1 (stock-vs-async token-equality gate before the bench),
 # plus every QWEN38_BENCH_* / QWEN38_PREFILL_* knob from the bench scripts.
 #
 #SBATCH --job-name=qwen38-meas
@@ -91,6 +92,17 @@ fi
 LOGDIR=/data/ayerofieiev/qwen38/logs
 mkdir -p "$LOGDIR"
 BENCHLOG="$LOGDIR/bench-${SLURM_JOB_ID:-manual}.log"
+
+if [[ "${RUN_ASYNC_GATE:-0}" == "1" ]]; then
+    # Token-equality gate for QWEN36_ASYNC_DECODE_STEP (stock vs device-resident
+    # stepping). This one is exit-code strict: a divergence must fail the job.
+    GATELOG2="$(mktemp)"
+    set +e
+    "$QWEN38_PYTHON" -m pytest models/demos/blackhole/qwen36/tests/test_async_decode_step.py -v -s 2>&1 | tee "$GATELOG2"
+    set -e
+    grep -qE "[0-9]+ passed" "$GATELOG2" || { echo "ASYNC_GATE_FAILED"; exit 1; }
+    rm -f "$GATELOG2"
+fi
 
 # Same rationale: judge the bench by its BENCH_JSON line, not the process exit code.
 set +e
