@@ -210,19 +210,19 @@ struct Logical1DShape {
     const ArchitecturePolicy& policy,
     const bool hybrid_tile_mirror,
     const uint32_t interleave_batch_sticks) {
-    const L1Accounting fixed =
-        make_l1_accounting(0, 0, 0, interleave_batch_sticks, policy.l1_scratch_bytes, available_bytes);
+    const uint64_t fixed_bytes =
+        checked_l1_allocation_bytes(0, 0, 0, interleave_batch_sticks, policy.l1_scratch_bytes, available_bytes);
     constexpr uint64_t mirror_rounding_reserve =
         uint64_t{3} * (device_protocol::kLwtGroupOutputElements - 1U) * sizeof(float);
     const uint64_t physical_workspace_multiplier = hybrid_tile_mirror ? 2U : 1U;
     const uint64_t rounding_reserve = hybrid_tile_mirror ? mirror_rounding_reserve : 0U;
     TT_FATAL(
-        available_bytes >= fixed.total_bytes + rounding_reserve + 3 * device_protocol::kStickBytes,
+        available_bytes >= fixed_bytes + rounding_reserve + 3 * device_protocol::kStickBytes,
         "LWT requires at least {} bytes of free per-core L1 after external L1 tensor allocation, but only {} remain",
-        fixed.total_bytes + rounding_reserve + 3 * device_protocol::kStickBytes,
+        fixed_bytes + rounding_reserve + 3 * device_protocol::kStickBytes,
         available_bytes);
     const uint64_t capacity_limited_budget =
-        (available_bytes - fixed.total_bytes - rounding_reserve) / physical_workspace_multiplier;
+        (available_bytes - fixed_bytes - rounding_reserve) / physical_workspace_multiplier;
     return checked_u32(std::min<uint64_t>(kDefaultL1SignalBudgetBytes, capacity_limited_budget), "LWT signal budget");
 }
 
@@ -975,7 +975,7 @@ template <typename Scheme>
     }
     const bool hybrid_tile_mirror =
         supports_hybrid_tile_mirror(architecture_policy.architecture, plan.workspace_layout);
-    static_cast<void>(make_l1_accounting(
+    static_cast<void>(checked_l1_allocation_bytes(
         plan.workspace_elements,
         plan.max_workspace_elements,
         tile_mirror_elements(plan.workspace_elements, hybrid_tile_mirror),
@@ -1027,7 +1027,7 @@ template <typename Scheme>
     }
     const bool hybrid_tile_mirror =
         supports_hybrid_tile_mirror(architecture_policy.architecture, plan.workspace_layout);
-    static_cast<void>(make_l1_accounting(
+    static_cast<void>(checked_l1_allocation_bytes(
         plan.workspace_elements,
         plan.max_workspace_elements,
         tile_mirror_elements(plan.workspace_elements, hybrid_tile_mirror),

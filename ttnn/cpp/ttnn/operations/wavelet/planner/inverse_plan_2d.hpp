@@ -28,18 +28,9 @@ struct Ilwt2DExecutionPlan {
     size_t output_width{0};
     size_t band_height{0};
     size_t band_width{0};
-    uint32_t chunk_tiles_y{0};
-    uint32_t chunk_tiles_x{0};
-    uint32_t active_core_count{0};
-    uint32_t executable_route_count{0};
     std::vector<Lwt2DChunkPlan> chunks;
-    double max_dependency_overhead{0.0};
-    uint64_t max_l1_bytes{0};
-    uint64_t estimated_latency_cycles{0};
-    std::array<uint32_t, 5> allocated_plane_heights_elements{};
     std::array<uint32_t, 5> allocated_plane_widths_elements{};
     std::array<uint64_t, 5> allocated_plane_slot_bytes{};
-    uint64_t allocated_workspace_bytes{0};
     uint64_t allocated_l1_bytes{0};
 };
 
@@ -66,8 +57,6 @@ namespace inverse_2d_detail {
         .initial_even = required.back().even,
         .initial_odd = required.back().odd,
         .routes = {},
-        .max_workspace_elements = std::max(required.back().even.length(), required.back().odd.length()),
-        .base_transitions_aligned_32 = false,
     };
     cone.routes.reserve(forward.routes.size());
 
@@ -96,7 +85,6 @@ namespace inverse_2d_detail {
         requirement.source = execution_detail::translated(base, route.source_offset, static_cast<size_t>(k - 1));
         requirement.base = base;
         requirement.output = output;
-        cone.max_workspace_elements = std::max(cone.max_workspace_elements, output.length());
         cone.routes.push_back(requirement);
     }
     return cone;
@@ -123,7 +111,6 @@ inline void append_axis_routes(
                 .source = plan_2d_detail::axis_rectangle(axis, requirement.before.even, transverse),
                 .base = plan_2d_detail::axis_rectangle(axis, requirement.before.odd, transverse),
                 .output = {},
-                .in_place = true,
             });
             std::swap(slots.even, slots.odd);
             continue;
@@ -142,7 +129,6 @@ inline void append_axis_routes(
                     axis, even ? requirement.before.even : requirement.before.odd, transverse),
                 .base = {},
                 .output = {},
-                .in_place = true,
             });
             continue;
         }
@@ -161,7 +147,6 @@ inline void append_axis_routes(
             .source = plan_2d_detail::axis_rectangle(axis, requirement.source, transverse),
             .base = plan_2d_detail::axis_rectangle(axis, requirement.base, transverse),
             .output = plan_2d_detail::axis_rectangle(axis, requirement.output, transverse),
-            .in_place = false,
         });
         if (predict) {
             slots.free = slots.odd;
@@ -225,10 +210,7 @@ inline void append_axis_routes(
 }
 
 [[nodiscard]] inline Lwt2DChunkPlan build_chunk(
-    const LiftingInversePlan& y_plan,
-    const LiftingInversePlan& x_plan,
-    const IndexRectangle output,
-    const uint64_t l1_budget_bytes) {
+    const LiftingInversePlan& y_plan, const LiftingInversePlan& x_plan, const IndexRectangle output) {
     const size_t pad_y = y_plan.forward_trace.preprocess_layout.pad_config.left;
     const size_t pad_x = x_plan.forward_trace.preprocess_layout.pad_config.left;
     const AxisConePlan y_cone = build_axis_cone(
@@ -248,8 +230,7 @@ inline void append_axis_routes(
     };
     auto [routes, parity_slots] = build_route_schedule(y_cone, x_cone);
     constexpr Lwt2DWorkspacePolicy workspace_policy = Lwt2DWorkspacePolicy::kFivePlaneGeneric;
-    const Lwt2DResourceModel resources =
-        plan_2d_detail::make_resource_model(initial, routes, workspace_policy, l1_budget_bytes);
+    const Lwt2DResourceModel resources = plan_2d_detail::make_resource_model(initial, routes, workspace_policy);
     const Lwt2DBandSourceRectangles parity_sources{
         .ll = interval_product(y_cone.final_even, x_cone.final_even),
         .lh = interval_product(y_cone.final_even, x_cone.final_odd),
@@ -263,10 +244,6 @@ inline void append_axis_routes(
             ? 0.0
             : static_cast<double>(dependency_elements - std::min(dependency_elements, output_elements)) /
                   static_cast<double>(output_elements);
-    uint64_t route_elements = 0;
-    for (const Lwt2DRoutePlan& route : routes) {
-        route_elements += route.output.area();
-    }
 
     return Lwt2DChunkPlan{
         .final_band_rect = output,
@@ -283,23 +260,12 @@ inline void append_axis_routes(
                         .end = round_up(output.x.end, kTileWidth2D),
                     },
             },
-        .y_cone = y_cone,
-        .x_cone = x_cone,
         .initial = initial,
-        .workspace_policy = workspace_policy,
         .routes = std::move(routes),
         .final_bands = parity_slots,
         .final_band_sources = parity_sources,
         .resources = resources,
         .dependency_overhead = dependency_overhead,
-        .exact_initial_elements = dependency_elements,
-        .internal_initial_elements = dependency_elements,
-        .exact_route_elements = route_elements,
-        .internal_route_elements = route_elements,
-        .exact_final_elements =
-            parity_sources.ll.area() + parity_sources.lh.area() + parity_sources.hl.area() + parity_sources.hh.area(),
-        .internal_final_elements =
-            parity_sources.ll.area() + parity_sources.lh.area() + parity_sources.hl.area() + parity_sources.hh.area(),
     };
 }
 
@@ -307,8 +273,7 @@ inline void append_axis_routes(
     const LiftingInversePlan& y_plan,
     const LiftingInversePlan& x_plan,
     const uint32_t chunk_tiles_y,
-    const uint32_t chunk_tiles_x,
-    const uint64_t l1_budget_bytes) {
+    const uint32_t chunk_tiles_x) {
     const size_t chunk_height = static_cast<size_t>(chunk_tiles_y) * kTileHeight2D;
     const size_t chunk_width = static_cast<size_t>(chunk_tiles_x) * kTileWidth2D;
     std::vector<Lwt2DChunkPlan> chunks;
@@ -323,8 +288,7 @@ inline void append_axis_routes(
                 IndexRectangle{
                     .y = IndexInterval{.begin = y, .end = std::min(y + chunk_height, y_plan.original_length)},
                     .x = IndexInterval{.begin = x, .end = std::min(x + chunk_width, x_plan.original_length)},
-                },
-                l1_budget_bytes));
+                }));
         }
     }
     return chunks;
@@ -349,13 +313,10 @@ inline void append_axis_routes(
     bool found = false;
     for (uint32_t tiles_y = 1; tiles_y <= output_tiles_y; ++tiles_y) {
         for (uint32_t tiles_x = 1; tiles_x <= output_tiles_x; ++tiles_x) {
-            std::vector<Lwt2DChunkPlan> chunks =
-                inverse_2d_detail::build_chunks(y_plan, x_plan, tiles_y, tiles_x, l1_budget_bytes);
-            uint64_t max_l1 = 0;
+            std::vector<Lwt2DChunkPlan> chunks = inverse_2d_detail::build_chunks(y_plan, x_plan, tiles_y, tiles_x);
             double max_overhead = 0.0;
             bool fits = true;
             for (const Lwt2DChunkPlan& chunk : chunks) {
-                max_l1 = std::max(max_l1, chunk.resources.total_l1_bytes);
                 max_overhead = std::max(max_overhead, chunk.dependency_overhead);
                 fits = fits && chunk.resources.total_l1_bytes <= l1_budget_bytes;
             }
@@ -366,7 +327,6 @@ inline void append_axis_routes(
                 .chunk_tiles_y = tiles_y,
                 .chunk_tiles_x = tiles_x,
                 .active_core_count = static_cast<uint32_t>(std::min(chunks.size(), static_cast<size_t>(core_limit))),
-                .max_l1_bytes = max_l1,
                 .max_dependency_overhead = max_overhead,
                 .estimated_latency_cycles = plan_2d_detail::estimate_candidate_latency_cycles(
                     chunks,
@@ -409,10 +369,6 @@ inline void append_axis_routes(
             Shape2D{.height = y_plan.coefficient_length, .width = x_plan.coefficient_length}),
         .padding_precedes_split = true,
     };
-    const uint32_t executable_routes = static_cast<uint32_t>(std::count_if(
-        best.chunks.front().routes.begin(), best.chunks.front().routes.end(), [](const Lwt2DRoutePlan& route) {
-            return !route.output.empty();
-        }));
     return Ilwt2DExecutionPlan{
         .y_plan = std::move(y_plan),
         .x_plan = std::move(x_plan),
@@ -421,18 +377,9 @@ inline void append_axis_routes(
         .output_width = tiling.input.logical.width,
         .band_height = tiling.band.logical.height,
         .band_width = tiling.band.logical.width,
-        .chunk_tiles_y = best.chunk_tiles_y,
-        .chunk_tiles_x = best.chunk_tiles_x,
-        .active_core_count = best.active_core_count,
-        .executable_route_count = executable_routes,
         .chunks = std::move(best.chunks),
-        .max_dependency_overhead = best.max_dependency_overhead,
-        .max_l1_bytes = best.max_l1_bytes,
-        .estimated_latency_cycles = best.estimated_latency_cycles,
-        .allocated_plane_heights_elements = heights,
         .allocated_plane_widths_elements = widths,
         .allocated_plane_slot_bytes = slot_bytes,
-        .allocated_workspace_bytes = workspace_bytes,
         .allocated_l1_bytes = total_l1_bytes,
     };
 }
