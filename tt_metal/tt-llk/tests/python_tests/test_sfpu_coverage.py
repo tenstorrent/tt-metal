@@ -10,11 +10,25 @@ and tolerance per op (the S4/ED conversion discipline).  The production
 kernels are byte-untouched — every selector lives test-side (LLK-pristine
 rule R7).
 
-Dst vector-row layout assumption (documented, silicon-unverified this lane —
-the rows are CORRECTNESS-UNVERIFIED-ON-SILICON until the first weekly books
-or refuses them): the flat stimuli vector is face-major (4 faces x 256) and
-each 32-lane SFPU vector row is one consecutive 32-element chunk of it, so
-row-structured goldens are computed on `tensor.view(32, 32)`.
+Dst vector-row layout (PROVEN on silicon + pinned sim, lane FM 2026-08-22 —
+golden re-spec per the CX cast precedent; supersedes lane EU's chunk-linear
+assumption): in BOTH observed Dst modes (bf16 dest_acc=No AND Int32
+dest_acc=Yes/unpack_to_dest), the SFPU vector-row PAIR dst_reg[2k] /
+dst_reg[2k+1] holds the EVEN / ODD elements of the flat face-major
+64-element span flat[64k : 64(k+1)] — NOT two consecutive 32-element
+chunks.  Proofs (evidence laneFM-evidence-20260822/coverage-diag):
+
+* rotate90 (bf16): tagged-stimulus runs — device and pinned-sim results
+  both match ``out[i] = -in[i^1]`` (i even) / ``in[i^1]`` (i odd) at
+  1024/1024 elements; the chunk-linear model matches 4/1024.
+* int_sum ROW (Int32): tagged sim run decodes exactly to the interleave
+  model (chunk c: even positions = the 4-vector sum, odd positions
+  untouched); int_sum COL is LAYOUT-BLIND — all its summand offsets are
+  even, making chunk-linear and interleaved predictions elementwise
+  identical — so its earlier silicon PASS proved nothing about layout.
+
+Row-structured goldens therefore use _vector_rows()/_from_vector_rows()
+below.  Lane-uniform (elementwise) goldens are layout-independent.
 """
 
 import struct
@@ -54,6 +68,20 @@ _SKF_WITHIN_BANK_MASK = 0x3FF
 _SKF_OUT_SHIFT = 0
 
 _IMPL_IDS = ["production", "fresh_cpp"]
+
+
+def _vector_rows(flat):
+    """(32, 32) view whose row v is SFPU vector row dst_reg[v] under the
+    proven Dst layout (both 16-bit and 32-bit modes): rows 2k/2k+1 =
+    even/odd elements of the flat 64-element span k (module docstring).
+    Lane order within a row is not observable by (nor relevant to)
+    lane-uniform goldens."""
+    return flat.reshape(16, 32, 2).permute(0, 2, 1).reshape(32, 32)
+
+
+def _from_vector_rows(rows):
+    """Inverse of _vector_rows: vector-row tensor back to flat layout."""
+    return rows.reshape(16, 2, 32).permute(0, 2, 1).reshape(1024)
 
 
 def _run_coverage(
@@ -153,14 +181,17 @@ _SKF_SPEC = StimuliSpec.uniform(low=0.0, high=float(2**16 - 1))
 def test_sfpu_coverage_rotate90(fresh_cpp_impl):
     """metal alt_complex_rotate90 vs fresh: (re, im) row pairs -> (-im, re).
 
-    Bit-preserving contract (sign flip + move), so the gate is exact."""
+    Vector-row pairs under the PROVEN 16-bit Dst layout (module docstring):
+    dst_reg[2k]/dst_reg[2k+1] are the even/odd elements of flat span k, so
+    the rotation is elementwise ``out[i] = -in[i^1]`` (even i) /
+    ``in[i^1]`` (odd i).  Bit-preserving contract, so the gate is exact."""
 
     def golden(a, _b):
-        rows = a.view(32, 32).clone()
+        rows = _vector_rows(a).clone()
         out = rows.clone()
         out[0::2] = -rows[1::2]
         out[1::2] = rows[0::2]
-        return out.flatten()
+        return _from_vector_rows(out)
 
     _run_coverage(
         1, fresh_cpp_impl, golden, _BF16, DestAccumulation.No, atol=0.0, rtol=0.0
@@ -256,13 +287,13 @@ def test_sfpu_coverage_tiled_prod(fresh_cpp_impl):
     9-term product well inside bf16 range."""
 
     def golden(a, _b):
-        rows = a.view(32, 32).to(torch.float32)
+        rows = _vector_rows(a).to(torch.float32)
         out = rows.clone()
         run = torch.ones(32)
         for r in range(_TILED_PROD_ROWS):
             run = run * rows[r]
             out[r] = run
-        return out.flatten()
+        return _from_vector_rows(out)
 
     _run_coverage(
         5,
@@ -278,12 +309,15 @@ def test_sfpu_coverage_tiled_prod(fresh_cpp_impl):
 def test_sfpu_coverage_zero_pad(fresh_cpp_impl):
     """legacy experimental zero_pad vs fresh: scrub rows [VALID, 32) to +0.0.
 
-    Pure constant store — exact gate."""
+    Pure constant store — exact gate.  Vector rows via the proven 16-bit
+    layout helper; with VALID=24 (even) the zeroed region happens to be the
+    same flat[768:1024] the old chunk-linear assumption gave — which is why
+    this row passed on silicon while rotate90/tiledprod failed."""
 
     def golden(a, _b):
-        rows = a.view(32, 32).clone()
+        rows = _vector_rows(a).clone()
         rows[_ZERO_PAD_VALID_ROWS:] = 0.0
-        return rows.flatten()
+        return _from_vector_rows(rows)
 
     _run_coverage(
         6, fresh_cpp_impl, golden, _BF16, DestAccumulation.No, atol=0.0, rtol=0.0
@@ -358,7 +392,10 @@ def test_sfpu_coverage_int_sum(subop, fresh_cpp_impl):
     stimuli (sums stay far below 2^31)."""
 
     def golden(a, _b):
-        rows = a.view(32, 32).to(torch.int64)
+        # Vector-row basis via the proven interleaved layout (module
+        # docstring).  COL is layout-blind (all-even offsets); ROW is not —
+        # its chunk-linear form failed the pinned sim before the re-spec.
+        rows = _vector_rows(a).to(torch.int64)
         out = rows.clone()
         if subop == 0:
             for i in range(2):
@@ -369,7 +406,7 @@ def test_sfpu_coverage_int_sum(subop, fresh_cpp_impl):
         else:
             for i in range(0, 8, 2):
                 out[i] = rows[i] + rows[i + 1] + rows[i + 8] + rows[i + 9]
-        return out.to(torch.int32).flatten()
+        return _from_vector_rows(out).to(torch.int32)
 
     _run_coverage(
         10,

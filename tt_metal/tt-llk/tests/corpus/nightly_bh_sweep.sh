@@ -110,6 +110,8 @@ python3 "$HERE/selftest_dst_layout_32b.py" > "$EV/selftest-dst-layout-32b.txt" 2
   || GATE_SELFTEST_RC=1
 python3 "$HERE/selftest_e2e_metric.py" > "$EV/selftest-e2e-metric.txt" 2>&1 \
   || { echo "FATAL: e2e-metric (dual-zone verdict) self-test failed (see $EV/selftest-e2e-metric.txt)"; exit 2; }
+python3 "$HERE/selftest_perf_schema_columns.py" > "$EV/selftest-perf-schema-columns.txt" 2>&1 \
+  || { echo "FATAL: perf-schema-columns self-test failed (see $EV/selftest-perf-schema-columns.txt)"; exit 2; }
 # Record the conf-lint verdict (already enforced above, pre-source) in-evidence.
 { mv /tmp/nightly-selftest-conf-lint.$$ "$EV/selftest-conf-lint.txt" 2>/dev/null || true; }
 { mv /tmp/nightly-selftest-wrapper-lib.$$ "$EV/selftest-wrapper-lib.txt" 2>/dev/null || true; }

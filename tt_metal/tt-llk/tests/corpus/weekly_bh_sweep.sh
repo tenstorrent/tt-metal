@@ -90,6 +90,8 @@ python3 "$HERE/selftest_dst_layout_32b.py" > "$EV/selftest-dst-layout-32b.txt" 2
   || { echo "FATAL: dst-layout-32b wiring self-test failed (see $EV/selftest-dst-layout-32b.txt)"; exit 2; }
 python3 "$HERE/selftest_e2e_metric.py" > "$EV/selftest-e2e-metric.txt" 2>&1 \
   || { echo "FATAL: e2e-metric (dual-zone verdict) self-test failed (see $EV/selftest-e2e-metric.txt)"; exit 2; }
+python3 "$HERE/selftest_perf_schema_columns.py" > "$EV/selftest-perf-schema-columns.txt" 2>&1 \
+  || { echo "FATAL: perf-schema-columns self-test failed (see $EV/selftest-perf-schema-columns.txt)"; exit 2; }
 { mv /tmp/weekly-selftest-conf-lint.$$ "$EV/selftest-conf-lint.txt" 2>/dev/null || true; }
 { mv /tmp/weekly-selftest-wrapper-lib.$$ "$EV/selftest-wrapper-lib.txt" 2>/dev/null || true; }
 bash "$HERE/conf_lint.sh" > "$EV/conf-lint.txt" 2>&1 \
