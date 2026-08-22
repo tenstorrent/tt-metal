@@ -99,6 +99,10 @@ def chunk_gated_delta_rule_fused_adapter(
     const_tiles=None,  # (eye, tril, ones, masks) device tensors built once by the caller (layer);
     # passed to the op so it stays stateless. Required under trace (the op's internal build does a
     # host upload, illegal under trace); if None, the op builds them eagerly.
+    valid_masks=None,  # {"f32": [B,T,1] fp32, "bf16": [B,T,1] bf16} caller-owned persistent
+    # device masks (1.0 for rows < valid_len, else 0.0) — the trace-safe form of valid_len:
+    # the values live in buffers the caller refreshes between replays, so no host write
+    # happens here. Overrides valid_len when set.
 ):
     global _logged_path
     if not _logged_path:
@@ -146,6 +150,20 @@ def chunk_gated_delta_rule_fused_adapter(
     # valid_len: zero beta/g past pad so state updates are identity; final_state = state at valid_len.
     # Scalar (one length for all rows) or a per-row list/tuple of B lengths (grouped batched prefill:
     # each user its own real length within the shared bucket).
+    if valid_masks is not None:
+        # Caller-owned persistent masks (trace-safe valid_len). Same multiplies as
+        # the host-built branch below; never deallocate the caller's buffers.
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        _m = valid_masks["f32"]
+        beta = ttnn.multiply(beta, _m, memory_config=_dram)
+        g = ttnn.multiply(g, _m, memory_config=_dram)
+        _mq = valid_masks["bf16"] if q.dtype == ttnn.bfloat16 else valid_masks["f32"]
+        if len(q.shape) != 3:
+            _mq = ttnn.reshape(_mq, [B, T, 1, 1])
+        q = ttnn.multiply(q, _mq, memory_config=_dram)
+        k = ttnn.multiply(k, _mq, memory_config=_dram)
+        v = ttnn.multiply(v, _mq, memory_config=_dram)
+        valid_len = None
     _is_per_row = isinstance(valid_len, (list, tuple))
     if _is_per_row or (valid_len is not None and valid_len < T):
         _dram = ttnn.DRAM_MEMORY_CONFIG  # op CBs clash with L1 inputs at small buckets

@@ -459,12 +459,18 @@ class TPGatedDeltaNet:
         ttnn.deallocate(ab)
         return qkv, z, a, b
 
-    def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False, return_state=False):
+    def forward_prefill(
+        self, x, chunk_size=128, valid_len=None, capture_state=False, return_state=False, valid_masks=None
+    ):
         """Causal chunk-prefill from scratch. x [1,1,T,dim]: K-sharded (dim/tp per device) when the
         fused in-proj AG-matmul path is active (``_fuse_agmm`` and T>TILE — the norm skips its
         post-AG); replicated otherwise. Output reduce-scattered.
 
         valid_len: real token count (rest is padding). capture_state: save rec/conv state for decode.
+        valid_masks: trace-safe replacement for valid_len — caller-owned persistent
+        device tensors {"conv_sel": [1,K-1,(K-1)+T], "f32": [1,T,1], "bf16": [1,T,1]}
+        whose VALUES encode valid_len (refreshed between trace replays, so nothing
+        here writes from host; requires the fused chunk op).
         return_state: when True (per-user batched prefill), return
         ``(output, final_state, conv_new_state)`` for one user's from-scratch B=1
         pass and skip all self.* writeback; the caller stitches per-user states via
@@ -497,7 +503,8 @@ class TPGatedDeltaNet:
 
         # FIR conv1d; conv_state = previous chunk's last K-1 inputs (None/zero from scratch)
         _cstate = self.conv_carry if carry else None
-        if self._gdn_conv1d and valid_len is None:
+        _masked = valid_len is not None or valid_masks is not None
+        if self._gdn_conv1d and not _masked:
             # Native depthwise ttnn.conv1d (masked buckets keep the MAC FIR: valid_len new_state differs)
             conv, conv_new_state = self._conv1d_prefill(qkv, T, _cstate)
         else:
@@ -512,7 +519,8 @@ class TPGatedDeltaNet:
                 conv_state=_cstate,
                 weight_taps=tw["conv_taps"],
                 bias_dev=None,
-                valid_len=valid_len,
+                valid_len=None if valid_masks is not None else valid_len,
+                valid_sel=valid_masks["conv_sel"] if valid_masks is not None else None,
             )
         ttnn.deallocate(qkv)
 
@@ -543,9 +551,10 @@ class TPGatedDeltaNet:
         )
 
         _use_fused = fused_chunk_enabled()
+        assert valid_masks is None or _use_fused, "valid_masks (traced masked chunk) requires the fused chunk op"
         _delta_fn = chunk_gated_delta_rule_fused_adapter if _use_fused else chunk_gated_delta_rule_seq_adapter
-        # const_tiles only applies to the fused op; the seq adapter has no such param.
-        _extra = {"const_tiles": self._fused_const_tiles} if _use_fused else {}
+        # const_tiles / valid_masks only apply to the fused op.
+        _extra = {"const_tiles": self._fused_const_tiles, "valid_masks": valid_masks} if _use_fused else {}
         o, final_state = _delta_fn(
             q,
             k,
@@ -557,7 +566,7 @@ class TPGatedDeltaNet:
             initial_state=self.rec_state if carry else None,
             device=self.mesh,
             cached_masks=self.chunk_seq_masks,
-            valid_len=valid_len,
+            valid_len=None if valid_masks is not None else valid_len,
             qkv_head_dims=_qkv_head_dims,
             return_o_bh=self._gdn_fuse_out,
             **_extra,

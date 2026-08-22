@@ -144,10 +144,14 @@ def _causal_conv1d_fir(
     weight_taps=None,
     bias_dev=None,
     valid_len=None,
+    valid_sel=None,
 ):
     """Depthwise causal conv1d + SiLU via K shifted multiply-accumulate slices.
 
     x [B,T,D]; conv_state [B,K-1,D] or list of [B,1,D]; weight_taps/bias_dev optional.
+    valid_sel: caller-owned device one-hot [B,K-1,(K-1)+T] selecting the decode
+    conv window (the trace-safe form of valid_len — the values live in a
+    persistent buffer the caller refreshes, so no host write happens here).
     Returns output [B,T,D], new_state [B,K-1,D].
     """
     mc = memory_config
@@ -173,7 +177,13 @@ def _causal_conv1d_fir(
 
     # new_state: last K-1 tokens; land in DRAM (carry alive across downstream kernel CBs).
     total_len = (kernel_size - 1) + T
-    if valid_len is None:
+    if valid_sel is not None:
+        # Trace-safe masked bucket: the one-hot lives in a caller-owned persistent
+        # buffer (values refreshed between trace replays), so nothing here writes
+        # from host and the graph is capture-safe. Do NOT deallocate valid_sel.
+        xp = ttnn.to_layout(x_padded, ttnn.TILE_LAYOUT)
+        new_state = ttnn.matmul(valid_sel, xp, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    elif valid_len is None:
         new_state = x_padded[:, total_len - (kernel_size - 1) :, :]
         # to_layout then to_memory_config: slice keeps L1 if memory_config passed to to_layout
         new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT)
