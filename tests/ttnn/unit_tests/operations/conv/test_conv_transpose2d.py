@@ -106,6 +106,37 @@ def test_simple_conv_t2d(
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
+@pytest.mark.parametrize("preprocess_weights_bias", [False, True], ids=["runtime-prepared", "preprepared"])
+@pytest.mark.parametrize("stride_h,out_pad_h", [(1, 0), (2, 1)], ids=["native-depthwise", "expanded-height"])
+def test_conv_transpose2d_single_channel_1d_weight_contract(device, preprocess_weights_bias, stride_h, out_pad_h):
+    run_conv_transpose2d(
+        device,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        activations_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        batch_size=1,
+        output_channels=1,
+        input_channels=1,
+        input_height=1,
+        input_width=32,
+        filter_height=1,
+        filter_width=3,
+        stride_h=stride_h,
+        stride_w=1,
+        pad_h=0,
+        pad_w=0,
+        out_pad_h=out_pad_h,
+        out_pad_w=0,
+        groups=1,
+        has_bias=False,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        auto_shard=True,
+        preprocess_weights_bias=preprocess_weights_bias,
+        fast_compare=False,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout, num_slices, slice_type",
     (

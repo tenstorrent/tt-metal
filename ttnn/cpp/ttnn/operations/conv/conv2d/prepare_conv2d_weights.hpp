@@ -25,6 +25,14 @@ bool is_valid_device_conv_weights(
     uint32_t out_channels,
     const std::optional<DataType>& expected_dtype);
 
+bool is_valid_device_depthwise_conv1d_weights(
+    const ttnn::Tensor& weight_tensor,
+    uint32_t expected_kernel_taps,
+    uint32_t expected_tap_height,
+    uint32_t out_channels,
+    uint32_t padded_out_channels,
+    const std::optional<DataType>& expected_dtype);
+
 bool is_valid_device_conv_bias(
     const ttnn::Tensor& bias_tensor, uint32_t out_channels, const std::optional<DataType>& expected_dtype);
 
