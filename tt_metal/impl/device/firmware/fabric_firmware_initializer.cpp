@@ -299,7 +299,6 @@ void FabricFirmwareInitializer::init(
         const auto fabric_manager = descriptor_->fabric_manager();
         if (has_flag(fabric_manager, tt_fabric::FabricManagerMode::INIT_FABRIC) ||
             has_flag(fabric_manager, tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
-            log_info(tt::LogMetal, "Compiling fabric on mock devices (no router programming or sync)");
             compile_fabric_only();
         }
         return;
@@ -457,17 +456,20 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
 }
 
 void FabricFirmwareInitializer::compile_fabric_only() {
-    std::vector<std::shared_future<void>> events;
-    events.reserve(devices_.size());
-    for (auto* dev : devices_) {
-        events.emplace_back(detail::async([dev]() {
-            if (!dev->compile_fabric()) {
-                log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
-            }
-        }));
+    // ERISC debug builds run from L1 and may exceed the fabric router's L1 budget.
+    // Skipping only leaves the cache cold.
+    if (!rtoptions_.get_erisc_iram_enabled()) {
+        log_info(tt::LogMetal, "Skipping mock fabric compile: erisc IRAM disabled by debug tooling");
+        return;
     }
-    for (const auto& event : events) {
-        event.get();
+    log_info(tt::LogMetal, "Compiling fabric on mock devices (no router programming or sync)");
+
+    // Serial on purpose: the shared tensix mux config mutates state from a const getter, which
+    // races when devices compile in parallel.
+    for (auto* dev : devices_) {
+        if (!dev->compile_fabric()) {
+            log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
+        }
     }
 }
 

@@ -34,7 +34,8 @@ private:
     // Configure fabric sequentially (Galaxy hangs if parallelized).
     void compile_and_configure_fabric();
 
-    // Mock only: compile the fabric program on all devices, without programming or syncing routers.
+    // Mock only: compile the fabric program on every device, without programming or syncing routers.
+    // No-op when debug tooling disables erisc IRAM.
     void compile_fabric_only();
 
     // Wait for fabric router handshake on all devices.

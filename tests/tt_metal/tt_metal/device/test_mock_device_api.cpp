@@ -21,6 +21,7 @@
 #include "impl/profiler/profiler_state.hpp"
 #include "impl/profiler/profiler_state_manager.hpp"
 #include "llrt/get_platform_architecture.hpp"
+#include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -135,6 +136,10 @@ TEST_F(MockDeviceAPIFixture, SwitchFromMockToRealHardware) {
 
 namespace {
 
+// Debug tooling disables erisc IRAM, which makes the mock fabric compile a no-op; the tests below
+// then have no routers to assert on. Read a fresh RunTimeOptions so this works before any context.
+bool mock_fabric_compile_is_disabled() { return !llrt::RunTimeOptions{}.get_erisc_iram_enabled(); }
+
 // get_num_fabric_initialized_routers() fatals for a device FabricBuilder never visited, so a
 // router count is itself proof the compile ran.
 void expect_mock_fabric_compiles_on_2_chips() {
@@ -157,6 +162,9 @@ void expect_mock_fabric_compiles_on_2_chips() {
 // Mock compiles the fabric program even though it never programs or syncs a router; that compile
 // is what warms the erisc kernel cache on a host with no silicon.
 TEST_F(MockDeviceAPIFixture, FabricProgramIsCompiledOnMock) {
+    if (mock_fabric_compile_is_disabled()) {
+        GTEST_SKIP() << "erisc IRAM disabled; mock fabric compile is skipped";
+    }
     experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 2);
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
     expect_mock_fabric_compiles_on_2_chips();
@@ -165,6 +173,9 @@ TEST_F(MockDeviceAPIFixture, FabricProgramIsCompiledOnMock) {
 
 // Same with the tensix mux, which additionally needs the control plane's tensix datamover config.
 TEST_F(MockDeviceAPIFixture, FabricProgramIsCompiledOnMockWithTensixMux) {
+    if (mock_fabric_compile_is_disabled()) {
+        GTEST_SKIP() << "erisc IRAM disabled; mock fabric compile is skipped";
+    }
     experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 2);
     tt::tt_fabric::SetFabricConfig(
         tt::tt_fabric::FabricConfig::FABRIC_1D,
