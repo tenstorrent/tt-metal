@@ -369,40 +369,36 @@ class Qwen36SpeculativeDecoder:
             ttnn.copy_host_to_device_tensor(src, vt[dst])
 
     def _verify_scores(self, normed):
-        """Per-shard greedy scores for the 32 extraction rows: [1,1,32,2] fp32.
+        """Per-shard greedy scores for the 32 extraction rows.
 
         Runs the LM head WITHOUT the vocab all-gather (each device scores its own
-        shard) and reduces on device — the host reads back 2 values per row per
-        device instead of the 32 x vocab logits.
+        shard) and reduces on device — the host reads back one (idx, val) pair
+        per row per device instead of the 32 x vocab logits. Two separate small
+        outputs (idx uint32, val bf16), both [1,1,32] — no cross-dtype concat.
         """
         model = self.model
         shard = ttnn.linear(normed, model.lm_head_weight)  # [1,1,32,Vs] per device
         rm = ttnn.untilize(shard, use_multicore=True)
-        idx32 = ttnn.argmax(rm, dim=-1, keepdim=False)  # [1,1,32] uint32 (exactly 32 rows: the multicore sweet spot)
+        idx = ttnn.argmax(rm, dim=-1, keepdim=False)  # [1,1,32] uint32 (exactly 32 rows: the multicore sweet spot)
         ttnn.deallocate(rm)
-        idx_f = ttnn.reshape(ttnn.typecast(idx32, ttnn.float32), (1, 1, self._VERIFY_ROWS, 1))
-        ttnn.deallocate(idx32)
-        val = ttnn.max(shard, dim=-1)  # [1,1,32,1]
+        val = ttnn.max(shard, dim=-1)  # [1,1,32] bf16 (keepdim defaults False)
         ttnn.deallocate(shard)
-        val_f = ttnn.typecast(val, ttnn.float32)
-        ttnn.deallocate(val)
-        score = ttnn.concat([idx_f, val_f], dim=-1)  # [1,1,32,2]
-        ttnn.deallocate(idx_f)
-        ttnn.deallocate(val_f)
-        return score
+        return idx, val
 
-    def _ids_from_scores(self, score_dev, n):
+    def _ids_from_scores(self, idx_dev, val_dev, n):
         """Read per-shard (idx, val) scores and return n global greedy token ids."""
         if self._tp:
-            scores = ttnn.to_torch(score_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.model.device, dim=0)).float()
+            comp = ttnn.ConcatMeshToTensor(self.model.device, dim=0)
+            idxs = ttnn.to_torch(idx_dev, mesh_composer=comp).reshape(-1, self._VERIFY_ROWS)
+            vals = ttnn.to_torch(val_dev, mesh_composer=comp).float().reshape(-1, self._VERIFY_ROWS)
         else:
-            scores = ttnn.to_torch(score_dev).float()
-        scores = scores.reshape(-1, self._VERIFY_ROWS, 2)  # [D, 32, 2]
+            idxs = ttnn.to_torch(idx_dev).reshape(-1, self._VERIFY_ROWS)
+            vals = ttnn.to_torch(val_dev).float().reshape(-1, self._VERIFY_ROWS)
         if self._tp and getattr(self.model, "_lmhead_vocab_sharded", False):
             per_shard = self.model.args.vocab_size // self.model.num_devices
-            d = scores[..., 1].argmax(dim=0)  # [32] winning shard per row
-            return [int(scores[int(d[r]), r, 0]) + int(d[r]) * per_shard for r in range(n)]
-        return [int(scores[0, r, 0]) for r in range(n)]
+            d = vals.argmax(dim=0)  # [32] winning shard per row
+            return [int(idxs[int(d[r]), r]) + int(d[r]) * per_shard for r in range(n)]
+        return [int(idxs[0, r]) for r in range(n)]
 
     def _verify_trace_body(self):
         """The verify-chunk op graph over the persistent buffers (compile + capture).
@@ -447,8 +443,8 @@ class Qwen36SpeculativeDecoder:
         rows = ttnn.to_memory_config(rows, ttnn.DRAM_MEMORY_CONFIG)
         normed = model.norm(rows, mode=Mode.PREFILL)  # replicated [1,1,ROWS,dim]
         ttnn.deallocate(rows)
-        score = self._verify_scores(normed)
-        return score, normed
+        idx, val = self._verify_scores(normed)
+        return idx, val, normed
 
     def _verify_traced(self, tokens, chunk_start, valid_len, row_start, n_rows):
         """Traced verify: refresh inputs, replay, read the accept-row scores.
@@ -470,17 +466,17 @@ class Qwen36SpeculativeDecoder:
         if first:
             # The graph self-restores at its head, so the compile and capture
             # runs are state-safe by construction.
-            score, normed = self._verify_trace_body()
+            idx, val, normed = self._verify_trace_body()
             ttnn.synchronize_device(mesh)
-            ttnn.deallocate(score)
-            ttnn.deallocate(normed)
+            for t in (idx, val, normed):
+                ttnn.deallocate(t)
             tid = ttnn.begin_trace_capture(mesh, cq_id=0)
-            score, normed = self._verify_trace_body()
+            idx, val, normed = self._verify_trace_body()
             ttnn.end_trace_capture(mesh, tid, cq_id=0)
-            self._vt.update({"id": tid, "score": score, "normed": normed})
+            self._vt.update({"id": tid, "idx": idx, "val": val, "normed": normed})
             logger.info("spec verify trace captured (bucket 128, self-restoring)")
         ttnn.execute_trace(mesh, self._vt["id"], cq_id=0, blocking=False)
-        target_ids = self._ids_from_scores(self._vt["score"], n_rows)
+        target_ids = self._ids_from_scores(self._vt["idx"], self._vt["val"], n_rows)
         hh = self._rows_to_host(self._vt["normed"], n_rows)
         return target_ids, hh
 
@@ -601,8 +597,9 @@ class Qwen36SpeculativeDecoder:
                 device=self.model.device,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.model.device),
             )
-            score = self._verify_scores(dummy)
-            ttnn.deallocate(score)
+            w_idx, w_val = self._verify_scores(dummy)
+            ttnn.deallocate(w_idx)
+            ttnn.deallocate(w_val)
             ttnn.deallocate(dummy)
 
         first_token = int(logits[tail_len - 1].argmax())

@@ -292,12 +292,13 @@ class Qwen36MTPHead:
     # reads back only a [2]-value score per device instead of the logit shard.
 
     def _argmax_score(self, logits):
-        """[1,1,Vs] logits -> [1,1,1,2] fp32 (local argmax idx, local max val).
+        """[1,1,Vs] logits -> ((idx [1,1,1] uint32), (val [1,1,1] bf16)) local greedy score.
 
         Multicore ttnn.argmax needs ROW_MAJOR input and exactly one 32-row tile
         (fewer/more rows silently degrade), so the single logit row is padded to
         32 rows first. The max value uses a two-stage grid reduce — a direct
-        dim=-1 max over one tile-row runs on a single core.
+        dim=-1 max over one tile-row runs on a single core. Two separate small
+        outputs: no cross-dtype concat, no uint32 typecast.
         """
         vs = logits.shape[-1]
         l4 = ttnn.reshape(logits, (1, 1, 1, vs))
@@ -308,8 +309,6 @@ class Qwen36MTPHead:
         ttnn.deallocate(rm)
         idx = ttnn.slice(idx32, [0, 0, 0], [1, 1, 1])
         ttnn.deallocate(idx32)
-        idx_f = ttnn.reshape(ttnn.typecast(idx, ttnn.float32), (1, 1, 1, 1))
-        ttnn.deallocate(idx)
         # Two-stage max: pad the row to an R x 32 grid so the dim=-1 reduce
         # parallelizes over tile-rows (text_demo _maxval_dev recipe).
         cols = 32
@@ -317,22 +316,15 @@ class Qwen36MTPHead:
         mpad = ttnn.pad(l4, [(0, 0), (0, 0), (0, 0), (0, rows * cols - vs)], value=-1e30)
         ttnn.deallocate(l4)
         grid = ttnn.reshape(mpad, (1, 1, rows, cols))
-        part = ttnn.max(grid, dim=-1)
+        part = ttnn.max(grid, dim=-1)  # [1,1,rows] (keepdim defaults False)
         part_row = ttnn.reshape(part, (1, 1, 1, rows))
-        val = ttnn.max(part_row, dim=-1)  # [1,1,1,1]
+        val = ttnn.max(part_row, dim=-1)  # [1,1,1] bf16
         for t in (mpad, grid, part, part_row):
             ttnn.deallocate(t)
-        val_f = ttnn.typecast(val, ttnn.float32)
-        ttnn.deallocate(val)
-        score = ttnn.concat([idx_f, val_f], dim=-1)  # [1,1,1,2] fp32
-        ttnn.deallocate(idx_f)
-        ttnn.deallocate(val_f)
-        return score
+        return idx, val
 
-    def token_from_scores(self, scores):
-        """Host [D,1,1,2] per-shard (idx, val) scores -> global greedy token id."""
-        idxs = scores[..., 0].reshape(-1)
-        vals = scores[..., 1].reshape(-1)
+    def token_from_scores(self, idxs, vals):
+        """Host per-shard idx/val vectors [D] -> global greedy token id."""
         if self.num_devices > 1 and self.lm_head_sharded:
             per_shard = self.args.vocab_size // self.num_devices
             d = int(vals.argmax())
@@ -388,9 +380,9 @@ class Qwen36MTPHead:
         cos = ttnn.to_layout(ttnn.slice(win["cos"], [0, j, 0], [1, j + 1, rd]), ttnn.TILE_LAYOUT)
         sin = ttnn.to_layout(ttnn.slice(win["sin"], [0, j, 0], [1, j + 1, rd]), ttnn.TILE_LAYOUT)
         logits, normed = self._step_graph(win["tok"], win["h"], cur_pos, cos, sin)
-        score = self._argmax_score(logits)
+        idx, val = self._argmax_score(logits)
         ttnn.deallocate(logits)
-        return score, normed
+        return idx, val, normed
 
     def capture_window_traces(self):
         """Capture one step trace per window index, all up front.
@@ -406,15 +398,15 @@ class Qwen36MTPHead:
         if self._win["traces"]:
             return
         for j in range(self._win["w_max"]):
-            score, normed = self._win_step_body(j)
-            ttnn.deallocate(score)
-            ttnn.deallocate(normed)
+            idx, val, normed = self._win_step_body(j)
+            for t in (idx, val, normed):
+                ttnn.deallocate(t)
         ttnn.synchronize_device(self.device)
         for j in range(self._win["w_max"]):
             tid = ttnn.begin_trace_capture(self.device, cq_id=0)
-            score, normed = self._win_step_body(j)
+            idx, val, normed = self._win_step_body(j)
             ttnn.end_trace_capture(self.device, tid, cq_id=0)
-            self._win["traces"][j] = {"id": tid, "score": score, "normed": normed}
+            self._win["traces"][j] = {"id": tid, "idx": idx, "val": val, "normed": normed}
 
     def step_win(self, j, token_id, hidden_row=None, chain_hidden=False, want_token=False):
         """One drafter leg at window index j (1-2 tiny uploads + one replay).
@@ -450,10 +442,13 @@ class Qwen36MTPHead:
         if not want_token:
             return None
         if self.num_devices > 1:
-            scores = ttnn.to_torch(tr["score"], mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)).float()
+            comp = ttnn.ConcatMeshToTensor(self.device, dim=0)
+            idxs = ttnn.to_torch(tr["idx"], mesh_composer=comp).reshape(-1)
+            vals = ttnn.to_torch(tr["val"], mesh_composer=comp).float().reshape(-1)
         else:
-            scores = ttnn.to_torch(tr["score"]).float()
-        return self.token_from_scores(scores)
+            idxs = ttnn.to_torch(tr["idx"]).reshape(-1)
+            vals = ttnn.to_torch(tr["val"]).float().reshape(-1)
+        return self.token_from_scores(idxs, vals)
 
     def ensure_window(self, w_max):
         if self._win is None:
