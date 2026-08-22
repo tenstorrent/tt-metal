@@ -51,13 +51,37 @@ uint32_t get_estimated_size_of_cbs(
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a);
 
+// reserved_l1_bytes_per_core: per-core L1 that is not yet allocated at the time of this
+// call but provably will be before the program's circular buffers are placed -- most
+// notably the op's own output buffer. Interleaved L1 buffers are allocated top-down while
+// static CBs grow bottom-up from the allocator base, so ignoring the pending output
+// buffer overestimates the room available to the CBs and can route to a factory whose
+// CBs then collide with it.
 bool is_enough_space(
     const Tensor& input_tensor_a,
     uint32_t input_single_tile_size,
     uint32_t output_single_tile_size,
     uint32_t num_tiles_per_row,
     uint32_t staging_bytes_per_tile = 0,
-    uint32_t fixed_staging_bytes = 0);
+    uint32_t fixed_staging_bytes = 0,
+    uint32_t reserved_l1_bytes_per_core = 0);
+
+// Per-core L1 footprint that `output_memory_config` will require for a tensor of
+// `output_padded_shape`/`output_dtype`, or 0 if it will not live in L1.
+//
+// If the TensorSpec cannot be constructed (unsupported dtype/layout combination) and
+// `require_constructible` is false, this falls back to reserving nothing -- the pre-existing
+// behavior for callers that treat a failed reservation as advisory. Callers that use the return
+// value to decide eligibility for a path with no other correctness backstop (e.g. concat's
+// unaligned-width routing) should pass `require_constructible = true` so an unconstructible spec
+// throws instead of silently making the eligibility check more permissive than it should be.
+uint32_t get_pending_l1_output_reservation(
+    const Tensor& input_tensor_a,
+    const ttnn::Shape& output_padded_shape,
+    const MemoryConfig& output_memory_config,
+    DataType output_dtype,
+    Layout output_layout,
+    bool require_constructible = false);
 
 ttnn::Tensor pad_to_tile_vol(
     const ttnn::Tensor& tensor, float value, bool use_multicore, const std::optional<MemoryConfig>& memory_config);

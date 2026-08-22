@@ -157,7 +157,15 @@ inline NcoresWHsb compute_ncores_wh_sb(
 
     // If no solution found, use single_block_size_limit
     if (opt_n == 0) {
-        TT_FATAL(false, "No solution found for single_block_size");
+        TT_FATAL(
+            false,
+            "No solution found for single_block_size: cannot fit a tilize/untilize block for a {}x{} tile grid within "
+            "a per-core circular buffer budget of {} tile(s). This means too little L1 is free -- the tensors already "
+            "resident in L1 plus this op's output leave no room for its circular buffers. Free L1 (e.g. move some "
+            "tensors to DRAM or use a DRAM output memory config for this op), or reduce the tensor size.",
+            width_tiles,
+            height_tiles,
+            single_block_size_limit);
     }
 
     total_blocks_width = tt::div_up(width_tiles, single_block_size);
