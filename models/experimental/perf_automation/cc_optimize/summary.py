@@ -449,6 +449,23 @@ def _measured_stage_ms(model: str = "", task: str = "") -> dict:
         return {}
 
 
+def _pinned_stage_bytes(stage, model: str = "", task: str = ""):
+    """The pinned BASELINE read set for one stage, or None. Read-only.
+
+    Measuring the bytes made them right. It did not stop them moving: the dtype rung halves a
+    weight and the observed read set halves with it, so a ceiling recomputed each round retreats
+    ahead of the measurement -- "the floor is a property of the IMPLEMENTATION, not a goal". The
+    baseline is the target; the current reading is kept beside it to tell a real win from a stale
+    number, exactly as _floor_anchor's caller does.
+    """
+    try:
+        led = _ledger()
+        v = led.anchor_value(led.KIND_STAGE_BYTES, depth=str(stage or "").strip().lower(), model=model, task=task)
+        return int(round(float(v) * 1e6)) if v and float(v) > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _measured_stage_bytes(model: str = "", task: str = "") -> dict:
     """trace_replay's per-stage READ SET in bytes, or {}.
 
@@ -1497,7 +1514,15 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # _stage_measured_bytes, which reads a profile-bucket `stage` tag the profiler does not write
         # and so returns 0 on every real profile, and ahead of _bytes_for, which apportions the
         # checkpoint using a tower NAME LIST.
-        _b = int((_meas_bytes or {}).get(name) or 0) or _stage_measured_bytes(profile, name) or _bytes_for(name, toks)
+        # PINNED BASELINE FIRST, then this build's reading, then the estimate. The pin is what keeps
+        # the target still while the ladder shrinks the read set underneath it.
+        _b = (
+            _pinned_stage_bytes(name, model, task)
+            or int((_meas_bytes or {}).get(name) or 0)
+            or _stage_measured_bytes(profile, name)
+            or _bytes_for(name, toks)
+        )
+        _b_now = int((_meas_bytes or {}).get(name) or 0)
         mem_ms = (_b / (float(peak_bw_gbps) * 1e9)) * 1000.0 if _b else None
         out[name] = {
             "share_basis": _share_bases.get(name, ""),
@@ -1507,6 +1532,9 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
             "bytes": _b,
             "tokens": toks,
             "peak_flops": peak_flops or None,
+            # This build's observed read set beside the pinned one, so a dtype win shows as the
+            # bytes genuinely falling rather than as the ceiling quietly following them down.
+            "bytes_now": _b_now or None,
             # What the CURRENT build's mode implies, carried beside the pinned roof so a reader (and
             # the >100% classifier) can tell "the model got faster" from "these numbers are stale".
             "peak_flops_now": _peak_now or None,

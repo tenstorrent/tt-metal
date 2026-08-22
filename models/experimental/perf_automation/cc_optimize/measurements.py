@@ -76,6 +76,20 @@ KIND_ACTIVE_BYTES = "active_bytes"
 # ceiling that also doubled. The error and the win cancel, and the reader sees neither.
 KIND_PEAK_FLOPS = "peak_flops"
 
+# The MEMORY roof's numerator, per stage: the bytes trace_replay observed that stage's ops reading.
+# Anchored for the third time for the same reason, because the reason has not changed and the shape
+# of the mistake is identical each time:
+#
+#   "The floor is a property of the IMPLEMENTATION, not a goal: halving a weight's dtype halves the
+#    bytes it must move, so recomputing it each round makes the target retreat ahead of the
+#    measurement and it is never reached."
+#
+# Measuring the read set instead of inferring it makes the number RIGHT; it does nothing about the
+# number MOVING, and the dtype rung moves it by construction -- bf16 -> bf8_b halves a weight, the
+# observed bytes halve, and the ceiling follows the build down. Keyed per stage, because each stage
+# has its own read set and decode's is the one that binds.
+KIND_STAGE_BYTES = "stage_bytes"
+
 PHASE_BEFORE = "before"
 PHASE_AFTER = "after"
 

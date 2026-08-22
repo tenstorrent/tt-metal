@@ -147,15 +147,42 @@ def test_nothing_on_device_reports_zero_and_zero_is_a_refusal():
 
 
 def test_the_consumer_prefers_the_measurement_over_the_estimate():
+    """Order of preference: the pinned baseline, then this build's reading, then the estimate.
+
+    The PIN comes first for the reason the floor is pinned -- measuring the bytes made them right and
+    did nothing about them moving, and the dtype rung halves them by construction, so a ceiling
+    recomputed each round retreats ahead of the measurement.
+    """
     import cc_optimize.summary as S
 
     src = (_PA / "cc_optimize" / "summary.py").read_text()
-    i = src.index("_b = int((_meas_bytes or {}).get(name) or 0)")
-    line = src[i : src.index("\n", i)]
-    assert "_stage_measured_bytes(profile, name)" in line, line
-    assert "_bytes_for(name, toks)" in line, line
-    assert line.index("_meas_bytes") < line.index("_bytes_for"), "the estimate must be last"
-    assert callable(S._measured_stage_bytes)
+    lines = src.splitlines()
+    i = next(n for n, ln in enumerate(lines) if ln.strip() == "_b = (")
+    block = "\n".join(lines[i : i + 6])
+    for nxt in ("_meas_bytes", "_stage_measured_bytes(profile, name)", "_bytes_for(name, toks)"):
+        assert nxt in block, block
+    assert block.index("_pinned_stage_bytes") < block.index("_meas_bytes") < block.index("_bytes_for")
+    assert callable(S._measured_stage_bytes) and callable(S._pinned_stage_bytes)
+
+
+def test_the_read_set_is_pinned_so_a_dtype_win_cannot_move_the_ceiling(tmp_path, monkeypatch):
+    """THE MISTAKE THIS ALMOST REPEATED. Measuring the bytes fixes accuracy, not stability: bf16 ->
+    bf8_b halves a weight, the observed read set halves, and an unpinned ceiling follows the build
+    down so the target is never reached. Same defect as the modelled floor, same fix."""
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_TASK", "main")
+    monkeypatch.delenv("PERF_MCP_LEDGER", raising=False)
+    import cc_optimize.summary as S
+
+    led = S._ledger()
+    monkeypatch.setattr(
+        led, "ledger_path", lambda model="", task="": tmp_path / ("%s_%s.jsonl" % (model or "m", task or "main"))
+    )
+    led.anchor(led.KIND_STAGE_BYTES, 4786.0, depth="decode", mode="bytes_mb", source="t", model="m")
+    # a later, smaller reading must not move the pin
+    led.anchor(led.KIND_STAGE_BYTES, 2393.0, depth="decode", mode="bytes_mb", source="t", model="m")
+    assert S._pinned_stage_bytes("decode", "m", "main") == 4_786_000_000
+    assert S._pinned_stage_bytes("prefill", "m", "main") is None  # keyed per stage
 
 
 def test_the_marker_is_emitted_only_when_something_was_observed():

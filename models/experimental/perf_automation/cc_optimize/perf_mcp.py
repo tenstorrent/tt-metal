@@ -2515,6 +2515,8 @@ def _persist_stage_ms(
                     # convention, and the one that matters most -- what a TOKEN reads -- had no
                     # measurement at all until this.
                     "bytes": stage_bytes or {},
+                    # The doc tracks the CURRENT build by design -- the report needs both numbers.
+                    # The pinned baseline lives in the ledger, written just below.
                     # THE BATCH THE RUN ACTUALLY SERVED. Parsed off TRACE_REPLAY_PATH for the
                     # scorecard and then dropped, so the report had to fall back to TT_PERF_BATCH --
                     # which carries 0, the "ask the pipeline" sentinel, and reads as 1. Every ceiling
@@ -3045,6 +3047,25 @@ def _run_full_pipeline_ms():
             stage_isl_per_request,
             stage_bytes,
         )
+        # PIN THE BASELINE READ SET, where it is produced. Measuring the bytes made them right; it did
+        # not stop them moving, and the dtype rung moves them by construction: bf16 -> bf8_b halves a
+        # weight, the observed bytes halve, and a ceiling recomputed from them retreats ahead of the
+        # measurement -- never reached, which is the defect KIND_FLOOR exists to prevent. Write-once
+        # per (model, task, stage); the doc above keeps tracking the current build so the report can
+        # tell a real dtype win from a stale reading.
+        try:
+            for _st, _bv in (stage_bytes or {}).items():
+                if _st and _bv > 0:
+                    _ledger().anchor(
+                        _ledger().KIND_STAGE_BYTES,
+                        float(_bv) / 1e6,
+                        depth=str(_st).strip().lower(),
+                        mode="bytes_mb",
+                        source="trace_replay observed read set",
+                        model=_MODEL_ROOT.name if _MODEL_ROOT else "",
+                    )
+        except Exception:  # noqa: BLE001 -- a pin that cannot be written must not cost a measurement
+            pass
         return statistics.median(per_tokens), "trace", None, decode_path
     if walls:
         return statistics.median(walls), "eager", None, None
