@@ -37,6 +37,7 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
+#include <impl/context/metal_context.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/distributed.hpp>
 
@@ -162,7 +163,15 @@ static std::vector<T> apply_row_broadcast_to_tiled_input(const std::vector<T>& i
     return broadcast_input;
 }
 
-static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& test_config, bool is_quasar) {
+// Wormhole unpacks L1 FP32 into SrcA/SrcB as TF32 by dropping the low 13 mantissa bits.
+// Blackhole can keep FP32 through dest / unpack-to-dest, so this is WH-only.
+constexpr uint32_t kTf32MantissaTruncMask = 0xffffe000u;
+static float quantize_fp32_src_to_tf32(float value) {
+    return std::bit_cast<float>(std::bit_cast<uint32_t>(value) & kTf32MantissaTruncMask);
+}
+
+static BinaryStimulus generate_binary_stimulus(
+    const SingleCoreBinaryConfig& test_config, bool is_quasar, bool fp32_src_is_tf32) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     BinaryStimulus s;
     // Use fixed seeds so test results are deterministic and reproducible.
@@ -195,7 +204,19 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
             const auto broadcast_input1 = apply_col_broadcast_to_tiled_input(input1, test_config.num_tiles);
             for (size_t i = 0; i < golden.size(); ++i) {
                 constexpr size_t tile_size = 32 * 32;
-                golden[i] = input2[i % tile_size] * (input0[i] - broadcast_input1[i]);
+                float in0 = input0[i];
+                float in1_bcast = broadcast_input1[i];
+                float in2 = input2[i % tile_size];
+                if (fp32_src_is_tf32) {
+                    // COL-broadcast sub unpacks both operands to TF32 Src; dest is FP32.
+                    // DEST_TO_SRCB then moves dest into SrcB (TF32) and unpacks in2 to SrcA (TF32).
+                    in0 = quantize_fp32_src_to_tf32(in0);
+                    in1_bcast = quantize_fp32_src_to_tf32(in1_bcast);
+                    in2 = quantize_fp32_src_to_tf32(in2);
+                    golden[i] = in2 * quantize_fp32_src_to_tf32(in0 - in1_bcast);
+                } else {
+                    golden[i] = in2 * (in0 - in1_bcast);
+                }
             }
         } else {
             TT_FATAL(
@@ -409,7 +430,9 @@ bool single_core_binary(
         num_runs > 0 && test_config.block_size > 0 && test_config.num_tiles % test_config.block_size == 0,
         "num_runs and block_size must be positive, and num_tiles must be divisible by block_size");
     TT_FATAL(!(test_config.col_broadcast && test_config.row_broadcast), "Only one broadcast type may be selected");
-    const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
+    const auto arch = MetalContext::instance().get_cluster().arch();
+    const bool is_quasar = arch == ARCH::QUASAR;
+    const bool fp32_src_is_tf32 = arch == ARCH::WORMHOLE_B0;
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -417,7 +440,7 @@ bool single_core_binary(
         static_cast<uint32_t>(test_config.core.x), static_cast<uint32_t>(test_config.core.y)};
 
     // Math-fidelity masks model WH/BH LLK behavior; Quasar HW does not apply them.
-    auto stimulus = generate_binary_stimulus(test_config, is_quasar);
+    auto stimulus = generate_binary_stimulus(test_config, is_quasar, fp32_src_is_tf32);
     auto buffers = create_and_populate_binary_buffers(mesh_device, cq, zero_coord, byte_size, stimulus);
     auto& input0_dram_buffer = buffers.input0;
     auto& input1_dram_buffer = buffers.input1;
