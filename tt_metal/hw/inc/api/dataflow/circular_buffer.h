@@ -255,11 +255,13 @@ private:
     }
 };
 
-#ifdef ARCH_QUASAR
+#if defined(ARCH_QUASAR) && defined(NOC_API_V2)
 #include "internal/tt-2xx/noc_zero_l1.inl"
-#else
+#elif !defined(ARCH_QUASAR)
 #include "internal/tt-1xx/noc_zero_l1.inl"
 #endif
+#if !defined(ARCH_QUASAR) || defined(NOC_API_V2)
 #include "internal/noc_zero_dram.inl"
+#endif
 
 #endif  // !COMPILE_FOR_TRISC
