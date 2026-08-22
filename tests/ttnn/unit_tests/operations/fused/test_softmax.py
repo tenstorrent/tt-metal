@@ -906,3 +906,25 @@ def test_softmax_large_kernel_mask_padded(device, shape, dim):
         ulp_threshold=15,
         check_ulp=True,
     )
+
+
+@pytest.mark.parametrize("w", [1024, 2048, 4096, 8192, 16384, 32000, 128000])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_softmax_rows_are_normalised(device, w, dtype):
+    """A softmax row must sum to 1.
+
+    The metrics the other tests here use cannot see a violation of this: PCC is invariant under a
+    uniform per-row scale, and atol=0.04 is orders of magnitude above values of order 1/w. With the
+    SUM reduce accumulating in a 16-bit Dest this measured 0.865 at w=8192 while test_large_softmax
+    passed at the same shapes.
+    """
+    torch.manual_seed(0)
+    torch_input_tensor = torch_random((1, 32, w), -1, 1, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    output_tensor = ttnn.to_torch(ttnn.from_device(ttnn.softmax(input_tensor, dim=-1, numeric_stable=True)))
+
+    row_sums = output_tensor.to(torch.float32).sum(-1)
+    assert torch.allclose(
+        row_sums, torch.ones_like(row_sums), atol=0.02
+    ), f"row sums range [{float(row_sums.min()):.5f}, {float(row_sums.max()):.5f}], expected 1.0"
