@@ -34,7 +34,7 @@ def get_current_run(conn, github_run_id: int) -> Optional[dict]:
                    -- Of EXECUTED, not of total: test_count includes vectors marked NOT_RUN by the
                    -- infra classifiers (dead device, fabric bring-up failure, TLB exhaustion), which
                    -- never ran an op kernel. Counting them as non-passing reports a device outage as
-                   -- a pass-rate drop -- run 32546013297 was 1253/1253 executed but announced 99.37%.
+                   -- a pass-rate drop -- run 32546013297 was 1253/1253 executed but announced 99.37 pct.
                    ROUND(pass_count * 100.0 / NULLIF(pass_count + fail_count, 0), 2) AS pass_pct
             FROM sweep_run
             WHERE github_pipeline_id = %s
@@ -61,7 +61,7 @@ def get_previous_run(conn, run_contents: str, card_type: str, git_branch: str, c
                    -- Of EXECUTED, not of total: test_count includes vectors marked NOT_RUN by the
                    -- infra classifiers (dead device, fabric bring-up failure, TLB exhaustion), which
                    -- never ran an op kernel. Counting them as non-passing reports a device outage as
-                   -- a pass-rate drop -- run 32546013297 was 1253/1253 executed but announced 99.37%.
+                   -- a pass-rate drop -- run 32546013297 was 1253/1253 executed but announced 99.37 pct.
                    ROUND(pass_count * 100.0 / NULLIF(pass_count + fail_count, 0), 2) AS pass_pct
             FROM sweep_run
             WHERE run_contents = %s
@@ -85,7 +85,7 @@ def get_previous_run(conn, run_contents: str, card_type: str, git_branch: str, c
                    -- Of EXECUTED, not of total: test_count includes vectors marked NOT_RUN by the
                    -- infra classifiers (dead device, fabric bring-up failure, TLB exhaustion), which
                    -- never ran an op kernel. Counting them as non-passing reports a device outage as
-                   -- a pass-rate drop -- run 32546013297 was 1253/1253 executed but announced 99.37%.
+                   -- a pass-rate drop -- run 32546013297 was 1253/1253 executed but announced 99.37 pct.
                    ROUND(pass_count * 100.0 / NULLIF(pass_count + fail_count, 0), 2) AS pass_pct
             FROM sweep_run
             WHERE run_contents = %s
