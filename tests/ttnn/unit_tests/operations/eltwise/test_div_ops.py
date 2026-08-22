@@ -458,3 +458,61 @@ def test_optional_output_tensor_remainder(device):
     optional_output_tensor = ttnn.to_torch(optional_output_tensor)
 
     assert_with_ulp(optional_output_tensor, torch_golden, ulp_threshold=0)
+
+
+@pytest.mark.parametrize("value", [5.0, 10.0, 28.0, 100.0, -15.0])
+@pytest.mark.parametrize("round_mode", ["floor", "trunc"])
+def test_rdiv_exactly_divisible(device, value, round_mode):
+    input_torch = torch.tensor([[value]], dtype=torch.float32)
+    input_tt = ttnn.from_torch(input_torch, dtype=ttnn.DataType.FLOAT32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tt = ttnn.rdiv(input_tt, value=value, round_mode=round_mode)
+    output_torch = ttnn.to_torch(output_tt)
+
+    assert torch.equal(output_torch, torch.tensor([[1.0]], dtype=torch.float32))
+
+
+RDIV_FULL_RANGES = [
+    (-1000.0, 1000.0),
+    (-1e5, 1e5),
+    (-1e10, 1e10),
+    (-1e-5, 1e-5),
+    (-1e-10, 1e-10),
+    (0.001, 100.0),
+    (-100.0, -0.001),
+    (1e-35, 1e-30),
+    (1e30, 1e35),
+]
+
+
+@pytest.mark.parametrize("round_mode", [None, "floor", "trunc"])
+@pytest.mark.parametrize("scalar_val", [1.0, 5.0, 28.0, 100.0, -15.0, 0.125, 1e4])
+def test_rdiv_fp32_full_range(device, round_mode, scalar_val):
+    torch.manual_seed(42)
+    test_shape = torch.Size([1, 2, 32, 128])
+    torch_input = create_full_range_tensor(test_shape, torch.float32, RDIV_FULL_RANGES)
+
+    torch_input = torch.where(torch_input == 0, torch.tensor(1.0, dtype=torch.float32), torch_input)
+
+    input_tt = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.DataType.FLOAT32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    if round_mode is None:
+        torch_golden = scalar_val / torch_input
+        output_tt = ttnn.rdiv(input_tt, value=scalar_val)
+    elif round_mode == "floor":
+        torch_golden = torch.floor(scalar_val / torch_input)
+        output_tt = ttnn.rdiv(input_tt, value=scalar_val, round_mode="floor")
+    elif round_mode == "trunc":
+        torch_golden = torch.trunc(scalar_val / torch_input)
+        output_tt = ttnn.rdiv(input_tt, value=scalar_val, round_mode="trunc")
+
+    output_torch = ttnn.to_torch(output_tt)
+    assert_with_ulp(output_torch, torch_golden, ulp_threshold=1, allow_nonfinite=True)
+
+
