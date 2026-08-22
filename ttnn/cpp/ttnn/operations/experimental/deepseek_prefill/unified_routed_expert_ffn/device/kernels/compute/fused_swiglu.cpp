@@ -378,7 +378,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
 
     // Up partials are NOT copied to a separate cb_up_intermed: the multiply
     // phase reads cb_partials_up directly (bf16) and pairs each tile with
-    // cb_gate_intermed (bf8 after silu+pack). Skipping the copy saves 48KB of
+    // cb_gate_intermed (BF8 or BF16 after silu+pack, matching x). Skipping the copy saves 48KB of
     // L1 and lets cb_in0_down_full stay double-buffered.
     (void)up_intermed_cb_id;
 }
@@ -555,7 +555,8 @@ void kernel_main() {
             cb_in0_x, cb_in1_gate, cb_in1_up, cb_partials_gu, cb_partials_up, cb_gate_intermed, cb_up_intermed);
 
         // Phase 3: elementwise multiply (cb_gate_intermed is silu(partials_gu)
-        // in bf8; cb_partials_up is the up matmul accumulator in bf16). The
+        // in the selected activation format; cb_partials_up is the up matmul
+        // accumulator in bf16). The
         // multiply does the format conversion via reconfig_data_format inside
         // multiply_phase — both unpacker srcs get reset to the input CB
         // formats.

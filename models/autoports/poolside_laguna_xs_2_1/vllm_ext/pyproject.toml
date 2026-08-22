@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "laguna-vllm-ext"
-version = "0.2.0"
+version = "0.3.0"
 description = "tt-metal-owned vLLM compatibility hooks for Laguna-XS-2.1 on stock vLLM 0.24.0 + the public vllm-tt-plugin."
 requires-python = ">=3.10"
 

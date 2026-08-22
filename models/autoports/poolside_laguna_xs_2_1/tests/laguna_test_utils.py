@@ -15,7 +15,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
-
 TESTS_DIR = Path(__file__).resolve().parent
 MODEL_DIR = TESTS_DIR.parent
 DOC_DIR = MODEL_DIR / "doc"
@@ -101,8 +100,7 @@ def _canonical_fabric(value: str) -> str:
     key = _FABRIC_ALIASES.get(key, value.strip().upper())
     if key not in {"DISABLED", "FABRIC_1D", "FABRIC_1D_RING"}:
         raise ValueError(
-            f"unsupported Laguna fabric {value!r}; expected DISABLED, FABRIC_1D/linear, "
-            "or FABRIC_1D_RING/ring"
+            f"unsupported Laguna fabric {value!r}; expected DISABLED, FABRIC_1D/linear, " "or FABRIC_1D_RING/ring"
         )
     return key
 
@@ -138,8 +136,7 @@ def resolve_profile(
 
     if legacy_mesh and _canonical_profile(legacy_mesh) != selected:
         raise ValueError(
-            f"{PROFILE_ENV}={selected} conflicts with {LEGACY_MESH_ENV}={legacy_mesh}; "
-            "remove the legacy override"
+            f"{PROFILE_ENV}={selected} conflicts with {LEGACY_MESH_ENV}={legacy_mesh}; " "remove the legacy override"
         )
 
     fabric_value = fabric_config or env.get(FABRIC_ENV)
@@ -150,9 +147,7 @@ def resolve_profile(
             raise ValueError(f"{CCL_TOPOLOGY_ENV} must be linear or ring")
         derived_fabric = "FABRIC_1D" if ccl_topology == "linear" else "FABRIC_1D_RING"
         if fabric_value and _canonical_fabric(fabric_value) != derived_fabric:
-            raise ValueError(
-                f"{FABRIC_ENV}={fabric_value} conflicts with {CCL_TOPOLOGY_ENV}={ccl_topology}"
-            )
+            raise ValueError(f"{FABRIC_ENV}={fabric_value} conflicts with {CCL_TOPOLOGY_ENV}={ccl_topology}")
         fabric_value = derived_fabric
     if fabric_value:
         fabric = _canonical_fabric(fabric_value)
@@ -191,9 +186,7 @@ def resolve_profile(
         except OSError:
             is_singleton_desc = graph_desc.name == P150_MESH_GRAPH_DESC.name
         if is_singleton_desc:
-            raise ValueError(
-                f"unset singleton {MESH_GRAPH_DESC_ENV} when running the multi-device {spec.name} profile"
-            )
+            raise ValueError(f"unset singleton {MESH_GRAPH_DESC_ENV} when running the multi-device {spec.name} profile")
 
     visible = env.get(VISIBLE_DEVICES_ENV)
     if validate_visible_devices and visible is not None:
@@ -247,7 +240,7 @@ def fabric_enum(ttnn_module, profile: LagunaTestProfile):
 def open_mesh(ttnn_module, profile: LagunaTestProfile):
     """Configure fabric before opening the exact mesh described by ``profile``."""
 
-    # A singleton half-P300 is reported as ClusterType.CUSTOM. SetFabricConfig, including
+    # A singleton P150 ASIC is reported as ClusterType.CUSTOM. SetFabricConfig, including
     # SetFabricConfig(DISABLED), requires a custom fabric graph for that cluster and fails before
     # open. D1 has no collectives, so leave global fabric state untouched exactly as the runtime
     # plugin does. Multi-device profiles still require configuration before open.

@@ -8,7 +8,12 @@ import torch
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
-from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig, _resolve_sampling1d_config
+from models.common.modules.sampling.sampling_1d import (
+    Sampling1D,
+    Sampling1DConfig,
+    _argmax_index_offsets_host,
+    _resolve_sampling1d_config,
+)
 
 # ---------------------------------------------------------------------------
 # Model name constants (match test_mlp_1d.py naming convention)
@@ -92,6 +97,7 @@ class TestConfigUnit:
         assert cfg.max_batch_size == 32
         assert cfg.max_top_k == 32
         assert cfg.allow_force_argmax is False
+        assert cfg.use_compact_argmax is False
         assert cfg.num_gather_links == 1
         assert cfg.mesh_device is None
         assert cfg.index_offsets is None
@@ -115,6 +121,85 @@ class TestConfigUnit:
         mock_device.get_num_devices.return_value = 2
         cfg = Sampling1DConfig(vocab_size=1024, mesh_device=mock_device, tt_ccl=None)
         assert not cfg.is_resolved()
+
+    def test_compact_argmax_offsets_are_tile_blocked_and_exact(self):
+        """One 32-wide CCL tile per device receives that shard's exact uint32-safe offset."""
+        offsets = _argmax_index_offsets_host(batch_size=2, num_devices=2, per_device_vocab=50176)
+
+        assert offsets.shape == (1, 1, 2, 64)
+        assert offsets.dtype == torch.int64
+        assert torch.equal(offsets[0, 0, 0, :32], torch.zeros(32, dtype=torch.int64))
+        assert torch.equal(offsets[0, 0, 0, 32:], torch.full((32,), 50176, dtype=torch.int64))
+        assert torch.equal(offsets[0, 0, 0], offsets[0, 0, 1])
+
+    @pytest.mark.parametrize(
+        "kwargs,match",
+        [
+            ({"batch_size": 0, "num_devices": 2, "per_device_vocab": 16}, "batch_size"),
+            ({"batch_size": 1, "num_devices": 0, "per_device_vocab": 16}, "num_devices"),
+            ({"batch_size": 1, "num_devices": 2, "per_device_vocab": 0}, "per_device_vocab"),
+        ],
+    )
+    def test_compact_argmax_offsets_reject_invalid_geometry(self, kwargs, match, expect_error):
+        with expect_error(ValueError, match):
+            _argmax_index_offsets_host(**kwargs)
+
+    def test_compact_argmax_only_all_gathers_tile_minimum_candidates(self, monkeypatch):
+        """Static op-graph check: the vocabulary tensor itself can never reach CCL."""
+        from types import SimpleNamespace
+
+        class FakeTensor:
+            def __init__(self, shape, name):
+                self.shape = tuple(shape)
+                self.name = name
+
+        logits = FakeTensor((1, 1, 1, 50176), "logits")
+        output = FakeTensor((1, 1, 1, 1), "output")
+        sampler = object.__new__(Sampling1D)
+        sampler.config = SimpleNamespace(
+            mesh_device=SimpleNamespace(shape=(1, 2)),
+            sub_core_grids=None,
+            num_argmax_gather_links=1,
+        )
+        sampler._argmax_index_offsets = FakeTensor((1, 1, 1, 64), "offsets")
+        gathered = []
+
+        def all_gather(tensor, **kwargs):
+            gathered.append((tensor, kwargs))
+            return FakeTensor((*tensor.shape[:-1], tensor.shape[-1] * 2), f"gathered-{tensor.name}")
+
+        sampler._perform_all_gather = all_gather
+        monkeypatch.setattr(ttnn, "typecast", lambda tensor, **_kwargs: FakeTensor(tensor.shape, "bf16"))
+        monkeypatch.setattr(ttnn, "untilize", lambda tensor, **_kwargs: FakeTensor(tensor.shape, f"rm-{tensor.name}"))
+        monkeypatch.setattr(
+            ttnn,
+            "argmax",
+            lambda tensor, **_kwargs: FakeTensor((*tensor.shape[:-1], 1), f"argmax-{tensor.name}"),
+        )
+        monkeypatch.setattr(ttnn, "to_layout", lambda tensor, _layout: FakeTensor(tensor.shape, tensor.name))
+        monkeypatch.setattr(
+            ttnn, "gather", lambda _tensor, _dim=None, **kwargs: FakeTensor(kwargs["index"].shape, "selected")
+        )
+
+        def pad(tensor, padding, **_kwargs):
+            shape = list(tensor.shape)
+            shape[-1] += padding[-1][1]
+            return FakeTensor(shape, f"padded-{tensor.name}")
+
+        monkeypatch.setattr(ttnn, "pad", pad)
+        monkeypatch.setattr(ttnn, "add", lambda tensor, *_args, **_kwargs: FakeTensor(tensor.shape, "global"))
+        monkeypatch.setattr(ttnn, "reshape", lambda tensor, shape: FakeTensor(shape, tensor.name))
+        monkeypatch.setattr(ttnn, "copy", lambda _src, dst: dst)
+        monkeypatch.setattr(ttnn, "deallocate", lambda _tensor: None)
+
+        assert sampler._argmax_multi_device(logits, output) is output
+        assert len(gathered) == 2
+        assert [tensor.shape[-1] for tensor, _ in gathered] == [32, 32]
+        assert all(tensor is not logits for tensor, _ in gathered)
+        assert [kwargs["buffer_key"] for _, kwargs in gathered] == [
+            "SAMPLING_ARGMAX_VALUES",
+            "SAMPLING_ARGMAX_INDICES",
+        ]
 
 
 # ==============================================================================
@@ -140,13 +225,14 @@ class TestSampling1DDevice:
         sampler.load_device_buffers()
         assert sampler._device_buffers_loaded
         assert isinstance(sampler._index_offsets, ttnn.Tensor)
+        assert sampler._argmax_index_offsets is None
         assert isinstance(sampler._local_indices, ttnn.Tensor)
         assert isinstance(sampler._seeds, ttnn.Tensor)
         assert isinstance(sampler._user_ids, ttnn.Tensor)
 
     @pytest.mark.parametrize("vocab_size", [1024])
     def test_force_argmax(self, ttnn_mesh_device, vocab_size):
-        """allow_force_argmax=True, k/p/temp=None → matches torch.argmax."""
+        """allow_force_argmax=True, k/p/temp=None → matches torch.argmax on vocab shards."""
         sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, allow_force_argmax=True)
         sampler.load_device_buffers()
         B = sampler.config.max_batch_size
@@ -154,7 +240,7 @@ class TestSampling1DDevice:
         torch.manual_seed(42)
         logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
 
-        logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device)
+        logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
 
         tokens_tt, log_probs = sampler.decode_forward(logits_tt)
         tokens_host = to_torch_auto_compose(tokens_tt)
@@ -169,14 +255,14 @@ class TestSampling1DDevice:
         ), f"Argmax mismatch: got {tokens_flat[:5]} vs expected {expected_flat[:5]}"
 
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_error_on_partial_params(self, ttnn_mesh_device, vocab_size):
+    def test_error_on_partial_params(self, ttnn_mesh_device, vocab_size, expect_error):
         """k provided but not p/temp → ValueError."""
         sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
         logits_host = torch.randn(1, 1, 32, vocab_size, dtype=torch.bfloat16)
         logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device)
         k_tt = ttnn.from_torch(torch.ones(32), device=ttnn_mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        with pytest.raises(ValueError, match="k, p, temp must all be provided"):
+        with expect_error(ValueError, "k, p, temp must all be provided"):
             sampler.decode_forward(logits_tt, k=k_tt)
 
     @pytest.mark.parametrize("vocab_size", [1024])
@@ -256,13 +342,13 @@ class TestSampling1DDevice:
     # ------------------------------------------------------------------
 
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_error_all_none_no_force_argmax(self, ttnn_mesh_device, vocab_size):
+    def test_error_all_none_no_force_argmax(self, ttnn_mesh_device, vocab_size, expect_error):
         """decode_forward with all-None k/p/temp when allow_force_argmax=False → ValueError (line 178)."""
         sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
         logits_host = torch.randn(1, 1, 32, vocab_size, dtype=torch.bfloat16)
         logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device)
 
-        with pytest.raises(ValueError, match="allow_force_argmax is False"):
+        with expect_error(ValueError, "allow_force_argmax is False"):
             sampler.decode_forward(logits_tt)
 
     @pytest.mark.parametrize("vocab_size", [1024])
@@ -419,7 +505,7 @@ class TestSampling1DDevice:
         assert isinstance(resolved.index_offsets, LazyBuffer)
         assert resolved.index_offsets.device is ttnn_mesh_device  # filled in by resolve_lazy_buffer
 
-    def test_rejects_galaxy(self, ttnn_mesh_device):
+    def test_rejects_galaxy(self, ttnn_mesh_device, expect_error):
         """from_model_args should reject 2D (Galaxy) topologies."""
 
         class FakeMesh:
@@ -435,7 +521,7 @@ class TestSampling1DDevice:
             start_core = ttnn.CoreCoord(0, 0)
             max_top_k = 32
 
-        with pytest.raises(ValueError, match="1D mesh topologies"):
+        with expect_error(ValueError, "1D mesh topologies"):
             Sampling1D.from_model_args(FakeMesh(), None, MockArgs())
 
 
@@ -652,7 +738,8 @@ def test_sampling1d_argmax_vs_reference(ttnn_mesh_device):
     """
     Force-argmax path (k/p/temp=None, allow_force_argmax=True) vs torch.argmax.
 
-    Tests the all-gather-free argmax path on single device.
+    Multi-device meshes use the established full-vocabulary gather by default; compact argmax is
+    deliberately covered only by its explicit static and P150x2 qualification gates.
     """
     torch.manual_seed(99)
     B = 32
@@ -665,7 +752,7 @@ def test_sampling1d_argmax_vs_reference(ttnn_mesh_device):
     )
 
     logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
-    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device)
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
 
     tokens_tt, _ = sampler.decode_forward(logits_tt)
     # .long(): ttnn.argmax → uint32, torch.argmax → int64; normalize before compare

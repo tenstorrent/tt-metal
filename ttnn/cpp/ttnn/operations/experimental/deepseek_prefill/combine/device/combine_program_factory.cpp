@@ -7,8 +7,9 @@
 #include <array>
 #include <bitset>
 #include <map>
-#include <utility>
 #include <limits>
+#include <tuple>
+#include <utility>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
@@ -108,6 +109,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     auto worker_core_range_set = operation_attributes.worker_core_range_set;
 
     const auto& mesh_view = mesh_device->get_view();
+    const uint32_t combine_axis = operation_attributes.axis.value_or(0);
+    const uint32_t combine_axis_size = combine_axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
+    const bool use_fabric = !(operation_attributes.dispatch_group_size == 1 && combine_axis_size == 1);
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
     uint32_t src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
@@ -135,8 +139,12 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
-    const auto [neighbors, directions] =
-        ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+    std::vector<ttnn::MeshCoordinate> neighbors;
+    std::array<bool, 4> directions = {false, false, false, false};
+    if (use_fabric) {
+        std::tie(neighbors, directions) =
+            ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+    }
 
     // FABRIC_2D uses the portable RoutingPlaneConnectionManager (per-destination connection +
     // multicast handshake) for multi-hop combine-axis forwarding; FABRIC_1D keeps the legacy
@@ -455,7 +463,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     }
 
     // c_5: packet header CB for fabric sends (writer-only)
-    if (num_links > 0) {
+    if (use_fabric) {
         constexpr uint32_t num_packet_headers = 2;
         auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
         uint32_t packet_header_cb_size = num_packet_headers * packet_header_size_bytes;
@@ -581,7 +589,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     // Both reader and writer get fabric defines so the reader can compute routes
     std::map<std::string, std::string> fabric_defines;
-    if (num_links > 0) {
+    if (use_fabric) {
         fabric_defines["DEST_CHIP_ID"] = ccl::common::stringify(dest_chip_id);
         fabric_defines["DEST_MESH_ID"] = ccl::common::stringify(dest_mesh_id);
         fabric_defines["DIRECTIONS"] = ccl::common::stringify(directions);
@@ -1196,7 +1204,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             writer_runtime_args_raw.push_back(noc_y);
         }
 
-        if (num_links > 0) {
+        if (use_fabric) {
             // Combine-axis neighbors (each a distinct fabric direction) as fabric nodes.
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
             for (const auto& neighbor_coordinate : neighbors) {
@@ -1290,8 +1298,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             untilizer_rt_args.push_back(expert_start);
             untilizer_rt_args.push_back(expert_end);
             untilizer_rt_args.push_back(dispatched_metadata.buffer());
-            desc.kernels[reader_untilize_kernel_ids[j]].emplace_runtime_args(
-                untilizer_row_cores[j], untilizer_rt_args);
+            desc.kernels[reader_untilize_kernel_ids[j]].emplace_runtime_args(untilizer_row_cores[j], untilizer_rt_args);
 
             // Compute kernel walks the same expert/batch iteration as reader_untilize and
             // writer_untilize (no per-batch signal CB).  Per-sender k_s + local_core_id drive

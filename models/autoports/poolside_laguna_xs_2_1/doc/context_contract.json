@@ -1,21 +1,26 @@
 {
   "schema_version": 3,
-  "as_of": "2026-08-21",
+  "as_of": "2026-08-22",
   "hf_model": "poolside/Laguna-XS-2.1",
   "terminology": {
     "p150": "one Blackhole ASIC/device as enumerated by tt-smi",
-    "p150x2": "two independently enumerated Blackhole ASIC/devices in a 1x2 mesh; on the qualification host these are one physical P300 card",
+    "p150x2": "two independently enumerated P150 Blackhole ASIC/devices in a 1x2 mesh; on the qualification host these are one physical dual-P150 card",
     "p150x4": "four independently enumerated Blackhole ASIC/devices in a 1x4 mesh"
   },
   "context_semantics": {
     "hf_config_declares_tokens": 262144,
     "serving_limit_includes_input_and_output": true,
     "policy": "A selected serving profile may advertise only its end-to-end qualified context. Component-level cache addressability is not serving qualification.",
-    "hf_262144_status": "not advertised by any current profile"
+    "hf_262144_status": "experimental p150x2 probe rejected for latency and remains unqualified; not advertised by any production profile"
   },
   "launcher_default": {
     "profile": "p150x2",
     "reason": "D1 is ruled out by full-model weight OOM. D2 passes topology, correctness, full 131K KV/trace, memory, cold API, online decode, exact-cap, and canonical prefix-cache gates. D4 remains the explicit regression profile."
+  },
+  "vllm_plugin_policy": {
+    "unset": "normal vLLM plugin auto-discovery",
+    "explicit_allowlist_required_exact_entries": ["tt", "tt_model_registry", "laguna_tt_ext"],
+    "reason": "Every Laguna launch requires the TT platform, TT model registry, and model-local plugin. The local plugin owns the qualified Laguna tool parser in all profiles as well as prefix-cache and hybrid-KV hooks."
   },
   "profiles": {
     "p150": {
@@ -62,7 +67,7 @@
       ],
       "selected_physical_pair": {
         "tt_visible_devices": "0,1",
-        "host_board_relationship": "one physical P300 card containing two Blackhole ASICs"
+        "host_board_relationship": "one physical dual-P150 card containing two P150 Blackhole ASICs"
       },
       "selected_ccl": {"topology": "ring", "num_links": 2},
       "mesh_graph_descriptor": null,
@@ -76,6 +81,10 @@
       "prefix_cache_physical_block_tokens": 64,
       "prefix_cache_admission": "complete_canonical_prompt_chunks",
       "prefix_cache_operator_rollback": "TT_LAGUNA_PREFIX_CACHE=0",
+      "streaming_prefill_enabled": true,
+      "streaming_prefill_profile_default": 1,
+      "streaming_prefill_outer_chunk_tokens": 8192,
+      "streaming_prefill_operator_rollback": "TT_LAGUNA_STREAMING_PREFILL=0 with LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1; unqualified",
       "qualification_status": "qualified_selected_default",
       "qualification_artifact": "/home/ttuser/laguna-qualification/p150x2-qualified-noalloc-20260821T123447",
       "prefix_cache_qualification_artifact": "/home/ttuser/laguna-qualification/p150x2-prefix-cache-20260821/cache-on-canonical-8k/results/full_qualification.json",
@@ -141,17 +150,75 @@
       "reason": "The runtime-offset implementation and frozen-cache warm set are qualified only for the p150x2 two-chip, max-num-seqs-1 serving envelope. Model initialization rejects enabled prefix caching on any other device count."
     },
     "hybrid_kv": {
-      "required_env": "TT_LAGUNA_HYBRID_KV=0",
-      "status": "unsafe_and_disabled",
-      "reason": "The current vLLM/plugin grouped allocator does not preserve Laguna's 10 full-attention and 30 sliding-window logical-to-physical group mapping. All profile qualification must use uniform KV."
+      "required_production_env": "TT_LAGUNA_HYBRID_KV=0",
+      "experimental_env": "TT_LAGUNA_HYBRID_KV=1",
+      "status": "production_disabled_experimental_cache_off_p150x2",
+      "reason": "Production and prefix-cache qualification retain uniform KV. The explicit experimental p150x2 path preserves four distinct block-table groups while aliasing equal slots onto ten physical K/V tensor pairs; it requires prefix caching off, max_num_seqs=1, scheduler chunks of 8192 tokens, LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1, and the complete explicit plugin allowlist when VLLM_PLUGINS is set."
+    },
+    "moe_token_dispatch": {
+      "required_production_env": "TT_LAGUNA_MOE_TOKEN_DISPATCH=0",
+      "experimental_env": "TT_LAGUNA_MOE_TOKEN_DISPATCH=1",
+      "status": "production_disabled_one_layer_hardware_qualified_only",
+      "reason": "The production-stacked layer-1 8192-token gate passed PCC, warm-latency, memory, and cache-stability gates, but cross-layer, cross-bucket, cumulative boot/residency, and full-model token gates remain outstanding.",
+      "exact_launcher_envelope": "p150x2, max_num_seqs=1, streaming prefill on, prefix cache off, uniform KV, DFlash/context/multi-sequence/tile-sparse paths off, and LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1"
+    },
+    "moe_prefill_tile_sparse": {
+      "required_production_env": "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE=0",
+      "experimental_env": "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE=1",
+      "status": "production_disabled_unqualified",
+      "exact_launcher_envelope": "p150x2, max_num_seqs=1, streaming prefill on, prefix cache off, uniform KV, DFlash/context/multi-sequence/token-dispatch paths off, and LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1"
+    },
+    "dflash": {
+      "required_production_env": "TT_LAGUNA_DFLASH=0",
+      "experimental_env": "TT_LAGUNA_DFLASH=1",
+      "status": "production_disabled_correctness_scoped_latency_rejected",
+      "reason": "Target verification and committed tokens were exact, but target verification alone cost at least 94.440 ms per committed token before draft cost versus about 50.5 ms for the qualified baseline.",
+      "exact_launcher_envelope": "p150x2, max_num_seqs=1, streaming prefill on, prefix cache off, uniform KV, speculative/context/multi-sequence/sparse-MoE paths off, and LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1"
+    },
+    "experimental_feature_stacking": {
+      "status": "rejected_fail_closed",
+      "reason": "A single experimental acknowledgement does not authorize combinations of independently qualified envelopes. The launcher rejects untested DFlash, hybrid-KV, multi-sequence, context-probe, token-dispatch, and tile-sparse overlaps except that the 262144 context probe explicitly requires hybrid KV."
     },
     "scheduler_chunked_prefill": {
       "status": "required_disabled_for_p150x2_prefix_cache",
       "note": "Laguna's internal bounded/pipelined prefill remains enabled and is not vLLM scheduler-level chunked prefill."
     },
     "context_262144": {
-      "status": "out_of_scope",
-      "reason": "Historical D4 serving reported OOM at this length, and D1/D2 are scoped to 65536/131072 respectively."
+      "status": "experimental_p150x2_probe_rejected_for_latency_unqualified",
+      "production_context_tokens": 131072,
+      "reason": "No production profile advertises 262144. The fail-closed cache-off hybrid-KV probe proved an exact repeat beyond the production boundary, but its exact-cap request exceeded the deliberate 1200-second client timeout. This rejects the 262144-token serving target for latency and does not constitute a capacity pass.",
+      "required_probe_configuration": {
+        "TT_LAGUNA_CONTEXT_PROBE": "1",
+        "TT_LAGUNA_HYBRID_KV": "1",
+        "TT_LAGUNA_PREFIX_CACHE": "0",
+        "LAGUNA_MAX_NUM_SEQS": "1",
+        "LAGUNA_MAX_MODEL_LEN": "262144",
+        "LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES": "1"
+      },
+      "completed_probe": {
+        "date": "2026-08-22",
+        "boundary": {
+          "input_tokens": 131136,
+          "output_tokens": 16,
+          "repetitions": 2,
+          "both_completed": true,
+          "exact_repeat": true,
+          "proof": "The harness submitted the exact-cap leg only after both boundary responses completed and passed its token-count and token-equality assertions."
+        },
+        "exact_cap": {
+          "input_tokens": 262112,
+          "output_tokens": 32,
+          "request_tokens": 262144,
+          "maximum_observed_kv_usage": 0.9709341025,
+          "client_timeout_seconds": 1200,
+          "completed": false,
+          "oom_or_device_fault_observed": false,
+          "abort_returned_kv_usage_to": 0
+        },
+        "disposition": "rejected_for_latency_unqualified_not_a_capacity_pass",
+        "artifact": "/tmp/laguna-context262k-probe-20260822/qualification.json",
+        "server_log": "/tmp/laguna-context262k-probe-20260822/laguna_serve_20260822-121656.log"
+      }
     }
   },
   "prefill_runtime_contract": {
@@ -189,16 +256,19 @@
       "decode_page_table_modified": false
     },
     "extended_private_prefill_addressability": {
-      "page_table_horizon": "max_model_len + largest_bucket",
-      "rope_horizon": "max_model_len + largest_bucket",
+      "p150_policy": "legacy monolithic max_model_len + largest_bucket",
+      "p150x2_page_table_horizon": "max_model_len rounded up once to the next 8192-token outer-chunk boundary",
+      "p150x2_rope_horizon": "max_model_len rounded up once to the next 8192-token outer-chunk boundary",
       "p150_horizon_tokens": 131072,
-      "p150x2_horizon_tokens": 262144,
-      "advertised_context_changed": false
+      "p150x2_horizon_tokens": 131072,
+      "production_advertised_context_changed": false
     },
     "warmup": {
       "plugin_calls_prefill_warmup_twice": true,
-      "full_bucket_ladder_passes": 1,
-      "mechanism": "Laguna's private _prefill_programs_warmed latch survives the plugin's public-flag reset and suppresses the redundant second full-model pass",
+      "d2_compute_bucket_ladder": [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192],
+      "d2_canonical_nonzero_position_long_stream_case": true,
+      "complete_prefill_warmup_passes": 1,
+      "mechanism": "Laguna's private _prefill_programs_warmed latch survives the plugin's public-flag reset and suppresses the redundant second finite-ladder plus canonical-long-stream pass",
       "runtime_offset_slots_preallocated": true,
       "program_cache_frozen_after_trace": true,
       "program_cache_misses_allowed_after_trace": false
@@ -377,6 +447,8 @@
         "prefix_cache_policy": "qualified",
         "prefix_cache_quantum_tokens": 8192,
         "kv_block_size_tokens": 64,
+        "streaming_prefill_enabled": true,
+        "streaming_prefill_outer_chunk_tokens": 8192,
         "scheduler_chunked_prefill": false,
         "kv_group_policy": "single_uniform_full_attention",
         "clean_environment_launcher_config_verified": true
@@ -601,6 +673,41 @@
           "verified": true
         },
         "overall_passed": true
+      },
+      "streaming_prefill_qualification": {
+        "status": "passed_and_promoted_default",
+        "date": "2026-08-22",
+        "artifact": "doc/vllm_integration/p150x2_hybrid_kv_qualification_20260822.md",
+        "full_stack_prompt_tokens": 16400,
+        "legacy_computed_rows": 32768,
+        "streaming_computed_rows": 24576,
+        "legacy_median_seconds": 46.804378,
+        "streaming_median_seconds": 33.622952,
+        "speedup": 1.392037,
+        "hidden_pcc": 1.0,
+        "logits_pcc": 1.0,
+        "argmax_exact": true,
+        "top10_exact": true,
+        "program_cache_misses": 0
+      },
+      "production_latency_sweep_20260822": {
+        "status": "passed",
+        "artifact_markdown": "doc/vllm_integration/p150x2_latency_sweep_20260822.md",
+        "artifact_tsv": "doc/vllm_integration/p150x2_latency_sweep_20260822.tsv",
+        "configuration": "p150x2 production defaults; context 131072; streaming prefill on; canonical prefix caching on; uniform KV; OSL 512; concurrency 1; unique salt per row",
+        "requested_input_tokens": [128, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 130048],
+        "actual_prompt_tokens": [82, 1066, 1939, 4138, 8234, 16426, 32810, 65578, 130090],
+        "ttft_ms": [215.07499, 2213.248366, 2563.049286, 8983.831799, 19679.643795, 33930.83672, 67811.632137, 156630.156203, 380812.158697],
+        "tpot_ms": [50.069871, 50.453539, 50.494126, 50.563984, 50.708412, 51.00303, 51.596682, 52.768491, 55.096388],
+        "decode_tokens_per_second": [19.972091, 19.820215, 19.804284, 19.776923, 19.720594, 19.606678, 19.381091, 18.950703, 18.15001],
+        "cache_hit_tokens": 0,
+        "cached_tokens": 0,
+        "completed": 9,
+        "failed": 0,
+        "output_tokens_each": 512,
+        "final_health_http_status": 200,
+        "runtime_compile_or_cache_miss": false,
+        "critical_faults": 0
       },
       "standalone_warm_prompt128_generate128": {
         "ttft_ms": 190.7,

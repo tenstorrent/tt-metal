@@ -33,6 +33,7 @@ import torch
 
 import ttnn
 
+from .dflash_reference import DFLASH_TARGET_LAYER_IDS, DFlashTargetAuxCapture
 from .multichip_decoder import MultichipDecoder
 from .optimized_decoder import PrecisionPolicy, _cached_device_tensor, weight_cache_key
 
@@ -334,9 +335,7 @@ class LagunaModel:
                 ctx[kind] = (cos, sin)
                 continue
             if int(runtime_offsets.bucket_len) != int(seq):
-                raise ValueError(
-                    f"prefill runtime bucket {runtime_offsets.bucket_len} does not match hidden seq {seq}"
-                )
+                raise ValueError(f"prefill runtime bucket {runtime_offsets.bucket_len} does not match hidden seq {seq}")
             outputs = runtime_offsets.rope_outputs.get(kind)
             if outputs is None:
                 raise ValueError(f"prefill runtime has no RoPE output slots for attention kind {kind!r}")
@@ -387,9 +386,7 @@ class LagunaModel:
             rope_ctx = self._build_prefill_rope(start_pos, seq, runtime_offsets=runtime_offsets)
         else:
             rope_ctx = (
-                None
-                if (_no_hoist or seq > self.layers[0].PIPE_CHUNK)
-                else self._build_prefill_rope(start_pos, seq)
+                None if (_no_hoist or seq > self.layers[0].PIPE_CHUNK) else self._build_prefill_rope(start_pos, seq)
             )
         h = hidden_1SH
         for i, (dec, kv) in enumerate(zip(self.layers, kv_cache)):
@@ -408,6 +405,116 @@ class LagunaModel:
                 runtime_offsets=runtime_offsets,
             )
         return h
+
+    def _validate_dflash_target_capture(self, enable_experimental):
+        """Fail closed before the separate DFlash capture path touches a layer."""
+
+        if not bool(enable_experimental):
+            raise RuntimeError(
+                "DFlash target auxiliary capture is experimental and default-off; "
+                "pass enable_experimental=True only from the qualified DFlash path"
+            )
+        layer_indices = tuple(int(getattr(layer, "layer_idx", index)) for index, layer in enumerate(self.layers))
+        expected_stack = tuple(range(40))
+        if layer_indices != expected_stack:
+            raise RuntimeError(
+                "DFlash target auxiliary capture requires the exact full 40-layer target stack; "
+                f"got layer indices {layer_indices}"
+            )
+        if tuple(DFLASH_TARGET_LAYER_IDS) != (1, 13, 25, 33, 39):
+            raise RuntimeError(f"unexpected DFlash target auxiliary layer contract: {DFLASH_TARGET_LAYER_IDS}")
+        return set(DFLASH_TARGET_LAYER_IDS)
+
+    def prefill_layers_with_dflash_aux(
+        self,
+        hidden_1SH,
+        kv_cache,
+        page_table,
+        *,
+        fill_page_table=None,
+        fill_page_table_base_pos=0,
+        user_id=0,
+        start_pos=0,
+        runtime_offsets=None,
+        valid_seq_len=None,
+        enable_experimental=False,
+    ):
+        """Run the target prefill and separately capture five post-layer states.
+
+        This is deliberately a distinct entry point: the established target
+        ``prefill_layers`` loop has no DFlash condition, append, or extra tensor
+        lifetime.  Only the last 511 valid rows are retained because older rows
+        are outside the draft's inclusive 512-token sliding window.
+        """
+
+        capture_ids = self._validate_dflash_target_capture(enable_experimental)
+        if fill_page_table is None:
+            fill_page_table = page_table
+        per_layer = isinstance(page_table, (list, tuple))
+        fill_per_layer = isinstance(fill_page_table, (list, tuple))
+        if per_layer and len(page_table) < len(self.layers):
+            raise ValueError(
+                f"prefill attention page table has {len(page_table)} entries for {len(self.layers)} layers"
+            )
+        if fill_per_layer and len(fill_page_table) < len(self.layers):
+            raise ValueError(
+                f"prefill fill page table has {len(fill_page_table)} entries for {len(self.layers)} layers"
+            )
+        seq = int(hidden_1SH.shape[-2])
+        valid_seq_len = seq if valid_seq_len is None else int(valid_seq_len)
+        if not 1 <= valid_seq_len <= seq:
+            raise ValueError(f"valid_seq_len must be in [1, {seq}], got {valid_seq_len}")
+        if int(start_pos) < 0 or int(start_pos) + valid_seq_len > self.cfg.max_position_embeddings:
+            raise ValueError(
+                f"DFlash target prefill interval [{start_pos}, {int(start_pos) + valid_seq_len}) "
+                f"is outside [0, {self.cfg.max_position_embeddings})"
+            )
+        keep = min(valid_seq_len, 511)
+        capture_begin = valid_seq_len - keep
+
+        _no_hoist = os.environ.get("TT_LAGUNA_NO_ROPE_HOIST") == "1"
+        if runtime_offsets is not None:
+            rope_ctx = self._build_prefill_rope(start_pos, seq, runtime_offsets=runtime_offsets)
+        else:
+            rope_ctx = (
+                None if (_no_hoist or seq > self.layers[0].PIPE_CHUNK) else self._build_prefill_rope(start_pos, seq)
+            )
+        h = hidden_1SH
+        captured = []
+        for i, (dec, kv) in enumerate(zip(self.layers, kv_cache)):
+            pt = page_table[i] if per_layer else page_table
+            fill_pt = fill_page_table[i] if fill_per_layer else fill_page_table
+            rm = rope_ctx[dec.cfg.attention_type] if rope_ctx is not None else None
+            h = dec.prefill_forward(
+                h,
+                kv,
+                pt,
+                fill_page_table=fill_pt,
+                fill_page_table_base_pos=fill_page_table_base_pos,
+                user_id=user_id,
+                start_pos=start_pos,
+                rope_mats=rm,
+                runtime_offsets=runtime_offsets,
+            )
+            if int(dec.layer_idx) in capture_ids:
+                captured.append(
+                    ttnn.slice(
+                        h,
+                        [0, capture_begin, 0],
+                        [1, valid_seq_len, self.cfg.hidden],
+                    )
+                )
+        if len(captured) != len(DFLASH_TARGET_LAYER_IDS):
+            raise RuntimeError(
+                f"captured {len(captured)} DFlash target states, expected {len(DFLASH_TARGET_LAYER_IDS)}"
+            )
+        flattened = ttnn.concat(captured, dim=-1)
+        capture = DFlashTargetAuxCapture(
+            hidden_states=flattened,
+            start_position=int(start_pos) + capture_begin,
+            row_count=keep,
+        )
+        return h, capture
 
     def decode_layers(self, hidden_1BH, cur_pos, rope_idx, page_table, kv_cache, sequential_kv_write=False):
         # ``sequential_kv_write`` serializes the per-row paged_update_cache when the batch rows are
@@ -432,6 +539,71 @@ class LagunaModel:
             )
         return h
 
+    def decode_layers_with_dflash_aux(
+        self,
+        hidden_1BH,
+        cur_pos,
+        rope_idx,
+        page_table,
+        kv_cache,
+        *,
+        absolute_position,
+        sequential_kv_write=False,
+        enable_experimental=False,
+    ):
+        """Run one contiguous target-verify block and capture post-layer states.
+
+        The decode batch dimension represents 1..16 consecutive rows belonging
+        to one request, not independent served requests.  Multi-row verification
+        must serialize shared-block KV writes.  Keeping this API separate leaves
+        the normal traced decode graph byte-for-byte untouched.
+        """
+
+        capture_ids = self._validate_dflash_target_capture(enable_experimental)
+        position = int(absolute_position)
+        B = int(hidden_1BH.shape[-2])
+        if not 1 <= B <= 16:
+            raise ValueError(f"DFlash target auxiliary verify requires 1..16 contiguous rows, got {B}")
+        if B > 1 and not bool(sequential_kv_write):
+            raise ValueError("multi-row DFlash target verify requires sequential_kv_write=True")
+        if position < 0 or position + B > self.cfg.max_position_embeddings:
+            raise ValueError(
+                f"DFlash target decode interval [{position}, {position + B}) is outside "
+                f"[0, {self.cfg.max_position_embeddings})"
+            )
+        per_layer = isinstance(page_table, (list, tuple))
+        if per_layer and len(page_table) < len(self.layers):
+            raise ValueError(f"decode page table has {len(page_table)} entries for {len(self.layers)} layers")
+        rope_ctx = None if os.environ.get("TT_LAGUNA_NO_ROPE_HOIST") == "1" else self._build_decode_rope(rope_idx, B)
+        h = hidden_1BH
+        captured = []
+        for i, (dec, kv) in enumerate(zip(self.layers, kv_cache)):
+            pt = page_table[i] if per_layer else page_table
+            h = dec.decode_forward(
+                h,
+                cur_pos,
+                rope_idx,
+                pt,
+                kv,
+                sequential_kv_write=sequential_kv_write,
+                rope_mats=(rope_ctx[dec.cfg.attention_type] if rope_ctx is not None else None),
+            )
+            if int(dec.layer_idx) in capture_ids:
+                captured.append(h)
+        if len(captured) != len(DFLASH_TARGET_LAYER_IDS):
+            raise RuntimeError(
+                f"captured {len(captured)} DFlash target states, expected {len(DFLASH_TARGET_LAYER_IDS)}"
+            )
+        flattened = ttnn.reshape(
+            ttnn.concat(captured, dim=-1),
+            (1, B, len(DFLASH_TARGET_LAYER_IDS) * self.cfg.hidden),
+        )
+        return h, DFlashTargetAuxCapture(
+            hidden_states=flattened,
+            start_position=position,
+            row_count=B,
+        )
+
     # ---- terminal: final norm + LM head ------------------------------------ #
     def final_norm(self, hidden):
         return ttnn.rms_norm(hidden, weight=self.norm_w, epsilon=self.cfg.eps, compute_kernel_config=self._norm_ck)
@@ -445,6 +617,28 @@ class LagunaModel:
         """Tiled matmul (decode): hidden [1,1,B,H] -> per-device logit shard [1,1,B,V/D]."""
         normed = self.final_norm(hidden_1BH)
         return ttnn.linear(normed, self.lm_head_w, compute_kernel_config=self._lm_ck)
+
+    def lm_head_shards_dflash(self, draft_hidden, *, enable_experimental=False):
+        """Project DFlash-normalized rows with the target-owned LM head.
+
+        The draft checkpoint owns and applies its own final RMSNorm.  Applying
+        the target model's final norm here would be a silent double-normalization
+        error, so this explicit default-off method performs only the raw target
+        LM-head projection.
+        """
+
+        if not bool(enable_experimental):
+            raise RuntimeError(
+                "raw target LM-head projection is reserved for experimental DFlash; " "pass enable_experimental=True"
+            )
+        if int(draft_hidden.shape[-1]) != self.cfg.hidden:
+            raise ValueError(
+                f"DFlash hidden width {draft_hidden.shape[-1]} does not match target width {self.cfg.hidden}"
+            )
+        # Proposal top-1 is sensitive to accumulated five-layer draft error.
+        # Only 15 rows are projected, so use the existing precise/fp32-dest
+        # kernel instead of the target's throughput-tuned normal LM-head kernel.
+        return ttnn.linear(draft_hidden, self.lm_head_w, compute_kernel_config=self._norm_ck)
 
     def logits_to_host(self, logit_shards):
         """Gather the mesh-sharded vocab shards into a full [.., V] host tensor (prefill/debug only —

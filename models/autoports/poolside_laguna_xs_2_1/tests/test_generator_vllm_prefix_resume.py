@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from models.autoports.poolside_laguna_xs_2_1.tt import generator_vllm as generator_vllm_module
 from models.autoports.poolside_laguna_xs_2_1.tt import multichip_decoder as multichip_decoder_module
 from models.autoports.poolside_laguna_xs_2_1.tt.generator_vllm import LagunaForCausalLM, _prefill_rope_capacity
 from models.autoports.poolside_laguna_xs_2_1.tt.model import LagunaModel
@@ -29,6 +30,41 @@ def test_prefix_cache_capabilities_are_fail_closed_by_default():
     assert LagunaForCausalLM._PREFIX_CACHE_ENABLED is False
     assert LagunaForCausalLM.model_capabilities["supports_prefix_caching"] is False
     assert LagunaForCausalLM.model_capabilities["supports_prefix_caching_with_sliding_window"] is False
+
+
+@pytest.mark.parametrize(("device_count", "expected_rope_capacity"), [(1, 262144), (2, 131072)])
+def test_model_initialization_selects_streaming_rope_capacity_only_on_d2(
+    monkeypatch, device_count, expected_rope_capacity
+):
+    calls = []
+    fake_gen = SimpleNamespace(max_seq_len=None)
+
+    def fake_from_pretrained(_mesh_device, *, max_seq_len, **_kwargs):
+        calls.append(max_seq_len)
+        return fake_gen
+
+    def fake_init(self, generator, _mesh_device, _max_batch_size, max_model_len):
+        self.gen = generator
+        self.max_model_len = max_model_len
+
+    monkeypatch.setattr(LagunaForCausalLM, "_STREAMING_PREFILL_ENABLED", True)
+    monkeypatch.setattr(
+        generator_vllm_module.LagunaGenerator,
+        "from_pretrained",
+        staticmethod(fake_from_pretrained),
+    )
+    monkeypatch.setattr(LagunaForCausalLM, "__init__", fake_init)
+    mesh = SimpleNamespace(get_num_devices=lambda: device_count)
+
+    bridge = LagunaForCausalLM.initialize_vllm_model(
+        hf_config=None,
+        mesh_device=mesh,
+        max_batch_size=1,
+        max_seq_len=131072,
+    )
+
+    assert calls == [expected_rope_capacity]
+    assert bridge.gen.max_seq_len == 131072
 
 
 class _RecordingModel:
@@ -80,6 +116,7 @@ def _bridge(*, max_model_len=32, spec_mode=""):
     bridge._spec_mode = spec_mode
     bridge._spec_prefill_seq = []
     bridge._spec_next_pos = None
+    bridge._PREFILL_STREAM_OUTER_CHUNK = 8
     bridge._test_pt_calls = []
     bridge._test_fill_pt_calls = []
     bridge._test_bucket_args = []
@@ -97,6 +134,10 @@ def _bridge(*, max_model_len=32, spec_mode=""):
         bridge._test_bucket_args.append(chunk_len)
         return 4 if chunk_len <= 4 else 8
 
+    def stream_plan(chunk_len, start_pos, block_size):
+        bridge._test_bucket_args.append(chunk_len)
+        return LagunaForCausalLM._prefill_plan_for_range(bridge, chunk_len, start_pos, block_size)
+
     def last_token_shards(hidden, chunk_len, bucket_len):
         bridge._test_last_rows.append((chunk_len, bucket_len))
         return torch.zeros((1, bridge.vocab), dtype=torch.float32)
@@ -104,7 +145,11 @@ def _bridge(*, max_model_len=32, spec_mode=""):
     bridge._prefill_pt = prefill_pt
     bridge._prefill_fill_pt = prefill_fill_pt
     bridge._bucket_len = bucket_len
-    bridge._prefill_page_table_width = lambda _block_size: 10
+    bridge._prefill_bucket_lens = lambda: [4, 8]
+    bridge._prefill_plan_for_range = stream_plan
+    bridge._prefill_page_table_width = (
+        lambda block_size: ((((int(max_model_len) + int(block_size) - 1) // int(block_size)) + 7) // 8) * 8
+    )
     bridge._runtime_offsets_for_prefill = lambda L, start, bs: ("runtime", L, start, bs)
     bridge._last_token_shards = last_token_shards
     return bridge
@@ -113,77 +158,80 @@ def _bridge(*, max_model_len=32, spec_mode=""):
 def _prefix_bucket_bridge():
     bridge = object.__new__(LagunaForCausalLM)
     bridge.D = 2
+    bridge.max_model_len = 131072
     bridge._PREFIX_CACHE_ENABLED = True
+    bridge._STREAMING_PREFILL_ENABLED = True
+    bridge._PREFILL_STREAM_OUTER_CHUNK = 8192
     bridge.model = SimpleNamespace(layers=[SimpleNamespace(_prefill_pipe_chunk=8192)])
-    buckets = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
+    buckets = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
     bridge._prefill_bucket_lens = lambda: buckets
     bridge._bucket_len = lambda length: next(bucket for bucket in buckets if int(length) <= bucket)
     return bridge
 
 
 @pytest.mark.parametrize(
-    ("label", "start", "real_end", "expected_bucket"),
+    ("label", "start", "real_end", "expected_plan"),
     [
-        ("short_after_first_chunk", 8192, 8257, 8192),
-        ("partial_32k", 24576, 25000, 8192),
-        ("full_32k_tail", 24576, 32768, 8192),
-        ("partial_65k", 57344, 57409, 8192),
-        ("full_65k_tail", 57344, 65536, 8192),
-        ("multi_chunk_suffix", 16384, 25384, 16384),
+        ("short_after_first_chunk", 8192, 8257, ((0, 65, 8192),)),
+        ("partial_32k", 24576, 25000, ((0, 424, 8192),)),
+        ("full_32k_tail", 24576, 32768, ((0, 8192, 8192),)),
+        ("partial_65k", 57344, 57409, ((0, 65, 8192),)),
+        ("full_65k_tail", 57344, 65536, ((0, 8192, 8192),)),
+        ("multi_chunk_suffix", 16384, 25384, ((0, 8192, 8192), (8192, 808, 8192))),
     ],
 )
-def test_prefix_resume_uses_aligned_scheduler_start_and_canonical_minimum_bucket(
-    label, start, real_end, expected_bucket
-):
+def test_prefix_resume_uses_aligned_scheduler_start_and_canonical_buckets(label, start, real_end, expected_plan):
     bridge = _prefix_bucket_bridge()
 
-    assert bridge._prefill_bucket_for_range(real_end - start, start, 64) == expected_bucket, label
+    plan = bridge._prefill_plan_for_range(real_end - start, start, 64)
+    assert tuple((chunk.relative_start, chunk.real_len, chunk.bucket_len) for chunk in plan) == expected_plan, label
 
 
 @pytest.mark.parametrize("start", [64, 2048, 32704, 65472])
-def test_prefix_resume_rejects_noncanonical_scheduler_start(start):
+def test_prefix_resume_rejects_noncanonical_scheduler_start(start, expect_error):
     bridge = _prefix_bucket_bridge()
 
-    with pytest.raises(ValueError, match="not aligned to canonical outer-chunk quantum 8192"):
-        bridge._prefill_bucket_for_range(65, start, 64)
+    with expect_error(ValueError, "not aligned to canonical outer-chunk quantum 8192"):
+        bridge._prefill_plan_for_range(65, start, 64)
 
 
-def test_prefix_bucket_rule_preserves_cold_cache_off_and_non_d2_paths():
+def test_canonical_tail_rule_preserves_short_cold_and_non_d2_paths():
     bridge = _prefix_bucket_bridge()
-    assert bridge._prefill_bucket_for_range(65, 0, 64) == 128
+    assert bridge._prefill_plan_for_range(65, 0, 64)[0].bucket_len == 128
 
     bridge._PREFIX_CACHE_ENABLED = False
-    assert bridge._prefill_bucket_for_range(65, 2048, 64) == 128
+    assert bridge._prefill_plan_for_range(65, 2048, 64)[0].bucket_len == 8192
+    assert bridge._prefill_plan_for_range(65, 8192, 64)[0].bucket_len == 8192
 
     bridge._PREFIX_CACHE_ENABLED = True
     bridge.D = 1
-    assert bridge._prefill_bucket_for_range(65, 2048, 64) == 128
+    assert bridge._prefill_plan_for_range(65, 2048, 64)[0].bucket_len == 128
 
 
-def test_prefix_resume_rejects_model_admission_quantum_drift():
+def test_prefix_resume_rejects_model_admission_quantum_drift(expect_error):
     bridge = _prefix_bucket_bridge()
     bridge.model.layers[0]._prefill_pipe_chunk = 4096
 
-    with pytest.raises(RuntimeError, match="requires prefill outer-chunk quantum 8192.*configured for 4096"):
-        bridge._prefill_bucket_for_range(65, 8192, 64)
+    with expect_error(RuntimeError, "adapter streaming outer chunk is 8192.*configured for 4096"):
+        bridge._prefill_plan_for_range(65, 8192, 64)
 
 
-def test_prefix_resume_rejects_partial_outer_chunk_bucket():
+def test_prefix_resume_forces_every_streamed_suffix_chunk_to_quantum():
     bridge = _prefix_bucket_bridge()
-    bridge._prefill_bucket_lens = lambda: [8192, 12_000]
-    bridge._bucket_len = lambda _length: 12_000
 
-    with pytest.raises(ValueError, match="bucket 12000 is not a whole multiple.*8192"):
-        bridge._prefill_bucket_for_range(9000, 8192, 64)
+    plan = bridge._prefill_plan_for_range(9000, 8192, 64)
+
+    assert [chunk.bucket_len for chunk in plan] == [8192, 8192]
 
 
-def test_uncanonical_prefix_hit_fails_before_page_table_or_device_work():
+def test_uncanonical_prefix_hit_fails_before_page_table_or_device_work(expect_error):
     bridge = _bridge(max_model_len=8192)
+    bridge._PREFILL_STREAM_OUTER_CHUNK = 8192
     bridge._PREFIX_CACHE_ENABLED = True
     bridge.model.layers = [SimpleNamespace(_prefill_pipe_chunk=8192)]
     bridge._prefill_bucket_lens = lambda: [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
 
-    with pytest.raises(ValueError, match="start_pos 2048 is not aligned.*8192"):
+    with expect_error(ValueError, "start_pos 2048 is not aligned.*8192"):
         bridge.prefill_forward(
             torch.arange(2113, dtype=torch.int64).reshape(1, -1),
             page_table=torch.arange(34, dtype=torch.int32).reshape(1, -1),
@@ -200,6 +248,7 @@ def test_uncanonical_prefix_hit_fails_before_page_table_or_device_work():
 
 def test_prefix_resume_never_reads_or_writes_before_scheduler_start(capsys):
     bridge = _bridge(max_model_len=16384)
+    bridge._PREFILL_STREAM_OUTER_CHUNK = 8192
     bridge._PREFIX_CACHE_ENABLED = True
     bridge.model.layers = [SimpleNamespace(_prefill_pipe_chunk=8192)]
     bridge._prefill_bucket_lens = lambda: [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
@@ -230,13 +279,15 @@ def test_prefix_resume_never_reads_or_writes_before_scheduler_start(capsys):
     assert bridge._test_last_rows == [(end - start, 8192)]
     log = capsys.readouterr().out
     assert (
-        "scheduled_start=8192 effective_start=8192 real_end=8257 "
-        "compute_bucket=8192 canonical_chunk=8192"
+        "scheduled_start=8192 effective_start=8192 real_end=8257 " "compute_bucket=8192 canonical_chunk=8192"
     ) in log
 
 
 def test_resumed_prefill_slices_absolute_range_but_retains_absolute_start():
     bridge = _bridge()
+    # The production adapter extends scheduler rows to its once-rounded prefill
+    # horizon, which safely covers a canonical outer-query continuation.
+    bridge._prefill_page_table_width = lambda _block_size: 32
     tokens = torch.tensor(
         [
             [10, 11, 12, 13, 14, 15, 16, 17],
@@ -255,26 +306,63 @@ def test_resumed_prefill_slices_absolute_range_but_retains_absolute_start():
     )
 
     assert bridge._test_bucket_args == [3, 2]
-    assert bridge.gen.uploads[0].tolist() == [12, 13, 14, 0]
-    assert bridge.gen.uploads[1].tolist() == [25, 26, 0, 0]
+    assert bridge.gen.uploads[0].tolist() == [12, 13, 14, 0, 0, 0, 0, 0]
+    assert bridge.gen.uploads[1].tolist() == [25, 26, 0, 0, 0, 0, 0, 0]
     assert [call["start_pos"] for call in bridge.model.prefills] == [2, 5]
     assert [call["user_id"] for call in bridge.model.prefills] == [0, 1]
     guarded_page_table = bridge._test_pt_calls[0]
     fill_page_table = bridge._test_fill_pt_calls[0]
-    assert guarded_page_table[0].tolist() == [0, 1, 2, 3, 4, 99, 99, 99, 99, 99]
-    assert guarded_page_table[1].tolist() == [10, 11, 12, 13, 14, 15, 16, 99, 99, 99]
-    assert fill_page_table[0].tolist() == [2, 3, 4, -1, -1, -1, -1, -1, -1, -1]
-    assert fill_page_table[1].tolist() == [15, 16, -1, -1, -1, -1, -1, -1, -1, -1]
+    assert guarded_page_table[0, :10].tolist() == [0, 1, 2, 3, 4, 99, 99, 99, 99, 99]
+    assert guarded_page_table[1, :10].tolist() == [10, 11, 12, 13, 14, 15, 16, 99, 99, 99]
+    assert torch.all(guarded_page_table[:, 10:] == 99)
+    assert fill_page_table[0, :3].tolist() == [2, 3, 4]
+    assert fill_page_table[1, :2].tolist() == [15, 16]
+    assert torch.all(fill_page_table[0, 3:] == -1)
+    assert torch.all(fill_page_table[1, 2:] == -1)
     assert all(torch.equal(call["page_table"], guarded_page_table) for call in bridge.model.prefills)
     assert all(torch.equal(call["fill_page_table"], fill_page_table) for call in bridge.model.prefills)
     assert all(call["kv_cache"] is kv_cache for call in bridge.model.prefills)
     assert [call["fill_page_table_base_pos"] for call in bridge.model.prefills] == [2, 5]
     assert [call["runtime_offsets"] for call in bridge.model.prefills] == [
-        ("runtime", 4, 2, 1),
-        ("runtime", 4, 5, 1),
+        ("runtime", 8, 2, 1),
+        ("runtime", 8, 5, 1),
     ]
-    assert bridge._test_last_rows == [(3, 4), (2, 4)]
+    assert bridge._test_last_rows == [(3, 8), (2, 8)]
     assert logits.shape == (2, 1, bridge.vocab)
+
+
+def test_cold_streaming_prefill_executes_8192_then_canonical_tail_and_selects_logits_once():
+    bridge = _bridge(max_model_len=16384)
+    bridge._PREFILL_STREAM_OUTER_CHUNK = 8192
+    bridge._prefill_bucket_lens = lambda: [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+    bridge._prefill_page_table_width = lambda _block_size: 256
+    tokens = torch.arange(8193, dtype=torch.int64).reshape(1, -1)
+    page_table = torch.arange(129, dtype=torch.int32).reshape(1, -1)
+    kv_cache = [{"block_size": 64, "scratch_block_idx": 999}]
+
+    logits = bridge.prefill_forward(
+        tokens,
+        page_table=page_table,
+        kv_cache=kv_cache,
+        prompt_lens=[8193],
+        start_pos=[0],
+    )
+
+    assert [tuple(upload.shape) for upload in bridge.gen.uploads] == [(8192,), (8192,)]
+    assert torch.equal(bridge.gen.uploads[0], tokens[0, :8192])
+    assert bridge.gen.uploads[1][0].item() == 8192
+    assert torch.count_nonzero(bridge.gen.uploads[1][1:]) == 0
+    assert [call["start_pos"] for call in bridge.model.prefills] == [0, 8192]
+    assert [call["fill_page_table_base_pos"] for call in bridge.model.prefills] == [0, 8192]
+    assert [call["runtime_offsets"] for call in bridge.model.prefills] == [
+        ("runtime", 8192, 0, 64),
+        ("runtime", 8192, 8192, 64),
+    ]
+    assert bridge._test_fill_pt_calls[0][0, :128].tolist() == list(range(128))
+    assert bridge._test_fill_pt_calls[1][0, 0].item() == 128
+    assert torch.all(bridge._test_fill_pt_calls[1][0, 1:] == -1)
+    assert bridge._test_last_rows == [(1, 8192)]
+    assert logits.shape == (1, 1, bridge.vocab)
 
 
 def test_d1_cold_prefill_keeps_legacy_runtime_path():
@@ -347,8 +435,8 @@ def test_resumed_bucket_padding_splits_attention_and_fill_after_absolute_real_en
     assert original.tolist() == [[31, 32, 33, 34, 35, 0, 0]]
 
 
-def test_padding_guard_rejects_unaligned_resume_and_insufficient_table_width():
-    with pytest.raises(ValueError, match="not aligned"):
+def test_padding_guard_rejects_unaligned_resume_and_insufficient_table_width(expect_error):
+    with expect_error(ValueError, "not aligned"):
         LagunaForCausalLM._protect_prefill_padding_blocks(
             torch.zeros((1, 8), dtype=torch.int32),
             ranges=[(1, 130, 129)],
@@ -357,7 +445,7 @@ def test_padding_guard_rejects_unaligned_resume_and_insufficient_table_width():
             scratch_block_idx=101,
         )
 
-    with pytest.raises(ValueError, match="beyond page-table width"):
+    with expect_error(ValueError, "beyond page-table width"):
         LagunaForCausalLM._protect_prefill_padding_blocks(
             torch.zeros((1, 3), dtype=torch.int32),
             ranges=[(0, 129, 129)],
@@ -367,14 +455,14 @@ def test_padding_guard_rejects_unaligned_resume_and_insufficient_table_width():
         )
 
 
-def test_near_cap_suffix_extends_prefill_table_and_rope_horizon():
+def test_near_cap_stream_tail_uses_one_rounded_page_table_and_rope_horizon():
     max_model_len = 131072
-    start = 98240
-    end = max_model_len
+    start = 122880
+    end = 131000
     chunk_len = end - start
-    bucket_len = 65536
+    bucket_len = 8192
     scheduler_width = max_model_len // 64
-    fixed_prefill_width = (max_model_len + max_model_len) // 64
+    fixed_prefill_width = _prefill_rope_capacity(max_model_len) // 64
     original = torch.arange(scheduler_width, dtype=torch.int32).reshape(1, -1)
 
     attention, fill = LagunaForCausalLM._protect_prefill_padding_blocks(
@@ -386,16 +474,27 @@ def test_near_cap_suffix_extends_prefill_table_and_rope_horizon():
         target_width=fixed_prefill_width,
     )
 
-    padded_block_end = (start + bucket_len) // 64
-    assert attention.shape == fill.shape == (1, 4096)
-    assert attention[0, scheduler_width - 1].item() == scheduler_width - 1
-    suffix_blocks = (end - start) // 64
-    assert fill[0, :suffix_blocks].tolist() == list(range(start // 64, scheduler_width))
+    real_block_end = (end + 63) // 64
+    suffix_blocks = real_block_end - start // 64
+    assert attention.shape == fill.shape == (1, 2048)
+    assert attention[0, real_block_end - 1].item() == real_block_end - 1
+    assert torch.all(attention[0, real_block_end:] == scheduler_width)
+    assert fill[0, :suffix_blocks].tolist() == list(range(start // 64, real_block_end))
     assert torch.all(fill[0, suffix_blocks:] == -1)
-    assert torch.all(attention[0, scheduler_width:padded_block_end] == scheduler_width)
-    assert torch.all(fill[0, scheduler_width:padded_block_end] == -1)
-    assert _prefill_rope_capacity(65536) == 131072
-    assert _prefill_rope_capacity(max_model_len) == 262144
+    assert _prefill_rope_capacity(65536) == 65536
+    assert _prefill_rope_capacity(max_model_len) == 131072
+    assert _prefill_rope_capacity(65536, streaming=False) == 131072
+    assert _prefill_rope_capacity(max_model_len, streaming=False) == 262144
+
+
+def test_streaming_prefill_page_table_width_is_not_doubled():
+    bridge = object.__new__(LagunaForCausalLM)
+    bridge.D = 2
+    bridge.max_model_len = 131072
+    bridge._STREAMING_PREFILL_ENABLED = True
+    bridge._PREFILL_STREAM_OUTER_CHUNK = 8192
+
+    assert bridge._prefill_page_table_width(64) == 2048
 
 
 def test_verify_prefill_uses_paired_attention_and_fill_guards():
@@ -461,14 +560,12 @@ def test_hybrid_list_path_builds_distinct_attention_and_fill_tables_without_muta
         operation="test prefill",
     )
 
-    assert [table[0].tolist() for table in attention] == [
-        [2, 3, 4, 90, 90, 90, 90, 90, 90, 90],
-        [12, 13, 14, 91, 91, 91, 91, 91, 91, 91],
-    ]
-    assert [table[0].tolist() for table in fill] == [
-        [2, 3, 4, -1, -1, -1, -1, -1, -1, -1],
-        [12, 13, 14, -1, -1, -1, -1, -1, -1, -1],
-    ]
+    assert [tuple(table.shape) for table in attention] == [(1, 16), (1, 16)]
+    assert [table[0, :3].tolist() for table in attention] == [[2, 3, 4], [12, 13, 14]]
+    assert torch.all(attention[0][0, 3:] == 90)
+    assert torch.all(attention[1][0, 3:] == 91)
+    assert [table[0, :3].tolist() for table in fill] == [[2, 3, 4], [12, 13, 14]]
+    assert all(torch.all(table[0, 3:] == -1) for table in fill)
     assert all(torch.equal(table, snapshot) for table, snapshot in zip(original, snapshots))
 
 
@@ -762,13 +859,18 @@ def test_prefill_bucket_ladder_warms_once_across_plugin_two_phase_calls():
     assert bridge.already_warmed_up_prefill is True
 
 
-def test_cache_off_d2_warmup_preserves_resumed_single_shot_shapes():
+def test_d2_streaming_warmup_covers_one_canonical_tail_at_nonzero_absolute_start():
     bridge = object.__new__(LagunaForCausalLM)
-    bridge.max_model_len = 128
+    bridge.max_model_len = 256
     bridge.max_batch_size = 1
     bridge.D = 2
     bridge._PREFIX_CACHE_ENABLED = False
-    bridge.model = type("Model", (), {"layers": [type("Layer", (), {"PIPE_CHUNK": 64})()]})()
+    bridge._PREFILL_STREAM_OUTER_CHUNK = 128
+    bridge.model = type(
+        "Model",
+        (),
+        {"layers": [type("Layer", (), {"PIPE_CHUNK": 64, "_prefill_pipe_chunk": 128})()]},
+    )()
     bridge._max_blocks = None
     bridge.already_warmed_up_prefill = False
     bridge._prefill_programs_warmed = False
@@ -784,13 +886,14 @@ def test_cache_off_d2_warmup_preserves_resumed_single_shot_shapes():
 
     bridge.warmup_model_prefill(kv_cache=kv_cache, enable_trace=False)
 
-    assert [call["start_pos"] for call in calls] == [[0], [0], [0], [64], [64]]
-    assert [call["prompt_lens"] for call in calls] == [[32], [64], [128], [96], [128]]
+    assert [call["start_pos"] for call in calls] == [[0]] * 4
+    assert [call["prompt_lens"] for call in calls] == [[32], [64], [128], [256]]
+    assert bridge._prefill_stream_warm_cases(64) == ((128, 256),)
 
 
 @pytest.mark.parametrize("prefix_enabled", [False, True])
-def test_production_d2_warmup_has_exact_cold_ladder_and_only_cache_off_resumed_shapes(prefix_enabled):
-    buckets = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
+def test_production_d2_warmup_has_cold_ladder_and_one_canonical_long_shape(prefix_enabled):
+    buckets = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
     bridge = object.__new__(LagunaForCausalLM)
     bridge.max_model_len = 131072
     bridge.max_batch_size = 1
@@ -816,10 +919,9 @@ def test_production_d2_warmup_has_exact_cold_ladder_and_only_cache_off_resumed_s
 
     bridge.warmup_model_prefill(kv_cache=kv_cache, enable_trace=False)
 
-    cold = [call["prompt_lens"][0] for call in calls if call["start_pos"] == [0]]
-    resumed = [call["prompt_lens"][0] - call["start_pos"][0] for call in calls if call["start_pos"] == [64]]
-    assert cold == buckets
-    assert resumed == ([] if prefix_enabled else [32, 64, 128, 256, 512, 1024, 2048])
+    assert [call["start_pos"] for call in calls] == [[0]] * (len(buckets) + 1)
+    assert [call["prompt_lens"][0] for call in calls] == buckets + [16384]
+
 
 @pytest.mark.parametrize(
     ("tokens", "prompt_lens", "start_pos", "max_model_len", "match"),
@@ -836,11 +938,11 @@ def test_production_d2_warmup_has_exact_cold_ladder_and_only_cache_off_resumed_s
     ],
 )
 def test_prefill_rejects_invalid_absolute_ranges_before_device_work(
-    tokens, prompt_lens, start_pos, max_model_len, match
+    tokens, prompt_lens, start_pos, max_model_len, match, expect_error
 ):
     bridge = _bridge(max_model_len=max_model_len)
 
-    with pytest.raises(ValueError, match=match):
+    with expect_error(ValueError, match):
         bridge.prefill_forward(tokens, prompt_lens=prompt_lens, start_pos=start_pos)
 
     assert bridge._test_pt_calls == []

@@ -38,10 +38,15 @@ from __future__ import annotations
 
 import math
 import os
+import re
 
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
+from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 
 from .optimized_decoder import (
     TILE,
@@ -55,6 +60,166 @@ from .optimized_decoder import (
     weight_cache_key,
 )
 from .prefill_page_table import single_shot_fill_page_table
+
+TOKEN_DISPATCH_ENV = "TT_LAGUNA_MOE_TOKEN_DISPATCH"
+MOE_PREFILL_TILE_SPARSE_ENV = "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE"
+TOKEN_DISPATCH_BUCKETS = frozenset({1024, 2048, 4096, 8192})
+TOKEN_DISPATCH_MOE_LAYERS = frozenset(range(1, 40))
+TOKEN_DISPATCH_CHUNK_M_TILES = 16
+TOKEN_DISPATCH_METADATA_LEN = 5
+
+
+def _parse_binary_env(name: str, default: bool = False) -> bool:
+    """Parse an experimental runtime switch without accepting typos.
+
+    The token-dispatch path is intentionally fail-closed: only literal ``0``
+    and ``1`` are accepted, and an unset variable retains the default-off
+    production path.
+    """
+
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    if value not in {"0", "1"}:
+        raise ValueError(f"{name} must be exactly '0' or '1'; got {value!r}")
+    return value == "1"
+
+
+def _token_dispatch_eligibility(
+    *,
+    enabled: bool,
+    layer_idx: int,
+    is_moe: bool,
+    mesh_devices: int,
+    seq_len: int,
+    sharded: bool,
+    pack_gate_up: bool,
+    global_experts: int,
+    local_experts: int,
+    hidden: int,
+    intermediate: int,
+    top_k: int,
+    activation_dtype,
+    moe_ff13_dtype,
+    moe_ff2_dtype,
+    ccl_dtype,
+    moe_fidelity: str,
+) -> tuple[bool, str]:
+    """Return the narrow, measured token-dispatch serving envelope.
+
+    Everything outside this envelope goes through the established 256-row
+    sparse-MoE loop. Keeping this decision device-free makes every layer and
+    bucket guard independently testable without opening hardware.
+    """
+
+    checks = (
+        (enabled, "feature flag is disabled"),
+        (layer_idx in TOKEN_DISPATCH_MOE_LAYERS and is_moe, "layer is not a Laguna routed-MoE layer"),
+        (mesh_devices == 2, "only the qualified p150x2 mesh is supported"),
+        (seq_len in TOKEN_DISPATCH_BUCKETS, "prefill bucket is not supported"),
+        (not sharded, "decode/sharded activations are not supported"),
+        (pack_gate_up, "stacked packed gate/up weights are required"),
+        (
+            (global_experts, local_experts, hidden, intermediate, top_k) == (256, 128, 2048, 512, 8),
+            "model or expert-partition dimensions do not match Laguna-XS-2.1 p150x2",
+        ),
+        (activation_dtype == ttnn.bfloat16, "BF16 token-dispatch activations are required"),
+        (
+            moe_ff13_dtype == ttnn.bfloat4_b and moe_ff2_dtype == ttnn.bfloat4_b,
+            "the qualified routed-expert weight policy is BFP4/BFP4",
+        ),
+        (ccl_dtype == ttnn.bfloat16, "the qualified routed accumulation uses BF16 CCL"),
+        (moe_fidelity == "LoFi", "the qualified routed-expert fidelity is LoFi"),
+    )
+    for passed, reason in checks:
+        if not passed:
+            return False, reason
+    return True, "eligible"
+
+
+def _cache_layer_identity(layer_idx: int, cache_namespace: str | None = None) -> int | str:
+    """Return the cache-layer identity without changing established target keys.
+
+    Draft models can reuse target layer numbers while owning different weights.  An
+    explicit namespace keeps those converted tensor caches disjoint; ``None`` retains
+    the byte-for-byte target-model key used before this option existed.
+    """
+
+    if cache_namespace is None:
+        return layer_idx
+    if not isinstance(cache_namespace, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", cache_namespace):
+        raise ValueError(
+            "cache_namespace must start with an alphanumeric character and contain only "
+            "letters, digits, '.', '_', or '-'"
+        )
+    return f"{cache_namespace}_L{layer_idx}"
+
+
+def _build_expert_row_dispatch(
+    topk_indices: torch.Tensor,
+    topk_weights: torch.Tensor,
+    *,
+    expert_start: int,
+    expert_count: int,
+) -> dict[str, torch.Tensor]:
+    """Build the stable token-to-local-expert packing contract on the host.
+
+    This is an executable specification for a future token-sparse device kernel, not a
+    runtime fallback: moving router output or activations through the host would erase the
+    prefill win.  Entries are ordered by ``(local_expert, token, top-k slot)``; the returned
+    offsets therefore delimit the selected input rows for every local expert without ever
+    materialising ``[tokens, local_experts, hidden]``.
+
+    Zero-weight routes are omitted because they cannot contribute to the weighted expert
+    sum.  That also matches ``sparse_matmul``'s current interpretation of a zero routing
+    entry as inactive.
+    """
+    if topk_indices.shape != topk_weights.shape:
+        raise ValueError(
+            f"top-k index/weight shapes must match, got {tuple(topk_indices.shape)} and " f"{tuple(topk_weights.shape)}"
+        )
+    if topk_indices.ndim < 2:
+        raise ValueError(f"top-k tensors must have rank >= 2, got rank {topk_indices.ndim}")
+    if expert_start < 0 or expert_count <= 0:
+        raise ValueError(f"invalid local expert range: start={expert_start}, count={expert_count}")
+
+    top_k = topk_indices.shape[-1]
+    num_tokens = topk_indices.numel() // top_k
+    indices = topk_indices.reshape(num_tokens, top_k).to(torch.int64)
+    weights = topk_weights.reshape(num_tokens, top_k)
+    token_indices = torch.arange(num_tokens, device=indices.device, dtype=torch.int64).unsqueeze(1).expand_as(indices)
+    slot_indices = torch.arange(top_k, device=indices.device, dtype=torch.int64).unsqueeze(0).expand_as(indices)
+
+    local_experts = indices - expert_start
+    selected = (local_experts >= 0) & (local_experts < expert_count) & (weights != 0)
+    packed_tokens = token_indices[selected]
+    packed_slots = slot_indices[selected]
+    packed_experts = local_experts[selected]
+    packed_weights = weights[selected]
+
+    # Sorting a unique composite key by expert and token is stable, leaving duplicate
+    # (token, expert) routes in top-k-slot order.  Stable ordering is part of the combine
+    # contract and makes a future device implementation deterministic.
+    if packed_tokens.numel():
+        key = (packed_experts * num_tokens + packed_tokens) * top_k + packed_slots
+        order = torch.argsort(key, stable=True)
+        packed_tokens = packed_tokens[order]
+        packed_slots = packed_slots[order]
+        packed_experts = packed_experts[order]
+        packed_weights = packed_weights[order]
+
+    counts = torch.bincount(packed_experts, minlength=expert_count)
+    offsets = torch.empty(expert_count + 1, device=indices.device, dtype=torch.int64)
+    offsets[0] = 0
+    offsets[1:] = torch.cumsum(counts, dim=0)
+    return {
+        "token_indices": packed_tokens,
+        "slot_indices": packed_slots,
+        "local_expert_indices": packed_experts,
+        "weights": packed_weights,
+        "expert_counts": counts,
+        "expert_offsets": offsets,
+    }
 
 
 class MultichipDecoder(OptimizedDecoder):
@@ -73,12 +238,23 @@ class MultichipDecoder(OptimizedDecoder):
 
     # Inherited runtime chunk knobs (MOE_PREFILL_CHUNK, PIPE_CHUNK, PREFILL_SDPA_CHUNK).
     PACK_GATE_UP = True
+    # Stage 1 of prefill dispatch: bound routed gate/up work to a hardware tile instead
+    # of taking one expert union across the full 256-token MoE chunk.  This remains
+    # tile-sparse (an expert selected by one row computes the other rows in that tile),
+    # not true token packing.  The down projection deliberately keeps the established
+    # full-T union because TTNN elementwise ops do not preserve a group×expert batch for
+    # input-A-sparse matmul. Keep this opt-in and unqualified; decode never uses it.
+    MOE_PREFILL_TILE_SPARSE = _parse_binary_env(MOE_PREFILL_TILE_SPARSE_ENV)
+    MOE_PREFILL_TILE_GROUP = TILE
 
     def __init__(self, cfg, weights, cos_table, sin_table, mesh_device, policy, meta):
         super().__init__(cfg, weights, cos_table, sin_table, mesh_device, policy, meta)
         self.D = meta["mesh_devices"]
         self.global_experts = meta["global_experts"]
         self.local_experts = meta["local_experts"]
+        self._token_dispatch_requested = _parse_binary_env(TOKEN_DISPATCH_ENV)
+        self._token_dispatch_state = None
+        self._token_dispatch_fallback_reason = "feature flag is disabled"
         # On a 1×1 MeshDevice, TTNN's explicit parallel decode-SDPA program is inaccurate once
         # the cache crosses long/non-aligned boundaries (observed PCC ~= 0 at positions 513/2048).
         # The default decode op is accurate at the same positions. Keep the proven explicit k64
@@ -132,6 +308,7 @@ class MultichipDecoder(OptimizedDecoder):
         cfg = LayerConfig.from_hf(hf_config, layer_idx)
         policy = policy or PrecisionPolicy()
         dev = mesh_device
+        cache_layer_identity = _cache_layer_identity(layer_idx, kwargs.get("cache_namespace"))
         D = mesh_device.get_num_devices()
         mesh_shape = tuple(mesh_device.shape)
         if D not in (1, 2, 4):
@@ -161,7 +338,7 @@ class MultichipDecoder(OptimizedDecoder):
                 layout=layout,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=replicate,
-                cache_key=weight_cache_key(name, layer_idx, f"rep_d{D}"),
+                cache_key=weight_cache_key(name, cache_layer_identity, f"rep_d{D}"),
             )
 
         def shard_tt(name, build, dim, dtype, layout=ttnn.TILE_LAYOUT):
@@ -172,7 +349,7 @@ class MultichipDecoder(OptimizedDecoder):
                 layout=layout,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=shard(dim),
-                cache_key=weight_cache_key(name, layer_idx, f"sh{dim}_d{D}"),
+                cache_key=weight_cache_key(name, cache_layer_identity, f"sh{dim}_d{D}"),
             )
 
         # ---- global shapes ----
@@ -328,6 +505,7 @@ class MultichipDecoder(OptimizedDecoder):
         cfg.num_kv_groups = lqh // lkv
 
         meta = {
+            "layer_idx": layer_idx,
             "dram_cores": dram_cores,
             "q_w": local_q_w,
             "kv_w": local_kv_w,
@@ -340,6 +518,7 @@ class MultichipDecoder(OptimizedDecoder):
         dec = cls(cfg, w, cos_2d, sin_2d, dev, policy, meta)
         if cls.PACK_GATE_UP:
             dec._pack_gate_up()
+        dec._setup_token_dispatch()
         return dec
 
     def _pack_gate_up(self):
@@ -376,6 +555,137 @@ class MultichipDecoder(OptimizedDecoder):
         else:
             pack_dram_pair("mlp_gate", "mlp_up", "mlp_gate_up", self.cfg.intermediate)
 
+    def _token_dispatch_guard(self, seq_len: int, sharded: bool) -> tuple[bool, str]:
+        """Check the qualified path contract before every dispatch attempt."""
+
+        eligible, reason = _token_dispatch_eligibility(
+            enabled=self._token_dispatch_requested,
+            layer_idx=self.meta["layer_idx"],
+            is_moe=self.cfg.is_moe,
+            mesh_devices=self.D,
+            seq_len=seq_len,
+            sharded=sharded,
+            pack_gate_up=self.PACK_GATE_UP,
+            global_experts=self.global_experts,
+            local_experts=self.local_experts,
+            hidden=self.cfg.hidden,
+            intermediate=self.cfg.moe_intermediate,
+            top_k=self.cfg.top_k,
+            activation_dtype=self.policy.activation,
+            moe_ff13_dtype=self.policy.moe_ff13,
+            moe_ff2_dtype=self.policy.moe_ff2,
+            ccl_dtype=self.policy.ccl,
+            moe_fidelity=self.policy.fid_moe,
+        )
+        if eligible and self._token_dispatch_state is None:
+            return False, self._token_dispatch_fallback_reason
+        return eligible, reason
+
+    def _setup_token_dispatch(self) -> None:
+        """Build the small local-only routing state for the opt-in D2 path.
+
+        No state is allocated unless the flag and static model policy match.
+        Bucket-specific dispatch/combine wrappers contain configuration only;
+        their large buffers are allocated per invocation by the TTNN ops.
+        """
+
+        eligible, reason = _token_dispatch_eligibility(
+            enabled=self._token_dispatch_requested,
+            layer_idx=self.meta["layer_idx"],
+            is_moe=self.cfg.is_moe,
+            mesh_devices=self.D,
+            seq_len=min(TOKEN_DISPATCH_BUCKETS),
+            sharded=False,
+            pack_gate_up=self.PACK_GATE_UP,
+            global_experts=self.global_experts,
+            local_experts=self.local_experts,
+            hidden=self.cfg.hidden,
+            intermediate=self.cfg.moe_intermediate,
+            top_k=self.cfg.top_k,
+            activation_dtype=self.policy.activation,
+            moe_ff13_dtype=self.policy.moe_ff13,
+            moe_ff2_dtype=self.policy.moe_ff2,
+            ccl_dtype=self.policy.ccl,
+            moe_fidelity=self.policy.fid_moe,
+        )
+        if not eligible:
+            self._token_dispatch_fallback_reason = reason
+            return
+        if "exp_gate_up" not in self.w or "exp_down" not in self.w:
+            self._token_dispatch_fallback_reason = "stacked routed-expert tensors are unavailable"
+            return
+
+        dispatch_group_size = 1
+        num_dispatch_groups = self.D
+        dispatch_table_host = ExpertMapping.create_dispatch_table(
+            num_routed_experts=self.global_experts,
+            dispatch_group_size=dispatch_group_size,
+            num_dispatch_groups=num_dispatch_groups,
+        )
+        routing_setup = TtMoERoutingSetup(
+            mesh_device=self.device,
+            expert_dispatch_table=dispatch_table_host,
+            num_links=1,
+            experts_per_chip=self.local_experts,
+        )
+        dispatch_table = TtDispatchModule.shard_expert_dispatch_table(self.device, dispatch_table_host, dispatch_axis=0)
+        global_expert_idx = ttnn.from_torch(
+            ExpertMapping.create_global_expert_idx_table(
+                experts_per_chip=self.local_experts,
+                dispatch_group_size=dispatch_group_size,
+                num_dispatch_groups=num_dispatch_groups,
+            ),
+            mesh_mapper=get_ep_mesh_mapper(self.device),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            dtype=ttnn.uint32,
+        )
+        global_expert_idx = ttnn.squeeze(ttnn.squeeze(global_expert_idx, 0), 0)
+
+        bucket_modules = {}
+        for seq_len in sorted(TOKEN_DISPATCH_BUCKETS):
+            # Worst case: every one of T*K routes is local, plus at most 31
+            # padding rows for each local expert's tile-aligned region.
+            max_dispatch_rows = seq_len * self.cfg.top_k + (TILE - 1) * self.local_experts
+            bucket_modules[seq_len] = {
+                "dispatch": TtDispatchModule(
+                    mesh_device=self.device,
+                    dispatch_group_size=dispatch_group_size,
+                    experts_per_chip=self.local_experts,
+                    num_routed_experts=self.global_experts,
+                    num_experts_per_tok=self.cfg.top_k,
+                    metadata_len=TOKEN_DISPATCH_METADATA_LEN,
+                    max_dispatch_buffer_token_size=max_dispatch_rows,
+                    seq_len_per_chip=seq_len,
+                    emb_dim=self.cfg.hidden,
+                    cluster_axis=0,
+                    num_links=1,
+                    topology=ttnn.Topology.Linear,
+                ),
+                "combine": TtCombineModule(
+                    mesh_device=self.device,
+                    dispatch_group_size=dispatch_group_size,
+                    num_dispatch_groups=num_dispatch_groups,
+                    experts_per_chip=self.local_experts,
+                    num_experts_per_tok=self.cfg.top_k,
+                    seq_len_per_chip=seq_len,
+                    cluster_axis=0,
+                    num_links=1,
+                    topology=ttnn.Topology.Linear,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    init_zeros=True,
+                ),
+                "max_dispatch_rows": max_dispatch_rows,
+            }
+
+        self._token_dispatch_state = {
+            "routing_setup": routing_setup,
+            "dispatch_table": dispatch_table,
+            "global_expert_idx": global_expert_idx,
+            "buckets": bucket_modules,
+        }
+        self._token_dispatch_fallback_reason = "eligible"
+
     # ---- KV cache / page table (replicated init; each device holds its own local KV heads) ---- #
     def alloc_kv_cache(self, max_users, max_seq_len, block_size=32, dtype=None):
         dtype = dtype or self.policy.kv_cache
@@ -411,6 +721,139 @@ class MultichipDecoder(OptimizedDecoder):
         )
 
     # ---- MoE (Expert Parallel) --------------------------------------------- #
+    def _token_dispatch_router(self, ln_flat, seq_len: int):
+        """Run the established 256-row router programs, then concatenate routes.
+
+        The 8192-token qualification showed that one whole-M router changes
+        roughly 18% of top-k slots. Keeping the existing slice boundaries is
+        therefore an accuracy contract, even though dispatch/experts operate on
+        the whole outer prefill bucket.
+        """
+
+        weights = []
+        indices = []
+        cfg = self.cfg
+        for start in range(0, seq_len, self.MOE_PREFILL_CHUNK):
+            end = min(start + self.MOE_PREFILL_CHUNK, seq_len)
+            chunk = ttnn.slice(ln_flat, [0, 0, start, 0], [1, 1, end, cfg.hidden])
+            logits = ttnn.linear(chunk, self.w["gate_w"], compute_kernel_config=self._ck_router)
+            scores = ttnn.sigmoid(logits)
+            selected_scores = ttnn.add(scores, self.w["e_bias"])
+            _, idx = ttnn.topk(ttnn.typecast(selected_scores, ttnn.bfloat16), k=cfg.top_k, dim=-1, sorted=True)
+            wsel = ttnn.gather(scores, dim=3, index=idx)
+            if cfg.norm_topk_prob:
+                wsel = ttnn.div(wsel, ttnn.sum(wsel, dim=3, keepdim=True))
+            if cfg.routed_scaling != 1.0:
+                wsel = ttnn.multiply(wsel, cfg.routed_scaling)
+            weights.append(ttnn.reshape(ttnn.to_layout(wsel, ttnn.ROW_MAJOR_LAYOUT), (1, end - start, cfg.top_k)))
+            indices.append(ttnn.reshape(ttnn.to_layout(idx, ttnn.ROW_MAJOR_LAYOUT), (1, end - start, cfg.top_k)))
+        return ttnn.concat(weights, dim=1), ttnn.concat(indices, dim=1)
+
+    def _token_dispatch_shared(self, ln_flat, seq_len: int):
+        """Preserve the established 256-row shared-expert numerics."""
+
+        partials = []
+        cfg = self.cfg
+        for start in range(0, seq_len, self.MOE_PREFILL_CHUNK):
+            end = min(start + self.MOE_PREFILL_CHUNK, seq_len)
+            chunk = ttnn.slice(ln_flat, [0, 0, start, 0], [1, 1, end, cfg.hidden])
+            partials.append(
+                self._glu_mlp(
+                    chunk,
+                    "sh",
+                    cfg.hidden,
+                    cfg.shared_intermediate,
+                    self._ck_shared,
+                    False,
+                )
+            )
+        return ttnn.concat(partials, dim=2)
+
+    def _moe_token_dispatch(self, ln_flat, seq_len: int):
+        """Exact local-only token-to-expert prefill dispatch on p150x2.
+
+        Each column is a dispatch group of size one: it packs only routes for
+        that ASIC's contiguous 128 experts, runs compact FFNs directly from the
+        existing stacked BFP4 tensors, combines back to top-k slots, applies the
+        original router weights in the fused reduction, then performs the one
+        existing EP all-reduce.
+        """
+
+        state = self._token_dispatch_state
+        bucket = state["buckets"][seq_len]
+        cfg = self.cfg
+
+        weights, indices = self._token_dispatch_router(ln_flat, seq_len)
+        offsets, counts, region_offsets, histogram = state["routing_setup"](
+            ttnn_top_k_experts_indices=indices,
+            num_routed_experts=self.global_experts,
+            seq_len_per_chip=seq_len,
+            num_experts_per_tok=cfg.top_k,
+        )
+        ttnn.deallocate(histogram)
+
+        dispatch_input = ttnn.reshape(ln_flat, (1, seq_len, cfg.hidden))
+        dispatched, metadata = bucket["dispatch"](
+            dispatch_input,
+            weights,
+            indices,
+            offsets,
+            state["dispatch_table"],
+        )
+        dispatched_tiled = ttnn.to_layout(
+            ttnn.squeeze(ttnn.squeeze(dispatched, 0), 0),
+            ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+        )
+        ttnn.deallocate(dispatched)
+
+        expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe_stacked(
+            dispatched_tiled,
+            region_offsets,
+            counts,
+            state["global_expert_idx"],
+            self.w["exp_gate_up"],
+            self.w["exp_down"],
+            seq_len,
+            compute_kernel_config=self._ck_moe,
+            chunk_m_tiles_override=TOKEN_DISPATCH_CHUNK_M_TILES,
+        )
+        ttnn.deallocate(dispatched_tiled)
+
+        combined_slots = bucket["combine"](
+            ttnn.unsqueeze(ttnn.unsqueeze(expert_outputs, 0), 0),
+            metadata,
+            counts,
+            region_offsets,
+        )
+        ttnn.deallocate(expert_outputs)
+        ttnn.deallocate(metadata)
+        ttnn.deallocate(offsets)
+        ttnn.deallocate(counts)
+        ttnn.deallocate(region_offsets)
+
+        weights_5d = ttnn.unsqueeze(ttnn.unsqueeze(weights, dim=-1), dim=0)
+        routed_local = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+            combined_slots,
+            weights_5d,
+            indices,
+            state["dispatch_table"],
+            expert_dim=3,
+            output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        routed_local = ttnn.reshape(routed_local, (1, 1, seq_len, cfg.hidden))
+        ttnn.deallocate(combined_slots)
+        ttnn.deallocate(weights)
+        ttnn.deallocate(indices)
+
+        shared_partial = self._token_dispatch_shared(ln_flat, seq_len)
+        local_output = ttnn.add(routed_local, ttnn.reshape(shared_partial, (1, 1, seq_len, cfg.hidden)))
+        ttnn.deallocate(routed_local)
+        ttnn.deallocate(shared_partial)
+        output = self._reduce(local_output)
+        ttnn.deallocate(local_output)
+        return output
+
     def _moe(self, ln_flat, m, sharded):
         """Routed-expert MoE (EP=4). With PACK_GATE_UP, one packed gate+up sparse_matmul (split + SwiGLU on
         device); else the unpacked two-matmul baseline (``_moe_separate``). Both end in a ring all_reduce."""
@@ -430,15 +873,34 @@ class MultichipDecoder(OptimizedDecoder):
         if cfg.routed_scaling != 1.0:
             wsel = ttnn.multiply(wsel, cfg.routed_scaling)
         dense = ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)
-        dense_local = dense if self.D == 1 else ttnn.matmul(
-            dense, self.w["ep_sel"], compute_kernel_config=self._ck_router
+        dense_local = (
+            dense if self.D == 1 else ttnn.matmul(dense, self.w["ep_sel"], compute_kernel_config=self._ck_router)
         )
-        union = ttnn.sum(dense_local, dim=2, keepdim=True)
+        # Preserve the established full-T union for the down projection.  The
+        # optional grouped union applies only to gate/up below.
+        full_union = ttnn.sum(dense_local, dim=2, keepdim=True)
+        group = self.MOE_PREFILL_TILE_GROUP
+        tile_sparse = self.MOE_PREFILL_TILE_SPARSE and not sharded and T >= group and T % group == 0
+        if tile_sparse:
+            # A sparse_matmul sparsity entry selects one complete M tile, so use one
+            # routing mask per 32 token rows.  The old mask reduced all T rows and
+            # caused an expert selected once to run over every row in the MoE chunk.
+            # Keeping group == the input tile height avoids padding extra compute.
+            groups = T // group
+            dense_grouped = ttnn.reshape(dense_local, (1, groups, group, LE))
+            union = ttnn.sum(dense_grouped, dim=2, keepdim=True)
+            a = ttnn.reshape(ln_flat, (1, groups, group, H))
+            matmul_m = group
+        else:
+            groups = 1
+            union = full_union
+            a = ttnn.reshape(ln_flat, (1, 1, T, H))
+            matmul_m = T
         sparsity = ttnn.to_layout(union, ttnn.ROW_MAJOR_LAYOUT)
-        a = ttnn.reshape(ln_flat, (1, 1, T, H))
+        down_sparsity = ttnn.to_layout(full_union, ttnn.ROW_MAJOR_LAYOUT) if tile_sparse else sparsity
         moe_mem = ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG
         otile = ttnn.Tile([TILE, TILE])
-        gu_pc = _sparse_pc(2 * I, T, H)  # packed gate+up, N = 2*I
+        gu_pc = _sparse_pc(2 * I, matmul_m, H)  # packed gate+up, N = 2*I
         gu = ttnn.sparse_matmul(
             a,
             self.w["exp_gate_up"],
@@ -448,7 +910,16 @@ class MultichipDecoder(OptimizedDecoder):
             memory_config=moe_mem,
             output_tile=otile,
         )
-        gu = ttnn.reshape(gu, (1, LE, T, 2 * I))
+        if tile_sparse:
+            # sparse_matmul orders output batches as A-batches then B-batches:
+            # [group, local_expert, row, channel]. Restore expert-major token
+            # order after the grouped gate/up projection. The down projection
+            # then follows the established full-T union path.
+            gu = ttnn.reshape(gu, (groups, LE, group, 2 * I))
+            gu = ttnn.permute(gu, (1, 0, 2, 3))
+            gu = ttnn.reshape(gu, (1, LE, T, 2 * I))
+        else:
+            gu = ttnn.reshape(gu, (1, LE, T, 2 * I))
         gate_o = ttnn.slice(gu, [0, 0, 0, 0], [1, LE, T, I])
         up_o = ttnn.slice(gu, [0, 0, 0, I], [1, LE, T, 2 * I])
         glu = ttnn.mul(ttnn.silu(gate_o), up_o)
@@ -456,7 +927,7 @@ class MultichipDecoder(OptimizedDecoder):
         down_o = ttnn.sparse_matmul(
             glu,
             self.w["exp_down"],
-            sparsity=sparsity,
+            sparsity=down_sparsity,
             is_input_a_sparse=True,
             program_config=dn_pc,
             compute_kernel_config=self._ck_moe,
@@ -498,9 +969,7 @@ class MultichipDecoder(OptimizedDecoder):
         dense = ttnn.scatter(ttnn.zeros_like(logits), dim=3, index=idx, src=wsel)  # [1,1,T,GE] replicated
         # --- EP selection: replicated 256-wide -> device-local contiguous 64-wide (SPMD-safe matmul) ---
         dense_local = (
-            dense
-            if self.D == 1
-            else ttnn.matmul(dense, self.w["ep_sel"], compute_kernel_config=self._ck_router)
+            dense if self.D == 1 else ttnn.matmul(dense, self.w["ep_sel"], compute_kernel_config=self._ck_router)
         )  # [1,1,T,LE]
         union = ttnn.sum(dense_local, dim=2, keepdim=True)  # [1,1,1,LE]
         sparsity = ttnn.to_layout(union, ttnn.ROW_MAJOR_LAYOUT)
@@ -579,6 +1048,11 @@ class MultichipDecoder(OptimizedDecoder):
         if not cfg.is_moe:
             partial = self._glu_mlp(ln_flat, "mlp", cfg.hidden, cfg.intermediate, self._ck_dense, sharded)
             return self._reduce(ttnn.reshape(partial, (1, 1, T, cfg.hidden)))
+        use_token_dispatch, reason = self._token_dispatch_guard(T, sharded)
+        if use_token_dispatch:
+            return self._moe_token_dispatch(ln_flat, T)
+        if self._token_dispatch_requested:
+            self._token_dispatch_fallback_reason = reason
         if T <= self.MOE_PREFILL_CHUNK:
             return self._moe(ln_flat, T, sharded)
         outs = []
@@ -647,9 +1121,7 @@ class MultichipDecoder(OptimizedDecoder):
         chunk_start_idx_tensor = None
         if runtime_offsets is not None:
             if tuple(runtime_offsets.chunk_lengths) != (int(seq),):
-                raise ValueError(
-                    f"single-shot runtime chunks {runtime_offsets.chunk_lengths} do not match seq {seq}"
-                )
+                raise ValueError(f"single-shot runtime chunks {runtime_offsets.chunk_lengths} do not match seq {seq}")
             chunk_start_idx_tensor = runtime_offsets.chunk_start_idxs[0]
         attn = self._prefill_attention(
             q,
@@ -694,16 +1166,12 @@ class MultichipDecoder(OptimizedDecoder):
         outs = []
         expected_chunks = tuple(min(CH, seq - c) for c in range(0, seq, CH))
         if runtime_offsets is not None and tuple(runtime_offsets.chunk_lengths) != expected_chunks:
-            raise ValueError(
-                f"pipelined runtime chunks {runtime_offsets.chunk_lengths} do not match {expected_chunks}"
-            )
+            raise ValueError(f"pipelined runtime chunks {runtime_offsets.chunk_lengths} do not match {expected_chunks}")
         if rope_mats is not None and len(rope_mats) != len(expected_chunks):
             raise ValueError(f"pipelined RoPE has {len(rope_mats)} chunks, expected {len(expected_chunks)}")
         fill_base = int(fill_page_table_base_pos)
         if int(start_pos) < fill_base or (int(start_pos) - fill_base) % bs:
-            raise ValueError(
-                f"prefill start {start_pos} and fill page-table base {fill_base} are not block aligned"
-            )
+            raise ValueError(f"prefill start {start_pos} and fill page-table base {fill_base} are not block aligned")
         for chunk_idx, c in enumerate(range(0, seq, CH)):
             ch = min(CH, seq - c)
             gpos = start_pos + c
@@ -726,13 +1194,9 @@ class MultichipDecoder(OptimizedDecoder):
             ttnn.experimental.paged_fill_cache(kv_cache["k"], self._cast_fill(k, cdt), chunk_pt, batch_idx=user_id)
             ttnn.experimental.paged_fill_cache(kv_cache["v"], self._cast_fill(v, cdt), chunk_pt, batch_idx=user_id)
             user_pt = ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[1]])
-            start_tensor = (
-                runtime_offsets.chunk_start_idxs[chunk_idx] if runtime_offsets is not None else None
-            )
+            start_tensor = runtime_offsets.chunk_start_idxs[chunk_idx] if runtime_offsets is not None else None
             start_kw = (
-                {"chunk_start_idx_tensor": start_tensor}
-                if start_tensor is not None
-                else {"chunk_start_idx": gpos}
+                {"chunk_start_idx_tensor": start_tensor} if start_tensor is not None else {"chunk_start_idx": gpos}
             )
             if not cfg.is_sliding:
                 attn = ttnn.transformer.chunked_scaled_dot_product_attention(

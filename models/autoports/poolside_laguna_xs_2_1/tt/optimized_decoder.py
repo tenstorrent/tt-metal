@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Optimized TTNN decoder for poolside/Laguna-XS-2.1 (single Blackhole p300c, 1x1 mesh).
+"""Optimized TTNN decoder for poolside/Laguna-XS-2.1 on Blackhole P150 ASIC meshes.
 
 Optimizes the functional decoder (``tt/functional_decoder.py``) for on-device
 performance while preserving its prefill/decode semantics, paged KV-cache behavior,
@@ -602,8 +602,9 @@ class OptimizedDecoder(LightweightModule):
         self._use_fused_rope = os.environ.get("TT_LAGUNA_FUSED_ROPE", "1") == "1"
         # W3a: fused decode QKV head-split output template (HEIGHT_SHARDED, one user/core). The op
         # (nlp_create_qkv_heads_decode) derives q/k/v shard specs from this; grid must cover >= B cores.
-        # Mirrors attention_1d.py Blackhole decode: 32 cores, shard (TILE, head_dim). Gated by
-        # TT_LAGUNA_FUSE_QKV_DECODE (default off until fast-loop PCC + timing validate).
+        # Mirrors attention_1d.py Blackhole decode: 32 cores, shard (TILE, head_dim). Correctness is
+        # qualified at B=1/32, but traced D1 layer latency regressed 0.83%; keep default off. The p150x2
+        # MultichipDecoder override does not use this branch. See fused_qkv_decode_qualification.md.
         self._fuse_qkv_decode = os.environ.get("TT_LAGUNA_FUSE_QKV_DECODE", "0") == "1"
         self._qkv_heads_decode_memcfg = ttnn.create_sharded_memory_config(
             shape=(TILE, self.cfg.head_dim),
@@ -1043,9 +1044,7 @@ class OptimizedDecoder(LightweightModule):
         outs = []
         fill_base = int(fill_page_table_base_pos)
         if int(start_pos) < fill_base or (int(start_pos) - fill_base) % bs:
-            raise ValueError(
-                f"prefill start {start_pos} and fill page-table base {fill_base} are not block aligned"
-            )
+            raise ValueError(f"prefill start {start_pos} and fill page-table base {fill_base} are not block aligned")
         for c in range(0, seq, CH):
             ch = min(CH, seq - c)
             gpos = start_pos + c

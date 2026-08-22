@@ -12,7 +12,9 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
 
-ttnn::Tensor unified_routed_expert_ffn(
+namespace {
+
+ttnn::Tensor unified_routed_expert_ffn_impl(
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
@@ -22,7 +24,9 @@ ttnn::Tensor unified_routed_expert_ffn(
     uint32_t local_expert_id,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output,
-    const std::optional<ttnn::Tensor>& expert_region_offsets) {
+    const std::optional<ttnn::Tensor>& expert_region_offsets,
+    const std::optional<uint32_t>& chunk_m_tiles_override,
+    bool stacked_packed_weights) {
     // Single-op fused per-expert FFN. One device Program runs gate matmul,
     // up matmul, silu, multiply, down matmul as four phases inside the same
     // kernel. The kernel reads counts[global_expert_idx_table[local_expert_id]]
@@ -47,17 +51,25 @@ ttnn::Tensor unified_routed_expert_ffn(
     constexpr uint32_t kMaxChunkMTiles = 64;  // per_core_M <= 8 (L1 cap)
     const uint32_t M_tiles_full = x.padded_shape()[-2] / 32;
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
-    uint32_t best_num_chunks = (M_tiles_full + kMinChunkMTiles - 1) / kMinChunkMTiles + 1;
-    uint32_t best_waste = kMaxChunkMTiles + 1;
-    for (uint32_t cand = kMinChunkMTiles; cand <= kMaxChunkMTiles; cand += kGridY) {
-        const uint32_t num_chunks = (M_tiles_full + cand - 1) / cand;
-        const uint32_t rem = M_tiles_full % cand;
-        const uint32_t waste = (rem == 0) ? 0 : (cand - rem);
-        const bool better = (num_chunks < best_num_chunks) || (num_chunks == best_num_chunks && waste < best_waste);
-        if (better) {
-            best_num_chunks = num_chunks;
-            best_waste = waste;
-            chunk_M_tiles = cand;
+    if (chunk_m_tiles_override.has_value()) {
+        chunk_M_tiles = chunk_m_tiles_override.value();
+        TT_FATAL(
+            chunk_M_tiles >= kMinChunkMTiles && chunk_M_tiles <= kMaxChunkMTiles && chunk_M_tiles % kGridY == 0,
+            "chunk_m_tiles_override must be one of {{16, 24, 32, 40, 48, 56, 64}}, got {}",
+            chunk_M_tiles);
+    } else {
+        uint32_t best_num_chunks = (M_tiles_full + kMinChunkMTiles - 1) / kMinChunkMTiles + 1;
+        uint32_t best_waste = kMaxChunkMTiles + 1;
+        for (uint32_t cand = kMinChunkMTiles; cand <= kMaxChunkMTiles; cand += kGridY) {
+            const uint32_t num_chunks = (M_tiles_full + cand - 1) / cand;
+            const uint32_t rem = M_tiles_full % cand;
+            const uint32_t waste = (rem == 0) ? 0 : (cand - rem);
+            const bool better = (num_chunks < best_num_chunks) || (num_chunks == best_num_chunks && waste < best_waste);
+            if (better) {
+                best_num_chunks = num_chunks;
+                best_waste = waste;
+                chunk_M_tiles = cand;
+            }
         }
     }
 
@@ -70,10 +82,52 @@ ttnn::Tensor unified_routed_expert_ffn(
         global_expert_idx_table,
         local_expert_id,
         chunk_M_tiles,
+        stacked_packed_weights,
         compute_kernel_config.has_value() ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
                                           : std::nullopt,
         output,
         expert_region_offsets);
+}
+
+ttnn::Tensor make_shared_expert_output(const ttnn::Tensor& dispatched_buffer) {
+    // Zero-initialized (not ttnn::empty): the FFN writer only writes valid
+    // expert rows. Padding and zero-count expert regions must remain zero for
+    // combine/reduction.
+    return ttnn::zeros_like(
+        dispatched_buffer,
+        /*dtype=*/std::nullopt,
+        /*layout=*/std::nullopt,
+        /*device=*/std::nullopt,
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
+}
+
+}  // namespace
+
+ttnn::Tensor unified_routed_expert_ffn(
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& gate_proj,
+    const ttnn::Tensor& up_proj,
+    const ttnn::Tensor& down_proj,
+    const ttnn::Tensor& counts,
+    const ttnn::Tensor& global_expert_idx_table,
+    uint32_t local_expert_id,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& output,
+    const std::optional<ttnn::Tensor>& expert_region_offsets,
+    const std::optional<uint32_t>& chunk_m_tiles_override) {
+    return unified_routed_expert_ffn_impl(
+        x,
+        gate_proj,
+        up_proj,
+        down_proj,
+        counts,
+        global_expert_idx_table,
+        local_expert_id,
+        compute_kernel_config,
+        output,
+        expert_region_offsets,
+        chunk_m_tiles_override,
+        /*stacked_packed_weights=*/false);
 }
 
 ttnn::Tensor unified_routed_expert_moe(
@@ -85,7 +139,8 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& up_projs,
     const std::vector<ttnn::Tensor>& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<uint32_t>& chunk_m_tiles_override) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -123,12 +178,7 @@ ttnn::Tensor unified_routed_expert_moe(
     // on-device ttnn::fill path — no host-side std::vector(volume) + H2D copy
     // (which plain ttnn::zeros would incur for a large dispatch buffer) and no
     // device-pointer deref here.
-    auto expert_outputs = ttnn::zeros_like(
-        dispatched_buffer,
-        /*dtype=*/std::nullopt,
-        /*layout=*/std::nullopt,
-        /*device=*/std::nullopt,
-        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
+    auto expert_outputs = make_shared_expert_output(dispatched_buffer);
     for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
         auto tokens = ttnn::extract(
             dispatched_buffer,
@@ -150,7 +200,65 @@ ttnn::Tensor unified_routed_expert_moe(
             local_expert,
             compute_kernel_config,
             expert_outputs,
-            expert_region_offsets);
+            expert_region_offsets,
+            chunk_m_tiles_override);
+    }
+    return expert_outputs;
+}
+
+ttnn::Tensor unified_routed_expert_moe_stacked(
+    const ttnn::Tensor& dispatched_buffer,
+    const ttnn::Tensor& expert_region_offsets,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& global_expert_idx_table,
+    const ttnn::Tensor& gate_up_projs,
+    const ttnn::Tensor& down_projs,
+    uint32_t max_dispatched_tokens_per_expert,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<uint32_t>& chunk_m_tiles_override) {
+    TT_FATAL(
+        gate_up_projs.logical_shape().rank() == 4,
+        "stacked gate_up_projs must have rank 4, got rank {}",
+        gate_up_projs.logical_shape().rank());
+    TT_FATAL(
+        down_projs.logical_shape().rank() == 4,
+        "stacked down_projs must have rank 4, got rank {}",
+        down_projs.logical_shape().rank());
+    TT_FATAL(
+        gate_up_projs.logical_shape()[0] == 1 && down_projs.logical_shape()[0] == 1,
+        "stacked gate_up/down leading dimensions must both be 1 (got {} and {})",
+        gate_up_projs.logical_shape()[0],
+        down_projs.logical_shape()[0]);
+    const uint32_t experts_per_chip = static_cast<uint32_t>(gate_up_projs.logical_shape()[-3]);
+    TT_FATAL(experts_per_chip > 0, "Need at least one stacked expert per chip");
+    TT_FATAL(
+        static_cast<uint32_t>(down_projs.logical_shape()[-3]) == experts_per_chip,
+        "stacked gate_up/down expert dimensions must match (got {} and {})",
+        experts_per_chip,
+        down_projs.logical_shape()[-3]);
+
+    auto expert_outputs = make_shared_expert_output(dispatched_buffer);
+    for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
+        auto tokens = ttnn::extract(
+            dispatched_buffer,
+            expert_region_offsets,
+            expert_token_counts,
+            global_expert_idx_table,
+            local_expert,
+            max_dispatched_tokens_per_expert);
+        expert_outputs = unified_routed_expert_ffn_impl(
+            tokens,
+            gate_up_projs,
+            gate_up_projs,
+            down_projs,
+            expert_token_counts,
+            global_expert_idx_table,
+            local_expert,
+            compute_kernel_config,
+            expert_outputs,
+            expert_region_offsets,
+            chunk_m_tiles_override,
+            /*stacked_packed_weights=*/true);
     }
     return expert_outputs;
 }

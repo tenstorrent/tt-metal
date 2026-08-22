@@ -63,6 +63,9 @@ class Sampling1DConfig:
     num_gather_links: int = 1
     sampling_memory_config: Optional[ttnn.MemoryConfig] = None  # None → DRAM_MEMORY_CONFIG
     allow_force_argmax: bool = False
+    # Experimental compact distributed argmax. Default-off because P150x2 qualification found it
+    # substantially slower than both the original full-vocabulary force-argmax and generic k=1.
+    use_compact_argmax: bool = False
     num_argmax_gather_links: Optional[int] = None  # None → same as num_gather_links
     ag_topology: Optional[ttnn.Topology] = None  # None → Topology.Linear
     # Pad each per-device logit shard up to the next power of 2 before ttnn.topk. Big device-perf
@@ -74,6 +77,10 @@ class Sampling1DConfig:
     # --- Persistent buffer specs (LazyBuffer | ttnn.Tensor | None) ---
     # Static index buffers (computed from vocab_size + num_devices, never mutated)
     index_offsets: LazyBuffer | ttnn.Tensor | None = None  # [1,1,32,max_top_k*num_devices], int32, TILE
+    # A TT tile is the minimum practical CCL payload.  The distributed-argmax path puts one
+    # real candidate in each 32-wide device block and fills the other slots with -inf/zero.
+    # These offsets turn the gathered shard-local indices into global vocabulary indices.
+    argmax_index_offsets: LazyBuffer | ttnn.Tensor | None = None  # [1,1,32,32*num_devices], uint32, TILE
     local_indices: LazyBuffer | ttnn.Tensor | None = (
         None  # [1,1,32,W], uint16, TILE (W=vocab for 1x1, per_dev_vocab otherwise)
     )
@@ -94,9 +101,10 @@ class Sampling1DConfig:
             return False
         if self.mesh_device.get_num_devices() > 1 and self.tt_ccl is None:
             return False
-        return all(
-            self._buf_resolved(getattr(self, f)) for f in ("index_offsets", "local_indices", "seeds", "user_ids")
-        )
+        required = ["index_offsets", "local_indices", "seeds", "user_ids"]
+        if self.use_compact_argmax and self.mesh_device.get_num_devices() > 1:
+            required.append("argmax_index_offsets")
+        return all(self._buf_resolved(getattr(self, field)) for field in required)
 
 
 # ---------------------------------------------------------------------------
@@ -141,12 +149,14 @@ class Sampling1D(LightweightModule):
         else:
             self._topk = self._topk_multi_device
 
-        # Argmax strategy: single vs multi-device
+        # Preserve the established force-argmax implementation by default. The compact candidate
+        # reduction is retained behind an explicit opt-in for correctness experiments only.
         num_devices = self.config.mesh_device.get_num_devices()
-        if num_devices > 1:
-            self._pre_argmax_gather = self._argmax_all_gather
+        if num_devices > 1 and self.config.use_compact_argmax:
+            self._argmax = self._argmax_multi_device
         else:
-            self._pre_argmax_gather = self._argmax_noop
+            self._argmax = self._argmax_default
+            self._pre_argmax_gather = self._argmax_all_gather if num_devices > 1 else self._argmax_noop
 
         # Memory config strategy for top-k post-processing
         cfg = self.config
@@ -183,6 +193,9 @@ class Sampling1D(LightweightModule):
         cfg = self.config
 
         self._index_offsets = _materialize(cfg.index_offsets)
+        self._argmax_index_offsets = (
+            _materialize(cfg.argmax_index_offsets) if cfg.argmax_index_offsets is not None else None
+        )
         self._local_indices = _materialize(cfg.local_indices)
         self._seeds = _materialize(cfg.seeds)
         self._user_ids = _materialize(cfg.user_ids)
@@ -254,28 +267,27 @@ class Sampling1D(LightweightModule):
         """Dispatcher."""
         return self.decode_forward(logits, **kwargs)
 
-    # -- Argmax path (port from tt_sampling.py:310-341) -----------------------
+    # -- Argmax path ----------------------------------------------------------
 
     def _sample_argmax(self, logits, tt_out_tok):
+        tt_out_tok = self._argmax(logits, tt_out_tok)
+        # Argmax path never emits logprobs (main's contract: force-argmax is disabled whenever
+        # logprobs are requested). Return None unconditionally — do not call the calculator.
+        return tt_out_tok, None
+
+    def _argmax_default(self, logits, tt_out_tok):
+        """Established force-argmax path: gather distributed logits, then reduce."""
         logits = self._pre_argmax_gather(logits)
         x_untilized = ttnn.untilize(logits, use_multicore=True)
-        tt_out_tok = ttnn.argmax(
+        return ttnn.argmax(
             x_untilized,
             dim=-1,
             output_tensor=tt_out_tok,
             keepdim=False,
         )
-        # Argmax path never emits logprobs (main's contract: force-argmax is disabled whenever
-        # logprobs are requested). Return None unconditionally — do not call the calculator.
-        return tt_out_tok, None
 
     def _get_argmax_all_gather_config(self, cluster_axis):
-        """Clamp the tuned all-gather config to what the actual submesh supports.
-
-        Port of main's ``_get_force_argmax_all_gather_config`` (#44246): bound num_links to the
-        links available on the submesh, and force Linear topology below 8 devices (Ring routing
-        like D0→D12 only wraps cleanly on T3K-class 8-device groups).
-        """
+        """Clamp the tuned all-gather config to what the actual submesh supports."""
         cfg = self.config
         num_links = cfg.num_argmax_gather_links
         if hasattr(cfg.tt_ccl, "get_num_links"):
@@ -286,12 +298,7 @@ class Sampling1D(LightweightModule):
         return max(1, num_links), topology
 
     def _argmax_all_gather(self, logits):
-        """Multi-device: all-gather logits before argmax.
-
-        On ring-capable meshes (e.g. T3K 1×8) use Ring topology with no barrier semaphore to match the
-        model's logits gather and avoid trace-capture issues seen with some barrier-based configurations.
-        For other meshes, fall back to the clamped Linear+barrier path.
-        """
+        """Original multi-device force-argmax vocabulary gather."""
         cfg = self.config
         if default_topology(cfg.mesh_device) == ttnn.Topology.Ring:
             return ttnn.experimental.all_gather_async(
@@ -325,8 +332,84 @@ class Sampling1D(LightweightModule):
 
     @staticmethod
     def _argmax_noop(logits):
-        """Single-device: no gather needed."""
         return logits
+
+    def _argmax_multi_device(self, logits, tt_out_tok):
+        """Distributed greedy argmax without a full-vocabulary all-gather.
+
+        Each device finds the argmax of its local vocabulary shard, reads only that winning value,
+        and all-gathers a single ``(value, local_index)`` candidate.  TT CCL moves tiled tensors, so
+        the one real candidate is padded to a 32-wide tile; this is still a fixed few KiB per device
+        instead of ``batch * vocab_shard`` logits.  The gathered local indices receive their static
+        shard offsets, and a final tiny argmax + gather selects the global token id.
+
+        Tie behavior matches a contiguous global ``argmax``: local argmax selects the first index in
+        a shard and the final argmax selects the lowest-numbered shard when maxima are equal.
+        """
+        cfg = self.config
+        cluster_shape = cfg.mesh_device.shape
+        sampling_cluster_axis = None if 1 in cluster_shape else 0
+
+        # Argmax accepts BF16/FP32.  Laguna's LM-head output may be BFP8, while the generic sampling
+        # path also compares BF16 values, so cast before both the index and selected-value operations.
+        x_bf16 = ttnn.typecast(logits, dtype=ttnn.bfloat16, sub_core_grids=cfg.sub_core_grids)
+        x_untilized = ttnn.untilize(x_bf16, use_multicore=True, sub_core_grids=cfg.sub_core_grids)
+        local_indices_rm = ttnn.argmax(x_untilized, dim=-1, keepdim=True)
+
+        local_indices = ttnn.to_layout(local_indices_rm, ttnn.TILE_LAYOUT)
+        local_values = ttnn.gather(x_bf16, dim=3, index=local_indices)
+
+        # One logical candidate, one physical TT tile. Padding to an explicit logical width of 32
+        # makes the CCL layout deterministic and lets each device's shard offset occupy one block.
+        local_values_padded = ttnn.pad(local_values, [(0, 0), (0, 0), (0, 0), (0, 31)], value=-sys.float_info.max)
+        local_indices_padded = ttnn.pad(local_indices, [(0, 0), (0, 0), (0, 0), (0, 31)], value=0)
+
+        gathered_values = self._perform_all_gather(
+            local_values_padded,
+            dim=3,
+            cluster_axis=sampling_cluster_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            num_links=cfg.num_argmax_gather_links,
+            buffer_key="SAMPLING_ARGMAX_VALUES",
+        )
+        gathered_indices = self._perform_all_gather(
+            local_indices_padded,
+            dim=3,
+            cluster_axis=sampling_cluster_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            num_links=cfg.num_argmax_gather_links,
+            buffer_key="SAMPLING_ARGMAX_INDICES",
+            dtype=ttnn.uint32,
+        )
+
+        global_candidates = ttnn.add(
+            gathered_indices,
+            self._argmax_index_offsets,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        gathered_values_rm = ttnn.untilize(gathered_values, use_multicore=True, sub_core_grids=cfg.sub_core_grids)
+        winner_rm = ttnn.argmax(gathered_values_rm, dim=-1, keepdim=True)
+        winner = ttnn.to_layout(winner_rm, ttnn.TILE_LAYOUT)
+
+        selected_global = ttnn.gather(global_candidates, dim=3, index=winner)
+        selected_global_rm = ttnn.untilize(selected_global, use_multicore=True)
+
+        # Keep all intermediates alive through the final device copy.  CCL and layout ops enqueue
+        # asynchronously on Blackhole; explicit early deallocation allowed candidate buffers to be
+        # reused before their consumers completed, corrupting the uint32 token with packed BF16 data.
+        # Python scope lifetime releases these short-lived tensors safely after this method returns.
+
+        if tt_out_tok is None:
+            # Match argmax(..., keepdim=False): remove the singleton vocabulary dimension.
+            return ttnn.reshape(selected_global_rm, tuple(selected_global_rm.shape[:-1]))
+
+        # Laguna feeds the sampled token back through a persistent [1,1,1,B] buffer while argmax's
+        # natural result is [1,1,B,1].  They have equal volume; reshape before the device-to-device
+        # copy so the preallocated-output contract remains exact and trace-safe.
+        selected_global_rm = ttnn.reshape(selected_global_rm, tuple(tt_out_tok.shape))
+        return ttnn.copy(selected_global_rm, tt_out_tok)
 
     # -- Top-k memory strategies (bound at init, no if-else in forward) -------
 
@@ -642,6 +725,23 @@ def _resolve_sampling1d_config(config: Sampling1DConfig) -> Sampling1DConfig:
     )
     to_set["index_offsets"] = _resolve_buf(config.index_offsets, idx_defaults, _make_index_offsets)
 
+    if config.use_compact_argmax and num_devices > 1:
+        # argmax_index_offsets: [1, 1, B, 32 * num_devices]. The compact payload is
+        # one tile per device, with only column zero carrying a real candidate.
+        def _make_argmax_index_offsets():
+            return _argmax_index_offsets_host(B, num_devices, V // num_devices)
+
+        argmax_idx_defaults = dict(
+            dtype=ttnn.uint32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=replicate_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        to_set["argmax_index_offsets"] = _resolve_buf(
+            config.argmax_index_offsets, argmax_idx_defaults, _make_argmax_index_offsets
+        )
+
     # local_indices: [1, 1, B, local_indices_width]
     # For multi-device: width = per_device_vocab (each device's shard)
     # For single-device split (multi_step_reduction): width = V (full vocab), so that
@@ -703,3 +803,22 @@ def _materialize(buf):
     if isinstance(buf, ttnn.Tensor):
         return buf
     return buf.get_device_buffer()
+
+
+def _argmax_index_offsets_host(batch_size: int, num_devices: int, per_device_vocab: int):
+    """Build the static global-index offsets for the compact distributed-argmax payload.
+
+    Kept as a hardware-independent helper so tile-block ordering and large-vocabulary integer
+    precision can be tested without opening devices.
+    """
+    import torch
+
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
+    if num_devices <= 0:
+        raise ValueError(f"num_devices must be positive, got {num_devices}")
+    if per_device_vocab <= 0:
+        raise ValueError(f"per_device_vocab must be positive, got {per_device_vocab}")
+    block_offsets = torch.arange(num_devices, dtype=torch.int64) * int(per_device_vocab)
+    row = torch.repeat_interleave(block_offsets, 32)
+    return row.reshape(1, 1, 1, -1).expand(1, 1, int(batch_size), -1).contiguous()

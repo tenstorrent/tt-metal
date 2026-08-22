@@ -13,6 +13,28 @@ PYTORCH_CPU_INDEX="${PYTORCH_CPU_INDEX:-https://download.pytorch.org/whl/cpu}"
 FORCE=0
 [ "${1:-}" = "--force" ] && FORCE=1
 
+vllm_plugin_is_allowed() {
+  local required="$1" plugin
+  local -a allowed_plugins
+  IFS=',' read -r -a allowed_plugins <<< "${VLLM_PLUGINS-}"
+  for plugin in "${allowed_plugins[@]}"; do
+    [ "$plugin" = "$required" ] && return 0
+  done
+  return 1
+}
+
+# Fail before an hours-long build if an inherited vLLM allowlist suppresses a
+# required Laguna runtime plugin. The model-local plugin owns the qualified tool
+# parser in every profile as well as prefix/hybrid cache-correctness hooks.
+if [ -n "${VLLM_PLUGINS+x}" ]; then
+  for required_plugin in tt tt_model_registry laguna_tt_ext; do
+    vllm_plugin_is_allowed "$required_plugin" || {
+      echo "ERROR: Laguna serving requires VLLM_PLUGINS to be unset or include the exact entry '$required_plugin'; got '${VLLM_PLUGINS}'" >&2
+      exit 2
+    }
+  done
+fi
+
 # Pins are read from requirements.txt so there is one place to bump them.
 req() { grep -m1 "^$1" "$MODEL_DIR/requirements.txt" | sed 's/[[:space:]]*#.*//'; }
 VLLM_PIN=$(req 'vllm==')
@@ -224,6 +246,19 @@ print(
     "  canonical prefix-cache admission patch: active "
     f"(quantum={DEFAULT_PREFIX_QUANTUM}, block={QUALIFIED_KV_BLOCK_SIZE})"
 )
+
+# Hybrid KV is opt-in, but its scheduler-policy and exact shared-pool sizing
+# wrappers must already be installed before a later hybrid launch reaches the
+# TT platform/worker hooks.
+from laguna_vllm_ext.hybrid_kv import hybrid_kv_patch_is_installed
+assert hybrid_kv_patch_is_installed(), "Laguna hybrid-KV compatibility wrapper NOT active"
+print("  hybrid-KV scheduler/block-pool compatibility wrapper: active")
+
+# Orderly vLLM shutdown must release Laguna's captured traces before the public
+# TT worker closes its mesh. The adapter destructor remains only a fallback.
+from laguna_vllm_ext.lifecycle import worker_lifecycle_patch_is_installed
+assert worker_lifecycle_patch_is_installed(), "Laguna worker lifecycle wrapper NOT active"
+print("  Laguna close-before-mesh worker lifecycle: active")
 
 import pytest
 import pytest_timeout  # noqa: F401

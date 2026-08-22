@@ -106,6 +106,54 @@ def test_optimized_path_active(device, hf_config, layer):
 
 
 # --------------------------------------------------------------------------- #
+# Experimental decode QKV fusion: prove the packed [Q|K|V] split itself.
+#
+# This is intentionally narrower than the end-to-end decode tests below.  It
+# catches head-order, logical-batch/padded-batch, and Blackhole interleaved-reader
+# regressions in the exact op/layout selected by TT_LAGUNA_FUSE_QKV_DECODE.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("batch", [1, 32])
+@pytest.mark.parametrize("num_heads", [48, 64], ids=["full_attention", "sliding_attention"])
+def test_fused_decode_qkv_split_matches_packed_layout(device, num_heads, batch):
+    num_kv_heads, head_dim = 8, 128
+    q_width = num_heads * head_dim
+    kv_width = num_kv_heads * head_dim
+    torch.manual_seed(1000 + num_heads + batch)
+    packed = torch.randn(1, 1, batch, q_width + 2 * kv_width, dtype=torch.bfloat16)
+    packed_tt = ttnn.from_torch(
+        packed,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_memcfg = ttnn.create_sharded_memory_config(
+        shape=(32, head_dim),
+        core_grid=ttnn.CoreGrid(y=4, x=8),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    q_tt, k_tt, v_tt = ttnn.experimental.nlp_create_qkv_heads_decode(
+        packed_tt,
+        num_heads=num_heads,
+        num_kv_heads=num_kv_heads,
+        overlap_qk_coregrid=True,
+        memory_config=output_memcfg,
+    )
+
+    expected = (
+        packed[..., :q_width].reshape(1, batch, num_heads, head_dim),
+        packed[..., q_width : q_width + kv_width].reshape(1, batch, num_kv_heads, head_dim),
+        packed[..., q_width + kv_width :].reshape(1, batch, num_kv_heads, head_dim),
+    )
+    for name, got_tt, want in zip(("q", "k", "v"), (q_tt, k_tt, v_tt), expected, strict=True):
+        got = ttnn.to_torch(got_tt)
+        assert got.shape == want.shape, f"{name} logical shape {tuple(got.shape)} != {tuple(want.shape)}"
+        assert torch.equal(got, want), f"{name} fused split changed packed head values at batch={batch}"
+
+
+# --------------------------------------------------------------------------- #
 # Prefill PCC — smoke, tile boundary, window boundary, just-over, non-aligned
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("seq", [8, 32, 100, 512, 513, 1024, 2048])

@@ -31,9 +31,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         if you need the extract/insert glue.
 
         Tensor requirements (enforced in validate_on_program_cache_miss):
-            * dtype: x must be BFLOAT8_B (BFLOAT16 path is untested and
-              rejected host-side; reintroduce when a real caller + PCC test
-              lands); gate/up/down any matmul-compatible weight dtype.
+            * dtype: x may be BFLOAT8_B (compact BFP8 intermediates/output)
+              or BFLOAT16 (BF16 intermediates/output); gate/up/down may use
+              any matmul-compatible weight dtype.
             * layout: all tensors TILE.
             * memory_config: all tensors DRAM-interleaved.
             * Blackhole-only — host expects 11x8 compute grid.
@@ -63,6 +63,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
                 start[global_id]/TILE tile-rows (direct-write mode), fusing the
                 ttnn::insert step. Requires ``output`` to be set. Defaults to
                 None (standalone per-expert output, rows start at 0).
+            chunk_m_tiles_override (int, optional): Force the M chunk size to
+                one of 16, 24, 32, 40, 48, 56, or 64 tiles. Defaults to the
+                existing automatic picker.
 
         Returns:
             ttnn.Tensor: (M_max, K=emb).
@@ -78,7 +81,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output") = nb::none(),
-        nb::arg("expert_region_offsets") = nb::none());
+        nb::arg("expert_region_offsets") = nb::none(),
+        nb::arg("chunk_m_tiles_override") = nb::none());
 
     ttnn::bind_function<"unified_routed_expert_moe", "ttnn.experimental.deepseek_prefill.">(
         mod,
@@ -109,6 +113,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
 
         Keyword Args:
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
+            chunk_m_tiles_override (int, optional): Force the per-expert M
+                chunk size to one of 16, 24, 32, 40, 48, 56, or 64 tiles.
+                Defaults to the existing automatic picker.
 
         Returns:
             ttnn.Tensor: expert outputs, same shape as dispatched_buffer.
@@ -123,7 +130,50 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("down_projs").noconvert(),
         nb::arg("max_dispatched_tokens_per_expert"),
         nb::kw_only(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("chunk_m_tiles_override") = nb::none());
+
+    ttnn::bind_function<"unified_routed_expert_moe_stacked", "ttnn.experimental.deepseek_prefill.">(
+        mod,
+        R"doc(
+        MoE composite for production EP-stacked weights.
+
+        This has the same dispatch/extract/direct-write behavior as
+        ``unified_routed_expert_moe``, but consumes the model's existing
+        expert-sharded tensors directly instead of a Python list of tensors:
+        ``gate_up_projs`` has shape ``[1, local_experts, emb, 2*hidden]``
+        with gate/up in the two halves of the last dimension, and
+        ``down_projs`` has shape ``[1, local_experts, hidden, emb]``.
+        Each per-expert program indexes its local expert slice in the reader;
+        no weight copy, slice, or host synchronization is performed.
+
+        Args:
+            dispatched_buffer (ttnn.Tensor): (max_dispatch, emb), TILE.
+            expert_region_offsets (ttnn.Tensor): UINT32 per-expert starts.
+            expert_token_counts (ttnn.Tensor): UINT32 per-expert counts.
+            global_expert_idx_table (ttnn.Tensor): UINT32 local->global IDs.
+            gate_up_projs (ttnn.Tensor): [1, LE, emb, 2*hidden].
+            down_projs (ttnn.Tensor): [1, LE, hidden, emb].
+            max_dispatched_tokens_per_expert (int): rows returned by extract.
+
+        Keyword Args:
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
+            chunk_m_tiles_override (int, optional): one of 16..64 in steps of 8.
+
+        Returns:
+            ttnn.Tensor: expert outputs, same shape as dispatched_buffer.
+        )doc",
+        &unified_routed_expert_moe_stacked,
+        nb::arg("dispatched_buffer").noconvert(),
+        nb::arg("expert_region_offsets").noconvert(),
+        nb::arg("expert_token_counts").noconvert(),
+        nb::arg("global_expert_idx_table").noconvert(),
+        nb::arg("gate_up_projs").noconvert(),
+        nb::arg("down_projs").noconvert(),
+        nb::arg("max_dispatched_tokens_per_expert"),
+        nb::kw_only(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("chunk_m_tiles_override") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

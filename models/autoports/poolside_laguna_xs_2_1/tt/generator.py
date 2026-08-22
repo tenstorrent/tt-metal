@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Readiness/serving generator for poolside/Laguna-XS-2.1 on the 1×4 Blackhole mesh.
+"""Readiness/serving generator for poolside/Laguna-XS-2.1 on Blackhole P150 ASIC meshes.
 
 Implements the standard Metal readiness ``Generator`` contract
 (``models.common.readiness_check.contract.Generator``): low-level ``prefill_forward`` /
@@ -16,7 +16,7 @@ The measured token-out decode path is **fully on-device traced split sampling**:
     actually changes; free-running decode feeds the sampled token back with zero host token/position
     work.
   * greedy = ``Sampling1D`` top-k with k=1 over each device's local vocab shard, all-gathering only
-    the 4×32 candidate set (NOT the full 100352-wide vocab). This is the canonical split-sampling
+    the D×32 candidate set (NOT the full 100352-wide vocab). This is the canonical split-sampling
     contract and avoids a full-vocab all-gather / host argmax / full-logits readback on the hot path.
 
 An explicit **host-sampling compatibility mode** (``host_sampling=True``) gathers full logits and

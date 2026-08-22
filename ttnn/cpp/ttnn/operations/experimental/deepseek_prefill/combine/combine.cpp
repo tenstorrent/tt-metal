@@ -49,8 +49,14 @@ ttnn::Tensor combine(
         "topology must be Linear or Ring. 2D topologies are not supported.");
 
     std::optional<uint32_t> axis = cluster_axis;
-    uint32_t num_links_ = num_links.value_or(ccl::common::get_num_links(*mesh_device, axis));
-    tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(dispatched_buffer, topology_, axis);
+    const bool local_only =
+        dispatch_group_size == 1 && ::ttnn::ccl::get_topological_dimension(dispatched_buffer, axis) == 1;
+    // A size-one group still uses one sender/untilizer worker lane, but does
+    // not need a fabric link, neighbor discovery, or topology negotiation.
+    uint32_t num_links_ =
+        local_only ? num_links.value_or(1) : num_links.value_or(ccl::common::get_num_links(*mesh_device, axis));
+    tt::tt_fabric::Topology usable_topology =
+        local_only ? topology_ : ::ttnn::ccl::get_usable_topology(dispatched_buffer, topology_, axis);
 
     log_debug(tt::LogOp, "num_links={} axis={} topology={}", num_links_, axis, usable_topology);
 

@@ -20,19 +20,41 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
     return mem.buffer_type() == tt::tt_metal::BufferType::DRAM &&
            mem.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
 }
+
+void validate_index_tensor(const ttnn::Tensor& tensor, const char* name, const ttnn::Tensor& x) {
+    TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+    TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
+    TT_FATAL(tensor.device() == x.device(), "{} must be on the same device as x", name);
+    TT_FATAL(tensor.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32", name);
+    TT_FATAL(
+        tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "{} must be ROW_MAJOR layout, got {}",
+        name,
+        tensor.layout());
+    TT_FATAL(is_dram_interleaved(tensor), "{} must be DRAM-interleaved", name);
+
+    const auto& shape = tensor.logical_shape();
+    const bool valid_1d = shape.rank() == 1;
+    const bool valid_2d = shape.rank() == 2 && shape[0] == 1;
+    TT_FATAL(valid_1d || valid_2d, "{} must be 1D or 2D with first dimension == 1, got shape {}", name, shape);
+}
 }  // namespace
 
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
     TT_FATAL(t.x.storage_type() == tt::tt_metal::StorageType::DEVICE, "x must be on device");
-    // x is restricted to BFLOAT8_B — the only dtype the existing callers
-    // (TtRoutedExpert typecasts the dispatched buffer to BF8_B before this
-    // op) and tests exercise. The kernel CB-size config can also accept
-    // BFLOAT16, but that path is untested; reintroduce when a real caller
-    // + PCC test for BF16 lands.
-    TT_FATAL(t.x.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "x must be BFLOAT8_B, got {}", t.x.dtype());
+    // BFLOAT8_B remains the DeepSeek production path. BFLOAT16 is also
+    // supported for models whose activation accuracy cannot tolerate the
+    // BFP8 dispatch/intermediate/output boundaries. The program factory uses
+    // x's dtype for the intermediate CBs, so this is a real end-to-end BF16
+    // path rather than a BF16 input immediately repacked to BFP8.
+    TT_FATAL(
+        t.x.dtype() == tt::tt_metal::DataType::BFLOAT8_B || t.x.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "x must be BFLOAT8_B or BFLOAT16, got {}",
+        t.x.dtype());
     TT_FATAL(t.x.layout() == tt::tt_metal::Layout::TILE, "x must be TILE layout");
     TT_FATAL(is_dram_interleaved(t.x), "x must be DRAM-interleaved");
+    TT_FATAL(t.x.buffer() != nullptr, "x must have a buffer");
     TT_FATAL(t.x.logical_shape().rank() >= 2, "x must have rank >= 2, got rank {}", t.x.logical_shape().rank());
     // For rank > 2, all leading dims must be 1 — we treat x as effectively
     // (M, K) using padded_shape[-2:].
@@ -40,57 +62,105 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(t.x.logical_shape()[i] == 1, "x leading dim {} must be 1, got {}", i, t.x.logical_shape()[i]);
     }
 
+    // Weight tensors share x's storage / layout / memory contract. Validate
+    // these before indexing their trailing dimensions below so malformed API
+    // inputs fail deterministically on the host.
+    for (const auto& [name, w] : std::initializer_list<std::pair<const char*, const ttnn::Tensor&>>{
+             {"gate_proj", t.gate_proj}, {"up_proj", t.up_proj}, {"down_proj", t.down_proj}}) {
+        TT_FATAL(w.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+        TT_FATAL(w.buffer() != nullptr, "{} must have a buffer", name);
+        TT_FATAL(w.device() == t.x.device(), "{} must be on the same device as x", name);
+        TT_FATAL(w.layout() == tt::tt_metal::Layout::TILE, "{} must be TILE layout", name);
+        TT_FATAL(is_dram_interleaved(w), "{} must be DRAM-interleaved", name);
+        TT_FATAL(w.logical_shape().rank() >= 2, "{} must have rank >= 2, got rank {}", name, w.logical_shape().rank());
+    }
+
     const auto& x_shape = t.x.padded_shape();
     const auto& gate_shape = t.gate_proj.padded_shape();
     const auto& up_shape = t.up_proj.padded_shape();
     const auto& down_shape = t.down_proj.padded_shape();
 
-    TT_FATAL(
-        x_shape[-1] == gate_shape[-2] && x_shape[-1] == up_shape[-2],
-        "x's last dim {} must match gate/up's K dim ({}, {})",
-        x_shape[-1],
-        gate_shape[-2],
-        up_shape[-2]);
-    TT_FATAL(
-        gate_shape[-1] == up_shape[-1] && gate_shape[-1] == down_shape[-2],
-        "gate/up N ({}) must equal down K ({})",
-        gate_shape[-1],
-        down_shape[-2]);
-    TT_FATAL(down_shape[-1] == x_shape[-1], "down N ({}) must equal x K ({})", down_shape[-1], x_shape[-1]);
+    if (op.stacked_packed_weights) {
+        TT_FATAL(
+            t.gate_proj.logical_shape().rank() == 4 && t.up_proj.logical_shape().rank() == 4 &&
+                t.down_proj.logical_shape().rank() == 4,
+            "stacked packed weights must have rank 4 (gate {}, up {}, down {})",
+            t.gate_proj.logical_shape().rank(),
+            t.up_proj.logical_shape().rank(),
+            t.down_proj.logical_shape().rank());
+        TT_FATAL(
+            t.gate_proj.logical_shape()[0] == 1 && t.up_proj.logical_shape()[0] == 1 &&
+                t.down_proj.logical_shape()[0] == 1,
+            "stacked packed weights must have leading dimension 1 (gate {}, up {}, down {})",
+            t.gate_proj.logical_shape()[0],
+            t.up_proj.logical_shape()[0],
+            t.down_proj.logical_shape()[0]);
+        TT_FATAL(
+            gate_shape == up_shape,
+            "stacked gate/up views must have identical shapes, got {} and {}",
+            gate_shape,
+            up_shape);
+        TT_FATAL(
+            gate_shape[-3] == down_shape[-3],
+            "stacked gate_up/down local-expert dimensions must match ({} vs {})",
+            gate_shape[-3],
+            down_shape[-3]);
+        TT_FATAL(
+            op.local_expert_id < gate_shape[-3],
+            "local_expert_id ({}) >= stacked local expert count ({})",
+            op.local_expert_id,
+            gate_shape[-3]);
+        TT_FATAL(
+            gate_shape[-1] % 2 == 0,
+            "stacked gate_up last dimension ({}) must split evenly into gate/up",
+            gate_shape[-1]);
+        TT_FATAL(
+            x_shape[-1] == gate_shape[-2],
+            "x's last dim {} must match stacked gate_up K dim {}",
+            x_shape[-1],
+            gate_shape[-2]);
+        TT_FATAL(
+            gate_shape[-1] / 2 == down_shape[-2],
+            "half of stacked gate_up N ({}) must equal down K ({})",
+            gate_shape[-1] / 2,
+            down_shape[-2]);
+        TT_FATAL(down_shape[-1] == x_shape[-1], "stacked down N ({}) must equal x K ({})", down_shape[-1], x_shape[-1]);
+    } else {
+        TT_FATAL(
+            x_shape[-1] == gate_shape[-2] && x_shape[-1] == up_shape[-2],
+            "x's last dim {} must match gate/up's K dim ({}, {})",
+            x_shape[-1],
+            gate_shape[-2],
+            up_shape[-2]);
+        TT_FATAL(
+            gate_shape[-1] == up_shape[-1] && gate_shape[-1] == down_shape[-2],
+            "gate/up N ({}) must equal down K ({})",
+            gate_shape[-1],
+            down_shape[-2]);
+        TT_FATAL(down_shape[-1] == x_shape[-1], "down N ({}) must equal x K ({})", down_shape[-1], x_shape[-1]);
+    }
 
     constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
     TT_FATAL(x_shape[-2] % TILE == 0, "x M ({}) must be tile-aligned", x_shape[-2]);
     TT_FATAL(op.chunk_M_tiles > 0, "chunk_M_tiles must be > 0");
 
-    // Weight tensors share x's storage / layout / memory contract — fail
-    // host-side if the caller forgot to upload one, picked the wrong layout,
-    // or sharded weights (the kernel reader assumes DRAM-interleaved).
-    for (const auto& [name, w] : std::initializer_list<std::pair<const char*, const ttnn::Tensor&>>{
-             {"gate_proj", t.gate_proj}, {"up_proj", t.up_proj}, {"down_proj", t.down_proj}}) {
-        TT_FATAL(w.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
-        TT_FATAL(w.layout() == tt::tt_metal::Layout::TILE, "{} must be TILE layout", name);
-        TT_FATAL(is_dram_interleaved(w), "{} must be DRAM-interleaved", name);
-    }
-
     // Aux tensors: counts / global_expert_idx_table are small UINT32 vectors
     // the reader fetches via DRAM accessor. The reader does a single
     // noc_async_read_page(page=0, ...) and then indexes anywhere in
     // [0, num_global_experts), so the full vector must fit in one page. The
-    // L1 scratch CB is sized to hold MAX_GLOBAL_EXPERTS UINT32 entries (see
-    // the program factory), which covers DeepSeek V3 (256), Kimi (384) and any
-    // model up to MAX_GLOBAL_EXPERTS routed experts. Validate the length here
-    // so larger expert counts produce a clean assertion instead of silent OOB
-    // reads at runtime.
+    // L1 scratch CB is sized to each tensor's aligned page (see the program
+    // factory), while MAX_GLOBAL_EXPERTS caps the reader's supported index
+    // space. This covers DeepSeek V3 (256), Kimi (384), and models up to the
+    // cap. Validate the length here so larger expert counts produce a clean
+    // assertion instead of silent OOB reads at runtime.
     for (const auto& [name, a] : std::initializer_list<std::pair<const char*, const ttnn::Tensor&>>{
              {"counts", t.counts}, {"global_expert_idx_table", t.global_expert_idx_table}}) {
-        TT_FATAL(a.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
-        TT_FATAL(a.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32", name);
-        TT_FATAL(is_dram_interleaved(a), "{} must be DRAM-interleaved", name);
+        validate_index_tensor(a, name, t.x);
         const uint32_t num_entries = a.logical_shape()[-1];
         TT_FATAL(
             num_entries <= MAX_GLOBAL_EXPERTS,
             "{} length ({}) exceeds the maximum supported number of experts ({}) — "
-            "the reader fetches only page 0 of this tensor into a fixed-size L1 scratch",
+            "the reader supports at most this many entries in its page-0 L1 scratch",
             name,
             num_entries,
             MAX_GLOBAL_EXPERTS);
@@ -113,20 +183,8 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         // enforce the same invariants insert did. The writer does a single
         // noc_async_read_page(page 0) and indexes start[global_id], which is
         // only correct for a contiguous ROW_MAJOR single-page UINT32 vector.
-        TT_FATAL(start.storage_type() == tt::tt_metal::StorageType::DEVICE, "expert_region_offsets must be on device");
-        TT_FATAL(start.dtype() == tt::tt_metal::DataType::UINT32, "expert_region_offsets must be UINT32");
-        TT_FATAL(
-            start.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-            "expert_region_offsets must be ROW_MAJOR layout, got {}",
-            start.layout());
-        TT_FATAL(is_dram_interleaved(start), "expert_region_offsets must be DRAM-interleaved");
+        validate_index_tensor(start, "expert_region_offsets", t.x);
         const auto& start_shape = start.logical_shape();
-        const bool start_valid_1d = start_shape.rank() == 1;
-        const bool start_valid_2d = start_shape.rank() == 2 && start_shape[0] == 1;
-        TT_FATAL(
-            start_valid_1d || start_valid_2d,
-            "expert_region_offsets must be 1D or 2D with first dimension == 1, got shape {}",
-            start_shape);
         TT_FATAL(
             static_cast<uint32_t>(start_shape[-1]) <= MAX_GLOBAL_EXPERTS,
             "expert_region_offsets length ({}) exceeds the maximum supported number of experts ({})",
@@ -148,6 +206,8 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     if (t.optional_output.has_value()) {
         const auto& out = *t.optional_output;
         TT_FATAL(out.storage_type() == tt::tt_metal::StorageType::DEVICE, "optional_output must be on device");
+        TT_FATAL(out.buffer() != nullptr, "optional_output must have a buffer");
+        TT_FATAL(out.device() == t.x.device(), "optional_output must be on the same device as x");
         TT_FATAL(out.layout() == tt::tt_metal::Layout::TILE, "optional_output must be TILE layout");
         TT_FATAL(is_dram_interleaved(out), "optional_output must be DRAM-interleaved");
         TT_FATAL(
@@ -204,12 +264,12 @@ UnifiedRoutedExpertFfnDeviceOperation::spec_return_value_t UnifiedRoutedExpertFf
     const auto mem =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     return TensorSpec(
-        output_shape, tt::tt_metal::TensorLayout(t.x.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem));
+        output_shape,
+        tt::tt_metal::TensorLayout(t.x.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem));
 }
 
 UnifiedRoutedExpertFfnDeviceOperation::tensor_return_value_t
-UnifiedRoutedExpertFfnDeviceOperation::create_output_tensors(
-    const operation_attributes_t& op, const tensor_args_t& t) {
+UnifiedRoutedExpertFfnDeviceOperation::create_output_tensors(const operation_attributes_t& op, const tensor_args_t& t) {
     if (t.optional_output.has_value()) {
         return *t.optional_output;
     }
@@ -229,15 +289,17 @@ ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& global_expert_idx_table,
     uint32_t local_expert_id,
     uint32_t chunk_M_tiles,
+    bool stacked_packed_weights,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
     const std::optional<ttnn::Tensor>& expert_region_offsets) {
-    using OperationType =
-        ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
+    using OperationType = ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::
+        UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .chunk_M_tiles = chunk_M_tiles,
             .local_expert_id = local_expert_id,
+            .stacked_packed_weights = stacked_packed_weights,
             .compute_kernel_config = compute_kernel_config},
         OperationType::tensor_args_t{
             .x = x,

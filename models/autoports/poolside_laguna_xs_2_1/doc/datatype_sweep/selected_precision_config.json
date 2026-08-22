@@ -53,7 +53,7 @@
   },
   "layer_exceptions": {
     "layer_0": "dense SwiGLU MLP (no experts): dense_ff13/dense_ff2 = BFP8 (there is no BFP4 expert group in layer 0)",
-    "layers_1_39": "EP-sharded routed MoE (256 experts, 64 local/device, top-8) with BFP4 experts + BFP8 shared expert",
+    "layers_1_39": "EP-sharded routed MoE (256 experts partitioned across the mesh: 128/device on p150x2 and 64/device on p150x4, top-8) with BFP4 experts + BFP8 shared expert",
     "attention_and_norms": "uniform across all 40 layers (no per-layer dtype exception)",
     "terminal": "LM head BFP8 (column-sharded), final RMSNorm BF16/HiFi4 \u2014 not a decoder layer"
   },
@@ -80,13 +80,13 @@
   },
   "kv_cache_dtype": {
     "dtype": "bfloat8_b",
-    "note": "prefill fill tensors cast to BFP8 before paged_fill_cache; decode paged_update_cache inputs stay BF16 (dest BFP8). BF16 KV swept (C1): identical accuracy 0.95 and speed, 2x the memory -> BFP8 kept. Context capacity 262144 preserved (see context_contract.json datatype_sweep section)."
+    "note": "prefill fill tensors cast to BFP8 before paged_fill_cache; decode paged_update_cache inputs stay BF16 (dest BFP8). BF16 KV swept (C1): identical accuracy 0.95 and speed, 2x the memory -> BFP8 kept. Production serving is qualified at 131072 tokens; the experimental 262144-token probe was rejected on latency (see ../context_contract.json)."
   },
   "logits_sampling_dtype": {
     "lm_head_output_logits": "bfloat16 (matmul output)",
-    "sampling": "Sampling1D greedy top-k(k=1); k uint32, p/temp bfloat16; all-gather of only the 4x32 candidate value/index set (NOT the 100352-wide vocab); on-device token feedback into tt_out_tok"
+    "sampling": "Sampling1D greedy top-k(k=1); k uint32, p/temp bfloat16; all-gather of only the D x 32 candidate value/index set (NOT the 100352-wide vocab); on-device token feedback into tt_out_tok. Production p150x2 uses D=2; experimental compact argmax remains default-off because it was slower."
   },
   "safe_baseline_override": "This selected config IS the safe baseline. A more conservative policy (e.g. BF16 KV, HiFi2 projections, BF16 attention weights) can be built by writing a different JSON here or passing precision_config_path=/precision_policy= to build_generator / LagunaModel.from_pretrained, or TT_LAGUNA_PRECISION_CONFIG=<path>.",
-  "hardware": "4x Blackhole p300c (P150x4), 1x4 mesh, FABRIC_1D_RING, KMD 2.10.0, fw 19.11.0",
+  "hardware": "Precision sweep captured on p150x4: 4 Blackhole P150 ASICs in a 1x4 mesh, FABRIC_1D_RING, KMD 2.10.0, fw 19.11.0",
   "branch": "agentic-research/hous/laguna-xs-2.1"
 }

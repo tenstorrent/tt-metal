@@ -27,7 +27,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 // `unified_routed_expert_moe` below if you need the extract/insert glue.
 //
 // Args:
-//   x: (M_max, K=emb), TILE, DRAM interleaved, BFLOAT8_B. Only the first
+//   x: (M_max, K=emb), TILE, DRAM interleaved, BFLOAT8_B or BFLOAT16. Only the first
 //      ceil_tile(count) rows are valid (the rest is dispatch padding).
 //   gate_proj: (K=emb, N=hidden), TILE, DRAM interleaved (any weights dtype).
 //   up_proj:   (K=emb, N=hidden), TILE, DRAM interleaved (any weights dtype).
@@ -57,7 +57,8 @@ ttnn::Tensor unified_routed_expert_ffn(
     uint32_t local_expert_id,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& output = std::nullopt,
-    const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt);
+    const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
+    const std::optional<uint32_t>& chunk_m_tiles_override = std::nullopt);
 
 // MoE-level composite: takes the dispatched buffer + ALL local experts'
 // weights and loops over local experts in C++, calling
@@ -79,11 +80,29 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& up_projs,
     const std::vector<ttnn::Tensor>& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<uint32_t>& chunk_m_tiles_override = std::nullopt);
+
+// Laguna-style stacked-weight variant of the MoE composite. gate_up_projs is
+// [1, local_experts, emb, 2*hidden] (gate in the first half, up in the
+// second); down_projs is [1, local_experts, hidden, emb]. The tensors remain
+// expert-sharded across the mesh. The per-expert device program indexes its
+// local expert slice directly, avoiding duplicated per-expert tensors.
+ttnn::Tensor unified_routed_expert_moe_stacked(
+    const ttnn::Tensor& dispatched_buffer,
+    const ttnn::Tensor& expert_region_offsets,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& global_expert_idx_table,
+    const ttnn::Tensor& gate_up_projs,
+    const ttnn::Tensor& down_projs,
+    uint32_t max_dispatched_tokens_per_expert,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<uint32_t>& chunk_m_tiles_override = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 
 namespace ttnn {
 using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_ffn;
 using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_moe;
+using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_moe_stacked;
 }  // namespace ttnn

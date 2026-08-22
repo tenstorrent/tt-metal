@@ -105,6 +105,7 @@ void kernel_main() {
     constexpr uint32_t cb_activated = get_compile_time_arg_val(20);
     constexpr uint32_t GRID_X_NOC = get_compile_time_arg_val(21);  // M-row mcast group size
     constexpr uint32_t K_down_tiles_padded = get_compile_time_arg_val(22);
+    constexpr bool stacked_packed_weights = get_compile_time_arg_val(23) != 0;
 
     constexpr uint32_t g_in0_block_num_tiles = per_core_M * in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
@@ -113,7 +114,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 23;
+    constexpr uint32_t x_accessor_offset = 24;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
 
@@ -333,7 +334,11 @@ void kernel_main() {
                         const uint32_t row = kb * in0_block_w_gu + k;
                         const uint32_t col = my_nt_gu * per_core_N_gu + n;
                         if (col < N_gate_tiles_full) {
-                            const uint32_t tile_idx = row * N_gate_tiles_full + col;
+                            constexpr uint32_t packed_row_tiles = 2 * N_gate_tiles_full;
+                            constexpr uint32_t expert_base = local_expert_id * K_gate_tiles * packed_row_tiles;
+                            const uint32_t tile_idx = stacked_packed_weights
+                                                          ? expert_base + row * packed_row_tiles + col
+                                                          : row * N_gate_tiles_full + col;
                             noc_async_read_page(tile_idx, gate_acc, l1_w_gate, /*offset=*/0, /*noc=*/0);
                         } else {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_gate);
@@ -351,7 +356,11 @@ void kernel_main() {
                         const uint32_t row = kb * in0_block_w_gu + k;
                         const uint32_t col = my_nt_gu * per_core_N_gu + n;
                         if (col < N_gate_tiles_full) {
-                            const uint32_t tile_idx = row * N_gate_tiles_full + col;
+                            constexpr uint32_t packed_row_tiles = 2 * N_gate_tiles_full;
+                            constexpr uint32_t expert_base = local_expert_id * K_gate_tiles * packed_row_tiles;
+                            const uint32_t tile_idx =
+                                stacked_packed_weights ? expert_base + row * packed_row_tiles + N_gate_tiles_full + col
+                                                       : row * N_gate_tiles_full + col;
                             noc_async_read_page(tile_idx, up_acc, l1_w_up, /*offset=*/0, /*noc=*/0);
                         } else {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
@@ -462,7 +471,10 @@ void kernel_main() {
                         const uint32_t row = kb * in0_block_w_d + k;
                         const uint32_t col = my_nt_d * per_core_N_d + n;
                         if (row < K_down_tiles && col < N_down_tiles_full) {
-                            const uint32_t tile_idx = row * N_down_tiles_full + col;
+                            constexpr uint32_t expert_base = local_expert_id * K_down_tiles * N_down_tiles_full;
+                            const uint32_t tile_idx = stacked_packed_weights
+                                                          ? expert_base + row * N_down_tiles_full + col
+                                                          : row * N_down_tiles_full + col;
                             noc_async_read_page(tile_idx, down_acc, l1_w, /*offset=*/0, /*noc=*/0);
                         } else {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);

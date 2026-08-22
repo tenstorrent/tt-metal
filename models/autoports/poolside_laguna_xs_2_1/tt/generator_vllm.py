@@ -20,12 +20,12 @@ standalone cache/reset path (``tt/generator.py``) is untouched and used only by 
 checks.
 
 Attention: Laguna is a hybrid model (10 full + 30 sliding layers, ``sliding_window=512``). The
-sliding layers trim attention on the READ side via the SDPA op's ``sliding_window_size`` kwarg over
-a full paged cache, so — exactly like the TT plugin's currently-gated hybrid path — the adapter is
-served as a **uniform full-attention model**: one page table, one ``FullAttentionSpec``-equivalent
-cache per layer. No ``get_kv_cache_spec`` is needed (sliding correctness is inside the model's
-SDPA, not vLLM page tables). This matches the documented full-context KV budget (all 40 layers hold
-the full context), so no advertised capability is reduced.
+qualified default remains a uniform full-context KV cache: sliding attention is enforced on the
+READ side by the SDPA op. ``TT_LAGUNA_HYBRID_KV=1`` is a separate, fail-closed qualification path.
+It exposes the exact 40-layer attention pattern to vLLM, which creates four independent block-table
+groups and aliases equal group slots onto ten physical K/V tensor pairs. The TT adapter validates
+that complete contract before allocating or executing and keeps prefix caching disabled until the
+two ownership schemes have been qualified together.
 
 Precision: construction goes through ``LagunaGenerator.from_pretrained`` →
 ``LagunaModel.from_pretrained``, which by default loads the datatype-sweep-selected precision
@@ -46,12 +46,27 @@ import ttnn
 
 try:
     from .generator import LagunaGenerator, _replicate
-    from .prefill_runtime import PrefillRuntimeOffsets, prefill_chunk_plan
+    from .kv_grouping import HybridKVLayout, build_laguna_hybrid_kv_layout, validate_per_layer_tensor_aliases
+    from .prefill_runtime import (
+        PrefillRuntimeOffsets,
+        PrefillStreamChunk,
+        prefill_chunk_plan,
+        prefill_stream_plan,
+        streaming_prefill_capacity,
+    )
 except ImportError:  # loaded as a standalone module by some tooling
     from models.autoports.poolside_laguna_xs_2_1.tt.generator import LagunaGenerator, _replicate
+    from models.autoports.poolside_laguna_xs_2_1.tt.kv_grouping import (
+        HybridKVLayout,
+        build_laguna_hybrid_kv_layout,
+        validate_per_layer_tensor_aliases,
+    )
     from models.autoports.poolside_laguna_xs_2_1.tt.prefill_runtime import (
         PrefillRuntimeOffsets,
+        PrefillStreamChunk,
         prefill_chunk_plan,
+        prefill_stream_plan,
+        streaming_prefill_capacity,
     )
 
 # A selected profile's advertised context MUST equal its end-to-end qualified context. The HF config
@@ -67,11 +82,19 @@ HF_CONFIG_MAX_CONTEXT = 262144  # what the HF config declares (not currently ser
 ADVERTISED_MAX_CONTEXT = int(os.environ.get("TT_LAGUNA_ADVERTISED_CONTEXT", "131072"))
 
 
-def _prefill_rope_capacity(max_model_len: int) -> int:
-    """RoPE horizon needed when a resumed real suffix is right-padded to its largest bucket."""
+def _prefill_rope_capacity(max_model_len: int, *, streaming: bool = True) -> int:
+    """RoPE horizon covering every padded prefill admitted by the adapter.
+
+    Streaming executes at most one 8192-token chunk at a time and only pads its
+    tail, so one rounding of the logical context is sufficient.  ``streaming=False``
+    retains the former monolithic-bucket horizon as a rollback path.
+    """
     requested = int(max_model_len)
-    largest_bucket = min(requested, ADVERTISED_MAX_CONTEXT)
-    capacity = requested + largest_bucket
+    if streaming:
+        capacity = streaming_prefill_capacity(requested, outer_chunk=min(8192, requested))
+    else:
+        largest_bucket = min(requested, ADVERTISED_MAX_CONTEXT)
+        capacity = requested + largest_bucket
     if capacity > HF_CONFIG_MAX_CONTEXT:
         raise ValueError(
             f"bucketed prefill needs RoPE through {capacity}, beyond the HF context {HF_CONFIG_MAX_CONTEXT}"
@@ -86,6 +109,10 @@ class LagunaForCausalLM:
     HF architecture ``LagunaForCausalLM``).
     """
 
+    # Marker consumed by the model-local worker lifecycle wrapper. It prevents
+    # the global TT worker patch from touching any other model adapter.
+    _LAGUNA_VLLM_ADAPTER = True
+
     # Capability flags read by the plugin platform hook. On-device sampling is REQUIRED here: the
     # readiness runner enforces ``sample_on_device_mode=all`` and the model serves its canonical
     # traced split-sampling path. Async decode is supported via the read/process split below.
@@ -98,20 +125,34 @@ class LagunaForCausalLM:
     # is absent and is rejected on non-D2 topologies. Enabling it also freezes the program cache.
     _PREFIX_CACHE_ENABLED = os.environ.get("TT_LAGUNA_PREFIX_CACHE", "0") == "1"
     _PREFIX_CACHE_QUANTUM = 8192
+    # Chunk-major prefill is the default D2 serving path after the device-free
+    # planner/adapter contracts in tests/test_prefill_runtime.py and
+    # tests/test_generator_vllm_prefix_resume.py and the retained D2 hardware
+    # PCC/latency gate. Keep an acknowledged monolithic rollback for diagnostics.
+    # D1 retains monolithic prefill because its sliding decoder carries K/V
+    # locally within one call.
+    _STREAMING_PREFILL_ENABLED = os.environ.get("TT_LAGUNA_STREAMING_PREFILL", "1") == "1"
+    _PREFILL_STREAM_OUTER_CHUNK = 8192
+    # vLLM 0.24 groups Laguna as four 10-layer block-table groups and aliases
+    # equal slots onto ten physical K/V tensor pairs.  The feature remains
+    # opt-in until its cache-off hardware gate completes.
+    _HYBRID_KV_CACHE_GROUPS_ENABLED = os.environ.get("TT_LAGUNA_HYBRID_KV", "0") == "1"
+    # Published five-layer DFlash serving is a separate, default-off batch-one
+    # cache-off mode.  It owns an eager verify/accept loop and therefore cannot
+    # coexist with prefix, hybrid KV, or the ngram speculative controller.
+    _DFLASH_SERVING_ENABLED = os.environ.get("TT_LAGUNA_DFLASH", "0") == "1"
     model_capabilities = {
-        "supports_prefix_caching": _PREFIX_CACHE_ENABLED,
-        "supports_prefix_caching_with_sliding_window": _PREFIX_CACHE_ENABLED,
+        # Prefix + aliased hybrid KV is a separate ownership qualification.  Do
+        # not advertise it while a cache-off hybrid or DFlash tranche is selected.
+        "supports_prefix_caching": (
+            _PREFIX_CACHE_ENABLED and not _HYBRID_KV_CACHE_GROUPS_ENABLED and not _DFLASH_SERVING_ENABLED
+        ),
+        "supports_prefix_caching_with_sliding_window": (
+            _PREFIX_CACHE_ENABLED and not _HYBRID_KV_CACHE_GROUPS_ENABLED and not _DFLASH_SERVING_ENABLED
+        ),
         "supports_async_decode": True,
         "supports_sample_on_device": True,
     }
-
-    # Hybrid KV remains disabled. vLLM 0.24 describes four groups of ten logical layers and asks
-    # cross-group layers to alias ten physical tensor pairs through ``tensor_idx``. The adapter below
-    # does not yet honor that aliasing or carry the four group IDs into traced page-table warmup, so
-    # enabling it would allocate the wrong footprint and can replay against the wrong block tables.
-    # The supported P150/P150x2 profiles therefore use uniform KV. Keep the environment knob only as
-    # an explicit fail-fast marker for the follow-up hybrid implementation; never silently serve it.
-    _HYBRID_KV_CACHE_GROUPS_ENABLED = os.environ.get("TT_LAGUNA_HYBRID_KV", "0") == "1"
 
     @staticmethod
     def _validate_prefix_cache_topology(device_count, enabled):
@@ -121,7 +162,48 @@ class LagunaForCausalLM:
                 f"got D={int(device_count)}. Set TT_LAGUNA_PREFIX_CACHE=0."
             )
 
+    @staticmethod
+    def _validate_kv_feature_combination(prefix_enabled, hybrid_enabled):
+        if bool(prefix_enabled) and bool(hybrid_enabled):
+            raise RuntimeError(
+                "Laguna hybrid KV is qualified cache-off first and cannot be combined with "
+                "prefix caching yet; set either TT_LAGUNA_HYBRID_KV=0 or "
+                "TT_LAGUNA_PREFIX_CACHE=0."
+            )
+
+    @staticmethod
+    def _validate_dflash_serving_envelope(
+        *,
+        enabled,
+        device_count,
+        max_batch_size,
+        prefix_enabled,
+        hybrid_enabled,
+        spec_mode,
+    ):
+        if not bool(enabled):
+            return
+        if int(device_count) != 2:
+            raise RuntimeError(
+                "experimental Laguna DFlash serving is hardware-scoped only to p150x2, "
+                f"got D={int(device_count)}; set TT_LAGUNA_DFLASH=0"
+            )
+        if int(max_batch_size) != 1:
+            raise RuntimeError("Laguna DFlash serving requires --max-num-seqs 1, " f"got {int(max_batch_size)}")
+        if bool(prefix_enabled):
+            raise RuntimeError("Laguna DFlash serving requires TT_LAGUNA_PREFIX_CACHE=0")
+        if bool(hybrid_enabled):
+            raise RuntimeError("Laguna DFlash serving requires TT_LAGUNA_HYBRID_KV=0")
+        if str(spec_mode):
+            raise RuntimeError("Laguna DFlash serving cannot be combined with TT_LAGUNA_SPEC_DECODE")
+
+    def _streaming_prefill_active(self):
+        """D2-only until D1 sliding attention can cross adapter-call boundaries."""
+
+        return bool(self._STREAMING_PREFILL_ENABLED) and int(self.D) == 2
+
     def __init__(self, generator: LagunaGenerator, mesh_device, max_batch_size: int, max_model_len: int):
+        self._closed = False
         self.gen = generator
         self.model = generator.model
         self.mesh_device = mesh_device
@@ -133,6 +215,10 @@ class LagunaForCausalLM:
         self.hidden = generator.hidden
         self.D = mesh_device.get_num_devices()
         self._validate_prefix_cache_topology(self.D, self._PREFIX_CACHE_ENABLED)
+        self._validate_kv_feature_combination(
+            self._PREFIX_CACHE_ENABLED,
+            self._HYBRID_KV_CACHE_GROUPS_ENABLED,
+        )
         # Per-batch captured decode trace + persistent device buffers.
         self._decode: dict[int, dict] = {}
         # Per-K1 captured spec-decode VERIFY trace (batched decode over K+1 candidates, seq KV write).
@@ -146,12 +232,14 @@ class LagunaForCausalLM:
         # block, while fill padding is -1 (the paged_fill_cache write-skip sentinel).
         self._pf_pt: dict = {}
         self._pf_fill_pt: dict = {}
-        # Hybrid KV: persistent prefill page-table buffers per GROUP ("full"/"sliding"); the 2 groups
-        # have identical shape but different content, so they can't share the shape-keyed _pf_pt.
+        # Hybrid KV: persistent prefill page-table buffers per vLLM group. Laguna
+        # has four groups, including three distinct sliding groups with different
+        # block-id namespaces; attention kind alone is not a sufficient identity.
         self._pf_pt_groups: dict = {}
         self._pf_fill_pt_groups: dict = {}
-        # Per built-layer group kind ("full"/"sliding"), lazily derived from each decoder's cfg.
+        # Per built-layer kind and exact production alias layout, derived lazily.
         self._layer_kinds: Optional[list] = None
+        self._hybrid_layout_cache: Optional[HybridKVLayout] = None
         # max_num_blocks_per_req, learned from warmup_model_decode; lets prefill warmup pre-allocate
         # the serving-shape page-table buffer before the decode trace is captured.
         self._max_blocks: Optional[int] = None
@@ -165,14 +253,19 @@ class LagunaForCausalLM:
         # When prefix caching is enabled, freeze TTNN's program cache after the full prefill ladder and
         # decode trace have been built. Any missed runtime-offset shape then fails immediately instead of
         # compiling under a resident trace. The qualified prefix-cache profile always enables this guard.
-        self._freeze_program_cache = self._PREFIX_CACHE_ENABLED or os.environ.get(
-            "TT_LAGUNA_FREEZE_PROGRAM_CACHE", "0"
-        ) == "1"
+        self._freeze_program_cache = (
+            self._PREFIX_CACHE_ENABLED or os.environ.get("TT_LAGUNA_FREEZE_PROGRAM_CACHE", "0") == "1"
+        )
         self._program_cache_entries_after_trace: Optional[int] = None
         # ---- eager spec-decode (opt-in) — served in-adapter, B==1 greedy. Phase 2. ----
         # TT_LAGUNA_SPEC_DECODE: "" off | "probe" = run the one-shot feasibility probe (does eager verify
         # run under the resident decode trace without an alloc-under-trace hang?) | "1" = full buffered loop.
         self._spec_mode = os.environ.get("TT_LAGUNA_SPEC_DECODE", "")
+        if self._HYBRID_KV_CACHE_GROUPS_ENABLED and self._spec_mode == "1":
+            raise RuntimeError(
+                "Laguna hybrid KV does not support traced speculative decode yet; "
+                "set TT_LAGUNA_SPEC_DECODE= or TT_LAGUNA_HYBRID_KV=0"
+            )
         self._spec_probed = False
         self._spec_buf: list = []  # pending committed token ids, returned one per vLLM step
         self._spec_hist: list = []  # running token history for the single served request (ngram source)
@@ -182,14 +275,154 @@ class LagunaForCausalLM:
         self._spec_prefill_seq: list = []  # prompt tokens stashed at prefill (greedy gives no history via kwargs)
         # Diagnostic sink: MPI-worker stdout isn't captured in the readiness log, so spec/probe verdicts go
         # to a file readable regardless of process. Only touched when spec mode is set (no normal-run noise).
-        self._spec_log_path = str(
-            Path(__file__).resolve().parents[1] / "doc/vllm_integration/_runs/spec_probe.txt"
-        )
+        self._spec_log_path = str(Path(__file__).resolve().parents[1] / "doc/vllm_integration/_runs/spec_probe.txt")
         if self._spec_mode:
             self._spec_log(f"__init__ pid={os.getpid()} spec_mode={self._spec_mode!r}")
+        self._validate_dflash_serving_envelope(
+            enabled=self._DFLASH_SERVING_ENABLED,
+            device_count=self.D,
+            max_batch_size=self.max_batch_size,
+            prefix_enabled=self._PREFIX_CACHE_ENABLED,
+            hybrid_enabled=self._HYBRID_KV_CACHE_GROUPS_ENABLED,
+            spec_mode=self._spec_mode,
+        )
+        self._dflash_core = None
+        self._dflash_cache = None
+        self._dflash_controller = None
+        self._dflash_tok = None
+        self._dflash_request_serial = 0
+        self._dflash_request_id = None
+        if self._DFLASH_SERVING_ENABLED:
+            self._initialize_dflash_serving()
         # vLLM-owned cache dtype (from the selected precision policy), used for allocation.
         self._kv_dtype = self.model.precision_policy.kv_cache
         self._report_dram("weights")
+
+    def _initialize_dflash_serving(self):
+        """Allocate the published draft and its one-request cache after opt-in."""
+
+        from .dflash_serving import DFlashServedController, DFlashServingEnvelope
+        from .dflash_tt import DFlashTTCore
+
+        if len(self.model.layers) != 40:
+            raise RuntimeError(
+                "Laguna DFlash serving requires the exact full 40-layer target; " f"got {len(self.model.layers)} layers"
+            )
+        # Proposal padding extends at most 64 rows beyond the admitted semantic
+        # context.  Reject an unrepresentable horizon before loading any draft
+        # tensor instead of truncating RoPE near the checkpoint limit.
+        draft_horizon = int(self.max_model_len) + 64
+        if draft_horizon > HF_CONFIG_MAX_CONTEXT:
+            raise RuntimeError(
+                "Laguna DFlash serving requires max_model_len + 64 <= "
+                f"{HF_CONFIG_MAX_CONTEXT}, got {self.max_model_len}"
+            )
+        core = DFlashTTCore.from_checkpoint(
+            self.mesh_device,
+            max_seq_len=draft_horizon,
+            enable_experimental=True,
+        )
+        cache = core.allocate_proposal_cache(enable_experimental=True)
+        self._dflash_core = core
+        self._dflash_cache = cache
+        try:
+            controller = DFlashServedController(
+                core=core,
+                proposal_cache=cache,
+                target_model=self.model,
+                verify_greedy=self.verify_greedy_decode_with_dflash_aux,
+                draft_argmax=self._dflash_draft_argmax,
+                envelope=DFlashServingEnvelope(
+                    enabled=True,
+                    batch_size=self.max_batch_size,
+                    greedy=True,
+                    prefix_caching=self._PREFIX_CACHE_ENABLED,
+                    hybrid_kv=self._HYBRID_KV_CACHE_GROUPS_ENABLED,
+                    cache_off=not self._PREFIX_CACHE_ENABLED,
+                ),
+            )
+            self._dflash_controller = controller
+            self._dflash_tok = self.gen._rep(torch.zeros([1, 1, 1, 1], dtype=torch.int32), ttnn.uint32)
+        except Exception:
+            self.close_dflash()
+            raise
+
+    def _dflash_draft_argmax(self, proposal):
+        rows = self.model.logits_to_host(proposal.logits_shards).reshape(-1, int(self.vocab))
+        expected = int(self._dflash_core.config.max_speculative_tokens)
+        if int(rows.shape[0]) != expected:
+            raise RuntimeError(f"DFlash proposal produced {rows.shape[0]} logit rows, expected {expected}")
+        return torch.argmax(rows, dim=-1).to(torch.int32).tolist()
+
+    def close_dflash(self):
+        """Explicitly release request state and draft-owned KV allocations."""
+
+        controller = getattr(self, "_dflash_controller", None)
+        cache = getattr(self, "_dflash_cache", None)
+        if controller is not None:
+            controller.close()
+        elif cache is not None:
+            cache.close()
+        self._dflash_controller = None
+        self._dflash_cache = None
+        self._dflash_core = None
+        self._dflash_tok = None
+        self._dflash_request_id = None
+
+    def _release_decode_traces(self):
+        """Release every captured TT trace before dropping its persistent state."""
+
+        mappings = (getattr(self, "_decode", {}), getattr(self, "_verify_dec", {}))
+        released = set()
+        errors = []
+        for mapping in mappings:
+            for state in mapping.values():
+                trace_id = state.get("tid") if isinstance(state, dict) else None
+                if trace_id is None:
+                    continue
+                if trace_id in released:
+                    state["tid"] = None
+                    continue
+                try:
+                    ttnn.release_trace(self.mesh_device, trace_id)
+                except Exception as error:
+                    errors.append((trace_id, error))
+                else:
+                    state["tid"] = None
+                    released.add(trace_id)
+        if errors:
+            failed = ", ".join(repr(trace_id) for trace_id, _ in errors)
+            raise RuntimeError(f"failed to release Laguna TT trace(s): {failed}") from errors[0][1]
+        for mapping in mappings:
+            mapping.clear()
+
+    def close(self):
+        """Idempotently release adapter-owned traces and persistent request state."""
+
+        if getattr(self, "_closed", False):
+            return
+        self._release_decode_traces()
+        self.close_dflash()
+        self._pf = None
+        for name in ("_pf_pt", "_pf_fill_pt", "_pf_pt_groups", "_pf_fill_pt_groups"):
+            mapping = getattr(self, name, None)
+            if isinstance(mapping, dict):
+                mapping.clear()
+        self._spec = None
+        self._spec_tok = None
+        for name in ("_spec_buf", "_spec_hist", "_spec_prefill_seq"):
+            values = getattr(self, name, None)
+            if isinstance(values, list):
+                values.clear()
+        self._closed = True
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            # Interpreter teardown and hard-kill recovery cannot safely surface
+            # Python exceptions; the TT worker still closes/resets the mesh.
+            pass
 
     def _report_dram(self, stage: str, *, enforce: bool = False):
         """Log a synchronized DRAM snapshot and optionally enforce the serving safety margin.
@@ -277,12 +510,15 @@ class LagunaForCausalLM:
             if env_nl:
                 n_layers = [int(x) for x in env_nl.split(",")] if "," in env_nl else int(env_nl)
         requested_max_seq_len = int(max_seq_len)
-        # A resumed suffix keeps its absolute start but is right-padded to a fixed compute bucket. Near
-        # the advertised context, start+bucket can exceed the real request end. Build the two shared RoPE
-        # tables through that fixed prefill horizon (D2: 262144, still the HF-declared limit) while keeping
-        # the generator/adapter's logical serving context at the requested value for KV allocation and
-        # scheduler admission.
-        rope_capacity = _prefill_rope_capacity(requested_max_seq_len)
+        # D2 streams fixed 8192-token chunks and pads only the final tail, so its
+        # shared RoPE tables need the logical context rounded once. D1 retains the
+        # legacy monolithic horizon because its sliding decoder cannot carry a
+        # local K/V tail across separate adapter calls. KV allocation and scheduler
+        # admission remain bounded by the requested logical context on both.
+        rope_capacity = _prefill_rope_capacity(
+            requested_max_seq_len,
+            streaming=(bool(cls._STREAMING_PREFILL_ENABLED) and int(mesh_device.get_num_devices()) == 2),
+        )
         gen = LagunaGenerator.from_pretrained(
             mesh_device,
             max_seq_len=rope_capacity,
@@ -294,25 +530,26 @@ class LagunaForCausalLM:
 
     @classmethod
     def get_kv_cache_spec(cls, vllm_config):
-        """Emit a HYBRID per-layer spec: ``SlidingWindowSpec(sliding_window=512)`` for the 30
-        sliding-attention layers and ``FullAttentionSpec`` for the 10 full-attention layers, keyed by
-        ``model.layers.{i}.self_attn`` and driven off ``text_config.layer_types``.
+        """Return Laguna's exact opt-in hybrid KV-cache specification.
 
-        The TT platform opts into vLLM's hybrid KV manager (``platform.support_hybrid_kv_cache() ==
-        True``), so these two spec kinds are packed into separate ``kv_cache_groups`` (NOT collapsed by
-        ``unify_hybrid_kv_cache_specs``). vLLM's ``SlidingWindowManager`` gives the sliding group a
-        SMALLER physical block pool and full-width block tables whose out-of-window entries point at a
-        shared ``null_block`` (absolute ``pos//block_size`` indexing is preserved — no ring remap), so
-        the model's existing paged fill/read (``sliding_window_size=512`` on the SDPA read side) is
-        unchanged; it just indexes a smaller sliding pool. This cuts per-device KV from ~5.4 GB toward
-        ~1.5 GB at full context (30/40 layers windowed to 512), freeing DRAM for larger batches.
-        Per-layer block tables reach the model as ``page_tables_per_layer`` (see prefill/decode)."""
-        if cls._HYBRID_KV_CACHE_GROUPS_ENABLED:
-            raise RuntimeError(
-                "TT_LAGUNA_HYBRID_KV=1 is not supported: vLLM 0.24 requires tensor_idx aliasing and "
-                "four-group page-table metadata that the Laguna adapter does not yet implement. "
-                "Use uniform KV (TT_LAGUNA_HYBRID_KV=0)."
-            )
+        When hybrid KV is disabled, return ``None`` so the TT plugin retains its
+        qualified single-spec/full-context fallback.  When enabled, emit 30
+        ``SlidingWindowSpec(sliding_window=512)`` and ten ``FullAttentionSpec``
+        entries in logical-layer order. vLLM groups them as one full and three
+        sliding groups, each containing ten layers. Equal slots across the four
+        groups share one physical tensor while their block tables retain disjoint
+        block-id namespaces. This reduces 40 physical K/V pairs to ten for the
+        same global block pool; sliding-window eviction also reduces each sliding
+        group's live per-request occupancy. Per-layer tables reach this adapter as
+        ``page_tables_per_layer`` and are collapsed back to four persistent device
+        buffers only after exact group-consistency validation.
+        """
+        cls._validate_kv_feature_combination(
+            cls._PREFIX_CACHE_ENABLED,
+            cls._HYBRID_KV_CACHE_GROUPS_ENABLED,
+        )
+        if not cls._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return None
 
         from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
@@ -327,6 +564,20 @@ class LagunaForCausalLM:
             num_layers = len(layer_types)
         num_layers = int(num_layers)
         sliding_window = int(getattr(text_config, "sliding_window", 0) or 0)
+        raw_kinds = tuple(layer_types or ())
+        unknown_kinds = sorted(set(raw_kinds) - {"full_attention", "sliding_attention"})
+        if unknown_kinds:
+            raise ValueError(f"Laguna hybrid KV received unknown layer_types {unknown_kinds}")
+        normalized_kinds = tuple("sliding" if kind == "sliding_attention" else "full" for kind in raw_kinds)
+        # Fails closed for a reduced stack, missing layer_types, unknown values,
+        # or any checkpoint whose repeated attention pattern drifted.
+        build_laguna_hybrid_kv_layout(normalized_kinds)
+        if num_layers != len(raw_kinds):
+            raise ValueError(
+                f"Laguna hybrid KV num_hidden_layers={num_layers} but layer_types has {len(raw_kinds)} entries"
+            )
+        if sliding_window != 512:
+            raise ValueError(f"Laguna hybrid KV requires sliding_window=512, got {sliding_window}")
         num_kv_heads = model_config.get_num_kv_heads(parallel_config)
         head_size = model_config.get_head_size()
         try:  # vLLM moved this constant across versions (fork 0.16 vs stock 0.24) — tolerate both.
@@ -346,15 +597,8 @@ class LagunaForCausalLM:
             dtype=dtype,
         )
 
-        # The production setting is uniform FullAttentionSpec for all layers. Keep the predicate here
-        # so the intended split remains visible beside the fail-fast gate above.
         def _is_sliding(i):
-            return (
-                cls._HYBRID_KV_CACHE_GROUPS_ENABLED
-                and bool(layer_types)
-                and layer_types[i] == "sliding_attention"
-                and sliding_window > 0
-            )
+            return bool(layer_types) and layer_types[i] == "sliding_attention" and sliding_window > 0
 
         spec = {}
         for i in range(num_layers):
@@ -363,11 +607,8 @@ class LagunaForCausalLM:
                 spec[key] = SlidingWindowSpec(sliding_window=sliding_window, **common)
             else:
                 spec[key] = FullAttentionSpec(**common)
-        # Phase-3 diagnostic (env-gated TT_LAGUNA_KV_SPEC_LOG=1): record what this hook returns. NOTE
-        # (2026-08-04): an always-on run proved this hook is NEVER CALLED at serving — the plugin's
-        # _try_get_spec_from_model_hook (worker.py) does not reach it, so vLLM uses the single-spec default
-        # (1 KV group / uniform full-KV). The model + HF config are correct (30 sliding + 10 full,
-        # sliding_window=512); the bug is plugin hook-resolution. Kept env-gated as a re-check.
+        # Optional audit trail: the pinned TT plugin resolves this class hook and
+        # forwards its result to upstream's hybrid KV planner.
         if os.environ.get("TT_LAGUNA_KV_SPEC_LOG") != "1":
             return spec
         try:
@@ -388,13 +629,32 @@ class LagunaForCausalLM:
 
     @classmethod
     def get_max_tokens_all_users(cls, model_name: str = "", num_devices: int = 1, tt_data_parallel: int = 1, **kwargs):
-        """Total KV-cache token pool for one single-user profile.
+        """Total KV-cache token pool for the selected serving profile.
 
         ``ADVERTISED_MAX_CONTEXT`` is a global ceiling. The requested ``max_model_len`` supplies the
         profile cap (65536 for D1, 131072 for D2/D4), so a single request can use that whole window
-        without treating the ceiling as proof that an unqualified profile is servable.
+        without treating the ceiling as proof that an unqualified profile is servable.  The opt-in
+        two-sequence pool remains fail-closed unless every independently checked launcher invariant
+        is also supplied to this hook.
         """
         max_model_len = kwargs.get("max_model_len")
+        if os.environ.get("TT_LAGUNA_MULTI_SEQ_POOL", "0") == "1":
+            max_num_seqs = kwargs.get("max_num_seqs")
+            if int(num_devices) != 2:
+                raise ValueError("TT_LAGUNA_MULTI_SEQ_POOL=1 requires num_devices=2, " f"got {num_devices}")
+            if max_num_seqs is None or int(max_num_seqs) != 2:
+                raise ValueError("TT_LAGUNA_MULTI_SEQ_POOL=1 requires max_num_seqs=2, " f"got {max_num_seqs}")
+            if max_model_len is None or not (0 < int(max_model_len) <= 65536):
+                raise ValueError(
+                    "TT_LAGUNA_MULTI_SEQ_POOL=1 requires 0 < max_model_len <= 65536, " f"got {max_model_len}"
+                )
+            pool_tokens = int(max_model_len) * 2
+            if pool_tokens > ADVERTISED_MAX_CONTEXT:
+                raise ValueError(
+                    "TT_LAGUNA_MULTI_SEQ_POOL=1 token pool exceeds advertised context: "
+                    f"{pool_tokens} > {ADVERTISED_MAX_CONTEXT}"
+                )
+            return pool_tokens
         if max_model_len:
             return min(int(max_model_len), ADVERTISED_MAX_CONTEXT)
         return ADVERTISED_MAX_CONTEXT
@@ -416,6 +676,9 @@ class LagunaForCausalLM:
         Returns the list of per-layer dicts that ``LagunaModel.prefill_layers`` / ``decode_layers``
         consume. KV dtype is the selected-policy BFP8, independent of vLLM's torch ``dtype`` hint."""
         num_blocks, local_kv_heads, block_size, head_dim = kv_cache_shape
+        # Traces close over the old KV tensors. Release them after validating the
+        # replacement shape but before allocating its first buffer.
+        self._release_decode_traces()
         # vLLM owns block ids [0, num_blocks). Bucketed prefill can compute beyond the last REAL
         # scheduler-allocated block, so reserve one adapter-private physical block for read-safe
         # attention padding. Paged-fill uses -1 to skip those columns; decode continues to use vLLM's
@@ -450,28 +713,42 @@ class LagunaForCausalLM:
                     "dtype": self._kv_dtype,
                 }
             )
-        # A cache (re)allocation invalidates captured decode traces (they close over kv buffers).
-        self._decode = {}
-        self._verify_dec = {}
         self._report_dram("kv_cache")
         return kv_cache
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
-        """Hybrid allocation: one paged buffer per attention layer, each sized to ITS group's block
-        budget. ``per_layer_specs`` is the plugin's list of ``(shape, dtype, tensor_idx)`` in model
-        layer-index order; ``shape`` = ``(num_blocks, local_kv_heads, block_size, head_dim)`` with the
-        sliding-window layers already given a smaller ``num_blocks`` by vLLM's hybrid manager. Same
-        BFP8 DRAM/replicated layout as ``allocate_kv_cache``; returns the per-layer dict list consumed
-        by ``LagunaModel.prefill_layers`` / ``decode_layers`` (via ``zip(self.layers, kv_cache)``)."""
-        if self._HYBRID_KV_CACHE_GROUPS_ENABLED:
-            raise RuntimeError(
-                "Hybrid Laguna KV allocation is disabled until tensor_idx aliasing and four-group "
-                "page tables are implemented. Use TT_LAGUNA_HYBRID_KV=0."
-            )
-        kv_cache = []
-        for entry in per_layer_specs:
-            shape = tuple(entry[0])
-            num_blocks, local_kv_heads, block_size, head_dim = shape
+        """Allocate plugin-resolved per-layer caches, honoring hybrid tensor aliases.
+
+        The plugin supplies ``(shape, dtype, tensor_idx)`` in logical layer
+        order.  Uniform mode keeps one physical tensor pair per layer.  Hybrid
+        mode validates the exact Laguna four-group layout, allocates each of the
+        ten unique ``tensor_idx`` values once, and returns 40 logical cache
+        dictionaries whose K/V objects alias by slot.  Group IDs remain separate
+        metadata because they select different vLLM block tables.
+        """
+
+        hybrid = bool(self._HYBRID_KV_CACHE_GROUPS_ENABLED)
+        if hybrid:
+            self._validate_kv_feature_combination(self._PREFIX_CACHE_ENABLED, True)
+            layout = self._hybrid_kv_layout()
+            descriptors = validate_per_layer_tensor_aliases(per_layer_specs, layout)
+            allocation_entries = [(*descriptors[tensor_idx], tensor_idx) for tensor_idx in range(layout.num_tensors)]
+        else:
+            layout = None
+            allocation_entries = [
+                (tuple(entry[0]), entry[1], layer_idx) for layer_idx, entry in enumerate(per_layer_specs)
+            ]
+
+        # Validate the complete alias plan before disturbing a live trace, then
+        # release all captures before allocating the first replacement KV tensor.
+        self._release_decode_traces()
+        physical = {}
+        for shape, _plugin_dtype, tensor_idx in allocation_entries:
+            # ``num_blocks`` is the vLLM-visible pool (2460 in the qualified
+            # hybrid envelope, including vLLM's null block). The extra row is
+            # adapter-private prefill padding, so the physical tensor has 2461
+            # rows without advertising another schedulable block ID.
+            num_blocks, local_kv_heads, block_size, head_dim = tuple(shape)
             scratch_block_idx = int(num_blocks)
             physical_shape = (int(num_blocks) + 1, int(local_kv_heads), int(block_size), int(head_dim))
             k = ttnn.from_torch(
@@ -490,19 +767,31 @@ class LagunaForCausalLM:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=_replicate(self.mesh_device),
             )
-            kv_cache.append(
-                {
-                    "k": k,
-                    "v": v,
-                    "block_size": int(block_size),
-                    "blocks_per_user": int(num_blocks),
-                    "scratch_block_idx": scratch_block_idx,
-                    "dtype": self._kv_dtype,
-                }
-            )
-        self._decode = {}
-        self._verify_dec = {}
-        self._report_dram("kv_cache_per_layer")
+            physical[int(tensor_idx)] = {
+                "k": k,
+                "v": v,
+                "block_size": int(block_size),
+                "blocks_per_user": int(num_blocks),
+                "scratch_block_idx": scratch_block_idx,
+                "dtype": self._kv_dtype,
+                "tensor_idx": int(tensor_idx),
+            }
+
+        kv_cache = []
+        if hybrid:
+            assert layout is not None
+            for alias in layout.aliases:
+                entry = dict(physical[alias.tensor_index])
+                entry.update(
+                    hybrid_group_id=alias.group_id,
+                    hybrid_kind=alias.kind,
+                    logical_layer_idx=alias.layer_index,
+                )
+                kv_cache.append(entry)
+        else:
+            for layer_idx in range(len(per_layer_specs)):
+                kv_cache.append(dict(physical[layer_idx]))
+        self._report_dram("kv_cache_per_layer_hybrid" if hybrid else "kv_cache_per_layer")
         return kv_cache
 
     # ---- hybrid KV: per-group page-table helpers ---- #
@@ -514,34 +803,117 @@ class LagunaForCausalLM:
             ]
         return self._layer_kinds
 
+    def _hybrid_kv_layout(self):
+        """Return the exact full-model layout; reduced hybrid bring-up is unsafe."""
+
+        if getattr(self, "_hybrid_layout_cache", None) is None:
+            self._hybrid_layout_cache = build_laguna_hybrid_kv_layout(self._group_kinds())
+        return self._hybrid_layout_cache
+
     def _group_reps(self):
-        """{kind: first built-layer index of that kind} — a representative layer per KV group."""
-        reps = {}
-        for i, k in enumerate(self._group_kinds()):
-            reps.setdefault(k, i)
-        return reps
+        """Map each of Laguna's four vLLM group IDs to its representative layer."""
+
+        layout = self._hybrid_kv_layout()
+        return {group_id: layer_idx for group_id, layer_idx in enumerate(layout.representative_layers)}
+
+    def _kv_cache_is_hybrid(self, kv_cache):
+        """Validate logical metadata/tensor aliases and return whether it is hybrid."""
+
+        if not kv_cache:
+            return False
+        marked = ["hybrid_group_id" in entry for entry in kv_cache]
+        if any(marked) and not all(marked):
+            raise ValueError("KV cache mixes uniform and hybrid logical-layer metadata")
+        if not all(marked):
+            return False
+        layout = self._hybrid_kv_layout()
+        if len(kv_cache) != len(layout.aliases):
+            raise ValueError(f"hybrid KV cache has {len(kv_cache)} logical layers, expected {len(layout.aliases)}")
+        physical = {}
+        for alias, entry in zip(layout.aliases, kv_cache, strict=True):
+            actual = (
+                int(entry.get("logical_layer_idx", -1)),
+                int(entry.get("hybrid_group_id", -1)),
+                int(entry.get("tensor_idx", -1)),
+                entry.get("hybrid_kind"),
+            )
+            expected = (alias.layer_index, alias.group_id, alias.tensor_index, alias.kind)
+            if actual != expected:
+                raise ValueError(
+                    f"hybrid KV metadata drift at layer {alias.layer_index}: got {actual}, expected {expected}"
+                )
+            descriptor = (
+                entry.get("k"),
+                entry.get("v"),
+                int(entry.get("block_size", -1)),
+                int(entry.get("blocks_per_user", -1)),
+                int(entry.get("scratch_block_idx", -1)),
+            )
+            prior = physical.setdefault(alias.tensor_index, descriptor)
+            if prior[0] is not descriptor[0] or prior[1] is not descriptor[1] or prior[2:] != descriptor[2:]:
+                raise ValueError(
+                    f"hybrid KV tensor alias {alias.tensor_index} is not physically shared "
+                    f"or has inconsistent cache metadata at layer {alias.layer_index}"
+                )
+        return True
+
+    def _validated_group_page_tables(self, page_tables_per_layer, *, purpose):
+        """Normalize and prove that every logical layer in a group has one table."""
+
+        layout = self._hybrid_kv_layout()
+        if len(page_tables_per_layer) != len(layout.aliases):
+            raise ValueError(
+                f"{purpose} page_tables_per_layer has {len(page_tables_per_layer)} entries "
+                f"for {len(layout.aliases)} logical layers"
+            )
+        representatives = {}
+        for group_id, group in enumerate(layout.groups):
+            rep_index = group[0]
+            rep = torch.as_tensor(page_tables_per_layer[rep_index], dtype=torch.int32)
+            if rep.dim() == 1:
+                rep = rep.reshape(1, -1)
+            if rep.dim() != 2:
+                raise ValueError(
+                    f"{purpose} page table for group {group_id} must be rank 1 or 2, got {tuple(rep.shape)}"
+                )
+            for layer_index in group[1:]:
+                candidate = torch.as_tensor(page_tables_per_layer[layer_index], dtype=torch.int32)
+                if candidate.dim() == 1:
+                    candidate = candidate.reshape(1, -1)
+                if candidate.shape != rep.shape or not torch.equal(candidate, rep):
+                    raise ValueError(
+                        f"{purpose} page tables disagree within hybrid group {group_id}: "
+                        f"layers {rep_index} and {layer_index}"
+                    )
+            representatives[group_id] = rep
+        return representatives
+
+    def _validate_page_table_mode(self, kv_cache, page_tables_per_layer, *, operation):
+        """Require hybrid cache tensors and per-layer tables to travel together."""
+
+        hybrid_cache = self._kv_cache_is_hybrid(kv_cache)
+        hybrid_tables = page_tables_per_layer is not None
+        if hybrid_cache != hybrid_tables:
+            raise ValueError(
+                f"{operation} received {'hybrid' if hybrid_cache else 'uniform'} KV cache but "
+                f"{'per-layer' if hybrid_tables else 'uniform'} page tables"
+            )
+        return hybrid_cache
 
     def _prefill_pt_grouped_into(self, page_tables_per_layer, buffers, *, purpose):
         """Upload one persistent prefill page table per KV group and return a per-layer list."""
-        kinds = self._group_kinds()
-        if len(page_tables_per_layer) < len(kinds):
-            raise ValueError(
-                f"{purpose} page_tables_per_layer has {len(page_tables_per_layer)} entries "
-                f"for {len(kinds)} built layers"
-            )
+        layout = self._hybrid_kv_layout()
+        hosts = self._validated_group_page_tables(page_tables_per_layer, purpose=purpose)
         bufs = {}
-        for kind, i in self._group_reps().items():
-            pt = torch.as_tensor(page_tables_per_layer[i], dtype=torch.int32)
-            if pt.dim() == 1:
-                pt = pt.reshape(1, -1)
-            key = (kind, tuple(pt.shape))
+        for group_id, pt in hosts.items():
+            key = (group_id, tuple(pt.shape))
             buf = buffers.get(key)
             if buf is None:
                 buf = self.gen._rep(torch.zeros(pt.shape, dtype=torch.int32), ttnn.int32)
                 buffers[key] = buf
             ttnn.copy_host_to_device_tensor(self.gen._host(pt, ttnn.int32), buf)
-            bufs[kind] = buf
-        return [bufs[k] for k in kinds]
+            bufs[group_id] = buf
+        return layout.expand_group_values([bufs[group_id] for group_id in range(layout.num_groups)])
 
     def _prefill_pt_grouped(self, page_tables_per_layer):
         """Persistent attention page tables, one per KV group, expanded back to a per-layer list."""
@@ -552,29 +924,27 @@ class LagunaForCausalLM:
         return self._prefill_pt_grouped_into(page_tables_per_layer, self._pf_fill_pt_groups, purpose="fill")
 
     def _decode_pt_grouped_alloc(self, page_tables_per_layer):
-        """Allocate the 2 per-group persistent DECODE page-table buffers (BEFORE trace capture) and
-        return (per_layer_list, groups_dict, reps_dict). Both groups share the full-width null-padded
-        shape [B, max_blocks], so the buffers are identical shape / different content."""
-        kinds = self._group_kinds()
+        """Allocate four persistent decode block tables before trace capture."""
+        layout = self._hybrid_kv_layout()
         reps = self._group_reps()
+        hosts = self._validated_group_page_tables(page_tables_per_layer, purpose="decode")
         groups = {}
-        for kind, i in reps.items():
-            pt = torch.as_tensor(page_tables_per_layer[i], dtype=torch.int32)
-            if pt.dim() == 1:
-                pt = pt.reshape(1, -1)
-            groups[kind] = self.gen._rep(torch.zeros(pt.shape, dtype=torch.int32), ttnn.int32)
-        return [groups[k] for k in kinds], groups, reps
+        for group_id, pt in hosts.items():
+            groups[group_id] = self.gen._rep(torch.zeros(pt.shape, dtype=torch.int32), ttnn.int32)
+        per_layer = layout.expand_group_values([groups[group_id] for group_id in range(layout.num_groups)])
+        return per_layer, groups, reps
 
     def _decode_pt_grouped_refresh(self, st, page_tables_per_layer):
         """Copy each group's host block table into its persistent decode buffer, only when changed."""
-        for kind, i in st["pt_reps"].items():
-            pt_host = torch.as_tensor(page_tables_per_layer[i], dtype=torch.int32)
-            if pt_host.dim() == 1:
-                pt_host = pt_host.reshape(1, -1)
-            last = st["last_pt_host_groups"].get(kind)
+        hosts = self._validated_group_page_tables(page_tables_per_layer, purpose="decode")
+        for group_id, pt_host in hosts.items():
+            last = st["last_pt_host_groups"].get(group_id)
             if last is None or not torch.equal(pt_host, last):
-                ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), st["pt_groups"][kind])
-                st["last_pt_host_groups"][kind] = pt_host.clone()
+                ttnn.copy_host_to_device_tensor(
+                    self._page_table_to_device_host(pt_host),
+                    st["pt_groups"][group_id],
+                )
+                st["last_pt_host_groups"][group_id] = pt_host.clone()
                 self.gen.counters["page_table_refresh"] += 1
 
     # --------------------------------------------------------------------- #
@@ -658,9 +1028,7 @@ class LagunaForCausalLM:
         source_width = int(pt.shape[1])
         width = source_width if target_width is None else int(target_width)
         if width < source_width:
-            raise ValueError(
-                f"prefill target page-table width {width} is smaller than scheduler width {source_width}"
-            )
+            raise ValueError(f"prefill target page-table width {width} is smaller than scheduler width {source_width}")
         # Fixed, equal widths keep both persistent PT buffers and their TT programs trace-stable.
         attention = torch.full((int(pt.shape[0]), width), scratch, dtype=torch.int32)
         fill = torch.full((int(pt.shape[0]), width), -1, dtype=torch.int32)
@@ -704,17 +1072,25 @@ class LagunaForCausalLM:
         return attention, fill
 
     def _prefill_page_table_width(self, block_size):
-        """Fixed prefill-only PT width covering ``max_model_len + largest_bucket``.
+        """Fixed prefill-only page-table width for the padded compute horizon.
 
-        Decode keeps the scheduler's original ``ceil(max_model_len / block_size)`` width. Prefill needs
-        the larger logical horizon because the compute bucket retains an absolute resumed start. Round
-        to eight int32 columns so the row-major page-table stick is a 32-byte multiple for TT kernels.
+        Streaming only pads a single tail chunk, so the horizon is the logical
+        context rounded once to the 8192-token outer boundary.  The rollback path
+        retains the historical ``max_model_len + largest_bucket`` width.  Round to
+        eight int32 columns for a 32-byte row-major stick.
         """
         bs = int(block_size)
         if bs <= 0:
             raise ValueError(f"prefill KV block_size must be positive, got {bs}")
-        largest_bucket = max(self._prefill_bucket_lens())
-        blocks = (int(self.max_model_len) + int(largest_bucket) + bs - 1) // bs
+        if self._streaming_prefill_active():
+            outer = min(int(self._PREFILL_STREAM_OUTER_CHUNK), int(self.max_model_len))
+            horizon = streaming_prefill_capacity(
+                int(self.max_model_len),
+                outer_chunk=outer,
+            )
+        else:
+            horizon = int(self.max_model_len) + max(self._prefill_bucket_lens())
+        blocks = (horizon + bs - 1) // bs
         return ((blocks + 7) // 8) * 8
 
     def _prepare_prefill_page_tables(
@@ -745,9 +1121,9 @@ class LagunaForCausalLM:
             )
             return self._prefill_pt(attention_host), self._prefill_fill_pt(fill_host)
 
-        # Hybrid serving is currently fail-fast at allocation, but retain correct list plumbing for
-        # reduced tests and the eventual re-enable: construct a pair from each layer's own pool metadata,
-        # then persist one distinct attention/fill buffer per group.
+        # Construct a protected pair from every logical layer's scheduler table,
+        # then validate/collapse identical members onto one persistent attention
+        # and fill buffer per group.
         layer_count = len(self._group_kinds())
         if len(page_tables_per_layer) < layer_count:
             raise ValueError(
@@ -761,9 +1137,7 @@ class LagunaForCausalLM:
         for i in range(layer_count):
             cache_meta = kv_cache[i]
             if "scratch_block_idx" not in cache_meta:
-                raise ValueError(
-                    f"{operation} KV cache layer {i} is missing its adapter-private scratch block"
-                )
+                raise ValueError(f"{operation} KV cache layer {i} is missing its adapter-private scratch block")
             attention_host, fill_host = self._protect_prefill_padding_blocks(
                 page_tables_per_layer[i],
                 ranges,
@@ -838,43 +1212,40 @@ class LagunaForCausalLM:
     #       trace. Sampling likewise reuses persistent B=1 buffers (copy-in, no alloc).
 
     def _prefill_bucket_lens(self):
-        """Supported prefill bucket lengths (powers of two from 128 up to the SERVABLE context). Every
-        request rounds UP to one of these via ``_bucket_len``, and ``warmup_model_prefill`` compiles
-        EVERY one of them before the decode trace is captured.
+        """Finite compute shapes warmed before the resident decode trace.
 
-        The ceiling is the servable context ``min(max_model_len, ADVERTISED_MAX_CONTEXT)``,
-        NOT a fixed 8192 cap. The sequence-pipelined prefill tail (``_prefill_pipelined``) reassembles
-        per-chunk outputs with a program whose shape depends on the CHUNK COUNT (``ttnn.concat(outs)``
-        + the per-chunk input ``ttnn.slice``s), so a prompt needing more chunks than any warmed bucket
-        would first-compile that program UNDER the resident decode trace — orders of magnitude slower
-        and trace-corrupting. (Under the old fixed 8192 cap, warmup exercised only 2- and 4-chunk
-        counts, so any prompt ≥16384 tokens compiled a new tail program mid-serve.) Warming the full
-        power-of-two ladder makes every servable prompt run only pre-compiled programs, and keeps
-        ``_bucket_len`` returning a value that is ALWAYS in the warmed set.
+        Chunk-major streaming needs only powers of two from one tile through the
+        8192-token outer chunk.  Short cold requests use that ladder; long D2
+        requests reuse the canonical 8192 program for complete chunks and the
+        padded tail, eliminating monolithic 16K..131K hidden/concat shapes while
+        keeping one SDPA reduction geometry.  The environment warm cap remains a
+        development-only way to reduce this finite set.
 
-        The ladder floor is 32 (one tile), not 128, so the small cached-suffix prefills that
-        dominate agentic serving (prefix caching hits ~95% of turns; the fresh suffix is typically 8–74
-        tokens) round up to 32/64/128 instead of always 128. That cuts up to ~16× of wasted prefill work
-        on the common turn (plen=8 → bucket 32 = 4× vs 16×; plen=40 → 64; plen=74 → 128). Right-padding
-        stays safe at the smaller buckets: the pad positions are future cache slots (plen..L-1),
-        overwritten before any decode step reads them, and causal attention means the last real token
-        never attends to them — so the last-token logits (and greedy output) are bit-identical.
-
-        ``TT_LAGUNA_PREFILL_WARM_CAP`` may lower the ceiling for fast dev iteration (bounds warmup
-        cost), but any prompt LONGER than the cap then compiles under the trace — a one-time warning is
-        logged. Do NOT set it below max_model_len for serving."""
+        On D1, or with ``TT_LAGUNA_STREAMING_PREFILL=0``, this returns the
+        historical ladder through the whole servable context for a safe rollback.
+        """
         import os as _os
 
         servable = min(int(self.max_model_len), ADVERTISED_MAX_CONTEXT)
-        cap = servable
+        streaming = self._streaming_prefill_active()
+        normal_cap = min(servable, int(self._PREFILL_STREAM_OUTER_CHUNK)) if streaming else servable
+        cap = normal_cap
         env = _os.environ.get("TT_LAGUNA_PREFILL_WARM_CAP")
         if env:
-            cap = min(servable, int(env))
-            if cap < servable and not getattr(type(self), "_warned_warm_cap", False):
+            cap = min(normal_cap, int(env))
+            if cap <= 0:
+                raise ValueError(f"TT_LAGUNA_PREFILL_WARM_CAP must be positive, got {env}")
+            if cap < normal_cap and not getattr(type(self), "_warned_warm_cap", False):
+                consequence = (
+                    f"stream chunks longer than {cap} tokens will be rejected before device execution"
+                    if streaming
+                    else f"prompts longer than {cap} tokens will compile prefill programs under the resident "
+                    "decode trace (very slow + trace-unsafe)"
+                )
                 print(
-                    f"[laguna] WARNING: TT_LAGUNA_PREFILL_WARM_CAP={cap} < servable context {servable}; "
-                    f"prompts longer than {cap} tokens will compile prefill programs under the resident "
-                    f"decode trace (very slow + trace-unsafe). Dev-only knob — unset for serving.",
+                    f"[laguna] WARNING: TT_LAGUNA_PREFILL_WARM_CAP={cap} < required compute shape "
+                    f"{normal_cap}; "
+                    f"{consequence}. Dev-only knob — unset for serving.",
                     flush=True,
                 )
                 type(self)._warned_warm_cap = True
@@ -886,25 +1257,81 @@ class LagunaForCausalLM:
         return sorted(set(x for x in buckets if x >= 1))
 
     def _bucket_len(self, plen):
+        """Smallest warmed bucket for one independently executed compute chunk."""
         buckets = self._prefill_bucket_lens()
         for b in buckets:
-            if plen <= b:
-                return b  # always in the warmed set (top bucket == servable context)
-        # Unreachable for in-contract prompts: the top bucket is the servable context
-        # (min(max_model_len, ADVERTISED_MAX_CONTEXT)), so any plen ≤ max_model_len is caught above.
-        # A prompt beyond that is out of contract (vLLM rejects it); round up as a last-resort guard —
-        # this length is NOT warmed and would compile under the decode trace.
+            if int(plen) <= b:
+                return b
         top = buckets[-1]
+        if self._streaming_prefill_active():
+            raise ValueError(
+                f"prefill compute chunk {int(plen)} exceeds streaming outer chunk {top}; "
+                "build a prefill_stream_plan instead of a monolithic bucket"
+            )
+        # Rollback-only monolithic guard for an out-of-contract request.
         return ((plen + top - 1) // top) * top
 
-    def _prefill_bucket_for_range(self, chunk_len, start_pos, block_size):
-        """Select a warmed compute bucket without crossing an accepted cached-prefix boundary.
+    def _prefill_stream_outer_chunk(self, block_size):
+        """Return and validate the adapter/model outer-chunk contract."""
 
-        Prefix-cache admission truncates D2 hits to complete cold outer chunks before this method is
-        called.  A nonzero admitted start must therefore be aligned to the decoder's *actual* outer
-        prefill chunk (8192 in the qualified profile).  Keeping that start unchanged makes every fill
-        target scheduler-owned; padding the fresh suffix to at least one outer chunk reproduces the
-        canonical cold chunk geometry without rewriting any shared cached block.
+        bs = int(block_size)
+        if bs <= 0:
+            raise ValueError(f"prefill stream block size must be positive, got {bs}")
+        configured = int(self._PREFILL_STREAM_OUTER_CHUNK)
+        outer = min(configured, int(self.max_model_len), ADVERTISED_MAX_CONTEXT)
+        if outer % bs:
+            raise ValueError(f"prefill streaming outer chunk {outer} is not aligned to KV block size {bs}")
+        layers = getattr(self.model, "layers", None)
+        if layers and outer == configured:
+            model_chunk = (int(layers[0]._prefill_pipe_chunk) // bs) * bs
+            if model_chunk != configured:
+                raise RuntimeError(
+                    f"adapter streaming outer chunk is {configured}, but the decoder is configured "
+                    f"for {model_chunk}; keep adapter planning and chunked SDPA identical"
+                )
+        return outer
+
+    def _prefill_plan_for_range(self, chunk_len, start_pos, block_size):
+        """Plan one scheduler range with canonical D2 long-stream geometry."""
+
+        length = int(chunk_len)
+        start = int(start_pos)
+        if not self._streaming_prefill_active():
+            bucket = self._prefill_bucket_for_range(length, start, block_size)
+            return (PrefillStreamChunk(0, length, bucket),)
+
+        outer = self._prefill_stream_outer_chunk(block_size)
+        buckets = tuple(int(bucket) for bucket in self._prefill_bucket_lens() if int(bucket) <= outer)
+        plan = prefill_stream_plan(
+            length,
+            bucket_lens=buckets,
+            outer_chunk=outer,
+            # A short, unsegmented cold request retains the finite 32..8192
+            # ladder. Every later scheduler range, or a first range longer than
+            # one outer chunk, uses the canonical 8192 shape on D2. This matches
+            # the established monolithic kernel family's tail reduction while
+            # still removing the 32768 power-of-two cliff (16400 real rows
+            # compute 24576 rows).
+            canonical_tail=int(self.D) == 2 and (start > 0 or length > outer),
+        )
+        # Prefix hits additionally enforce scheduler alignment.  Their compute
+        # plan is already canonical under the D2 long-stream rule above; retain
+        # the explicit remap as a fail-closed assertion of that contract.
+        if bool(self._PREFIX_CACHE_ENABLED) and int(self.D) == 2 and start > 0:
+            quantum = self._prefix_resume_quantum(block_size)
+            if start % quantum:
+                raise ValueError(
+                    f"prefix-cache resumed prefill start_pos {start} is not aligned to canonical "
+                    f"outer-chunk quantum {quantum}; cache-hit admission must truncate to a complete chunk"
+                )
+            plan = tuple(PrefillStreamChunk(chunk.relative_start, chunk.real_len, quantum) for chunk in plan)
+        return plan
+
+    def _prefill_bucket_for_range(self, chunk_len, start_pos, block_size):
+        """Select one bucket for legacy/verify callers.
+
+        Streaming prefill uses :meth:`_prefill_plan_for_range`; this helper remains
+        for the rollback path and small speculative-verify prefills.
         """
         length = int(chunk_len)
         start = int(start_pos)
@@ -1052,14 +1479,10 @@ class LagunaForCausalLM:
         if start < 0:
             raise ValueError(f"prefill runtime start_pos must be non-negative, got {start}")
         if start % bs:
-            raise ValueError(
-                f"prefill runtime start_pos {start} is not aligned to KV block size {bs}"
-            )
+            raise ValueError(f"prefill runtime start_pos {start} is not aligned to KV block size {bs}")
         rope_capacity = int(getattr(self.model, "meta", {}).get("max_seq_len", self.max_model_len))
         if start + L > rope_capacity:
-            raise ValueError(
-                f"prefill padded RoPE range [{start}, {start + L}) exceeds table capacity {rope_capacity}"
-            )
+            raise ValueError(f"prefill padded RoPE range [{start}, {start + L}) exceeds table capacity {rope_capacity}")
         for offset, length, pos_buf, start_buf in zip(
             runtime.chunk_offsets,
             runtime.chunk_lengths,
@@ -1083,6 +1506,22 @@ class LagunaForCausalLM:
             # Preserve the established cold single-shot RoPE slice + local SDPA path exactly.
             return None
         return self._refresh_prefill_runtime_offsets(L, start, block_size)
+
+    def _prefill_stream_warm_cases(self, block_size):
+        """Return the canonical start>0 long-stream warm case.
+
+        Running the returned cold prompt through :meth:`prefill_forward` executes
+        two complete outer-query programs, the second at a nonzero absolute start.
+        Short cold requests are covered separately by the finite bucket ladder.
+        """
+
+        if not self._streaming_prefill_active():
+            return ()
+        outer = self._prefill_stream_outer_chunk(block_size)
+        max_tail = min(outer, max(0, int(self.max_model_len) - outer))
+        if max_tail <= 0:
+            return ()
+        return ((outer, outer + max_tail),)
 
     def _prefill_state(self, block_size=None):
         """Allocate (once) the persistent prefill sampling buffers + B=1 sampler. Called from
@@ -1208,9 +1647,11 @@ class LagunaForCausalLM:
         The plugin supplies the full token row and absolute half-open bounds for the work scheduled
         in this step: ``tokens[u, start_pos[u]:prompt_lens[u]]``. ``start_pos`` is retained as the
         absolute KV/RoPE position, while bucketing and last-row selection use the relative chunk
-        length ``prompt_lens[u] - start_pos[u]``. The chunk length may be any positive value ≤
-        context (not block/tile/chunk aligned); internally it is right-padded to a bucket length so
-        the prefill uses pre-compiled, trace-safe programs (see the block comment above)."""
+        length ``prompt_lens[u] - start_pos[u]``. On D2, complete 8192-token chunks run through the
+        full layer stack before one canonical 8192-query padded tail for a long stream; only that
+        final real chunk reaches the LM head and sampler. Short cold requests retain the finite bucket
+        ladder, and D1 retains one monolithic bucket. In all cases the scheduled length may be any
+        positive value up to context and only precompiled, trace-safe compute shapes are used."""
         tokens = torch.as_tensor(tokens, dtype=torch.int64)
         if tokens.dim() == 1:
             tokens = tokens.unsqueeze(0)
@@ -1236,45 +1677,37 @@ class LagunaForCausalLM:
                     "a prefill step must schedule at least one token"
                 )
             if end > token_width:
-                raise ValueError(
-                    f"prefill request {u} ends at {end}, beyond supplied token width {token_width}"
-                )
+                raise ValueError(f"prefill request {u} ends at {end}, beyond supplied token width {token_width}")
             if end > int(self.max_model_len):
-                raise ValueError(
-                    f"prefill request {u} ends at {end}, beyond max_model_len {self.max_model_len}"
-                )
+                raise ValueError(f"prefill request {u} ends at {end}, beyond max_model_len {self.max_model_len}")
             ranges.append((start, end, end - start))
 
         if not kv_cache:
             raise ValueError("prefill requires an allocated KV cache")
+        self._validate_page_table_mode(
+            kv_cache,
+            page_tables_per_layer,
+            operation="prefill",
+        )
         runtime_bs = int(kv_cache[0]["block_size"])
         if any(int(entry["block_size"]) != runtime_bs for entry in kv_cache):
             raise ValueError("resumed prefill runtime offsets require a uniform KV block size across layers")
-        bucket_lens = [
-            self._prefill_bucket_for_range(chunk_len, start, runtime_bs)
-            for start, _, chunk_len in ranges
-        ]
+        plans = [self._prefill_plan_for_range(chunk_len, start, runtime_bs) for start, _, chunk_len in ranges]
+        compute_spans = [plan[-1].relative_start + plan[-1].bucket_len for plan in plans]
         if bool(self._PREFIX_CACHE_ENABLED) and int(self.D) == 2:
-            for u, ((start, end, _), bucket_len) in enumerate(zip(ranges, bucket_lens)):
+            for u, ((start, end, _), plan) in enumerate(zip(ranges, plans)):
                 if start > 0:
                     quantum = self._prefix_resume_quantum(runtime_bs)
+                    buckets = [chunk.bucket_len for chunk in plan]
+                    bucket_summary = (
+                        f"compute_bucket={buckets[0]}" if len(buckets) == 1 else f"compute_buckets={buckets}"
+                    )
                     print(
                         "[laguna prefix] resume "
                         f"request={u} scheduled_start={start} effective_start={start} "
-                        f"real_end={end} compute_bucket={bucket_len} canonical_chunk={quantum}",
+                        f"real_end={end} {bucket_summary} canonical_chunk={quantum}",
                         flush=True,
                     )
-        # Attention reads and paged-cache fills use separate persistent page tables. Both have the
-        # same fixed shape and are pre-allocated by warmup_model_prefill; model.prefill_layers handles
-        # either uniform tensors or per-layer lists without touching the scheduler/decode table.
-        pt, fill_pt = self._prepare_prefill_page_tables(
-            page_table,
-            page_tables_per_layer,
-            kv_cache,
-            ranges,
-            bucket_lens,
-            operation="prefill",
-        )
         if self._spec_mode == "1" and batch == 1:
             # Stash the prompt token sequence for ngram seeding — on the greedy served path the plugin
             # passes NO prompt_tokens/output_tokens (those are penalty-gated, model_runner.py:1051), so
@@ -1298,23 +1731,81 @@ class LagunaForCausalLM:
         st = self._prefill_state() if device_sampling else None
         last_logits = []
         sampled = []
-        for u, ((start, end, chunk_len), L) in enumerate(zip(ranges, bucket_lens)):
-            runtime_offsets = self._runtime_offsets_for_prefill(L, start, runtime_bs)
-            padded = torch.zeros(L, dtype=torch.int64)
-            padded[:chunk_len] = tokens[u, start:end]
-            tok_tt = self.gen._tokens_to_device(padded)
-            x = self.model.embed_prefill(tok_tt)
-            h = self.model.prefill_layers(
-                x,
-                kv_cache,
-                pt,
-                fill_page_table=fill_pt,
-                fill_page_table_base_pos=start,
-                user_id=u,
-                start_pos=start,
-                runtime_offsets=runtime_offsets,
-            )
-            shards = self._last_token_shards(h, chunk_len, L)  # fixed-shape terminal
+        for u, ((request_start, _request_end, _request_len), plan) in enumerate(zip(ranges, plans)):
+            final_hidden = None
+            final_real_len = None
+            final_bucket_len = None
+            for chunk_idx, chunk in enumerate(plan):
+                absolute_start = request_start + chunk.relative_start
+                absolute_end = absolute_start + chunk.real_len
+                L = int(chunk.bucket_len)
+
+                # Protect and rebase the active row for this absolute subchunk.
+                # Other rows retain whole-request guards; they are not executed in
+                # this iteration but keep the shared [batch,width] buffer valid.
+                protected_ranges = list(ranges)
+                protected_buckets = list(compute_spans)
+                protected_ranges[u] = (absolute_start, absolute_end, int(chunk.real_len))
+                protected_buckets[u] = L
+                pt, fill_pt = self._prepare_prefill_page_tables(
+                    page_table,
+                    page_tables_per_layer,
+                    kv_cache,
+                    protected_ranges,
+                    protected_buckets,
+                    operation=f"prefill request {u} stream chunk {chunk_idx}",
+                )
+
+                runtime_offsets = self._runtime_offsets_for_prefill(L, absolute_start, runtime_bs)
+                padded = torch.zeros(L, dtype=torch.int64)
+                padded[: chunk.real_len] = tokens[u, absolute_start:absolute_end]
+                tok_tt = self.gen._tokens_to_device(padded)
+                x = self.model.embed_prefill(tok_tt)
+                if self._DFLASH_SERVING_ENABLED:
+                    h, capture = self.model.prefill_layers_with_dflash_aux(
+                        x,
+                        kv_cache,
+                        pt,
+                        fill_page_table=fill_pt,
+                        fill_page_table_base_pos=absolute_start,
+                        user_id=u,
+                        start_pos=absolute_start,
+                        runtime_offsets=runtime_offsets,
+                        valid_seq_len=chunk.real_len,
+                        enable_experimental=True,
+                    )
+                    new_request = absolute_start == 0
+                    if new_request:
+                        self._dflash_request_serial += 1
+                        self._dflash_request_id = f"vllm-{self._dflash_request_serial}"
+                    if self._dflash_request_id is None:
+                        raise RuntimeError("DFlash cache-off prefill must begin at absolute position zero")
+                    self._dflash_controller.ingest_prefill_capture(
+                        self._dflash_request_id,
+                        capture,
+                        new_request=new_request,
+                    )
+                else:
+                    h = self.model.prefill_layers(
+                        x,
+                        kv_cache,
+                        pt,
+                        fill_page_table=fill_pt,
+                        fill_page_table_base_pos=absolute_start,
+                        user_id=u,
+                        start_pos=absolute_start,
+                        runtime_offsets=runtime_offsets,
+                    )
+                if chunk_idx == len(plan) - 1:
+                    final_hidden = h
+                    final_real_len = int(chunk.real_len)
+                    final_bucket_len = L
+
+            if final_hidden is None or final_real_len is None or final_bucket_len is None:
+                raise RuntimeError(f"prefill request {u} produced no terminal stream chunk")
+            # Only the final real chunk reaches the norm/LM-head/sampler. Earlier
+            # chunks exist solely to materialize every layer's causal K/V.
+            shards = self._last_token_shards(final_hidden, final_real_len, final_bucket_len)
             if device_sampling:
                 self._refresh_prefill_sampling(st, sampling_params, u)
                 st["sampler"].decode_forward(
@@ -1386,9 +1877,14 @@ class LagunaForCausalLM:
         start = int(start_pos)
         end = start + S
         if start < 0 or end > int(self.max_model_len):
-            raise ValueError(
-                f"verify prefill range [{start}, {end}) is outside max_model_len {self.max_model_len}"
-            )
+            raise ValueError(f"verify prefill range [{start}, {end}) is outside max_model_len {self.max_model_len}")
+        if not kv_cache:
+            raise ValueError("verify prefill requires an allocated KV cache")
+        self._validate_page_table_mode(
+            kv_cache,
+            page_tables_per_layer,
+            operation="verify prefill",
+        )
         st = self._prefill_state()
         L = self._bucket_len(S)
         pt, fill_pt = self._prepare_prefill_page_tables(
@@ -1499,6 +1995,67 @@ class LagunaForCausalLM:
 
         hist = _row0(prompt_tokens) + _row0(output_tokens)
         return hist or [int(torch.as_tensor(tokens).reshape(-1)[0])]
+
+    def _dflash_serve(
+        self,
+        tokens,
+        pos,
+        page_table,
+        kv_cache,
+        page_tables_per_layer,
+        sampling_params,
+        read_from_device,
+    ):
+        """Return one buffered exact-greedy DFlash commit to vLLM."""
+
+        if self._dflash_controller is None or self._dflash_tok is None:
+            raise RuntimeError("DFlash serving was enabled but its request controller is unavailable")
+        if int(tokens.shape[0]) != 1:
+            raise RuntimeError(f"DFlash served decoding requires B=1, got B={tokens.shape[0]}")
+        if page_tables_per_layer is not None:
+            raise RuntimeError("DFlash served decoding does not support hybrid per-layer page tables")
+        if sampling_params is None or not self._spec_is_greedy(sampling_params):
+            raise RuntimeError("DFlash served decoding is exact-greedy only")
+        try:
+            block_sizes = {int(entry["block_size"]) for entry in kv_cache}
+        except (KeyError, TypeError) as error:
+            raise RuntimeError("DFlash served decoding requires explicit KV block-size metadata") from error
+        if block_sizes != {64}:
+            raise RuntimeError(f"DFlash served decoding requires uniform 64-token KV blocks, got {block_sizes}")
+        position = int(pos.reshape(-1)[0])
+        pending = bool(self._dflash_controller.pending_tokens)
+        proposal_rows = int(self._dflash_core.config.block_size)
+        # A full round can commit the target bonus at position P+16.  An exact
+        # fit is valid; a new round beyond it must fail rather than emit outside
+        # scheduler admission.  Already-verified buffered tokens remain safe.
+        if not pending and position + proposal_rows > int(self.max_model_len):
+            raise RuntimeError(
+                f"DFlash full-round verify at position {position} would exceed " f"max_model_len {self.max_model_len}"
+            )
+        known_bonus = int(tokens.reshape(-1)[0])
+        verify_kwargs = {
+            "page_table": page_table,
+            "kv_cache": kv_cache,
+            "page_tables_per_layer": None,
+        }
+        # vLLM allocates the block containing the current input, but does not
+        # reserve the next block for fixed speculative look-ahead.  At residues
+        # 49..63, a 16-row verify would cross that ownership boundary.  Advance
+        # with one exact target+aux row until the next block is allocated.
+        target_only = not pending and position % 64 > 48
+        serve = self._dflash_controller.serve_target_token if target_only else self._dflash_controller.serve_token
+        token_id = serve(
+            known_bonus=known_bonus,
+            position=position,
+            verify_kwargs=verify_kwargs,
+        )
+        ttnn.copy_host_to_device_tensor(
+            self._host_rank4_tok_batch(torch.tensor([[token_id]], dtype=torch.int64), 1),
+            self._dflash_tok,
+        )
+        if read_from_device:
+            return self._read_tokens_host(self._dflash_tok, 1)
+        return [self._dflash_tok]
 
     def _spec_serve(
         self, tokens, pos, page_table, kv_cache, page_tables_per_layer, reset_batch, kwargs, read_from_device
@@ -1629,6 +2186,67 @@ class LagunaForCausalLM:
         shards = self.model.lm_head_shards_decode(h)
         logits = self.model.logits_to_host(shards).reshape(B, self.vocab)
         return logits
+
+    def verify_greedy_decode_with_dflash_aux(
+        self,
+        tokens,
+        positions,
+        page_table=None,
+        kv_cache=None,
+        page_tables_per_layer=None,
+        **kwargs,
+    ):
+        """Eager target verify plus exact auxiliary rows for one DFlash request."""
+
+        if not self._DFLASH_SERVING_ENABLED:
+            raise RuntimeError("DFlash target verify is default-off; set TT_LAGUNA_DFLASH=1")
+        if page_tables_per_layer is not None:
+            raise RuntimeError("DFlash target verify does not support hybrid per-layer page tables")
+        if not kv_cache:
+            raise ValueError("DFlash target verify requires an allocated KV cache")
+        token_ids = torch.as_tensor(tokens, dtype=torch.int64).reshape(-1)
+        B = int(token_ids.shape[0])
+        if not 1 <= B <= 16:
+            raise ValueError(f"DFlash target verify requires 1..16 rows, got {B}")
+        if bool(((token_ids < 0) | (token_ids >= int(self.vocab))).any()):
+            raise ValueError("DFlash target verify received a token outside the target vocabulary")
+        pos = torch.as_tensor(positions, dtype=torch.int32).reshape(-1)
+        if int(pos.numel()) != B:
+            raise ValueError(f"DFlash target verify has {pos.numel()} positions for {B} tokens")
+        expected = torch.arange(int(pos[0]), int(pos[0]) + B, dtype=torch.int32)
+        if not torch.equal(pos.cpu(), expected):
+            raise ValueError("DFlash target verify positions must be strictly contiguous")
+        if int(pos[0]) < 0 or int(pos[-1]) >= int(self.max_model_len):
+            raise ValueError(
+                f"DFlash target verify interval [{int(pos[0])}, {int(pos[-1]) + 1}) "
+                f"is outside max_model_len {self.max_model_len}"
+            )
+
+        pt_host = torch.as_tensor(page_table, dtype=torch.int32)
+        if pt_host.dim() == 1:
+            pt_host = pt_host.unsqueeze(0)
+        if pt_host.dim() != 2 or int(pt_host.shape[0]) < 1:
+            raise ValueError("DFlash target verify requires one uniform page-table row")
+        pt_host = pt_host[:1].repeat(B, 1) if B > 1 else pt_host[:1]
+        pt = self._page_table_to_device(pt_host)
+        tok_tt = self.gen._rep(token_ids.reshape(1, B).to(torch.int32), ttnn.uint32)
+        cur = self.gen._rep(pos, ttnn.int32)
+        ridx = self.gen._rep(pos.reshape(1, B), ttnn.uint32)
+        hidden = self.model.embed_decode(tok_tt)
+        hidden, capture = self.model.decode_layers_with_dflash_aux(
+            hidden,
+            cur,
+            ridx,
+            pt,
+            kv_cache,
+            absolute_position=int(pos[0]),
+            sequential_kv_write=True,
+            enable_experimental=True,
+        )
+        shards = self.model.lm_head_shards_decode(hidden)
+        logits = self.model.logits_to_host(shards).reshape(B, int(self.vocab))
+        greedy = torch.argmax(logits, dim=-1).to(torch.int32).tolist()
+        return greedy, capture
 
     def _alloc_verify_decode(self, K1, kv_cache, tokens, pos, pt_host):
         """Phase 1 of verify-trace warmup: allocate ALL persistent device buffers for one K1 and warm
@@ -2000,6 +2618,24 @@ class LagunaForCausalLM:
         tokens = torch.as_tensor(tokens, dtype=torch.int64).reshape(-1, 1)
         B = tokens.shape[0]
         pos = torch.as_tensor(start_pos, dtype=torch.int32).reshape(B)
+        if not kv_cache:
+            raise ValueError("decode requires an allocated KV cache")
+        hybrid_cache = self._validate_page_table_mode(
+            kv_cache,
+            page_tables_per_layer,
+            operation="decode",
+        )
+
+        if self._DFLASH_SERVING_ENABLED:
+            return self._dflash_serve(
+                tokens,
+                pos,
+                page_table,
+                kv_cache,
+                page_tables_per_layer,
+                sampling_params,
+                read_from_device,
+            )
 
         if self._spec_mode and not self._spec_probed:
             # One-time diagnostic + Phase-2 feasibility probe. Placed BEFORE the host-sampling return and
@@ -2023,9 +2659,11 @@ class LagunaForCausalLM:
             )
 
         if sampling_params is None:
+            if hybrid_cache:
+                raise RuntimeError("hybrid KV host-sampling decode is unsupported; use on-device sampling")
             return self._decode_host_sampling(tokens, pos, page_table, kv_cache, read_from_device)
 
-        hybrid = page_tables_per_layer is not None
+        hybrid = hybrid_cache
         st = self._decode.get(B)
         if st is None:
             # the decode trace for this batch B was NOT pre-captured by warmup, so we compile +
@@ -2068,7 +2706,7 @@ class LagunaForCausalLM:
 
         # --- page table: copy only when contents changed ---
         if hybrid:
-            # Refresh BOTH per-group persistent buffers (full + sliding) that the trace closed over.
+            # Refresh all four per-group persistent buffers that the trace closed over.
             self._decode_pt_grouped_refresh(st, page_tables_per_layer)
         else:
             pt_host = torch.as_tensor(page_table, dtype=torch.int32)
@@ -2186,10 +2824,10 @@ class LagunaForCausalLM:
             from types import SimpleNamespace
 
             greedy = SimpleNamespace(temperature=[0.0], top_k=[0], top_p=[1.0], seed=[None])
-        # Warm at the fixed PREFILL-only extended width, NOT a bucket-tight arange. The paired extension
-        # covers max_model_len + largest_bucket: attention uses valid scratch ids while paged-fill uses
-        # -1 skip entries. A near-cap resumed suffix can retain its absolute start while its padded
-        # compute rows stay addressable. Decode retains ``_max_blocks``.
+        # Warm at the fixed PREFILL-only horizon, NOT a bucket-tight arange. D2's
+        # streamed tail needs one outer-chunk rounding; D1's rollback path retains
+        # max_model_len + largest_bucket. Attention uses valid scratch ids while
+        # paged-fill uses -1 skip entries. Decode retains ``_max_blocks``.
         # The chunked prefill path (seq > PIPE_CHUNK) is keyed on this PT width. Warming at a narrower
         # width leaves those programs to RECOMPILE under the resident decode
         # trace on the first real >PIPE_CHUNK prefill — a ~200x slowdown (measured: chunked 4096 is
@@ -2197,8 +2835,7 @@ class LagunaForCausalLM:
         # at the serving width makes serving-time prefill compile-free. Single-shot buckets use the
         # table whole (width-agnostic) so this is a no-op for them.
         prefill_w = self._prefill_page_table_width(bs)
-        # Hybrid iff the per-layer pools differ (sliding layers got a smaller pool).
-        hybrid = len({int(kv["blocks_per_user"]) for kv in kv_cache}) > 1
+        hybrid = self._kv_cache_is_hybrid(kv_cache)
         for L in self._prefill_bucket_lens():
             nb = (L + bs - 1) // bs
             if nb > total_blocks:  # cache too small for this bucket (reduced bring-up); skip
@@ -2231,19 +2868,24 @@ class LagunaForCausalLM:
                 self.prefill_forward(
                     dummy, page_table=pt, kv_cache=kv_cache, prompt_lens=[L], start_pos=[0], sampling_params=greedy
                 )
-        # Cache-off chunked prefill may still resume with a sub-PIPE_CHUNK suffix, so preserve its
-        # one-chunk pipeline warm passes. Prefix-cache admission instead exposes only complete outer-
-        # chunk starts, and _prefill_bucket_for_range floors every admitted suffix to that outer chunk;
-        # the ordinary cold ladder already compiles those pipeline shapes. In particular, never warm
-        # the prefix-on path with start=block_size: it is intentionally rejected as a non-canonical hit.
-        single_shot = (
-            [L for L in self._prefill_bucket_lens() if L <= int(self.model.layers[0].PIPE_CHUNK)]
-            if int(self.D) == 2 and not bool(self._PREFIX_CACHE_ENABLED)
-            else []
-        )
-        for L in single_shot:
-            start = bs
-            end = start + int(L)
+        # Streaming executes every subchunk through the full decoder stack. Warm
+        # one canonical 8192-query tail at a nonzero absolute start before the
+        # decode trace is resident; start is runtime data thereafter, so later
+        # chunk ordinals reuse the same program. The cold ladder above covers
+        # truly short requests. The rollback path retains the former cache-off
+        # start=block-size probes.
+        if self._streaming_prefill_active():
+            start_gt_zero_cases = self._prefill_stream_warm_cases(bs)
+            warm_ranges = [(0, end, bucket) for bucket, end in start_gt_zero_cases]
+        else:
+            single_shot = (
+                [L for L in self._prefill_bucket_lens() if L <= int(self.model.layers[0].PIPE_CHUNK)]
+                if int(self.D) == 2 and not bool(self._PREFIX_CACHE_ENABLED)
+                else []
+            )
+            warm_ranges = [(bs, bs + int(L), int(L)) for L in single_shot]
+
+        for start, end, _tail_bucket in warm_ranges:
             needed = (end + bs - 1) // bs
             if needed > total_blocks:
                 continue
@@ -2321,6 +2963,19 @@ class LagunaForCausalLM:
         if not enable_trace or kv_cache is None or max_batch_size is None:
             return None
         B = int(max_batch_size)
+        if self._DFLASH_SERVING_ENABLED:
+            if B != 1:
+                raise RuntimeError(f"DFlash decode warmup requires max_batch_size=1, got {B}")
+            # The first serving tranche uses eager draft + target verification.
+            # Keeping a normal CCL decode trace resident would make its dynamic
+            # proposal allocations unsafe, so no trace is captured in this mode.
+            print(
+                "[laguna dflash] warmup: normal decode trace OMITTED; "
+                "batch-1 eager five-layer proposal + target verify selected",
+                flush=True,
+            )
+            self._report_dram("dflash_ready", enforce=True)
+            return None
         # SPEC-DECODE served mode (TT_LAGUNA_SPEC_DECODE=1): capture the VERIFY traces (K1=1..k_max+1) and
         # OMIT the normal decode trace. Two resident CCL-bearing traces (normal decode + verify) deadlock
         # the mesh; routing ALL batch-1 greedy decode through the verify traces (K1=1 = a native single-token
@@ -2345,10 +3000,9 @@ class LagunaForCausalLM:
         if B in self._decode:
             return None
         nb = int(num_blocks) if num_blocks else 1
-        hybrid = len({int(kv["blocks_per_user"]) for kv in kv_cache}) > 1
+        hybrid = self._kv_cache_is_hybrid(kv_cache)
         if hybrid:
-            # Capture the decode trace over the TWO per-group persistent page tables (full + sliding),
-            # both full-width [B, nb] null-padded (dummy zeros → block 0, in-bounds for both pools).
+            # Capture the decode trace over four full-width group page tables.
             ptl = [torch.zeros([B, nb], dtype=torch.int32) for _ in kv_cache]
             pt_persist, groups, reps = self._decode_pt_grouped_alloc(ptl)
             st = self._decode_state(B, kv_cache, pt_persist)

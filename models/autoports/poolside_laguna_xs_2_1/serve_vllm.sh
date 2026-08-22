@@ -24,6 +24,16 @@ is_positive_integer() {
   [[ "$1" =~ ^[0-9]+$ ]] && ((10#$1 > 0))
 }
 
+vllm_plugin_is_allowed() {
+  local required="$1" plugin
+  local -a allowed_plugins
+  IFS=',' read -r -a allowed_plugins <<< "${VLLM_PLUGINS-}"
+  for plugin in "${allowed_plugins[@]}"; do
+    [ "$plugin" = "$required" ] && return 0
+  done
+  return 1
+}
+
 stop() {
   g=$(cat "$PIDF" 2>/dev/null)
   [ -n "$g" ] && kill -TERM -"$g" 2>/dev/null
@@ -96,9 +106,10 @@ case "$LAGUNA_PROFILE" in
     ;;
 esac
 
-# A singleton selected from this P300_X2 host is reported by UMD as ClusterType.CUSTOM and needs an
-# explicit 1x1 graph. Multi-device profiles use normal discovery; require a deliberate opt-in before
-# passing them any inherited/custom graph so the singleton descriptor cannot leak into D2 or D4.
+# A singleton selected from the dual-P150 qualification card is reported by UMD as
+# ClusterType.CUSTOM and needs an explicit 1x1 graph. Multi-device profiles use normal discovery;
+# require a deliberate opt-in before passing them any inherited/custom graph so the singleton
+# descriptor cannot leak into D2 or D4.
 ALLOW_CUSTOM_MESH_GRAPH_DESC="${LAGUNA_ALLOW_CUSTOM_MESH_GRAPH_DESC:-0}"
 case "$ALLOW_CUSTOM_MESH_GRAPH_DESC" in
   0|1) ;;
@@ -153,15 +164,49 @@ if [ -n "${MESH_DEVICE+x}" ] && [ "$MESH_DEVICE" != "$PROFILE_MESH_DEVICE" ]; th
 fi
 export MESH_DEVICE="$PROFILE_MESH_DEVICE"
 
+TT_LAGUNA_CONTEXT_PROBE="${TT_LAGUNA_CONTEXT_PROBE:-0}"
+TT_LAGUNA_MULTI_SEQ_POOL="${TT_LAGUNA_MULTI_SEQ_POOL:-0}"
+case "$TT_LAGUNA_CONTEXT_PROBE:$TT_LAGUNA_MULTI_SEQ_POOL" in
+  [01]:[01]) ;;
+  *) die "TT_LAGUNA_CONTEXT_PROBE and TT_LAGUNA_MULTI_SEQ_POOL must be 0 or 1" ;;
+esac
+
 MAX_MODEL_LEN="${LAGUNA_MAX_MODEL_LEN:-$PROFILE_MAX_MODEL_LEN}"
 is_positive_integer "$MAX_MODEL_LEN" || die "LAGUNA_MAX_MODEL_LEN must be a positive integer"
-((10#$MAX_MODEL_LEN <= PROFILE_MAX_MODEL_LEN)) ||
-  die "LAGUNA_MAX_MODEL_LEN=$MAX_MODEL_LEN exceeds the verified $LAGUNA_PROFILE limit $PROFILE_MAX_MODEL_LEN"
+if ((10#$MAX_MODEL_LEN > PROFILE_MAX_MODEL_LEN)); then
+  [ "$TT_LAGUNA_CONTEXT_PROBE" -eq 1 ] &&
+    [ "$LAGUNA_PROFILE" = p150x2 ] &&
+    [ "$MAX_MODEL_LEN" -eq 262144 ] ||
+    die "LAGUNA_MAX_MODEL_LEN=$MAX_MODEL_LEN exceeds the verified $LAGUNA_PROFILE limit $PROFILE_MAX_MODEL_LEN; the only fail-closed exception is TT_LAGUNA_CONTEXT_PROBE=1 at 262144 on p150x2"
+fi
+if [ "$TT_LAGUNA_CONTEXT_PROBE" -eq 1 ]; then
+  [ "$LAGUNA_PROFILE" = p150x2 ] && [ "$MAX_MODEL_LEN" -eq 262144 ] ||
+    die "TT_LAGUNA_CONTEXT_PROBE=1 requires LAGUNA_PROFILE=p150x2 and LAGUNA_MAX_MODEL_LEN=262144"
+  if [ -n "${TT_LAGUNA_ADVERTISED_CONTEXT+x}" ] && [ "$TT_LAGUNA_ADVERTISED_CONTEXT" != 262144 ]; then
+    die "TT_LAGUNA_CONTEXT_PROBE=1 requires TT_LAGUNA_ADVERTISED_CONTEXT=262144 when explicitly set"
+  fi
+  export TT_LAGUNA_ADVERTISED_CONTEXT=262144
+  CONTEXT_STATUS=experimental_262144_probe
+else
+  CONTEXT_STATUS=profile_qualified_limit
+fi
 
 MAX_NUM_SEQS="${LAGUNA_MAX_NUM_SEQS:-$PROFILE_MAX_NUM_SEQS}"
 is_positive_integer "$MAX_NUM_SEQS" || die "LAGUNA_MAX_NUM_SEQS must be a positive integer"
-((10#$MAX_NUM_SEQS <= PROFILE_MAX_NUM_SEQS)) ||
-  die "LAGUNA_MAX_NUM_SEQS=$MAX_NUM_SEQS exceeds the $LAGUNA_PROFILE limit $PROFILE_MAX_NUM_SEQS"
+if ((10#$MAX_NUM_SEQS > PROFILE_MAX_NUM_SEQS)); then
+  [ "$TT_LAGUNA_MULTI_SEQ_POOL" -eq 1 ] &&
+    [ "$LAGUNA_PROFILE" = p150x2 ] &&
+    [ "$MAX_NUM_SEQS" -eq 2 ] &&
+    ((10#$MAX_MODEL_LEN <= 65536)) ||
+    die "LAGUNA_MAX_NUM_SEQS=$MAX_NUM_SEQS exceeds the $LAGUNA_PROFILE limit $PROFILE_MAX_NUM_SEQS; the only fail-closed exception is TT_LAGUNA_MULTI_SEQ_POOL=1 with two p150x2 sequences and max_model_len<=65536"
+fi
+if [ "$TT_LAGUNA_MULTI_SEQ_POOL" -eq 1 ]; then
+  [ "$LAGUNA_PROFILE" = p150x2 ] && [ "$MAX_NUM_SEQS" -eq 2 ] && ((10#$MAX_MODEL_LEN <= 65536)) ||
+    die "TT_LAGUNA_MULTI_SEQ_POOL=1 requires p150x2, LAGUNA_MAX_NUM_SEQS=2, and LAGUNA_MAX_MODEL_LEN<=65536"
+  MULTI_SEQ_STATUS=experimental_two_sequence_pool
+else
+  MULTI_SEQ_STATUS=profile_qualified_sequence_limit
+fi
 
 TRACE_REGION_SIZE="${LAGUNA_TRACE_REGION_SIZE:-1500000000}"
 is_positive_integer "$TRACE_REGION_SIZE" || die "LAGUNA_TRACE_REGION_SIZE must be a positive integer"
@@ -224,6 +269,37 @@ case "$TT_LAGUNA_PREFIX_CACHE" in
   0|1) ;;
   *) die "TT_LAGUNA_PREFIX_CACHE must be 0 or 1" ;;
 esac
+TT_LAGUNA_HYBRID_KV="${TT_LAGUNA_HYBRID_KV:-0}"
+case "$TT_LAGUNA_HYBRID_KV" in
+  0|1) ;;
+  *) die "TT_LAGUNA_HYBRID_KV must be 0 or 1" ;;
+esac
+TT_LAGUNA_DFLASH="${TT_LAGUNA_DFLASH:-0}"
+case "$TT_LAGUNA_DFLASH" in
+  0|1) ;;
+  *) die "TT_LAGUNA_DFLASH must be 0 or 1" ;;
+esac
+TT_LAGUNA_STREAMING_PREFILL="${TT_LAGUNA_STREAMING_PREFILL:-1}"
+TT_LAGUNA_MOE_TOKEN_DISPATCH="${TT_LAGUNA_MOE_TOKEN_DISPATCH:-0}"
+TT_LAGUNA_MOE_PREFILL_TILE_SPARSE="${TT_LAGUNA_MOE_PREFILL_TILE_SPARSE:-0}"
+case "$TT_LAGUNA_STREAMING_PREFILL:$TT_LAGUNA_MOE_TOKEN_DISPATCH:$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" in
+  [01]:[01]:[01]) ;;
+  *)
+    die "TT_LAGUNA_STREAMING_PREFILL, TT_LAGUNA_MOE_TOKEN_DISPATCH, and TT_LAGUNA_MOE_PREFILL_TILE_SPARSE must be 0 or 1"
+    ;;
+esac
+# VLLM_PLUGINS is an exact comma-separated allowlist shared by vLLM's plugin
+# groups; an explicitly empty value loads no plugins. Every Laguna launch needs
+# the TT platform, TT model registry, and model-local general plugin. The local
+# plugin owns the qualified tool parser in every profile as well as prefix-cache
+# admission and hybrid-pool hooks. Reject an inherited incomplete filter instead
+# of mutating the operator's allowlist.
+if [ -n "${VLLM_PLUGINS+x}" ]; then
+  for required_plugin in tt tt_model_registry laguna_tt_ext; do
+    vllm_plugin_is_allowed "$required_plugin" ||
+      die "Laguna serving requires VLLM_PLUGINS to be unset or include the exact entry '$required_plugin'; got '${VLLM_PLUGINS}'"
+  done
+fi
 case "$PROFILE_PREFIX_CACHE_POLICY:$PROFILE_PREFIX_CACHE_DEFAULT" in
   experimental_only:0|qualification_candidate:0|qualified:1) ;;
   *) die "internal prefix-cache policy mismatch for '$LAGUNA_PROFILE': $PROFILE_PREFIX_CACHE_POLICY/default=$PROFILE_PREFIX_CACHE_DEFAULT" ;;
@@ -235,6 +311,7 @@ PREFIX_CACHE_KV_GROUP_POLICY=single_uniform_full_attention
 PREFIX_CACHE_SCHEDULER_POLICY=max_num_seqs_1_no_chunked_prefill
 PREFIX_CACHE_SPEC_DECODE_POLICY=disabled
 PREFIX_CACHE_EXTERNAL_KV_POLICY=disabled
+HYBRID_KV_SCHEDULER_CHUNK=8192
 
 # Production profiles are reproducible only if inherited bring-up knobs cannot silently change the
 # layer count, precision, attention geometry, warm set, or speculative path. Exact qualified values
@@ -282,6 +359,13 @@ for name in \
   record_if_set "$name"
 done
 record_if_nondefault TT_LAGUNA_PIPE_CHUNK 2048
+record_if_nondefault TT_LAGUNA_HYBRID_KV 0
+record_if_nondefault TT_LAGUNA_DFLASH 0
+record_if_nondefault TT_LAGUNA_CONTEXT_PROBE 0
+record_if_nondefault TT_LAGUNA_MULTI_SEQ_POOL 0
+record_if_nondefault TT_LAGUNA_STREAMING_PREFILL 1
+record_if_nondefault TT_LAGUNA_MOE_TOKEN_DISPATCH 0
+record_if_nondefault TT_LAGUNA_MOE_PREFILL_TILE_SPARSE 0
 # Enabled caching on a non-qualified profile remains diagnostic-only. A disable is intentionally not
 # recorded: TT_LAGUNA_PREFIX_CACHE=0 is the emergency rollback for a qualified/default-on profile and
 # must never require an experimental acknowledgement.
@@ -315,6 +399,13 @@ fi
 
 export TT_LAGUNA_PIPE_CHUNK="${TT_LAGUNA_PIPE_CHUNK:-2048}"
 export TT_LAGUNA_PREFIX_CACHE
+export TT_LAGUNA_HYBRID_KV
+export TT_LAGUNA_DFLASH
+export TT_LAGUNA_CONTEXT_PROBE
+export TT_LAGUNA_MULTI_SEQ_POOL
+export TT_LAGUNA_STREAMING_PREFILL
+export TT_LAGUNA_MOE_TOKEN_DISPATCH
+export TT_LAGUNA_MOE_PREFILL_TILE_SPARSE
 export TT_LAGUNA_PREFILL_FAST="${TT_LAGUNA_PREFILL_FAST:-1}"
 export TT_LAGUNA_PREFILL_FAST_CHUNK="${TT_LAGUNA_PREFILL_FAST_CHUNK:-8192}"
 export TT_LAGUNA_PREFILL_SDPA_CHUNK="${TT_LAGUNA_PREFILL_SDPA_CHUNK:-8192}"
@@ -381,14 +472,128 @@ if [ "$PROFILE_DEVICE_COUNT" -eq 1 ] && [ "$TT_LAGUNA_DECODE_SDPA_PC" -eq 1 ]; t
 else
   DECODE_SDPA_PC_STATUS=profile_safe
 fi
+if [ "$LAGUNA_PROFILE" = p150x2 ]; then
+  if [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ]; then
+    STREAMING_PREFILL_STATUS=production_qualified
+  else
+    STREAMING_PREFILL_STATUS=experimental_monolithic_rollback
+  fi
+else
+  STREAMING_PREFILL_STATUS=topology_inactive
+fi
+if [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 1 ]; then
+  MOE_TOKEN_DISPATCH_STATUS=experimental_unqualified
+else
+  MOE_TOKEN_DISPATCH_STATUS=production_safe_disabled
+fi
+if [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 1 ]; then
+  MOE_TILE_SPARSE_STATUS=experimental_unqualified
+else
+  MOE_TILE_SPARSE_STATUS=production_safe_disabled
+fi
+if [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 1 ]; then
+  [ "$LAGUNA_PROFILE" = p150x2 ] ||
+    die "Laguna MoE token dispatch is restricted to LAGUNA_PROFILE=p150x2"
+  [ "$MAX_NUM_SEQS" -eq 1 ] ||
+    die "Laguna MoE token dispatch requires LAGUNA_MAX_NUM_SEQS=1"
+  [ "$TT_LAGUNA_PREFIX_CACHE" -eq 0 ] ||
+    die "Laguna MoE token dispatch qualification requires TT_LAGUNA_PREFIX_CACHE=0"
+  [ "$TT_LAGUNA_HYBRID_KV" -eq 0 ] && [ "$TT_LAGUNA_DFLASH" -eq 0 ] ||
+    die "Laguna MoE token dispatch qualification requires TT_LAGUNA_HYBRID_KV=0 and TT_LAGUNA_DFLASH=0"
+  [ "$TT_LAGUNA_CONTEXT_PROBE" -eq 0 ] && [ "$TT_LAGUNA_MULTI_SEQ_POOL" -eq 0 ] ||
+    die "Laguna MoE token dispatch qualification does not support context or multi-sequence probes"
+  [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ] ||
+    die "Laguna MoE token dispatch qualification requires TT_LAGUNA_STREAMING_PREFILL=1"
+  [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
+    die "Laguna MoE token dispatch and tile-sparse prefill are separate, unstacked qualification paths"
+fi
+if [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 1 ]; then
+  [ "$LAGUNA_PROFILE" = p150x2 ] ||
+    die "Laguna tile-sparse MoE prefill is restricted to LAGUNA_PROFILE=p150x2"
+  [ "$MAX_NUM_SEQS" -eq 1 ] ||
+    die "Laguna tile-sparse MoE prefill requires LAGUNA_MAX_NUM_SEQS=1"
+  [ "$TT_LAGUNA_PREFIX_CACHE" -eq 0 ] ||
+    die "Laguna tile-sparse MoE prefill qualification requires TT_LAGUNA_PREFIX_CACHE=0"
+  [ "$TT_LAGUNA_HYBRID_KV" -eq 0 ] && [ "$TT_LAGUNA_DFLASH" -eq 0 ] ||
+    die "Laguna tile-sparse MoE prefill qualification requires TT_LAGUNA_HYBRID_KV=0 and TT_LAGUNA_DFLASH=0"
+  [ "$TT_LAGUNA_CONTEXT_PROBE" -eq 0 ] && [ "$TT_LAGUNA_MULTI_SEQ_POOL" -eq 0 ] ||
+    die "Laguna tile-sparse MoE prefill qualification does not support context or multi-sequence probes"
+  [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ] ||
+    die "Laguna tile-sparse MoE prefill qualification requires TT_LAGUNA_STREAMING_PREFILL=1"
+  [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 0 ] ||
+    die "Laguna token-dispatch and tile-sparse MoE prefill are separate, unstacked qualification paths"
+fi
 [[ "$TT_LAGUNA_MIN_DRAM_FREE_FRACTION" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]] ||
   die "TT_LAGUNA_MIN_DRAM_FREE_FRACTION must be between 0 and 1"
 is_positive_integer "$TT_LAGUNA_MIN_CONTIGUOUS_MIB" ||
   die "TT_LAGUNA_MIN_CONTIGUOUS_MIB must be a positive integer"
-if [ -n "${TT_LAGUNA_HYBRID_KV+x}" ] && [ "$TT_LAGUNA_HYBRID_KV" != 0 ]; then
-  die "TT_LAGUNA_HYBRID_KV must remain 0; hybrid KV is not qualified for Laguna serving"
+if [ "$TT_LAGUNA_HYBRID_KV" -eq 1 ]; then
+  [ "$LAGUNA_PROFILE" = p150x2 ] ||
+    die "Laguna hybrid KV qualification is restricted to LAGUNA_PROFILE=p150x2"
+  [ "$TT_LAGUNA_PREFIX_CACHE" -eq 0 ] ||
+    die "Laguna hybrid KV qualification requires TT_LAGUNA_PREFIX_CACHE=0"
+  [ "$MAX_NUM_SEQS" -eq 1 ] ||
+    die "Laguna hybrid KV qualification requires LAGUNA_MAX_NUM_SEQS=1"
+  [ -z "${TT_LAGUNA_SPEC_DECODE:-}" ] ||
+    die "Laguna hybrid KV qualification does not support TT_LAGUNA_SPEC_DECODE"
+  [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ] ||
+    die "Laguna hybrid KV qualification requires TT_LAGUNA_STREAMING_PREFILL=1"
+  [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
+    die "Laguna hybrid KV qualification does not support sparse-MoE experimental paths"
+  HYBRID_KV_STATUS=experimental_cache_off_qualification
+  HYBRID_KV_LAYOUT=four_groups_ten_aliased_tensor_pairs
+  CHUNKED_PREFILL_CLI_ARG=--enable-chunked-prefill
+  CHUNKED_PREFILL_CLI_ARGS=(
+    "$CHUNKED_PREFILL_CLI_ARG"
+    --max-num-batched-tokens "$HYBRID_KV_SCHEDULER_CHUNK"
+  )
+else
+  HYBRID_KV_STATUS=production_safe_disabled
+  HYBRID_KV_LAYOUT=uniform_forty_tensor_pairs
 fi
-export TT_LAGUNA_HYBRID_KV=0
+if [ "$TT_LAGUNA_DFLASH" -eq 1 ]; then
+  [ "$LAGUNA_PROFILE" = p150x2 ] ||
+    die "Laguna DFlash serving is restricted to LAGUNA_PROFILE=p150x2"
+  [ "$MAX_NUM_SEQS" -eq 1 ] ||
+    die "Laguna DFlash serving requires LAGUNA_MAX_NUM_SEQS=1"
+  [ "$TT_LAGUNA_PREFIX_CACHE" -eq 0 ] ||
+    die "Laguna DFlash serving requires TT_LAGUNA_PREFIX_CACHE=0"
+  [ "$TT_LAGUNA_HYBRID_KV" -eq 0 ] ||
+    die "Laguna DFlash serving requires TT_LAGUNA_HYBRID_KV=0"
+  [ "$TT_LAGUNA_CONTEXT_PROBE" -eq 0 ] && [ "$TT_LAGUNA_MULTI_SEQ_POOL" -eq 0 ] ||
+    die "Laguna DFlash serving does not support context or multi-sequence probes"
+  [ -z "${TT_LAGUNA_SPEC_DECODE:-}" ] ||
+    die "Laguna DFlash serving does not support TT_LAGUNA_SPEC_DECODE"
+  [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ] ||
+    die "Laguna DFlash serving requires TT_LAGUNA_STREAMING_PREFILL=1"
+  [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
+    die "Laguna DFlash serving does not support sparse-MoE experimental paths"
+  ((10#$MAX_MODEL_LEN + 64 <= 262144)) ||
+    die "Laguna DFlash serving requires LAGUNA_MAX_MODEL_LEN+64<=262144"
+  DFLASH_STATUS=experimental_cache_off_serving
+  DFLASH_ENVELOPE=p150x2_batch1_greedy_uniform_cache_off
+  CHUNKED_PREFILL_CLI_ARG=--no-enable-chunked-prefill
+  CHUNKED_PREFILL_CLI_ARGS=("$CHUNKED_PREFILL_CLI_ARG")
+else
+  DFLASH_STATUS=production_safe_disabled
+  DFLASH_ENVELOPE=disabled
+fi
+if [ "$TT_LAGUNA_CONTEXT_PROBE" -eq 1 ]; then
+  [ "$TT_LAGUNA_HYBRID_KV" -eq 1 ] && [ "$TT_LAGUNA_PREFIX_CACHE" -eq 0 ] && [ "$MAX_NUM_SEQS" -eq 1 ] ||
+    die "TT_LAGUNA_CONTEXT_PROBE=1 requires cache-off hybrid KV and LAGUNA_MAX_NUM_SEQS=1"
+  [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ] && [ "$TT_LAGUNA_DFLASH" -eq 0 ] ||
+    die "TT_LAGUNA_CONTEXT_PROBE=1 requires streaming prefill and TT_LAGUNA_DFLASH=0"
+  [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
+    die "TT_LAGUNA_CONTEXT_PROBE=1 does not support sparse-MoE experimental paths"
+fi
+if [ "$TT_LAGUNA_MULTI_SEQ_POOL" -eq 1 ]; then
+  [ "$TT_LAGUNA_CONTEXT_PROBE" -eq 0 ] && [ "$TT_LAGUNA_HYBRID_KV" -eq 0 ] && [ "$TT_LAGUNA_PREFIX_CACHE" -eq 0 ] ||
+    die "TT_LAGUNA_MULTI_SEQ_POOL=1 requires the 131K-or-smaller uniform-KV cache-off path"
+  [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ] && [ "$TT_LAGUNA_DFLASH" -eq 0 ] ||
+    die "TT_LAGUNA_MULTI_SEQ_POOL=1 requires streaming prefill and TT_LAGUNA_DFLASH=0"
+  [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
+    die "TT_LAGUNA_MULTI_SEQ_POOL=1 does not support sparse-MoE experimental paths"
+fi
 if [ "$TT_LAGUNA_PREFIX_CACHE" -eq 1 ]; then
   [ "$MAX_NUM_SEQS" -eq 1 ] ||
     die "Laguna canonical prefix caching requires LAGUNA_MAX_NUM_SEQS=1"
@@ -415,6 +620,8 @@ if [ "$1" = "config" ]; then
     "device_count=$PROFILE_DEVICE_COUNT" \
     "max_model_len=$MAX_MODEL_LEN" \
     "max_num_seqs=$MAX_NUM_SEQS" \
+    "context_status=$CONTEXT_STATUS" \
+    "multi_seq_status=$MULTI_SEQ_STATUS" \
     "fabric_config=$FABRIC_CONFIG" \
     "ccl_topology=$TT_LAGUNA_CCL_TOPOLOGY" \
     "ccl_num_links=$TT_LAGUNA_CCL_NUM_LINKS" \
@@ -425,6 +632,19 @@ if [ "$1" = "config" ]; then
     "decode_maxcores=$TT_LAGUNA_DECODE_MAXCORES" \
     "verify_k=$TT_LAGUNA_VERIFY_K" \
     "pipe_chunk=$TT_LAGUNA_PIPE_CHUNK" \
+    "streaming_prefill=$TT_LAGUNA_STREAMING_PREFILL" \
+    "streaming_prefill_status=$STREAMING_PREFILL_STATUS" \
+    "moe_token_dispatch=$TT_LAGUNA_MOE_TOKEN_DISPATCH" \
+    "moe_token_dispatch_status=$MOE_TOKEN_DISPATCH_STATUS" \
+    "moe_prefill_tile_sparse=$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" \
+    "moe_prefill_tile_sparse_status=$MOE_TILE_SPARSE_STATUS" \
+    "dflash=$TT_LAGUNA_DFLASH" \
+    "dflash_status=$DFLASH_STATUS" \
+    "dflash_envelope=$DFLASH_ENVELOPE" \
+    "hybrid_kv=$TT_LAGUNA_HYBRID_KV" \
+    "hybrid_kv_status=$HYBRID_KV_STATUS" \
+    "hybrid_kv_layout=$HYBRID_KV_LAYOUT" \
+    "hybrid_kv_scheduler_chunk=$HYBRID_KV_SCHEDULER_CHUNK" \
     "prefix_cache=$TT_LAGUNA_PREFIX_CACHE" \
     "prefix_cache_profile_default=$PROFILE_PREFIX_CACHE_DEFAULT" \
     "prefix_cache_profile_policy=$PROFILE_PREFIX_CACHE_POLICY" \
@@ -441,6 +661,7 @@ if [ "$1" = "config" ]; then
     "prefix_cache_spec_decode_policy=$PREFIX_CACHE_SPEC_DECODE_POLICY" \
     "prefix_cache_external_kv_policy=$PREFIX_CACHE_EXTERNAL_KV_POLICY" \
     "chunked_prefill_cli_arg=$CHUNKED_PREFILL_CLI_ARG" \
+    "chunked_prefill_cli_args=${CHUNKED_PREFILL_CLI_ARGS[*]}" \
     "prefill_fast=$TT_LAGUNA_PREFILL_FAST" \
     "prefill_fast_chunk=$TT_LAGUNA_PREFILL_FAST_CHUNK" \
     "prefill_sdpa_chunk=$TT_LAGUNA_PREFILL_SDPA_CHUNK" \
@@ -483,7 +704,7 @@ export PYTHONPATH="$REPO_ROOT"          # so EXTRA_MODELS_DIR's main_class (gene
 export EXTRA_MODELS_DIR="$MODEL_DIR/vllm_ext/extra_models"
 
 echo "[serve_vllm] vllm $("$VLLM_ENV_BIN/python" -c 'import vllm;print(vllm.__version__)' 2>/dev/null) | env: $VLLM_ENV | log: $LOG" | tee -a "$LOG"
-echo "[serve_vllm] profile: $LAGUNA_PROFILE | mesh: $MESH_DEVICE | devices: $TT_VISIBLE_DEVICES | context: $MAX_MODEL_LEN | seqs: $MAX_NUM_SEQS | prefix cache: $TT_LAGUNA_PREFIX_CACHE ($PREFIX_CACHE_STATUS; quantum=$PREFIX_CACHE_QUANTUM; admission=$PREFIX_CACHE_ADMISSION_POLICY; scheduler=$PREFIX_CACHE_SCHEDULER_POLICY) | fabric: $FABRIC_CONFIG | CCL: $TT_LAGUNA_CCL_TOPOLOGY/$TT_LAGUNA_CCL_NUM_LINKS | decode SDPA PC/k/exp/maxcores: $TT_LAGUNA_DECODE_SDPA_PC/$TT_LAGUNA_DECODE_K/$TT_LAGUNA_DECODE_EXP/$TT_LAGUNA_DECODE_MAXCORES | verify k: $TT_LAGUNA_VERIFY_K | experimental: $EXPERIMENTAL_OVERRIDE_SUMMARY" | tee -a "$LOG"
+echo "[serve_vllm] profile: $LAGUNA_PROFILE | mesh: $MESH_DEVICE | devices: $TT_VISIBLE_DEVICES | context: $MAX_MODEL_LEN | seqs: $MAX_NUM_SEQS | streaming prefill: $TT_LAGUNA_STREAMING_PREFILL ($STREAMING_PREFILL_STATUS) | MoE token dispatch/tile sparse: $TT_LAGUNA_MOE_TOKEN_DISPATCH/$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE ($MOE_TOKEN_DISPATCH_STATUS/$MOE_TILE_SPARSE_STATUS) | DFlash: $TT_LAGUNA_DFLASH ($DFLASH_STATUS; $DFLASH_ENVELOPE) | hybrid KV: $TT_LAGUNA_HYBRID_KV ($HYBRID_KV_STATUS; $HYBRID_KV_LAYOUT) | prefix cache: $TT_LAGUNA_PREFIX_CACHE ($PREFIX_CACHE_STATUS; quantum=$PREFIX_CACHE_QUANTUM; admission=$PREFIX_CACHE_ADMISSION_POLICY; scheduler=$PREFIX_CACHE_SCHEDULER_POLICY) | fabric: $FABRIC_CONFIG | CCL: $TT_LAGUNA_CCL_TOPOLOGY/$TT_LAGUNA_CCL_NUM_LINKS | decode SDPA PC/k/exp/maxcores: $TT_LAGUNA_DECODE_SDPA_PC/$TT_LAGUNA_DECODE_K/$TT_LAGUNA_DECODE_EXP/$TT_LAGUNA_DECODE_MAXCORES | verify k: $TT_LAGUNA_VERIFY_K | experimental: $EXPERIMENTAL_OVERRIDE_SUMMARY" | tee -a "$LOG"
 cd /tmp
 setsid "$VLLM_ENV_BIN/vllm" serve "$HF_MODEL" \
   --trust-remote-code --max-model-len "$MAX_MODEL_LEN" --max-num-seqs "$MAX_NUM_SEQS" --block-size "$PREFIX_CACHE_BLOCK_SIZE" \

@@ -51,8 +51,15 @@ std::array<ttnn::Tensor, 2> dispatch(
         "topology must be Linear or Ring. 2D topologies are not supported.");
 
     std::optional<uint32_t> axis = cluster_axis;
-    uint32_t num_links_ = num_links.value_or(ccl::common::get_num_links(*mesh_device, axis));
-    tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology_, axis);
+    const bool local_only = dispatch_group_size == 1 && ::ttnn::ccl::get_topological_dimension(input_tensor, axis) == 1;
+    // Keep one worker lane for the existing reader/untilizer core geometry,
+    // but do not query fabric links or topology for a size-one dispatch group.
+    // The program factory suppresses all fabric defines/connections in this
+    // mode, so the kernels execute only their direct local-write paths.
+    uint32_t num_links_ =
+        local_only ? num_links.value_or(1) : num_links.value_or(ccl::common::get_num_links(*mesh_device, axis));
+    tt::tt_fabric::Topology usable_topology =
+        local_only ? topology_ : ::ttnn::ccl::get_usable_topology(input_tensor, topology_, axis);
 
     log_debug(tt::LogOp, "num_links={} axis={} topology={}", num_links_, axis, usable_topology);
 

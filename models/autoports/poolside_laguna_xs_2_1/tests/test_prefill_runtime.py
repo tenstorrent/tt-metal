@@ -19,16 +19,113 @@ from models.autoports.poolside_laguna_xs_2_1.tt.optimized_decoder import Optimiz
 from models.autoports.poolside_laguna_xs_2_1.tt.prefill_runtime import (
     PrefillRuntimeOffsets,
     prefill_chunk_plan,
+    prefill_stream_plan,
+    streaming_prefill_capacity,
 )
+
+_STREAM_BUCKETS = (32, 64, 128, 256, 512, 1024, 2048, 4096, 8192)
+
+
+@pytest.mark.parametrize(
+    ("real_len", "expected"),
+    [
+        (1, ((0, 1, 32),)),
+        (32, ((0, 32, 32),)),
+        (33, ((0, 33, 64),)),
+        (8192, ((0, 8192, 8192),)),
+        (8193, ((0, 8192, 8192), (8192, 1, 32))),
+        (
+            32810,
+            (
+                (0, 8192, 8192),
+                (8192, 8192, 8192),
+                (16384, 8192, 8192),
+                (24576, 8192, 8192),
+                (32768, 42, 64),
+            ),
+        ),
+        (
+            65578,
+            tuple((offset, 8192, 8192) for offset in range(0, 65536, 8192)) + ((65536, 42, 64),),
+        ),
+    ],
+)
+def test_stream_plan_uses_full_outer_chunks_and_minimal_tail(real_len, expected):
+    plan = prefill_stream_plan(real_len, bucket_lens=_STREAM_BUCKETS, outer_chunk=8192)
+
+    assert tuple((chunk.relative_start, chunk.real_len, chunk.bucket_len) for chunk in plan) == expected
+    assert sum(chunk.real_len for chunk in plan) == real_len
+
+
+def test_stream_plan_removes_long_power_of_two_padding_cliffs():
+    plan_32k = prefill_stream_plan(32810, bucket_lens=_STREAM_BUCKETS, outer_chunk=8192)
+    plan_64k = prefill_stream_plan(65578, bucket_lens=_STREAM_BUCKETS, outer_chunk=8192)
+
+    assert sum(chunk.bucket_len for chunk in plan_32k) == 32832
+    assert sum(chunk.bucket_len for chunk in plan_64k) == 65600
+    assert sum(chunk.bucket_len for chunk in plan_32k) < 65536
+    assert sum(chunk.bucket_len for chunk in plan_64k) < 131072
+
+
+@pytest.mark.parametrize(
+    ("real_len", "expected"),
+    [
+        (8193, ((0, 8192, 8192), (8192, 1, 8192))),
+        (16400, ((0, 8192, 8192), (8192, 8192, 8192), (16384, 16, 8192))),
+        (
+            32810,
+            tuple((offset, 8192, 8192) for offset in range(0, 32768, 8192)) + ((32768, 42, 8192),),
+        ),
+    ],
+)
+def test_stream_plan_can_pin_long_tail_to_canonical_outer_geometry(real_len, expected):
+    plan = prefill_stream_plan(
+        real_len,
+        bucket_lens=_STREAM_BUCKETS,
+        outer_chunk=8192,
+        canonical_tail=True,
+    )
+
+    assert tuple((chunk.relative_start, chunk.real_len, chunk.bucket_len) for chunk in plan) == expected
+    assert sum(chunk.real_len for chunk in plan) == real_len
+
+
+def test_canonical_stream_removes_16k_cliff_without_changing_query_family():
+    plan = prefill_stream_plan(
+        16400,
+        bucket_lens=_STREAM_BUCKETS,
+        outer_chunk=8192,
+        canonical_tail=True,
+    )
+
+    assert [chunk.bucket_len for chunk in plan] == [8192, 8192, 8192]
+    assert sum(chunk.bucket_len for chunk in plan) == 24576
+    assert sum(chunk.bucket_len for chunk in plan) < 32768
+
+
+def test_stream_plan_validates_geometry(expect_error):
+    with expect_error(ValueError, "positive"):
+        prefill_stream_plan(0, bucket_lens=_STREAM_BUCKETS, outer_chunk=8192)
+    with expect_error(ValueError, "largest bucket"):
+        prefill_stream_plan(100, bucket_lens=(32, 64, 128), outer_chunk=8192)
+    with expect_error(ValueError, "positive lengths"):
+        prefill_stream_plan(100, bucket_lens=(0, 8192), outer_chunk=8192)
+
+
+def test_streaming_capacity_rounds_once_and_unlocks_hf_context():
+    assert streaming_prefill_capacity(131072, outer_chunk=8192) == 131072
+    assert streaming_prefill_capacity(131073, outer_chunk=8192) == 139264
+    assert streaming_prefill_capacity(262144, outer_chunk=8192) == 262144
 
 
 def test_exact_production_bucket_and_chunk_slot_geometry(monkeypatch):
     monkeypatch.delenv("TT_LAGUNA_PREFILL_WARM_CAP", raising=False)
     bridge = object.__new__(LagunaForCausalLM)
+    bridge.D = 2
     bridge.max_model_len = 131072
     buckets = bridge._prefill_bucket_lens()
 
-    assert buckets == [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
+    assert buckets == [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
 
     keys = set()
     for L in buckets:
@@ -36,22 +133,20 @@ def test_exact_production_bucket_and_chunk_slot_geometry(monkeypatch):
         for ordinal, (_offset, length) in enumerate(plan):
             keys.add(("pipe" if L > 2048 else "single", ordinal, length))
 
-    assert len(keys) == 24
-    assert sum(key[2] for key in keys) == 139232
+    assert len(keys) == 9
+    assert sum(key[2] for key in keys) == 16352
     assert ("pipe", 0, 4096) in keys
-    assert {key for key in keys if key[0] == "pipe" and key[2] == 8192} == {
-        ("pipe", ordinal, 8192) for ordinal in range(16)
-    }
+    assert {key for key in keys if key[0] == "pipe" and key[2] == 8192} == {("pipe", 0, 8192)}
 
 
-def test_prefill_chunk_plan_validates_alignment_and_coverage():
+def test_prefill_chunk_plan_validates_alignment_and_coverage(expect_error):
     assert prefill_chunk_plan(2048, pipe_threshold=2048, outer_chunk=8192, block_size=64) == ((0, 2048),)
     assert prefill_chunk_plan(20000, pipe_threshold=2048, outer_chunk=8192, block_size=64) == (
         (0, 8192),
         (8192, 8192),
         (16384, 3616),
     )
-    with pytest.raises(ValueError, match="multiple of block size"):
+    with expect_error(ValueError, "multiple of block size"):
         prefill_chunk_plan(4096, pipe_threshold=2048, outer_chunk=2000, block_size=64)
 
 
@@ -73,9 +168,9 @@ def test_runtime_path_is_d2_only_and_preserves_cold_single_shot():
     assert calls == [(2048, 64, 64), (4096, 0, 64)]
 
 
-def test_prefix_cache_requires_d2_and_cannot_disable_program_freeze(monkeypatch):
+def test_prefix_cache_requires_d2_and_cannot_disable_program_freeze(monkeypatch, expect_error):
     assert LagunaForCausalLM._validate_prefix_cache_topology(2, True) is None
-    with pytest.raises(RuntimeError, match="only on the p150x2"):
+    with expect_error(RuntimeError, "only on the p150x2"):
         LagunaForCausalLM._validate_prefix_cache_topology(1, True)
 
     fake_model = SimpleNamespace(precision_policy=SimpleNamespace(kv_cache=object()))

@@ -20,14 +20,11 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 //
 // The reader fetches the per-global-expert `counts` vector (and the
 // local->global `global_expert_idx_table`) into an L1 scratch CB with a
-// single noc_async_read_page, then indexes counts[global_expert_id] for
-// global_expert_id in [0, num_global_experts). The L1 scratch is sized to
-// hold this many UINT32 entries — 1024 entries = 4 KB ("4 tiles" of 1 KB) —
-// which covers DeepSeek V3 (256 experts), Kimi (384 experts) and any model up
-// to 1024 routed experts with headroom. A single ROW_MAJOR DRAM page already
-// holds the whole vector, so the read stays a single page fetch; bumping this
-// past TILE_HW would additionally require widening the device-op validation
-// below and re-checking the per-core L1 budget.
+// single noc_async_read_page, then indexes counts[global_expert_id]. The CB is
+// sized to the input tensor's aligned page; this constant caps the supported
+// index space at 1024 UINT32 entries (4 KB), covering DeepSeek V3 (256), Kimi
+// (384), and models up to 1024 routed experts. Raising it requires widening
+// the device-op validation and re-checking the per-core L1 budget.
 inline constexpr uint32_t MAX_GLOBAL_EXPERTS = tt::constants::TILE_HW;  // 1024
 
 // Attributes (the constants known at host time).
@@ -42,10 +39,25 @@ struct UnifiedRoutedExpertFfnParams {
     // counts[global_id]).
     uint32_t local_expert_id = 0;
 
+    // When true, gate_proj/up_proj refer to the same packed tensor with
+    // logical shape [1, local_experts, K, 2*N], and down_proj has shape
+    // [1, local_experts, N, K]. The reader selects local_expert_id directly
+    // from those stacked tensors and treats the first/second halves of the
+    // packed last dimension as gate/up. This lets EP model weights stay in
+    // their production representation instead of creating one Tensor handle
+    // (and one duplicate allocation) per local expert.
+    bool stacked_packed_weights = false;
+
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id); }
+    // compute_kernel_config affects the compiled kernel (at minimum fidelity
+    // and approximation mode), so it must participate in the program-cache
+    // key. Omitting it silently reused a LoFi program for a later HiFi call.
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("chunk_M_tiles", "local_expert_id", "stacked_packed_weights", "compute_kernel_config");
+    auto attribute_values() const {
+        return std::forward_as_tuple(chunk_M_tiles, local_expert_id, stacked_packed_weights, compute_kernel_config);
+    }
 };
 
 // Tensors fed into the op.

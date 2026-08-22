@@ -50,9 +50,7 @@ constexpr uint32_t CB_START_SCRATCH = tt::CBIndex::c_14;
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
-    const UnifiedRoutedExpertFfnParams& op,
-    const UnifiedRoutedExpertFfnInputs& t,
-    Tensor& tensor_return_value) {
+    const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertFfnInputs& t, Tensor& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const auto& x_shape = t.x.padded_shape();
@@ -60,10 +58,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const auto& down_shape = t.down_proj.padded_shape();
 
     const uint32_t M_tiles_full = x_shape[-2] / TILE;
-    const uint32_t K_gate_tiles = x_shape[-1] / TILE;            // = N_gate K = emb / TILE
-    const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;    // = hidden / TILE
-    const uint32_t K_down_tiles = down_shape[-2] / TILE;         // = hidden / TILE
-    const uint32_t N_down_tiles_full = down_shape[-1] / TILE;    // = emb / TILE
+    const uint32_t K_gate_tiles = x_shape[-1] / TILE;  // = N_gate K = emb / TILE
+    const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE / (op.stacked_packed_weights ? 2 : 1);  // = hidden / TILE
+    const uint32_t K_down_tiles = down_shape[-2] / TILE;                                             // = hidden / TILE
+    const uint32_t N_down_tiles_full = down_shape[-1] / TILE;                                        // = emb / TILE
 
     // Blackhole compute grid is 13x10 worker cores; we use the bottom-left
     // 11x8 = 88 to leave headroom for dispatch and to give per_core_M /
@@ -124,6 +122,25 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         in0_block_w_d);
     (void)K_down_tiles;  // actual K_down; used by reader for OOB; suppress unused warning here
 
+    const auto resolved_compute_kernel_config = op.compute_kernel_config.value_or(ttnn::DeviceComputeKernelConfig{
+        .math_fidelity = MathFidelity::LoFi,
+        .math_approx_mode = false,
+        .fp32_dest_acc_en = false,
+        // The fused kernel always uses L1 accumulation internally; this field
+        // documents the effective default but does not gate PACKER_L1_ACC.
+        .packer_l1_acc = true,
+        .dst_full_sync_en = false,
+    });
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(t.x.device()->arch(), resolved_compute_kernel_config);
+    // The fused kernel's partial CBs and subblock geometry are BF16-DST
+    // specific. Fidelity/approximation are independently configurable, but
+    // accepting FP32 DST today would halve register capacity without resizing
+    // the subblocks and would be numerically unsafe.
+    TT_FATAL(!fp32_dest_acc_en, "unified_routed_expert_ffn does not yet support fp32_dest_acc_en=true");
+    TT_FATAL(!dst_full_sync_en, "unified_routed_expert_ffn does not yet support dst_full_sync_en=true");
+    (void)packer_l1_acc;  // PACKER_L1_ACC is an algorithmic requirement below.
+
     // Subblock dims. DST tile-register file is 16 tiles wide; fp32_dest_acc_en
     // halves usable capacity (fp32 accumulator occupies two tile slots). With
     // fp32_dest_acc_en=false (bf16 dst), per-thread DST capacity is 8 tiles.
@@ -176,13 +193,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const tt::DataFormat up_df = tt::tt_metal::datatype_to_dataformat_converter(t.up_proj.dtype());
     const tt::DataFormat down_df = tt::tt_metal::datatype_to_dataformat_converter(t.down_proj.dtype());
     const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
-    // Intermediate and partials share the same format — required by the
-    // compute kernel's mm_init pattern (mm_init's 3rd arg drives the packer's
-    // data-format config; mismatched formats need explicit pack reconfig that
-    // the kernel doesn't do). Use bfp8_b for both: 1KB/tile is half the bf16
-    // cost so we fit in L1 with both intermediates and partials sized to the
-    // full per-core block.
-    const tt::DataFormat intermed_df = tt::DataFormat::Bfp8_b;
+    // BF8 inputs keep the established compact BFP8 intermediate path used by
+    // DeepSeek. BF16 inputs retain BF16 through SiLU, SwiGLU, the down-matmul
+    // input, and output. This removes three avoidable quantization boundaries
+    // for smaller-expert models (for Laguna's H=2048, I=512, chunk=16 the
+    // doubled CBs remain well inside Blackhole L1).
+    const tt::DataFormat intermed_df =
+        t.x.dtype() == tt::tt_metal::DataType::BFLOAT16 ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b;
     const tt::DataFormat partials_gu_df = tt::DataFormat::Float16_b;
     const tt::DataFormat partials_d_df = tt::DataFormat::Float16_b;
 
@@ -393,6 +410,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // K_down_tiles_padded — phase-4 K-loop bound. K dim of down is
         // padded to N_gate_padded so per-K-block sender = gx == kb holds.
         K_down_tiles_padded,
+        // stacked_packed_weights — gate/up share [LE,K,2N], down is
+        // [LE,N,K]; the reader adds local-expert bases and the up-half offset.
+        static_cast<uint32_t>(op.stacked_packed_weights),
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -525,9 +545,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         "fused_swiglu.cpp",
         core_range_set,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::LoFi,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
+            .dst_full_sync_en = false,
+            .math_approx_mode = math_approx_mode,
             .compile_args = compute_ct_args,
             .defines = compute_defines,
             .named_compile_args = compute_named_args,

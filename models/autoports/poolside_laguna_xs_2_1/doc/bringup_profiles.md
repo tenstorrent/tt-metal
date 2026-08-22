@@ -4,7 +4,7 @@
 # P150 profile qualification
 
 This is the acceptance runbook for Laguna-XS-2.1. It separates configuration from evidence: a
-profile existing in code does not make it qualified. As of 2026-08-21, D1 is rejected because the
+profile existing in code does not make it qualified. As of 2026-08-22, D1 is rejected because the
 full model cannot allocate its LM head even with a 4,096-token cap. D2 ring/two-link is the recommended
 configuration after topology, representative correctness, full 131K uniform-KV smoke, and trace replay;
 cold live API, decode-performance, exact-cap, and canonical prefix-cache gates pass. D2 is the selected
@@ -14,7 +14,7 @@ default.
 
 One `P150` is one Blackhole ASIC/device enumerated by `tt-smi`. A D2 pair must be two such devices
 that pass the topology test together; a board label is not a substitute for enumerated device IDs.
-On this host, `p150x2` is one physical P300 card containing two enumerated Blackhole ASICs.
+On this host, `p150x2` is one physical dual-P150 card containing two enumerated P150 ASICs.
 
 | Profile | Mesh | Uniform-KV context | Serving concurrency | Fabric / CCL | Role |
 |---|---:|---:|---:|---|---|
@@ -28,8 +28,15 @@ is context-independent. Qualify D2 at 131,072 against the same 15 tokens/s at IS
 at ISL 32K gates. D2 passes those decode gates plus the exact 131,072-token request, so it replaces
 `p150x4` as the launcher default. D4 remains the explicit regression profile.
 
-The HF configuration declares 262,144 tokens. That value is not a serving target in this bring-up.
-Do not raise a profile cap based on component-level addressability.
+The HF configuration declares 262,144 tokens, but no production profile advertises that value. The
+fail-closed experimental cache-off hybrid-KV probe completed both 131,136-input + 16-output boundary
+requests exactly, then reached 0.9709341025 KV usage on the 262,112-input + 32-output exact-cap leg
+without an OOM or device fault. That leg exceeded the deliberate 1,200-second client timeout, was
+aborted, and KV usage returned to zero. The 262,144-token target is therefore **rejected for latency
+and remains unqualified**; this is not a capacity pass. Production `p150x2` remains capped at 131,072.
+The host-local failed-run artifact and server log are
+`/tmp/laguna-context262k-probe-20260822/qualification.json` and
+`/tmp/laguna-context262k-probe-20260822/laguna_serve_20260822-121656.log`.
 
 Status shorthand in this document: G0 is mesh/open-close plus eager/traced collective qualification;
 G1 is representative packed decoder correctness. Neither gate implies that full-model serving is
@@ -37,9 +44,23 @@ qualified.
 
 ## Fixed invariants
 
-- Use uniform BFP8 KV: `TT_LAGUNA_HYBRID_KV=0`. Hybrid KV is unsafe in the current vLLM/plugin
-  integration because its grouped allocator does not preserve Laguna's 10-full/30-sliding mapping.
-  The launcher intentionally rejects a nonzero value.
+- Production uses uniform BFP8 KV with `TT_LAGUNA_HYBRID_KV=0`. An explicit experimental
+  `TT_LAGUNA_HYBRID_KV=1` path is restricted to cache-off, single-sequence `p150x2`, requires
+  `LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1`, scheduler chunks of 8,192 tokens, and the model-local
+  plugin. It preserves four distinct block-table groups while aliasing equal slots onto ten physical
+  K/V tensor pairs, but it is not promoted to the production prefix-cache profile.
+- Production p150x2 streaming prefill defaults on with `TT_LAGUNA_STREAMING_PREFILL=1` and an
+  8,192-token outer chunk. Its explicit `=0` monolithic rollback is unqualified and requires
+  `LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1`.
+- Experimental acknowledgement is not permission to stack independently qualified paths. The
+  launcher rejects untested overlap among hybrid KV, DFlash, multi-sequence serving, sparse-MoE
+  token dispatch, and tile-sparse MoE. The only intentional combination is the rejected 262,144-token
+  context probe with its required cache-off hybrid-KV envelope.
+- Leave `VLLM_PLUGINS` unset for vLLM's normal plugin auto-discovery. If an operator supplies that
+  exact comma-separated allowlist, every Laguna launch requires the exact entries `tt`,
+  `tt_model_registry`, and `laguna_tt_ext`. The local extension owns the qualified tool parser in all
+  profiles as well as the prefix-cache and hybrid-KV hooks; incomplete and lookalike entries fail
+  closed.
 - Production p150x2 prefix caching defaults on with `TT_LAGUNA_PREFIX_CACHE=1`. An explicit `=0` is the
   fail-closed operator rollback and never requires `LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1`. `p150` and
   `p150x4` remain cache-off and unqualified for prefix caching.
@@ -60,13 +81,14 @@ qualified.
   zeroed scratch block and paged-fill padding to the kernel's `-1` write-skip sentinel. This prevents
   both physical-block-0 corruption and writer races on scratch. Never rewrite the scheduler/decode
   table or count scratch as logical capacity.
-- The private prefill page table and shared RoPE tables cover `max_model_len + largest_bucket`
-  (262,144 positions for the 131,072-token D2 profile). This is internal padded-compute addressability,
-  not an advertised context extension.
-- The complete prefill bucket ladder is warmed in the plugin's first compile phase. Laguna's private
-  `_prefill_programs_warmed` latch makes the plugin's second call a no-op except for restoring its
-  public flag; the runtime-offset slots required by canonical suffixes are preallocated. A qualification
-  log must show only one full-model prefill warmup pass.
+- D2 private prefill page tables and shared RoPE tables cover `max_model_len` rounded once to the next
+  8,192-token boundary. The 131,072-token production profile is already aligned, so its internal
+  horizon is 131,072 rather than the former doubled horizon. This remains padded-compute
+  addressability, not an advertised context extension.
+- The finite D2 ladder (32 through 8,192 rows) plus one canonical nonzero-position long-stream case is
+  warmed in the plugin's first compile phase. Laguna's private `_prefill_programs_warmed` latch makes
+  the plugin's second call a no-op except for restoring its public flag; all runtime-offset slots are
+  preallocated. A qualification log must show only one complete prefill warmup pass.
 - Last-real-token selection uses a persistent per-bucket one-hot input and persistent one-row output;
   its matmul is compiled during that one ladder pass. A resumed prefill selects row
   `prompt_lens-start_pos-1`, not the absolute prompt-end row, without creating a per-request
@@ -421,8 +443,10 @@ Store raw logs/result JSON beside a summary with this minimum shape. Use `null` 
     "ccl_topology": "ring",
     "ccl_num_links": 2,
     "prefill_private_scratch_blocks_per_layer": 1,
-    "prefill_internal_rope_horizon": 262144,
-    "prefill_full_ladder_passes": 1
+    "prefill_compute_buckets": [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192],
+    "prefill_canonical_long_stream_case": true,
+    "prefill_internal_rope_horizon": 131072,
+    "prefill_warmup_passes": 1
   },
   "topology_runs": [],
   "memory": {

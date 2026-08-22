@@ -6,8 +6,9 @@
 #include "kernels/dataflow/dispatch_plan.hpp"  // PlanHeader / PlanEntry layout (host sizes the plan CB from these)
 #include <algorithm>
 #include <array>
-#include <utility>
 #include <limits>
+#include <tuple>
+#include <utility>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -19,6 +20,7 @@
 #include <tt-metalium/workload_descriptor.hpp>
 #include <ttnn/global_semaphore.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
 namespace detail {
@@ -118,6 +120,9 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
 
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
+    const uint32_t dispatch_axis = operation_attributes.axis.value_or(0);
+    const uint32_t dispatch_axis_size = dispatch_axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
+    const bool use_fabric = !(operation_attributes.dispatch_group_size == 1 && dispatch_axis_size == 1);
 
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
@@ -425,8 +430,12 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         }
     }
 
-    const auto [neighbors, directions] =
-        ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+    std::vector<ttnn::MeshCoordinate> neighbors;
+    std::array<bool, 4> directions = {false, false, false, false};
+    if (use_fabric) {
+        std::tie(neighbors, directions) =
+            ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+    }
 
     // FABRIC_2D uses the portable RoutingPlaneConnectionManager (per-destination connection +
     // multicast handshake) so dispatch-axis traffic forwards multi-hop; FABRIC_1D keeps the legacy
@@ -438,7 +447,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
 
     // c_8: packet header CB for fabric sends (sender-only)
-    if (operation_attributes.num_links > 0) {
+    if (use_fabric) {
         constexpr uint32_t num_packet_headers = 2;
         auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
         uint32_t packet_header_cb_size = num_packet_headers * packet_header_size_bytes;
@@ -553,7 +562,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.buffer()).append_to(compile_time_args);
 
     std::map<std::string, std::string> fabric_defines;
-    if (operation_attributes.num_links > 0) {
+    if (use_fabric) {
         fabric_defines["DEST_CHIP_ID"] = ccl::common::stringify(dest_chip_id);
         fabric_defines["DEST_MESH_ID"] = ccl::common::stringify(dest_mesh_id);
         fabric_defines["DIRECTIONS"] = ccl::common::stringify(directions);
@@ -808,7 +817,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             writer_runtime_args.push_back(data_avail_semaphore_ids[s]);
         }
 
-        if (operation_attributes.num_links > 0) {
+        if (use_fabric) {
             // Dispatch-axis neighbors (each a distinct fabric direction) as fabric nodes.
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
             for (const auto& neighbor_coordinate : neighbors) {
@@ -941,6 +950,9 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
 
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
+    const uint32_t dispatch_axis = operation_attributes.axis.value_or(0);
+    const uint32_t dispatch_axis_size = dispatch_axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
+    const bool use_fabric = !(operation_attributes.dispatch_group_size == 1 && dispatch_axis_size == 1);
 
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
@@ -1069,8 +1081,12 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         /*cb_id=*/tt::CBIndex::c_7,
         "metadata_temp_buffer");
 
-    const auto [neighbors, directions] =
-        ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+    std::vector<ttnn::MeshCoordinate> neighbors;
+    std::array<bool, 4> directions = {false, false, false, false};
+    if (use_fabric) {
+        std::tie(neighbors, directions) =
+            ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+    }
 
     // FABRIC_2D uses the portable RoutingPlaneConnectionManager (per-destination connection +
     // multicast handshake) so dispatch-axis traffic forwards multi-hop; FABRIC_1D keeps the legacy
@@ -1082,7 +1098,7 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
     const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
 
     // c_8: packet header CB for fabric sends (writer-only)
-    if (operation_attributes.num_links > 0) {
+    if (use_fabric) {
         constexpr uint32_t num_packet_headers = 2;
         auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
         uint32_t packet_header_cb_size = num_packet_headers * packet_header_size_bytes;
@@ -1205,7 +1221,7 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
 
     // Both reader and writer get fabric defines so the reader can compute routes
     std::map<std::string, std::string> fabric_defines;
-    if (operation_attributes.num_links > 0) {
+    if (use_fabric) {
         fabric_defines["DEST_CHIP_ID"] = ccl::common::stringify(dest_chip_id);
         fabric_defines["DEST_MESH_ID"] = ccl::common::stringify(dest_mesh_id);
         fabric_defines["DIRECTIONS"] = ccl::common::stringify(directions);
@@ -1295,7 +1311,7 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         // init/exit reuse race; mirrors the combine fix).
         writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
 
-        if (operation_attributes.num_links > 0) {
+        if (use_fabric) {
             // Dispatch-axis neighbors (each a distinct fabric direction) as fabric nodes.
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
             for (const auto& neighbor_coordinate : neighbors) {

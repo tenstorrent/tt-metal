@@ -4,7 +4,7 @@ Result: **PASS, 9/9 requests**. Every row generated exactly 512 output tokens at
 server had no request error, serving-time compilation/retrace, or critical fault, and final health was
 HTTP 200.
 
-Hardware: two P150 Blackhole ASICs, physically one P300 card on the qualification host. Profile
+Hardware: two P150 Blackhole ASICs on one physical dual-P150 card on the qualification host. Profile
 `p150x2`, 131,072-token context, prefix caching off.
 
 | Requested ISL | Actual prompt | Actual total | OSL | C | TTFT | TPOT | E2EL | Decode tok/s/user | Aggregate output tok/s |
