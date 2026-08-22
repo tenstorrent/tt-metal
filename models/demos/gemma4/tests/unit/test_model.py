@@ -19,9 +19,12 @@ from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from ...tests.test_factory import (
     TestFactory,
     compare_tensors,
+    from_pretrained_gemma4_causal_lm,
     get_pcc_threshold,
+    load_real_model_substate,
     num_layers_for_full_attention_group,
     parametrize_mesh_with_fabric,
+    skip_unless_real_weights,
 )
 
 
@@ -310,6 +313,109 @@ def test_single_layer_model(mesh_device, layer_group, reset_seeds, request):
     assert passing, f"Single-layer model (group={layer_group}, layers={num_layers}, tp={tp}) PCC too low: {pcc_msg}"
 
 
+# ── Real-weight Truncated Model PCC Test ────────────────────────────────
+
+
+@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize("layer_group", ["sliding_only"], ids=["sliding_only"])
+def test_single_layer_model_real_weights(mesh_device, layer_group, reset_seeds, request):
+    """Truncated model on the checkpoint's trained weights.
+
+    ``test_single_layer_model`` runs the same stack on HF's constructor init.
+    This runs it on the real thing: real projections, real norms, real final
+    norm, and the real tied lm_head — so the layer-to-logits path is gated at
+    the magnitudes the model actually runs at rather than at unit scale.
+
+    It stops short of ``test_full_model`` on purpose: one layer isolates a
+    weight/layout regression to the layer, where a 48- or 60-layer PCC folds it
+    into the whole backbone's accumulated error and tells you nothing about
+    where it came from.
+
+    Vocab is capped at 256, matching the random-init test. Every weight is
+    still the trained one — the embedding is the first 256 rows of the real
+    table and the lm_head is tied to that slice — but the *shape* of the output
+    matmul is not the shipped one. The full ``[hidden, 262144]`` lm_head, its
+    column-parallel split and its program config are covered by test_lm_head.py
+    and ``test_full_model``; at the true vocab this test cannot run on a single
+    chip at all (31B stages the tied lm_head as fp32 = 5.64 GB against ~360 MB
+    free, measured).
+    """
+    skip_unless_real_weights()
+
+    from models.demos.gemma4.config import MeshConfig, ModeConfig
+    from models.demos.gemma4.tt.ccl import CCLManager
+
+    num_layers = 1
+    vocab = 256
+    hf_text_config = _create_hf_text_config(vocab_size=vocab, num_layers=num_layers)
+    if getattr(hf_text_config, "enable_moe_block", False):
+        pytest.skip("MoE variants need the reduced-expert path; the real expert count cannot be reduced")
+
+    hf_model = _create_hf_model(hf_text_config)
+    real_state = load_real_model_substate(num_layers)
+    # Slice the real embedding to the configured vocab; the tie to lm_head
+    # follows it, so both stay trained values rather than constructor init.
+    real_state["embed_tokens.weight"] = real_state["embed_tokens.weight"][:vocab].contiguous()
+    _, unexpected = hf_model.load_state_dict(real_state, strict=False)
+    assert not unexpected, f"Real weights the HF reference stack has no home for: {unexpected[:5]}"
+    # _create_hf_model ties lm_head to embed_tokens by identity; load_state_dict
+    # copies into that shared storage, so the tie survives and the real
+    # checkpoint's tied lm_head is what the reference uses.
+    hf_model.eval()
+
+    model_args = Gemma4ModelArgs.from_hf_config(hf_text_config)
+    model_args._hf_text_config = hf_text_config  # Enables internal per-layer RoPE
+    tt_state = _hf_model_state_to_tt_state(hf_model)
+
+    seq_len = 32
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
+
+    tt_model = Gemma4Model(
+        mesh_device=mesh_device,
+        hf_config=model_args,
+        state_dict=tt_state,
+        ccl_manager=ccl_manager,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        mesh_config=mesh_config,
+        max_seq_len=seq_len,
+        max_local_batch_size=1,
+        num_layers=num_layers,
+    )
+
+    tokens = torch.randint(0, model_args.vocab_size, (1, seq_len), dtype=torch.long)
+
+    causal_mask = torch.triu(torch.full((1, 1, seq_len, seq_len), float("-inf")), diagonal=1)
+    with torch.no_grad():
+        hf_logits = hf_model(tokens, attention_mask=causal_mask)
+
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+    tt_tokens = ttnn.from_torch(
+        tokens.to(torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=replicate,
+    )
+    tt_embeds = tt_model.embed_tokens(tt_tokens)
+    tt_embeds = ttnn.reshape(tt_embeds, (1, 1, seq_len, model_args.hidden_size))
+    tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
+
+    tt_logits = tt_model(tt_embeds, rope_mats=None, position_idx=None, page_table=None, kv_caches=None, is_decode=False)
+    tt_logits_torch = (
+        (ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]) if is_mesh else ttnn.to_torch(tt_logits))
+        .squeeze(0)
+        .float()
+    )
+
+    passing, pcc_msg = compare_tensors(tt_logits_torch, hf_logits, pcc_threshold=get_pcc_threshold(request))
+    logger.info(f"TP={tp} real-weights ({num_layers}-layer, vocab={vocab}) PCC: {pcc_msg}")
+    assert passing, f"Single-layer model real-weights (layers={num_layers}, tp={tp}) PCC too low: {pcc_msg}"
+
+
 # ── Full Model PCC Test ─────────────────────────────────────────────────
 
 
@@ -327,7 +433,7 @@ def test_full_model(mesh_device, reset_seeds, request):
     import os
 
     import torch.nn.functional as F
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
     from models.demos.gemma4.tt.common import create_tt_model
 
@@ -347,7 +453,7 @@ def test_full_model(mesh_device, reset_seeds, request):
 
     # ── HF reference ─────────────────────────────────────────────────
     logger.info(f"Loading HF reference model from {model_path}...")
-    hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
+    hf_model = from_pretrained_gemma4_causal_lm(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
     hf_model.eval()
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
@@ -489,7 +595,7 @@ def test_full_model_decode(mesh_device, reset_seeds, request):
     import os
 
     import torch.nn.functional as F
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
     from models.demos.gemma4.tt.common import create_tt_model
 
@@ -505,7 +611,7 @@ def test_full_model_decode(mesh_device, reset_seeds, request):
 
     # ── HF reference: prefill, then one decode step ──────────────────────
     logger.info(f"Loading HF reference from {model_path}...")
-    hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
+    hf_model = from_pretrained_gemma4_causal_lm(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
     hf_model.eval()
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
@@ -678,6 +784,13 @@ def _build_decode_harness(mesh_device, model_path, decode_pos, max_seq_len=8192,
             (1, 4),
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000},
             id="1x4",
+        ),
+        # 31B needs TP=8: at TP=4 its bfp8 shared_mlp+attention weights are
+        # ~8.6 GB/chip plus ~1.8 GB KV, which crowds the ~12.8 GB WH budget.
+        pytest.param(
+            (1, 8),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000},
+            id="1x8",
         ),
     ],
     indirect=True,
@@ -1076,3 +1189,11 @@ def test_single_decode(mesh_device, reset_seeds, request):
     assert torch.isfinite(out).all(), "decode produced non-finite logits"
     next_token = int(out.argmax().item())
     logger.info(f"Single decode complete (TP={tp}, pos={decode_pos + 1}); next token id = {next_token}")
+
+
+def test_use_31b_batch32_host_batched_extract_scope():
+    from models.demos.gemma4.tt.model import GEMMA4_31B_HIDDEN_SIZE, _use_31b_batch32_host_batched_extract
+
+    assert _use_31b_batch32_host_batched_extract(GEMMA4_31B_HIDDEN_SIZE, target_batch=32) is True
+    assert _use_31b_batch32_host_batched_extract(GEMMA4_31B_HIDDEN_SIZE, target_batch=8) is False
+    assert _use_31b_batch32_host_batched_extract(3840, target_batch=32) is False

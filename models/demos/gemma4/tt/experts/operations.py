@@ -11,7 +11,12 @@ import ttnn
 
 
 def apply_geglu(gate, up):
-    """GeGLU activation: gelu(gate) * up. Gemma4 uses gelu_pytorch_tanh."""
-    activated = ttnn.gelu(gate, fast_and_approximate_mode=True)
-    result = ttnn.mul(activated, up)
-    return result
+    """GeGLU activation: gelu(gate) * up. Gemma4 uses gelu_pytorch_tanh.
+
+    Fused into one BinaryNg mul with lhs GELU (param 1.0 == fast tanh approx).
+    """
+    return ttnn.mul(
+        gate,
+        up,
+        input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0)],
+    )

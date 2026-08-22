@@ -18,6 +18,7 @@ from loguru import logger
 from transformers import AutoModelForCausalLM
 
 from models.demos.gemma4.demo.text_demo import _batch_prefill_hits_ceiling, _maybe_xfail_batch_prefill_dram
+from models.demos.gemma4.tt.common import get_gemma4_padded_prefill_len
 from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import (
     GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS,
@@ -26,7 +27,7 @@ from models.demos.gemma4.tt.generator_trace import (
     can_gemma4_enable_prefill_trace,
     warmup_gemma4_prefill_bucket,
 )
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len
+from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
 
 from ..test_factory import (
@@ -115,7 +116,7 @@ def _build_tokens(batch_size, prefill_len, vocab_size, *, seed=0):
     """Build ``test_full_model`` prompt tokens (short text, zero-padded to the ISL bucket)."""
     from transformers import AutoTokenizer
 
-    kernel_len = get_padded_prefill_len(prefill_len)
+    kernel_len = get_gemma4_padded_prefill_len(prefill_len)
     tokenizer = AutoTokenizer.from_pretrained(_get_model_path(), trust_remote_code=True)
     input_ids = tokenizer.encode("The capital of France is", return_tensors="pt")
     seq_len = min(int(input_ids.shape[1]), prefill_len)
@@ -267,7 +268,7 @@ def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, res
     if int(getattr(hf_config, "hidden_size_per_layer_input", 0) or 0) > 0:
         pytest.skip("PLI models disable prefill trace")
 
-    kernel_len = get_padded_prefill_len(prefill_len)
+    kernel_len = get_gemma4_padded_prefill_len(prefill_len)
     if _batch_prefill_hits_ceiling(batch_size, prefill_len):
         pytest.skip(
             f"batch {batch_size} x kernel {kernel_len} meets 128k batched-prefill ceiling "

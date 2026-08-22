@@ -17,6 +17,7 @@ import os
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
@@ -26,10 +27,12 @@ from models.demos.gemma4.tt.ccl import CCLManager
 from ...tests.test_factory import (
     PREFILL_BUCKETS,
     TestFactory,
+    _get_model_path,
     build_hf_prefill_mask,
     compare_tensors,
     find_layer_idx,
     get_pcc_threshold,
+    load_real_weights_into,
     parametrize_mesh_with_fabric,
 )
 
@@ -44,11 +47,50 @@ def _skip_if_l1_overflow(config, mesh_device):
             pytest.skip("Global attention head_dim=512 overflows L1 on single device for large models")
 
 
-def _setup_attention(mesh_device, layer_idx, create_kv_cache=False, max_seq_len=128):
-    """Create HF reference and TT attention module for a given mesh."""
+def _attn_weight_dtype(mesh_device):
+    """Weight dtype for the TT attention module under test — same source as the demo.
+
+    These tests construct ``Gemma4Attention`` directly, so they never pass through
+    ``tt/common.py:create_tt_model``, the only place ``Gemma4Precision.load`` reads
+    ``precision_overrides.json``. Left to the constructor default they would PCC
+    bf16 weights while the demo runs bfp8, so a precision regression in the shipped
+    config could not fail this test. Resolve the same table instead.
+
+    Per-variant, not a blanket bfp8: ``attention: bfp8`` is declared for 31B/12B
+    only, so E2B/E4B/26B-A4B keep bf16 here exactly as they do in the demo.
+
+    ``GEMMA4_ATTN_WEIGHT_DTYPE=bf16|bfp8`` forces a dtype for sweeps. It is an env
+    var rather than a parametrize axis on purpose: an extra axis would rename every
+    node and silently strand the existing ``test_attention_*`` entries in
+    pcc_thresholds.json back on the 0.99 default.
+    """
+    from models.demos.gemma4.tt.precision import _DTYPE_BY_NAME, Gemma4Precision
+
+    forced = os.getenv("GEMMA4_ATTN_WEIGHT_DTYPE")
+    if forced is not None:
+        if forced not in _DTYPE_BY_NAME:
+            raise ValueError(f"GEMMA4_ATTN_WEIGHT_DTYPE={forced!r} — expected one of {sorted(_DTYPE_BY_NAME)}")
+        return _DTYPE_BY_NAME[forced]
+
+    mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    precision = Gemma4Precision.load(_get_model_path(), mesh_shape, hf_config=TestFactory.create_hf_config())
+    return precision.get("attention", ttnn.bfloat16)
+
+
+def _setup_attention(mesh_device, layer_idx, create_kv_cache=False, max_seq_len=128, real_weights=False):
+    """Create HF reference and TT attention module for a given mesh.
+
+    ``real_weights`` overwrites the constructor init with the checkpoint's
+    trained q/k/v/o projections and q/k norms for this layer. Both sides still
+    read their weights from ``hf_attn``, so the reference and the TT module stay
+    in lockstep either way.
+    """
     hf_text_config = TestFactory.create_hf_text_config()
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
     hf_attn = hf_layer.self_attn
+    if real_weights:
+        load_real_weights_into(hf_attn, f"layers.{layer_idx}.self_attn")
+        hf_attn.eval()
     config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
 
     state_dict = {k: v.clone() for k, v in hf_attn.state_dict().items() if not k.startswith("v_norm")}
@@ -68,6 +110,7 @@ def _setup_attention(mesh_device, layer_idx, create_kv_cache=False, max_seq_len=
         create_kv_cache=create_kv_cache,
         max_batch_size=1,
         max_seq_len=max_seq_len,
+        weight_dtype=_attn_weight_dtype(mesh_device),
     )
 
     return hf_text_config, hf_attn, config, tt_attn, mesh_config
@@ -136,6 +179,61 @@ def test_attention_prefill(layer_type, seq_len, mesh_device, reset_seeds, reques
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, (
         f"Attention prefill (layer_type={layer_type}, layer_idx={layer_idx}, "
+        f"seq={seq_len}, tp={mesh_config.tp}) PCC too low: {pcc_msg}"
+    )
+
+
+# ── Real-weight prefill PCC ───────────────────────────────────────────────
+
+
+@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"], ids=["sliding", "global"])
+@pytest.mark.parametrize("seq_len", [1024], ids=["seq1024"])
+def test_attention_prefill_real_weights(layer_type, seq_len, mesh_device, reset_seeds, request):
+    """Prefill PCC on the checkpoint's trained q/k/v/o projections and q/k norms.
+
+    ``test_attention_prefill`` runs on HF's constructor init. The projections are
+    what this buys: real q_proj spans [-0.30, 0.36] over ~5k distinct values,
+    and the weight dtype follows ``precision_overrides.json``, so on 31B/12B this
+    gates the *shipped bfp8* attention weights at real magnitudes — a
+    shared-exponent format's error depends on the within-block spread, which
+    random init does not reproduce.
+
+    Not the q/k norms: unlike every other RMSNorm in this model those are
+    constant vectors in the checkpoint (12B layer 0: q=1.0234375, k=0.1220703125,
+    one unique value each). The only thing they add over the all-ones init is the
+    ~8x q-vs-k scale difference.
+    """
+    hf_text_config = TestFactory.create_hf_text_config()
+    try:
+        layer_idx = find_layer_idx(hf_text_config, layer_type)
+    except ValueError:
+        pytest.skip(f"No {layer_type} layer in this model")
+
+    hf_text_config, hf_attn, config, tt_attn, mesh_config = _setup_attention(mesh_device, layer_idx, real_weights=True)
+    _skip_if_l1_overflow(config, mesh_device)
+
+    q_norm = getattr(hf_attn, "q_norm", None)
+    if q_norm is not None and getattr(q_norm, "weight", None) is not None:
+        w = q_norm.weight.data.float()
+        logger.info(f"layers.{layer_idx}.self_attn q_norm: min={w.min():.4g} max={w.max():.4g} std={w.std():.4g}")
+
+    x_torch = torch.randn(1, seq_len, config.hidden_size, dtype=torch.float32)
+
+    hf_rope = TestFactory.create_hf_rope(hf_text_config, seq_len, layer_idx)
+    sliding = config.sliding_window if config.is_sliding else None
+    attn_mask = build_hf_prefill_mask(seq_len, sliding_window=sliding)
+    with torch.no_grad():
+        ref_output, _ = hf_attn(x_torch, position_embeddings=hf_rope, attention_mask=attn_mask, shared_kv_states=None)
+
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx)
+    x_tt = _to_device(x_torch.unsqueeze(0).to(torch.bfloat16), mesh_device)
+    tt_output = tt_attn(x_tt, rope_mats=(cos_tt, sin_tt), is_decode=False)
+    tt_output_torch = _from_device(tt_output, mesh_device).squeeze(0).float()
+
+    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
+    assert passing, (
+        f"Attention prefill real-weights (layer_type={layer_type}, layer_idx={layer_idx}, "
         f"seq={seq_len}, tp={mesh_config.tp}) PCC too low: {pcc_msg}"
     )
 
@@ -228,15 +326,12 @@ def _build_sliding_window_mask(cache_len, sliding_window):
     return mask
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
-@pytest.mark.parametrize("cache_len", [32, 512, 1023, 1500], ids=lambda c: f"cache{c}")
-def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, request):
-    """Test decode attention with paged KV cache against HF reference.
+def _run_decode_paged(layer_idx, cache_len, mesh_device, request, real_weights, label):
+    """Paged-decode PCC body, shared by the random-init and real-weight tests.
 
-    Tests at various cache lengths including positions beyond the sliding window (1024).
-    At cache_len=1500 with sliding_window=1024, SDPA must correctly mask out old entries.
-    Global layers (no sliding window) should attend to all cache positions.
+    Split out rather than parametrized on a ``weights`` axis: an extra axis would
+    rename every existing node and silently strand the ``test_attention_decode_paged``
+    entries in pcc_thresholds.json back on the 0.99 default.
     """
     from transformers.cache_utils import DynamicCache
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
@@ -247,6 +342,9 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
     hf_text_config = TestFactory.create_hf_text_config()
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
     hf_attn = hf_layer.self_attn
+    if real_weights:
+        load_real_weights_into(hf_attn, f"layers.{layer_idx}.self_attn")
+        hf_attn.eval()
     config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
     _skip_if_l1_overflow(config, mesh_device)
 
@@ -271,6 +369,7 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
         mesh_config=mesh_config,
         program_config=None,
         layer_idx=layer_idx,
+        weight_dtype=_attn_weight_dtype(mesh_device),
     )
     tt_attn.kv_cache = kv_cache
 
@@ -336,9 +435,41 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
 
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, (
-        f"Attention paged decode (layer={layer_idx}, cache_len={cache_len}, "
+        f"Attention paged decode {label} (layer={layer_idx}, cache_len={cache_len}, "
         f"sliding_window={sliding_window}) PCC too low: {pcc_msg}"
     )
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
+@pytest.mark.parametrize("cache_len", [32, 512, 1023, 1500], ids=lambda c: f"cache{c}")
+def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, request):
+    """Test decode attention with paged KV cache against HF reference.
+
+    Tests at various cache lengths including positions beyond the sliding window (1024).
+    At cache_len=1500 with sliding_window=1024, SDPA must correctly mask out old entries.
+    Global layers (no sliding window) should attend to all cache positions.
+    """
+    _run_decode_paged(layer_idx, cache_len, mesh_device, request, real_weights=False, label="random-init")
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
+@pytest.mark.parametrize("cache_len", [512, 1500], ids=lambda c: f"cache{c}")
+def test_attention_decode_paged_real_weights(layer_idx, cache_len, mesh_device, reset_seeds, request):
+    """Paged decode on the checkpoint's trained projections.
+
+    Decode is the shipped hot path and had no real-weight module gate: it reads
+    the paged KV cache, runs the per-user RoPE lookup and a single-query SDPA,
+    none of which the prefill test exercises. Two cache lengths, one inside the
+    1024 sliding window and one past it, so the window masking is checked at
+    real weight magnitudes.
+
+    The KV cache is still filled with ``torch.randn`` — a real cache would need
+    a real prefill first, which is what ``test_full_model_decode`` covers. This
+    isolates the weights, not the cache contents.
+    """
+    _run_decode_paged(layer_idx, cache_len, mesh_device, request, real_weights=True, label="real-weights")
 
 
 # ── Batched Decode PCC Test (paged attention, batch > 1) ─────────────────
@@ -380,26 +511,11 @@ def _kv_fill_to_tt(k_torch, mesh_device, *, num_kv_heads, num_attention_heads, t
     )
 
 
-@pytest.mark.skipif(
-    os.environ.get("CI") == "true",
-    reason="Batched decode PCC test is slow; excluded from CI (run locally for coverage).",
-)
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
-@pytest.mark.parametrize("batch", [1, 16, 32], ids=lambda b: f"batch{b}")
-@pytest.mark.parametrize("cache_len", [512, 1500], ids=lambda c: f"cache{c}")
-def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device, reset_seeds, request):
-    """True batched decode (batch > 1 single forward) with paged KV cache.
+def _run_decode_paged_batched(layer_idx, batch, cache_len, mesh_device, request, real_weights, label):
+    """Batched paged-decode PCC body, shared by the random-init and real-weight tests.
 
-    Each user gets independent random K/V, an independent query, and a distinct
-    position ``cache_len - b`` so the per-user RoPE path (apply_rope_decode_peruser
-    on [1, batch, 1, head_dim]) is exercised — a single broadcast position would
-    not catch a per-user-position bug. Compares each user's TT output against an HF
-    reference computed per user. Uses the 2D embedding-lookup RoPE cache (the path
-    real decode takes); the 4D legacy cache cannot represent per-user positions.
-
-    Skipped in CI (slow — runs across every gemma4 variant's unit job); run
-    locally for batched-decode coverage.
+    Split out rather than parametrized on a ``weights`` axis — see
+    ``_run_decode_paged`` for why an extra axis is not an option here.
     """
     from transformers.cache_utils import DynamicCache
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
@@ -410,6 +526,9 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
     hf_text_config = TestFactory.create_hf_text_config()
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
     hf_attn = hf_layer.self_attn
+    if real_weights:
+        load_real_weights_into(hf_attn, f"layers.{layer_idx}.self_attn")
+        hf_attn.eval()
     config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
     _skip_if_l1_overflow(config, mesh_device)
 
@@ -444,6 +563,7 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
         mesh_config=mesh_config,
         program_config=None,
         layer_idx=layer_idx,
+        weight_dtype=_attn_weight_dtype(mesh_device),
     )
     tt_attn.kv_cache = kv_cache
 
@@ -556,8 +676,56 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
     ref_stacked = torch.stack(ref_outputs, dim=0)  # [batch, hidden_size]
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_stacked, pcc_threshold=get_pcc_threshold(request))
     assert passing, (
-        f"Batched decode (layer={layer_idx}, batch={batch}, cache_len={cache_len}, "
+        f"Batched decode {label} (layer={layer_idx}, batch={batch}, cache_len={cache_len}, "
         f"tp={tp}, sliding_window={sliding_window}) PCC too low: {pcc_msg}"
+    )
+
+
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="Batched decode PCC test is slow; excluded from CI (run locally for coverage).",
+)
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
+@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
+@pytest.mark.parametrize("batch", [1, 16, 32], ids=lambda b: f"batch{b}")
+@pytest.mark.parametrize("cache_len", [512, 1500], ids=lambda c: f"cache{c}")
+def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device, reset_seeds, request):
+    """True batched decode (batch > 1 single forward) with paged KV cache.
+
+    Each user gets independent random K/V, an independent query, and a distinct
+    position ``cache_len - b`` so the per-user RoPE path (apply_rope_decode_peruser
+    on [1, batch, 1, head_dim]) is exercised — a single broadcast position would
+    not catch a per-user-position bug. Compares each user's TT output against an HF
+    reference computed per user. Uses the 2D embedding-lookup RoPE cache (the path
+    real decode takes); the 4D legacy cache cannot represent per-user positions.
+
+    Skipped in CI (slow — runs across every gemma4 variant's unit job); run
+    locally for batched-decode coverage.
+    """
+    _run_decode_paged_batched(
+        layer_idx, batch, cache_len, mesh_device, request, real_weights=False, label="random-init"
+    )
+
+
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="Batched decode PCC test is slow; excluded from CI (run locally for coverage).",
+)
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
+@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
+@pytest.mark.parametrize("batch", [32], ids=lambda b: f"batch{b}")
+@pytest.mark.parametrize("cache_len", [1500], ids=lambda c: f"cache{c}")
+def test_attention_decode_paged_batched_real_weights(layer_idx, batch, cache_len, mesh_device, reset_seeds, request):
+    """Batched decode on the checkpoint's trained projections.
+
+    Narrower than the random-init grid on purpose — one point, the hardest one:
+    the full 32-user batch at a cache length past the 1024 sliding window, where
+    the per-user RoPE lookup and the window masking are both live. The random-init
+    test keeps the full batch/cache sweep; this adds real weight magnitudes to
+    the corner that matters rather than multiplying a 36-case grid.
+    """
+    _run_decode_paged_batched(
+        layer_idx, batch, cache_len, mesh_device, request, real_weights=True, label="real-weights"
     )
 
 
@@ -611,6 +779,7 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
         mesh_config=mesh_config,
         program_config=None,
         layer_idx=layer_idx,
+        weight_dtype=_attn_weight_dtype(mesh_device),
     )
     tt_attn.kv_cache = kv_cache
 
@@ -664,14 +833,13 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     assert out2_torch.shape[-2] == chunk_size, f"Expected seq_len={chunk_size} in output, got {out2_torch.shape[-2]}"
     # endregion
 
-    # region No DRAM pinning during decode
-    # After the last prefill chunk, the tail is still stored (for a potential
-    # next chunk that never comes). The first decode call must release it.
+    # region Async-safe tail lifetime across decode
+    # Under vLLM async_scheduling, another request's decode can interleave
+    # between APC continuation prefills. Decode must NOT wipe the sliding
+    # tail; a new prefill at chunk_start_idx==0 releases it instead.
     tail_before_decode = getattr(tt_attn, "_sliding_prefill_tail", None)
     assert tail_before_decode is not None, "Tail should still be present after chunk 2 (not yet in decode)"
 
-    # Simulate a decode call: minimal input, just needs to trigger the
-    # `is_decode=True` branch which releases the tail.
     x_dec = torch.randn(1, 1, 1, config.hidden_size, dtype=torch.bfloat16)
     x_dec_tt = _to_device(x_dec, mesh_device)
     position_idx_tt = ttnn.from_torch(
@@ -691,7 +859,129 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     )
 
     tail_after_decode = getattr(tt_attn, "_sliding_prefill_tail", None)
-    assert tail_after_decode is None, (
-        "Tail should be released after the first decode call - " "DRAM must not be pinned during decode"
+    assert tail_after_decode is not None, "Tail must survive decode so async APC continuations keep sliding_tail_in"
+    assert all(t.is_allocated() for t in tail_after_decode), "Tail deallocated during decode"
+
+    # A fresh prefill at chunk_start==0 must release the prior request's tail.
+    x_new = torch.randn(1, 1, chunk_size, config.hidden_size, dtype=torch.bfloat16)
+    x_new_tt = _to_device(x_new, mesh_device)
+    chunk_new_pt = page_table[:, : chunk_size // block_size]
+    chunk_new_pt_tt = ttnn.from_torch(chunk_new_pt, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+    out_new = tt_attn(
+        x_new_tt,
+        rope_mats=(cos_tt, sin_tt),
+        is_decode=False,
+        page_table=page_table_tt,
+        kv_cache=kv_cache,
+        chunk_start_idx=0,
+        chunk_page_table=chunk_new_pt_tt,
     )
+    out_new.deallocate(True)
+    tail_after_reset = getattr(tt_attn, "_sliding_prefill_tail", None)
+    assert tail_after_reset is not None, "New prefill at start=0 should stash a fresh tail"
+    assert all(t.is_allocated() for t in tail_after_reset)
     # endregion
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds, request):
+    """APC remnant: first grant < sliding_window must still stash a hist-wide tail.
+
+    Reproduces the shield failure mode where chunk_start=384 arrives on the
+    continuation without sliding_tail_in because the prior short chunk skipped
+    the post-SDPA stash (kseq < hist).
+    """
+    from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
+    hf_text_config = TestFactory.create_hf_text_config()
+    layer_idx = find_layer_idx(hf_text_config, "sliding_attention")
+    config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
+    sliding_window = int(config.sliding_window)
+    hist = ((sliding_window + 31) // 32) * 32
+    assert hist > 384, f"test needs hist>384, got hist={hist}"
+
+    hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
+    state_dict = {k: v.clone() for k, v in hf_layer.self_attn.state_dict().items() if not k.startswith("v_norm")}
+
+    short_len = 384
+    cont_len = 1024
+    short_cont = 128
+    block_size = 64
+    total_seq = short_len + cont_len
+    final_seq = total_seq + short_cont
+    max_num_blocks = (final_seq + block_size - 1) // block_size + 2
+    max_seq_len = max_num_blocks * block_size
+    paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
+
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=1))
+    kv_cache = init_kv_cache(
+        mesh_device=mesh_device,
+        config=config,
+        paged_attention_config=paged_attention_config,
+        cache_dtype=ttnn.bfloat16,
+    )
+    tt_attn = Gemma4Attention(
+        mesh_device=mesh_device,
+        config=config,
+        state_dict=state_dict,
+        ccl_manager=None,
+        mesh_config=mesh_config,
+        program_config=None,
+        layer_idx=layer_idx,
+        weight_dtype=_attn_weight_dtype(mesh_device),
+    )
+    tt_attn.kv_cache = kv_cache
+    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(1, -1)
+    page_table_tt = ttnn.from_torch(page_table, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max_seq_len, layer_idx)
+
+    # Short first grant — single-chunk path (no chunk_page_table), like vLLM APC.
+    x1 = torch.randn(1, 1, short_len, config.hidden_size, dtype=torch.bfloat16)
+    out1 = tt_attn(
+        _to_device(x1, mesh_device),
+        rope_mats=(cos_tt, sin_tt),
+        is_decode=False,
+        page_table=page_table_tt,
+        kv_cache=kv_cache,
+        chunk_start_idx=0,
+        valid_seq_len=short_len,
+    )
+    out1.deallocate(True)
+    tail = getattr(tt_attn, "_sliding_prefill_tail", None)
+    assert tail is not None, "Short first chunk must stash a padded sliding tail"
+    assert all(t.is_allocated() for t in tail)
+    assert int(tail[0].shape[-2]) == hist, f"Expected padded hist={hist}, got {tail[0].shape[-2]}"
+
+    # Continuation at chunk_start=384 with chunk_page_table — needs the tail.
+    x2 = torch.randn(1, 1, cont_len, config.hidden_size, dtype=torch.bfloat16)
+    chunk2_pt = page_table[:, short_len // block_size : total_seq // block_size]
+    chunk2_pt_tt = ttnn.from_torch(chunk2_pt, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+    out2 = tt_attn(
+        _to_device(x2, mesh_device),
+        rope_mats=(cos_tt, sin_tt),
+        is_decode=False,
+        page_table=page_table_tt,
+        kv_cache=kv_cache,
+        chunk_start_idx=short_len,
+        chunk_page_table=chunk2_pt_tt,
+    )
+    out2_torch = _from_device(out2, mesh_device)
+    assert out2_torch.shape[-2] == cont_len
+
+    # Short continuation with seq < hist must still consume the padded tail
+    # (Q filler previously sliced hist rows from a short tt_q → TT_FATAL).
+    x3 = torch.randn(1, 1, short_cont, config.hidden_size, dtype=torch.bfloat16)
+    chunk3_pt = page_table[:, total_seq // block_size : final_seq // block_size]
+    chunk3_pt_tt = ttnn.from_torch(chunk3_pt, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+    out3 = tt_attn(
+        _to_device(x3, mesh_device),
+        rope_mats=(cos_tt, sin_tt),
+        is_decode=False,
+        page_table=page_table_tt,
+        kv_cache=kv_cache,
+        chunk_start_idx=total_seq,
+        chunk_page_table=chunk3_pt_tt,
+    )
+    out3_torch = _from_device(out3, mesh_device)
+    assert out3_torch.shape[-2] == short_cont, "short continuation with seq < hist failed"

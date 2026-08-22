@@ -10,6 +10,7 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -24,12 +25,36 @@ from .operations import (
     chunked_prefill_sdpa_sliding,
     concat_heads,
     effective_block_size,
+    interleave_qkv_if_sharded,
+    o_proj_input_memcfg,
+    prefill_sdpa_act_memcfg,
+    prefill_sdpa_compute_kernel_config,
     prefill_sdpa_program_config,
     split_qkv_heads_prefill,
 )
 from .weights import AttentionWeights
 
 TILE_HEIGHT = 32
+
+
+def _ensure_dram_interleaved(tensor):
+    """Park an activation in DRAM interleaved before SDPA (L1 CBs need the room)."""
+    if tensor is None:
+        return tensor
+    try:
+        mem = tensor.memory_config()
+        is_l1 = mem.buffer_type == ttnn.BufferType.L1
+        is_sharded = tensor.is_sharded()
+    except Exception:
+        return tensor
+    if not is_l1 and not is_sharded:
+        return tensor
+    if is_sharded:
+        out = ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        out = ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
+    tensor.deallocate(True)
+    return out
 
 
 def _resolve_valid_seq_len_tensor(config, valid_seq_len, padded_seq_len, mesh_device):
@@ -71,6 +96,179 @@ def _resolve_valid_seq_len_tensor(config, valid_seq_len, padded_seq_len, mesh_de
     )
 
 
+def _merge_bounded_boundary_fill(tt_x, valid_seq_len, modulo):
+    """Restore wrap-window rows into the newest tile's padding slots.
+
+    Kernel ``skip_tiles`` is tile-granular: when ``V % 32 != 0`` it commits
+    padding rows ``[V, ceil_tile)`` into the ring's newest slots and drops the
+    oldest ``V % 32`` in-window tokens. Splice those wrap-window rows into the
+    padding slots so the filled tile window matches ``[V - modulo, V)``.
+    """
+    if tt_x is None or valid_seq_len is None or modulo is None:
+        return tt_x
+    v = int(valid_seq_len)
+    mod = int(modulo)
+    s = int(tt_x.shape[-2])
+    if v <= 0 or v >= s or v % TILE_HEIGHT == 0 or mod <= 0:
+        return tt_x
+    pad_rows = TILE_HEIGHT - (v % TILE_HEIGHT)
+    tile_end = min(v + pad_rows, s)
+    pad_rows = tile_end - v
+    if pad_rows <= 0:
+        return tt_x
+    wrap_start = v - mod
+    if wrap_start < 0:
+        return tt_x
+    b, h, _, d = (int(tt_x.shape[i]) for i in range(4))
+    head = ttnn.slice(tt_x, [0, 0, 0, 0], [b, h, v, d])
+    wrap = ttnn.slice(tt_x, [0, 0, wrap_start, 0], [b, h, wrap_start + pad_rows, d])
+    parts = [head, wrap]
+    tail = None
+    if tile_end < s:
+        tail = ttnn.slice(tt_x, [0, 0, tile_end, 0], [b, h, s, d])
+        parts.append(tail)
+    out = ttnn.concat(parts, dim=2)
+    for t in (head, wrap, tail):
+        if t is not None:
+            t.deallocate(True)
+    return out
+
+
+def _left_pad_kv_to_hist(tt_k, tt_v, hist, head_dim, *, deallocate_inputs=False):
+    """Left-pad K/V with zeros to ``hist`` rows (causal window right-aligned).
+
+    ``ttnn.pad`` cannot front-pad TILE tensors on device. Used by the sliding
+    SDPA consumer when a prior short stash is narrower than ``hist``. Avoid
+    calling mid-trace-capture (``ttnn.zeros`` host write). When already
+    ``>= hist``, returns the last ``hist`` rows (cloned if truncated).
+    """
+    if tt_k is None or tt_v is None or hist is None or hist <= 0:
+        return tt_k, tt_v
+    kseq = int(tt_k.shape[-2])
+    nkv = int(tt_k.shape[1])
+    if kseq == hist:
+        return tt_k, tt_v
+    if kseq > hist:
+        start = kseq - hist
+        k_s = ttnn.slice(tt_k, [0, 0, start, 0], [1, nkv, kseq, head_dim])
+        v_s = ttnn.slice(tt_v, [0, 0, start, 0], [1, nkv, kseq, head_dim])
+        k_out = ttnn.clone(k_s, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v_out = ttnn.clone(v_s, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        k_s.deallocate(True)
+        v_s.deallocate(True)
+        if deallocate_inputs:
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
+        return k_out, v_out
+    pad = hist - kseq
+    zero_shape = [1, nkv, pad, head_dim]
+    k_zeros = ttnn.zeros(
+        zero_shape,
+        dtype=tt_k.dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=tt_k.device(),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    v_zeros = ttnn.zeros(
+        zero_shape,
+        dtype=tt_v.dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=tt_v.device(),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    k_out = ttnn.concat([k_zeros, tt_k], dim=2)
+    v_out = ttnn.concat([v_zeros, tt_v], dim=2)
+    k_zeros.deallocate(True)
+    v_zeros.deallocate(True)
+    if deallocate_inputs:
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
+    return k_out, v_out
+
+
+def _clone_sliding_prefill_tail(tt_k, tt_v, hist, head_dim, valid_seq_len=None, *, allow_short_pad=True):
+    """Clone the last up-to-``hist`` K/V rows for the next sliding prefill chunk.
+
+    vLLM APC / token-chunked prefill often delivers a first scheduler grant
+    shorter than ``sliding_window`` (e.g. ``chunk_start`` remnant 128/384 with
+    ``hist=1024``). Skipping the stash when ``kseq < hist`` leaves the next
+    continuation without ``sliding_tail_in`` (shield QB2 hang / #51186).
+
+    Always clone at least the available rows (safe mid-trace-capture). Eager
+    paths may left-pad to ``hist`` here; traced short buckets keep a short
+    clone and the consumer pads via ``_left_pad_kv_to_hist``.
+    """
+    if tt_k is None or tt_v is None or hist is None or hist <= 0:
+        return None
+    kseq = int(tt_k.shape[-2])
+    if valid_seq_len is not None:
+        kseq = min(kseq, max(0, int(valid_seq_len)))
+    if kseq <= 0:
+        return None
+    nkv = int(tt_k.shape[1])
+    take = min(kseq, hist)
+    tail_start = kseq - take
+    k_part = ttnn.slice(tt_k, [0, 0, tail_start, 0], [1, nkv, kseq, head_dim])
+    v_part = ttnn.slice(tt_v, [0, 0, tail_start, 0], [1, nkv, kseq, head_dim])
+    if take < hist and allow_short_pad:
+        # Eager only: traced capture forbids ttnn.zeros (host write).
+        k_part, v_part = _left_pad_kv_to_hist(k_part, v_part, hist, head_dim, deallocate_inputs=True)
+    k_out = ttnn.clone(k_part, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    v_out = ttnn.clone(v_part, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    k_part.deallocate(True)
+    v_part.deallocate(True)
+    return (k_out, v_out)
+
+
+def flush_deferred_bounded_fills(layers):
+    """Merge + ``paged_fill_cache`` for stashed bounded ring fills.
+
+    Must run after lm_head (never mid-layer / between layers and lm_head on TP).
+    Intermediate generator chunks leave the stash empty (they skip ring fill).
+    """
+    for layer in layers:
+        cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+        if cfg is None:
+            continue
+        pending = getattr(cfg, "_deferred_bounded_fill", None)
+        if not pending:
+            continue
+        cfg._deferred_bounded_fill = None
+        k_fill = pending["k_fill"]
+        v_fill = pending["v_fill"]
+        k_merged = k_fill
+        v_merged = v_fill
+        try:
+            k_merged = _merge_bounded_boundary_fill(k_fill, pending["valid_seq_len"], pending["modulo"])
+            v_merged = _merge_bounded_boundary_fill(v_fill, pending["valid_seq_len"], pending["modulo"])
+            ttnn.experimental.paged_fill_cache(
+                pending["k_cache"],
+                k_merged,
+                pending["page_table"],
+                batch_idx=pending["user_id"],
+                block_size=pending["block_size"],
+                **pending["paged_modulo_kwargs"],
+            )
+            ttnn.experimental.paged_fill_cache(
+                pending["v_cache"],
+                v_merged,
+                pending["page_table"],
+                batch_idx=pending["user_id"],
+                block_size=pending["block_size"],
+                **pending["paged_modulo_kwargs"],
+            )
+        finally:
+            seen = set()
+            for t in (k_fill, v_fill, k_merged, v_merged):
+                if t is None or id(t) in seen:
+                    continue
+                seen.add(id(t))
+                try:
+                    t.deallocate(True)
+                except Exception:
+                    pass
+
+
 def _prefill_forward_single(
     hidden_states,
     cos_cache,
@@ -106,14 +304,25 @@ def _prefill_forward_single(
     """
     tp = mesh_config.tp if mesh_config else 1
     is_chunked = chunk_page_table is not None
-    chunk_offset = int(chunk_start_idx) if chunk_start_idx is not None else 0
-    need_cross_chunk = is_chunked and chunk_offset > 0
+    # Host int for control-flow (path selection). Device tensor offsets are used
+    # for RoPE / chunked SDPA under traced multi-chunk replay.
+    if isinstance(chunk_start_idx, ttnn.Tensor):
+        chunk_offset = None  # signal: use tensor path; cross-chunk always on
+        chunk_offset_tensor = chunk_start_idx
+        need_cross_chunk = is_chunked  # sp1 / middle-chunk traced graph
+    else:
+        chunk_offset = int(chunk_start_idx) if chunk_start_idx is not None else 0
+        chunk_offset_tensor = None
+        need_cross_chunk = is_chunked and chunk_offset > 0
     # Generator-level chunked prefill on a sliding-window layer (any chunk,
     # including the first). Handled via the in-memory window tail below rather
     # than the full-prefix paged read used for full-attention layers.
     sliding_chunked = is_chunked and config.is_sliding and config.sliding_window is not None
-    if need_cross_chunk and shared_kv is not None:
-        raise NotImplementedError("Gemma4 KV-shared layer cross-chunk prefill not implemented yet (Stage A-hard).")
+    # KV-shared + generator multi-chunk: current-chunk K/V still arrive via
+    # ``shared_kv`` (source layer's keep_kv). Cross-chunk full-attention then
+    # reads the source's already-filled paged cache (``need_cross_chunk`` path);
+    # sliding layers use the in-memory window tail. Do not hard-error here —
+    # forcing single-chunk at 64k+ hangs E2B/E4B warmup on P150x8.
     # Fill the current chunk's K/V at its physical blocks. For a single chunk the
     # chunk table equals the (full) page_table, so behavior is unchanged.
     #
@@ -129,29 +338,50 @@ def _prefill_forward_single(
         fill_page_table = chunk_page_table if is_chunked else page_table
 
     xqkv = apply_qkv_projection(hidden_states, weights)
+    # Free the QKV in0 (often L1 interleaved from input_layernorm S2I / hoist)
+    # before SDPA. Leaving it resident clashes with SDPA's static circular
+    # buffers on the full worker grid (same pattern as the batched path below).
+    ttnn.deallocate(hidden_states)
 
+    # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
+    # #48861). The allreduce input stays DRAM (CCL path); the o_proj matmul writes
+    # L1 block-sharded under its tuned config and is interleaved back before CCL.
+    # The tuned prefill QKV already writes DRAM interleaved; the guard stays for
+    # callers/paths that hand back a sharded projection (head-split needs interleaved).
+    act_mc = prefill_sdpa_act_memcfg()
+    xqkv = interleave_qkv_if_sharded(xqkv, memory_config=act_mc)
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(
-        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
+        xqkv,
+        config,
+        weights.is_global,
+        tp=tp,
+        kv_replicated=weights.kv_replicated,
+        memory_config=act_mc,
     )
+    # Free the fused projection buffer once the heads are materialized so it is
+    # not still resident under SDPA.
+    ttnn.deallocate(xqkv)
 
-    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
+    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc)
 
     if shared_kv is not None:
         tt_k.deallocate(True)
         tt_v.deallocate(True)
         tt_k, tt_v = shared_kv
     else:
-        tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
+        tt_k = apply_per_head_norm(
+            tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc
+        )
+        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc)
 
     # RoPE Q (and K, unless KV-shared — then K comes already-RoPE'd from the
     # source layer). A concat(Q,K)->rope->split fusion was evaluated to collapse
     # the two rotary_embedding calls into one, but it adds concat+split device
     # kernels for no throughput benefit (RoPE is ~1% of the step), so Q and K are
     # rotated separately.
-    tt_q = apply_rope(tt_q, cos_cache, sin_cache)
+    tt_q = apply_rope(tt_q, cos_cache, sin_cache, memory_config=act_mc)
     if shared_kv is None:
-        tt_k = apply_rope(tt_k, cos_cache, sin_cache)
+        tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
 
     if kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
@@ -163,66 +393,139 @@ def _prefill_forward_single(
                 if config.cache_position_modulo is not None
                 else {}
             )
-            # Bounded sliding cache + padded single-chunk prefill: the prompt is
-            # padded up to the next power of 2, and writing those padding tokens
-            # into the modulo-slot circular cache WRAPS and overwrites the real
-            # recent window — so decode reads padding and emits garbage once the
-            # padding exceeds the window (real prompt < seq_len - window). Cap the
-            # bounded-cache fill to a block-aligned length >= the real (unpadded)
-            # prompt so the circular buffer ends on (mostly) real tokens. Full
-            # (unbounded) layers are unaffected: their padding lands at positions
-            # decode never reads. NOTE: a residual sub-tile boundary padding is a
-            # known >32k long-context limitation, tracked in
-            # docs/bounded_sliding_kv_cache_debug.md.
-            # Two ways to keep the bounded fill from wrapping padding over the real
-            # recent window:
-            #  (1) host-side slice: cap the input to a block-aligned fill_len >= the
-            #      real prompt before the fill. Works only when valid_seq_len (the
-            #      real length) is known here — i.e. eager prefill (get_last_token>=0).
-            #  (2) kernel-side cap: pass valid_seq_len as a device tensor; the writer
-            #      restricts the ring window to end there. Works under a captured
-            #      prefill trace too (get_last_token==-1), where valid_seq_len is None
-            #      but a per-request device tensor is refreshed outside the trace.
-            k_fill, v_fill = tt_k, tt_v
-            fill_kwargs = {}
-            valid_dev = _resolve_valid_seq_len_tensor(config, valid_seq_len, tt_k.shape[-2], k_cache.device())
-            if valid_dev is not None:
-                fill_kwargs["valid_seq_len_tensor"] = valid_dev
-            elif config.cache_position_modulo is not None and valid_seq_len is not None:
-                fill_len = ((min(valid_seq_len, tt_k.shape[-2]) + eff_bs - 1) // eff_bs) * eff_bs
-                if 0 < fill_len < tt_k.shape[-2]:
-                    k_fill = ttnn.slice(tt_k, [0, 0, 0, 0], [tt_k.shape[0], tt_k.shape[1], fill_len, tt_k.shape[3]])
-                    v_fill = ttnn.slice(tt_v, [0, 0, 0, 0], [tt_v.shape[0], tt_v.shape[1], fill_len, tt_v.shape[3]])
-            ttnn.experimental.paged_fill_cache(
-                k_cache,
-                k_fill,
-                fill_page_table,
-                batch_idx=user_id,
-                block_size=eff_bs,
-                **paged_modulo_kwargs,
-                **fill_kwargs,
-            )
-            ttnn.experimental.paged_fill_cache(
-                v_cache,
-                v_fill,
-                fill_page_table,
-                batch_idx=user_id,
-                block_size=eff_bs,
-                **paged_modulo_kwargs,
-                **fill_kwargs,
-            )
-            if k_fill is not tt_k:
-                k_fill.deallocate(True)
-            if v_fill is not tt_v:
-                v_fill.deallocate(True)
-            # Free the inline-built cap tensor; leave a persistent (config-owned) one.
-            if valid_dev is not None and valid_dev is not getattr(config, "prefill_valid_len_dev", None):
-                valid_dev.deallocate(True)
+            if config.cache_position_modulo is not None:
+                # Bounded ring fill: never merge/where/paged_fill mid-forward on TP
+                # (corrupts token-0). Eager last chunk (valid_seq_len known): stash
+                # a tile-ceil K/V clone; model flushes after lm_head. Intermediate
+                # chunks (valid_seq_len None + chunked): skip — last chunk overwrites
+                # the ring. Traced path (valid_seq_len None, non-chunked / kernel
+                # cap): may still kernel-cap-fill in-graph.
+                if valid_seq_len is not None:
+                    v = min(int(valid_seq_len), int(tt_k.shape[-2]))
+                    tile_end = ((v + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT
+                    tile_end = min(tile_end, int(tt_k.shape[-2]))
+                    if tile_end <= 0:
+                        pass
+                    else:
+                        # Drop any prior stash (e.g. re-run) before cloning.
+                        old = getattr(config, "_deferred_bounded_fill", None)
+                        if old:
+                            for t in (old.get("k_fill"), old.get("v_fill")):
+                                if t is not None:
+                                    try:
+                                        t.deallocate(True)
+                                    except Exception:
+                                        pass
+                            config._deferred_bounded_fill = None
+                        if tile_end < int(tt_k.shape[-2]):
+                            k_slice = ttnn.slice(
+                                tt_k,
+                                [0, 0, 0, 0],
+                                [tt_k.shape[0], tt_k.shape[1], tile_end, tt_k.shape[3]],
+                            )
+                            v_slice = ttnn.slice(
+                                tt_v,
+                                [0, 0, 0, 0],
+                                [tt_v.shape[0], tt_v.shape[1], tile_end, tt_v.shape[3]],
+                            )
+                            k_stash = ttnn.clone(k_slice)
+                            v_stash = ttnn.clone(v_slice)
+                            k_slice.deallocate(True)
+                            v_slice.deallocate(True)
+                        else:
+                            k_stash = ttnn.clone(tt_k)
+                            v_stash = ttnn.clone(tt_v)
+                        config._deferred_bounded_fill = {
+                            "k_cache": k_cache,
+                            "v_cache": v_cache,
+                            "k_fill": k_stash,
+                            "v_fill": v_stash,
+                            "page_table": fill_page_table,
+                            "user_id": user_id,
+                            "block_size": eff_bs,
+                            "paged_modulo_kwargs": paged_modulo_kwargs,
+                            "valid_seq_len": v,
+                            "modulo": int(config.cache_position_modulo),
+                        }
+                elif not is_chunked:
+                    # Traced / single-chunk with get_last_token=-1: kernel-cap fill.
+                    k_fill, v_fill = tt_k, tt_v
+                    fill_kwargs = {}
+                    valid_dev = _resolve_valid_seq_len_tensor(config, valid_seq_len, tt_k.shape[-2], k_cache.device())
+                    if valid_dev is not None:
+                        fill_kwargs["valid_seq_len_tensor"] = valid_dev
+                    ttnn.experimental.paged_fill_cache(
+                        k_cache,
+                        k_fill,
+                        fill_page_table,
+                        batch_idx=user_id,
+                        block_size=eff_bs,
+                        **paged_modulo_kwargs,
+                        **fill_kwargs,
+                    )
+                    ttnn.experimental.paged_fill_cache(
+                        v_cache,
+                        v_fill,
+                        fill_page_table,
+                        batch_idx=user_id,
+                        block_size=eff_bs,
+                        **paged_modulo_kwargs,
+                        **fill_kwargs,
+                    )
+                    if valid_dev is not None and valid_dev is not getattr(config, "prefill_valid_len_dev", None):
+                        valid_dev.deallocate(True)
+                # else: intermediate multi-chunk — skip ring (last chunk overwrites)
+            else:
+                # Unbounded: in-forward fill. When ``valid_seq_len`` is known
+                # (last multi-chunk with true last-token index), slice away
+                # power-of-2 pad rows before fill. Pad rows otherwise write
+                # through page-table zeros into physical block 0 and corrupt
+                # the prompt prefix (LB 12B ~9k / 16k garbage cliff).
+                k_fill, v_fill = tt_k, tt_v
+                if valid_seq_len is not None:
+                    v = min(int(valid_seq_len), int(tt_k.shape[-2]))
+                    # Tile-ceil so the writer sees a legal RM height; unused
+                    # rows inside the last tile must be -1 in the page table
+                    # (generator pads with -1, not 0).
+                    tile_end = ((v + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT
+                    tile_end = min(tile_end, int(tt_k.shape[-2]))
+                    if 0 < tile_end < int(tt_k.shape[-2]):
+                        k_fill = ttnn.slice(
+                            tt_k,
+                            [0, 0, 0, 0],
+                            [tt_k.shape[0], tt_k.shape[1], tile_end, tt_k.shape[3]],
+                        )
+                        v_fill = ttnn.slice(
+                            tt_v,
+                            [0, 0, 0, 0],
+                            [tt_v.shape[0], tt_v.shape[1], tile_end, tt_v.shape[3]],
+                        )
+                ttnn.experimental.paged_fill_cache(
+                    k_cache,
+                    k_fill,
+                    fill_page_table,
+                    batch_idx=user_id,
+                    block_size=eff_bs,
+                    **paged_modulo_kwargs,
+                )
+                ttnn.experimental.paged_fill_cache(
+                    v_cache,
+                    v_fill,
+                    fill_page_table,
+                    batch_idx=user_id,
+                    block_size=eff_bs,
+                    **paged_modulo_kwargs,
+                )
         else:
             ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
 
     # 6. SDPA (causal prefill, scale=1.0)
+    # Prefill SDPA's static CBs fill Wormhole L1; any L1 Q/K/V (or residue from
+    # an L1 QKV out) clashes. Force DRAM interleaved heads before the op.
+    tt_q = _ensure_dram_interleaved(tt_q)
+    tt_k = _ensure_dram_interleaved(tt_k)
+    tt_v = _ensure_dram_interleaved(tt_v)
     # The non-chunked SDPA silently returns WRONG results at seq_len >= 32768
     # (2^15) — generation degrades to garbage. The cliff is INCLUSIVE of 32768:
     # a power-of-2-padded prompt that lands exactly on 32768 is already broken
@@ -233,6 +536,11 @@ def _prefill_forward_single(
     #   - sliding-window layers: that op is causal-only, so use an overlapping
     #     windowed chunking over the in-memory K/V (each slice stays <32768).
     # Both stay correct at/above 32768 and reduce to the non-chunked op below it.
+    #
+    # KV-shared layers still take the paged chunked path: ``kv_cache`` points at
+    # the source layer's already-filled cache. Do NOT require ``shared_kv is None``
+    # here — that used to fall through to non-chunked SDPA and produce garbage
+    # (e.g. trailing "la la la") on E2B/E4B long-context.
     seq_len = tt_q.shape[-2]
     long_seq = seq_len >= PREFILL_SDPA_MAX_SEQ
     sliding_window = config.sliding_window if config.is_sliding else None
@@ -248,19 +556,39 @@ def _prefill_forward_single(
         # rows [hist, hist+seq_len) are query positions [chunk_offset,
         # chunk_offset+seq_len) with their full window covered. The current
         # chunk's last ``sliding_window`` K/V become next chunk's tail.
-        sdpa_ckc = ttnn.init_device_compute_kernel_config(
-            tt_q.device().arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        sdpa_ckc = prefill_sdpa_compute_kernel_config(tt_q.device())
         hist = ((sliding_window + 31) // 32) * 32
+        use_persistent_tail = isinstance(chunk_start_idx, ttnn.Tensor)
         if sliding_tail_in is not None:
             k_tail, v_tail = sliding_tail_in
-            nqh = tt_q.shape[1]
-            # Filler Q rows (outputs discarded); reuse the chunk's leading rows.
-            q_pad = ttnn.slice(tt_q, [0, 0, 0, 0], [1, nqh, hist, config.head_dim])
+            # Traced short first-buckets stash an unpadded tail (< hist); pad
+            # here so concat stays square. Eager APC often already padded.
+            if int(k_tail.shape[-2]) != hist:
+                k_tail, v_tail = _left_pad_kv_to_hist(
+                    k_tail,
+                    v_tail,
+                    hist,
+                    config.head_dim,
+                    # Never free persistent ring buffers; eager stashes are owned here.
+                    deallocate_inputs=not use_persistent_tail,
+                )
+            nqh = int(tt_q.shape[1])
+            # Filler Q rows (outputs discarded). Prefer the chunk's leading
+            # rows when ``seq_len >= hist``; APC remnant chunks can be shorter
+            # than ``hist`` (e.g. 128/384), so left-pad with zeros instead of
+            # slicing past ``tt_q`` (TT_FATAL Ends hist > tensor seq).
+            if seq_len >= hist:
+                q_pad = ttnn.slice(tt_q, [0, 0, 0, 0], [1, nqh, hist, config.head_dim])
+            else:
+                q_zeros = ttnn.zeros(
+                    [1, nqh, hist - seq_len, config.head_dim],
+                    dtype=tt_q.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=tt_q.device(),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                q_pad = ttnn.concat([q_zeros, tt_q], dim=2)
+                q_zeros.deallocate(True)
             q_cat = ttnn.concat([q_pad, tt_q], dim=2)
             k_cat = ttnn.concat([k_tail, tt_k], dim=2)
             v_cat = ttnn.concat([v_tail, tt_v], dim=2)
@@ -278,13 +606,27 @@ def _prefill_forward_single(
             q_cat.deallocate(True)
             k_cat.deallocate(True)
             v_cat.deallocate(True)
-            k_tail.deallocate(True)
-            v_tail.deallocate(True)
+            # Persistent ring (traced multi-chunk): keep the buffer addresses so
+            # execute_trace can refresh them via ttnn.copy below. Eager path
+            # frees the previous chunk's tail.
+            if not use_persistent_tail:
+                k_tail.deallocate(True)
+                v_tail.deallocate(True)
             tt_sdpa = ttnn.slice(sdpa_full, [0, 0, hist, 0], [1, nqh, hist + seq_len, config.head_dim])
             sdpa_full.deallocate(True)
         else:
-            # First chunk (chunk_offset==0): no history, window lies inside the
-            # chunk (seq_len=chunk_size >= sliding_window). Standard windowed SDPA.
+            # No in-memory tail. Correct for the first chunk (chunk_offset==0).
+            # Continuation without a tail (e.g. prior scheduler chunk took the
+            # single-chunk path and failed to stash — see post-SDPA stash below)
+            # silently drops the prior window; log so the ~9k remnant cliff is
+            # diagnosable if it regresses.
+            if chunk_offset is not None and chunk_offset > 0:
+                logger.warning(
+                    "Gemma4 sliding prefill: chunk_start={} without sliding_tail_in; "
+                    "windowed SDPA will miss prior-chunk K/V (vLLM chunked prefill "
+                    "remnant < sliding_window).",
+                    chunk_offset,
+                )
             tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
                 tt_q,
                 tt_k,
@@ -296,21 +638,49 @@ def _prefill_forward_single(
                 compute_kernel_config=sdpa_ckc,
             )
         # Save this chunk's last ``hist`` K/V tokens as the next chunk's tail.
-        # The slices must outlive tt_k / tt_v (deallocated below); force an
-        # independent DRAM copy so deallocation of the parent doesn't
-        # invalidate the tail.
-        kseq = tt_k.shape[-2]
-        nkv = tt_k.shape[1]
-        tail_start = max(0, kseq - hist)
-        k_tail_out = ttnn.clone(
-            ttnn.slice(tt_k, [0, 0, tail_start, 0], [1, nkv, kseq, config.head_dim]),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # Slices may be views of tt_k/tt_v; clone (+ left-pad if short) so the
+        # tail outlives parent dealloc across vLLM cross-call chunked prefill
+        # (#51041) and APC short-first-grant continuations.
+        sliding_tail_stash = _clone_sliding_prefill_tail(
+            tt_k,
+            tt_v,
+            hist,
+            config.head_dim,
+            valid_seq_len=valid_seq_len,
+            # Tensor chunk_start_idx ⇒ traced multi-chunk; skip short-pad alloc.
+            allow_short_pad=not use_persistent_tail,
         )
-        v_tail_out = ttnn.clone(
-            ttnn.slice(tt_v, [0, 0, tail_start, 0], [1, nkv, kseq, config.head_dim]),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        sliding_tail_out = (k_tail_out, v_tail_out)
+        if sliding_tail_stash is None:
+            k_tail_out = v_tail_out = None
+        else:
+            k_tail_out, v_tail_out = sliding_tail_stash
+        if use_persistent_tail and k_tail_out is not None:
+            # Bind fixed DRAM addresses into the graph so middle-chunk replay
+            # sees the previous chunk's window without re-running Python.
+            # Prefer the capture-time buffers stashed on config so replay copies
+            # into the same addresses the trace recorded.
+            persistent = getattr(config, "sliding_prefill_tail_persistent", None)
+            if persistent is not None:
+                persistent_k, persistent_v = persistent
+                ttnn.copy(k_tail_out, persistent_k)
+                ttnn.copy(v_tail_out, persistent_v)
+                k_tail_out.deallocate(True)
+                v_tail_out.deallocate(True)
+                sliding_tail_out = (persistent_k, persistent_v)
+            elif sliding_tail_in is not None:
+                persistent_k, persistent_v = sliding_tail_in
+                config.sliding_prefill_tail_persistent = (persistent_k, persistent_v)
+                ttnn.copy(k_tail_out, persistent_k)
+                ttnn.copy(v_tail_out, persistent_v)
+                k_tail_out.deallocate(True)
+                v_tail_out.deallocate(True)
+                sliding_tail_out = (persistent_k, persistent_v)
+            else:
+                # First persistent alloc: clones above already own independent DRAM.
+                config.sliding_prefill_tail_persistent = (k_tail_out, v_tail_out)
+                sliding_tail_out = (k_tail_out, v_tail_out)
+        elif k_tail_out is not None:
+            sliding_tail_out = (k_tail_out, v_tail_out)
     elif need_cross_chunk:
         # Full-attention chunk N>0: attend the full prefix already filled in the
         # paged cache. base_offset shifts the causal window to this chunk's
@@ -325,28 +695,32 @@ def _prefill_forward_single(
             user_id,
             config.head_dim,
             scale=1.0,
-            base_offset=chunk_offset,
+            base_offset=chunk_offset_tensor if chunk_offset_tensor is not None else chunk_offset,
             num_kv_heads=nkv_local,
         )
     elif long_seq and config.is_sliding and sliding_window is not None:
         tt_sdpa = chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, config.head_dim, scale=1.0)
-    elif long_seq and not config.is_sliding and page_table is not None and kv_cache is not None and shared_kv is None:
+    elif long_seq and not config.is_sliding and page_table is not None and kv_cache is not None:
+        # Full-attention long context (incl. KV-shared layers whose kv_cache is
+        # the source layer's already-filled pool).
         k_cache, v_cache = kv_cache
         nkv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         tt_sdpa = chunked_prefill_sdpa(
             tt_q, k_cache, v_cache, page_table, user_id, config.head_dim, scale=1.0, num_kv_heads=nkv_local
         )
-    else:
-        # HiFi4 + FP32 dest-acc SDPA: restore the softmax-reduce precision #47311 removed
-        # (it dropped the reduce's forced-FP32 accumulation). fp32_dest_acc is safe on the
-        # prefill SDPA op (unlike the decode op, where it halves dest for head_dim=512).
-        sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            tt_q.device().arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+    elif long_seq:
+        raise RuntimeError(
+            f"Gemma4 long-context prefill (seq_len={seq_len} >= {PREFILL_SDPA_MAX_SEQ}) requires "
+            f"chunked SDPA, but no valid path was selected "
+            f"(is_sliding={config.is_sliding}, page_table={page_table is not None}, "
+            f"kv_cache={kv_cache is not None}, shared_kv={shared_kv is not None}). "
+            f"Non-chunked SDPA silently returns garbage above this length."
         )
+    else:
+        # fp32 dest-acc is safe on the prefill SDPA op (unlike the decode op, where
+        # it halves dest for head_dim=512). Fidelity policy and the #38306 caveat
+        # live in prefill_sdpa_compute_kernel_config.
+        sdpa_compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device())
         tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
             tt_q,
             tt_k,
@@ -357,6 +731,38 @@ def _prefill_forward_single(
             program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
             compute_kernel_config=sdpa_compute_kernel_config,
         )
+    # Persist sliding-window K/V tail after *any* sliding prefill, not only
+    # generator-level ``sliding_chunked``. vLLM token-chunked prefill
+    # (``enable_chunked_prefill``) often runs the first scheduler chunk through
+    # the single-chunk path (no ``chunk_page_table``); without this stash the
+    # next call's sliding SDPA has no prior-window K/V — including when the
+    # first grant is shorter than ``sliding_window`` (APC remnant / short
+    # ``max_num_batched_tokens`` slice). Left-pad short tails to ``hist`` so
+    # the continuation concat stays square (#51186). Clone so the tail
+    # outlives tt_k/tt_v dealloc (#51041). Default prefill-trace buckets omit
+    # 4096 so the common vLLM chunk size stays eager and this Python-side
+    # stash stays live (see ``_DEFAULT_TRACE_PREFILL_SEQ_LENS``).
+    if (
+        sliding_tail_out is None
+        and config.is_sliding
+        and sliding_window is not None
+        and tt_k is not None
+        and shared_kv is None
+    ):
+        hist = ((sliding_window + 31) // 32) * 32
+        # Short-pad uses ttnn.zeros (host write) — illegal mid-trace-capture.
+        # Cold traced single-chunk prepares chunk_start_idx=None; eager APC /
+        # token-chunked prefill passes a host int (incl. 0). Device-tensor
+        # offsets are traced multi-chunk (chunk sizes ≥ hist; no short-pad).
+        allow_short_pad = chunk_start_idx is not None and not isinstance(chunk_start_idx, ttnn.Tensor)
+        sliding_tail_out = _clone_sliding_prefill_tail(
+            tt_k,
+            tt_v,
+            hist,
+            config.head_dim,
+            valid_seq_len=valid_seq_len,
+            allow_short_pad=allow_short_pad,
+        )
     tt_q.deallocate(True)
     kept_kv = None
     if shared_kv is None and not keep_kv:
@@ -365,7 +771,10 @@ def _prefill_forward_single(
     elif keep_kv:
         kept_kv = (tt_k, tt_v)
 
-    tt_out = concat_heads(tt_sdpa, is_decode_mode=False)
+    # The tuned o_proj matmul reads in0 from L1 interleaved — land the head-concat
+    # there directly when it fits the L1 budget (else act_mc, i.e. DRAM by default).
+    concat_mc = o_proj_input_memcfg(tt_sdpa, config.hidden_size, default_memcfg=act_mc)
+    tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=concat_mc)
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 
@@ -442,32 +851,42 @@ def prefill_forward(
     xqkv = apply_qkv_projection(hidden_states, weights)
     ttnn.deallocate(hidden_states)
 
+    # Block-sharded QKV (tuned prefill path) must be interleaved before reshape/split.
+    act_mc = prefill_sdpa_act_memcfg()
+    xqkv = interleave_qkv_if_sharded(xqkv, memory_config=act_mc)
     xqkv = ttnn.reshape(xqkv, [batch_size, 1, seq_len // batch_size, -1])
     seq_len_per_user = seq_len // batch_size
 
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(
-        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
+        xqkv,
+        config,
+        weights.is_global,
+        tp=tp,
+        kv_replicated=weights.kv_replicated,
+        memory_config=act_mc,
     )
     ttnn.deallocate(xqkv)
 
-    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
+    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc)
 
     if shared_kv is not None:
         tt_k.deallocate(True)
         tt_v.deallocate(True)
         tt_k, tt_v = shared_kv
     else:
-        tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
+        tt_k = apply_per_head_norm(
+            tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc
+        )
+        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc)
 
     # RoPE Q (and K, unless KV-shared — then K comes already-RoPE'd from the
     # source layer). A concat(Q,K)->rope->split fusion was evaluated to collapse
     # the two rotary_embedding calls into one, but it adds concat+split device
     # kernels for no throughput benefit (RoPE is ~1% of the step), so Q and K are
     # rotated separately.
-    tt_q = apply_rope(tt_q, cos_cache, sin_cache)
+    tt_q = apply_rope(tt_q, cos_cache, sin_cache, memory_config=act_mc)
     if shared_kv is None:
-        tt_k = apply_rope(tt_k, cos_cache, sin_cache)
+        tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
 
     if kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
@@ -509,15 +928,12 @@ def prefill_forward(
                 ttnn.fill_cache(v_cache, tt_v[slot_idx : slot_idx + 1], batch_idx=slot_idx)
 
     sliding_window = config.sliding_window if config.is_sliding else None
-    # HiFi4 + FP32 dest-acc SDPA: restore softmax-reduce precision lost after #47311
-    # (forced-FP32 reduce accumulation removed).
-    sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        tt_q.device().arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
+    tt_q = _ensure_dram_interleaved(tt_q)
+    tt_k = _ensure_dram_interleaved(tt_k)
+    tt_v = _ensure_dram_interleaved(tt_v)
+    # Fidelity policy and the #38306 caveat live in
+    # prefill_sdpa_compute_kernel_config.
+    sdpa_compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device())
     tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
         tt_q,
         tt_k,
@@ -535,7 +951,8 @@ def prefill_forward(
     elif keep_kv:
         kept_kv = (tt_k, tt_v)
 
-    tt_out = concat_heads(tt_sdpa, is_decode_mode=False)
+    concat_mc = o_proj_input_memcfg(tt_sdpa, config.hidden_size, default_memcfg=act_mc)
+    tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=concat_mc)
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 

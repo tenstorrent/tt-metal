@@ -14,25 +14,39 @@ TP sharding (following gpt-oss pattern):
 - Allreduce after O_proj recombines results
 """
 
+import os
 from dataclasses import dataclass
+from typing import Union
 
 import torch
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig
+from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard, decode_1d_matmul_config
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
+
+# DRAM-width-sharded QKV / O-proj decode matmuls (same size as the interleaved
+# weight → no memory cost). On by default for tp>1; GEMMA4_ATTN_DRAM_SHARD=0
+# falls back to plain interleaved matmuls.
+_DRAM_SHARD_ATTN = os.environ.get("GEMMA4_ATTN_DRAM_SHARD", "1") != "0"
 
 
 @dataclass(frozen=True)
 class AttentionWeights:
     """Container for attention weight tensors — immutable after creation."""
 
-    wqkv: ttnn.Tensor  # Fused Q+K+V per TP device, column-parallel sharded
-    o_proj: ttnn.Tensor  # Row-parallel sharded
+    wqkv: Union[ttnn.Tensor, DramShardedLinear]  # Fused Q+K+V, column-parallel
+    o_proj: Union[ttnn.Tensor, DramShardedLinear]  # Row-parallel sharded
     q_norm_weight: ttnn.Tensor  # Replicated across devices
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     is_global: bool  # Controls K=V tying and partial RoPE
     kv_replicated: bool = False  # True when KV heads are replicated (not split) across TP devices
+    # (program_config, compute_kernel_config) for the decode (M<=32) fused-QKV
+    # matmul, or None to keep ttnn.linear's auto choice. See
+    # dram_sharded.decode_1d_matmul_config: the fused QKV is the one narrow-N
+    # decode matmul where auto collapses to a 1x1 output subblock, leaving DRAM
+    # far short of peak on 31B sliding layers.
+    qkv_decode_config: object = None
 
 
 def load_attention_weights(
@@ -143,24 +157,53 @@ def load_attention_weights(
 
     dtype_suffix = f"_{dtype_to_str(weight_dtype)}"
 
-    wqkv = ttnn.as_tensor(
-        qkv,
-        device=mesh_device,
-        dtype=weight_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=col_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"wqkv{tp_suffix}{dtype_suffix}"),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    o_proj = ttnn.as_tensor(
-        o_w,
-        device=mesh_device,
-        dtype=weight_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=row_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{tp_suffix}{dtype_suffix}"),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    # Per-device fused-QKV output width and o_proj input width (concat_heads out).
+    num_local_heads = config.num_attention_heads // tp
+    head_dim = config.head_dim
+    q_per_dev = num_local_heads * head_dim
+    kv_per_dev = head_dim if kv_replicated else (config.num_key_value_heads // tp) * head_dim
+    qkv_n = q_per_dev + 2 * kv_per_dev
+    oproj_k = q_per_dev
+    oproj_n = hidden_size
+
+    # MoE (26B-A4B): sharded QKV/O-proj decode matmuls regress layer-decode PCC
+    # on BH 1x4 (~0.93 vs 0.99). Dense models keep the opt.
+    is_moe = bool(getattr(config, "enable_moe_block", False))
+    dram_shard = _DRAM_SHARD_ATTN and tp > 1 and not is_moe
+    qkv_cache = get_cache_file_name(tensor_cache_path, f"wqkv{tp_suffix}{dtype_suffix}")
+    oproj_cache = get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{tp_suffix}{dtype_suffix}")
+    qkv_cache_ws = (qkv_cache + ".ws") if qkv_cache else None
+    oproj_cache_ws = (oproj_cache + ".ws") if oproj_cache else None
+
+    if dram_shard and can_dram_shard(hidden_size, qkv_n, dtype=weight_dtype):
+        wqkv = DramShardedLinear(
+            qkv, mesh_device, col_mapper, k=hidden_size, n=qkv_n, dtype=weight_dtype, cache_file_name=qkv_cache_ws
+        )
+    else:
+        wqkv = ttnn.as_tensor(
+            qkv,
+            device=mesh_device,
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=col_mapper,
+            cache_file_name=qkv_cache,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    if dram_shard and o_proj_pad_size == 0 and can_dram_shard(oproj_k, oproj_n, dtype=weight_dtype):
+        o_proj = DramShardedLinear(
+            o_w, mesh_device, row_mapper, k=oproj_k, n=oproj_n, dtype=weight_dtype, cache_file_name=oproj_cache_ws
+        )
+    else:
+        o_proj = ttnn.as_tensor(
+            o_w,
+            device=mesh_device,
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=row_mapper,
+            cache_file_name=oproj_cache,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
     q_norm_weight = ttnn.as_tensor(
         q_norm_w,
         device=mesh_device,
@@ -180,6 +223,12 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    # Narrow-N decode config for the fused QKV matmul (no-op when wqkv is a
+    # DramShardedLinear, which brings its own program config).
+    qkv_decode_config = (
+        None if isinstance(wqkv, DramShardedLinear) else decode_1d_matmul_config(mesh_device, hidden_size, qkv_n)
+    )
+
     return AttentionWeights(
         wqkv=wqkv,
         o_proj=o_proj,
@@ -187,4 +236,5 @@ def load_attention_weights(
         k_norm_weight=k_norm_weight,
         is_global=is_global,
         kv_replicated=kv_replicated,
+        qkv_decode_config=qkv_decode_config,
     )

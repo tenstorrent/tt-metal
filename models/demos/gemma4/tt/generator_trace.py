@@ -8,6 +8,7 @@ import os
 import torch
 from loguru import logger
 
+from models.demos.gemma4.tt.model import GEMMA4_31B_HIDDEN_SIZE
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
@@ -25,6 +26,16 @@ from models.tt_transformers.tt.generator import (
 # directly shrinks the required ``trace_region_size``. The override drives both
 # warmup capture (``patch_gemma4_trace_model_args``) and runtime eligibility
 # (``can_gemma4_enable_prefill_trace``) so they stay consistent.
+# Include 4096 so cold single-chunk / first scheduler grant ≤4k can replay a
+# prefill device trace (TTFT). Continuations (``num_cached_tokens>0`` — APC hits
+# and vLLM chunked-prefill remnants) always stay eager: Gemma4 sliding layers
+# carry a mutable in-memory tail that diverges compile vs capture (TT_FATAL
+# unwarmed ``ttnn.concat`` / ``ttnn.copy``). ``GEMMA4_CHUNKED_PREFILL_TRACE=1``
+# only enables the *generator* long-ISL multi-chunk replay path (seeded
+# ``sp0_mc``/``sp1_mc``), not JIT ``sp1`` via ``can_enable_trace``. Sliding-tail
+# stash + persistent rebind in ``attention/prefill.py`` keep eager remnant
+# chunks coherent across vLLM chunk boundaries (#51186). Trim via
+# ``GEMMA4_TRACE_PREFILL_SEQ_LENS``.
 _DEFAULT_TRACE_PREFILL_SEQ_LENS = [128, 512, 1024, 2048, 4096]
 
 
@@ -37,6 +48,17 @@ def _resolve_trace_prefill_seq_lens() -> list[int]:
 
 GEMMA4_TRACE_PREFILL_SEQ_LENS = _resolve_trace_prefill_seq_lens()
 
+
+def reset_trace_prefill_seq_lens_to_default() -> None:
+    """Re-read ``GEMMA4_TRACE_PREFILL_SEQ_LENS`` (pytest must call per test case).
+
+    ``trim_demo_prefill_trace_buckets`` mutates the module-global list; without
+    a reset, a later parametrized row (e.g. long-context-4k) inherits [128].
+    """
+    global GEMMA4_TRACE_PREFILL_SEQ_LENS
+    GEMMA4_TRACE_PREFILL_SEQ_LENS = _resolve_trace_prefill_seq_lens()
+
+
 # Prefill trace is disabled above 4k ISL (no perf gain, OOM risk) and at or above 32k
 # batched virtual tokens (batch_size × padded prefill length). Prefills above the
 # cap are instead kept safe by generator-level chunking (see
@@ -45,6 +67,50 @@ GEMMA4_TRACE_PREFILL_SEQ_LENS = _resolve_trace_prefill_seq_lens()
 # nor OOMs a whole-length trace.
 GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN = 4096
 GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = 32 * 1024
+
+
+def chunked_prefill_trace_enabled() -> bool:
+    """True when long-ISL multi-chunk should replay captured chunk prefill traces.
+
+    Each generator chunk (WH T3K 2048 / QB2 4096) replays the matching
+    ``sp0_mc``/``sp1_mc`` prefill trace instead of an eager
+    ``ttnn_prefill_forward``.
+
+    Default is off unless the demo auto-enables via
+    :func:`maybe_auto_enable_chunked_prefill_trace`. Force with
+    ``GEMMA4_CHUNKED_PREFILL_TRACE=1``; opt out with ``0``.
+    """
+    return os.environ.get("GEMMA4_CHUNKED_PREFILL_TRACE", "0").lower() in ("1", "true", "yes")
+
+
+def maybe_auto_enable_chunked_prefill_trace(
+    *,
+    batch_size: int,
+    max_seq_len: int,
+    prefill_chunk: int,
+    bounded_sliding: bool,
+) -> bool:
+    """Auto-enable traced multi-chunk when it can win; leave env overrides alone.
+
+    Conditions (all required when the env var is unset):
+      * ``batch_size == 1`` (traced multi-chunk is B=1 only)
+      * not ``bounded_sliding`` (bounded final-chunk KV cannot safely replay)
+      * ``max_seq_len > prefill_chunk`` (otherwise a single chunk is enough)
+
+    Tracing buys a small warm-TTFT win here. Needs WH ``trace_region_size``
+    ≥ ~68 MB so decode capture still fits after the extra prefill traces.
+    """
+    if "GEMMA4_CHUNKED_PREFILL_TRACE" in os.environ:
+        return chunked_prefill_trace_enabled()
+    if batch_size == 1 and (not bounded_sliding) and max_seq_len > int(prefill_chunk):
+        os.environ["GEMMA4_CHUNKED_PREFILL_TRACE"] = "1"
+        logger.info(
+            "Auto-enabled GEMMA4_CHUNKED_PREFILL_TRACE "
+            f"(max_seq_len={max_seq_len} > chunk={prefill_chunk}, unbounded batch-1)"
+        )
+        return True
+    return False
+
 
 # Default generator-level prefill chunk when GEMMA4_GEN_PREFILL_CHUNK is unset,
 # applied on QB2 ONLY (P150x4 or P300x2 = 1x4 Blackhole / 2x P300, the board
@@ -59,12 +125,10 @@ GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = 32 * 1024
 # reference, and exactly the unbounded full-sequence prefill op that wedges the
 # fetch queue at ISL>=8192 (#49083) or OOMs a whole-length trace.
 #
-# 4096 is the largest chunk validated on QB2 to both trace safely
+# 4096 is the largest chunk validated on QB2/P150x8 to both trace safely
 # (<= GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN) and clear the #49083 wedge
-# (repro_prefill_hang.py, REPRO_ISLS=8192,8192 -> ALL_DONE, no wedge/OOM). It is
-# NOT applied to other boards (Wormhole T3K/TG, single-chip Blackhole, etc.),
-# where neither the wedge nor this number was validated — those keep the
-# caller's prior default (see resolve_gemma4_prefill_chunk_size).
+# (repro_prefill_hang.py, REPRO_ISLS=8192,8192 -> ALL_DONE, no wedge/OOM).
+# WH T3K uses a tighter per-board ``prefill_chunk`` (2048) — see policy table.
 GEMMA4_DEFAULT_PREFILL_CHUNK = 4096
 
 # Per-(model, device) long-context policy.
@@ -79,7 +143,14 @@ GEMMA4_DEFAULT_PREFILL_CHUNK = 4096
 #   chunked_bounded_isl_min:  bounded AND max_seq_len >= this → auto multi-chunk
 #                             (single-chunk scratch OOM). Between bounded_isl_min
 #                             and this: bounded + single-chunk.
-#   prefill_chunk:            generator chunk size on the chunked path.
+#   prefill_chunk:            default generator / vLLM scheduler chunk size.
+#   prefill_chunk_by_isl:     optional list of {isl_min, chunk, require_bounded?}
+#                             overrides. Highest matching isl_min wins when
+#                             max_seq_len >= isl_min (and bounded_sliding if
+#                             require_bounded). Demo + vLLM share this table so
+#                             server specs can keep max_num_batched_tokens /
+#                             long_prefill_token_threshold aligned with the
+#                             resolved chunk for that max_context.
 #   source:                   "measured" | "inferred" | "placeholder"
 #
 # Env overrides still win: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK,
@@ -100,25 +171,48 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "unbounded_isl_max": 65536,  # demo ran ~65k unbounded; vLLM serve ~49k
             "bounded_isl_min": 65536,  # auto bounded at 64k+
             "chunked_bounded_isl_min": 262144,  # single-chunk ~5.6GB OOM at 256k
+            # Default 4096; at ISL>=128k + bounded, 2048 (4096 → token-0 garbage).
             "prefill_chunk": _CHUNK,
+            "prefill_chunk_by_isl": [
+                {"isl_min": 131072, "chunk": 2048, "require_bounded": True},
+            ],
             "source": "measured",
         },
+        # P150x8: unbounded 128k multi-chunk (4096) still collapses to
+        # "lapped lapped…" (full_matrix LB + 2026-07-27 repro). QB2 128k with
+        # bounded + chunk=2048 is coherent — mirror that cutover here.
+        # 256k still needs bounded for DRAM. Override: GEMMA4_BOUNDED_SLIDING=0/1.
         "P150x8": {
             "unbounded_isl_max": 65536,
-            "bounded_isl_min": 65536,
-            "chunked_bounded_isl_min": 262144,
+            "bounded_isl_min": 131072,  # auto bounded at 128k+ for coherence
+            "chunked_bounded_isl_min": 262144,  # DRAM: multi-chunk required at 256k
             "prefill_chunk": _CHUNK,
-            "source": "placeholder",
+            "prefill_chunk_by_isl": [
+                # Same as QB2: bounded @ ≥128k with chunk=4096 → token-0 garbage.
+                {"isl_min": 131072, "chunk": 2048, "require_bounded": True},
+            ],
+            "source": "measured",
         },
+        # WH LoudBox / QuietBox (T3K): 12 GB GDDR6 per ASIC (n150/n300) vs
+        # BH P150 32 GB; T3K mesh 1×8 ≈ 96 GB total vs BH LB 256 GB / QB2 128 GB
+        # (docs.tenstorrent.com wormhole + t3000 / quietbox specs). Hybrid-OFF
+        # full-length KV + full-ISL prefill scratch OOM at max_model_len=32768
+        # (vLLM nightly run 30291376571: banks ~full, chunk=32768). Keep multi-
+        # chunk=2048 and auto-bound earlier than BH; serve ≤16k until hybrid KV.
         "T3K": {
-            "unbounded_isl_max": 65536,
-            "bounded_isl_min": 65536,
-            "chunked_bounded_isl_min": 262144,
-            "prefill_chunk": _CHUNK,
-            "source": "placeholder",
+            "unbounded_isl_max": 16384,
+            "bounded_isl_min": 32768,
+            "chunked_bounded_isl_min": 32768,
+            "prefill_chunk": 2048,
+            "prefill_chunk_by_isl": [],
+            "source": "inferred",
         },
     },
     # Dense 12B — HF max_pos=256k. QB2: unbounded 64k+128k PASSED; unbounded 256k OOM.
+    # P150x8: unbounded 64k+128k+256k PASSED (isl_sweep_logs/p150x8_bg_lb).
+    # Single P150: unbounded 32k OK; 64k+ unbounded KV OOM (~22GB sliding pool) —
+    # auto-bound + multi-chunk (4096) through full HF 256k (measured PASS + coherent
+    # gen in isl_sweep_logs/full_matrix N150/P150 64k/128k/256k reruns).
     "12B": {
         _QB2: {
             "unbounded_isl_max": 131072,
@@ -127,11 +221,28 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
+        # Single P150: full ISL 256k via bounded sliding + chunked prefill.
+        "P150": {
+            "unbounded_isl_max": 32768,
+            "bounded_isl_min": 65536,
+            "chunked_bounded_isl_min": 65536,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
+        "P150x8": {
+            "unbounded_isl_max": 262144,
+            "bounded_isl_min": 524288,  # beyond measured 256k
+            "chunked_bounded_isl_min": 524288,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
     },
     # MoE 26B-A4B — HF max_pos=256k. QB2: unbounded 64k PASSED (after instruct-clip
     # trim fix); 128k allocated/ran (no OOM, prior 1800s timeout); unbounded 256k OOM.
     # Bounded+chunked 256k PASSED (~72m prefill / TTFT~4345s at chunk=4096; needs
     # TIMEOUT_256K>=7200 — 3600s timed out mid-prefill).
+    # P150x8: unbounded 64k+128k PASSED (~53m at 128k); unbounded 256k bus-error;
+    # bounded single-chunk 256k PASSED (~131m TTFT).
     "26B-A4B": {
         _QB2: {
             "unbounded_isl_max": 131072,
@@ -140,9 +251,21 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
+        # P150x8: same coherency cutover as 31B (unbounded 128k → garbage).
+        "P150x8": {
+            "unbounded_isl_max": 65536,
+            "bounded_isl_min": 131072,
+            "chunked_bounded_isl_min": 262144,
+            "prefill_chunk": _CHUNK,
+            "prefill_chunk_by_isl": [
+                {"isl_min": 131072, "chunk": 2048, "require_bounded": True},
+            ],
+            "source": "measured",
+        },
     },
     # MatFormer E4B — HF max_pos=128k native; demo can force higher. QB2: unbounded
-    # 64k+128k+256k PASSED.
+    # 64k+128k+256k PASSED. P150x8: same (isl_sweep_logs/p150x8_bg_lb).
+    # Single P150: unbounded through 256k measured (full_matrix N150 alias).
     "E4B": {
         _QB2: {
             "unbounded_isl_max": 262144,
@@ -151,13 +274,44 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
+        "P150": {
+            "unbounded_isl_max": 262144,
+            "bounded_isl_min": 524288,
+            "chunked_bounded_isl_min": 524288,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
+        "P150x8": {
+            "unbounded_isl_max": 262144,
+            "bounded_isl_min": 524288,
+            "chunked_bounded_isl_min": 524288,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
     },
     # MatFormer E2B — HF max_pos=128k native; demo can force higher. QB2: unbounded
-    # 64k+128k+256k PASSED.
+    # 64k+128k+256k PASSED. P150x8: same (isl_sweep_logs/p150x8_bg_lb).
+    # Also use_double_wide_mlp on KV-shared layers (2× intermediate).
+    # Prefer multi-chunk (4096): single-chunk 64k+ warmup can hang on P150x8.
+    # Single P150: unbounded through 256k measured (full_matrix N150 alias).
     "E2B": {
         _QB2: {
             "unbounded_isl_max": 262144,
             "bounded_isl_min": 524288,  # beyond measured 256k
+            "chunked_bounded_isl_min": 524288,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
+        "P150": {
+            "unbounded_isl_max": 262144,
+            "bounded_isl_min": 524288,
+            "chunked_bounded_isl_min": 524288,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
+        "P150x8": {
+            "unbounded_isl_max": 262144,
+            "bounded_isl_min": 524288,
             "chunked_bounded_isl_min": 524288,
             "prefill_chunk": _CHUNK,
             "source": "measured",
@@ -178,16 +332,18 @@ _DEFAULT_LONG_CONTEXT_POLICY = {
 def normalize_gemma4_model_key(model_name_or_path) -> str:
     """Map HF id / path / base name → policy key (31B, 12B, 26B-A4B, E4B, E2B)."""
     name = str(model_name_or_path or "").lower().replace("_", "-")
-    base = name.rsplit("/", 1)[-1]
-    if "31b" in base:
+    # vLLM often passes the resolved HF snapshot dir
+    # (.../models--google--gemma-4-31b-it/snapshots/<hash>); the last path
+    # component is then the hash, so search the full string.
+    if "31b" in name:
         return "31B"
-    if "12b" in base:
+    if "12b" in name:
         return "12B"
-    if "26b" in base or "a4b" in base:
+    if "26b" in name or "a4b" in name:
         return "26B-A4B"
-    if "e4b" in base:
+    if "e4b" in name:
         return "E4B"
-    if "e2b" in base:
+    if "e2b" in name:
         return "E2B"
     return "unknown"
 
@@ -204,18 +360,23 @@ def _device_name(mesh_device) -> str | None:
 
 
 def _canonical_device_name(device: str | None) -> str | None:
-    """Map QB2 aliases (P150x4 / P300x2) onto the canonical policy key."""
+    """Map device aliases onto canonical policy keys (QB2 / single P150)."""
     if device is None:
         return None
     if device in _QB2_ALIASES:
         return _QB2
+    # Historical WH tag; this host is Blackhole P150.
+    if device in ("N150", "n150"):
+        return "P150"
     return device
 
 
 def get_gemma4_long_context_policy(mesh_device=None, model_name_or_path=None) -> dict:
     """Return long-context policy for ``(model_key, device)``."""
     model_key = normalize_gemma4_model_key(model_name_or_path)
-    device = _canonical_device_name(_device_name(mesh_device)) or _QB2
+    # Prefer live mesh; fall back to MESH_DEVICE so server/vLLM config-time
+    # resolution (before mesh open) still picks the right board entry.
+    device = _canonical_device_name(_device_name(mesh_device) or os.environ.get("MESH_DEVICE")) or _QB2
     by_model = GEMMA4_LONG_CONTEXT_POLICY.get(model_key)
     if by_model is not None:
         if device in by_model:
@@ -240,6 +401,27 @@ def should_auto_enable_bounded_sliding(max_seq_len: int, mesh_device=None, model
     return max_seq_len >= int(policy["bounded_isl_min"])
 
 
+def resolve_gemma4_bounded_sliding(
+    max_seq_len: int,
+    mesh_device=None,
+    model_name_or_path=None,
+    *,
+    paged_attention: bool = True,
+) -> bool:
+    """Demo/vLLM shared bounded-sliding resolution (policy + env override).
+
+    ``GEMMA4_BOUNDED_SLIDING`` unset → ``should_auto_enable_bounded_sliding``.
+    Set to 1/true/yes → force on; any other value → force off.
+    Always requires paged attention.
+    """
+    _bs_env = os.environ.get("GEMMA4_BOUNDED_SLIDING")
+    if _bs_env is None:
+        bounded = should_auto_enable_bounded_sliding(max_seq_len, mesh_device, model_name_or_path)
+    else:
+        bounded = _bs_env.lower() in ("1", "true", "yes")
+    return bool(bounded and paged_attention)
+
+
 def should_auto_enable_chunked_bounded(
     max_seq_len: int, mesh_device=None, model_name_or_path=None, *, bounded_sliding: bool = False
 ) -> bool:
@@ -250,32 +432,113 @@ def should_auto_enable_chunked_bounded(
     return max_seq_len >= int(policy["chunked_bounded_isl_min"])
 
 
+def resolve_gemma4_demo_long_context(
+    max_seq_len: int,
+    mesh_device=None,
+    model_name_or_path=None,
+    *,
+    paged_attention: bool = True,
+    non_qb2_default=None,
+) -> dict:
+    """Resolve bounded + prefill chunk for demos (MESH_DEVICE / HF model aware).
+
+    Returns keys: bounded_sliding, prefill_chunk, needs_chunked_bounded, policy_source.
+    Both ``text_demo`` and ``text_demo_v2`` should use this so default commands
+    pick the same coherency/perf cutovers without extra env knobs.
+    """
+    if non_qb2_default is None:
+        non_qb2_default = GEMMA4_DEFAULT_PREFILL_CHUNK
+    bounded = resolve_gemma4_bounded_sliding(
+        max_seq_len, mesh_device, model_name_or_path, paged_attention=paged_attention
+    )
+    chunk = resolve_gemma4_prefill_chunk_size(
+        max_seq_len,
+        mesh_device=mesh_device,
+        non_qb2_default=non_qb2_default,
+        model_name_or_path=model_name_or_path,
+        bounded_sliding=bounded,
+    )
+    policy = get_gemma4_long_context_policy(mesh_device, model_name_or_path)
+    return {
+        "bounded_sliding": bounded,
+        "prefill_chunk": int(chunk),
+        "needs_chunked_bounded": should_auto_enable_chunked_bounded(
+            max_seq_len, mesh_device, model_name_or_path, bounded_sliding=bounded
+        ),
+        "policy_source": str(policy.get("source", "")),
+    }
+
+
 def _is_qb2(mesh_device) -> bool:
     """True only for the QB2 board (P150x4 or P300x2, 1x4 Blackhole)."""
-    return _device_name(mesh_device) in _QB2_ALIASES
+    name = _device_name(mesh_device) or os.environ.get("MESH_DEVICE")
+    return name in _QB2_ALIASES or _canonical_device_name(name) == _QB2
+
+
+def _prefill_chunk_isl_tiers(policy: dict) -> list[dict]:
+    """Normalize ``prefill_chunk_by_isl`` (plus legacy bounded_* keys)."""
+    tiers = policy.get("prefill_chunk_by_isl")
+    if tiers:
+        return [dict(t) for t in tiers]
+    # Legacy keys from earlier QB2 128k coherency wiring.
+    bchunk = policy.get("bounded_prefill_chunk")
+    bmin = policy.get("bounded_prefill_chunk_isl_min")
+    if bchunk is not None and bmin is not None:
+        return [{"isl_min": int(bmin), "chunk": int(bchunk), "require_bounded": True}]
+    return []
 
 
 def resolve_gemma4_prefill_chunk_size(
-    max_seq_len: int, mesh_device=None, non_qb2_default=None, model_name_or_path=None
+    max_seq_len: int,
+    mesh_device=None,
+    non_qb2_default=None,
+    model_name_or_path=None,
+    *,
+    bounded_sliding: bool = False,
 ) -> int:
-    """Generator-level prefill chunk size for the vLLM serving generator.
-
-    (The demo generator forces a single chunk instead — Gemma4's multi-chunk
-    prefill is not validated for output correctness at long context, see
-    models/demos/gemma4/tt/generator.py. vLLM must chunk anyway to dodge the
-    #49083 serving-path wedge.)
+    """Generator-level prefill chunk size for demo + vLLM serving.
 
     ``GEMMA4_GEN_PREFILL_CHUNK`` (a 2048-multiple) overrides on any board.
-    Otherwise the per-(model, device) ``prefill_chunk`` applies on QB2. On every
-    other board the caller's ``non_qb2_default`` (prior vLLM default, often
-    ``max_seq_len``) is used so unvalidated boards keep existing behavior.
+    Otherwise the per-(model, device) ``prefill_chunk`` default applies when the
+    policy is measured (incl. P150x8) or the board is QB2, then
+    ``prefill_chunk_by_isl`` may select a smaller chunk for high ISL (e.g. QB2
+    31B bounded @ ≥128k → 2048 for coherency). Other boards keep
+    ``non_qb2_default`` (often ``max_seq_len``) so unvalidated configs stay
+    single-chunk unless the caller passes 4096.
+
+    Server specs should set vLLM ``max_num_batched_tokens`` /
+    ``long_prefill_token_threshold`` to this same resolved value for the
+    configured ``max_context``.
+
+    P150x8 / 31B: unbounded chunk=4096 is fast (~31s TTFT) but quality collapses
+    at 128k; bounded + chunk=2048 (same tier as QB2) is the coherency path.
     """
     override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
     if override > 0:
         return override
     policy = get_gemma4_long_context_policy(mesh_device, model_name_or_path)
-    if _is_qb2(mesh_device):
-        return min(int(policy["prefill_chunk"]), max_seq_len)
+    source = str(policy.get("source", ""))
+    # measured / placeholder / inferred entries (and any board with ISL tiers)
+    # share the policy chunk table so demo defaults stay coherent without env.
+    use_policy_chunk = (
+        _is_qb2(mesh_device)
+        or source.startswith(("measured", "placeholder", "inferred"))
+        or bool(_prefill_chunk_isl_tiers(policy))
+    )
+    if use_policy_chunk:
+        chunk = int(policy["prefill_chunk"])
+        for tier in sorted(
+            _prefill_chunk_isl_tiers(policy),
+            key=lambda t: int(t["isl_min"]),
+            reverse=True,
+        ):
+            if max_seq_len < int(tier["isl_min"]):
+                continue
+            if tier.get("require_bounded", False) and not bounded_sliding:
+                continue
+            chunk = int(tier["chunk"])
+            break
+        return min(chunk, max_seq_len)
     return non_qb2_default if non_qb2_default is not None else max_seq_len
 
 
@@ -291,8 +554,15 @@ def can_gemma4_enable_prefill_trace(
     num_cached_tokens: int = 0,
     uses_pli: bool = False,
 ) -> bool:
-    """Return True when Gemma4 prefill device trace may be captured or replayed."""
-    if uses_pli or num_cached_tokens != 0:
+    """Return True when Gemma4 prefill device trace may be captured or replayed.
+
+    ``num_cached_tokens > 0`` (sp1 / APC / multi-chunk middle) is allowed only
+    when ``GEMMA4_CHUNKED_PREFILL_TRACE`` is on — cold single-chunk traces stay
+    sp0-only.
+    """
+    if uses_pli:
+        return False
+    if num_cached_tokens != 0 and not chunked_prefill_trace_enabled():
         return False
     if prefill_seq_len > GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN:
         return False
@@ -352,14 +622,18 @@ def resolve_gemma4_prefill_trace_enable(
     empty_slots=None,
 ) -> bool:
     """Resolve whether prefill trace stays enabled for this batch/prefill shape."""
-    # Batched + bounded: the fill-cap device tensor is a single scalar, so a
-    # captured trace cannot refresh per-user real lengths. Eager batched+bounded
-    # still works via the host-side K/V slice — only disable TRACE here.
-    if can_batch_prefill and batch_size > 1 and getattr(model, "bounded_sliding_kv_cache", False):
+    # Bounded sliding: TRACE capture uses get_last_token=-1 so attention takes the
+    # mid-forward ``paged_fill_cache`` branch (valid_seq_len is None). That fill
+    # before lm_head corrupts token-0 on TP — the same hazard documented on the
+    # eager deferred-fill path (flush only after lm_head). Disable TRACE for all
+    # bounded prefills (B=1 short nightly prompts included); eager deferred-fill
+    # remains. Batched+bounded also cannot refresh the scalar fill-cap tensor.
+    if getattr(model, "bounded_sliding_kv_cache", False):
         if enable_trace:
             logger.info(
-                "Disabling prefill trace for batched+bounded "
-                "(scalar valid_seq_len cap; eager host-slice path remains)."
+                "Disabling prefill trace for bounded sliding "
+                "(TRACE mid-forward paged_fill_cache corrupts token-0 on TP; "
+                "eager deferred-fill path remains)."
             )
         return False
     trace_batch_size = batch_size
@@ -395,6 +669,84 @@ def patch_gemma4_trace_model_args(model_args, *, prefill_trace_enabled: bool = T
     else:
         model_args.trace_prefill_supported_seq_lens = []
         model_args.can_enable_trace = lambda prefill_seq_len, num_cached_tokens=0, batch_size=1: False
+
+
+def ensure_trace_prefill_seq_len(seq_len: int) -> bool:
+    """Opt ``seq_len`` into prefill Metal Trace capture/replay allow-list.
+
+    Returns True when the bucket was newly added. Default lenses omit 4096 for
+    vLLM chunked-prefill APC (#51186); standalone single-chunk demos should use
+    :func:`enable_single_chunk_demo_prefill_trace_bucket` instead of changing the
+    global default.
+    """
+    n = int(seq_len)
+    if n <= 0 or n > GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN:
+        return False
+    if n in GEMMA4_TRACE_PREFILL_SEQ_LENS:
+        return False
+    GEMMA4_TRACE_PREFILL_SEQ_LENS.append(n)
+    GEMMA4_TRACE_PREFILL_SEQ_LENS.sort()
+    logger.info(
+        "Enabled prefill Metal Trace bucket seq_len={} "
+        "(omitted from default lenses for vLLM APC safety; ok for single-chunk demos)",
+        n,
+    )
+    return True
+
+
+def trim_demo_prefill_trace_buckets(*, input_prompts, max_seq_len: int) -> bool:
+    """Drop unused high prefill trace buckets for ``prefill_128`` latency demos.
+
+    ``input_data_questions_prefill_128.json`` prompts pad to the 128 kernel
+    bucket; capturing 512/1024/4096 traces at warmup costs tens of seconds on
+    31B WH with no runtime win for these rows. Override with
+    ``GEMMA4_TRACE_PREFILL_SEQ_LENS`` when a demo needs wider buckets.
+
+    Call :func:`reset_trace_prefill_seq_lens_to_default` at the start of each
+    demo test so parametrized rows do not inherit a prior trim.
+    """
+    if os.environ.get("GEMMA4_TRACE_PREFILL_SEQ_LENS") is not None:
+        return False
+    if "prefill_128" not in str(input_prompts):
+        return False
+    if int(max_seq_len) > 4096:
+        return False
+    global GEMMA4_TRACE_PREFILL_SEQ_LENS
+    trimmed = [128]
+    if list(GEMMA4_TRACE_PREFILL_SEQ_LENS) == trimmed:
+        return False
+    GEMMA4_TRACE_PREFILL_SEQ_LENS = trimmed
+    logger.info(
+        "Demo prefill_128 boot: trimmed prefill Metal Trace buckets to {} "
+        "(set GEMMA4_TRACE_PREFILL_SEQ_LENS to override)",
+        trimmed,
+    )
+    return True
+
+
+def enable_single_chunk_demo_prefill_trace_bucket(
+    *,
+    max_seq_len: int,
+    max_prefill_chunk_size: int,
+    model_args_list,
+    batch_size: int = 1,
+) -> bool:
+    """Opt the demo's single-chunk 4k bucket into prefill Metal Trace.
+
+    Default lenses stop at 2048 (vLLM APC). Standalone 12B long-4k is
+    single-chunk @ 4096 and needs this bucket. No-ops when the run does not
+    use that path: short ``max_seq_len``, ``batch_size > 1`` (unused 4k B=1
+    traces bloat the region), or multi-chunk (``chunk < max_seq_len``).
+    """
+    chunk = int(max_prefill_chunk_size)
+    msl = int(max_seq_len)
+    if int(batch_size) > 1 or chunk <= 0 or msl < 4096 or chunk < msl:
+        return False
+    bucket = min(chunk, GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN)
+    ensure_trace_prefill_seq_len(bucket)
+    for args in model_args_list:
+        patch_gemma4_trace_model_args(args, prefill_trace_enabled=True)
+    return True
 
 
 def maybe_disable_pli_prefill_trace(enable_trace: bool, model, batch_size: int = 1) -> bool:
@@ -453,8 +805,14 @@ def warmup_gemma4_batched_prefill_traces(
 
     Sweeps ``SUPPORTED_PREFILL_BATCH_SIZES`` × ``trace_prefill_supported_seq_lens``,
     skipping combinations that meet or exceed ``MAX_BATCHED_PREFILL_SEQ_LEN`` (128k).
+    ``GEMMA4_WARMUP_CHUNK_SPANS`` additionally warms the wider row spans that
+    chunked batched prefill lands on (off by default; see the comment below).
     Caller must set ``generator.already_warmed_up_prefill`` before calling if needed,
     or this function sets it on entry.
+
+    Default warmup batch sizes are **batch=1** only (``GEMMA4_WARMUP_PREFILL_BATCHES``
+    overrides). Runtime may still pack multiple users into one prefill step without
+    a dedicated B>1 trace capture.
 
     ``prefill_forward_fn`` selects the entry point used for each capture. It
     defaults to ``generator.prefill_forward_text`` (demo / uniform-page-table
@@ -475,12 +833,87 @@ def warmup_gemma4_batched_prefill_traces(
     sequence_lengths_to_warmup = model_args.get_warmup_prefill_supported_seq_lens()
     trace_isls = set(model_args.trace_prefill_supported_seq_lens)
     max_batch_size = model_args.max_batch_size
-    warmup_batch_sizes = tuple(b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= max_batch_size)
+    # Cap at the B≤4 hang ceiling (see GEMMA4_MAX_BATCHED_PREFILL_USERS).
+    from models.demos.gemma4.tt.generator import max_batched_prefill_users
+
+    user_cap = max_batched_prefill_users()
+    override = os.environ.get("GEMMA4_WARMUP_PREFILL_BATCHES")
+    if override:
+        warmup_batch_sizes = tuple(
+            b
+            for b in sorted({int(x) for x in override.split(",") if x.strip()})
+            if 1 <= b <= max_batch_size and b <= user_cap and b in SUPPORTED_PREFILL_BATCH_SIZES
+        )
+        if not warmup_batch_sizes:
+            warmup_batch_sizes = (1,)
+    else:
+        # Same as tt_transformers: batch-1-only traced prefill warmup. Runtime
+        # batched prefill still packs multiple users; B>1 trace capture is
+        # opt-in via GEMMA4_WARMUP_PREFILL_BATCHES (demo-only).
+        warmup_batch_sizes = (1,)
+
+    # (users, empty_slots, row_span) per capture. ``row_span`` selects the trace,
+    # not the request count: ``batched_prefill_padded_batch`` buckets by *highest
+    # slot + 1* and passes that through as ``batch_size`` to the prefill capture.
+    warmup_specs = [(b, None, b) for b in warmup_batch_sizes]
+
+    # Chunked batched prefill keeps each chunk's real slots, so chunk 2 of a
+    # batch-8 prefill sits at slots 4..7 and asks for an *8-row* trace. Sweeping
+    # only up to ``user_cap`` leaves those spans uncaptured and each one compiles
+    # in-band inside the measured prefill. Warming them uses ``user_cap`` users
+    # placed at the top of the span -- the runtime chunk's exact shape; running
+    # ``span`` real users would re-introduce the B>4 hang ``user_cap`` avoids.
+    #
+    # OFF BY DEFAULT. The TTFT win is real but config-dependent, while the warmup
+    # cost is paid unconditionally and grows with each extra span.
+    #
+    # batch-32 pays and replays none of it: its prompt lengths are not uniform
+    # enough for ``can_batch_prefill`` to batch at all. And nothing gates output
+    # here -- a span capture runs a real prefill at those slots, writing per-slot
+    # state the request then overwrites (as today's slots-0..3 warmup already
+    # does), but no test would catch a warmup-induced leak and the batch-8 demo
+    # is non-reproducible in *both* settings, so it cannot certify neutrality.
+    # Enable once a deterministic gate exists -- an in-process A/B that
+    # ``torch.equal``-compares batched-prefill output tokens with the flag
+    # flipped would do it.
+    #
+    # ``GEMMA4_WARMUP_CHUNK_SPANS``: unset/``0`` off; ``1`` first chunk boundary
+    # (2 x user_cap), the one every chunked batched prefill crosses; ``all``
+    # every reachable span, for a server that does prefill full batches.
+    # 31B batch-32 defaults to ``all`` so measured prefill replays row-span traces
+    # instead of cold-capturing them in-band (WH T3K L1 clash at span ≥16).
+    chunk_spans_env = os.environ.get("GEMMA4_WARMUP_CHUNK_SPANS")
+    auto_hidden = getattr(generator.model[0], "hidden_size", None)
+    auto_chunk_spans = chunk_spans_env is None and auto_hidden == GEMMA4_31B_HIDDEN_SIZE and max_batch_size >= 32
+    chunk_spans_mode = ("all" if auto_chunk_spans else (chunk_spans_env or "0")).lower()
+    # Log it: the auto path is keyed on an attribute lookup, so a rename would turn
+    # it off silently and the span >= 16 L1 clash would come back as a hard failure
+    # with nothing in the log to say the warmup had opted out.
+    if auto_chunk_spans:
+        logger.info(
+            "Gemma4 batched prefill warmup: auto chunk-span warmup ON "
+            "(hidden_size={}, max_batch_size={}) -- set GEMMA4_WARMUP_CHUNK_SPANS to override.",
+            auto_hidden,
+            max_batch_size,
+        )
+    elif chunk_spans_env is None and max_batch_size >= 32:
+        logger.debug(
+            "Gemma4 batched prefill warmup: auto chunk-span warmup off (hidden_size={} != {}).",
+            auto_hidden,
+            GEMMA4_31B_HIDDEN_SIZE,
+        )
+    if chunk_spans_mode not in ("0", "false", "no"):
+        reachable = [span for span in SUPPORTED_PREFILL_BATCH_SIZES if user_cap < span <= max_batch_size]
+        if chunk_spans_mode not in ("all", "every"):
+            reachable = reachable[:1]
+        warmup_specs += [(user_cap, list(range(span - user_cap, span)), span) for span in reachable]
 
     logger.info(
-        "Gemma4 batched prefill trace warmup: batch sizes {} x trace ISLs {}",
+        "Gemma4 batched prefill trace warmup: batch sizes {} x trace ISLs {} " "(user_cap={}, chunk row spans {})",
         warmup_batch_sizes,
         sorted(trace_isls),
+        user_cap,
+        [span for _, slots, span in warmup_specs if slots is not None],
     )
 
     skip_sequence_lengths = False
@@ -493,18 +926,21 @@ def warmup_gemma4_batched_prefill_traces(
             if model_id != 0 and (supported_length not in trace_isls or not enable_trace):
                 continue
 
-            for batch_size in warmup_batch_sizes:
-                if batch_size * supported_length >= MAX_BATCHED_PREFILL_SEQ_LEN:
+            for warmup_users, warmup_slots, row_span in warmup_specs:
+                # The token budget and the trace policy are both driven by the
+                # rows the capture actually runs, which is the span.
+                if row_span * supported_length >= MAX_BATCHED_PREFILL_SEQ_LEN:
                     logger.info(
-                        "Skipping batched prefill trace warmup for batch_size={}, seq_len={}: "
-                        "exceeds {} token limit",
-                        batch_size,
+                        "Skipping batched prefill trace warmup for row_span={}, seq_len={}: " "exceeds {} token limit",
+                        row_span,
                         supported_length,
                         MAX_BATCHED_PREFILL_SEQ_LEN,
                     )
                     continue
 
-                warmup_args = generator._mock_tokens(batch_size, supported_length, kv_cache, model_id)
+                warmup_args = generator._mock_tokens(warmup_users, supported_length, kv_cache, model_id)
+                if warmup_slots is not None:
+                    warmup_args["empty_slots"] = list(warmup_slots)
 
                 if warmup_args["page_table"] is None and max_prefill_chunk_size_cutoff(
                     supported_length, model_args.max_prefill_chunk_size
@@ -521,7 +957,7 @@ def warmup_gemma4_batched_prefill_traces(
                     sampling_params = generator._create_sampling_params(
                         can_sample_on_device=can_sample_on_device,
                         greedy_only=greedy_only,
-                        batch_size=batch_size,
+                        batch_size=warmup_users,
                     )
                 else:
                     sampling_params = [None]
@@ -529,25 +965,27 @@ def warmup_gemma4_batched_prefill_traces(
                 capture_trace = apply_gemma4_prefill_trace_policy(
                     enable_trace,
                     supported_length,
-                    batch_size,
+                    row_span,
                     generator.model[model_id],
                 )
 
                 for param in sampling_params:
                     if capture_trace:
                         logger.info(
-                            "Warming up prefill trace for sequence length: {} batch size: {} "
+                            "Warming up prefill trace for sequence length: {} users: {} rows: {} "
                             "with sampling params: {}",
                             supported_length,
-                            batch_size,
+                            warmup_users,
+                            row_span,
                             param,
                         )
                     else:
                         logger.info(
-                            "Warming up prefill (trace off) for sequence length: {} batch size: {} "
+                            "Warming up prefill (trace off) for sequence length: {} users: {} rows: {} "
                             "with sampling params: {}",
                             supported_length,
-                            batch_size,
+                            warmup_users,
+                            row_span,
                             param,
                         )
                     prefill_forward(
@@ -600,6 +1038,10 @@ def warmup_gemma4_model_prefill(
     ``prefill_forward_fn`` (vLLM hybrid bridge only) routes the trace capture
     through the per-layer page-table path; see
     :func:`warmup_gemma4_batched_prefill_traces`.
+
+    When ``GEMMA4_CHUNKED_PREFILL_TRACE`` is on, also warms an 2×chunk multi-chunk
+    prefill so the ``sp1`` (middle-chunk) 4k trace is captured before the first
+    long-ISL request.
     """
     enable_trace = maybe_disable_pli_prefill_trace(enable_trace, generator.model[0])
     if enable_trace:
@@ -611,13 +1053,139 @@ def warmup_gemma4_model_prefill(
             greedy_only=greedy_only,
             prefill_forward_fn=prefill_forward_fn,
         )
+        # Once-only: tt_transformers calls warmup_model_prefill on *every*
+        # prefill (warmup_prefill=True). The batched helper early-returns via
+        # already_warmed_up_prefill, but this 8192 sp1 capture used to re-run
+        # and add ~1.4s to every request TTFT.
+        if chunked_prefill_trace_enabled() and not getattr(generator, "_warmed_chunked_prefill_sp1", False):
+            chunk = int(getattr(generator.model_args[0], "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
+            chunk = min(chunk, GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN)
+            if chunk > 0:
+                # Two chunks → captures/replays sp0 then captures sp1 at ``chunk``.
+                multi_len = chunk * 2
+                logger.info(
+                    "Warming up traced multi-chunk prefill (sp1): {} tokens in {}-token chunks",
+                    multi_len,
+                    chunk,
+                )
+                prefill_forward = (
+                    prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
+                )
+                warmup_args = generator._mock_tokens(1, multi_len, kv_cache, 0)
+                prefill_forward(
+                    **warmup_args,
+                    kv_cache=kv_cache,
+                    enable_trace=True,
+                    model_id_warmup=0,
+                    sampling_params=None,
+                    warmup_prefill=False,
+                )
+            generator._warmed_chunked_prefill_sp1 = True
         return
-    from models.tt_transformers.tt.generator import Generator
 
-    Generator.warmup_model_prefill(
-        generator,
-        kv_cache=kv_cache,
-        enable_trace=enable_trace,
-        can_sample_on_device=can_sample_on_device,
-        greedy_only=greedy_only,
+    # Eager (non-traced) warmup for long-ISL demos (prefill trace gated off).
+    # Skip the stock 32/128/512/1024/2048/4096 sweep — it only matters for
+    # trace capture. Warm a short length (+ chunk size) once.
+    #
+    # Important: do NOT run the chunk-sized prefill with on-device SamplingParams.
+    # Stock Generator only compiles sampling on the first short bucket, then uses
+    # sampling_params=None for longer lengths. Pairing SamplingParams with the
+    # 4096 eager warmup hung indefinitely on 31B/P150x8 (256k bounded).
+    #
+    # Optional: warm max_batch×128 when GEMMA4_WARMUP_PREFILL_BATCHES lists B>1
+    # (demo-only; product/server uses batch-1 like tt_transformers).
+    if getattr(generator, "already_warmed_up_prefill", False):
+        return
+    generator.already_warmed_up_prefill = True
+
+    chunk = int(getattr(generator.model_args[0], "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
+    max_seq = int(getattr(generator.model_args[0], "max_seq_len", chunk) or chunk)
+    # Never warm a length whose padded prefill bucket exceeds max_seq_len.
+    # e.g. chunk=49152 → get_padded_prefill_len=65536 > pool → RoPE slice FATAL.
+    from models.demos.gemma4.tt.common import get_gemma4_padded_prefill_len
+
+    chunk = min(chunk, max_seq)
+    if chunk > 0 and get_gemma4_padded_prefill_len(chunk) > max_seq:
+        chunk = 1 << max(max_seq.bit_length() - 1, 11)
+        chunk = min(chunk, max_seq)
+    # GEMMA4_TRACE_PREFILL_SEQ_LENS historically only trimmed the *traced* bucket
+    # set. PLI / full-ISL single-chunk boots take this eager path instead, and
+    # would otherwise warm max_prefill_chunk_size (== max_seq_len, e.g. 131072)
+    # which exceeds practical server boot timeouts. Honor the same override here
+    # so nightly's GEMMA4_TRACE_PREFILL_SEQ_LENS=128 actually shortens boot.
+    override = os.environ.get("GEMMA4_TRACE_PREFILL_SEQ_LENS")
+    if override is not None:
+        lengths = []
+        for raw in override.split(","):
+            raw = raw.strip()
+            if not raw:
+                continue
+            length = int(raw)
+            if length > 0 and length <= max_seq and length not in lengths:
+                lengths.append(length)
+        if not lengths:
+            lengths = [min(128, max_seq)]
+    else:
+        lengths = []
+        for length in (128, chunk):
+            if length > 0 and length <= max_seq and length not in lengths:
+                lengths.append(length)
+
+    sampling_params_short = None
+    if can_sample_on_device:
+        params = generator._create_sampling_params(
+            can_sample_on_device=True,
+            batch_size=1,
+            greedy_only=greedy_only,
+        )
+        sampling_params_short = params[0] if params else None
+
+    prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
+    logger.info(
+        "Eager prefill warmup (no trace): lengths={} sampling_on_short={}",
+        lengths,
+        sampling_params_short is not None,
     )
+    for i, length in enumerate(lengths):
+        # Match stock: sampling compile on the first/short bucket only.
+        sampling_params = sampling_params_short if i == 0 else None
+        logger.info(
+            "Warming up eager prefill seq_len={} sampling={}",
+            length,
+            sampling_params is not None,
+        )
+        warmup_args = generator._mock_tokens(1, length, kv_cache, 0)
+        prefill_forward(
+            **warmup_args,
+            kv_cache=kv_cache,
+            enable_trace=False,
+            model_id_warmup=0,
+            sampling_params=sampling_params,
+            warmup_prefill=False,
+        )
+        logger.info("Finished eager prefill warmup seq_len={}", length)
+
+    batch_override = os.environ.get("GEMMA4_WARMUP_PREFILL_BATCHES")
+    if batch_override:
+        from models.demos.gemma4.tt.generator import max_batched_prefill_users
+
+        max_batch = int(getattr(generator.model_args[0], "max_batch_size", 1) or 1)
+        warm_batch = min(max_batch, max_batched_prefill_users())
+        requested = [int(x) for x in batch_override.split(",") if x.strip()]
+        warm_batch = max((b for b in requested if 1 < b <= warm_batch), default=1)
+        warm_batch = max((b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= warm_batch), default=1)
+        if warm_batch > 1 and 128 * warm_batch < MAX_BATCHED_PREFILL_SEQ_LEN:
+            logger.info(
+                "Warming up eager batched prefill batch_size={} seq_len=128 (no sampling)",
+                warm_batch,
+            )
+            warmup_args = generator._mock_tokens(warm_batch, 128, kv_cache, 0)
+            prefill_forward(
+                **warmup_args,
+                kv_cache=kv_cache,
+                enable_trace=False,
+                model_id_warmup=0,
+                sampling_params=None,
+                warmup_prefill=False,
+            )
+            logger.info("Finished eager batched prefill warmup batch_size={}", warm_batch)
