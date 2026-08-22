@@ -222,7 +222,7 @@ def _variant(
                 fused_reduce=fused_reduce,
                 chunk_base_mode=chunk_base_mode,
                 chunk_base=chunk_base,
-                full_sort=full_sort,
+                merge_both_halves=full_sort,
                 linear_stamp=linear_stamp,
             ),
         ],
