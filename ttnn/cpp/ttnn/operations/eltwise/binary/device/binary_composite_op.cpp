@@ -403,13 +403,23 @@ Tensor div_no_nan(
 }
 
 Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    if (input_a.dtype() == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
-        // Not using SFPU div op here since inf/nan handling is not required
-        Tensor div_result = ttnn::multiply(input_a, ttnn::reciprocal(input_b), std::nullopt, output_mem_config);
-        return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
-    }
-    Tensor div_result = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
-    return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
+    // float32 used to take reciprocal + multiply here instead of the SFPU divide,
+    // to keep div(a, +-inf) from coming back NaN. That was a property of the divide
+    // kernel's residual refinement rather than of this op, and it is fixed, so both
+    // dtypes now reach the same kernel. The zero-divisor arm is the only thing that
+    // separates div_no_nan from divide, and it lives inside that kernel rather than
+    // in an eqz and a where over the whole tensor.
+    return ttnn::detail::invoke_binary_ng(
+        input_a,
+        input_b,
+        binary::BinaryOpType::DIV_NO_NAN,
+        std::nullopt,
+        output_mem_config,
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt);
 }
 
 Tensor prelu(

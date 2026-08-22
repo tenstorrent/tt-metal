@@ -23,6 +23,7 @@ enum class BinaryOpType {
     LOGICAL_OR,
     LOGICAL_XOR,
     LDEXP,
+    DIV_NO_NAN,
     LOGADDEXP2,
     DIV,
     DIV_FLOOR,
