@@ -6395,3 +6395,19 @@ path) or host reboot, then ONE validation run. The N+70 line "the merge amplifie
 corrected: the MERGE was exonerated by this control; the NIGHT did the amplifying. Integration verdict:
 Mo's device producer + our host + split kernels is correctness-green everywhere and stall-behavior is
 indistinguishable from pre-merge at equal box state.
+
+### N+70 second addendum: every software lever eliminated; it is the PRE-EXISTING episode class (2026-08-22 ~03:45)
+
+Eliminated by direct experiment tonight, in order: the v6 host rework (restored our host: still fails),
+Mo's device producer (pre-merge tree: still fails), driver state (module reload: still fails, arguably
+worse), CPU contention (no hogs; k8s daemons predate the clean run), PCIe/IOMMU error state (30-day
+kernel log: zero AER/AMD-Vi entries), and the blaze worker_l1_size edit (TRUE control -- pre-merge tree
++ original L1, the exact 21:13-clean bytes -- still fails: d1/s1 dead, 71k stalls, 7 chips at ZERO).
+
+Conclusion: the per-run one-victim host-writer/socket episode documented pre-merge (final-state variance
+0/35/1841) is the phenomenon; 21:13's zero was its lucky face. Whether late-night incidence (1-6
+victims/run) is elevated vs the base rate, and whether any tree shifts it, needs an N-run comparison --
+single runs cannot distinguish luck from rate at these numbers. Recommended: power-cycle the box (the
+one reset lever not yet tried), then N>=5 runs per tree if the rate question matters before Monday.
+The victim signature for whoever hunts it: pages_available() ~0 for the whole run on one stream while
+its mover credit-waits and trickles 12-56 frames every ~3 s -- decided at bring-up, sticky for the run.
