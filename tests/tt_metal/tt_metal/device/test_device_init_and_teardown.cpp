@@ -71,7 +71,25 @@ bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh
 }
 }  // namespace unit_tests_common::basic::test_device_init
 
-INSTANTIATE_TEST_SUITE_P(DeviceInit, DeviceParamFixture, ::testing::Values(1, tt::tt_metal::GetNumAvailableDevices()));
+namespace {
+// gtest evaluates INSTANTIATE_TEST_SUITE_P generators at test-registration time
+// (inside InitGoogleTest), BEFORE --gtest_filter is applied. Calling
+// GetNumAvailableDevices() directly here forces full MetalContext/Cluster creation
+// at process startup, which throws on hosts without silicon (arch detection yields
+// ARCH::Invalid) and would abort the whole binary — including the host-only CPU_*
+// tests that run on the device-less github_hosted_cpu CI runner. Fall back to a
+// single-device parameterization on such hosts; the DeviceParamFixture tests
+// themselves are excluded there by the CPU_-filter split anyway.
+unsigned int num_available_devices_or_one() {
+    try {
+        return tt::tt_metal::GetNumAvailableDevices();
+    } catch (...) {
+        return 1;
+    }
+}
+}  // namespace
+
+INSTANTIATE_TEST_SUITE_P(DeviceInit, DeviceParamFixture, ::testing::Values(1, num_available_devices_or_one()));
 
 TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     unsigned int num_devices = GetParam();
@@ -134,7 +152,7 @@ private:
     std::optional<std::string> prev_;
 };
 
-TEST_F(TdpLimitEnvFixture, ParsesEnvVar) {
+TEST_F(TdpLimitEnvFixture, CPU_ParsesEnvVar) {
     unsetenv(kTdpLimitEnvVar);
     EXPECT_FALSE(llrt::RunTimeOptions().get_tdp_limit_watts().has_value());
 
@@ -156,7 +174,7 @@ TEST_F(TdpLimitEnvFixture, ParsesEnvVar) {
 
 // A typo must not quietly leave the run at full power, so parsing is strict. Neither of these is
 // usable as a watt count: one is not a number, the other does not fit the uint32_t that holds it.
-TEST_F(TdpLimitEnvFixture, MalformedEnvVarThrows) {
+TEST_F(TdpLimitEnvFixture, CPU_MalformedEnvVarThrows) {
     setenv(kTdpLimitEnvVar, "abc", /*overwrite=*/1);
     EXPECT_ANY_THROW(llrt::RunTimeOptions());
 
