@@ -484,6 +484,10 @@ class TestConfig:
                 # resolves with this on the path. Listed last so the tt-llk copy still
                 # wins the basenames that exist in both trees.
                 "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
+                # NOTE: the demo-fork experimental-LLK ADVANCE TEST shadow roots deliberately do NOT live here.
+                # INCLUDES is a session-wide ClassVar, so a temporary scaffold parked here would land in the
+                # compile command for every Blackhole test. They are appended per test by the
+                # helpers/advance_llk_includes.py autouse fixture instead.
             ]
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             hw_specific_includes = [
