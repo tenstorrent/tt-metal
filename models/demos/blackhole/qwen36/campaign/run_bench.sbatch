@@ -38,7 +38,15 @@ cd "$QWEN38_WORKSPACE"
 sweep_local_caches() {
     rm -rf "$HOME/.cache/tt-metal-cache" "$HOME/.cache/huggingface" /tmp/"${USER}"-* 2>/dev/null || true
 }
-trap sweep_local_caches EXIT
+# tt-metal#53281: a torn-down process can leave BH eth cores unresettable and the next
+# init times out ("waiting for active ethernet core XX-25"). Prologue: kill stale
+# /dev/tenstorrent holders + board reset; exit trap: reset again so the node is left
+# clean for whoever comes next. TT_METAL_DISABLE_MULTI_AERISC=1 (set in env.sh)
+# prevents the wedge and fixes the fabric local handshake on this cluster's eth fw.
+trap 'sweep_local_caches; tt-smi -r >/dev/null 2>&1 || true' EXIT
+fuser -k /dev/tenstorrent/* 2>/dev/null || true
+sleep 2
+tt-smi -r >/dev/null 2>&1 || echo "WARN: prologue tt-smi -r failed"
 
 if [[ -n "${REF:-}" ]]; then
     git checkout --detach "$REF" 2>/dev/null || {
@@ -57,18 +65,29 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
 fi
 
 if [[ "${SKIP_GATE:-0}" != "1" ]]; then
-    # Fast PCC gate on the TP mesh: loads one layer's MLP weights only.
-    "$QWEN38_PYTHON" -m pytest models/demos/blackhole/qwen36/tests/test_mlp_tp.py::test_mlp_tp -q -x
+    # Fast PCC gate on the TP mesh: loads one layer's MLP weights only. Gate on the
+    # pytest summary text, not the exit code — a teardown SIGABRT after a green suite
+    # (the #53281 signature) must not fail the job.
+    GATELOG="$(mktemp)"
+    set +e
+    "$QWEN38_PYTHON" -m pytest models/demos/blackhole/qwen36/tests/test_mlp_tp.py::test_mlp_tp -q -x 2>&1 | tee "$GATELOG"
+    set -e
+    grep -qE "[0-9]+ passed" "$GATELOG" || { echo "GATE_FAILED"; exit 1; }
+    rm -f "$GATELOG"
 fi
 
 LOGDIR=/data/ayerofieiev/qwen38/logs
 mkdir -p "$LOGDIR"
 BENCHLOG="$LOGDIR/bench-${SLURM_JOB_ID:-manual}.log"
 
+# Same rationale: judge the bench by its BENCH_JSON line, not the process exit code.
+set +e
 REF="$SHA" "$QWEN38_PYTHON" -m pytest models/demos/blackhole/qwen36/campaign/bench_decode.py -v -s 2>&1 | tee "$BENCHLOG"
 if [[ "${RUN_PREFILL:-0}" == "1" ]]; then
     REF="$SHA" "$QWEN38_PYTHON" -m pytest models/demos/blackhole/qwen36/campaign/bench_prefill.py -v -s 2>&1 | tee -a "$BENCHLOG"
 fi
+set -e
+grep -q "BENCH_JSON" "$BENCHLOG" || { echo "BENCH_PRODUCED_NO_JSON"; exit 1; }
 
 "$QWEN38_PYTHON" models/demos/blackhole/qwen36/campaign/parse_bench.py "$BENCHLOG" \
     --ref "$SHA" --node "${SLURMD_NODENAME:-$(hostname)}" \
