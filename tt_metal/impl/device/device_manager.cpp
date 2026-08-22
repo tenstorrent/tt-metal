@@ -274,12 +274,15 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
     bool is_mock = env_impl_.get_cluster().is_mock_or_emulated();
     if (any_remote_devices && !is_mock) {
         auto fabric_config = ctx_.get_fabric_config();
+        // Honor a user-specified RELIABILITY_MODE for the dispatch-fabric path too (mirrors the
+        // set_fabric_config chokepoint); default (unset) stays STRICT.
+        const auto dispatch_reliability_mode = env_impl_.get_rtoptions().get_reliability_mode().value_or(
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
         if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
             fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
             // TODO: This is using an internal API.
             // Externally, we should decide how/where to have SetFabricConfig on the correct MetalEnv
-            ctx_.set_fabric_config(
-                fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+            ctx_.set_fabric_config(fabric_config, dispatch_reliability_mode, 1);
             // Update the fabric config in the descriptor
             MetalEnvAccessor(descriptor_->env()).impl().fabric_config_ = fabric_config;
             // Call initialize again because previously it was a no-op
@@ -291,11 +294,9 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
                 fabric_config);
         } else {
             // Use the same mode
-            ctx_.set_fabric_config(
-                fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+            ctx_.set_fabric_config(fabric_config, dispatch_reliability_mode, 1);
         }
-        MetalEnvAccessor(descriptor_->env()).impl().fabric_reliability_mode_ =
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        MetalEnvAccessor(descriptor_->env()).impl().fabric_reliability_mode_ = dispatch_reliability_mode;
         log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs_);
     }
 

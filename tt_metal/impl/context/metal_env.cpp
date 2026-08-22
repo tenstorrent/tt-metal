@@ -267,7 +267,12 @@ bool MetalEnvImpl::set_fabric_config(
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
         fabric_config == tt_fabric::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
-        this->fabric_reliability_mode_ = reliability_mode;
+        // Honor a user-specified RELIABILITY_MODE (RunTimeOptions) over the caller-passed default.
+        // Callers (fabric-topology setup, dispatch enablement) hardcode STRICT; that ignored the
+        // documented RELAXED mode ("initialize with fewer routing planes than the MGD, per live
+        // links"), so a partially-cabled mesh FATAL'd in configure_routing_tables even in RELAXED.
+        // Default (unset) preserves the caller's value (STRICT).
+        this->fabric_reliability_mode_ = rtoptions_->get_reliability_mode().value_or(reliability_mode);
     } else {
         TT_FATAL(
             this->fabric_config_ == fabric_config,
