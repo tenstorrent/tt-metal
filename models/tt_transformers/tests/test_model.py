@@ -9,6 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.tt_transformers.tests.decode_test_helpers import decode_step_state, teacher_forced_decode_token
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
@@ -148,7 +149,10 @@ def test_model_inference(
         final_model_pcc = {
             "Llama-3.1-8B": (0.9649 if model_args.device_name == "N150" else 0.965) if mode_accuracy else 0.954,
             "Llama-3.1-70B": 0.973,
-            "Llama-3.2-1B": 0.999 if mode_accuracy else 0.991,
+            # BH Galaxy's corrected second decode step exercises position 1 and
+            # prompt token 1; the former test repeated position/token 0 and its
+            # 0.991 threshold was calibrated against that duplicated output.
+            "Llama-3.2-1B": 0.999 if mode_accuracy else (0.989 if model_args.device_name == "BHGLX" else 0.991),
             "Llama-3.2-3B": 0.954 if mode_accuracy else 0.945,
             "Llama-3.2-11B": 0.952 if mode_accuracy else 0.940,
             "Llama-3.2-90B": 0.971,
@@ -330,6 +334,10 @@ def test_model_inference(
     )
 
     for i in range(generation_length):
+        # Validate the absolute position before executing the model step.
+        next_position, next_token_index, num_written = decode_step_state(
+            generation_start_pos, i, len(encoded_prompts[0]), model_args.max_seq_len
+        )
         logger.info(f"[Model] Generating token {i}")
 
         decode_input = model_args.prepare_residual_tensor_decode(
@@ -375,7 +383,7 @@ def test_model_inference(
             ref_output = reference_model(pt_decode_input, current_pos[0])
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch)])
+        current_pos = torch.tensor([next_position for _ in range(batch)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,
@@ -388,31 +396,36 @@ def test_model_inference(
         )
 
         # Append the generated token to the list of outputs
-        if i in range(len(encoded_prompts[0])):
+        if next_token_index is not None:
             # While in "prefill" mode, use the prompt tokens as the output
-            all_outputs.append(encoded_prompts[0][i])  # Update list of TT outputs
+            all_outputs.append(encoded_prompts[0][next_token_index])  # Update list of TT outputs
             if run_ref_pt:
-                all_outputs_ref.append(encoded_prompts[0][i])  # Update list of ref outputs
+                all_outputs_ref.append(encoded_prompts[0][next_token_index])  # Update list of ref outputs
 
-            tt_decode_input = embd(encoded_prompts_tensor[:, i]).view(batch, seqlen, -1)
+            tt_decode_input = embd(encoded_prompts_tensor[:, next_token_index]).view(batch, seqlen, -1)
             if run_ref_pt:
-                pt_decode_input = embd(encoded_prompts_tensor[:, i]).view(batch, seqlen, -1)
+                pt_decode_input = embd(encoded_prompts_tensor[:, next_token_index]).view(batch, seqlen, -1)
         else:
             # Greedy decode (temperature = 0) the generated token and save it to print out later
+            reference_token = None
+            device_token = None
             if run_ref_pt:
                 # Sample from reference model first
-                _, pt_out_tok = sample_host(ref_output, temperature=0, top_p=0.8)
-                pt_decode_input = embd(pt_out_tok)
-                all_outputs_ref.append(pt_out_tok.squeeze(1).tolist()[0])
-
-                # Use the same token for TT model (teacher forcing)
-                tt_decode_input = pt_decode_input
-                all_outputs.append(pt_out_tok.squeeze(1).tolist()[0])
+                _, reference_token = sample_host(ref_output, temperature=0, top_p=0.8)
             else:
                 # If not running reference model, sample from TT model directly
-                _, tt_out_tok = sample_host(tt_output_torch, temperature=0, top_p=0.8)
-                tt_decode_input = embd(tt_out_tok)
-                all_outputs.append(tt_out_tok.squeeze(1).tolist()[0])
+                _, device_token = sample_host(tt_output_torch, temperature=0, top_p=0.8)
+
+            next_token = teacher_forced_decode_token(
+                reference_token=reference_token,
+                device_token=device_token,
+            )
+            next_token_id = next_token.squeeze(1).tolist()[0]
+            tt_decode_input = embd(next_token)
+            all_outputs.append(next_token_id)
+            if run_ref_pt:
+                pt_decode_input = tt_decode_input
+                all_outputs_ref.append(next_token_id)
 
         # Measure PCC if also running reference model
         if run_ref_pt:
@@ -478,9 +491,8 @@ def test_model_inference(
                             )
 
                     for kv_cache, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-                        cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + i + 1)
-                        cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-                        cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
+                        cache_pt = cache_pt[:, :, 0:num_written, :]
+                        cache_tt = cache_tt[:, :, generation_start_pos : generation_start_pos + num_written, :]
                         if (
                             layers == 1 and i == iterations - 1
                         ):  # On last iteration in the quick test, set a tighter PCC
