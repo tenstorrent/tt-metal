@@ -16,6 +16,10 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
 )
 
+# Module-scoped device: these tests all run with the default device config, so the device is
+# opened once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def get_torch_dtype(dtype):
     if dtype == ttnn.int32:
@@ -39,8 +43,6 @@ def run_moreh_softmax_test(
     strategy=None,
     compute_kernel_options=None,
 ):
-    if ttnn_dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported")
     torch_dtype = get_torch_dtype(ttnn_dtype)
     if use_randint == True:
         torch_input = torch.randint(low=0, high=4, size=shape).to(torch_dtype) + 100
@@ -86,8 +88,6 @@ def run_moreh_softmax_backward_test(
     strategy=None,
     compute_kernel_options=None,
 ):
-    if ttnn_dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported")
     torch_dtype = get_torch_dtype(ttnn_dtype)
     if use_randint == True:
         torch_x = torch.randint(low=0, high=4, size=shape).to(torch_dtype).requires_grad_(True)
@@ -141,13 +141,7 @@ def run_moreh_softmax_backward_test(
         [[10, 20, 32 * 3, 32 * 5], 2],  # multiple tiles per core
     ],
 )
-@pytest.mark.parametrize(
-    "dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ],
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_softmax_for_dim_hw(shape_dim, dtype, compute_kernel_options, device):
     shape, dim = shape_dim
@@ -286,13 +280,7 @@ def test_softmax_for_dim_nc(shape_dim, dtype, compute_kernel_options, device):
         [[10, 20, 32 * 3, 32 * 5], 2],  # multiple tiles per core
     ],
 )
-@pytest.mark.parametrize(
-    "dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ],
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_softmax_backward_for_dim_hw(shape_dim, dtype, compute_kernel_options, device):
     shape, dim = shape_dim

@@ -14,6 +14,10 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     to_ttnn,
 )
 
+# Module-scoped device: these tests all run with the default device config, so the device is
+# opened once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def get_tensors(
     input_shape,
@@ -169,11 +173,8 @@ def moreh_linear(shapes, has_bias, has_output, compute_kernel_config, device, np
 )
 @pytest.mark.parametrize("has_bias", [False, True])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-@pytest.mark.parametrize("npu_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["BFP8", "BFP16"])
+@pytest.mark.parametrize("npu_dtype", [ttnn.bfloat16], ids=["BFP16"])
 def test_moreh_linear(shapes, has_bias, compute_kernel_options, npu_dtype, device):
-    if npu_dtype == ttnn.bfloat8_b:
-        # FAILED test cases produce 0.0 and also precision results.
-        pytest.skip("Moreh Linear does not support bfloat8_b")
     torch.manual_seed(3072)
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     passing = moreh_linear(shapes, has_bias, True, compute_kernel_config, device, npu_dtype)
@@ -189,11 +190,8 @@ def test_moreh_linear(shapes, has_bias, compute_kernel_options, npu_dtype, devic
     ),
 )
 @pytest.mark.parametrize("has_bias", [False, True])
-@pytest.mark.parametrize("npu_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["BFP8", "BFP16"])
+@pytest.mark.parametrize("npu_dtype", [ttnn.bfloat16], ids=["BFP16"])
 def test_moreh_linear_wo_output(shapes, has_bias, npu_dtype, device):
-    if npu_dtype == ttnn.bfloat8_b:
-        # FAILED test cases produce 0.0 and also precision results.
-        pytest.skip("Moreh Linear does not support bfloat8_b")
     torch.manual_seed(3072)
     compute_kernel_config = get_compute_kernel_options(False)
     passing = moreh_linear(shapes, has_bias, False, compute_kernel_config, device, npu_dtype)
@@ -343,10 +341,8 @@ def moreh_linear_backward(
 )
 @pytest.mark.parametrize("requires_bias_grad", [True, False])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-@pytest.mark.parametrize("npu_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["BFP8", "BFP16"])
+@pytest.mark.parametrize("npu_dtype", [ttnn.bfloat16], ids=["BFP16"])
 def test_moreh_linear_backward(shapes, requires_grads, requires_bias_grad, compute_kernel_options, npu_dtype, device):
-    if npu_dtype == ttnn.bfloat8_b:
-        pytest.skip("Moreh Linear Backward does not support bfloat8_b")
     torch.manual_seed(3072)
     requires_input_grad, requires_weight_grad = requires_grads
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)

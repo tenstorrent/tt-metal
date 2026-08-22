@@ -21,6 +21,10 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     TILE_WIDTH,
 )
 
+# Module-scoped device: these tests all run with the default device config, so the device is
+# opened once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def is_npu_dtype_uint32(data_type):
     return data_type == ttnn.uint32
@@ -185,11 +189,9 @@ def moreh_sum(input_shape, dim, keepdim, use_provide_output, compute_kernel_opti
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 @pytest.mark.parametrize("keepdim", [True, False], ids=["keepdim-true", "keepdim-false"])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bfloat16", "bfloat8_b"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 def test_moreh_sum(input_shape, dim, keepdim, compute_kernel_options, dtype, device):
     torch.manual_seed(2023)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip("bfloat8_b not supported")
     passing = moreh_sum(input_shape, dim, keepdim, True, compute_kernel_options, device, dtype=dtype)
     assert passing
 
@@ -256,6 +258,9 @@ def test_moreh_sum_rank_1_global(input_shape, dim, use_provide_output, device):
 )
 def test_moreh_sum_enable_cache(input_shape, dim, device):
     torch.manual_seed(3072)
+    # Asserts an absolute cache-entry count, so start from an empty cache: the
+    # module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     keepdim = [True, False]
     use_provide_output = [True, False]
     for i in range(2):
@@ -379,11 +384,9 @@ def moreh_sum_backward(
 )
 @pytest.mark.parametrize("keepdim", [True, False], ids=["keepdim-true", "keepdim-false"])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bfloat16", "bfloat8_b"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 def test_moreh_sum_backward(input_shape, dim, keepdim, compute_kernel_options, dtype, device):
     torch.manual_seed(2023)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip("bfloat8_b is not supported")
     passing = moreh_sum_backward(input_shape, dim, keepdim, True, compute_kernel_options, device, dtype=dtype)
     assert passing
 
@@ -429,6 +432,9 @@ def test_moreh_sum_backward_wo_input_grad(input_shape, dim, device):
 )
 def test_moreh_sum_backward_enable_cache(input_shape, dim, device):
     torch.manual_seed(3072)
+    # Asserts an absolute cache-entry count, so start from an empty cache: the
+    # module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     keepdim = [True, False]
     use_provide_output = [True, False]
     num_cache_entires = [2, 2, 2]

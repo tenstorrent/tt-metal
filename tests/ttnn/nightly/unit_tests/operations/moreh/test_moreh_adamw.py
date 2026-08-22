@@ -20,6 +20,10 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 )
 from loguru import logger
 
+# Module-scoped device: these tests all run with the default device config, so the device is
+# opened once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def create_tt_tensors(cpu_grad, cpu_weight, cpu_exp_avg, cpu_exp_avg_sq, cpu_max_exp_avg_sq, amsgrad, dtype, device):
     def create_tt_tensor(tensor: torch.Tensor, dtype, device):
@@ -199,10 +203,8 @@ def run_moreh_adamw(
 @pytest.mark.parametrize("weight_decay", [0.3])
 @pytest.mark.parametrize("amsgrad", [True, False])
 @pytest.mark.parametrize("step", [8])
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
 def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, ttnn_dtype, device):
-    if ttnn_dtype == ttnn.bfloat8_b:
-        pytest.skip("Bfloat8_b is only supported with fp32_dest_acc set to True")
     torch.manual_seed(0)
     run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, ttnn_dtype=ttnn_dtype)
 

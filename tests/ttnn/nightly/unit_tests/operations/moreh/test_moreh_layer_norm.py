@@ -22,6 +22,10 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 )
 from models.common.utility_functions import skip_for_blackhole
 
+# Module-scoped device: these tests all run with the default device config, so the device is
+# opened once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def torch_layer_norm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
     normalized_shape = input.shape[-normalized_dims:]
@@ -446,17 +450,7 @@ def run_moreh_layer_norm_backward_with_gamma_or_beta(
 
 
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
-@pytest.mark.parametrize(
-    "dtype",
-    (
-        ttnn.bfloat8_b,
-        ttnn.bfloat16,
-    ),
-    ids=[
-        "bfloat8_b",
-        "bfloat16",
-    ],
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize(
     "elementwise_affine",
     [False, True],
@@ -473,24 +467,12 @@ def run_moreh_layer_norm_backward_with_gamma_or_beta(
 )
 def test_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, dtype, device):
     torch.manual_seed(2023)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported in the kernel")
     run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, dtype, device)
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
-@pytest.mark.parametrize(
-    "dtype",
-    (
-        ttnn.bfloat8_b,
-        ttnn.bfloat16,
-    ),
-    ids=[
-        "bfloat8_b",
-        "bfloat16",
-    ],
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize(
     "elementwise_affine",
     [False, True],
@@ -507,24 +489,12 @@ def test_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, 
 )
 def test_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affine, eps, dtype, device):
     torch.manual_seed(2023)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported in the kernel")
     run_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affine, eps, dtype, device)
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
-@pytest.mark.parametrize(
-    "dtype",
-    (
-        ttnn.bfloat8_b,
-        ttnn.bfloat16,
-    ),
-    ids=[
-        "bfloat8_b",
-        "bfloat16",
-    ],
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize(
     "gamma_or_beta",
     [False, True],
@@ -541,23 +511,11 @@ def test_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affi
 )
 def test_moreh_layer_norm_backward_with_gamma_or_beta(input_shape_normalized_dims, gamma_or_beta, eps, dtype, device):
     torch.manual_seed(2023)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported in the kernel")
     run_moreh_layer_norm_backward_with_gamma_or_beta(input_shape_normalized_dims, gamma_or_beta, eps, dtype, device)
 
 
 @pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
-@pytest.mark.parametrize(
-    "dtype",
-    (
-        ttnn.bfloat8_b,
-        ttnn.bfloat16,
-    ),
-    ids=[
-        "bfloat8_b",
-        "bfloat16",
-    ],
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize(
     "elementwise_affine",
     [False, True],
@@ -575,23 +533,11 @@ def test_moreh_layer_norm_compute_kernel_options(
     input_shape_normalized_dims, elementwise_affine, eps, compute_kernel_options, dtype, device
 ):
     torch.manual_seed(2023)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported in the kernel")
     run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, dtype, device, compute_kernel_options)
 
 
 @pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
-@pytest.mark.parametrize(
-    "dtype",
-    (
-        ttnn.bfloat8_b,
-        ttnn.bfloat16,
-    ),
-    ids=[
-        "bfloat8_b",
-        "bfloat16",
-    ],
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize(
     "elementwise_affine",
     [False, True],
@@ -609,25 +555,13 @@ def test_moreh_layer_norm_backward_compute_kernel_options(
     input_shape_normalized_dims, elementwise_affine, eps, compute_kernel_options, dtype, device
 ):
     torch.manual_seed(2023)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported in the kernel")
     run_moreh_layer_norm_backward(
         input_shape_normalized_dims, elementwise_affine, eps, dtype, device, compute_kernel_options
     )
 
 
 @pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
-@pytest.mark.parametrize(
-    "dtype",
-    (
-        ttnn.bfloat8_b,
-        ttnn.bfloat16,
-    ),
-    ids=[
-        "bfloat8_b",
-        "bfloat16",
-    ],
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize(
     "elementwise_affine",
     [False, True],
@@ -641,8 +575,6 @@ def test_moreh_layer_norm_backward_compute_kernel_options(
 )
 def test_moreh_layer_norm_callback(input_shape_normalized_dims, elementwise_affine, eps, dtype, device):
     torch.manual_seed(2024)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported in the kernel")
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, dtype, device)
@@ -655,17 +587,7 @@ def test_moreh_layer_norm_callback(input_shape_normalized_dims, elementwise_affi
 
 
 @pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
-@pytest.mark.parametrize(
-    "dtype",
-    (
-        ttnn.bfloat8_b,
-        ttnn.bfloat16,
-    ),
-    ids=[
-        "bfloat8_b",
-        "bfloat16",
-    ],
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize(
     "elementwise_affine",
     [False, True],
@@ -679,8 +601,6 @@ def test_moreh_layer_norm_callback(input_shape_normalized_dims, elementwise_affi
 )
 def test_moreh_layer_norm_backward_callback(input_shape_normalized_dims, elementwise_affine, eps, dtype, device):
     torch.manual_seed(2024)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported in the kernel")
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affine, eps, dtype, device)
@@ -762,17 +682,7 @@ def test_moreh_layer_norm_backward_rejects_same_volume_wrong_mean_shape(device, 
 
 
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
-@pytest.mark.parametrize(
-    "dtype",
-    (
-        ttnn.bfloat8_b,
-        ttnn.bfloat16,
-    ),
-    ids=[
-        "bfloat8_b",
-        "bfloat16",
-    ],
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize(
     "elementwise_affine",
     [False, True],
@@ -787,8 +697,6 @@ def test_moreh_layer_norm_backward_rejects_same_volume_wrong_mean_shape(device, 
 )
 def test_moreh_layer_norm_no_mean_rstd(input_shape_normalized_dims, elementwise_affine, eps, dtype, device):
     torch.manual_seed(2023)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported in the kernel")
     run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, dtype, device, create_mean_rstd=False)
 
 

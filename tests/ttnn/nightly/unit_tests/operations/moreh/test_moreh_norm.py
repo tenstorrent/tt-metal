@@ -17,6 +17,10 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
 )
 
+# Module-scoped device: these tests all run with the default device config, so the device is
+# opened once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def make_torch_tensors(input_shape, dim, keepdim=False, *, dtype=torch.float32):
     """
@@ -176,9 +180,6 @@ def run_moreh_norm(
     Raises:
         AssertionError: If the computed norm values from ttnn's implementation and torch are not close.
     """
-    # TODO @mrshaw01: Support bfloat8_b in kernel
-    if ttnn_dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported in the kernel")
     check_dim(input_shape, dim, keepdim)
     torch_input, torch_output_grad = make_torch_tensors(input_shape, dim, keepdim=keepdim, dtype=torch_dtype)
     expected_output, _ = torch_norm(
@@ -309,9 +310,6 @@ def run_moreh_norm_backward(
     Raises:
         AssertionError: If the computed gradients from ttnn's implementation and torch are not close.
     """
-    # TODO @mrshaw01: Support bfloat8_b in kernel
-    if ttnn_dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported in the kernel")
     check_dim(input_shape, dim, keepdim)
     torch_input, torch_output_grad = make_torch_tensors(input_shape, dim, keepdim=keepdim, dtype=torch_dtype)
     _, expected_input_grad = torch_norm(
@@ -386,7 +384,7 @@ def run_moreh_norm_backward(
     ],
 )
 @pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("is_linalg_vector_norm", [False, True])
 def test_moreh_norm(input_shape, p, dim_rtol_atol, keepdim, ttnn_dtype, device, is_linalg_vector_norm):
     """
@@ -613,7 +611,7 @@ def test_moreh_norm_callback(dim_rtol_atol, keepdim, device, is_linalg_vector_no
     ],
 )
 @pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("is_linalg_vector_norm", [False, True])
 def test_moreh_norm_backward(input_shape, p, dim_rtol_atol, keepdim, ttnn_dtype, device, is_linalg_vector_norm):
     """

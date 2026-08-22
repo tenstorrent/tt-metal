@@ -12,6 +12,10 @@ from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_equal
 
+# Module-scoped device: these tests all run with the default device config, so the device is
+# opened once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 torch_dtype_to_ttnn_dtype = {
     torch.int32: ttnn.int32,
     torch.bfloat16: ttnn.bfloat16,

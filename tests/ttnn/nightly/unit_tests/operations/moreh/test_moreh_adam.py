@@ -19,6 +19,10 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     to_ttnn,
 )
 
+# Module-scoped device: these tests all run with the default device config, so the device is
+# opened once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def create_tt_tensor(tensor: torch.Tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
     return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
@@ -144,11 +148,9 @@ def run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_e
 @pytest.mark.parametrize("weight_decay", [0.0, 0.3])
 @pytest.mark.parametrize("amsgrad", [True, False])
 @pytest.mark.parametrize("fp32_dest_acc_en", compute_kernel_options, ids=compute_kernel_ids)
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, dtype, step=1):
     torch.manual_seed(0)
-    if dtype == ttnn.bfloat8_b:
-        pytest.skip("bfloat8_b not supported")
     return run_moreh_adam(
         shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, dtype=dtype, step=step
     )
