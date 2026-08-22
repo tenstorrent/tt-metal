@@ -2892,15 +2892,17 @@ class Qwen36Model:
                     ttnn.deallocate(group_conv_dev[g][li][m])
 
     def prefill_paged_grouped(self, token_ids_list, page_table, valid_lens=None, group_size=4):
-        """Grouped batched SHORT-prompt prefill (single-pass, every valid_len <= one GDN bucket):
-        process users in groups of <= group_size through ONE hybrid forward per group instead of B
-        sequential B=1 forwards. Within a group the GDN layers run BATCHED (forward_prefill_batched,
-        per-row valid_len masking — bit-exact per user, see test_gdn_tp_batched_prefill) and the
-        full-attention layers run PER-USER (attention prefill is B=1 only). The group size respects
-        the fused GDN op's grid cap BH=B*Nv_tp<=compute cores (see below). Numerically the batched
-        GDN + per-user attention is the same math as prefill_paged_peruser, so per-user output
-        (incl. DIFFERENT prompts/lengths) is unchanged; it just amortizes the underutilized GDN
-        over the group.
+        """Grouped SHORT-prompt prefill (single-pass, every valid_len <= one GDN bucket): process
+        users in groups of <= group_size, batching the GDN layers over each group in ONE
+        forward_prefill_batched call (per-row valid_len masking — bit-exact per user, see
+        test_gdn_tp_batched_prefill) instead of B sequential B=1 scans. Everything else — norms,
+        full attention, MLP, residual adds, lm head — runs PER-USER at the validated <=2048-row
+        width (attention prefill is B=1 only; the MLP/norm prefill program configs scale their L1
+        CBs with M, so a fused group-wide stream overflows L1 at long buckets). The group size
+        respects the fused GDN op's grid cap BH=B*Nv_tp<=compute cores (see below). Numerically
+        the batched GDN + per-user everything-else is the same math as prefill_paged_peruser, so
+        per-user output (incl. DIFFERENT prompts/lengths) is unchanged; it amortizes the
+        underutilized GDN scan over the group.
 
         token_ids_list: list of B torch.Tensor [1, T_u] (lengths may differ).
         page_table:      torch.Tensor [B, blocks_per_user] int32 (row u = user u's blocks).
@@ -2957,22 +2959,26 @@ class Qwen36Model:
             Bg = len(grp)
             prev = self._alloc_gdn_scratch_b(Bg)
             try:
-                # Batched embedding: [1, Bg, bucket, dim] (pad each user's tokens to the bucket).
+                # Batched embedding: [Bg, bucket, d] (pad each user's tokens to the bucket).
                 tok_bg = torch.zeros(Bg, bucket, dtype=torch.int32)
                 for i, u in enumerate(grp):
                     t = token_ids_list[u][0, : vlens[u]].to(torch.int32)
                     tok_bg[i, : t.shape[0]] = t
                 tok = ttnn.from_torch(tok_bg, dtype=ttnn.uint32, device=self.device, mesh_mapper=rep)
-                x = self.embd(tok)  # [Bg, bucket, d]
-                d = x.shape[-1]
-                # Canonical residual-stream shape [1, 1, Bg*bucket, d] (dim1==1) so the framework
-                # norm / MLP / residual add see the SAME layout as the validated per-user path
-                # (a [1,Bg,bucket,d] shape trips "invalid subtile broadcast" in the norm/residual).
-                # Reshaped to [Bg, bucket, d] only for the batched GDN, and split to [1,Bg,bucket,d]
-                # to slice each user for the per-user attention. Row order is user-major (user u owns
-                # rows [u*bucket : (u+1)*bucket]), matching the group state assembly.
-                x = ttnn.reshape(x, (1, 1, Bg * bucket, d))
-                x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+                x_emb = self.embd(tok)  # [Bg, bucket, d]
+                d = x_emb.shape[-1]
+                # PER-USER residual streams [1, 1, bucket, d]: every non-GDN op (norms, attention,
+                # MLP, residual adds, lm head) runs at the validated per-user width. The MLP/norm
+                # prefill program configs size their L1 CBs with M (tuned for the <=2048-row
+                # per-user chunk), so one fused [Bg*bucket] stream overflows L1 at long buckets;
+                # only the fused GDN op — whose grid maps (row, head), not M-blocks — sees the
+                # batched group. Row i of every gathered GDN tensor is group user i, matching the
+                # group state assembly.
+                xs = []
+                for i in range(Bg):
+                    xi = ttnn.slice(x_emb, (i, 0, 0), (i + 1, bucket, d))  # [1, bucket, d] copy
+                    xs.append(ttnn.to_memory_config(ttnn.reshape(xi, (1, 1, bucket, d)), ttnn.DRAM_MEMORY_CONFIG))
+                ttnn.deallocate(x_emb)
                 ttnn.deallocate(tok)
                 # Per-user device page tables (full + real-blocks-only for the KV fill).
                 full_pts, chunk_pts = [], []
@@ -2993,16 +2999,13 @@ class Qwen36Model:
 
                 for layer in self.layers:
                     # The DistributedNorm all-gathers to the FULL hidden dim for the module (dn), so
-                    # attn_in's last dim is the full dim (!= d, the fractured residual-stream dim).
-                    attn_in = layer.attention_norm(x, mode=Mode.PREFILL)  # [1, 1, Bg*bucket, full]
-                    full = attn_in.shape[-1]
+                    # each attn_in's last dim is the full dim (!= d, the fractured residual dim).
                     if layer.is_full_attention:
-                        attn_in_b = ttnn.reshape(attn_in, (1, Bg, bucket, full))  # split users for slicing
                         outs = []
-                        for i, u in enumerate(grp):
-                            xi = ttnn.reshape(attn_in_b[:, i : i + 1, :, :], (1, 1, bucket, full))
+                        for i in range(Bg):
+                            attn_in = layer.attention_norm(xs[i], mode=Mode.PREFILL)  # [1,1,bucket,full]
                             oi = layer.attention.forward_prefill_paged(
-                                xi,
+                                attn_in,
                                 cos,
                                 sin,
                                 full_pts[i],
@@ -3011,44 +3014,50 @@ class Qwen36Model:
                                 chunk_start_idx_tensor=csi,
                                 user_id=0,  # per-user page tables are single-row; blocks route via values
                             )
-                            ttnn.deallocate(xi)  # per-user slice copy
+                            ttnn.deallocate(attn_in)
                             outs.append(ttnn.reshape(oi, (1, 1, bucket, oi.shape[-1])))
-                        # Concat user outputs along the seq dim -> [1, 1, Bg*bucket, d_out] (user-major).
-                        attn_out = ttnn.concat(outs, dim=2) if Bg > 1 else outs[0]
-                        for o in outs:
-                            if o is not attn_out:
-                                ttnn.deallocate(o)
                     else:
-                        # Batched GDN over the group (per-row valid_len masking, from scratch).
-                        gdn_in = ttnn.reshape(attn_in, (Bg, bucket, full))
-                        attn_out = layer.attention.forward_prefill_batched(
+                        # Per-user norm gathered into ONE batched GDN call over the group
+                        # (per-row valid_len masking, from scratch). Row i = group user i.
+                        normed = []
+                        for i in range(Bg):
+                            ai = layer.attention_norm(xs[i], mode=Mode.PREFILL)  # [1,1,bucket,full]
+                            normed.append(ttnn.reshape(ai, (1, bucket, ai.shape[-1])))
+                        gdn_in = ttnn.concat(normed, dim=0) if Bg > 1 else normed[0]
+                        for t in normed:
+                            if t is not gdn_in:
+                                ttnn.deallocate(t)
+                        attn_out_b = layer.attention.forward_prefill_batched(
                             gdn_in, chunk_size=gdn_chunk, valid_lens=[vlens[u] for u in grp], carry=False
                         )  # [1, Bg, bucket, d_out]
-                        attn_out = ttnn.reshape(attn_out, (1, 1, Bg * bucket, attn_out.shape[-1]))
-                    ttnn.deallocate(attn_in)
-                    h = ttnn.add(x, attn_out)  # both [1, 1, Bg*bucket, d]
-                    ttnn.deallocate(x)
-                    ttnn.deallocate(attn_out)
-                    ff_in = layer.ffn_norm(h, mode=Mode.PREFILL)
-                    ff_out = layer.feed_forward.forward(ff_in)
-                    ttnn.deallocate(ff_in)
-                    x = ttnn.add(h, ff_out)
-                    ttnn.deallocate(h)
-                    ttnn.deallocate(ff_out)
+                        ttnn.deallocate(gdn_in)
+                        d_out = attn_out_b.shape[-1]
+                        # Per-user slice copies; the batched output is freed once split.
+                        outs = [ttnn.reshape(attn_out_b[:, i : i + 1, :, :], (1, 1, bucket, d_out)) for i in range(Bg)]
+                        ttnn.deallocate(attn_out_b)
+                    for i in range(Bg):
+                        h = ttnn.add(xs[i], outs[i])  # both [1, 1, bucket, d]
+                        ttnn.deallocate(xs[i])
+                        ttnn.deallocate(outs[i])
+                        ff_in = layer.ffn_norm(h, mode=Mode.PREFILL)
+                        ff_out = layer.feed_forward.forward(ff_in)
+                        ttnn.deallocate(ff_in)
+                        xs[i] = ttnn.add(h, ff_out)
+                        ttnn.deallocate(h)
+                        ttnn.deallocate(ff_out)
 
                 # Final norm + per-user next-token logit at valid_len-1, read to host immediately.
-                xn = self.norm(x, mode=Mode.PREFILL)  # [1, 1, Bg*bucket, full]
-                ttnn.deallocate(x)
-                xn_b = ttnn.reshape(xn, (1, Bg, bucket, xn.shape[-1]))
                 for i, u in enumerate(grp):
-                    x_last = xn_b[:, i : i + 1, vlens[u] - 1 : vlens[u], :]  # [1,1,1,full] (slice copy)
+                    xn = self.norm(xs[i], mode=Mode.PREFILL)  # [1, 1, bucket, full]
+                    ttnn.deallocate(xs[i])
+                    x_last = xn[:, :, vlens[u] - 1 : vlens[u], :]  # [1,1,1,full] (slice copy)
+                    ttnn.deallocate(xn)
                     lg = ttnn.linear(x_last, self.lm_head_weight)
                     ttnn.deallocate(x_last)
                     host_logits[u] = (
                         ttnn.to_torch(lg, mesh_composer=comp).reshape(1, 1, -1)[:, :, : self.args.vocab_size].clone()
                     )
                     ttnn.deallocate(lg)
-                ttnn.deallocate(xn)
                 for t in full_pts + chunk_pts:
                     ttnn.deallocate(t)
 
