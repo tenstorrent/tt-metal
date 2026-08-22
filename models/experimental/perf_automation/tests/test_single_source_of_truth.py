@@ -112,6 +112,28 @@ _OWNERS = {
             "cc_optimize/summary.py": {"_roofline_lines"},
         },
     ),
+    # THE COMPUTE ROOF'S DENOMINATOR. One producer (perf_mcp, which derives the dominant fidelity and
+    # pins it) and one reader (summary._stage_roofs, via _pinned_peak_flops). This is the ceiling
+    # input that had no anchor at all: _promote_baseline refreshes the profile PICTURE on every
+    # profile_model call while ratcheting only device_ms, so a peak read off that picture doubles the
+    # moment the `fidelity` rung lands -- 175.5 -> 351.0 TFLOPS on voxtral, from one matmul.
+    #
+    # It survived because it never printed anything impossible: the memory roof divides by a fixed
+    # 512 GB/s and screams when it drifts, while here the peak IS what moves and the measurement
+    # moves with it, so a stage that got 2x faster reports the same percentage.
+    "the compute peak": (
+        "peak_flops",
+        {
+            "cc_optimize/perf_mcp.py": {"_dominant_peak_flops", "_persist_throughput"},
+            # _stage_roofs reads the anchor through _pinned_peak_flops and keeps the current-picture
+            # value beside it as peak_flops_now, which is what separates a real fidelity win from a
+            # stale reading -- the same pairing _floor_anchor's caller uses.
+            # _roofline_tables only RENDERS the value _stage_roofs already put in the roofs dict --
+            # it prints the TFLOPS cell and scales the 60-80% band from it. It derives nothing, and
+            # the ratio it prints (measured / peak) is the one number a reader checks the ceiling by.
+            "cc_optimize/summary.py": {"_stage_roofs", "_pinned_peak_flops", "_roofline_tables"},
+        },
+    ),
     "the modeled floor": (
         "modeled_floor_ms",
         {

@@ -756,6 +756,22 @@ def _win_set(attempts, baseline_ms=None) -> set:
         return set()
 
 
+def _pinned_peak_flops(unit, model: str = "", task: str = ""):
+    """The pinned peak FLOP/s for this (model, task, unit), or None if nothing is pinned.
+
+    READ-ONLY, and keyed on the UNIT rather than the profiling window -- the same key the byte anchor
+    uses, because both describe the whole model rather than the slice the profiler built. Pinning
+    happens where the value is PRODUCED (perf_mcp._persist_throughput); rendering a report must not
+    change what the next report says.
+    """
+    try:
+        led = _ledger()
+        d = str(unit or "token").strip().lower() or "token"
+        return led.anchor_value(led.KIND_PEAK_FLOPS, depth=d, model=model, task=task)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _floor_anchor(current_ms, depth, model: str = "", task: str = ""):
     """The pinned modeled floor for this (model, task, depth), or None if nothing is pinned yet.
 
@@ -1185,7 +1201,7 @@ def _unit_work_name(unit) -> str:
     return "inference"
 
 
-def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stage_ms=None):
+def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stage_ms=None, model="", task=""):
     """Both ceilings for both stages, from the MODEL'S OWN facts rather than from summing annotated ops.
 
     THE ROOFS ARE ANALYTIC, WHICH IS WHY THIS NEEDS NO PER-OP STAGE LABEL. A stage's memory floor is
@@ -1356,6 +1372,19 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         peak_flops = float(_cpf(ARCH_FACTS.get(_arch) or {}, _dom) or 0.0)
     except Exception:  # noqa: BLE001
         peak_flops = 0.0
+    # THE PINNED PEAK OUTRANKS THE ONE JUST DERIVED, for the same reason the byte anchor outranks the
+    # snapshot: the value above describes the CURRENT picture, and _promote_baseline replaces that
+    # picture on every profile_model call. A ceiling recomputed from it retreats ahead of the
+    # measurement -- the defect KIND_FLOOR was introduced to fix, on a roof that never got the fix.
+    #
+    # The derived value is kept as _peak_flops_now: it is what separates a real fidelity win from a
+    # stale reading when a stage measures faster than its pinned roof, exactly as _floor_anchor's
+    # caller uses the current floor. Falling back to it when nothing is pinned keeps every existing
+    # path alive -- a report rendered before any anchor exists still gets a ceiling.
+    _peak_now = peak_flops
+    _pinned = _pinned_peak_flops(unit, model, task)
+    if _pinned and _pinned > 0:
+        peak_flops = float(_pinned)
     # THE RECURRING STAGE EXISTS FOR EVERY UNIT, not only for tokens. Gating it on "tok" deleted the
     # whole ceiling for a diffusion model, whose unit of work is a denoise STEP and which is exactly
     # as memory-bound per step as an LLM is per token. PREFILL is the part that is token-specific:
@@ -1456,6 +1485,9 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
             "bytes": _b,
             "tokens": toks,
             "peak_flops": peak_flops or None,
+            # What the CURRENT build's mode implies, carried beside the pinned roof so a reader (and
+            # the >100% classifier) can tell "the model got faster" from "these numbers are stale".
+            "peak_flops_now": _peak_now or None,
             "fidelity": _dom,
             # The binding roof is the SLOWEST one -- the stage cannot beat its tightest floor. Stated
             # per stage because it genuinely differs: prefill's FLOPs scale with the sequence and
@@ -1531,6 +1563,8 @@ def _roofline_tables(
     stage_paths=None,
     stage_ops=None,
     tp_degree=1,
+    model="",
+    task="",
 ):
     """The Roofline / Overheads / Utilization blocks.
 
@@ -1652,7 +1686,7 @@ def _roofline_tables(
     # retiring many items per unit -- not from being called "prefill". Resolved after the roofs are
     # built, below, so the item counts are available; None until then.
     _pf_measured = None
-    _roofs = _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile, stage_ms)
+    _roofs = _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile, stage_ms, model=model, task=task)
     # ONE CEILING, NOT TWO THAT NEARLY AGREE. `theo` is what perf_target published and what the stop
     # gate judges against -- and on the anchored path it is recomputed from the ledger, not from the
     # snapshot this function was handed. Re-deriving the decode memory roof from bytes here would put
@@ -2305,6 +2339,10 @@ def _roofline_lines(
                     # The dispatch count each path label was derived from, so the label is evidence
                     # rather than an assertion.
                     stage_ops=_measured_stage_ops(model, task),
+                    # The pinned peak is keyed per (model, task) like every other anchor, so the
+                    # ceiling code needs both to look it up.
+                    model=model,
+                    task=task,
                     # The stage roofs shard the bytes and the FLOPs the same way the ceiling does.
                     tp_degree=tp,
                     # WHY the measurement is absent, not merely that it is. A depth mismatch means the

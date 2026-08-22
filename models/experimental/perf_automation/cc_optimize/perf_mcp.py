@@ -5850,6 +5850,34 @@ def _anchored_ceiling_facts():
     return None
 
 
+def _dominant_peak_flops(rep: dict) -> float:
+    """Peak FLOP/s at the fidelity carrying the most FLOPs in this report, or 0.0.
+
+    THE MODE THE MODEL ACTUALLY RUNS AT, by FLOP share -- a measurement, not the hifi4 default
+    chip_peak_flops falls back to when handed nothing. Returns 0.0 rather than guessing when the
+    report carries no fidelity-tagged FLOPs, so a run with nothing to measure pins nothing and the
+    renderer keeps its existing behaviour.
+    """
+    try:
+        ops = [o for o in ((rep or {}).get("open_ops") or []) if o.get("flops")]
+        if not ops:
+            return 0.0
+        agg: dict = {}
+        for o in ops:
+            f = str(o.get("fidelity") or "hifi4").lower()
+            agg[f] = agg.get(f, 0) + int(o["flops"])
+        if not agg:
+            return 0.0
+        dom = max(agg.items(), key=lambda kv: kv[1])[0]
+        from agent.environment import ARCH_FACTS
+        from agent.perf_target import chip_peak_flops as _cpf
+
+        _arch = str(os.environ.get("PERF_MCP_ARCH") or "blackhole").strip().lower()
+        return float(_cpf(ARCH_FACTS.get(_arch) or {}, dom) or 0.0)
+    except Exception:  # noqa: BLE001 -- a peak that cannot be derived is simply not pinned
+        return 0.0
+
+
 def _persist_throughput(rep: dict) -> None:
     """Write a FRESH static roofline-target snapshot (theoretical ceiling / band / active_bytes /
     peak BW / floor) each time we profile. Deliberately stores NO measured number — the report
@@ -5900,6 +5928,28 @@ def _persist_throughput(rep: dict) -> None:
                 _ledger().KIND_FLOOR,
                 _f,
                 depth=_win,
+                source="_persist_throughput",
+                model=_MODEL_ROOT.name if _MODEL_ROOT else "",
+            )
+        # THE COMPUTE ROOF'S DENOMINATOR, pinned here for the same reason the floor above it is.
+        #
+        # The snapshot tracks the current build by design, and the peak read from it moves whenever
+        # the `fidelity` rung lands: _promote_baseline replaces the profile PICTURE on every
+        # profile_model call while ratcheting only device_ms, and the peak is read off that picture.
+        # Blackhole's modes are 4x apart, so one matmul changing mode can double the ceiling -- on
+        # voxtral, hifi4 carries 4.037e12 FLOPs against hifi2's 3.299e12, a 5.0%-of-total margin, and
+        # the largest single hifi4 matmul is 16.7%.
+        #
+        # KEYED ON THE UNIT, exactly like the byte anchor, because the renderer looks it up by the
+        # unit the ceiling describes. Not on _win: a peak is a property of the math mode and the
+        # silicon, not of how many layers the profiler happened to build.
+        _pk = _dominant_peak_flops(rep)
+        if _pk > 0:
+            _ledger().anchor(
+                _ledger().KIND_PEAK_FLOPS,
+                _pk,
+                depth=str(snap.get("unit") or "token"),
+                mode="roofline",
                 source="_persist_throughput",
                 model=_MODEL_ROOT.name if _MODEL_ROOT else "",
             )

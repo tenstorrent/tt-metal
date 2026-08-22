@@ -62,6 +62,20 @@ KIND_FLOOR = "modeled_floor"
 # a full-model measurement in the report.
 KIND_ACTIVE_BYTES = "active_bytes"
 
+# The COMPUTE roof's denominator -- peak FLOP/s at the math fidelity the model runs at. Anchored for
+# the same reason the floor and the bytes are, and it was the one ceiling input that never was.
+#
+# Blackhole's peak spans 4x across the modes (LoFi 702, HiFi2 351, HiFi3 234, HiFi4 175.5 TFLOPS), so
+# the `fidelity` rung moves this ceiling every time it lands. _promote_baseline already protects the
+# BAR on exactly this reasoning -- "a re-profile must not redefine what wins are graded against" --
+# and then refreshes the PICTURE the peak is read from, in the same function.
+#
+# Nothing announced it, which is why it outlived the other two. The memory roof divides by a fixed
+# 512 GB/s, so drift there prints an impossible bandwidth and gets caught. Here the peak IS what
+# moves, and the measurement moves with it: a stage that got 2x faster reports the same % of a
+# ceiling that also doubled. The error and the win cancel, and the reader sees neither.
+KIND_PEAK_FLOPS = "peak_flops"
+
 PHASE_BEFORE = "before"
 PHASE_AFTER = "after"
 
