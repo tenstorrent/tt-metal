@@ -182,15 +182,11 @@ def test_fused_relu_with_broadcast(device, dtype, broadcast_shape):
 
 
 # fmt: off
-@pytest.mark.parametrize("ttnn_op, torch_op", [
-    (ttnn.add, lambda a, b: a + b),
-    (ttnn.subtract, lambda a, b: a - b),
-    (ttnn.rsub, lambda a, b: b - a),
-])
+@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract, ttnn.rsub])
 @pytest.mark.parametrize("fast_and_approximate_mode, ulp_threshold", [(False, 0), (None, 1)])
 @pytest.mark.parametrize("high, low", [(0, -1e5), (1e5, 0), (500, -500), (1e5, 1e-5), ])
 # fmt: on
-def test_rne_approx_modes(device, ttnn_op, torch_op, fast_and_approximate_mode, ulp_threshold, high, low):
+def test_rne_approx_modes(device, ttnn_op, fast_and_approximate_mode, ulp_threshold, high, low):
     """fast_and_approximate_mode=False routes bfloat16 add/sub/rsub through the SFPU with RNE
     rounding, which matches torch exactly. The default (unset) keeps the 1-ULP FPU kernel."""
 
@@ -198,7 +194,8 @@ def test_rne_approx_modes(device, ttnn_op, torch_op, fast_and_approximate_mode, 
     assert high > low, "high must be greater than low"
     torch_input_tensor_a = torch.randn((128, 128), dtype=torch.bfloat16) * (high - low) + low
     torch_input_tensor_b = torch.randn((128, 128), dtype=torch.bfloat16) * (high - low) + low
-    torch_output_tensor = torch_op(torch_input_tensor_a, torch_input_tensor_b)
+    golden_fn = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -210,19 +207,16 @@ def test_rne_approx_modes(device, ttnn_op, torch_op, fast_and_approximate_mode, 
 
 
 # fmt: off
-@pytest.mark.parametrize("ttnn_op, torch_op", [
-    (ttnn.add_, lambda a, b: a + b),
-    (ttnn.subtract_, lambda a, b: a - b),
-    (ttnn.rsub_, lambda a, b: b - a),
-])
+@pytest.mark.parametrize("ttnn_op", [ttnn.add_, ttnn.subtract_, ttnn.rsub_])
 @pytest.mark.parametrize("fast_and_approximate_mode, ulp_threshold", [(False, 0), (None, 1)])
 # fmt: on
-def test_rne_approx_modes_inplace(device, ttnn_op, torch_op, fast_and_approximate_mode, ulp_threshold):
+def test_rne_approx_modes_inplace(device, ttnn_op, fast_and_approximate_mode, ulp_threshold):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn((128, 128), dtype=torch.bfloat16) * 1e5
     torch_input_tensor_b = torch.randn((128, 128), dtype=torch.bfloat16) * 1e5
-    torch_output_tensor = torch_op(torch_input_tensor_a, torch_input_tensor_b)
+    golden_fn = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
