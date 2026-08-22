@@ -747,6 +747,7 @@ class TOPK_XL(TemplateParameter):
     chunk_base_mode: TopKXLChunkBaseMode = TopKXLChunkBaseMode.Static
     chunk_base: int = 0
     full_sort: bool = False
+    linear_stamp: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -763,6 +764,7 @@ class TOPK_XL(TemplateParameter):
             f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE_MODE = {self.chunk_base_mode.value};",
             f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE = {self.chunk_base};",
             f"constexpr bool TOPK_XL_FULL_SORT = {str(self.full_sort).lower()};",
+            f"constexpr bool TOPK_XL_LINEAR_STAMP = {str(self.linear_stamp).lower()};",
         ]
         return "\n".join(lines)
 

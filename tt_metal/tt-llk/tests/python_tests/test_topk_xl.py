@@ -108,6 +108,11 @@ def _make_row(search_len: int, seed: int, mode: str) -> torch.Tensor:
         return _distinct_bf16_from_hi16(hi16)
     if mode == "random":
         return torch.randn(search_len, generator=gen).to(torch.bfloat16).float()
+    if mode == "tie_levels":
+        # Massive tie groups spanning both chunks, negatives and zeros included:
+        # the stability stress input for the linear-stamp full sort.
+        levels = torch.tensor([-1.5, -0.5, -0.5, 0.0, 0.5, 1.5], dtype=torch.float32)
+        return levels[torch.randint(0, len(levels), (search_len,), generator=gen)]
     if mode == "all_equal":
         # Degenerate input: all identical.
         return torch.full((search_len,), 3.0, dtype=torch.float32)
@@ -174,6 +179,7 @@ def _variant(
     chunk_base_mode=TopKXLChunkBaseMode.Static,
     chunk_base=0,
     full_sort=False,
+    linear_stamp=False,
     dest_sync=DestSync.Full,
     formats=FORMATS,
 ):
@@ -186,7 +192,9 @@ def _variant(
     """
     tail_elements = K if tail_elements is None else tail_elements
     tiles_per_seq = _tiles_per_sequence(K)
-    result_tiles = (1 if index_op == TopKXLIndexOp.RemoveMsb else 2) * tiles_per_seq
+    result_tiles = (
+        1 if index_op == TopKXLIndexOp.RemoveMsb else (4 if linear_stamp else 2)
+    ) * tiles_per_seq
     # 32-bit input does unpack_to_dest (is_32bit_input), while bf16 goes
     # through SrcA then the MATH A2D datacopy.
     is_32bit = formats.input_format in (DataFormat.Float32, DataFormat.Int32)
@@ -215,6 +223,7 @@ def _variant(
                 chunk_base_mode=chunk_base_mode,
                 chunk_base=chunk_base,
                 full_sort=full_sort,
+                linear_stamp=linear_stamp,
             ),
         ],
         variant_stimuli=StimuliConfig(
@@ -764,3 +773,75 @@ def test_topk_xl_full_sort_both_halves(K, sort_direction, mode):
         sort_direction=sort_direction,
     )
     _check_full_sort(result, K, rows, sort_direction == TopKSortDirection.Ascending)
+
+
+def _check_full_sort_linear(result, K, rows, ascending):
+    """Linear-stamp full sort packs [values0 | values1 | indices0 | indices1]:
+    value words are stripped [bf16 | 0], index words are the UINT32 global
+    positions. Reading each region through the rank interleave must reproduce
+    torch.sort(stable=True) EXACTLY — values and indices, ties included."""
+    res = torch.tensor(result, dtype=format_dict[FORMATS.output_format])
+    region = _tiles_per_sequence(K) * ELEMENTS_PER_TILE  # K words
+    per_row = 4 * region
+    num_rows = rows.shape[0]
+    assert res.numel() == num_rows * per_row
+
+    for r in range(num_rows):
+        block = res[r * per_row : (r + 1) * per_row]
+        row = rows[r]
+        golden_values, golden_indices = torch.sort(
+            row, descending=not ascending, stable=True
+        )
+
+        hw_values = []
+        hw_indices = []
+        for half in range(2):
+            vbase = half * region
+            ibase = (2 + half) * region
+            for rank in range(K):
+                w = _rank_to_word(rank, K)
+                word = int(block[vbase + w])
+                assert (
+                    word & 0xFFFF == 0
+                ), f"row {r}: value word {word:#010x} has unstripped tag bits"
+                hw_values.append(
+                    float(_bitcast_float32(block[vbase + w : vbase + w + 1])[0])
+                )
+                hw_indices.append(int(block[ibase + w]))
+
+        gold_v = [float(v) for v in golden_values.tolist()]
+        assert hw_values == gold_v, (
+            f"row {r}: sorted value order mismatch; first diffs: "
+            f"{[(i, a, b) for i, (a, b) in enumerate(zip(hw_values, gold_v)) if a != b][:8]}"
+        )
+        gold_i = [int(i) for i in golden_indices.tolist()]
+        assert hw_indices == gold_i, (
+            f"row {r}: stable index order mismatch; first diffs: "
+            f"{[(i, a, b) for i, (a, b) in enumerate(zip(hw_indices, gold_i)) if a != b][:8]}"
+        )
+
+
+# The ttnn.sort mergesort leaf/output contract: LINEAR position stamps
+# (numeric tag order == element order => stability), sign-conditioned
+# complement for the tie class the sign-magnitude compare reverses, and the
+# linear index split into stripped values + UINT32 index regions. "random"
+# and "tie_levels" are tie-prone on purpose: the stable index order against
+# torch.sort(stable=True) is the assertion.
+@parametrize(
+    K=[512, 1024, 2048],
+    sort_direction=[TopKSortDirection.Ascending, TopKSortDirection.Descending],
+    mode=["random", "signed", "tie_levels"],
+)
+def test_topk_xl_full_sort_linear_stable(K, sort_direction, mode):
+    result, rows = _run(
+        K,
+        num_chunks=2,
+        num_rows=2,
+        mode=mode,
+        full_sort=True,
+        linear_stamp=True,
+        sort_direction=sort_direction,
+    )
+    _check_full_sort_linear(
+        result, K, rows, sort_direction == TopKSortDirection.Ascending
+    )

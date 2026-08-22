@@ -8,6 +8,7 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
+from models.common.utility_functions import is_blackhole
 
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
@@ -1098,6 +1099,87 @@ def test_sort_stable_single_core_fused_dtype(descending, device):
     assert_equal(torch_values, ttnn.to_torch(ttnn_values))
 
 
+# ---------------------------------------------------------------------------
+# Mergesort row engine (issue #33492 roadmap): on Blackhole, stable bfloat16
+# sorts of padded width 2048/4096 run a full per-row sort on the TopK XL SFPU
+# kernels (fused linearly-tagged keys, both-halves merge level) — one row per
+# core. On other archs the same shapes keep the previous engines; every test
+# below asserts torch-stable exactness either way, so they double as parity
+# tests for whichever engine the router picks.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
+@pytest.mark.parametrize("width", [2048, 4096])
+def test_sort_stable_mergesort_row_engine(width, layout, descending, device):
+    """Tie-heavy (negative ties, zeros, positive ties) exactness on the
+    mergesort widths, both layouts. W=4096 exercises the both-halves merge
+    level; W=2048 is leaf-only."""
+    levels = [-1.5, -0.5, -0.5, 0.0, 0.5, 1.5]
+    input_tensor = _tie_heavy_tensor([32, width], levels, seed=61 + width + int(descending))
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16, layout=layout)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_mergesort_multi_tile_row(descending, device):
+    """H=96 (three tile-rows, one row per core) plus a non-multiple-of-32 H:
+    the row-parallel work split must cover every real row exactly once."""
+    levels = [-2.5, -0.5, -0.5, 0.5, 2.5]
+    input_tensor = _tie_heavy_tensor([96, 2048], levels, seed=67)
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16)
+
+    input_tensor = _tie_heavy_tensor([40, 4096], levels, seed=71)
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_mergesort_signed_zero(descending, device):
+    """-0.0 and +0.0 are one tie class under the stable contract (torch
+    semantics); the engine's copy path canonicalizes -0.0 on the way in."""
+    levels = [-1.0, -0.0, 0.0, 0.0, 1.0]
+    input_tensor = _tie_heavy_tensor([32, 2048], levels, seed=73)
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_mergesort_w4096_index_dtype(descending, device):
+    """On Blackhole the W=4096 stable bf16 cell runs the mergesort engine whose
+    fused tags live in 32-bit DEST, so its indices are UINT32 (previously this
+    width returned UINT16 from the CrossCore comparator). Other archs keep the
+    old dtype; both must be torch-stable exact."""
+    levels = [-1.5, -0.5, -0.5, 0.5, 1.5]
+    input_tensor = _tie_heavy_tensor([32, 4096], levels, seed=79)
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    if is_blackhole():
+        assert ttnn_indices.dtype == ttnn.uint32
+    assert_equal(torch_indices, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_mergesort_prealloc_u16_opt_out(descending, device):
+    """A caller who preallocates UINT16 index tensors opts out of the mergesort
+    engine (its indices are inherently 32-bit); the previous routing must still
+    produce a torch-stable-exact result."""
+    levels = [-1.5, -0.5, -0.5, 0.5, 1.5]
+    input_tensor = _tie_heavy_tensor([32, 2048], levels, seed=83)
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    out_values = ttnn.zeros_like(ttnn_input)
+    out_indices = ttnn.zeros((32, 2048), dtype=ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+    ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True, out=(out_values, out_indices))
+
+    assert out_indices.dtype == ttnn.uint16
+    assert_equal(torch_indices, ttnn.to_torch(out_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(out_values))
+
+
 @pytest.mark.parametrize("descending", [False, True])
 def test_sort_stable_single_core_fused_large_ht(descending, device):
     """Large-Ht guard for the small-Ht CrossCore reroute: Ht=9 exceeds the Wt/8=8 cutoff at
@@ -1252,7 +1334,7 @@ def test_sort_stable_uint16(width, descending, device):
     "shape",
     [
         [32, 64],  # SingleRowSingleCore
-        [32, 4096],  # CrossCoreDataExchange
+        [32, 4096],  # CrossCoreDataExchange (mergesort row engine on Blackhole)
     ],
     ids=["single_core", "cross_core"],
 )

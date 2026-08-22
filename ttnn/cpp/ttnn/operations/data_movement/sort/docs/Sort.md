@@ -33,7 +33,7 @@ requires; users do not need to pre-format inputs.
 | Tensor   | Supported dtypes              |
 | -------- | ----------------------------- |
 | Values   | `bfloat16`, `float32`, `uint16` |
-| Indices  | `uint16`, `uint32` (auto-promoted to `uint32` when the sort dim ≥ 65 535, the input is `float32`/`uint16`, or `stable=True` with `bfloat16` input on the single-core factory — padded sort dim ≤ 2 048) |
+| Indices  | `uint16`, `uint32` (auto-promoted to `uint32` when the sort dim ≥ 65 535, the input is `float32`/`uint16`, `stable=True` with `bfloat16` input on the single-core factory — padded sort dim ≤ 2 048 — or `stable=True` with `bfloat16` input at padded sort dim 2 048/4 096 on Blackhole, where the mergesort row engine runs) |
 
 #### Supported layouts
 
@@ -84,8 +84,13 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
 - `memory_config` (optional): output memory config when `out=` is omitted.
   Defaults to the input's memory config.
 - `stable` (bool): preserve the original (ascending-index) order of equal
-  elements, matching `torch.sort(stable=True)`. Two engines, selected per
+  elements, matching `torch.sort(stable=True)`. Three engines, selected per
   program factory (issue #33492):
+  - **Mergesort row engine** — Blackhole, `bfloat16` values at padded sort dim
+    2 048/4 096: a full per-row sort on the TopK XL SFPU kernels with LINEAR
+    position tags fused into the value words, one row per core. Stability is
+    structural (tag order == element order), indices are `uint32`. See the
+    Strategy Comparison section.
   - **Fused-key engine** — `bfloat16` values on the SingleRowSingleCore
     factory (padded sort dim ≤ 2 048): every network call tags each value
     word's free low 16 bits with its TRUE index (sign-conditioned complement
@@ -196,6 +201,7 @@ The TTNN Sort operation provides three sorting strategies, each optimized for di
   * The **L1 memory size** of each core.
 * **Single Row Multi Core** is the **most scalable and robust** strategy. It guarantees sorting of **tensors of any size**, regardless of how large they are, though it may be slower due to increased synchronization and DRAM involvement. This strategy ensures that even extremely large tensors are always supported.
 * **Single Row Single Core** is efficient for small tensors where the entire sort fits easily within one core's working memory — provided there are enough tile-rows (`Ht`) to occupy the grid. Each core sorts whole tile-rows, so at small `Ht` the rest of the grid idles while one core pays the full tile-network cost.
+* **Mergesort row engine (Blackhole)**: stable `bfloat16` sorts of padded width 2048 or 4096 run a fourth strategy — a full per-row sort on the TopK XL SFPU kernels (fused `[bf16 | u16]` keys carrying LINEAR position tags, a both-halves merge level, and a rebuild per half), one row per core. Stability is structural (tag order == element order; sign-conditioned tag complement handles the sign-magnitude compare), so no comparator or index tiles ride the network. Measured on p150a (tie-heavy bf16, Tracy device-kernel duration): `32×2048` stable 1.98 ms → 33.5 µs, `32×4096` stable 380 µs → 60.6 µs. These cells return `uint32` indices (the fused tags live in 32-bit DEST; a preallocated `uint16` index tensor opts back into the previous routing). Blackhole-only — the TopK XL LLKs have no Wormhole tree.
 * **Small-`Ht` reroute**: cells in the single-core width band (`Wt` in `[16, 64]`, TILE layout, non-UINT16) with `Ht <= Wt/8` are routed to **Cross Core Data Exchange** instead, which splits the tile-row across `~Wt/2` cores (measured 5–12× faster on those cells; e.g. a `32×2048` stable bfloat16 sort drops from 1.98 ms to ~0.19 ms). The index-dtype rules are unaffected by this reroute — stable bfloat16 sorts in the single-core width band return `uint32` indices on either factory.
 
 ## Strategies description
