@@ -73,7 +73,8 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     // However, intermediary values can overflow, which leads to output increasing again instead of
     // staying at 0.
     // This overflow happens when z_f32 < -127. Therefore, we clamp z_f32 to -127.
-    sfpi::vFloat z_f32 = pow * log2_result;
+    sfpi::vFloat z_orig = pow * log2_result;
+    sfpi::vFloat z_f32 = z_orig;
     const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;
     v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
     v_endif;
@@ -114,6 +115,12 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     zii = sfpi::as<sfpi::vInt>(sfpi::setexp(sfpi::as<sfpi::vFloat>(zif), 127U + zii));
 
     sfpi::vFloat y = sfpi::as<sfpi::vFloat>(zii);
+
+    // Overflow guard: when 2**(pow * log2(base)) >= 2^128, return +inf instead of NaN wraparound
+    v_if(z_orig >= 128.0f) {
+        y = std::numeric_limits<float>::infinity();
+    }
+    v_endif;
 
     // Negative base handling (for both positive and negative exponents)
     v_if(base < 0.0f) {

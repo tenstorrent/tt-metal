@@ -12,6 +12,8 @@
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
+using namespace sfpi;
+
 namespace ckernel {
 namespace sfpu {
 
@@ -71,7 +73,8 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     // However, intermediary values can overflow, which leads to output increasing again instead of
     // staying at 0.
     // This overflow happens when z_f32 < -127. Therefore, we clamp z_f32 to -127.
-    sfpi::vFloat z_f32 = pow * log2_result;
+    sfpi::vFloat z_orig = pow * log2_result;
+    sfpi::vFloat z_f32 = z_orig;
     const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;
     v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
     v_endif;
@@ -113,6 +116,12 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
 
     sfpi::vFloat y = sfpi::as<sfpi::vFloat>(zii);
 
+    // Overflow guard: when 2**(pow * log2(base)) >= 2^128, return +inf instead of NaN wraparound
+    v_if(z_orig >= 128.0f) {
+        y = std::numeric_limits<float>::infinity();
+    }
+    v_endif;
+
     // Negative base handling (for both positive and negative exponents)
     v_if(base < 0.0f) {
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
@@ -123,6 +132,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
 
         // If pow is odd integer then result is negative
         // If power is even, then result is positive
+        // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
         y = sfpi::setsgn2(y, pow_int);
 
         // Check for integer power, if it is not then overwrite result with NaN
@@ -185,16 +195,20 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_(sfpi::vFloat z) {
 }
 
 // Computes 2**(z_hi + z_lo) where the argument is supplied as an unevaluated sum
-// (double-float). For pow(x,y): z = y*log2(x) can be O(100) with a tiny but
-// significant fractional tail. Rounding (z_hi + z_lo) into one fp32 before the
-// reduction discards that tail (the 20-27 ULP error). A Dekker FastTwoSum keeps the
-// residual, which is folded back into the reduced remainder r so no fractional bits
-// are lost. FastTwoSum is exact under the precondition |z_hi| >= |z_lo| or z_hi == 0,
-// which both pow callers satisfy: z_hi = pow*exponent(base) and z_lo carries the
-// fractional log2 term (|z_lo| < ~0.5*|pow| plus a <=2**-12*|pow| Veltkamp remainder).
-// When exponent(base) == 0 then z_hi == 0 exactly (the sum is already exact);
-// otherwise |exponent(base)| >= 1 so |z_hi| >= |pow| > |z_lo|.
+// (double-float). This matters for pow(x,y): z = y*log2(x) can be O(100) with a
+// tiny but significant fractional tail. Rounding (z_hi + z_lo) into one fp32 before
+// the reduction discards that tail (the 20-27 ULP error). A Dekker FastTwoSum recovers
+// the exact rounding residual, which is folded back into the reduced remainder so
+// no fractional bits are lost across the k = round(z) argument reduction.
 sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::vFloat z_lo) {
+    // Full argument z = z_hi + z_lo. k must be the nearest integer to the TOTAL z, not
+    // just z_hi -- otherwise leftover integer bits in z_lo blow up the polynomial. We
+    // keep the tail explicitly via a Dekker FastTwoSum. FastTwoSum is exact under the
+    // precondition |z_hi| >= |z_lo| or z_hi == 0, which both pow callers satisfy:
+    // z_hi = pow*exponent(base) and z_lo carries the fractional log2 term (|z_lo| <
+    // ~0.5*|pow| plus a <=2**-12*|pow| Veltkamp remainder). When exponent(base) == 0
+    // then z_hi == 0 exactly (the sum is already exact); otherwise |exponent(base)| >= 1
+    // so |z_hi| >= |pow| > |z_lo|. s = round(z_hi+z_lo); e = the exact rounding error.
     sfpi::vFloat s = z_hi + z_lo;
     sfpi::vFloat e = z_lo - (s - z_hi);
 
@@ -207,11 +221,12 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::
     constexpr float LN2_HI = 0.693359375f;
     constexpr float LN2_LO = -2.12194440e-4f;
 
-    // Reduced fractional argument f = (s - k) + e. (s - k) is exact by Sterbenz since
-    // k is the nearest integer to s and |s| < 2**23; adding the residual e restores the
-    // fractional tail that a single-fp32 (z_hi+z_lo) would have discarded.
+    // Reduced fractional argument f = (s - k) + e. (s - k) is exact by Sterbenz since k
+    // is the nearest integer to s and |s| < 2**23; adding the two-sum residual e then
+    // restores the fractional tail that s dropped.
     sfpi::vFloat f = (s - k) + e;
 
+    // r = f * ln2 in extended precision (2**f = e**(f*ln2)).
     sfpi::vFloat r = f * LN2_HI + f * LN2_LO;
 
     sfpi::vFloat p = PolynomialEvaluator::eval(
