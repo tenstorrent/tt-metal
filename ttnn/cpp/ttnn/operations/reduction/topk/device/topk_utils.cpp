@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <limits>
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
 namespace ttnn::prim {
@@ -26,8 +27,9 @@ uint32_t largest_power_of_two(uint32_t x) { return x == 0 ? 0 : (1U << (31 - __b
  * @brief Finds optimal core configuration for multi-core TopK execution
  *
  * This function determines the best way to distribute TopK work across multiple cores
- * by analyzing memory constraints, core availability, and workload balance. It searches
- * for a configuration that maximizes parallelization while staying within hardware limits.
+ * by analyzing memory constraints, core availability, and workload balance. It evaluates
+ * every valid configuration and returns the one with the lowest modeled makespan
+ * (see the fitted cost model at the search loop below).
  *
  * Algorithm overview:
  * 1. Start with a conservative split size based on available cores and width
@@ -35,7 +37,8 @@ uint32_t largest_power_of_two(uint32_t x) { return x == 0 ? 0 : (1U << (31 - __b
  * 3. For each split size, calculate required cores and memory costs
  * 4. Verify that configuration fits within available cores and memory
  * 5. Find contiguous core arrangement that matches the requirement
- * 6. Return the first valid configuration found
+ * 6. Score each valid configuration with the makespan model
+ *    (kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final) and return the minimum
  *
  * Memory cost model:
  * - Gather cost: Data movement between cores (2 * num_cores * tile_sizes)
@@ -82,7 +85,18 @@ std::optional<TopKCoreConfig> find_topk_core_config(
     const uint32_t bf16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t transposed_tile_size = std::max(value_tile_size, bf16_tile_size);
 
-    // Search for optimal split size by trying powers of 2 from conservative start to max_dim
+    // Search all power-of-2 split sizes and keep the one with the best modeled makespan.
+    // The first-valid (= smallest split, most cores) choice maximizes the SERIAL final
+    // stage: the single final core does O(num_cores * k) gather-merge work while every
+    // local core does O(split_size) sort work. Model both sides and minimize
+    //   T ~ kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final
+    // Constants fitted on p150a silicon (4 configs across 8192/32768-wide k=64 cells,
+    // <0.5% residual): a local tile costs ~3.5x a final tile — locals run full
+    // 64-element sorts per tile while the final core runs merge/rebuild pair-ops.
+    constexpr uint32_t kLocalCostFactor = 7;
+    constexpr uint32_t kFinalCostFactor = 2;
+    std::optional<TopKCoreConfig> best_config = std::nullopt;
+    uint32_t best_score = std::numeric_limits<uint32_t>::max();
     for (uint32_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
         // Calculate work distribution for this split size
         TT_FATAL(
@@ -156,12 +170,14 @@ std::optional<TopKCoreConfig> find_topk_core_config(
             config.selected_x = static_cast<uint16_t>(selected_x);
             config.selected_y = static_cast<uint16_t>(selected_y);
 
-            // Return the first valid configuration found (greedy approach)
-            return std::make_optional(config);
+            const uint32_t score = kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final;
+            if (score < best_score) {
+                best_score = score;
+                best_config = config;
+            }
         }
     }
-    // No valid configuration found after trying all split sizes
-    return std::nullopt;
+    return best_config;
 }
 
 /**

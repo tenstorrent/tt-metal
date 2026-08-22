@@ -37,6 +37,8 @@
 #include "ttnn/operations/reduction/moe/moe.hpp"
 #include "ttnn/operations/reduction/prod/prod.hpp"
 #include "ttnn/operations/reduction/sampling/sampling.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 #include "ttnn/operations/reduction/topk/topk.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -773,6 +775,48 @@ TEST_F(ReductionSmoke, TopkMultiCoreRows64) {
             ASSERT_EQ(static_cast<float>(values[row * k + m]), 512.0f - 4.0f * m) << "row=" << row << " m=" << m;
             ASSERT_EQ(indices[row * k + m], static_cast<uint16_t>(peak_col(row, m))) << "row=" << row << " m=" << m;
         }
+    }
+}
+
+// Host-side lock on the multi-core split model in find_topk_core_config: the
+// fitted makespan score (kLocalCostFactor * Wt_local + kFinalCostFactor *
+// Wt_final) must keep selecting the measured-fastest split, not the
+// first-valid (smallest-split / most-cores) config the old greedy search
+// returned. Pure function of its arguments -- no device needed. The core
+// range and tile sizes mirror what the multi-core factory passes on a p150a
+// (13x10 compute grid, bf16 values, uint16 indices, BH L1); the expected
+// splits are the configs the model was fitted against on that silicon.
+// If a coefficient or the search order changes, these assertions catch it
+// even though every numerical topk test stays green.
+TEST(TopkCoreConfigModel, SelectsFittedMakespanMinimum) {
+    constexpr uint32_t l1_size = 1536 * 1024;                                       // BH L1 per core
+    constexpr uint32_t value_tile_size = tt::tile_size(tt::DataFormat::Float16_b);  // 2048
+    constexpr uint32_t index_tile_size = tt::tile_size(tt::DataFormat::UInt16);     // 2048
+    constexpr uint32_t min_dim = ttnn::prim::constants::min_dim_per_core;           // 64
+    const tt::tt_metal::CoreRange core_range({0, 0}, {12, 9});                      // p150a 13x10 grid
+
+    struct Case {
+        uint32_t width;
+        uint32_t k;
+        uint16_t expected_split;
+        uint16_t expected_cores;
+    };
+    // Expected values: minimum of 7 * Wt_local + 2 * Wt_final over all valid
+    // power-of-two splits. The old first-valid picks were 128/64 (W=8192) and
+    // 512/64 (W=32768) -- maximum cores, maximum serial final-stage work.
+    const std::array<Case, 4> cases{{
+        {8192, 64, 512, 16},
+        {8192, 50, 256, 32},
+        {8192, 32, 256, 32},
+        {32768, 64, 1024, 32},
+    }};
+    for (const auto& c : cases) {
+        const auto config = ttnn::prim::find_topk_core_config(
+            c.width, min_dim, c.width / 2, c.k, core_range, l1_size, value_tile_size, index_tile_size);
+        ASSERT_TRUE(config.has_value()) << "W=" << c.width << " k=" << c.k;
+        EXPECT_EQ(config->split_size, c.expected_split) << "W=" << c.width << " k=" << c.k;
+        EXPECT_EQ(config->num_cores, c.expected_cores) << "W=" << c.width << " k=" << c.k;
+        EXPECT_EQ(config->rem, 0u) << "W=" << c.width << " k=" << c.k;
     }
 }
 
