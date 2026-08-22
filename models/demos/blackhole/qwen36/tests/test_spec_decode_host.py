@@ -468,3 +468,103 @@ def test_batched_schedule_positions(monkeypatch):
     # Chain legs are consecutive after the last pending.
     assert [int(p) for p in pos[0, width - K :]] == [101, 102, 103]
     assert [int(p) for p in pos[1, width - K :]] == [69, 70, 71]
+
+
+# --------------------------------------------------------------------------- #
+# Fused decode-width verify loop: the REAL Qwen36FusedSpeculativeDecoder
+# generate() with fake device ops — per-user targets, commit-by-select rows,
+# and the anchor==head invariant.
+# --------------------------------------------------------------------------- #
+def _make_fake_fused_spec(draft_len, prompt_lens, monkeypatch):
+    from types import SimpleNamespace
+
+    import torch
+
+    import models.demos.blackhole.qwen36.tt.spec_decode_batched as sb_mod
+    import models.demos.blackhole.qwen36.tt.spec_decode_fused as sf_mod
+
+    monkeypatch.setattr(sb_mod, "ttnn", SimpleNamespace(deallocate=lambda *_a, **_k: None))
+    monkeypatch.setattr(sf_mod, "ttnn", SimpleNamespace(deallocate=lambda *_a, **_k: None))
+    monkeypatch.setenv("TT_SPEC_TRACE", "0")
+    B = len(prompt_lens)
+
+    class _FakeFused(sf_mod.Qwen36FusedSpeculativeDecoder):
+        def __init__(self, mtp):
+            # Bypass the device-heavy __init__ chain; wire only the bookkeeping.
+            model_stub = SimpleNamespace(num_devices=8, layers=[])
+            page_table = torch.arange(B * 4, dtype=torch.int32).reshape(B, 4)
+            sb_mod.Qwen36BatchedSpeculativeDecoder.__init__(self, model_stub, mtp, page_table, draft_len=draft_len)
+            self._use_trace = False
+            self.W = draft_len + 1
+            self.commit_rows = []  # (iteration, [m_u])
+
+        def seed(self):
+            for u, T in enumerate(prompt_lens):
+                slot = sb_mod.SpecSlot(
+                    committed=[_tok_u(u, i) for i in range(T)],
+                    a=sb_mod.block_aligned_prefill_len(T),
+                )
+                slot.k_ema = float(self.draft_len)
+                self.slots.append(slot)
+
+        def _snapshot_from_live(self):
+            pass
+
+        def _restore_from_snapshot(self):
+            pass
+
+        def _batched_verify(self, chunks):  # the parent's chunk-shaped first verify
+            results = []
+            for u, (tokens, a_u, n_u, hid_start, score_start) in enumerate(chunks):
+                n_score = min(sb_mod._VERIFY_ROWS, n_u - score_start)
+                target_ids = [_tok_u(u, a_u + score_start + j + 1) for j in range(n_score)]
+                hid = torch.stack([_hid_u(u, a_u + hid_start + j) for j in range(n_u - hid_start)])
+                results.append((target_ids, hid))
+            return results
+
+        def _commit_user(self, u):
+            slot = self.slots[u]
+            slot.a += sb_mod.commit_advance(len(slot.committed) - slot.a)
+
+        def _align_anchor_to_head(self):
+            for slot in self.slots:
+                slot.a = len(slot.committed) - 1
+
+        def _fused_verify(self, drafts):
+            results = []
+            for u, slot in enumerate(self.slots):
+                assert slot.a == len(slot.committed) - 1, f"user {u}: fused anchor must equal the committed head"
+                c = len(slot.committed) - 1
+                ids = [_tok_u(u, c + t + 1) for t in range(self.W)]
+                hid = torch.stack([_hid_u(u, c + t) for t in range(self.W)])
+                results.append((ids, hid))
+            return results
+
+        def _commit_select(self, accepts):
+            self.commit_rows.append(list(accepts))
+            for u, m in enumerate(accepts):
+                if m is not None:
+                    assert 0 <= m <= self.draft_len
+
+    return _FakeFused
+
+
+def test_fused_loop_desync(monkeypatch):
+    """The fused loop (anchor==head, commit-by-select) emits every user's exact
+    target sequence with per-user desyncing accepts."""
+    prompt_lens = [100, 70, 130, 65]
+    fake_cls = _make_fake_fused_spec(3, prompt_lens, monkeypatch)
+    spec = fake_cls(_BatchedOracleDrafter(len(prompt_lens)))
+    spec.seed()
+    rows, stats = spec.generate(50)
+    for u, (row, T) in enumerate(zip(rows, prompt_lens)):
+        assert row == [_tok_u(u, T + i) for i in range(len(row))], f"user {u} diverged"
+        assert len(row) >= 50
+        assert spec.slots[u].a == len(spec.slots[u].committed) - 1
+    assert len({tuple(s.accepts[:10]) for s in spec.slots}) > 1, "accepts did not desync"
+    assert spec.commit_rows and all(len(r) == len(prompt_lens) for r in spec.commit_rows)
+    # Every iteration's commit rows match that iteration's accepts.
+    for it, row in enumerate(spec.commit_rows):
+        for u, m in enumerate(row):
+            if m is not None:
+                assert m == spec.slots[u].accepts[it]

@@ -150,7 +150,7 @@ Adaptive draft length (TT_SPEC_ADAPTIVE_K=1): K_t = clamp(round(EMA(accepts))+1,
 1, K). Purely data-driven — chunk `valid_len`, the masks, and the accept-row
 count all ride the same buffers, so it works traced and eager.
 
-## Fused decode-width verify — ACTIVE (contract v1, user-directed)
+## Fused decode-width verify — BUILT (eager v1; contract v1, user-directed)
 
 Promoted from deferred design after three capture-discipline failures on
 bespoke traces: this path rides ONLY proven machinery — the production
@@ -200,6 +200,20 @@ does today (rows <= 32 per user; scores can run per user or on the padded
 width-independent) + drafter legs; ~35-50 ms/iter at c8 => ~2-3 ms/token/user
 verify-side — an order under the chunk verify, and u=1 inherits the same path
 at width K+1.
+
+Status: IMPLEMENTED. The `seq_rows` kernel mode lives on gdn-decode-fused
+(constexpr branch of the recurrence generic_op; single-token mode untouched)
+with two device gates — a minimal W=1 stash-addressing probe vs the in-place
+op, and W=4 x 8 users vs both the torch per-row golden and W sequential
+in-place calls. The loop is `tt/spec_decode_fused.py::
+Qwen36FusedSpeculativeDecoder` (TT_SPEC_FUSED=1 in the batched demo runner;
+requires the gdn-decode-fused branch merged into the workspace): inherits the
+batched prefill/drafting, runs the verify as one eager decode-width step
+(width B*(K+1) <= 32 — K=3 at c8, i.e. exactly the production width-32
+decode bucket), and commits by selecting stash rows. Perf steps, in order:
+(1) read the per-user anchor row index in-kernel from a device tensor
+(ping-pong stashes) so commit-by-select is pure data; (2) ride the
+production decode-width trace.
 
 Shared with the chunk-verify loop: SpecSlot bookkeeping, greedy_accept,
 adaptive_draft_len, the drafter (traced windows or eager), and the

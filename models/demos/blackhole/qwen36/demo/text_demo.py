@@ -1275,10 +1275,18 @@ def _run_spec_generation_batched(model, tokenizer, token_ids, max_generated_toke
     )
     mtp.allocate_kv_cache(blocks_pu, users=batch)
 
-    draft_len = int(os.environ.get("TT_SPEC_DRAFT_LEN", 4))
-    spec = Qwen36BatchedSpeculativeDecoder(
-        model, mtp, page_table, draft_len=draft_len, stop_tokens=[tokenizer.eos_token_id]
-    )
+    if os.environ.get("TT_SPEC_FUSED", "0") == "1":
+        from models.demos.blackhole.qwen36.tt.spec_decode_fused import Qwen36FusedSpeculativeDecoder
+
+        draft_len = int(os.environ.get("TT_SPEC_DRAFT_LEN", str(32 // batch - 1)))
+        spec = Qwen36FusedSpeculativeDecoder(
+            model, mtp, page_table, draft_len=draft_len, stop_tokens=[tokenizer.eos_token_id]
+        )
+    else:
+        draft_len = int(os.environ.get("TT_SPEC_DRAFT_LEN", 4))
+        spec = Qwen36BatchedSpeculativeDecoder(
+            model, mtp, page_table, draft_len=draft_len, stop_tokens=[tokenizer.eos_token_id]
+        )
 
     signpost("inference_prefill")
     t0 = time.time()
