@@ -18,8 +18,8 @@
 // clang-format off
 #include "api/compute/common.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "internal/compute/tile_move_copy.h"
 #include "ttnn/operations/wavelet/device/protocol/lwt_config.hpp"
 #include "ttnn/operations/wavelet/planner/static_scheme.hpp"
 #include "../sfpi/horizontal_stencil_sfpi.h"
@@ -62,23 +62,6 @@ static_assert(
 #else
 #define WAVELET_1D_STEP_ATTRIBUTES __attribute__((noinline, noclone))
 #endif
-
-#ifdef TRISC_MATH
-ALWI void copy_narrow_tile_math(const uint32_t dst_tile_index) {
-    math::math_unpack_to_dest_math_ready();
-    math::set_dst_write_addr<DstTileShape::Tile32x16, UnpackDestination::DestReg>(dst_tile_index);
-    math::math_unpack_to_dest_tile_ready();
-}
-#endif
-
-// copy_tile_init_short() still configures the unpack MOP from the 32x16 CB
-// metadata (two faces). Only the FP32 math-side Dst address needs overriding:
-// Metalium's generic direct-copy path currently hardcodes a 32x32 Dst stride.
-ALWI void copy_narrow_tile(const uint32_t cb, const uint32_t input_tile_index, const uint32_t dst_tile_index) {
-    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        cb, input_tile_index)));
-    MATH((copy_narrow_tile_math(dst_tile_index)));
-}
 
 template <typename Scheme, uint32_t Index = 0>
 constexpr uint32_t last_predict_update_step_index() noexcept {
@@ -200,21 +183,21 @@ WAVELET_1D_STEP_ATTRIBUTES void run_predict_update_step(
 
         input0_buffer.wait_front(2);
         copy_tile_to_dst_init_short(cb_input0);
-        copy_narrow_tile(cb_input0, 0, kDstSource0);
-        copy_narrow_tile(cb_input0, 1, kDstSource1);
+        ckernel::internal::copy_tile_to_dst_32x16(cb_input0, 0, kDstSource0);
+        ckernel::internal::copy_tile_to_dst_32x16(cb_input0, 1, kDstSource1);
         input0_buffer.pop_front(2);
 
         input1_buffer.wait_front(2);
         copy_tile_to_dst_init_short(cb_input1);
-        copy_narrow_tile(cb_input1, 0, kDstSource2);
-        copy_narrow_tile(cb_input1, 1, kDstSource3);
+        ckernel::internal::copy_tile_to_dst_32x16(cb_input1, 0, kDstSource2);
+        ckernel::internal::copy_tile_to_dst_32x16(cb_input1, 1, kDstSource3);
         input1_buffer.pop_front(2);
 
         base_buffer.wait_front(3);
         copy_tile_to_dst_init_short(cb_base);
-        copy_narrow_tile(cb_base, 0, kDstBase0);
-        copy_narrow_tile(cb_base, 1, kDstBase1);
-        copy_narrow_tile(cb_base, 2, kDstBase2);
+        ckernel::internal::copy_tile_to_dst_32x16(cb_base, 0, kDstBase0);
+        ckernel::internal::copy_tile_to_dst_32x16(cb_base, 1, kDstBase1);
+        ckernel::internal::copy_tile_to_dst_32x16(cb_base, 2, kDstBase2);
         base_buffer.pop_front(3);
 
         hstencil_init();
@@ -263,9 +246,9 @@ inline void run_scale_step(
 
         tile_regs_acquire();
         copy_tile_to_dst_init_short(cb_input);
-        copy_narrow_tile(cb_input, 0, kDstBase0);
-        copy_narrow_tile(cb_input, 1, kDstBase1);
-        copy_narrow_tile(cb_input, 2, kDstBase2);
+        ckernel::internal::copy_tile_to_dst_32x16(cb_input, 0, kDstBase0);
+        ckernel::internal::copy_tile_to_dst_32x16(cb_input, 1, kDstBase1);
+        ckernel::internal::copy_tile_to_dst_32x16(cb_input, 2, kDstBase2);
         scale_narrow_tile(kDstBase0, scalar_packed);
         scale_narrow_tile(kDstBase1, scalar_packed);
         scale_narrow_tile(kDstBase2, scalar_packed);
