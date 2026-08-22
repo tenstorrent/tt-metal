@@ -40,7 +40,7 @@ from models.demos.blackhole.qwen36.demo.text_demo import (
 )
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
-CHUNK = 2048
+CHUNK = int(os.environ.get("QWEN38_PREFILL_CHUNK", "2048"))  # HP3: chunk-size amortization probe
 _ISLS = sorted(int(x) for x in os.environ.get("QWEN38_PREFILL_ISLS", "2048,10240,65536").split(","))
 _REPEATS = int(os.environ.get("QWEN38_PREFILL_REPEATS", "0"))
 
