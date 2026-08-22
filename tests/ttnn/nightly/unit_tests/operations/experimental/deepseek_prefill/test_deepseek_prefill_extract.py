@@ -17,6 +17,18 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+def _ci_unsupported_param_combos(**params):
+    is_ci_env = params["is_ci_env"]
+    is_ci_v2_env = params["is_ci_v2_env"]
+
+    if not (is_ci_env or is_ci_v2_env):
+        return False
+    return True
+
+
+pytestmark = pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
+
+
 GLOBAL_ROWS = 64
 HIDDEN_DIM = 128
 NUM_EXPERTS = 8
