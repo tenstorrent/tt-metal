@@ -240,6 +240,13 @@ def _config(
             num_faces=num_faces,
         ),
         dest_acc=DestAccumulation.No,
+        # GATE defines only row 0 of the SCORES/IDS tiles (the top-k the asserts read); the bitonic
+        # sort leaves its scratch in rows 1-15, which the packer ships but nothing validates. Those
+        # lanes are a deterministic function of the DEST residue the op starts from, so run 0 (cold,
+        # inheriting the previous test's residue) differs from every re-run (which sit at the gate's
+        # own fixed point) -- NOT hardware non-determinism, so opt the gate out of the bit-exact check.
+        # MOVE/RUN/BINARY build and check a full DEST image and stay in the suite.
+        expected_nondeterministic=(gmg.mode == MODE_GATE),
     )
 
 

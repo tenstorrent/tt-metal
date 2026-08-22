@@ -1760,11 +1760,15 @@ class TestConfig:
             # expected to differ and comparing them would be meaningless.
             return "L1 accumulation makes every run add onto the previous result"
         if self.expected_nondeterministic:
-            # Negative controls that deliberately run with a corrupt HW config
-            # (e.g. a zeroed addrmod) leave DEST addressing undefined, so the
-            # result is not bit-reproducible by contract. The functional check
-            # (expect_mismatch) still validates the single run; only the
-            # bit-exact re-run comparison is meaningless here.
+            # Set for two kinds of variant whose packed buffer is not bit-reproducible
+            # by contract, though the single run the functional check validates is fine:
+            #   1. Negative controls that deliberately run with a corrupt HW config
+            #      (e.g. a zeroed addrmod), leaving DEST addressing undefined.
+            #   2. Ops that define only part of the packed tile and leave scratch in the
+            #      rest (e.g. generalized_moe_gate writes row 0 and leaves the bitonic
+            #      sort's leftovers in rows 1-15). That scratch tracks the DEST residue
+            #      the op starts from, so run 0 (cold) differs from the re-run fixed point
+            #      -- a defined-output vs packed-extent mismatch, not flaky hardware.
             return "variant intentionally exercises undefined hardware state"
         return None
 
