@@ -424,14 +424,14 @@ def test_sfpu_generic_moe_gate_topk_device_profile(perf_report):
 # test_sfpu_generic_moe_gate_topk above.
 # ---------------------------------------------------------------------------
 
-_BLAZE_IMPL_IDS = {1: "blaze_original", 2: "semantic_lift"}
+_BLAZE_IMPL_IDS = {1: "blaze_original", 2: "semantic_lift", 4: "crosslane"}
 _BLAZE_POINT = dict(
     num_selected_experts=8, full_sort=True, normalize=True, zero_tail=False
 )
 
 
 @skip_for_wormhole
-@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("blaze_impl", [1, 2, 4], ids=lambda i: _BLAZE_IMPL_IDS[i])
 def test_sfpu_blaze_moe_gate_topk(blaze_impl):
     torch.manual_seed(0)
 
@@ -537,7 +537,7 @@ def test_sfpu_blaze_moe_gate_topk(blaze_impl):
 
 
 @skip_for_wormhole
-@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("blaze_impl", [1, 2, 4], ids=lambda i: _BLAZE_IMPL_IDS[i])
 def test_sfpu_blaze_moe_gate_topk_device_profile(perf_report, blaze_impl):
     """MATH-zone sample of MOE_GATE_TOPK_BODY for the blaze original / lift."""
     torch.manual_seed(0)
@@ -662,7 +662,7 @@ def _mt_config(cls, tile_cnt, blaze_impl, formats, src_A, src_B, **extra):
 
 
 @skip_for_wormhole
-@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("blaze_impl", [1, 2, 4], ids=lambda i: _BLAZE_IMPL_IDS[i])
 @pytest.mark.parametrize("tile_cnt", _MT_TILE_COUNTS, ids=lambda n: f"t{n}")
 def test_sfpu_blaze_moe_gate_topk_mt(tile_cnt, blaze_impl):
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
@@ -735,7 +735,7 @@ def test_sfpu_blaze_moe_gate_topk_mt(tile_cnt, blaze_impl):
 
 
 @skip_for_wormhole
-@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("blaze_impl", [1, 2, 4], ids=lambda i: _BLAZE_IMPL_IDS[i])
 @pytest.mark.parametrize("tile_cnt", _MT_TILE_COUNTS, ids=lambda n: f"t{n}")
 def test_sfpu_blaze_moe_gate_topk_device_profile_mt(perf_report, tile_cnt, blaze_impl):
     """Multi-instance MATH-zone sample of MOE_GATE_TOPK_BODY (per-instance)."""

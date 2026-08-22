@@ -82,3 +82,22 @@ recorded follow-up.  Findings:
   sources/deepseek_moe_gate_test.cpp (+ their python tests): BLAZE_IMPL axis
   (0 = in-tree arm, 1 = vendored blaze original, 2 = vendored lift)
 - corpus/sweep_2x2_ops.tsv `blaze-*` rows
+
+## Lane FK update (2026-08-22): cross-lane surface migrations
+
+Source commit advanced for the files below: `tenstorrent/tt-blaze`, branch
+`agent/crosslane-migration`, commit `5e352909b` (byte-exact copies).
+
+| file (under blaze/kernels/sfpu/semantic/) | class |
+|---|---|
+| softmax_k_crosslane.hpp | MIGRATED lift (sfpi_crosslane.h surface, BLAZE_IMPL 4) |
+| generic_moe_gate_topk_crosslane.hpp | MIGRATED lift (BLAZE_IMPL 4) |
+| deepseek_moe_gate_topk_single_face_crosslane.hpp | MIGRATED lift (BLAZE_IMPL 4; partial-arm rule inherited) |
+| sdpa_reduce_row_crosslane.hpp | MIGRATED lift (BLAZE_IMPL 4) |
+| sfpu_bridge.hpp | UPDATED in lock-step (graduation seam: `using sfpi::transp8;` on surface toolchains — the lane-FA ADL landmine otherwise makes every unqualified transp8 call in the bridge lifts ambiguous, reproduced as a compile failure at the lane-FK tip hybrid) |
+
+The migrated files and the updated bridge REQUIRE a toolchain that ships the
+typed cross-lane surface (sfpi 21f8ee8 headers; pin-21 will carry them —
+lane-FK hybrid until then).  The plain pin-20 install still compiles every
+BLAZE_IMPL 0/1/2/3 arm unchanged (the bridge seam is __has_include-gated).
+rope has no migrated twin: its lift is already pure typed sfpi.

@@ -161,6 +161,13 @@ using namespace ckernel;
 #define TRISC_MATH 1
 #endif
 #include "blaze/kernels/kernel_includes/tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_deepseek_moe_gate_topk_single_face.h"
+#elif BLAZE_IMPL == 4
+// Lane-FK cross-lane migration of the lift (sfpi_crosslane.h surface); pulls
+// the byte-exact original along for the partial-arm sort_top4 phase.
+#ifndef TRISC_MATH
+#define TRISC_MATH 1
+#endif
+#include "blaze/kernels/sfpu/semantic/deepseek_moe_gate_topk_single_face_crosslane.hpp"
 #else
 #ifndef TRISC_MATH
 #define TRISC_MATH 1
@@ -198,6 +205,12 @@ static inline void run_gate()
     DMG_SFPU_CALL(deepseek_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
 #elif BLAZE_IMPL == 1
     DMG_SFPU_CALL(_deepseek_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
+#elif BLAZE_IMPL == 4
+#if defined(BLAZE_HYBRID_PHASES) && !(BLAZE_HYBRID_PHASES & 1)
+    DMG_SFPU_CALL(_deepseek_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
+#else
+    DMG_SFPU_CALL(semantic::crosslane::_semantic_deepseek_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
+#endif
 #else
 #if defined(BLAZE_HYBRID_PHASES) && !(BLAZE_HYBRID_PHASES & 1)
     DMG_SFPU_CALL(_deepseek_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
@@ -213,6 +226,15 @@ static inline void run_gate()
     DMG_SFPU_CALL(deepseek_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
 #elif BLAZE_IMPL == 1
     DMG_SFPU_CALL(_deepseek_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
+#elif BLAZE_IMPL == 4
+    // Same PARTIAL-ARM rule as the lift arm below: sort_top4 stays the
+    // byte-exact ORIGINAL (the lift phase is execution-refuted; the
+    // migration inherits that verdict).  BLAZE_HYBRID_PHASES overrides.
+#if defined(BLAZE_HYBRID_PHASES) && (BLAZE_HYBRID_PHASES & 2)
+    DMG_SFPU_CALL(semantic::crosslane::_semantic_deepseek_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
+#else
+    DMG_SFPU_CALL(_deepseek_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
+#endif
 #else
     // PARTIAL LIFT ARM (lane FD registration): sum_top2 and top8 run the
     // lane-EX typed lifts (execution-proven after the lane-FD bridge and
@@ -236,6 +258,12 @@ static inline void run_gate()
     // The blaze original takes a third extra_scale argument (function-pointer
     // call: the C++ default does not apply).
     DMG_SFPU_CALL(_deepseek_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), DMG_EPS, DMG_SCALE, 0u);
+#elif BLAZE_IMPL == 4
+#if defined(BLAZE_HYBRID_PHASES) && !(BLAZE_HYBRID_PHASES & 4)
+    DMG_SFPU_CALL(_deepseek_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), DMG_EPS, DMG_SCALE, 0u);
+#else
+    DMG_SFPU_CALL(semantic::crosslane::_semantic_deepseek_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), DMG_EPS, DMG_SCALE, 0u);
+#endif
 #else
 #if defined(BLAZE_HYBRID_PHASES) && !(BLAZE_HYBRID_PHASES & 4)
     DMG_SFPU_CALL(_deepseek_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), DMG_EPS, DMG_SCALE, 0u);
@@ -414,6 +442,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         SFPU_UNARY_INIT_FN(unused, sfpu::deepseek_moe_gate_topk_init, (APPROX_MODE, is_fp32_dest_acc_en));
 #elif BLAZE_IMPL == 1
         SFPU_UNARY_INIT_FN(unused, sfpu::_init_deepseek_moe_gate_topk, (APPROX_MODE, is_fp32_dest_acc_en));
+#elif BLAZE_IMPL == 4
+        SFPU_UNARY_INIT_FN(unused, sfpu::semantic::crosslane::_init_semantic_deepseek_moe_gate_topk, (APPROX_MODE, is_fp32_dest_acc_en));
 #else
         SFPU_UNARY_INIT_FN(unused, sfpu::semantic::_init_semantic_deepseek_moe_gate_topk, (APPROX_MODE, is_fp32_dest_acc_en));
 #endif

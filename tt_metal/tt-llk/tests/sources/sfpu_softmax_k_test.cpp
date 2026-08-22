@@ -87,6 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 //   0 in-tree canon sfpu/experimental kernel
 //   1 byte-exact vendored tt-blaze original (helpers/include/blaze_vendored/)
 //   2 lane-EX typed semantic lift (same vendored tree)
+//   4 lane-FK cross-lane migration of the lift (sfpi_crosslane.h surface)
 // Canon and blaze-original define the same ckernel::sfpu symbols: one per TU.
 #ifndef BLAZE_IMPL
 #define BLAZE_IMPL 0
@@ -104,6 +105,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_sfpu/ckernel_sfpu_reduce.h"
 // Helpers first (own block so clang-format keeps the order).
 #include "blaze/kernels/kernel_includes/tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_softmax_k.h"
+#elif BLAZE_IMPL == 4
+#ifndef TRISC_MATH
+#define TRISC_MATH 1
+#endif
+#include "llk_sfpu/ckernel_sfpu_exp.h"
+// Helpers first (own block so clang-format keeps the order).
+#include "blaze/kernels/sfpu/semantic/softmax_k_crosslane.hpp"
 #else
 #ifndef TRISC_MATH
 #define TRISC_MATH 1
@@ -132,6 +140,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
 #if BLAZE_IMPL == 2
     ckernel::sfpu::semantic::_init_semantic_softmax_k_();
+#elif BLAZE_IMPL == 4
+    ckernel::sfpu::semantic::crosslane::_init_semantic_softmax_k_();
 #else
     ckernel::sfpu::_init_softmax_k_();
 #endif
@@ -150,6 +160,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             START_PERF_MEASURE("SOFTMAX_K_BODY")
 #if BLAZE_IMPL == 2
             SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, semantic::_semantic_softmax_k_, (SOFTMAX_K), 0 /* dst_index */, VectorMode::RC_custom);
+#elif BLAZE_IMPL == 4
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, semantic::crosslane::_semantic_softmax_k_, (SOFTMAX_K), 0 /* dst_index */, VectorMode::RC_custom);
 #else
             SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _softmax_k_, (SOFTMAX_K), 0 /* dst_index */, VectorMode::RC_custom);
 #endif

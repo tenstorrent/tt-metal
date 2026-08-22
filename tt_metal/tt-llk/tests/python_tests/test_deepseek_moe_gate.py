@@ -616,7 +616,7 @@ def test_deepseek_moe_gate_step2():
 # shared protocol on every arm.  BLAZE_IMPL: 1 = blaze original, 2 = lift.
 # ---------------------------------------------------------------------------
 
-_BLAZE_IMPL_IDS = {1: "blaze_original", 2: "semantic_lift"}
+_BLAZE_IMPL_IDS = {1: "blaze_original", 2: "semantic_lift", 4: "crosslane"}
 
 
 def _blaze_gate_config(blaze_impl, payload, bias):
@@ -650,7 +650,7 @@ def _blaze_gate_config(blaze_impl, payload, bias):
 
 
 @skip_for_wormhole
-@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("blaze_impl", [1, 2, 4], ids=lambda i: _BLAZE_IMPL_IDS[i])
 @pytest.mark.parametrize("seed", [19, 128])
 def test_sfpu_blaze_deepseek_moe_gate(seed, blaze_impl):
     payload, bias, keys = _gate_stimuli(seed)
@@ -665,11 +665,11 @@ def test_sfpu_blaze_deepseek_moe_gate(seed, blaze_impl):
 @skip_for_wormhole
 @pytest.mark.parametrize(
     "blaze_impl",
-    [0, 1, 2],
+    [0, 1, 2, 4],
     ids=lambda i: {0: "ttnn_vendored"}.get(i) or _BLAZE_IMPL_IDS[i],
 )
 def test_sfpu_blaze_deepseek_moe_gate_device_profile(perf_report, blaze_impl):
-    """MATH-zone sample of DMG_GATE_BODY per arm (0 ttnn, 1 blaze, 2 lift)."""
+    """MATH-zone sample of DMG_GATE_BODY per arm (0 ttnn, 1 blaze, 2 lift, 4 crosslane)."""
     if True:
         payload, bias, _keys = _gate_stimuli(seed=19)
         configuration = PerfConfig(

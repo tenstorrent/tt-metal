@@ -1520,6 +1520,51 @@ class EMA_ALPHA_BETA(TemplateParameter):
 
 
 @dataclass
+class EMA_IMPL(TemplateParameter):
+    """Racing-arm selector for the EMA vehicle (lane FK ema-fresh).
+
+    0 = production hand entry (raw-TTI ckernel_sfpu_ema.h),
+    1 = fresh typed semantic body (fresh_cpp/ema.h), "fma" contract,
+    2 = fresh typed semantic body, "mul_add" contract.
+    """
+
+    ema_impl: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"#define EMA_IMPL {self.ema_impl}"
+
+
+@dataclass
+class CUMSUM_IMPL(TemplateParameter):
+    """Racing-arm selector for the cumsum vehicle (lane FK cumsum-fresh).
+
+    0 = production hand kernel (raw-TTI ckernel_sfpu_cumsum.h, replay body),
+    1 = fresh typed semantic body (fresh_cpp/cumsum.h).
+    """
+
+    cumsum_impl: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"#define CUMSUM_IMPL {self.cumsum_impl}"
+
+
+@dataclass
+class DEMAND_CHAIN(TemplateParameter):
+    """Register-chain fixture-probe selector (lane FK, crosslane_fixtures):
+    op 1 = ema chain (contract from demand_contract: 1 fma / 2 mul_add),
+    op 2 = cumsum fp32 chain, op 3 = cumsum int32 chain."""
+
+    demand_op: int = 1
+    demand_contract: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"#define DEMAND_OP {self.demand_op}\n"
+            f"#define DEMAND_CONTRACT {self.demand_contract}"
+        )
+
+
+@dataclass
 class TILE_DST_CT_OFFSET(TemplateParameter):
     offset: int = 0
 

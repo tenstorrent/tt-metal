@@ -269,11 +269,11 @@ def test_sfpu_softmax_k_device_profile(perf_report):
 # only legal region for k < 16 (see the skip predicates above).
 # ---------------------------------------------------------------------------
 
-_BLAZE_IMPL_IDS = {1: "blaze_original", 2: "semantic_lift"}
+_BLAZE_IMPL_IDS = {1: "blaze_original", 2: "semantic_lift", 4: "crosslane"}
 
 
 @skip_for_wormhole
-@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("blaze_impl", [1, 2, 4], ids=lambda i: _BLAZE_IMPL_IDS[i])
 @pytest.mark.parametrize("k", [5, 8], ids=lambda k: f"k{k}")
 def test_sfpu_blaze_softmax_k(k, blaze_impl):
     torch.manual_seed(0)
@@ -343,7 +343,7 @@ def test_sfpu_blaze_softmax_k(k, blaze_impl):
 
 
 @skip_for_wormhole
-@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("blaze_impl", [1, 2, 4], ids=lambda i: _BLAZE_IMPL_IDS[i])
 def test_sfpu_blaze_softmax_k_device_profile(perf_report, blaze_impl):
     """MATH-zone sample of SOFTMAX_K_BODY for the blaze original / lift (k=5)."""
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
@@ -415,7 +415,7 @@ def _mt_build_tiles(tile_cnt, torch_format):
 
 
 @skip_for_wormhole
-@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("blaze_impl", [1, 2, 4], ids=lambda i: _BLAZE_IMPL_IDS[i])
 @pytest.mark.parametrize("tile_cnt", _MT_TILE_COUNTS, ids=lambda n: f"t{n}")
 def test_sfpu_blaze_softmax_k_mt(tile_cnt, blaze_impl):
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
@@ -485,7 +485,7 @@ def test_sfpu_blaze_softmax_k_mt(tile_cnt, blaze_impl):
 
 
 @skip_for_wormhole
-@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("blaze_impl", [1, 2, 4], ids=lambda i: _BLAZE_IMPL_IDS[i])
 @pytest.mark.parametrize("tile_cnt", _MT_TILE_COUNTS, ids=lambda n: f"t{n}")
 def test_sfpu_blaze_softmax_k_device_profile_mt(perf_report, tile_cnt, blaze_impl):
     """Multi-tile MATH-zone sample of SOFTMAX_K_BODY (per-tile readout, k=5)."""

@@ -115,7 +115,26 @@ sfpi_inline void swap_mod(V &va, V &vb)
 // 4-tuple; the companion-bank results are read back through the fixed-LReg
 // window right after (the pattern rvtt.md documents for rvtt_sfptransp8_int:
 // the L4..L7 SETs stay explicit in the same RTL insn).
+//
+// GRADUATION SEAM (lane FK, 2026-08-22): on toolchains that ship the typed
+// cross-lane surface (sfpi_crosslane.h, lane FA X1), sfpi::transp8 IS this
+// wrapper — and defining a second identical overload here makes every
+// unqualified transp8 call in the lifts AMBIGUOUS (ADL adds sfpi:: via the
+// argument types; lane FA's documented landmine).  A using-declaration
+// merges the names into one entity instead.  Header presence is the honest
+// detector: the surface headers and the builtins travel together
+// (__has_builtin would misfire on pin-19/20, whose compilers already carry
+// rvtt_sfpconfig_i without the surface headers).
 // ---------------------------------------------------------------------------
+#if defined(__has_include)
+#if __has_include("sfpi_crosslane.h")
+#define SFPU_BRIDGE_HAVE_CROSSLANE_SURFACE 1
+#endif
+#endif
+
+#ifdef SFPU_BRIDGE_HAVE_CROSSLANE_SURFACE
+using sfpi::transp8;
+#else
 sfpi_inline void transp8(sfpi::vFloat &v0, sfpi::vFloat &v1,
                          sfpi::vFloat &v2, sfpi::vFloat &v3,
                          sfpi::vUInt &c0, sfpi::vUInt &c1,
@@ -132,6 +151,7 @@ sfpi_inline void transp8(sfpi::vFloat &v0, sfpi::vFloat &v1,
     c2 = sfpi::vUInt(sfpi::l_reg[sfpi::LRegs::LReg6]);
     c3 = sfpi::vUInt(sfpi::l_reg[sfpi::LRegs::LReg7]);
 }
+#endif // SFPU_BRIDGE_HAVE_CROSSLANE_SURFACE
 
 // ---------------------------------------------------------------------------
 // Packed-companion Dst access.  The hand kernels pack (index LO16 | score

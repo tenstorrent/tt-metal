@@ -153,6 +153,7 @@ using namespace ckernel;
 #include "blaze/kernels/sfpu/semantic/logit_softcap.hpp"
 #include "blaze/kernels/sfpu/semantic/rope.hpp"
 #include "blaze/kernels/sfpu/semantic/sdpa_reduce_row.hpp"
+#include "blaze/kernels/sfpu/semantic/sdpa_reduce_row_crosslane.hpp"
 #include "blaze/kernels/sfpu/semantic/sdpa_reduce_row_walk.hpp"
 #include "blaze/kernels/sfpu/silu_scaled.hpp"
 #include "blaze/kernels/sfpu/sparse_k_filter_sfpu.hpp"
@@ -343,6 +344,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 0u /* src_index */,
                 0u /* dst_index */,
                 false /* prev_sum */);
+#endif
+#elif BLAZE_IMPL == 4 // lane-FK cross-lane migration (sfpi_crosslane.h frames)
+#if BLAZE_SUBOP == 0
+        SFPU_UNARY_CALL(
+            DstSync::SyncHalf,
+            is_fp32_dest_acc_en,
+            semantic::crosslane::_calculate_sdpa_reduce_max_row_8x32_,
+            (DataFormat::Float16_b, 4 /* block_width */, true /* skip_signalling */, 1),
+            0,
+            VectorMode::RC_custom,
+            0u /* src_index */,
+            0u /* dst_index */,
+            false /* prev_max */);
+#else
+        SFPU_UNARY_CALL(
+            DstSync::SyncHalf,
+            is_fp32_dest_acc_en,
+            semantic::crosslane::_calculate_sdpa_reduce_sum_row_8x32_,
+            (DataFormat::Float16_b, 4 /* block_width */, true /* skip_signalling */),
+            0,
+            VectorMode::RC_custom,
+            0u /* src_index */,
+            0u /* dst_index */,
+            false /* prev_sum */);
 #endif
 #elif BLAZE_IMPL == 3 // lane-FI walk variant of the lift (address-invariant blocks)
 #if BLAZE_SUBOP == 0

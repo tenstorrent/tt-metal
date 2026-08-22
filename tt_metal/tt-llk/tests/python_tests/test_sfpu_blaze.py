@@ -79,7 +79,7 @@ _INT32 = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
 
 _INT_SPEC = StimuliSpec.uniform(low=0.0, high=float(2**16 - 1))
 
-_IMPL_IDS = {0: "blaze_original", 2: "semantic_lift", 3: "semantic_lift_walk"}
+_IMPL_IDS = {0: "blaze_original", 2: "semantic_lift", 3: "semantic_lift_walk", 4: "crosslane"}
 
 
 # --------------------------------------------------------------------------
@@ -515,7 +515,7 @@ def test_sfpu_blaze_rope(impl):
     )
 
 
-@pytest.mark.parametrize("impl", [0, 2, 3], ids=lambda i: _IMPL_IDS[i])
+@pytest.mark.parametrize("impl", [0, 2, 3, 4], ids=lambda i: _IMPL_IDS[i])
 @pytest.mark.parametrize("pool", ["max", "sum"], ids=["MAX", "SUM"])
 def test_sfpu_blaze_sdpa_reduce_row(pool, impl):
     """blaze RAW-TTI sdpa_reduce_row vs lane-EW typed lift (lift 2).
@@ -562,6 +562,8 @@ _PERF_POINTS = {
     "sdpareducerow-sum-orig": dict(op=13, subop=1, impl=0),
     "sdpareducerow-sum-lift": dict(op=13, subop=1, impl=2),
     "sdpareducerow-sum-walk": dict(op=13, subop=1, impl=3),
+    "sdpareducerow-max-cl": dict(op=13, impl=4),
+    "sdpareducerow-sum-cl": dict(op=13, subop=1, impl=4),
 }
 
 
@@ -740,6 +742,8 @@ _MT_CORR = {
     "sdpareducerow-sum-orig": dict(pool="sum"),
     "sdpareducerow-sum-lift": dict(pool="sum"),
     "sdpareducerow-sum-walk": dict(pool="sum"),
+    "sdpareducerow-max-cl": dict(pool="max"),
+    "sdpareducerow-sum-cl": dict(pool="sum"),
 }
 
 

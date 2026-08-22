@@ -66,6 +66,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_sfpu/llk_math_ema_sfpu_entry.h"
 
+// EMA_IMPL selects the racing arm (lane FK ema-fresh registration):
+//   0 = production hand entry (raw-TTI ckernel_sfpu_ema.h, LREG4/5/6
+//       cross-call carry/alpha/beta ABI) — the vehicle's original arm;
+//   1 = fresh typed semantic body (fresh_cpp/ema.h), "fma" arithmetic
+//       contract (two single-rounded SFPMADs per step — the hand dataflow);
+//   2 = fresh typed semantic body, "mul_add" contract (every product and
+//       sum individually rounded) — the lane-FB demand-golden alternative.
+#ifndef EMA_IMPL
+#define EMA_IMPL 0
+#endif
+#if EMA_IMPL >= 1
+#include "fresh_cpp/ema.h"
+#endif
+
 using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -82,8 +96,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // EMA init: program the SFPU and load the smoothing weights. Clear the
     // running EMA once for the whole (single) batch.
     llk_math_ema_sfpu_init();
+#if EMA_IMPL == 0
     llk_math_ema_sfpu_load_alpha_beta(EMA_ALPHA_BITS, EMA_BETA_BITS);
     llk_math_ema_sfpu_clear_previous_output();
+#else
+    // Fresh typed arm: the alpha/beta/carry state is a caller-held typed
+    // quad (the typed spelling of the hand kernel's LREG4/5/6 cross-call
+    // ABI), programmed and scrambled once before the tile loop — the same
+    // amortized fixed cost as the hand arm's alpha/beta load + carry clear.
+    sfpu::EmaFreshState ema_state;
+    sfpu::ema_fresh_state_init(ema_state, EMA_ALPHA_BITS, EMA_BETA_BITS);
+#endif
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
@@ -93,7 +116,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
             EMA_INPUT_DST_INDEX, formats.math, formats.math);
 
-        // EMA reads dst tile 0, writes dst tile 1, updates the LREG4 carry.
+        // EMA reads dst tile 0, writes dst tile 1, updates the carry.
         {
             // Isolated device-profile zone (test_sfpu_ema_device_profile):
             // profiler-only L1 bookkeeping (no SFPU instruction, no LREG
@@ -101,7 +124,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // in functional builds. Alpha/beta load and carry clear stay
             // outside the zone, like the Welford state clear.
             START_PERF_MEASURE("EMA_BODY")
+#if EMA_IMPL == 0
             llk_math_ema_sfpu_tile(EMA_INPUT_DST_INDEX);
+#else
+            _llk_math_eltwise_sfpu_start_(EMA_INPUT_DST_INDEX);
+            sfpu::_calculate_ema_fresh_tile_<EMA_IMPL>(ema_state);
+            _llk_math_eltwise_sfpu_done_();
+#endif
         }
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
