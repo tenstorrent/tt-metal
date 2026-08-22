@@ -190,6 +190,10 @@ Return:
 
 You read the subagent's summary and decide what to do next. If you then need to dig into a specific failure, read that targeted slice of the log yourself — a few lines around the error, not the whole file.
 
+**While a test run is in flight, kernel sources are frozen.** Turn-durability is exactly what makes this bite: the job keeps going, so you keep working, and the obvious thing to work on next is the kernels. But your build never compiled them. Kernel sources are compiled by the **runtime**, from disk, at every program-cache miss — so they are read *throughout* the run, not once at its start, and a kernel you edit mid-run is compiled as-edited by every program the run constructs after that. The result then measures neither the tree you launched on nor the one you now have. Before the port that costs you a run and a diagnosis: the half-converted kernel fails to compile, the failures read as a broken baseline, and the runtime's own explanation — `Need to JIT build because file X has changed` — is logged at debug level, so it is not in your log to find. After the port it is worse, because it can come back green: programs built before your edit ran the old kernel and those built after ran the new one, and a pass for a state that never existed is the false green this whole verification step exists to prevent.
+
+**This is only about files the JIT reads** — the kernel sources and any header they `#include`. Host-side work is unaffected: the run is executing an already-linked binary, so editing the factory `.cpp` while a test runs is safe, and that is most of the port. Park the kernel edits until the run exits.
+
 ---
 
 ### Ensure the Metal 2.0 host-side legality checks are enabled
