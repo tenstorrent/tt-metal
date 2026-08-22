@@ -160,7 +160,7 @@ while IFS= read -r FILE; do
     esac
 done <<< "$CHANGED_FILES"
 
-# --- run-clang-tidy inputs: raw snapshot + dedicated re-scans ---------------
+# --- run-clang-tidy / run-compile inputs: raw snapshot + dedicated re-scans ---
 # Snapshot the language-agnostic per-file flags NOW, before the blanket
 # submodule/workflow "treat as everything changed" fallback below mutates
 # them. run-clang-tidy must reflect only changes that can plausibly alter
@@ -173,6 +173,11 @@ RAW_LLK_WORMHOLE_CHANGED=$LLK_WORMHOLE_CHANGED
 RAW_LLK_BLACKHOLE_CHANGED=$LLK_BLACKHOLE_CHANGED
 RAW_LLK_COMMON_CHANGED=$LLK_COMMON_CHANGED
 RAW_LLK_SFPI_CHANGED=$LLK_SFPI_CHANGED
+# Pre-fallback any-code-changed, used only by run-compile below. This is the
+# language-inclusive counterpart to the C/C++-only scan: it is what
+# any-code-changed would be if the blanket fallback didn't exist, so it still
+# covers the .py changes clang-tidy deliberately ignores.
+RAW_ANY_CODE_CHANGED=$ANY_CODE_CHANGED
 
 # clang-tidy is a C/C++-only linter, so the "did relevant source change?"
 # half of run-clang-tidy gets its own dedicated scan for C/C++ extensions
@@ -265,6 +270,28 @@ if [[ "$CPP_SOURCE_FOR_CLANG_TIDY_CHANGED" = true || \
     RUN_CLANG_TIDY=true
 fi
 
+# run-compile: should the compile job (pr-gate.yaml's asan-build) run? The
+# clang-tidy scan and the compile both consume the same C/C++ sources, the same
+# CMake/LLK/submodule inputs, and the same docker plumbing, so a change that
+# warrants one warrants the other — hence run-clang-tidy is reused wholesale
+# rather than duplicating its inputs or maintaining a second key-workflow list.
+#
+# RAW_ANY_CODE_CHANGED is OR'd in for the one case where the two genuinely
+# differ: clang-tidy is a C/C++-only linter and deliberately ignores .py, but
+# the compile job publishes the package/ttnn-import artifact that pr-gate's
+# smoke tests and examples run against, and those DO exercise Python under
+# tt_metal/, ttnn/ and tests/. Gating on run-clang-tidy alone would silently
+# stop compiling and smoke-testing Python-only PRs.
+#
+# Net effect vs. the old any-code-changed gate: identical, except a workflow
+# file on neither the key-workflow list nor the build-workflow list (i.e. one
+# that cannot affect what gets built) no longer forces a full ASan compile.
+# See tenstorrent/tt-metal#53738.
+RUN_COMPILE=false
+if [[ "$RUN_CLANG_TIDY" = true || "$RAW_ANY_CODE_CHANGED" = true ]]; then
+    RUN_COMPILE=true
+fi
+
 if [[ "$SUBMODULE_CHANGED" = true || "$WORKFLOWS_CHANGED" = true ]]; then
     # Treat any submodule or workflow change as a change to everything; not going to manage dependency trees for this.
     # For workflows this guarantees a workflow-only PR runs the full standard gate (build + smoke + examples + code-analysis)
@@ -308,6 +335,7 @@ declare -A changes=(
     [submodule-changed]=$SUBMODULE_CHANGED
     [any-code-changed]=$ANY_CODE_CHANGED
     [run-clang-tidy]=$RUN_CLANG_TIDY
+    [run-compile]=$RUN_COMPILE
     [docs-changed]=$DOCS_CHANGED
     [model-charts-changed]=$MODEL_CHARTS_CHANGED
     [models-changed]=$MODELS_CHANGED

@@ -119,12 +119,17 @@ jobs:
       manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
       llk-ci-docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
 
+  # Gated on run-compile rather than any-code-changed so that workflow-only PRs
+  # which cannot affect what gets built (see find-changed-files.sh) don't pay for
+  # a full ASan compile. run-compile is run-clang-tidy OR'd with the pre-fallback
+  # any-code-changed, so Python-only PRs still build and still reach the smoke
+  # tests and examples that consume this job's artifacts.
   asan-build:
     if: >-
       ${{
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-        ((github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.find-changed-files.outputs.any-code-changed == 'true')
+        ((github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.find-changed-files.outputs.run-compile == 'true')
       }}
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     uses: ./.github/workflows/build-artifact.yaml
@@ -165,6 +170,7 @@ jobs:
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
       run-clang-tidy: ${{ steps.find-changes.outputs.run-clang-tidy }}
+      run-compile: ${{ steps.find-changes.outputs.run-compile }}
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
       cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
       tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
