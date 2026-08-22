@@ -53,6 +53,7 @@
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
+#include "tt_metal/hw/inc/api/optional_binding.h"  // binding::MAX_BINDING_NAME_LEN
 
 #include "test_helpers.hpp"
 
@@ -3900,6 +3901,34 @@ TEST_F(ProgramSpecTestGen1, InvalidTensorAccessorNameFails) {
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("tensor accessor_name 'has-dash' must be a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestGen1, OverlongTensorAccessorNameFails) {
+    // A binding's accessor_name is also baked into the device-side optional-binding lookups
+    // (try_get_tensor_binding<"name">()), whose ::binding::Name template parameter holds a
+    // fixed-capacity buffer and silently truncates past MAX_BINDING_NAME_LEN. Two names agreeing
+    // on that many leading characters would become indistinguishable there and a lookup would
+    // hand back the wrong binding, so the host rejects the name up front instead.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    const std::string too_long = "a" + std::string(::binding::MAX_BINDING_NAME_LEN, 'b');  // one over
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", too_long);
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("characters long, which exceeds the")));
+}
+
+TEST_F(ProgramSpecTestGen1, MaxLengthTensorAccessorNameSucceeds) {
+    // The boundary itself is legal — the cap rejects only names the lookups cannot distinguish.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    const std::string at_limit = "a" + std::string(::binding::MAX_BINDING_NAME_LEN - 1, 'b');
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", at_limit);
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, AccessorNamesAcrossCategoriesAreSeparateNamespaces) {

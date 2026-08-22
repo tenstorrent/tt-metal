@@ -30,6 +30,7 @@ set(HW_JIT_API_HEADERS
     inc/api/tensor/pages_address_iterator.h
     inc/api/tensor/page.h
     inc/api/scratchpad.h
+    inc/api/optional_binding.h
     inc/api/compute/compute_kernel_api.h
     inc/api/compute/add_int_sfpu.h
     inc/api/compute/atan2.h

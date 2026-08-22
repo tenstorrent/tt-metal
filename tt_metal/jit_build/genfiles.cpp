@@ -194,74 +194,98 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
     if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty()) {
+        // Such a kernel still gets the optional-binding lookups below: they are how it asks whether
+        // a resource was bound, and "nothing was bound" is an answer it is entitled to receive.
         content << "// No bindings for this kernel.\n";
-    } else {
-        if (!dfb_entries.empty()) {
-            content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
-        }
-        if (!sem_entries.empty()) {
-            content << "#include <cstdint>\n";
-        }
-        if (!ta_entries.empty()) {
-            // This header defines TensorBindingToken, a type which can be used
-            // to construct a TensorAccessor or LocalTensorAccessor.
-            content << "#include \"api/tensor/tensor_binding_token.h\"\n";
-        }
-        if (!scratch_entries.empty()) {
-            // The full Scratchpad type (NOC-free, so it compiles on both data-movement and
-            // compute/TRISC builds), which also pulls in the ScratchpadBindingToken type.
-            content << "#include \"api/scratchpad.h\"\n";
-        }
-        content << "\n";
-
-        if (!dfb_entries.empty()) {
-            content << "namespace dfb {\n";
-            for (const auto& [name, id] : dfb_entries) {
-                content << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
-            }
-            content << "}  // namespace dfb\n";
-        }
-
-        if (!sem_entries.empty()) {
-            content << "namespace sem {\n";
-            for (const auto& [name, id] : sem_entries) {
-                content << "constexpr std::uint32_t " << name << " = " << id << "u;\n";
-            }
-            content << "}  // namespace sem\n";
-        }
-
-        if (!ta_entries.empty()) {
-            // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
-            // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
-            // its implicit base-address CRTA.
-            // The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces.
-            //
-            // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
-            // template with extra metadata in the future without touching kernel source.
-            content << "namespace tensor {\n";
-            for (const auto& entry : ta_entries) {
-                content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
-                        << "u, " << entry.addr_crta_offset << "u>;\n";
-                content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
-            }
-            content << "}  // namespace tensor\n";
-        }
-
-        if (!scratch_entries.empty()) {
-            // ScratchpadBindingToken scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
-            // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
-            // and the scratchpad's compile-time per-node size.
-            // The kernel-side Scratchpad(token) constructor unpacks both.
-            // The token's members are opaque, so the framework can extend it later without touching
-            // kernel source.
-            content << "namespace scratch {\n";
-            for (const auto& entry : scratch_entries) {
-                content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
-                        << entry.size_bytes << "u};\n";
-            }
-            content << "}  // namespace scratch\n";
-        }
     }
+
+    // Unconditional: the optional-binding lookups are emitted for every Metal 2.0 kernel, so the
+    // headers their signatures need are too. This subsumes what used to be conditional includes of
+    // api/dataflow/dataflow_buffer.h (for dfb_entries) and api/scratchpad.h (for scratch_entries) --
+    // a lookup has to name DFBBindingToken and ScratchpadBindingToken whether or not the kernel has
+    // a binding of that kind. See OPTIONAL_BINDING_LOOKUP_INCLUDES.
+    content << jit_build::utils::OPTIONAL_BINDING_LOOKUP_INCLUDES;
+    if (!sem_entries.empty()) {
+        content << "#include <cstdint>\n";
+    }
+    if (!ta_entries.empty()) {
+        // This header defines TensorBindingToken, a type which can be used
+        // to construct a TensorAccessor or LocalTensorAccessor.
+        content << "#include \"api/tensor/tensor_binding_token.h\"\n";
+    }
+    content << "\n";
+
+    if (!dfb_entries.empty()) {
+        content << "namespace dfb {\n";
+        for (const auto& [name, id] : dfb_entries) {
+            content << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
+        }
+        content << "}  // namespace dfb\n";
+    }
+
+    if (!sem_entries.empty()) {
+        content << "namespace sem {\n";
+        for (const auto& [name, id] : sem_entries) {
+            content << "constexpr std::uint32_t " << name << " = " << id << "u;\n";
+        }
+        content << "}  // namespace sem\n";
+    }
+
+    if (!ta_entries.empty()) {
+        // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
+        // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
+        // its implicit base-address CRTA.
+        // The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces.
+        //
+        // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
+        // template with extra metadata in the future without touching kernel source.
+        content << "namespace tensor {\n";
+        for (const auto& entry : ta_entries) {
+            content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
+                    << "u, " << entry.addr_crta_offset << "u>;\n";
+            content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+        }
+        content << "}  // namespace tensor\n";
+    }
+
+    if (!scratch_entries.empty()) {
+        // ScratchpadBindingToken scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
+        // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
+        // and the scratchpad's compile-time per-node size.
+        // The kernel-side Scratchpad(token) constructor unpacks both.
+        // The token's members are opaque, so the framework can extend it later without touching
+        // kernel source.
+        content << "namespace scratch {\n";
+        for (const auto& entry : scratch_entries) {
+            content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
+                    << entry.size_bytes << "u};\n";
+        }
+        content << "}  // namespace scratch\n";
+    }
+
+    // The optional-binding lookups, which let a kernel ask whether a resource was bound instead of
+    // naming its token directly. Emitted unconditionally -- a kernel with no DFB bindings still
+    // needs try_get_dfb_binding to exist in order to ask, and that is the case the lookups serve.
+    // Rendered by a shared formatter because the emulated program runner must emit byte-identical
+    // text; see format_optional_binding_lookups.
+    vector<string> ta_names;
+    ta_names.reserve(ta_entries.size());
+    for (const auto& entry : ta_entries) {
+        ta_names.push_back(entry.name);
+    }
+    vector<string> dfb_names;
+    dfb_names.reserve(dfb_entries.size());
+    for (const auto& entry : dfb_entries) {
+        dfb_names.push_back(entry.first);
+    }
+    vector<string> scratch_names;
+    scratch_names.reserve(scratch_entries.size());
+    for (const auto& entry : scratch_entries) {
+        scratch_names.push_back(entry.name);
+    }
+    content << "\n";
+    content << jit_build::utils::format_optional_binding_lookups(ta_names, dfb_names, scratch_names);
+
     write_file(path, content.str());
 }
 
