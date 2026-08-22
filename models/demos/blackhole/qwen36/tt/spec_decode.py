@@ -15,14 +15,23 @@ Runs single-device or TP (B=1); on TP the drafter head executes fully
 replicated (see tt/mtp.py).
 
 TP runs TRACED by default (TT_SPEC_TRACE=0 for eager): the verify chunk and the
-drafter step are captured once and replayed per iteration, with every varying
+drafter steps are captured once and replayed per iteration, with every varying
 quantity carried as data in persistent device buffers (tokens, RoPE window,
 chunk page table, device chunk_start, the row-select one-hot, and the GDN
-valid_len masks — the trace-safe form of the masked bucket). Capture ordering
-is strict: prefill + the eager first verify (+ a 32-row extraction warm)
-compile every program BEFORE any capture, the drafter trace captures first,
-then the verify trace — so no compile ever happens after a trace is parked.
-Commit chunks stay eager (amortized ~1/64 of iterations).
+valid_len masks — the trace-safe form of the masked bucket). The per-iteration
+host path is trimmed to a handful of tiny transfers: the verify trace is
+SELF-RESTORING (it copies the standing anchor snapshot back into the GDN state
+buffers in-graph, so no eager per-iteration snapshot/restore dispatch storm)
+and scores greedily on device (per-vocab-shard argmax/max — no vocab gather,
+no 32xvocab logits readback); the drafter runs one trace per window index over
+a per-iteration pos/cos/sin window upload, chains hiddens on device, picks
+greedily on device, and reads back only a [2]-value score per shard per draft
+(catch-up legs read nothing). Capture ordering is strict: prefill + the eager
+first verify (+ explicit warms) compile every program BEFORE any capture, the
+drafter window traces capture first (all compiles, then all captures), then
+the verify trace — so no compile ever happens after a trace is parked. Commit
+chunks stay eager (amortized ~1/64 of iterations) and refresh the standing
+anchor snapshot.
 
 Committed tokens are ALWAYS produced by the target verify rows, so greedy
 spec decode matches plain greedy decode up to bf16 chunk-vs-decode numerics.
@@ -31,6 +40,8 @@ See docs/mtp_design.md for the full design.
 """
 
 import os
+import time
+from collections import defaultdict
 
 import torch
 from loguru import logger
@@ -142,6 +153,9 @@ class Qwen36SpeculativeDecoder:
         self.k_used = []  # drafts proposed per iteration (stats)
         self._vt = None  # traced-verify persistent I/O (built lazily)
         self._snap_bufs = None  # persistent TP GDN snapshot buffers (allocation-free loop)
+        # TT_SPEC_TIMING=1: per-phase wall-time attribution, logged with _stats.
+        self._timing_on = os.environ.get("TT_SPEC_TIMING", "0") == "1"
+        self._timing = defaultdict(float)
 
         self.committed = []  # token ids 0..c (prompt + generated)
         self.a = 0  # block-aligned state anchor: GDN state reflects tokens 0..a-1
@@ -354,15 +368,59 @@ class Qwen36SpeculativeDecoder:
             src = ttnn.from_torch(host_t, dtype=dtype, layout=layout, **rep)
             ttnn.copy_host_to_device_tensor(src, vt[dst])
 
+    def _verify_scores(self, normed):
+        """Per-shard greedy scores for the 32 extraction rows: [1,1,32,2] fp32.
+
+        Runs the LM head WITHOUT the vocab all-gather (each device scores its own
+        shard) and reduces on device — the host reads back 2 values per row per
+        device instead of the 32 x vocab logits.
+        """
+        model = self.model
+        shard = ttnn.linear(normed, model.lm_head_weight)  # [1,1,32,Vs] per device
+        rm = ttnn.untilize(shard, use_multicore=True)
+        idx32 = ttnn.argmax(rm, dim=-1, keepdim=False)  # [1,1,32] uint32 (exactly 32 rows: the multicore sweet spot)
+        ttnn.deallocate(rm)
+        idx_f = ttnn.reshape(ttnn.typecast(idx32, ttnn.float32), (1, 1, self._VERIFY_ROWS, 1))
+        ttnn.deallocate(idx32)
+        val = ttnn.max(shard, dim=-1)  # [1,1,32,1]
+        ttnn.deallocate(shard)
+        val_f = ttnn.typecast(val, ttnn.float32)
+        ttnn.deallocate(val)
+        score = ttnn.concat([idx_f, val_f], dim=-1)  # [1,1,32,2]
+        ttnn.deallocate(idx_f)
+        ttnn.deallocate(val_f)
+        return score
+
+    def _ids_from_scores(self, score_dev, n):
+        """Read per-shard (idx, val) scores and return n global greedy token ids."""
+        if self._tp:
+            scores = ttnn.to_torch(score_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.model.device, dim=0)).float()
+        else:
+            scores = ttnn.to_torch(score_dev).float()
+        scores = scores.reshape(-1, self._VERIFY_ROWS, 2)  # [D, 32, 2]
+        if self._tp and getattr(self.model, "_lmhead_vocab_sharded", False):
+            per_shard = self.model.args.vocab_size // self.model.num_devices
+            d = scores[..., 1].argmax(dim=0)  # [32] winning shard per row
+            return [int(scores[int(d[r]), r, 0]) + int(d[r]) * per_shard for r in range(n)]
+        return [int(scores[0, r, 0]) for r in range(n)]
+
     def _verify_trace_body(self):
         """The verify-chunk op graph over the persistent buffers (compile + capture).
 
-        Mirrors _forward_prefill_chunk_masked_tp with the GDN valid_len masks fed
-        as device tensors, plus the in-trace row-select + final norm + LM head.
-        Returns the persistent output handles (logits, normed rows).
+        SELF-RESTORING: the graph begins by copying the standing anchor snapshot
+        back into the GDN state buffers, so every replay starts from the anchor
+        without ~100 eager copy dispatches per iteration; the snapshot itself is
+        refreshed only at commits. Then the masked chunk
+        (_forward_prefill_chunk_masked_tp with the valid_len masks as device
+        tensors), the row-select + final norm, and the per-shard greedy scores.
+        Returns the persistent output handles (score32, normed rows).
         """
         model, vt = self.model, self._vt
         B = self._VERIFY_BUCKET
+        assert self._snap_bufs is not None, "anchor snapshot must exist before the verify graph"
+        for dn, (rec, conv) in zip(self._dns, self._snap_bufs):
+            ttnn.copy(rec, dn.rec_state)
+            ttnn.copy(conv, dn.conv_carry)
         vm = {"conv_sel": vt["conv_sel"], "f32": vt["mask_f32"], "bf16": vt["mask_bf16"]}
         x = model.embd(vt["tok"])
         x = ttnn.reshape(x, (1, 1, B, x.shape[-1]))
@@ -389,16 +447,19 @@ class Qwen36SpeculativeDecoder:
         rows = ttnn.to_memory_config(rows, ttnn.DRAM_MEMORY_CONFIG)
         normed = model.norm(rows, mode=Mode.PREFILL)  # replicated [1,1,ROWS,dim]
         ttnn.deallocate(rows)
-        logits = model._lm_head(normed)  # replicated [1,1,ROWS,vocab]
-        return logits, normed
+        score = self._verify_scores(normed)
+        return score, normed
 
     def _verify_traced(self, tokens, chunk_start, valid_len, row_start, n_rows):
-        """Traced verify: refresh inputs, replay, read the accept rows.
+        """Traced verify: refresh inputs, replay, read the accept-row scores.
 
         Lazy capture on the first call — by then every program in the body is
-        warm (prefill segments, the eager first verify, and _warm_extract32),
+        warm (prefill segments, the eager first verify, and the explicit warms),
         so the compile run compiles nothing and cannot clobber the parked
-        drafter trace (#48536 class).
+        drafter traces (#48536 class). The trace is SELF-RESTORING (state reset
+        to the anchor snapshot in-graph), so replays need no eager rollback.
+
+        Returns (target_ids list[int] of len n_rows, hid torch [n_rows, dim]).
         """
         mesh = self.model.device
         assert chunk_start % BLOCK == 0
@@ -407,32 +468,28 @@ class Qwen36SpeculativeDecoder:
             self._init_verify_trace()
         self._stage_verify_inputs(tokens, chunk_start, valid_len, row_start)
         if first:
-            # Compile + capture both advance GDN state (non-idempotent) — roll
-            # back to the pre-verify snapshot between and after them so the
-            # first real replay starts from the correct state.
-            snap = self._gdn_snapshot()
-            logits, normed = self._verify_trace_body()
+            # The graph self-restores at its head, so the compile and capture
+            # runs are state-safe by construction.
+            score, normed = self._verify_trace_body()
             ttnn.synchronize_device(mesh)
-            ttnn.deallocate(logits)
+            ttnn.deallocate(score)
             ttnn.deallocate(normed)
-            self._gdn_restore(snap)
             tid = ttnn.begin_trace_capture(mesh, cq_id=0)
-            logits, normed = self._verify_trace_body()
+            score, normed = self._verify_trace_body()
             ttnn.end_trace_capture(mesh, tid, cq_id=0)
-            self._gdn_restore(snap)
-            self._vt.update({"id": tid, "logits": logits, "normed": normed})
-            logger.info("spec verify trace captured (bucket 128)")
+            self._vt.update({"id": tid, "score": score, "normed": normed})
+            logger.info("spec verify trace captured (bucket 128, self-restoring)")
         ttnn.execute_trace(mesh, self._vt["id"], cq_id=0, blocking=False)
-        lh = self._rows_to_host(self._vt["logits"], n_rows)
+        target_ids = self._ids_from_scores(self._vt["score"], n_rows)
         hh = self._rows_to_host(self._vt["normed"], n_rows)
-        return lh, hh
+        return target_ids, hh
 
     def release_traces(self):
         """Release the verify + drafter traces (call before freeing KV caches)."""
         if self._vt is not None and "id" in self._vt:
             ttnn.release_trace(self.model.device, self._vt["id"])
         self._vt = None
-        release = getattr(self.mtp, "release_step_trace", None)
+        release = getattr(self.mtp, "release_window_traces", None)
         if release is not None:
             release()
 
@@ -441,11 +498,20 @@ class Qwen36SpeculativeDecoder:
         k = commit_advance(len(self.committed) - self.a)
         if k == 0:
             return
+        t0 = time.perf_counter()
+        if self._use_trace and self._snap_bufs is not None:
+            # Traced loop: state is dirty (post-verify; replays self-restore).
+            # Reset to the anchor eagerly, run the commit chunk, then refresh the
+            # standing snapshot the verify trace restores from. Amortized ~1/64.
+            self._gdn_restore(self._snap_bufs)
         ctx = self._gdn_commit_ctx()
         hidden, _ = self._chunk_forward(self.committed[self.a : self.a + k], self.a, k)
         ttnn.deallocate(hidden)
         self._gdn_commit_done(ctx)
+        if self._use_trace:
+            self._gdn_snapshot()  # refresh the standing anchor snapshot in place
         self.a += k
+        self._timing["commit"] += time.perf_counter() - t0
 
     # ── prefill + drafter seeding ────────────────────────────────────────────
     def prefill(self, token_ids):
@@ -489,6 +555,12 @@ class Qwen36SpeculativeDecoder:
         # compiled every target-side program (post-park compiles clobber traces).
         for i in range(seed_from, a0):
             self.mtp.step(self.committed[i + 1], prompt_hidden[i], i)
+        if self._use_trace and seed_from >= a0:
+            # No seeding ran (short prompt): warm the eager drafter programs
+            # anyway — iteration 1's oversized-window fallback runs eager legs
+            # after the window traces are parked. Slot 0 is rewritten by the
+            # first catch-up leg before anything attends to it.
+            self.mtp.step(self.committed[1], torch.zeros(self.model.args.dim), 0)
         logger.info(f"spec prefill: T={T} anchor a0={a0} drafter seeded on [{seed_from}, {a0})")
 
     # ── generation ───────────────────────────────────────────────────────────
@@ -517,6 +589,21 @@ class Qwen36SpeculativeDecoder:
             hidden, _ = self._chunk_forward(pad, self.a, BLOCK + 1)
             ttnn.deallocate(hidden)
             self._gdn_restore(snap)
+        if self._use_trace:
+            # Warm the per-shard greedy-score programs (untilize/argmax/max/
+            # typecast/concat at the 32-row shapes) on dummy rows — the verify
+            # trace's compile run must not compile anything after the drafter
+            # traces are parked.
+            dummy = ttnn.from_torch(
+                torch.zeros(1, 1, self._VERIFY_ROWS, self.model.args.dim, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.model.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.model.device),
+            )
+            score = self._verify_scores(dummy)
+            ttnn.deallocate(score)
+            ttnn.deallocate(dummy)
 
         first_token = int(logits[tail_len - 1].argmax())
         c = len(self.committed) - 1  # last prompt position
@@ -538,50 +625,74 @@ class Qwen36SpeculativeDecoder:
         if first_token in self.stop_tokens:
             return out, self._stats()
 
+        if self._use_trace:
+            # The whole iteration's drafter legs sit at consecutive positions:
+            # len(pending) catch-up legs then k_t-1 chained legs (steady state
+            # <= 2K rows; iteration 1's prompt-tail catch-up can exceed the
+            # window and falls back to eager legs). Capture the window traces
+            # NOW — before the verify trace parks at iteration 1's verify — so
+            # their compile passes cannot clobber a parked trace.
+            self.mtp.ensure_window(2 * K)
+            self.mtp.stage_window(self._pending[0][2], 2 * K)
+            self.mtp.capture_window_traces()
+
         while len(out) < max_new_tokens:
-            # 1. Drafter catch-up over pending pairs; the last pair's logits are
-            # draft 1, then chain K-1 steps on the drafter's own hidden. The
-            # traced drafter keeps the chained hidden on device.
+            # 1. Drafter catch-up over pending pairs; the last pair's pick is
+            # draft 1, then chain k_t-1 steps on the drafter's own hidden.
+            # Traced: one window upload per iteration, one tiny token upload per
+            # leg, greedy pick on device, no readback for catch-up legs.
+            t0 = time.perf_counter()
             k_t = adaptive_draft_len(self._k_ema, K) if self._adaptive_k else K
             self.k_used.append(k_t)
             last_pos = self._pending[-1][2]
-            if self._use_trace:
-                for tok, hid_row, pos in self._pending[:-1]:
-                    self.mtp.step_traced(tok, hid_row, pos)
-                d_logits = self.mtp.step_traced(*self._pending[-1])
+            n_pend = len(self._pending)
+            if self._use_trace and n_pend + k_t - 1 <= 2 * K:
+                self.mtp.stage_window(self._pending[0][2], n_pend + k_t - 1)
+                for idx, (tok, hid_row, _pos) in enumerate(self._pending[:-1]):
+                    self.mtp.step_win(idx, tok, hid_row)
+                d_tok = self.mtp.step_win(n_pend - 1, self._pending[-1][0], self._pending[-1][1], want_token=True)
+                drafts = [d_tok]
+                for j in range(1, k_t):
+                    drafts.append(self.mtp.step_win(n_pend - 1 + j, drafts[-1], chain_hidden=True, want_token=True))
             else:
+                # Oversized window (iteration 1's prompt tail): eager legs — the
+                # programs are warm from seeding, so nothing compiles post-park.
                 for tok, hid_row, pos in self._pending[:-1]:
                     self.mtp.step(tok, hid_row, pos)
                 d_logits, g = self.mtp.step(*self._pending[-1])
-            self._pending = []
-            drafts = [int(d_logits.argmax())]
-            for j in range(1, k_t):
-                if self._use_trace:
-                    d_logits = self.mtp.step_traced(drafts[-1], None, last_pos + j, chain_hidden=True)
-                else:
+                drafts = [int(d_logits.argmax())]
+                for j in range(1, k_t):
                     d_logits, g = self.mtp.step(drafts[-1], g, last_pos + j)
-                drafts.append(int(d_logits.argmax()))
+                    drafts.append(int(d_logits.argmax()))
+            self._pending = []
+            self._timing["draft"] += time.perf_counter() - t0
 
             # 2. Verify chunk [t_a..t_c, drafts] at positions a..c+k_t.
+            t0 = time.perf_counter()
             c = len(self.committed) - 1
-            snap = self._gdn_snapshot()
             chunk_tokens = self.committed[self.a :] + drafts
             if self._use_trace:
-                logits, hid = self._verify_traced(chunk_tokens, self.a, len(chunk_tokens), c - self.a, k_t + 1)
+                # The trace self-restores to the anchor snapshot in-graph.
+                target_ids, hid = self._verify_traced(chunk_tokens, self.a, len(chunk_tokens), c - self.a, k_t + 1)
             else:
+                snap = self._gdn_snapshot()
                 hidden, bucket = self._chunk_forward(chunk_tokens, self.a, len(chunk_tokens))
                 logits, hid = self._extract_rows(hidden, bucket, c - self.a, k_t + 1)
                 ttnn.deallocate(hidden)
+                target_ids = [int(logits[j].argmax()) for j in range(k_t + 1)]
+            self._timing["verify"] += time.perf_counter() - t0
 
-            # 3. Accept, then ALWAYS roll the GDN state back to the anchor.
-            target_ids = [int(logits[j].argmax()) for j in range(k_t + 1)]
+            # 3. Accept; the eager path rolls GDN state back to the anchor.
             m, new_tokens = greedy_accept(drafts, target_ids)
             self.accepts.append(m)
             self._k_ema = 0.7 * self._k_ema + 0.3 * m
             logger.debug(
                 f"spec iter {len(self.accepts)}: c={c} a={self.a} K={k_t} drafts={drafts} targets={target_ids} m={m}"
             )
-            self._gdn_restore(snap)
+            if not self._use_trace:
+                t0 = time.perf_counter()
+                self._gdn_restore(snap)
+                self._timing["restore"] += time.perf_counter() - t0
 
             # 4. Commit tokens + arm the next catch-up pairs (true target hiddens).
             stop = False
@@ -603,6 +714,16 @@ class Qwen36SpeculativeDecoder:
         iters = len(self.accepts)
         total = sum(self.accepts)
         proposed = sum(self.k_used) if self.k_used else iters * self.draft_len
+        if self._timing_on and iters:
+            per_iter = {k: f"{1000.0 * v / iters:.1f}ms" for k, v in sorted(self._timing.items())}
+            # Legs ≈ chained drafts (k_used counts the first draft too) + catch-up
+            # legs (previous iteration's commits); iteration 1's prompt-tail
+            # catch-ups make this a slight undercount.
+            legs = sum(self.k_used) + total
+            draft_per_leg = 1000.0 * self._timing["draft"] / max(1, legs)
+            logger.info(
+                f"spec timing per iteration: {per_iter}; draft per leg ~{draft_per_leg:.1f}ms over ~{legs} legs"
+            )
         return {
             "iterations": iters,
             "accepted_drafts": total,
@@ -611,4 +732,5 @@ class Qwen36SpeculativeDecoder:
             "accepts": list(self.accepts),
             "k_used": list(self.k_used),
             "traced": self._use_trace,
+            "timing_s": dict(self._timing),
         }

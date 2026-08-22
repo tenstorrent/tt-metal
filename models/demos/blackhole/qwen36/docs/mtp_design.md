@@ -118,26 +118,59 @@ Two traces, captured lazily and replayed every iteration:
   `valid_masks` plumbing (`layer.forward` → `TPGatedDeltaNet.forward_prefill` →
   `_causal_conv1d_fir(valid_sel=...)` / fused-chunk adapter) feeds them as
   caller-owned device tensors instead. GDN state carry is already in-place
-  (`_stable_state`), so replays mutate fixed addresses and the spec loop's
-  persistent-buffer snapshot/restore keeps the verify-never-commits contract.
-- **Drafter trace** — one T=1 step (persistent tok/pos/cos/sin/hidden inputs),
-  replayed for catch-up and chained drafts; the chained hidden recurrence stays
-  on device (`ttnn.copy(normed → h_in)` between replays). No CCL in this trace
-  (the head is fully replicated), which sidesteps the distinct-CCL-trace
-  interleaving deadlock gemma4 hit.
+  (`_stable_state`), so replays mutate fixed addresses; the graph is
+  SELF-RESTORING — it begins by copying the standing anchor snapshot back into
+  the state buffers, so the verify-never-commits contract costs zero eager
+  dispatches per iteration (the ~2x48 eager `ttnn.copy` round per iteration was
+  the dominant fixed cost in the v2 measurement). The snapshot refreshes only
+  at commits. Greedy scoring is also in-graph: per-vocab-shard argmax/max (no
+  vocab all-gather, no 32xvocab readback), host-combined across shards.
+- **Drafter window traces** — an iteration's drafter legs sit at CONSECUTIVE
+  positions, so pos/cos/sin for the whole run upload ONCE per iteration into
+  window buffers and one trace per window index bakes a static slice of them.
+  A leg is one tiny token upload + one replay; the chained hidden stays on
+  device, the greedy pick happens on device (pad-to-32 multicore argmax + a
+  grid max per vocab shard), and only drafts read back a [2]-value score per
+  device — catch-up legs read nothing. No CCL in these traces (the head is
+  fully replicated), which sidesteps the distinct-CCL-trace interleaving
+  deadlock gemma4 hit.
 
 Capture ordering is load-bearing (#48536: a compile after a trace is parked can
 clobber it): prefill segments + eager drafter seeding + the eager first verify
-(+ explicit warms for the 32-row extraction and the 2-block fill) compile every
-program FIRST; the drafter trace captures at iteration 1's first step, the
-verify trace right after — its compile run compiles nothing new. Commit chunks
-stay eager (amortized ~1/64 of iterations; all-warm programs). Compile and
-capture runs advance GDN state non-idempotently, so the loop restores the
-snapshot between and after them.
+(+ explicit warms for the 32-row extraction, the 2-block fill, and the
+score graph) compile every program FIRST; the drafter window traces capture at
+iteration 1 (ALL compile passes, then all captures — per-index slice offsets
+may compile distinct programs), the verify trace right after — its compile run
+compiles nothing new. Commit chunks stay eager (amortized ~1/64 of iterations;
+all-warm programs); in traced mode a commit eagerly restores the anchor first
+and refreshes the standing snapshot after. TT_SPEC_TIMING=1 logs per-phase
+attribution (draft/verify/commit, per-leg draft cost).
 
 Adaptive draft length (TT_SPEC_ADAPTIVE_K=1): K_t = clamp(round(EMA(accepts))+1,
 1, K). Purely data-driven — chunk `valid_len`, the masks, and the accept-row
 count all ride the same buffers, so it works traced and eager.
+
+## Decode-shaped sequential verify — deferred (fit correction)
+
+The 41337 headline (113.7 ms/token) charged the chunk verify for costs that a
+clean K-sweep re-attributed: with in-window capture pollution removed, the fit
+is ~26 ms per draft leg and ~123 ms iteration-fixed, of which the verify chunk
+itself is only ~30-45 ms — the rest was per-iteration eager dispatch (the
+~2x48-layer GDN snapshot/restore copy storm) and per-leg host I/O (per-leg
+cos/sin uploads + a full 8-shard logits readback per draft). v3 removes those
+on the host side (self-restoring verify trace, window drafter, on-device
+scores); the chunk verify STAYS.
+
+If a future measurement shows the remaining verify floor (~30-45 ms) gating,
+the decode-shaped verify remains the designed next step: gemma4 batch-alias
+attention (W=K+1 pseudo-users, replicated page-table row) + a GDN W-step
+no-commit recurrence with per-row state stashes (composition first via the
+non-in-place `recurrent_gated_delta_rule_decode_ttnn`; then a `seq_rows`
+compile-time mode on the fused `recurrence` generic_op from gdn-decode-fused —
+one core per v-head loops the W rows in-kernel, state resident in L1, per-row
+stash, no writeback). Commit becomes a host-selected
+`ttnn.copy(state_stash[m] -> rec_state)`, which would retire the block-anchor
+machinery entirely.
 
 ## TP (P150x4 / P150x8), B=1 — built
 

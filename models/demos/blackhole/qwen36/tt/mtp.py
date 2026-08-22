@@ -154,7 +154,8 @@ class Qwen36MTPHead:
         self._k_cache = None
         self._v_cache = None
         self._page_table_tt = None
-        self._step_trace = None  # persistent traced-step I/O (capture on first step_traced)
+        self._win = None  # traced window-step machinery (ensure_window/stage_window)
+        self._last_normed = None
 
     def allocate_kv_cache(self, num_blocks, block_size=64, dtype=ttnn.bfloat16):
         """Own paged KV (one layer) + identity page table over its own blocks."""
@@ -174,7 +175,7 @@ class Qwen36MTPHead:
     def free_kv_cache(self):
         if self._k_cache is None:
             return
-        self.release_step_trace()
+        self.release_window_traces()
         for t in (self._k_cache, self._v_cache, self._page_table_tt):
             ttnn.deallocate(t)
         self._k_cache = self._v_cache = self._page_table_tt = None
@@ -281,115 +282,187 @@ class Qwen36MTPHead:
             return ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).reshape(-1).float()
         return ttnn.to_torch(logits).reshape(-1).float()
 
-    # ── traced step ──────────────────────────────────────────────────────────
-    def _host_step_inputs(self, token_id, position):
-        """Host-side (tok, pos, cos, sin) tensors for copy_host_to_device_tensor."""
-        # int64 host source for the uint32 tensor avoids the int32->uint32
-        # row-major conversion warning (#18536).
-        tok = ttnn.from_torch(
-            torch.tensor([[token_id]], dtype=torch.int64), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        pos = ttnn.from_torch(
-            torch.tensor([position], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        cos = ttnn.from_torch(
-            self.rope.cos_cpu[position : position + 1].unsqueeze(0).contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        sin = ttnn.from_torch(
-            self.rope.sin_cpu[position : position + 1].unsqueeze(0).contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        return tok, pos, cos, sin
+    # ── traced window stepping ───────────────────────────────────────────────
+    # An iteration's drafter legs sit at CONSECUTIVE positions (catch-up pairs,
+    # then the chained drafts), so per-iteration host work collapses to ONE
+    # window upload (pos/cos/sin for the whole run of legs) plus one tiny token
+    # upload per leg. One trace is captured PER WINDOW INDEX j — each bakes a
+    # static slice of the window buffers — and every leg is a single replay.
+    # The greedy pick happens ON DEVICE (per-vocab-shard argmax + max), so a leg
+    # reads back only a [2]-value score per device instead of the logit shard.
 
-    def _capture_step_trace(self, token_id, hidden_row, position):
-        """Capture the drafter step at the REAL first-call inputs.
+    def _argmax_score(self, logits):
+        """[1,1,Vs] logits -> [1,1,1,2] fp32 (local argmax idx, local max val).
 
-        Persistent inputs get stable addresses; the compile + capture runs write
-        the SAME KV slot with the SAME values as the first replay, so the writes
-        are idempotent. Must run before any other trace is parked (an eager
-        compile after a parked trace can clobber it — the spec loop guarantees
-        this by capturing the drafter before the verify trace).
+        Multicore ttnn.argmax needs ROW_MAJOR input and exactly one 32-row tile
+        (fewer/more rows silently degrade), so the single logit row is padded to
+        32 rows first. The max value uses a two-stage grid reduce — a direct
+        dim=-1 max over one tile-row runs on a single core.
         """
+        vs = logits.shape[-1]
+        l4 = ttnn.reshape(logits, (1, 1, 1, vs))
+        padded = ttnn.pad(l4, [(0, 0), (0, 0), (0, 31), (0, 0)], value=0.0)
+        rm = ttnn.untilize(padded, use_multicore=True)
+        ttnn.deallocate(padded)
+        idx32 = ttnn.argmax(rm, dim=-1, keepdim=False)  # [1,1,32] uint32
+        ttnn.deallocate(rm)
+        idx = ttnn.slice(idx32, [0, 0, 0], [1, 1, 1])
+        ttnn.deallocate(idx32)
+        idx_f = ttnn.reshape(ttnn.typecast(idx, ttnn.float32), (1, 1, 1, 1))
+        ttnn.deallocate(idx)
+        # Two-stage max: pad the row to an R x 32 grid so the dim=-1 reduce
+        # parallelizes over tile-rows (text_demo _maxval_dev recipe).
+        cols = 32
+        rows = (((vs + cols - 1) // cols) + 31) // 32 * 32
+        mpad = ttnn.pad(l4, [(0, 0), (0, 0), (0, 0), (0, rows * cols - vs)], value=-1e30)
+        ttnn.deallocate(l4)
+        grid = ttnn.reshape(mpad, (1, 1, rows, cols))
+        part = ttnn.max(grid, dim=-1)
+        part_row = ttnn.reshape(part, (1, 1, 1, rows))
+        val = ttnn.max(part_row, dim=-1)  # [1,1,1,1]
+        for t in (mpad, grid, part, part_row):
+            ttnn.deallocate(t)
+        val_f = ttnn.typecast(val, ttnn.float32)
+        ttnn.deallocate(val)
+        score = ttnn.concat([idx_f, val_f], dim=-1)  # [1,1,1,2] fp32
+        ttnn.deallocate(idx_f)
+        ttnn.deallocate(val_f)
+        return score
+
+    def token_from_scores(self, scores):
+        """Host [D,1,1,2] per-shard (idx, val) scores -> global greedy token id."""
+        idxs = scores[..., 0].reshape(-1)
+        vals = scores[..., 1].reshape(-1)
+        if self.num_devices > 1 and self.lm_head_sharded:
+            per_shard = self.args.vocab_size // self.num_devices
+            d = int(vals.argmax())
+            return d * per_shard + int(idxs[d])
+        return int(idxs[0])  # replicated logits: every row agrees
+
+    def _init_window(self, w_max):
         mk = self._mesh_kwargs
-        tr = {
-            "tok": ttnn.from_torch(
-                torch.tensor([[token_id]], dtype=torch.int64),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-                **mk,
-            ),
-            "pos": ttnn.from_torch(
-                torch.tensor([position], dtype=torch.int32),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-                **mk,
-            ),
-            "cos": ttnn.from_torch(
-                self.rope.cos_cpu[position : position + 1].unsqueeze(0).contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                **mk,
-            ),
-            "sin": ttnn.from_torch(
-                self.rope.sin_cpu[position : position + 1].unsqueeze(0).contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                **mk,
-            ),
-            "h": ttnn.from_torch(
+        rd = self.rope.head_dim
+        rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
+
+        def dev(t, dtype, layout):
+            return ttnn.from_torch(t, dtype=dtype, layout=layout, device=self.device, **mk)
+
+        self._win = {
+            "w_max": w_max,
+            "pos": dev(torch.zeros(w_max, dtype=torch.int32), ttnn.int32, rm),
+            "cos": dev(torch.zeros(1, w_max, rd, dtype=torch.bfloat16), ttnn.bfloat16, rm),
+            "sin": dev(torch.zeros(1, w_max, rd, dtype=torch.bfloat16), ttnn.bfloat16, rm),
+            "tok": dev(torch.zeros(1, 1, dtype=torch.int64), ttnn.uint32, rm),
+            "h": dev(torch.zeros(1, 1, self.args.dim, dtype=torch.bfloat16), ttnn.bfloat16, tile),
+            "traces": {},
+        }
+        self._last_normed = None
+
+    def stage_window(self, start_pos, width):
+        """Upload pos/cos/sin for drafter positions [start_pos, start_pos+width).
+
+        One host->device copy per table per ITERATION; the per-index traces then
+        slice their leg's row statically.
+        """
+        w_max = self._win["w_max"]
+        assert width <= w_max, f"window {width} exceeds w_max {w_max}"
+        pos = torch.zeros(w_max, dtype=torch.int32)
+        pos[:width] = torch.arange(start_pos, start_pos + width, dtype=torch.int32)
+        cos = torch.zeros(1, w_max, self.rope.head_dim, dtype=torch.bfloat16)
+        sin = torch.zeros(1, w_max, self.rope.head_dim, dtype=torch.bfloat16)
+        cos[0, :width] = self.rope.cos_cpu[start_pos : start_pos + width]
+        sin[0, :width] = self.rope.sin_cpu[start_pos : start_pos + width]
+        for host_t, dtype, layout, dst in (
+            (pos, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, "pos"),
+            (cos, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "cos"),
+            (sin, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "sin"),
+        ):
+            src = ttnn.from_torch(host_t, dtype=dtype, layout=layout, **self._mesh_kwargs)
+            ttnn.copy_host_to_device_tensor(src, self._win[dst])
+
+    def _win_step_body(self, j):
+        """Drafter step graph for window index j (static window slices + score)."""
+        win = self._win
+        rd = self.rope.head_dim
+        cur_pos = ttnn.slice(win["pos"], [j], [j + 1])
+        cos = ttnn.to_layout(ttnn.slice(win["cos"], [0, j, 0], [1, j + 1, rd]), ttnn.TILE_LAYOUT)
+        sin = ttnn.to_layout(ttnn.slice(win["sin"], [0, j, 0], [1, j + 1, rd]), ttnn.TILE_LAYOUT)
+        logits, normed = self._step_graph(win["tok"], win["h"], cur_pos, cos, sin)
+        score = self._argmax_score(logits)
+        ttnn.deallocate(logits)
+        return score, normed
+
+    def capture_window_traces(self):
+        """Capture one step trace per window index, all up front.
+
+        Must run before any OTHER trace is parked (post-park compiles clobber
+        parked traces): the spec loop calls this at iteration 1, before the
+        verify trace exists. Two phases — ALL eager compile passes first, then
+        all captures — so no compile ever runs after the first window trace is
+        parked (per-index slice offsets may compile distinct programs). The
+        capture-time KV writes land at the staged window slots and are
+        rewritten in order by the real legs before any leg attends to them.
+        """
+        if self._win["traces"]:
+            return
+        for j in range(self._win["w_max"]):
+            score, normed = self._win_step_body(j)
+            ttnn.deallocate(score)
+            ttnn.deallocate(normed)
+        ttnn.synchronize_device(self.device)
+        for j in range(self._win["w_max"]):
+            tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+            score, normed = self._win_step_body(j)
+            ttnn.end_trace_capture(self.device, tid, cq_id=0)
+            self._win["traces"][j] = {"id": tid, "score": score, "normed": normed}
+
+    def step_win(self, j, token_id, hidden_row=None, chain_hidden=False, want_token=False):
+        """One drafter leg at window index j (1-2 tiny uploads + one replay).
+
+        chain_hidden feeds the previous leg's on-device hidden. want_token reads
+        back the [2]-value per-shard scores and returns the global greedy token;
+        catch-up legs skip the readback entirely.
+        """
+        if self._win is None:
+            raise RuntimeError("call _init_window/stage_window first")
+        if not self._win["traces"]:
+            self.capture_window_traces()
+        tr = self._win["traces"][j]
+        tok_h = ttnn.from_torch(
+            torch.tensor([[token_id]], dtype=torch.int64),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            **self._mesh_kwargs,
+        )
+        ttnn.copy_host_to_device_tensor(tok_h, self._win["tok"])
+        if chain_hidden:
+            ttnn.copy(self._last_normed, self._win["h"])
+        else:
+            h_h = ttnn.from_torch(
                 hidden_row.reshape(1, 1, -1).to(torch.bfloat16),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                **mk,
-            ),
-        }
-        # Compile run (warm the program cache), then capture.
-        logits, normed = self._step_graph(tr["tok"], tr["h"], tr["pos"], tr["cos"], tr["sin"])
-        ttnn.synchronize_device(self.device)
-        ttnn.deallocate(logits)
-        ttnn.deallocate(normed)
-        tid = ttnn.begin_trace_capture(self.device, cq_id=0)
-        logits, normed = self._step_graph(tr["tok"], tr["h"], tr["pos"], tr["cos"], tr["sin"])
-        ttnn.end_trace_capture(self.device, tid, cq_id=0)
-        tr.update({"id": tid, "logits": logits, "normed": normed})
-        self._step_trace = tr
-
-    def step_traced(self, token_id, hidden_row, position, chain_hidden=False):
-        """Traced drafter step: refresh persistent inputs, replay, read logits.
-
-        chain_hidden=True feeds the PREVIOUS traced step's output hidden (kept on
-        device — ttnn.copy into the persistent input, no host round-trip); else
-        hidden_row (torch [dim]) is uploaded. Returns host logits [vocab].
-        """
-        if self._step_trace is None:
-            self._capture_step_trace(token_id, hidden_row if not chain_hidden else torch.zeros(self.args.dim), position)
-            # fall through: replay with the real inputs
-        tr = self._step_trace
-        tok_h, pos_h, cos_h, sin_h = self._host_step_inputs(token_id, position)
-        ttnn.copy_host_to_device_tensor(tok_h, tr["tok"])
-        ttnn.copy_host_to_device_tensor(pos_h, tr["pos"])
-        ttnn.copy_host_to_device_tensor(cos_h, tr["cos"])
-        ttnn.copy_host_to_device_tensor(sin_h, tr["sin"])
-        if chain_hidden:
-            # Recurrence stays on device: previous replay's normed output -> input.
-            ttnn.copy(tr["normed"], tr["h"])
-        else:
-            h_h = ttnn.from_torch(
-                hidden_row.reshape(1, 1, -1).to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                **self._mesh_kwargs,
             )
-            ttnn.copy_host_to_device_tensor(h_h, tr["h"])
+            ttnn.copy_host_to_device_tensor(h_h, self._win["h"])
         ttnn.execute_trace(self.device, tr["id"], cq_id=0, blocking=False)
-        return self._logits_to_host(tr["logits"])
+        self._last_normed = tr["normed"]
+        if not want_token:
+            return None
+        if self.num_devices > 1:
+            scores = ttnn.to_torch(tr["score"], mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)).float()
+        else:
+            scores = ttnn.to_torch(tr["score"]).float()
+        return self.token_from_scores(scores)
 
-    def release_step_trace(self):
-        if self._step_trace is not None:
-            ttnn.release_trace(self.device, self._step_trace["id"])
-            self._step_trace = None
+    def ensure_window(self, w_max):
+        if self._win is None:
+            self._init_window(w_max)
+
+    def release_window_traces(self):
+        if self._win is None:
+            return
+        for tr in self._win["traces"].values():
+            ttnn.release_trace(self.device, tr["id"])
+        self._win["traces"] = {}
+        self._last_normed = None
