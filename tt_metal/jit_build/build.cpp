@@ -1067,4 +1067,44 @@ void jit_build_cache_clear() {
     jit_build::clear_file_hash_cache();
 }
 
+namespace {
+// Process-global set of deferred kernel-build futures (compile-only mode). See build.hpp.
+std::mutex g_pending_kernel_builds_mutex;
+std::vector<std::shared_future<void>> g_pending_kernel_builds;
+}  // namespace
+
+void add_pending_kernel_build(std::shared_future<void> build_future) {
+    std::lock_guard<std::mutex> lock(g_pending_kernel_builds_mutex);
+    g_pending_kernel_builds.push_back(std::move(build_future));
+}
+
+void launch_pending_build_step(const std::function<void()>& build_func) {
+    add_pending_kernel_build(detail::async(build_func));
+}
+
+void wait_for_pending_kernel_builds() {
+    // Move the pending set out under the lock, then join outside it so builds submitted concurrently
+    // are not blocked by this wait.
+    std::vector<std::shared_future<void>> pending;
+    {
+        std::lock_guard<std::mutex> lock(g_pending_kernel_builds_mutex);
+        pending.swap(g_pending_kernel_builds);
+    }
+    // Join every build before returning, even if one throws (mirrors sync_build_steps): stash the
+    // first error and rethrow only once nothing is still running against captured state.
+    std::exception_ptr first_error;
+    for (auto& build_future : pending) {
+        try {
+            build_future.get();
+        } catch (...) {
+            if (!first_error) {
+                first_error = std::current_exception();
+            }
+        }
+    }
+    if (first_error) {
+        std::rethrow_exception(first_error);
+    }
+}
+
 }  // namespace tt::tt_metal
