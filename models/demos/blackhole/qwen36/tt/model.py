@@ -3029,11 +3029,16 @@ class Qwen36Model:
                                 ttnn.deallocate(t)
                         attn_out_b = layer.attention.forward_prefill_batched(
                             gdn_in, chunk_size=gdn_chunk, valid_lens=[vlens[u] for u in grp], carry=False
-                        )  # [1, Bg, bucket, d_out]
+                        )
                         ttnn.deallocate(gdn_in)
                         d_out = attn_out_b.shape[-1]
+                        # tt_all_reduce inside forward_prefill_batched flattens its [1,Bg,T,·] input
+                        # to [1,1,Bg*T,·] and (on this mesh path) returns it flat, so normalize with
+                        # a full-merge reshape (volume-safe for either shape) and split users by
+                        # their seq rows [i*bucket, (i+1)*bucket) — user-major row order.
+                        attn_out_b = ttnn.reshape(attn_out_b, (1, 1, Bg * bucket, d_out))
                         # Per-user slice copies; the batched output is freed once split.
-                        outs = [ttnn.reshape(attn_out_b[:, i : i + 1, :, :], (1, 1, bucket, d_out)) for i in range(Bg)]
+                        outs = [attn_out_b[:, :, i * bucket : (i + 1) * bucket, :] for i in range(Bg)]
                         ttnn.deallocate(attn_out_b)
                     for i in range(Bg):
                         h = ttnn.add(xs[i], outs[i])  # both [1, 1, bucket, d]
