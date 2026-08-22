@@ -159,8 +159,14 @@ def main() -> int:
                 ttnn.deallocate(S1)
                 ex2 = ttnn.multiply(S2, 1.0 / n_elem)
                 ttnn.deallocate(S2)
-                var = ttnn.subtract(ex2, ttnn.multiply(mean, mean))
+                var_raw = ttnn.subtract(ex2, ttnn.multiply(mean, mean))
                 ttnn.deallocate(ex2)
+                # Matches tt/flow/estimator.py's TtGroupNorm exactly: E[x^2]-E[x]^2 is
+                # catastrophic-cancellation-prone and can go negative under bfloat16
+                # rounding, and rsqrt of that is Inf with no exception -- see
+                # PERF.md's "The matmul form needed a variance clamp" note.
+                var = ttnn.relu(var_raw)
+                ttnn.deallocate(var_raw)
                 inv = ttnn.rsqrt(ttnn.add(var, 1e-5))
                 ttnn.deallocate(var)
                 mean_c = ttnn.matmul(mean, mt_dev)  # [B, 1, C]
