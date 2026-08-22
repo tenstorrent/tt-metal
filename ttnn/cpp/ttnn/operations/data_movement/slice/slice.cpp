@@ -325,6 +325,45 @@ ttnn::Tensor slice(
         if (!no_step) {
             TT_FATAL(input.dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
         }
+        // Narrow a TILE input to the minimal tile-aligned row window before the ROW_MAJOR hop.
+        // rm_only converts the WHOLE tensor to ROW_MAJOR; the untilize's per-core CBs are sized
+        // from the L1 free at program-creation time, so a row-subset slice of a wide activation
+        // can allocate CBs that cross concurrently resident L1 tensors and fail the launch-time
+        // CB/L1 clash check (program.cpp "static circular buffers ... clash with L1 buffers").
+        // Carving the tile window first (e.g. [1,2048,5120] rows 2045..2048 -> 32-row window)
+        // shrinks the untilize input by the row ratio; the tile-window slice is exact (row
+        // bounds tile-aligned) so numerics are unchanged. Interleaved + full-width + step-1
+        // inputs only; everything else keeps the existing whole-tensor conversion.
+        if (input_tensor.layout() == Layout::TILE && no_step && !one_dimensional && !input_tensor.is_sharded() &&
+            modified_begins[input_rank - 1] == 0 &&
+            modified_ends[input_rank - 1] == input_tensor.padded_shape()[input_rank - 1]) {
+            const uint32_t tile_h = tile_shape[0];
+            const uint32_t in_rows = input_tensor.padded_shape()[input_rank - 2];
+            const uint32_t win_begin = (modified_begins[input_rank - 2] / tile_h) * tile_h;
+            uint32_t win_end = std::min(tt::round_up(modified_ends[input_rank - 2], tile_h), in_rows);
+            win_end = std::max(win_end, tile_h);
+            if (win_begin < win_end && (win_end - win_begin) < in_rows) {
+                ttsl::SmallVector<uint32_t> win_begins = modified_begins;
+                ttsl::SmallVector<uint32_t> win_ends = modified_ends;
+                win_begins[input_rank - 2] = win_begin;
+                win_ends[input_rank - 2] = win_end;
+                input = ttnn::prim::slice(
+                    input,
+                    ttnn::Shape(win_begins),
+                    ttnn::Shape(win_ends),
+                    ttnn::Shape(modified_step),
+                    memory_config,
+                    /*use_tensor_args*/ false,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    sub_core_grids,
+                    std::nullopt);
+                modified_begins[input_rank - 2] -= win_begin;
+                modified_ends[input_rank - 2] -= win_begin;
+            }
+        }
         input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config);
     }
 
