@@ -6,7 +6,8 @@
 # Seeded from /home/ttuser/sfpi-uplift/sweep-2x2/weekly-e2e-weekly-20260821 by tools/seed_kernel_baseline.py; committing an
 # update is a REVIEWED manual step (review the run's KERNEL-DELTA.md alongside).
 # Pin anchors (conf_lint R5b/R6b enforce these against sweep_2x2.conf):
-#  21. c5bc09aab243c614d5cadf07a0738660bfb779f6c062e75dd69d538554f76b68 (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 21 = pin 20 + FL trio + crosslane-lower (2026-08-22)
+#  22. 1505b01f7b6fde1f2c3d00fc42e9cc1018f7321bb0650324992ce1edd6ffd646 (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 22 = pin 21 + FP-1 fix (2026-08-22)
+#  21. c5bc09aab243c614d5cadf07a0738660bfb779f6c062e75dd69d538554f76b68 (superseded by 22; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 21 = pin 20 + FL trio + crosslane-lower (2026-08-22)
 # 31611bc75cb201f153c33e03c30254513f0a7b966ae54f2b9927ff62ee36cd14 (superseded by 21; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256)
 # 32489dda4fd6321262fbc7c18b8f05126ed760073c7030dc529555111967ffd3 (CURRENT sweep_2x2.conf PINNED_SIM_BH_SHA256)
 id	arch	chip_class	metric	scope	selector	cycles	status	expected_class	compiler_sha	provenance
