@@ -13,6 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt.gdn import conv_kda
 from models.demos.blackhole.qwen36.tt.gdn.weights import gdn_proj_dtype_and_tag
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_decode_ttnn,
@@ -213,6 +214,10 @@ class TPGatedDeltaNet:
         # Native ttnn.conv1d depthwise prefill; L1_FULL slice keeps it trace-safe.
         # Only used when valid_len is None (masked buckets keep the MAC FIR).
         self._gdn_conv1d = True
+        # Fused KDA decode conv (qkv_causal_conv1d_silu) replacing the composite
+        # shift-register; opt-in experiment, composite stays the default.
+        self._gdn_conv_kda = os.environ.get("QWEN36_GDN_CONV_KDA") == "1"
+        self._kda_bufs = None  # allocated by reset_state on the batched (B == max_batch_size) binding
         self._conv1d_wprep = None  # prepared depthwise weight (populated on first prefill call)
         # Persistent zero sources for trace-safe reset_state_inplace (alloc before any trace)
         self._zero_conv0 = None
@@ -251,6 +256,17 @@ class TPGatedDeltaNet:
         if getattr(self, "_batched_conv_carry", None) is not None:
             ttnn.deallocate(self._batched_conv_carry)
         self._batched_conv_carry = None
+        # KDA decode-conv windows: only for the batched decode binding — model.py rebinds
+        # B=1 prefill scratches through reset_state, and those must not touch (or shadow)
+        # the batched windows the decode trace baked in.
+        if self._gdn_conv_kda and self.B == self.args.max_batch_size:
+            if self._kda_bufs is None:
+                _chunk = os.environ.get("QWEN36_GDN_CONV_KDA_CHUNK")
+                self._kda_bufs = conv_kda.KDAConvBuffers(
+                    self.mesh, self.B, self.K, self.qkv_dim_tp, channel_chunk=int(_chunk) if _chunk else None
+                )
+            else:
+                self._kda_bufs.reset()
 
     def reset_state_inplace(self):
         """Zero conv + recurrent state in place (preserves trace buffer addresses).
@@ -273,6 +289,25 @@ class TPGatedDeltaNet:
         ttnn.copy(self._zero_rec, self.rec_state)
         # Zero cross-chunk conv carry for new sequence
         ttnn.copy(self._zero_conv_carry, self.conv_carry)
+        # New sequence also clears the KDA windows (only when the batched state is
+        # bound — a B=1 scratch reset must not clear live batched users).
+        if self._kda_active() and self.conv_states[0].shape[1] == self._kda_bufs.B:
+            self._kda_bufs.reset()
+
+    def _kda_active(self):
+        return self._gdn_conv_kda and self._kda_bufs is not None
+
+    def _kda_sync_from_conv_states(self):
+        """Refresh the KDA decode windows from a freshly written conv_states list.
+
+        Skipped when the bound conv_states width differs from the batched windows
+        (a B=1 prefill scratch is bound); its state reaches the windows through
+        write_slot instead. Device-only, so safe inside a captured prefill trace."""
+        if not self._kda_active():
+            return
+        if self.conv_states is None or self.conv_states[0].shape[1] != self._kda_bufs.B:
+            return
+        conv_kda.rebuild_window(self._kda_bufs, self.conv_states)
 
     def _col_proj(self, x, weight, decode_progcfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG):
         """Column-parallel qkvz projection; DRAM-sharded decode matmul when enabled.
@@ -599,6 +634,7 @@ class TPGatedDeltaNet:
                 for j in range(self.K - 1):
                     src = ttnn.reshape(ttnn.slice(conv_new_state, (0, j, 0), (1, j + 1, D)), (1, B, D))
                     ttnn.copy(src, self.conv_states[j + 1])
+                self._kda_sync_from_conv_states()
             ttnn.deallocate(conv_new_state)
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
         _L1 = ttnn.L1_MEMORY_CONFIG
@@ -715,6 +751,7 @@ class TPGatedDeltaNet:
         else:
             self.rec_state = rec_batched
             self.conv_states = conv_states
+        self._kda_sync_from_conv_states()
         for t in rec_list:
             ttnn.deallocate(t)
         for t in conv_new_list:
@@ -825,6 +862,9 @@ class TPGatedDeltaNet:
         if rec_src is not rec:
             ttnn.deallocate(rec)
         self._write_index(self.rec_state, rec_src, slot, dim=0)
+        # KDA windows first: the conv_states loop below consumes convs.
+        if self._kda_active():
+            conv_kda.write_window_slot(self._kda_bufs, convs, slot)
         for m in range(self.K):
             c = convs[m]
             c_src = c if c.dtype == self.conv_states[m].dtype else ttnn.typecast(c, self.conv_states[m].dtype)
@@ -844,6 +884,8 @@ class TPGatedDeltaNet:
         self._gather_indices(self.rec_state, idx, dim=0)
         for m in range(self.K):
             self._gather_indices(self.conv_states[m], idx, dim=1)
+        if self._kda_active():
+            conv_kda.gather_window_slots(self._kda_bufs, idx)
 
     def _gather_indices(self, buf, idx, dim):
         """Rebuild `buf` so slice i along `dim` becomes old slice idx[i], then copy back in place.
@@ -1003,6 +1045,7 @@ class TPGatedDeltaNet:
                 ttnn.deallocate(new_conv[m])
         else:
             self.conv_states = new_conv
+        self._kda_sync_from_conv_states()
 
         # ---- output (gated RMSNorm + SiLU(z) gate + row-parallel out proj + all-reduce) ----
         out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6)
@@ -1054,20 +1097,36 @@ class TPGatedDeltaNet:
             qkv_p = ttnn.pad(qkv, [(0, 0), (0, Bmax - B), (0, 0)], value=0.0, memory_config=_L1)
             ttnn.deallocate(qkv)
             qkv = qkv_p
-        for j in range(self.K - 1):
-            ttnn.copy(st[j + 1], st[j])
-        ttnn.copy(qkv, st[self.K - 1])
-        ttnn.deallocate(qkv)
-        conv = ttnn.multiply(st[0], tw["conv_taps"][0], memory_config=_L1)
-        for j in range(1, self.K):
-            conv = ttnn.mac(st[j], tw["conv_taps"][j], conv)
-        conv = ttnn.silu(conv, memory_config=_L1)
-
         kd = self.key_dim_tp
-        q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd)), (B, Nk, Dk))
-        k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, Nk, Dk))
-        v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
-        ttnn.deallocate(conv)
+        if self._kda_active():
+            # Fused KDA conv: shift+MAC+SiLU+q/k/v split in one kernel on the
+            # user-major window sequence; state lives in _kda_bufs.win (the
+            # conv_states list is left stale until the next prefill refresh).
+            qf, kf, vf = conv_kda.decode_conv(
+                self._kda_bufs, qkv, tw["conv_taps"], kd, self.value_dim_tp, memory_config=_L1
+            )
+            ttnn.deallocate(qkv)
+            if B < Bmax:
+                qf = ttnn.slice(qf, (0, 0, 0), (1, B, kd), memory_config=_L1)
+                kf = ttnn.slice(kf, (0, 0, 0), (1, B, kd), memory_config=_L1)
+                vf = ttnn.slice(vf, (0, 0, 0), (1, B, self.value_dim_tp), memory_config=_L1)
+            q = ttnn.reshape(qf, (B, Nk, Dk))
+            k = ttnn.reshape(kf, (B, Nk, Dk))
+            v = ttnn.reshape(vf, (B, Nv, Dv))
+        else:
+            for j in range(self.K - 1):
+                ttnn.copy(st[j + 1], st[j])
+            ttnn.copy(qkv, st[self.K - 1])
+            ttnn.deallocate(qkv)
+            conv = ttnn.multiply(st[0], tw["conv_taps"][0], memory_config=_L1)
+            for j in range(1, self.K):
+                conv = ttnn.mac(st[j], tw["conv_taps"][j], conv)
+            conv = ttnn.silu(conv, memory_config=_L1)
+
+            q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd)), (B, Nk, Dk))
+            k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, Nk, Dk))
+            v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
+            ttnn.deallocate(conv)
 
         # GQA expand Q/K Nk→Nv; recurrence L2-norms + scales internally
         rf = Nv // Nk
