@@ -2601,6 +2601,65 @@ class TestReportVersion:
         assert report["version"] == ttnn.graph.REPORT_VERSION
 
 
+class TestRunId:
+    """The ``run_id`` that pairs a memory report with the performance report from the same run.
+
+    The value originates in tt-metal (``tt::tt_metal::get_or_create_run_id``) and is written into
+    the capture metadata by ``GraphProcessor::get_report()``; the profiler writes the same value
+    into the ``profile_log_device.csv`` preamble.
+    """
+
+    def test_capture_metadata_has_run_id(self, device, tmp_report_dir):
+        """A real capture stamps a non-empty run_id into the report metadata."""
+        report_path = tmp_report_dir / "report.json"
+
+        torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        _ = ttnn.relu(tt_input)
+        _ = ttnn.graph.end_graph_capture_to_file(report_path)
+
+        with open(report_path) as f:
+            report = json.load(f)
+
+        assert report["metadata"]["run_id"]
+
+    def test_run_id_is_stable_across_captures(self, device, tmp_report_dir):
+        """Two captures in one process share a run_id, so both pair with the same perf report."""
+        torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+        run_ids = []
+        for index in range(2):
+            report_path = tmp_report_dir / f"report_{index}.json"
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            _ = ttnn.relu(tt_input)
+            _ = ttnn.graph.end_graph_capture_to_file(report_path)
+            with open(report_path) as f:
+                run_ids.append(json.load(f)["metadata"]["run_id"])
+
+        assert run_ids[0] == run_ids[1]
+
+    def test_import_carries_run_id_into_report_metadata(self, tmp_path):
+        """The importer surfaces run_id in ``report_metadata`` for the visualizer to read."""
+        graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {"counter": 1, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        report = _make_report(graph, metadata={"run_id": "0123456789abcdef0123456789abcdef"})
+
+        conn, cursor = _import_to_db(report, tmp_path)
+        try:
+            cursor.execute("SELECT value FROM report_metadata WHERE key = 'run_id'")
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+
+        assert row is not None
+        assert row[0] == "0123456789abcdef0123456789abcdef"
+
+
 class TestBufferChunksSchemaAndAggregation:
     """Schema, version, and per-(op, device, addr, bank, core) aggregation tests
     for the ``buffer_chunks`` table that replaced the legacy ``buffer_pages``.
