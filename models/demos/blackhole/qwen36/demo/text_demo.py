@@ -243,6 +243,8 @@ def _blocks_for(seqlen, max_generated_tokens):
         pytest.param(128, 100, False, 1, 1, id="paged_128"),
         pytest.param(128, 200, False, 1, 1, id="spec_128"),
         pytest.param(2048, 200, False, 1, 1, id="spec_2k"),
+        # Batched-c8 spec probe (TT_SPEC_DECODE=1 TT_SPEC_BATCHED=1; the goal config).
+        pytest.param(2048, 200, False, 8, 1, id="spec_2k_b8"),
         pytest.param(4096, 100, True, 1, 1, id="traced_4k"),
         pytest.param(8192, 100, True, 1, 1, id="traced_8k"),
         pytest.param(16384, 100, True, 1, 1, id="traced_16k"),
@@ -321,7 +323,9 @@ def test_demo_text(
     # See docs/mtp_design.md.
     if os.environ.get("TT_SPEC_DECODE", "0") == "1":
         if batch > 1:
-            pytest.skip("spec decode is B=1 (batched/one-slot spec not built; see docs/mtp_design.md)")
+            if os.environ.get("TT_SPEC_BATCHED", "0") == "1":
+                return _run_spec_generation_batched(model, tokenizer, token_ids, max_generated_tokens, batch)
+            pytest.skip("batched spec needs TT_SPEC_BATCHED=1 (see docs/mtp_design.md)")
         generated, perf = _run_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
         perf["compile_time"] = 0.0
         text = tokenizer.decode(generated, skip_special_tokens=True)
@@ -1211,6 +1215,94 @@ def _run_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_
         f"{avg_decode * 1000:.1f} ms/token"
     )
     return generated, {"ttft": ttft, "avg_decode_s": avg_decode, "decode_steps": stats["iterations"], **stats}
+
+
+def _run_spec_generation_batched(model, tokenizer, token_ids, max_generated_tokens, batch):
+    """Batched (c8) MTP speculative generation (TT_SPEC_DECODE=1 TT_SPEC_BATCHED=1).
+
+    Per-user drafting + ONE grouped chunk verify per iteration. With
+    QWEN36_PROMPT_FILE set, users take prompts round-robin from the file so the
+    per-user anchors/accepts genuinely desync; otherwise every user runs the
+    shared prompt (rows must then decode identically — a built-in check).
+    """
+    from models.demos.blackhole.qwen36.tt.mtp import Qwen36MTPHead
+    from models.demos.blackhole.qwen36.tt.spec_decode_batched import Qwen36BatchedSpeculativeDecoder
+    from models.demos.blackhole.qwen36.tt.weight_mapping import checkpoint_has_mtp, load_qwen36_mtp_state_dict
+
+    ckpt = model.args.CKPT_DIR
+    if not checkpoint_has_mtp(ckpt):
+        pytest.skip(f"checkpoint {ckpt} has no mtp.* weights (needs the 3.8 checkpoint)")
+
+    # Per-user prompts (round-robin from the prompt file when provided).
+    prompt_file = os.environ.get("QWEN36_PROMPT_FILE")
+    prompts = []
+    for u in range(batch):
+        if prompt_file:
+            os.environ["QWEN36_PROMPT_INDEX"] = str(u)
+            try:
+                prompts.append(_prompt_from_file(prompt_file, tokenizer, token_ids.shape[1]))
+            except IndexError:
+                os.environ["QWEN36_PROMPT_INDEX"] = "0"
+                prompts.append(_prompt_from_file(prompt_file, tokenizer, token_ids.shape[1]))
+        else:
+            prompts.append(token_ids.clone())
+
+    # Per-user block budgets over one shared paged KV pool.
+    max_t = max(p.shape[1] for p in prompts)
+    blocks_pu = ((max(64, (max_t + max_generated_tokens + BLOCK_SIZE - 1) // BLOCK_SIZE) + 31) // 32) * 32
+    page_table = torch.stack(
+        [torch.arange(u * blocks_pu, (u + 1) * blocks_pu, dtype=torch.int32) for u in range(batch)]
+    )
+    kv_heads = model.args.n_local_kv_heads if model.num_devices > 1 else model.args.n_kv_heads
+    kv_cache_shape = [batch * blocks_pu, kv_heads, BLOCK_SIZE, model.args.head_dim]
+    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=batch)
+
+    logger.info("Loading MTP head weights from safetensors...")
+    mtp_sd = load_qwen36_mtp_state_dict(ckpt)
+    mtp = Qwen36MTPHead(
+        model.mesh_device,
+        model.args,
+        mtp_sd,
+        embedding=_mtp_embedding(model),
+        lm_head_weight=model.lm_head_weight,
+        rope=model.rope,
+        tensor_cache_path=model.args.weight_cache_path(),
+        lm_head_sharded=getattr(model, "_lmhead_vocab_sharded", False),
+    )
+    mtp.allocate_kv_cache(blocks_pu, users=batch)
+
+    draft_len = int(os.environ.get("TT_SPEC_DRAFT_LEN", 4))
+    spec = Qwen36BatchedSpeculativeDecoder(
+        model, mtp, page_table, draft_len=draft_len, stop_tokens=[tokenizer.eos_token_id]
+    )
+
+    signpost("inference_prefill")
+    t0 = time.time()
+    spec.prefill(prompts)
+    ttft = time.time() - t0
+
+    signpost("inference_decode")
+    t0 = time.time()
+    adaptive = os.environ.get("TT_SPEC_ADAPTIVE_K", "0") == "1"
+    rows, stats = spec.generate(max_generated_tokens, adaptive_k=adaptive)
+    decode_s = time.time() - t0
+    mtp.free_kv_cache()
+
+    total_tokens = sum(len(r) for r in rows)
+    per_user_ms = 1000.0 * decode_s * batch / max(1, total_tokens)
+    logger.info(
+        f"[spec c{batch} K={draft_len}] {total_tokens} tokens over {batch} users in {stats['iterations']} "
+        f"iterations ({stats['tokens_per_user_iteration']:.2f} tok/user-iter, accept {stats['accept_rate']:.2f}); "
+        f"ttft={ttft:.1f}s, {per_user_ms:.1f} ms/token/user "
+        f"({1000.0 / per_user_ms:.1f} t/s/u), timing={stats['timing_s']}"
+    )
+    for u, r in enumerate(rows):
+        logger.info(f"[spec c{batch}] user {u}: {tokenizer.decode(r, skip_special_tokens=True)[:200]!r}")
+    if not prompt_file:
+        for u in range(1, batch):
+            assert rows[u] == rows[0], f"user {u} diverged from user 0 (identical prompts must decode identically)"
+    assert all(len(r) >= 1 for r in rows)
+    return
 
 
 def _save_tp_benchmark(perf, model, seqlen, prompt_len, num_generated):

@@ -184,16 +184,37 @@ executes fully REPLICATED — weights, KV, and inputs on every device, no CCL; a
 its own replicated embed_tokens copy (the target's table is hidden-sharded)
 and reuses the target's vocab-sharded LM head with host shard-concat.
 
-## Batch > 1 (goal: concurrency 8) — design only, NOT built
+## Batch > 1 (goal: concurrency 8) — BUILT (eager v1, TT_SPEC_BATCHED=1)
 
-- Verify: per-user B=1 chunk forwards against the user's page-table row and GDN
-  slot (mirroring `prefill_paged_slots`), or a batched GDN chunk kernel at B=8
-  once available. The per-slot dense GDN state means the snapshot/commit scheme
-  applies per slot unchanged.
-- Drafter: the MTP step is a standard B-wide paged decode — batch the pending +
-  chained steps across users directly.
-- Scheduling: users have different `m` per iteration; commit points diverge, so
-  per-user `(a, c)` bookkeeping (already per-slot in this design) carries over.
+`tt/spec_decode_batched.py::Qwen36BatchedSpeculativeDecoder` — per-user
+drafting, ONE grouped chunk verify per iteration (the c8 fixed-cost
+amortization), fully desynced per-user accept/commit:
+
+- **Batched verify**: rides the silicon-validated grouped machinery
+  (`prefill_paged_grouped` / `test_gdn_fused_batch`, Bg=8 at bucket 128) with
+  two changes: GDN runs `forward_prefill_batched(carry=True)` over the batched
+  per-user ANCHOR state rows (`rec_state[B,...]` + `_batched_conv_carry`
+  [B,K-1,D]), and each user's per-user attention pass gets its OWN device
+  chunk_start, rope window, and page-table rows — the desync is pure data.
+  Per-user row extraction splits hidden rows (up to 64 for the first verify's
+  prompt tail) from score rows (exactly 32 — the multicore-argmax contract)
+  with independent anchors.
+- **Verify never commits**: one batched snapshot (2 clones per GDN layer — the
+  SAME tensor count as B=1) restored after every verify.
+- **Commits desync per user**: when `commit_advance` fires for user u, a B=1
+  masked chunk runs on the persistent prefill scratch seeded from snapshot row
+  u, and the result is row-written (`TPGatedDeltaNet._write_index`) into the
+  live batched state AND the snapshot.
+- **Prefill**: per-user segmented masked chunks on the B=1 scratch (per-user
+  drafter-KV block ranges via `Qwen36MTPHead(users=B)`), stitched into the
+  batched anchor buffers host-side once.
+- Host-emulation coverage: `test_batched_loop_desync` (per-user accept rates
+  differ -> anchors/accepts/commits desync while every user emits exactly its
+  own target sequence), uniform-prompt identity, first-verify pending arming.
+
+Next: batch the drafter legs across users (the MTP step is a standard B-wide
+paged decode) and trace the batched verify once the u=1 capture-chain isolation
+lands.
 
 ## v1 limitations (explicit)
 
