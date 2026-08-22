@@ -598,6 +598,195 @@ def test_sfpu_blaze_moe_gate_topk_device_profile(perf_report, blaze_impl):
 
 
 # ---------------------------------------------------------------------------
+# Lane FU top16 unlock: the lane-EX top16 lift is compiler-blocked no more
+# (dual-bank pinned-chain binding, sfpi-gcc agent/ira-dualbank) -- the
+# blaze-moegatetop16 row's arms.  Same vehicle, num_selected_experts=16
+# (routes both arms to the top-16 path; sixteen emitted rows, ordering
+# asserted via full_sort=True).  The SEMANTIC arm requires
+# -mtt-tensix-optimize-lreg-alloc (the reviewed default-off allocator knob)
+# in TT_LLK_EXTRA_COMPILER_OPTIONS until the flag is promoted -- without it
+# the lift still refuses lreg-pressure-exceeded by design.
+# ---------------------------------------------------------------------------
+
+_BLAZE_POINT16 = dict(
+    num_selected_experts=16, full_sort=True, normalize=True, zero_tail=False
+)
+
+
+@skip_for_wormhole
+@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+def test_sfpu_blaze_moe_gate_top16(blaze_impl):
+    torch.manual_seed(0)
+
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    torch_format = format_dict[formats.input_format]
+
+    biased = _distinct_bf16_keys()
+    scores = (
+        torch.empty(NUM_TOTAL_EXPERTS, dtype=torch.float32)
+        .uniform_(0.05, 0.95)
+        .to(torch_format)
+        .to(torch.float32)
+    )
+
+    scores_tile = _face0_tile(scores, torch_format)
+    biased_tile = _face0_tile(biased, torch_format)
+
+    src_A = torch.cat(
+        [
+            tilize_block(
+                t.flatten(), [TILE_DIM, TILE_DIM], stimuli_format=formats.input_format
+            ).flatten()
+            for t in (scores_tile, biased_tile)
+        ]
+    )
+    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+
+    configuration = TestConfig(
+        "sources/sfpu_generic_moe_gate_topk_test.cpp",
+        formats,
+        templates=[
+            MOE_GATE_TOPK(num_total_experts=NUM_TOTAL_EXPERTS, **_BLAZE_POINT16),
+            MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
+            BLAZE_IMPL(blaze_impl),
+        ],
+        runtimes=[TILE_COUNT(1)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=2,
+            tile_count_B=1,
+            tile_count_res=NUM_RESULT_TILES,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+
+    res_from_L1 = configuration.run().result
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+
+    score_words = res_tensor[:ELEMENTS_PER_TILE]
+    index_words = res_tensor[ELEMENTS_PER_TILE : 2 * ELEMENTS_PER_TILE]
+
+    result_scores = untilize_block(
+        score_words, formats.output_format, [TILE_DIM, TILE_DIM]
+    ).reshape(TILE_DIM, TILE_DIM)
+    result_indices = (
+        untilize_block(index_words, formats.output_format, [TILE_DIM, TILE_DIM])
+        .contiguous()
+        .view(torch.uint16)
+        .to(torch.int32)
+        .reshape(TILE_DIM, TILE_DIM)
+    )
+
+    emitted_rows, num_winners = _expected_live_winners(
+        _BLAZE_POINT16["num_selected_experts"],
+        _BLAZE_POINT16["normalize"],
+        _BLAZE_POINT16["zero_tail"],
+    )
+
+    golden_generator = get_golden_generator(MoeGateTopkGolden)
+    scale = _bits_to_float(SCALE_BITS)
+    eps = _bits_to_float(EPS_BITS)
+    golden_ids, _ = golden_generator(
+        biased, scores, num_winners, _BLAZE_POINT16["normalize"], eps=eps, scale=scale
+    )
+
+    got_ids = [int(result_indices[row, 0].item()) for row in range(num_winners)]
+    got_scores = torch.tensor(
+        [result_scores[row, 0].item() for row in range(num_winners)],
+        dtype=torch.float32,
+    )
+
+    assert sorted(got_ids) == sorted(golden_ids), (
+        f"[{_BLAZE_IMPL_IDS[blaze_impl]}] selected expert ids differ.\n"
+        f"  got    {sorted(got_ids)}\n"
+        f"  golden {sorted(golden_ids)}"
+    )
+    expected_paired = golden_generator.scores_for_ids(
+        got_ids, golden_ids, scores, _BLAZE_POINT16["normalize"], eps=eps, scale=scale
+    )
+    assert passed_test(
+        expected_paired, got_scores, formats.output_format, print_errors=True
+    ), "returned scores are not the (normalized) original scores of the returned ids"
+    assert got_ids == golden_ids, (
+        f"[{_BLAZE_IMPL_IDS[blaze_impl]}] full_sort=True must return winners in "
+        f"descending-key order.\n  got    {got_ids}\n  golden {golden_ids}"
+    )
+    # Blanked tail rows (emitted 16, winners 16 here: none) -- keep the canon
+    # invariant executable should the point ever gain a blanked tail.
+    for row in range(num_winners, emitted_rows):
+        got_id = int(result_indices[row, 0].item())
+        got_score = result_scores[row, 0].item()
+        assert got_id == 0 and got_score == 0.0
+    # No odd-columns check: this is the top-16 path (canon test skips it too).
+
+
+@skip_for_wormhole
+@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+def test_sfpu_blaze_moe_gate_top16_device_profile(perf_report, blaze_impl):
+    """MATH-zone sample of MOE_GATE_TOPK_BODY for the top-16 original / lift."""
+    torch.manual_seed(0)
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    torch_format = format_dict[formats.input_format]
+
+    biased = _distinct_bf16_keys()
+    scores = (
+        torch.empty(NUM_TOTAL_EXPERTS, dtype=torch.float32)
+        .uniform_(0.05, 0.95)
+        .to(torch_format)
+        .to(torch.float32)
+    )
+    src_A = torch.cat(
+        [
+            tilize_block(
+                _face0_tile(t, torch_format).flatten(),
+                [TILE_DIM, TILE_DIM],
+                stimuli_format=formats.input_format,
+            ).flatten()
+            for t in (scores, biased)
+        ]
+    )
+    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+
+    configuration = PerfConfig(
+        "sources/sfpu_generic_moe_gate_topk_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            MOE_GATE_TOPK(num_total_experts=NUM_TOTAL_EXPERTS, **_BLAZE_POINT16),
+            MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
+            BLAZE_IMPL(blaze_impl),
+        ],
+        runtimes=[TILE_COUNT(1)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=2,
+            tile_count_B=1,
+            tile_count_res=NUM_RESULT_TILES,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+    configuration.run(perf_report, run_count=1)
+    frame = perf_report.frame()
+    rows = frame[frame["marker"] == "MOE_GATE_TOPK_BODY"]
+    assert len(rows) == 1, frame.to_string(index=False)
+    cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(
+        f"BLAZE_MOE_GATE_TOP16 {_BLAZE_IMPL_IDS[blaze_impl]} math_cycles={int(cycles)}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Lane FE multi-tile rows: blaze original vs lift at tile_count (= gate
 # instances) 8 / 32 on the vehicle's runtime TILE_CNT batch loop.  Instance b
 # has its own scores/biased pair (buffer_A[2b] / buffer_A[2b+1]) and its own

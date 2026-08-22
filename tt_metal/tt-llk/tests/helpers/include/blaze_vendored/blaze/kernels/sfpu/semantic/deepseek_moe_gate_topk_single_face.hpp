@@ -147,12 +147,12 @@ template <bool start_transpose, bool end_transpose>
 sfpi_inline void ds_ph0_st1_to_1(DsBank &b)
 {
     if constexpr (start_transpose) {
-        transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+        ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     }
     indexed_swap<1>(b.v0, b.v1, b.c0, b.c1);
     indexed_swap<1>(b.v3, b.v2, b.c3, b.c2);
     if constexpr (end_transpose) {
-        transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+        ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     }
 }
 
@@ -160,14 +160,14 @@ template <bool start_transpose, bool end_transpose>
 sfpi_inline void ds_ph1_st2_to_1(DsBank &b)
 {
     if constexpr (start_transpose) {
-        transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+        ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     }
     indexed_swap<3>(b.v0, b.v2, b.c0, b.c2);
     indexed_swap<3>(b.v1, b.v3, b.c1, b.c3);
     indexed_swap<3>(b.v0, b.v1, b.c0, b.c1);
     indexed_swap<3>(b.v2, b.v3, b.c2, b.c3);
     if constexpr (end_transpose) {
-        transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+        ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     }
 }
 
@@ -180,14 +180,14 @@ sfpi_inline void ds_ph2_st3_to_1(DsBank &b)
     } else {
         indexed_swap<1>(b.v2, b.v3, b.c2, b.c3);
     }
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     constexpr unsigned swap_mode = bitonic ? 2u /*ROWS_01_MAX*/ : 1u /*ALL_ROWS_MAX*/;
     indexed_swap<swap_mode>(b.v0, b.v2, b.c0, b.c2);
     indexed_swap<swap_mode>(b.v1, b.v3, b.c1, b.c3);
     indexed_swap<swap_mode>(b.v0, b.v1, b.c0, b.c1);
     indexed_swap<swap_mode>(b.v2, b.v3, b.c2, b.c3);
     if constexpr (end_transpose) {
-        transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+        ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     }
 }
 
@@ -198,7 +198,7 @@ sfpi_inline void ds_top8_ph3_st4_to_1(DsBank &b)
         indexed_swap<1>(b.v0, b.v2, b.c0, b.c2);  // Step 4
         indexed_swap<1>(b.v1, b.v3, b.c1, b.c3);
         indexed_swap<1>(b.v0, b.v1, b.c0, b.c1);  // Step 3
-        transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+        ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
         indexed_swap<1>(b.v0, b.v2, b.c0, b.c2);  // Step 2
         indexed_swap<1>(b.v1, b.v3, b.c1, b.c3);
         indexed_swap<1>(b.v0, b.v1, b.c0, b.c1);  // Step 1
@@ -207,14 +207,14 @@ sfpi_inline void ds_top8_ph3_st4_to_1(DsBank &b)
         indexed_swap<1>(b.v2, b.v0, b.c2, b.c0);  // Step 4
         indexed_swap<1>(b.v3, b.v1, b.c3, b.c1);
         indexed_swap<1>(b.v3, b.v2, b.c3, b.c2);  // Step 3
-        transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+        ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
         indexed_swap<1>(b.v2, b.v0, b.c2, b.c0);  // Step 2
         indexed_swap<1>(b.v3, b.v1, b.c3, b.c1);
         indexed_swap<1>(b.v1, b.v0, b.c1, b.c0);  // Step 1
         indexed_swap<1>(b.v3, b.v2, b.c3, b.c2);
     }
     if constexpr (end_transpose) {
-        transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+        ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     }
 }
 
@@ -229,10 +229,10 @@ sfpi_inline void ds_top8_ph0_to_ph3(DsBank &b)
 
 sfpi_inline void ds_reverse_sort_order(DsBank &b)
 {
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     indexed_swap<0>(b.v0, b.v3, b.c0, b.c3);  // UNCONDITIONALLY
     indexed_swap<0>(b.v1, b.v2, b.c1, b.c2);
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
 }
 
 // ---- entry points ---------------------------------------------------------
@@ -263,9 +263,9 @@ inline void _semantic_deepseek_moe_gate_sum_top2()
 
     // Sum top2 (F4: window off before compiler-allocated arithmetic).
     set_dest_index_tracking<false>();
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     b.v0 = b.v0 + b.v1;
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
 
     // Replicate the top2 sum down the column (F5: typed prgm-const carries
     // the SFPCONFIG lanes-0..7 vertical broadcast).
