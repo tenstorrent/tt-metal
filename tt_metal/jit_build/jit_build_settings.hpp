@@ -7,13 +7,80 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include <tt_stl/assert.hpp>
+
+// Host-side mirror of the device SemScope enum.
+// Codegen emits these values into each kernel's scope table.
+enum class SemScope : uint8_t {
+    LOCAL_NONATOMIC = 0,
+    DM_LOCAL_CACHED = 1,
+    EXTERNAL = 2,
+};
+
 namespace tt::tt_metal {
+
+// One resolved semaphore binding.
+struct SemBindingEntry {
+    std::string name;
+    uint16_t id = 0;
+    SemScope scope = SemScope::LOCAL_NONATOMIC;
+    uint32_t total_binder_harts = 0;
+};
+
+// The generated semaphore section.
+// Emits the TT_METAL2_SEM_SCOPE_TABLE define. Must be the FIRST line of the generated header,
+// before any include, so no include chain can compile noc_semaphore.h without it.
+inline void emit_sem_scope_table(std::ostream& os, const std::vector<SemBindingEntry>& entries, size_t table_size) {
+    std::vector<SemScope> table(table_size, SemScope::LOCAL_NONATOMIC);
+    for (const auto& entry : entries) {
+        TT_FATAL(
+            entry.id < table.size(),
+            "semaphore id {} does not fit the {}-slot scope table (NUM_SEMAPHORES)",
+            entry.id,
+            table.size());
+        table[entry.id] = entry.scope;
+    }
+    os << "#define TT_METAL2_SEM_SCOPE_TABLE {";
+    for (size_t i = 0; i < table.size(); i++) {
+        os << "static_cast<::SemScope>(" << static_cast<int>(table[i]) << ")" << (i + 1 < table.size() ? ", " : "");
+    }
+    os << "}\n\n";
+}
+
+// Emits the sem:: ids plus two static_asserts: one fails the kernel build if the host
+// and device SemScope enums are renumbered out of sync; the other if anything compiled
+// noc_semaphore.h before the scope table was defined (which would silently degrade every id
+// to LOCAL_NONATOMIC). Leaves `namespace sem {` open so the caller can append symbols (the
+// cached-pool seeder) before closing it.
+inline void emit_sem_ids_and_tripwires(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
+    os << "#include <cstdint>\n";
+    os << "#ifndef COMPILE_FOR_TRISC\n";
+    os << "#include \"api/dataflow/noc_semaphore.h\"\n";
+    os << "#endif\n";
+    os << "namespace sem {\n";
+    for (const auto& entry : entries) {
+        os << "constexpr std::uint32_t " << entry.name << " = " << entry.id << "u;\n";
+    }
+    os << "#ifndef COMPILE_FOR_TRISC\n";
+    os << "static_assert(static_cast<int>(::SemScope::LOCAL_NONATOMIC) == "
+       << static_cast<int>(SemScope::LOCAL_NONATOMIC)
+       << " && static_cast<int>(::SemScope::DM_LOCAL_CACHED) == " << static_cast<int>(SemScope::DM_LOCAL_CACHED)
+       << " && static_cast<int>(::SemScope::EXTERNAL) == " << static_cast<int>(SemScope::EXTERNAL)
+       << ", \"device SemScope numbering diverged from the host mirror (jit_build_settings.hpp)\");\n";
+    for (const auto& entry : entries) {
+        os << "static_assert(::sem_scope_of(" << entry.id << "u) == static_cast<::SemScope>("
+           << static_cast<int>(entry.scope)
+           << "), \"scope table not visible at noc_semaphore.h inclusion -- include-order regression\");\n";
+    }
+    os << "#endif\n";
+}
 
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.
 //
@@ -99,7 +166,9 @@ public:
     virtual void process_dataflow_buffer_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
     virtual void process_semaphore_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
+        std::function<
+            void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
+        const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `tensor::` namespace
