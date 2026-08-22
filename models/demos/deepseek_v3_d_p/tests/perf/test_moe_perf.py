@@ -65,7 +65,6 @@ def test_deepseek_v3_moe_perf_loudbox():
     )
 
 
-@_ISL_REBASELINE_SKIP
 @pytest.mark.timeout(0)
 def test_deepseek_v3_moe_perf_galaxy():
     """Measure the production 8x4 TorusXY Galaxy path without padding."""
@@ -77,8 +76,10 @@ def test_deepseek_v3_moe_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad0,
-        # Historical baseline: measured with FABRIC_1D, not TorusXY.
-        expected_device_perf_ns_per_iteration=21_028_751,
+        # Measured 2026-08-22 on the 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified
+        # (DDR 16000 nominal, high power).
+        # Two runs 6.155 / 6.070 ms, spread 1.38%. Supersedes a FABRIC_1D-era number.
+        expected_device_perf_ns_per_iteration=6_112_530,
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4",
         num_iterations=1,
@@ -88,7 +89,6 @@ def test_deepseek_v3_moe_perf_galaxy():
     )
 
 
-@_ISL_REBASELINE_SKIP
 @pytest.mark.timeout(0)
 def test_deepseek_v3_moe_perf_galaxy_pad50():
     """8x4 galaxy ground truth with 50% right-padding + padding-aware routing (zigzag placement)."""
@@ -100,8 +100,10 @@ def test_deepseek_v3_moe_perf_galaxy_pad50():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad50,
-        # Historical baseline: measured with FABRIC_1D, not TorusXY.
-        expected_device_perf_ns_per_iteration=14_107_228,
+        # Measured 2026-08-22 on the 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified
+        # (DDR 16000 nominal, high power).
+        # Two runs 5.223 / 5.188 ms, spread 0.67%. Supersedes a FABRIC_1D-era number.
+        expected_device_perf_ns_per_iteration=5_205_872,
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4_pad50",
         num_iterations=1,

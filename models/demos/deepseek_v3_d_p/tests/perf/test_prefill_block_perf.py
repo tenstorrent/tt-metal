@@ -68,25 +68,27 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         ),
         pytest.param(
             f"pytest {_TEST_PATH} -k 'torus-xy-8x4 and layer0 and gate_device and no_ref and isl_5k' --wrapper-invocation",
-            18_157_603,  # Calibrated 2026-07-01 on BH Galaxy 110-c910, TorusXY, real weights.
+            5_435_504,  # Measured 2026-08-22 on the 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified
+            # (DDR 16000 nominal, high power).
+            # Two runs 5.421 / 5.450 ms, spread 0.54% -- well inside the 3% band.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer0_dense_torus_xy",
             1,
             1,
             0.03,
             "glx_8x4_layer0_dense_real_weights_torus_xy",
-            marks=_ISL_REBASELINE_SKIP,
         ),
         pytest.param(
             f"pytest {_TEST_PATH} -k 'torus-xy-8x4 and layer3 and gate_device and no_ref and isl_5k' --wrapper-invocation",
-            60_634_662,  # Calibrated 2026-07-01 on BH Galaxy 110-c910, TorusXY, real weights.
+            13_674_937,  # Measured 2026-08-22 on the 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified
+            # (DDR 16000 nominal, high power).
+            # Two runs 13.558 / 13.792 ms, spread 1.71% -- inside the 3% band, the widest of the five.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer3_moe_torus_xy",
             1,
             1,
             0.03,
             "glx_8x4_layer3_moe_real_weights_torus_xy",
-            marks=_ISL_REBASELINE_SKIP,
         ),
         pytest.param(
             f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer0 and gate_device and no_ref and isl_2k56' --wrapper-invocation",

@@ -15,8 +15,11 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla"
 
-_CMD_2X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq100k and scaled_sl and random and fabric2d-2x4' --wrapper-invocation"
-_CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq100k and scaled_sl and random and torus-xy-8x4' --wrapper-invocation"
+# Both proxies run the one prefill ISL at 640 tokens/chip. 8x4 takes it literally (max_sl: 5120
+# global / sp=8); 2x4 scales it (scaled_sl: 1280 global / sp=2), since max_sl there would put 2560
+# on each chip. Selecting seq5k rather than seq100k keeps the id honest about the workload.
+_CMD_2X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq5k and scaled_sl and random and fabric2d-2x4' --wrapper-invocation"
+_CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq5k and max_sl and random and torus-xy-8x4' --wrapper-invocation"
 
 # Kimi K2.6 chunked prefill: 50k KV-cache prefix + one fresh 5k chunk (chunk_size_global=5120). On
 # the 8x4 Galaxy (sp=8) this lands chunk_local=640 per chip, exercising the num_heads=64 chunked-only
@@ -60,7 +63,17 @@ def _ci_unsupported_param_combos(**params):
     return True
 
 
+# Two independent reasons this is off: CI does not want the non-chunked path at all (above), and the
+# baseline predates the ISL change. The skip covers local runs too; drop it once a LoudBox number
+# exists, which leaves the CI policy above standing.
+_ISL_REBASELINE_SKIP = pytest.mark.skip(
+    reason="baseline measured at 3200 tokens/chip; the row now runs 640/chip. Re-measure on a LoudBox, "
+    "then drop this mark."
+)
+
+
 @pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
+@_ISL_REBASELINE_SKIP
 @pytest.mark.timeout(0)
 def test_deepseek_v3_mla_perf_loudbox():
     """Retain the existing 2x4 LoudBox proxy on unwrapped Fabric2D."""
@@ -71,7 +84,7 @@ def test_deepseek_v3_mla_perf_loudbox():
         model_name_2x4="deepseek_v3_mla_lb_2x4_fabric2d",
         subdir="deepseek_v3_mla",
         margin=0.03,
-        comments_2x4="seq100k_scaled_lb_2x4_fabric2d_proxy",
+        comments_2x4="isl5k_lb_2x4_fabric2d_proxy",
     )
 
 
@@ -87,13 +100,16 @@ def test_deepseek_v3_mla_perf_galaxy():
         command=_CMD_8X4,
         # Migration starting threshold: measured 2026-06-10 on bh-glx-110-c08u02 with FABRIC_1D.
         # The first certified TorusXY result must be used to recalibrate it.
-        expected_device_perf_ns_per_iteration=14_252_829,
+        # Measured 2026-08-22 on the 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified
+        # (DDR 16000 nominal, high power).
+        # Two runs 3.894 / 3.886 ms, spread 0.21% -- the tightest of the five.
+        expected_device_perf_ns_per_iteration=3_890_333,
         subdir="deepseek_v3_mla",
         model_name="deepseek_v3_mla_glx_8x4",
         num_iterations=1,
         batch_size=1,
         margin=margin,
-        comments="seq100k_scaled_glx_8x4_ground_truth",
+        comments="isl5k_glx_8x4_ground_truth",
     )
 
 
