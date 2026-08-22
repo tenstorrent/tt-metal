@@ -6411,3 +6411,16 @@ single runs cannot distinguish luck from rate at these numbers. Recommended: pow
 one reset lever not yet tried), then N>=5 runs per tree if the rate question matters before Monday.
 The victim signature for whoever hunts it: pages_available() ~0 for the whole run on one stream while
 its mover credit-waits and trickles 12-56 frames every ~3 s -- decided at bring-up, sticky for the run.
+
+### N+70 third addendum: 2-MINUTE MODEL-FREE REPRODUCER (2026-08-22 ~04:20)
+
+TT_METAL_PERF_DEBUG_FULL_MESH=RxC on test_perf_debug_zones opens the whole mesh in ONE process and
+launches the workload on every device concurrently (slow dispatch: no-wait launches, then wait-all) --
+kimi's exact bring-up shape at synthetic speed. First loaded run: 4 dead sockets (d0/s0 7,327 / d0/s1
+594 / d1/s1 2,361 / d2/s0 1,610 vs ~42-43k healthy), victim chips at 56-108k producer stalls, anomalies
+0 -- the full episode signature in ~2 minutes. It also reproduces the intermittent niu-mode bring-up
+MMIO wedge (1 of 3 mesh bring-ups tonight) and the uncaught-second-UmdException crash after a handled
+init failure. NOT kimi-specific; NOT single-device (unit-mesh runs never showed it all week). Root-cause
+loop from here: per-leg (notify-visibility vs ack-landing) timing on a victim, bring-up-order experiments
+(the week's tally skews ~6:1 toward s0, the first-constructed socket), UMD static/dynamic window path per
+victim -- at 2 min/sample.

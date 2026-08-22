@@ -179,8 +179,23 @@ int main(int argc, char** argv) {
     const size_t num_cqs = (nq != nullptr && *nq != '\0') ? (size_t)std::strtoul(nq, nullptr, 10) : 1;
 
     int device_id = 0;
-    std::shared_ptr<distributed::MeshDevice> mesh_device =
-        distributed::MeshDevice::create_unit_mesh(device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, num_cqs);
+    // TT_METAL_PERF_DEBUG_FULL_MESH=RxC (e.g. 2x4): open the whole mesh in ONE process -- the same
+    // bring-up shape as a real multi-device workload (N devices, 2N sockets, one profiler boot) with
+    // this synthetic workload, for reproducing bring-up-order socket failures without a model run.
+    std::shared_ptr<distributed::MeshDevice> mesh_device;
+    if (const char* fm = std::getenv("TT_METAL_PERF_DEBUG_FULL_MESH"); fm != nullptr && *fm != '\0') {
+        uint32_t rows = (uint32_t)std::strtoul(fm, nullptr, 10);
+        const char* xp = std::strchr(fm, 'x');
+        uint32_t cols = xp != nullptr ? (uint32_t)std::strtoul(xp + 1, nullptr, 10) : 1;
+        mesh_device = distributed::MeshDevice::create(
+            distributed::MeshDeviceConfig(distributed::MeshShape(rows, cols)),
+            DEFAULT_L1_SMALL_SIZE,
+            DEFAULT_TRACE_REGION_SIZE,
+            num_cqs);
+    } else {
+        mesh_device = distributed::MeshDevice::create_unit_mesh(
+            device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, num_cqs);
+    }
     if (clkprobe) {
         clock_probe(mesh_device);
         mesh_device->close();
@@ -245,10 +260,16 @@ int main(int argc, char** argv) {
             2000.0 / zone_ns);
     }
     if (slow_dispatch) {
-        IDevice* device = mesh_device->get_devices().front();
-        detail::CompileProgram(device, program);
-        detail::WriteRuntimeArgsToDevice(device, program);
-        detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+        // Launch on EVERY device of the mesh, concurrently (no-wait launches, then wait all): a unit mesh
+        // degenerates to the old single-device behavior, and a full mesh drives all sockets at once.
+        for (IDevice* device : mesh_device->get_devices()) {
+            detail::CompileProgram(device, program);
+            detail::WriteRuntimeArgsToDevice(device, program);
+            detail::LaunchProgram(device, program, /*wait_until_cores_done=*/false);
+        }
+        for (IDevice* device : mesh_device->get_devices()) {
+            detail::WaitProgramDone(device, program);
+        }
     } else {
         distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
         distributed::MeshWorkload workload;
