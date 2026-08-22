@@ -87,9 +87,43 @@ def _load_and_cache_context(context_url, max_length=None):
     return context_text
 
 
+def _prompt_from_file(path, tokenizer, cap):
+    """QWEN36_PROMPT_FILE prompt override for distribution-specific measurement.
+
+    Accepts a JSON file (list of strings, list of {"prompt": ...}, or
+    {"prompts": [...]}) or a plain-text file (the whole file is one prompt).
+    QWEN36_PROMPT_INDEX picks the entry (default 0). The chat template is
+    applied (add_generation_prompt=True) so generation measures the assistant
+    distribution; QWEN36_PROMPT_RAW=1 tokenizes the text verbatim instead.
+    """
+    raw = Path(path).read_text()
+    if path.endswith(".json"):
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            data = data["prompts"]
+        prompts = [e["prompt"] if isinstance(e, dict) else e for e in data]
+    else:
+        prompts = [raw]
+    idx = int(os.environ.get("QWEN36_PROMPT_INDEX", "0"))
+    prompt = prompts[idx]
+    if os.environ.get("QWEN36_PROMPT_RAW", "0") == "1":
+        ids = tokenizer(prompt, return_tensors="pt")["input_ids"]
+    else:
+        text = tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}], add_generation_prompt=True, tokenize=False
+        )
+        ids = tokenizer(text, add_special_tokens=False, return_tensors="pt")["input_ids"]
+    logger.info(f"QWEN36_PROMPT_FILE: {path}[{idx}] -> {ids.shape[1]} tokens (cap {cap})")
+    return ids[:, :cap]
+
+
 def _get_prompt(seqlen, tokenizer, max_prompt_len=None):
     """Load ~seqlen tokens (clipped, not padded). Tile-aligned; no pad tokens (last-token logits)."""
     cap = seqlen if max_prompt_len is None else min(seqlen, max_prompt_len)
+    # Prompt-file override (accept-rate measurement on a chosen prompt distribution).
+    prompt_file = os.environ.get("QWEN36_PROMPT_FILE")
+    if prompt_file:
+        return _prompt_from_file(prompt_file, tokenizer, cap)
     # QWEN35_REF_PROMPT=1: match the reference 27B 64k extractive task (pg84, default chat template, no thinking seed).
     if os.environ.get("QWEN35_REF_PROMPT") and seqlen >= 4096:
         with open(f"{SHARED_PROMPTS_DIR}/input_data_long_64k.json") as f:
@@ -203,6 +237,12 @@ def _blocks_for(seqlen, max_generated_tokens):
     "seqlen, max_generated_tokens, use_trace, batch, repeat_batches",
     [
         pytest.param(128, 50, True, 1, 1, id="traced_128"),
+        # Non-traced single-user path (also the TT_SPEC_DECODE probe ids: with
+        # TT_SPEC_DECODE=1 the run routes to MTP speculative decode; without it,
+        # plain eager paged decode — a like-for-like spec-off baseline).
+        pytest.param(128, 100, False, 1, 1, id="paged_128"),
+        pytest.param(128, 200, False, 1, 1, id="spec_128"),
+        pytest.param(2048, 200, False, 1, 1, id="spec_2k"),
         pytest.param(4096, 100, True, 1, 1, id="traced_4k"),
         pytest.param(8192, 100, True, 1, 1, id="traced_8k"),
         pytest.param(16384, 100, True, 1, 1, id="traced_16k"),
@@ -275,6 +315,19 @@ def test_demo_text(
     logger.info(
         f"Prompt: {actual_len} tokens (block budget: {num_blocks} blocks x {BLOCK_SIZE} = {max_seq_len} tokens)"
     )
+
+    # TT_SPEC_DECODE=1: MTP speculative decode (B=1, single device or TP mesh),
+    # reachable from EVERY test id — spec runs eager, so use_trace is ignored.
+    # See docs/mtp_design.md.
+    if os.environ.get("TT_SPEC_DECODE", "0") == "1":
+        if batch > 1:
+            pytest.skip("spec decode is B=1 (batched/one-slot spec not built; see docs/mtp_design.md)")
+        generated, perf = _run_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
+        perf["compile_time"] = 0.0
+        text = tokenizer.decode(generated, skip_special_tokens=True)
+        _log_results(perf, actual_len, len(generated), text)
+        _assert_results(perf, actual_len, len(generated))
+        return
 
     # Multi-device (TP): route through the chunk-outer prefill + paged decode path.
     # Prefill runs each ~2048-token chunk through all layers, carrying GDN recurrent/
@@ -1027,10 +1080,6 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
     # Identity page table
     page_table = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
 
-    # TT_SPEC_DECODE=1: MTP speculative decode (single device, greedy) — see docs/mtp_design.md.
-    if os.environ.get("TT_SPEC_DECODE", "0") == "1":
-        return _run_spec_generation(model, tokenizer, token_ids, page_table, max_generated_tokens, num_blocks)
-
     signpost("inference_prefill")
     t0 = time.time()
     logits = model.prefill_paged(token_ids, page_table)
@@ -1071,14 +1120,43 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
     return generated, {"ttft": ttft, "avg_decode_s": avg_decode, "decode_steps": len(decode_times)}
 
 
-def _run_spec_generation(model, tokenizer, token_ids, page_table, max_generated_tokens, num_blocks):
+def _mtp_embedding(model):
+    """Embedding callable for the MTP drafter head.
+
+    Single device shares the target's Embedding. On TP the target's table is
+    hidden-sharded, but the replicated drafter needs full-dim rows — load a
+    replicated copy of embed_tokens straight from the safetensors shards
+    (~2.5 GB bf16 per device).
+    """
+    if model.num_devices == 1:
+        return model.embd
+
+    from safetensors import safe_open
+
+    ckpt = Path(model.args.CKPT_DIR)
+    key = "model.language_model.embed_tokens.weight"
+    with open(ckpt / "model.safetensors.index.json") as f:
+        fname = json.load(f)["weight_map"][key]
+    with safe_open(str(ckpt / fname), framework="pt") as sf:
+        table = sf.get_tensor(key)
+    weight = ttnn.from_torch(
+        table.unsqueeze(0).unsqueeze(0),  # [1,1,vocab,dim], the framework Embedding layout
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=model.mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
+    )
+    return lambda tok: ttnn.embedding(tok, weight, layout=ttnn.TILE_LAYOUT)
+
+
+def _run_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks):
     """MTP speculative generation (TT_SPEC_DECODE=1): drafter head + verify loop.
 
-    The MTP weights are read straight from the checkpoint's safetensors (the
-    backbone loader drops mtp.*), the head shares the target's embedding + LM
-    head, and the spec decoder owns prefill (segmented masked buckets with
-    hidden capture for drafter seeding). Returns (generated, perf_dict) in the
-    _run_paged_generation format plus accept-rate stats.
+    B=1, single device or TP mesh. The MTP weights are read straight from the
+    checkpoint's safetensors (the backbone loader drops mtp.*); the spec decoder
+    owns prefill (segmented masked buckets with hidden capture for drafter
+    seeding). Returns (generated, perf_dict) in the _run_paged_generation
+    format plus accept-rate stats.
     """
     from models.demos.blackhole.qwen36.tt.mtp import Qwen36MTPHead
     from models.demos.blackhole.qwen36.tt.spec_decode import Qwen36SpeculativeDecoder
@@ -1088,16 +1166,26 @@ def _run_spec_generation(model, tokenizer, token_ids, page_table, max_generated_
     if not checkpoint_has_mtp(ckpt):
         pytest.skip(f"checkpoint {ckpt} has no mtp.* weights (TT_SPEC_DECODE=1 needs the 3.8 checkpoint)")
 
+    # Paged KV + GDN state (TP allocates n_local_kv_heads per device and turns
+    # on in-place GDN state, which the TP spec snapshots require). Blocks
+    # rounded to 32 for chunked-SDPA page-table stick alignment.
+    num_blocks = ((num_blocks + 31) // 32) * 32
+    kv_heads = model.args.n_local_kv_heads if model.num_devices > 1 else model.args.n_kv_heads
+    kv_cache_shape = [num_blocks, kv_heads, BLOCK_SIZE, model.args.head_dim]
+    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+    page_table = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
+
     logger.info("Loading MTP head weights from safetensors...")
     mtp_sd = load_qwen36_mtp_state_dict(ckpt)
     mtp = Qwen36MTPHead(
         model.mesh_device,
         model.args,
         mtp_sd,
-        embedding=model.embd,
+        embedding=_mtp_embedding(model),
         lm_head_weight=model.lm_head_weight,
         rope=model.rope,
         tensor_cache_path=model.args.weight_cache_path(),
+        lm_head_sharded=getattr(model, "_lmhead_vocab_sharded", False),
     )
     mtp.allocate_kv_cache(num_blocks)
 
