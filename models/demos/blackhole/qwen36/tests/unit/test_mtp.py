@@ -163,7 +163,7 @@ def test_mtp_kv_slot_overwrite(device, mtp_setup, request):
         ref.step(*seeds[pos], pos)
 
     # Garbage chain at slots 2..3 (as if drafted then rejected). The reference
-    # cache is append-only, so it skips this — that asymmetry is the test.
+    # skips it — the TT head must erase the difference by slot overwrite.
     head.step(int(torch.randint(0, _STUB_VOCAB, (1,))), torch.randn(args.dim), 2)
     head.step(int(torch.randint(0, _STUB_VOCAB, (1,))), torch.randn(args.dim), 3)
 

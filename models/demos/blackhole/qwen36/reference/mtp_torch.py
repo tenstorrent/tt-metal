@@ -56,20 +56,26 @@ class MTPTorchReference:
         self.head_dim = head_dim
         self.norm_eps = norm_eps
         self.cos_cpu, self.sin_cpu = compute_rope_freqs(rope_head_dim, max_seq_len, theta=rope_theta)
-        self.past_k = None
-        self.past_v = None
+        self._kv = {}  # position -> (k [1,H_kv,1,D], v [1,H_kv,1,D])
 
     def reset(self):
-        self.past_k = None
-        self.past_v = None
+        self._kv = {}
 
     def step(self, token_id, hidden_row, position):
-        """One drafter step. Returns (logits [out], hidden [dim]); appends KV.
+        """One drafter step. Returns (logits [out], hidden [dim]).
 
-        The KV cache is append-only (this reference exists for step/chain PCC,
-        not for rollback), so callers must feed strictly increasing positions.
+        KV is position-addressed (paged-cache semantics): re-stepping a slot
+        overwrites it, so rejected-draft replays behave like the TT head.
+        Slots 0..position-1 must all be populated.
         """
         sd = self.sd
+        missing = [p for p in range(position) if p not in self._kv]
+        assert not missing, f"drafter KV slots {missing} unwritten below position {position}"
+        if position > 0:
+            past_k = torch.cat([self._kv[p][0] for p in range(position)], dim=2)
+            past_v = torch.cat([self._kv[p][1] for p in range(position)], dim=2)
+        else:
+            past_k = past_v = None
         emb = self.embed_weight[token_id].reshape(1, 1, -1)
         e_n = rms_norm_zero_centered(emb, sd["pre_fc_norm_embedding.weight"], eps=self.norm_eps)
         h_n = rms_norm_zero_centered(
@@ -82,9 +88,8 @@ class MTPTorchReference:
         sin = self.sin_cpu[position : position + 1].unsqueeze(0)
         # Explicit all-visible mask: torch SDPA's is_causal aligns query row 0 with
         # key 0, which would mask the whole cache on a T=1 decode step.
-        s_total = 1 + (self.past_k.shape[2] if self.past_k is not None else 0)
-        mask = torch.zeros(1, 1, 1, s_total)
-        attn_out, self.past_k, self.past_v = gated_attention_forward(
+        mask = torch.zeros(1, 1, 1, position + 1)
+        attn_out, k_all, v_all = gated_attention_forward(
             hidden_states=attn_in,
             q_proj_weight=sd["layers.0.self_attn.q_proj.weight"],
             k_proj_weight=sd["layers.0.self_attn.k_proj.weight"],
@@ -99,10 +104,11 @@ class MTPTorchReference:
             head_dim=self.head_dim,
             attention_mask=mask,
             norm_eps=self.norm_eps,
-            past_key_value_k=self.past_k,
-            past_key_value_v=self.past_v,
+            past_key_value_k=past_k,
+            past_key_value_v=past_v,
             output_kv_cache=True,
         )
+        self._kv[position] = (k_all[:, :, -1:], v_all[:, :, -1:])
         h1 = x + attn_out
 
         ff_in = rms_norm_zero_centered(h1, sd["layers.0.post_attention_layernorm.weight"], eps=self.norm_eps)
