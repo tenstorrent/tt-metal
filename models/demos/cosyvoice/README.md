@@ -121,10 +121,47 @@ python models/demos/cosyvoice/demo/demo.py --out out.wav
 ```
 
 Runs all three stages on device and writes a 22.05 kHz wav. With no arguments it
-synthesises the captured golden utterance, which needs no front-end.
+synthesises the captured golden utterance, which needs no front-end -- the quickest way to
+hear the pipeline work, and it additionally scores itself against the reference waveform.
 
 The front-end is not ported. `scripts/prepare_inputs.py` runs it once in the reference
-venv and writes the flat `.npz` the demo loads — see [What runs where](#what-runs-where).
+venv and writes the flat `.npz` files the demo loads — see [What runs where](#what-runs-where).
+
+**All four modes, real synthesis:**
+
+`sft` and `instruct` need their own checkpoint's weights, not the base `CosyVoice-300M`
+export above -- `llm.pt` differs across all three checkpoints and `flow.pt` differs for
+`-SFT` specifically (`-Instruct`'s `flow.pt` is byte-identical to the base checkpoint's;
+`hift.pt` is identical across all three, so one export covers every mode):
+
+```bash
+export PYTHONPATH=$COSYVOICE_PYTHONPATH
+mkdir -p tests/golden/per_mode
+$COSYVOICE_PY scripts/export_weights.py --checkpoint CosyVoice-300M-SFT --module llm --fp16 \
+    --out tests/golden/per_mode/llm_weights_sft.npz
+$COSYVOICE_PY scripts/export_weights.py --checkpoint CosyVoice-300M-Instruct --module llm --fp16 \
+    --out tests/golden/per_mode/llm_weights_instruct.npz
+$COSYVOICE_PY scripts/export_weights.py --checkpoint CosyVoice-300M-SFT --module flow --fp16 \
+    --out tests/golden/per_mode/flow_weights_sft.npz
+```
+
+```bash
+# in the reference venv, once:
+$COSYVOICE_PY scripts/prepare_inputs.py --out-dir /tmp/sweep --langs en
+
+# in tt-metal's python_env, on device:
+export PYTHONPATH=$TT_METAL_HOME
+python models/demos/cosyvoice/demo/demo.py --inputs /tmp/sweep --out /tmp/cosy_demo
+```
+
+Writes `sft_en.wav`, `zero_shot_en.wav`, `cross_lingual_en.wav` and `instruct_en.wav` into
+`--out`. Unlike the golden path above, this generates fresh LLM tokens and a fresh vocoder
+excitation per mode through `tt.pipeline.CosyVoiceTTNN.synthesize` — real synthesis, not
+reproduction, so there is nothing to score it against and no two runs sound identical.
+`--modes sft,instruct` restricts the loop; `--lang` picks which of
+`prepare_inputs.py --langs`'s outputs to use (default `en`). One utterance per mode is the
+right scope for a quickstart — the full mode x language sweep is what
+`run_reference.py`/`eval_wer_sim.py` already cover for scoring.
 
 ### Reference baseline and scoring
 
