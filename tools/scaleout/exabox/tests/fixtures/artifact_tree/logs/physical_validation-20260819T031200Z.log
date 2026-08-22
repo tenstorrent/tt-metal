@@ -1,0 +1,8 @@
+=== Physical Validation - 20260819T031200Z ===
+EXECUTION_DIR=/tmp/artifact_tree
+OUTPUT_DIR=physical_validation/label/abcd1234_20260819T031200Z
+HOSTS=bh-glx-110-c01u02,bh-glx-110-c01u08
+
+--- Analyzing validation results ---
+
+Analysis exit code: 1

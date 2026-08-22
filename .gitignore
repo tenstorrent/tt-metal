@@ -5,6 +5,7 @@
 .idea
 runtime
 *.log
+!tools/scaleout/exabox/tests/fixtures/**/*.log
 *.csv
 *.xlsx
 *.code-workspace

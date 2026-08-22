@@ -1,0 +1,6 @@
+=== Recover - 20260819T051200Z ===
+HOSTS=bh-glx-110-d10u02
+OUTPUT_DIR=/tmp/recover-incomplete
+
+Running recover.sh:
+  ./tools/scaleout/exabox/recover.sh --hosts bh-glx-110-d10u02

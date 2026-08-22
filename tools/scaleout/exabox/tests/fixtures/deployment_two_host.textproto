@@ -1,0 +1,12 @@
+hosts: {
+  aisle: "C"
+  rack: 1
+  shelf_u: 2
+  host: "bh-glx-110-c01u02"
+}
+hosts: {
+  aisle: "C"
+  rack: 1
+  shelf_u: 8
+  host: "bh-glx-110-c01u08"
+}
