@@ -626,6 +626,7 @@ def compute_target(
     if bytes_per_unit and float(bytes_per_unit) > 0:
         ab = int(round(float(bytes_per_unit)))
         src = "anchored baseline bytes"
+
         # A PLACEHOLDER ANCHOR IS NOT EVIDENCE. The anchor is written at phase "before", from the
         # checkpoint alone, because that is when the run needs a ceiling -- and it is write-once so
         # the report and the stop gate can never score one run against two numbers. Both correct.
@@ -639,12 +640,63 @@ def compute_target(
         # So the anchor is superseded exactly once, by a measurement of the same thing, and only when
         # it is recognisably the old placeholder. Every anchor derived any other way still wins, and
         # the value stays pinned for the rest of the run either way -- this replaces a guess with a
-        # measurement before optimisation starts, it does not let the ceiling drift during it.
-        if _anchor_is_placeholder(ab, mf):
-            _dwb = _scalar(mf.get("device_weight_bytes", 0), 0)
-            if _dwb > 0 and mf.get("device_census_complete", True):
-                ab = int(_dwb)
-                src = "device census: %.3g GB resident (superseded a params x 1.0 placeholder anchor)" % (_dwb / 1e9)
+    # THE MEASURED WIDTH, NOT THE MEASURED TOTAL.
+    #
+    # Both branches below used device_weight_bytes -- the census's byte TOTAL -- and
+    # simple_active_bytes twenty lines away says why that is wrong: "Deliberately the RATIO and not
+    # the census's byte TOTAL. The total counts everything resident -- on gemma-3, 15.49 GB of which
+    # ~6.85 GB is KV cache, which the ceiling must not divide by."
+    #
+    # And it is worse than that, because the total also encodes the DEPTH the census walked. The perf
+    # test drives trace_replay, and trace_replay runs the census -- so the census executes twice per
+    # cycle: once inside the full-pipeline gate, which measures every layer, and once inside the
+    # TRACY profile, which is legitimately depth-capped because an uncapped capture overflows the
+    # marker buffer. Whichever ran last wins. On voxtral that is 7.043 GB against 1.718 GB, a 4.1x
+    # swing in the ceiling's divisor decided purely by ordering; run 16 recorded one and run 17 the
+    # other, from identical code.
+    #
+    #   the RATIO  1.3228 (2 layers) vs 1.3252 (62)   0.2% apart -- an average width does not care
+    #                                                 how many layers were built
+    #   the TOTAL  1.718 GB vs 7.043 GB               4.1x apart
+    #
+    # So params x bytes_per_param keeps everything the census was added for -- it is still a
+    # MEASUREMENT of the served width, still outranks every predicted width, and still fixes the
+    # params x 1.0 placeholder that published voxtral at 141.8 tok/s/u against a true 54.7 -- while
+    # depending on the one figure that survives a capped build. Decode was the only stage to show it,
+    # because active_bytes feeds the MEMORY roof and decode is the only memory-bound stage; encode
+    # and prefill carried the same error on a non-binding row nobody reads.
+    # The WIDTH is preferred over the census's byte TOTAL, and the total is kept only as the fallback
+    # for facts that state no width. Where the census walks the whole model the two agree -- gemma-3
+    # measures 11.9 GB resident and 1.0625 B/param x 11.18B params = 11.88 GB, the same ceiling by
+    # either road. They part company only when the census is DEPTH-CAPPED, and then the width is the
+    # one that survives: an average width does not care how many layers were built, while a byte
+    # total is almost entirely a statement about how many were.
+    def _census_bytes():
+        _p = ceiling_params(mf) or 0
+        if not mf.get("device_census_complete", True):
+            return 0, 0.0, 0, ""
+        _bpp = _scalar(mf.get("bytes_per_param", 0.0), 0.0)
+        if _bpp > 0 and _p > 0:
+            return int(round(_p * _bpp)), _bpp, _p, "measured served width"
+        # No width stated. The total is all there is, and it is still a measurement of the built
+        # model -- better than any predicted width -- so it is used, but it carries the depth the
+        # census walked and says so.
+        _tot = int(_scalar(mf.get("device_weight_bytes", 0), 0))
+        if _tot > 0:
+            return _tot, ((_tot / _p) if _p else 0.0), _p, "resident total, no width stated"
+        return 0, 0.0, 0, ""
+
+    # An anchor pinned from the checkpoint alone is a placeholder, not evidence. Superseding it with a
+    # measurement before optimisation starts does not let the ceiling drift during it.
+    if _anchor_is_placeholder(ab, mf):
+        _cb, _bpp, _p, _how = _census_bytes()
+        if _cb > 0:
+            ab = _cb
+            src = "device census: %.3gB x %.4g B/param (%s, superseded a placeholder anchor)" % (
+                _p / 1e9,
+                _bpp,
+                _how,
+            )
     # THE CENSUS OUTRANKS EVERY RULE, because it is not a rule. agent/weight_census walks the BUILT
     # model and sums each resident tensor's element count at its REAL dtype -- the only place the
     # served width exists, since the checkpoint records what was on disk and not what the loader
@@ -654,10 +706,10 @@ def compute_target(
     # is refused rather than used as a lower bound: too few bytes reads as too HIGH a ceiling, which
     # is the direction that ends a run early believing it is at the wall.
     if ab <= 0:
-        _dwb = _scalar(mf.get("device_weight_bytes", 0), 0)
-        if _dwb > 0 and mf.get("device_census_complete", True):
-            ab = int(_dwb)
-            src = "device census: %.3g GB resident at served dtype" % (_dwb / 1e9)
+        _cb, _bpp, _p, _how = _census_bytes()
+        if _cb > 0:
+            ab = _cb
+            src = "device census: %.3gB x %.4g B/param (%s)" % (_p / 1e9, _bpp, _how)
     if ab <= 0:
         ab = simple_active_bytes(mf)
         _p = ceiling_params(mf) or 0

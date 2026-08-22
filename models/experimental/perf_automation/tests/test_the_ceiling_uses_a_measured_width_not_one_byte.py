@@ -152,7 +152,11 @@ def test_the_census_supersedes_the_placeholder_anchor():
     from agent.perf_target import compute_target
 
     t = compute_target(_FACTS, {"dram_bw_gbps": 512.0}, bytes_per_unit=_PLACEHOLDER)
-    assert t.active_bytes == 1718081696, t.active_bytes
+    # params x the measured WIDTH, not the census's byte total: the total is 1.718 GB here only
+    # because that census was depth-capped to 2 layers. See
+    # test_the_ceiling_uses_the_measured_width.py -- the same census at 62 layers totals 7.043 GB,
+    # and a divisor that moves 4.1x with the capture depth is not a property of the model.
+    assert t.active_bytes == 4777269892, t.active_bytes
 
 
 def test_the_resulting_floor_is_physically_possible():
@@ -161,8 +165,12 @@ def test_the_resulting_floor_is_physically_possible():
 
     t = compute_target(_FACTS, {"dram_bw_gbps": 512.0}, bytes_per_unit=_PLACEHOLDER)
     floor_ms = 1e3 * t.active_bytes / 512e9
-    assert floor_ms < 6.11, "measured still beats the floor: %.2f ms" % floor_ms
-    assert 1e-9 * t.active_bytes / (6.11e-3) < 512, "implied bandwidth still exceeds peak"
+    # 6.11 ms was itself a capped-depth decode. Measured at FULL depth the stage takes 17.86 ms, and
+    # THAT is what a floor has to sit under. The invariant is unchanged -- a floor above the
+    # measurement implies a bandwidth above peak -- only the measurement it is checked against.
+    measured_ms = 17.86
+    assert floor_ms < measured_ms, "measured still beats the floor: %.2f ms" % floor_ms
+    assert 1e-9 * t.active_bytes / (measured_ms * 1e-3) < 512, "implied bandwidth still exceeds peak"
 
 
 def test_a_non_placeholder_anchor_still_wins_over_the_census():

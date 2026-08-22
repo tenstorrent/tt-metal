@@ -104,16 +104,25 @@ def test_the_ceiling_divides_by_what_the_census_measured():
     from agent.perf_target import compute_target
 
     t = compute_target(_FACTS, {"dram_bw_gbps": 512.0}, bytes_per_unit=_ANCHOR_BF16)
-    assert t.active_bytes == _FACTS["device_weight_bytes"]
-    assert abs(_floor_ms(t.active_bytes) - 3.36) < 0.05, _floor_ms(t.active_bytes)
+    # The joint this file exists to check is that the report divides by what the census MEASURED
+    # rather than by a prediction. It still does; the measured quantity is now the served width.
+    assert t.active_bytes == int(round(_FACTS["total_params"] * _FACTS["bytes_per_param"]))
+    # 9.33 ms, not the 3.36 the 2-layer byte total gave. Both are "what the census measured" -- the
+    # width is the half of it that does not move when the capture depth does.
+    assert abs(_floor_ms(t.active_bytes) - 9.33) < 0.05, _floor_ms(t.active_bytes)
 
 
 def test_the_printed_floor_is_no_longer_four_times_the_truth():
-    """The report said 14.11 ms. The measurement it was printed beside was 2.89 ms."""
+    """The report said 14.11 ms beside a 2.89 ms measurement -- 487% of a 512 GB/s part. Both of
+    those numbers came from capped-depth runs; measured at full depth decode takes 17.86 ms. The
+    invariant is the one that was violated, stated without a magic ratio: a floor sits UNDER the
+    measurement, because a floor above it claims a bandwidth above peak."""
     from agent.perf_target import compute_target
 
+    measured_ms = 17.86
     t = compute_target(_FACTS, {"dram_bw_gbps": 512.0}, bytes_per_unit=_ANCHOR_BF16)
-    assert _floor_ms(t.active_bytes) < 0.5 * 14.11
+    assert _floor_ms(t.active_bytes) < measured_ms, _floor_ms(t.active_bytes)
+    assert 1e-9 * t.active_bytes / (measured_ms * 1e-3) < 512
 
 
 # ------------------------------------------------------------------ joint 2: stage -> tower
