@@ -6,6 +6,8 @@
 
 #include <array>
 #include <optional>
+#include <stdexcept>
+#include <string>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
@@ -29,6 +31,19 @@
 
 namespace ttml::ops {
 
+namespace {
+
+// ttnn::experimental::gelu_bw takes a string, not a GeluVariant, and only special-cases the exact
+// string "tanh" -- anything else selects the exact-derivative polynomial kernel. There is no LUT
+// backward kernel, so FAST_LUT shares ACCURATE's backward.
+const std::string& gelu_bw_approximate(GeluVariant variant) {
+    static const std::string k_none = "none";
+    static const std::string k_tanh = "tanh";
+    return variant == GeluVariant::TANH ? k_tanh : k_none;
+}
+
+}  // namespace
+
 autograd::TensorPtr relu(const autograd::TensorPtr& tensor) {
     auto out = autograd::create_tensor();
     out->set_value(ttnn::relu(tensor->get_value()));
@@ -43,12 +58,25 @@ autograd::TensorPtr relu(const autograd::TensorPtr& tensor) {
     return out;
 }
 
-autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
+GeluVariant gelu_variant_from_string(std::string_view name) {
+    if (name == "none" || name == "accurate") {
+        return GeluVariant::ACCURATE;
+    }
+    if (name == "tanh") {
+        return GeluVariant::TANH;
+    }
+    if (name == "fast_lut") {
+        return GeluVariant::FAST_LUT;
+    }
+    throw std::invalid_argument(
+        fmt::format("Unknown GELU variant: {}. Supported variants [none, accurate, tanh, fast_lut]", name));
+}
+
+autograd::TensorPtr gelu(const autograd::TensorPtr& tensor, GeluVariant variant) {
     auto out = autograd::create_tensor();
-    out->set_value(ttnn::gelu(tensor->get_value()));
-    autograd::GradFunction grad = [tensor, out]() {
-        static const std::string approx_mode = "none";
-        auto dL_dt = ttnn::experimental::gelu_bw(out->get_grad(), tensor->get_value(), approx_mode);
+    out->set_value(ttnn::gelu(tensor->get_value(), variant));
+    autograd::GradFunction grad = [tensor, out, variant]() {
+        auto dL_dt = ttnn::experimental::gelu_bw(out->get_grad(), tensor->get_value(), gelu_bw_approximate(variant));
         tensor->add_grad(dL_dt);
     };
 
