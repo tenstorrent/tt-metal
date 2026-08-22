@@ -6036,6 +6036,22 @@ def termination_check() -> dict:
         prof = _profile_with_zero_row_retry()
     except Exception as exc:  # noqa: BLE001
         _note_device_crash("termination_check", str(exc))
+        # BEFORE THE VERDICT, NOT AFTER IT. Run 18 halted telling the operator to reboot the host
+        # while two stale processes still held /dev/tenstorrent; the supervisor reaped them on its way
+        # out and a plain `tt-smi -r` then recovered all four boards in ninety seconds. The resets
+        # that "failed" had run against a held device. One retry, only if reaping actually freed
+        # something -- see device_recovery.retry_once_after_reaping for why that is not a loosened
+        # limit.
+        if _recovery_exhausted():
+            try:
+                if _dr().retry_once_after_reaping(
+                    "termination_check",
+                    lambda tgt: _board_reset("termination_check", "post-reap retry (target=%s)" % tgt, target=tgt),
+                    log=lambda m: sys.stderr.write("[perf-mcp] %s\n" % m),
+                ):
+                    prof = _profile_with_zero_row_retry()
+            except Exception:  # noqa: BLE001
+                pass
         if _recovery_exhausted():
             # STOP POLLING A DEAD BOARD. can_stop=False means "work remains"; a device that cannot be
             # recovered is not work remaining, and the agent is instructed never to stop while it is

@@ -535,6 +535,54 @@ def recovery_exhausted() -> bool:
     return RESET_FAILS["n"] >= RESET_FAIL_LIMIT
 
 
+# One post-reap retry per run. Not a second chance at the limit -- a first chance under different
+# conditions, and only when the conditions demonstrably changed.
+_POST_REAP_RETRY = Counter("post_reap_retry")
+
+
+def retry_once_after_reaping(where: str, reset, log=None) -> bool:
+    """After recovery is exhausted, reap device holders and -- only if any were found -- try ONE more
+    verified reset. True when the board came back.
+
+    VOXTRAL RUN 18. The run halted with "a board-management fault no PCIe reset can clear -- REBOOT
+    THE HOST" while the reclaim reported `killed holders none`. The supervisor then printed "the
+    attempt left 2 process(es) running after exiting (1047857, 1245943) -- killing them before going
+    on", and a plain `tt-smi -r` brought all four p300c back in ninety seconds. The board was never
+    unresettable; it was held. The reset attempts that "failed" ran while something still had the
+    device open, and the reaping that would have freed it happened after the verdict.
+
+    WHY THIS IS NOT A LOOSENED LIMIT. "A limit counted in one place and enforced in none is not a
+    limit" -- RESET_FAILS once climbed to 34 against a limit of 3, and that must not come back. So
+    this fires at most ONCE per run, and only when reaping actually killed something: a holder that
+    existed is new evidence about why the earlier resets failed, and a retry against a changed world
+    is a different experiment. Reap nothing and this returns False without touching the device,
+    because nothing changed and repeating an experiment unchanged is what the limit exists to stop.
+
+    Deliberately NOT gated on the kernel signature. board_needs_host_reboot reads a message that
+    "fires whenever a device is OPENED while its ARC is not ready" -- which is precisely what a stale
+    holder causes, so the fault this recovers from is the one that message is most likely to be
+    reporting.
+    """
+    if _POST_REAP_RETRY["n"]:
+        return False
+    _POST_REAP_RETRY["n"] = 1
+    try:
+        killed = reap_device_holders()
+    except Exception:  # noqa: BLE001
+        killed = []
+    if not killed:
+        if log:
+            log("post-reap retry: no device holders found -- nothing changed, not resetting again")
+        return False
+    if log:
+        log(
+            "post-reap retry: killed %d stale device holder(s) %s -- the earlier resets ran while the "
+            "device was held, so trying ONE more" % (len(killed), killed)
+        )
+    RESET_FAILS["n"] = 0
+    return recover(where, reset, "post-reap retry", "", log, None)
+
+
 def note_crash(where: str, reset, error_text: str = "", config_target: str = "", log=None, expand=None) -> bool:
     """Record a crash and recover when the evidence justifies it.
 

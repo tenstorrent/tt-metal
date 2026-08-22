@@ -2472,12 +2472,25 @@ def _baseline_bucket_lines(baseline_profile: dict | None, report_csv: str = "") 
     buckets = prof.get("buckets") if isinstance(prof, dict) else None
     if not buckets:
         return []
-    # STATE WHICH MEASUREMENT THIS IS, do not name it. The variable is called baseline_profile, but
-    # perf_mcp REWRITES that file on every profile, so the word BASELINE was a claim about provenance
-    # the number did not have: on llama3_1_8b_p150 these rows summed to 615.69 ms of device time -- the
-    # PREVIOUS reading -- while the roofline above reported 534.44 ms and the true baseline was
-    # 2464.18 ms. Three points in the run, one of them labelled the other. Printing the total the rows
-    # sum to lets the reader tie the table to a measurement instead of trusting a label.
+    # STATE WHICH MEASUREMENT THIS IS, do not name it. `baseline_profile` names TWO DIFFERENT FILES
+    # depending on who called render_summary, and only one of them is a baseline:
+    #
+    #   run.py:_read_baseline_profile_for_report -> runs/*/profiles/baseline_profile.json
+    #       written ONCE by before_loop, predates every lever. Genuinely the baseline.
+    #   perf_mcp:_read_baseline_profile -> .state/perf_mcp_baseline_<model>_<task>.json
+    #       rewritten by _promote_baseline on EVERY profile_model call: `out = dict(prof)` replaces
+    #       the whole picture and only device_ms is ratcheted ("picture refreshed, BAR unchanged").
+    #       This is the LIVE report's source, so here the word BASELINE is a claim about provenance
+    #       the number does not have.
+    #
+    # On llama3_1_8b_p150 these rows summed to 615.69 ms of device time -- the PREVIOUS reading --
+    # while the roofline above reported 534.44 ms and the true baseline was 2464.18 ms. Three points
+    # in the run, one of them labelled the other. Printing the total the rows sum to lets the reader
+    # tie the table to a measurement instead of trusting a label.
+    #
+    # Spelled out because the single-sentence version of this ("perf_mcp REWRITES that file on every
+    # profile") is true of one caller and false of the other, and a later audit read it, believed the
+    # ceiling floated on both paths, and had to be walked back.
     _tot = sum((b.get("device_ms") or 0.0) for b in buckets if isinstance(b, dict))
     _depth = _depth_label(prof) if isinstance(prof, dict) else ""
     _hdr_note = "totalling %.2f ms" % _tot if _tot > 0 else "total unknown"

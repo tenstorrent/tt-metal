@@ -5317,9 +5317,25 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
         # unit could not be determined (bge-large-en-v1.5) silently fell back to the checkpoint's FILE
         # SIZE as the divisor: 1.34 GB of float32 instead of its param count, i.e. ~4 B/param, so the
         # xB -> xGB rule was bypassed for exactly the models least able to report the error themselves.
+        # WHICH SECTIONS A UNIT ACTUALLY READS, derived rather than named. stage_roots binds each
+        # stage to a checkpoint section using the stack depths this tool measured and the indices its
+        # own generated test emitted, so it is evidence; _TOWER_ONLY is a list of the names encoders
+        # usually have. A model naming its encoder off-list gets it charged to every token, which
+        # inflates the divisor and the ceiling with it.
+        #
+        # Only the RECURRING stage's subtree is streamed per unit -- the same thing summary says per
+        # stage: "the model-level figure divides by the WHOLE resident model, including towers the
+        # recurring stage never reads ... the difference being an audio encoder a decoded token does
+        # not touch."
+        #
+        # None when the map is not available yet, and then the name list runs exactly as before. The
+        # map arrives from discovery, which does not always precede this call -- the same ordering
+        # that put the byte anchor under a placeholder key, so it is handled rather than assumed.
+        _streamed = _streamed_sections_for_unit(demo_dir, _unit)
         if _snap:
             _an = _mb.weight_bytes(
                 _snap,
+                streamed_sections=_streamed,
                 # Unknown unit -> count as "token", which EXCLUDES lookup-only tensors. One row of an
                 # embedding table crosses the bus per token, never the whole matrix, and that is true of
                 # an encoder pass too -- so excluding it is right for any unit, and erring toward a
@@ -5553,6 +5569,41 @@ def read_arch_mirror() -> dict:
         return {k: v for k, v in d.items() if k in ARCH_KEYS and v} if isinstance(d, dict) else {}
     except Exception:  # noqa: BLE001
         return {}
+
+
+def _streamed_sections_for_unit(model_root, unit):
+    """The checkpoint sections a single unit of work reads, from stage_roots, or None.
+
+    None means "not derivable here" -- no map yet, or a unit that is not the recurring kind -- and
+    the caller then falls back to the name list. Never guesses: a wrong section set would drop real
+    streamed weights from the divisor, which raises the ceiling, which is the direction that ends a
+    run early believing it is at the wall.
+
+    THE RECURRING STAGE IS THE ONE WHOSE UNIT THIS IS. For a token unit that is the stage the
+    generated test bound to the backbone; prefill reads the same subtree, so both map to it and the
+    set is the same either way. A non-token unit (a denoise step, one classifier pass) runs the whole
+    pipeline per unit, so nothing is excluded and None is right.
+    """
+    try:
+        if str(unit or "").strip().lower() != "token":
+            return None
+        _roots = (read_arch_mirror() or {}).get("stage_roots") or {}
+        if not _roots:
+            # The facts file is the other home for the map, and it is the one that survives when the
+            # run has no --persist state dir to mirror into.
+            try:
+                _f = Path(model_root) / "perf_target_inputs.json"
+                if _f.is_file():
+                    _roots = (json.loads(_f.read_text()) or {}).get("stage_roots") or {}
+            except Exception:  # noqa: BLE001
+                _roots = {}
+        if not _roots:
+            return None
+        # The token-consuming stages, by the tool's own stage labels -- not the model's tensor names.
+        _keep = {str(v) for k, v in _roots.items() if str(k).strip().lower() in ("decode", "prefill") and v}
+        return _keep or None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _emit_perf_target_inputs(model_root, demo_dir, model_id_hint, manifest) -> None:

@@ -253,6 +253,7 @@ def weight_bytes(
     unit: str = "token",
     overrides=(),
     default_device_dtype: str = "",
+    streamed_sections=None,
 ) -> dict:
     """Bytes streamed per unit of work, per tensor, from the checkpoint's own headers.
 
@@ -261,8 +262,22 @@ def weight_bytes(
     tensor no pattern matches keeps its stored width (or ``default_device_dtype`` when given), so the
     result is never better than what is actually known.
 
+    ``streamed_sections`` is the set of top-level checkpoint sections a unit of work actually reads,
+    as the caller derived it from stage_roots. When given, it REPLACES the _TOWER_ONLY name list: a
+    section outside it is not streamed per unit, whatever it is called. When absent the name list
+    still runs, so a caller that cannot supply the set is exactly as well off as before.
+
+    Why prefer it: _TOWER_ONLY matches names (`audio_tower`, `vision_tower`, `multi_modal_projector`,
+    ...) and a model naming its encoder something else has that encoder charged to every token, which
+    inflates the divisor and so the ceiling -- the direction that ends a run early believing it is at
+    the wall. stage_roots is derived from the stack depths this tool measured and the indices its own
+    generated test binds, so it is evidence rather than a guess about someone's naming. It is the
+    same quantity summary already uses per stage: "the model-level figure divides by the WHOLE
+    resident model, including towers the recurring stage never reads".
+
     Returns {bytes, tensors, skipped_lookup_bytes, by_pattern, shards} or {} when nothing was read.
     """
+    _streamed = {str(x) for x in (streamed_sections or ()) if str(x).strip()}
     d = Path(snapshot_dir or "")
     files = sorted(d.glob("*.safetensors")) if d.is_dir() else []
     if not files:
@@ -304,7 +319,21 @@ def weight_bytes(
                 width = dflt if dflt is not None else _STORED_WIDTHS.get(str(meta.get("dtype")), 2.0)
             b = n * width
             count += 1
-            if unit == "token" and _TOWER_ONLY.search(name):
+            if unit == "token" and _streamed:
+                # DERIVED, NOT NAMED. The section is the first dotted component -- the same one
+                # stage_roots and declared_sections key on, so there is one definition of "which
+                # tower" rather than a second that can drift.
+                #
+                # A NAME WITH NO SECTION IS KEPT. Flat checkpoints exist ("w", "weight"), and
+                # _checkpoint_tensor_sections -- where stage_roots' sections come from -- skips those
+                # names entirely, so no section set can ever contain them. Excluding them would drop
+                # real streamed weights from the divisor, which RAISES the ceiling: the direction
+                # that ends a run early believing it is at the wall. Erring the other way merely
+                # fails to bind.
+                _sec = str(name).split(".", 1)[0] if "." in str(name) else ""
+                if _sec and _sec not in _streamed:
+                    continue
+            elif unit == "token" and _TOWER_ONLY.search(name):
                 # Not streamed per token at all: an encoder pass is per image/clip. Not "skipped
                 # lookup" either -- that counter means "read one row of", which this is not.
                 continue
