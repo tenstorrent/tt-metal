@@ -12,11 +12,10 @@
 
 namespace ttnn::operations::wavelet {
 
-/** Parameters for the virtual 1D extension applied before the even/odd split. */
 struct Pad1DConfig {
-    BoundaryMode mode{BoundaryMode::kSymmetric};  ///< Extension mode at both boundaries.
-    uint32_t left{0};                             ///< Samples virtually prepended to the signal.
-    uint32_t right{0};                            ///< Samples virtually appended to the signal.
+    BoundaryMode mode{BoundaryMode::kSymmetric};
+    uint32_t left{0};
+    uint32_t right{0};
 };
 
 struct PadSplit1DLayout {
