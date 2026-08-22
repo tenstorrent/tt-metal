@@ -5,14 +5,12 @@
 #pragma once
 
 #include <cstdint>
-#include <cstring>
-#include <functional>
 #include <ostream>
-#include <string>
 #include <utility>
 #include <vector>
 #include <compare>
 #include <bit>
+#include <type_traits>
 
 class bfloat16 {
 private:
@@ -67,30 +65,3 @@ uint32_t pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16> two_bfloats
 
 std::vector<bfloat16> create_random_vector_of_bfloat16_native(
     size_t num_bytes, float rand_max_float, int seed, float offset = 0.0f);
-
-std::vector<std::uint32_t> create_random_vector_of_bfloat16(
-    size_t num_bytes, int rand_max_float, int seed, float offset = 0.0f);
-
-/*
- * rk: Still won't handle the case where the number of elements is odd, except
- * if it's 1. Whatever, for now.
- */
-std::vector<std::uint32_t> create_constant_vector_of_bfloat16(size_t num_bytes, float value);
-
-// creates a bfloat16 identity matrix with dims (rows x cols)
-// each 2 cols will be packed as a single uint32_t
-std::vector<bfloat16> create_identity_matrix(int rows, int cols, int num_ones);
-
-std::vector<uint32_t> pack_bfloat16_vec_into_uint32_vec(const std::vector<bfloat16>& data);
-
-bfloat16 bfloat16_identity_transform(const bfloat16& input);
-
-std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
-    const std::vector<std::uint32_t>& data,
-    const std::function<bfloat16(const bfloat16&)>& transform = bfloat16_identity_transform);
-
-// Equality functions
-bool equal_within_n_sig_figs(float a, float b, int n);
-
-// this follows the implementation of numpy's is_close
-bool is_close(float a, float b, float rtol = 0.01f, float atol = 0.001f);

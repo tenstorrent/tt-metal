@@ -9,6 +9,7 @@
 #include <tt-metalium/sub_device.hpp>
 
 #include <tt-metalium/bfloat16.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>

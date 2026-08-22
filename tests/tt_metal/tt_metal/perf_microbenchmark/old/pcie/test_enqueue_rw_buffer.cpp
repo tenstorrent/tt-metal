@@ -7,6 +7,7 @@
 #include <fmt/base.h>
 #include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/device.hpp>
 #include <algorithm>
 #include <cstring>

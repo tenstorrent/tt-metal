@@ -14,6 +14,7 @@
 #include <map>
 
 #include <tt-metalium/bfloat16.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 inline float exponential(float x) { return std::exp(x); }
 

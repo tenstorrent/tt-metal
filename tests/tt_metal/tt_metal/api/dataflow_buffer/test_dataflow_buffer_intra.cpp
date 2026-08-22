@@ -10,6 +10,7 @@
 #include <array>
 #include <map>
 #include <string_view>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 namespace tt::tt_metal {
 

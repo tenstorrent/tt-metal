@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/mxfp6.hpp>
+#include "impl/data_format/mxfp6.hpp"
 
 #include <optional>
 #include <vector>

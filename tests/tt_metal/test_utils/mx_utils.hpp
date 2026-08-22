@@ -8,10 +8,10 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/mxfp4.hpp>
-#include <tt-metalium/mxfp6.hpp>
-#include <tt-metalium/mxfp8.hpp>
-#include <tt-metalium/mxint.hpp>
+#include "impl/data_format/mxfp4.hpp"
+#include "impl/data_format/mxfp6.hpp"
+#include "impl/data_format/mxfp8.hpp"
+#include "impl/data_format/mxint.hpp"
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/assert.hpp>

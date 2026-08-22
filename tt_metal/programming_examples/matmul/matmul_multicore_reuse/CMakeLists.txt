@@ -11,3 +11,6 @@ target_link_libraries(
         TT::Metalium
         Matmul::Common
 )
+if(DEFINED CMAKE_SOURCE_DIR)
+    target_include_directories(metal_example_matmul_multicore_reuse PRIVATE ${CMAKE_SOURCE_DIR}/tt_metal)
+endif()

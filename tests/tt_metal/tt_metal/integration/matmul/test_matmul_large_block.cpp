@@ -9,7 +9,8 @@
 #include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include "impl/data_format/tilize_utils.hpp"
+#include "impl/data_format/bfloat16_utils.hpp"
 #include <algorithm>
 #include <array>
 #include <cstdint>

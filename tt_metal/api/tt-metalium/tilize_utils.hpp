@@ -2,10 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//
-// This header contains tile conversion functions used in tests on the host.
-//
-
 #pragma once
 
 #include <tt_stl/span.hpp>
@@ -25,35 +21,7 @@ std::ostream& operator<<(std::ostream& os, TensorLayoutType layout);
 
 using PhysicalSize = std::array<uint32_t, 2>;
 
-struct TensAddr {
-    std::vector<std::uint32_t> sh;
-
-    TensAddr(const std::vector<std::uint32_t>& shape);
-    std::uint32_t numel() const;
-    int offs(int n, int c, int h, int w);
-};
-
-std::uint32_t round_up_to_mul16(std::uint32_t val);
-
 std::uint32_t round_up_to_mul32(std::uint32_t val);
-
-std::uint32_t round_up_to_tile(int val, int tile_val);
-
-template <class T>
-std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
-    ttsl::Span<const T> in_tile_swizzled,
-    std::optional<PhysicalSize> tile_shape = std::nullopt,
-    std::optional<PhysicalSize> face_shape = std::nullopt,
-    bool transpose_face = false,
-    bool transpose_face_order = false);
-
-template <class T>
-std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
-    ttsl::Span<const T> in_tile_nfaces,
-    std::optional<PhysicalSize> tile_shape = std::nullopt,
-    std::optional<PhysicalSize> face_shape = std::nullopt,
-    bool transpose_face = false,
-    bool transpose_face_order = false);
 
 template <typename T>
 std::vector<T> convert_layout(
@@ -76,17 +44,3 @@ std::vector<T> convert_layout(
     std::optional<PhysicalSize> face_shape = std::nullopt,
     bool transpose_within_face = false,
     bool transpose_of_faces = false);
-
-// Those are specific cases that convert_layout can do, but left for compatibility with existing codebase
-// Converts from/to row major
-template <typename T>
-std::vector<T> tilize_swizzled(const std::vector<T>& input, uint32_t m, uint32_t n);
-
-template <typename T>
-std::vector<T> untilize_swizzled(const std::vector<T>& input, uint32_t m, uint32_t n);
-
-template <typename T>
-std::vector<T> tilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n);
-
-template <typename T>
-std::vector<T> untilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n);

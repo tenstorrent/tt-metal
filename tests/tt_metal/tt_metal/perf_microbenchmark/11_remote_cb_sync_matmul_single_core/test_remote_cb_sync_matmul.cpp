@@ -47,7 +47,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "test_common.hpp"
-#include <tt-metalium/tilize_utils.hpp>
+#include "impl/data_format/tilize_utils.hpp"
+#include "impl/data_format/bfloat16_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <umd/device/types/arch.hpp>

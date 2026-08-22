@@ -6,6 +6,7 @@
 
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/data_format/bfloat16_utils.hpp"
 
 namespace tt::tt_metal {
 

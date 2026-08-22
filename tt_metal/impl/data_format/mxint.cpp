@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/mxint.hpp>
+#include "impl/data_format/mxint.hpp"
 
 #include <optional>
 #include <vector>

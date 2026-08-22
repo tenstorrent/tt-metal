@@ -11,6 +11,9 @@ target_link_libraries(
         TT::Metalium
         Matmul::Common
 )
+if(DEFINED CMAKE_SOURCE_DIR)
+    target_include_directories(metal_example_matmul_multicore_reuse_mcast PRIVATE ${CMAKE_SOURCE_DIR}/tt_metal)
+endif()
 
 # Use smaller problem sizes in CI to keep gate times fast (~8x speedup).
 # Unset this to build with the original walkthrough values.

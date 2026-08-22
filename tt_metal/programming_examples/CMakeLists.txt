@@ -7,6 +7,7 @@ add_compile_options("$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>")
 
 add_compile_definitions(OVERRIDE_KERNEL_PREFIX="tt_metal/programming_examples/")
 include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
+include_directories(${PROJECT_SOURCE_DIR}/tt_metal)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/programming_examples")
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/profiler)

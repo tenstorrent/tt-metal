@@ -12,7 +12,12 @@ if(TARGET TT::CommonPCH)
     tt_reuse_precompile_headers(distributed_eltwise_add TT::CommonPCH)
 endif()
 
-target_include_directories(distributed_eltwise_add PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(
+    distributed_eltwise_add
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/tt_metal
+)
 
 set_target_properties(
     distributed_eltwise_add
