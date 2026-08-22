@@ -1,0 +1,118 @@
+name: "[internal] vLLM plugin unit tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      vllm-source:
+        required: false
+        type: string
+        default: plugin
+        description: "Where the TT backend comes from: 'plugin' or 'fork'"
+      plugin-repository:
+        required: false
+        type: string
+        default: tenstorrent/vllm-tt-plugin
+      plugin-ref:
+        required: false
+        type: string
+        default: main
+      vllm-commit:
+        required: false
+        type: string
+        default: dev
+      tt-metal-ref:
+        required: false
+        type: string
+        default: ""
+        description: "TT-metal revision matching the supplied artifacts"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  vllm-plugin-unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        VLLM_SOURCE: ${{ inputs.vllm-source }}
+        PLUGIN_DIR: ${{ inputs.vllm-source == 'fork' && '/work/vllm/plugins/vllm-tt-plugin' || '/work/vllm-tt-plugin' }}
+        PYTHONPATH: ${{ inputs.vllm-source == 'fork' && '/work:/work/vllm' || '/work:/work/vllm-tt-plugin/src' }}
+        LD_LIBRARY_PATH: /work/build/lib
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout TT-metal
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ inputs.tt-metal-ref || job.workflow_sha }}
+          submodules: recursive
+          path: docker-job
+          persist-credentials: false
+      - name: ⬇️ Setup Metal
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ⬇️ Checkout vLLM TT plugin
+        if: ${{ inputs.vllm-source != 'fork' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: ${{ inputs.plugin-repository }}
+          path: docker-job/vllm-tt-plugin
+          ref: ${{ inputs.plugin-ref }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: ⬇️ Checkout vLLM fork
+        if: ${{ inputs.vllm-source == 'fork' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/vllm
+          path: docker-job/vllm
+          ref: ${{ inputs.vllm-commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 📀 Install vLLM
+        run: |
+          if [ "$VLLM_SOURCE" = "fork" ]; then
+            VLLM_TARGET_DEVICE=empty uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
+          else
+            pushd vllm-tt-plugin
+            source docs/install-vllm-tt.sh
+            popd
+          fi
+      - name: 📀 Install plugin test dependencies
+        run: |
+          if [ "$VLLM_SOURCE" = "fork" ]; then
+            uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
+          else
+            pushd vllm-tt-plugin
+            uv pip install -e ".[dev]"
+            popd
+          fi
+      - name: 🧪 Run host-only plugin tests
+        run: |
+          pushd "$PLUGIN_DIR"
+          pytest tests --ignore=tests/tt -v -W error::pytest.PytestUnraisableExceptionWarning
+          popd

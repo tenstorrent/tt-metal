@@ -1,7 +1,7 @@
 name: "Build tt-metal artifacts"
 permissions:
   contents: read
-  packages: write
+  packages: read
 on:
   workflow_call:
     inputs:
@@ -110,6 +110,11 @@ on:
         type: string
         default: ""
         description: 'Commit SHA to test (default: HEAD)'
+      allow-missing-cache-credentials:
+        required: false
+        type: boolean
+        default: false
+        description: "Continue without remote build caches when credentials are unavailable"
       wheel-ref:
         required: false
         type: string
@@ -329,6 +334,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ inputs.ref || job.workflow_sha }}
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
       - id: parse
@@ -353,6 +360,9 @@ jobs:
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
     if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
@@ -372,6 +382,8 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ inputs.ref || job.workflow_sha }}
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
       - name: Download artifacts from workflow run
@@ -421,7 +433,7 @@ jobs:
     concurrency:
       group: >-
         cmake-build-
-        ${{ github.sha }}-
+        ${{ inputs.ref || github.sha }}-
         ${{ inputs.platform }}-
         ${{ inputs.build-type }}-
         ${{ inputs.toolchain }}-
@@ -490,11 +502,17 @@ jobs:
 
     steps:
       - name: Configure S3 ccache storage
-        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
-        # Forks will never have secrets; don't fail the job for them, they'll just run slower
+        id: configure-s3-ccache
+        # Missing credentials fail by default. Forks skip this step, while callers that
+        # opt in can continue without remote caches.
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ] || [ -z "${{ secrets.GARAGE_S3_SECRET_KEY }}" ]; then
+            if [ "${{ inputs.allow-missing-cache-credentials }}" = "true" ]; then
+              echo "::warning::Garage S3 credentials are unavailable; continuing without remote ccache."
+              echo "enabled=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             echo "Garage S3 credentials are missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
@@ -511,13 +529,14 @@ jobs:
             echo "CRSH_LOGFILE=/tmp/ccache-storage-s3.log" >> $GITHUB_ENV
           fi
           echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
 
       - name: Verify S3 connectivity (write / read-back / delete)
         # NOTE: this probe is intentionally NON-FATAL. ccache treats the remote
         # cache as a soft dependency (remote errors degrade to local misses), so a
         # transient Garage hiccup must not turn into a hard build failure. We warn
         # and continue rather than `exit 1`. The probe is purely diagnostic.
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: ${{ steps.configure-s3-ccache.outputs.enabled == 'true' }}
         run: |
           # Use a per-job unique key so concurrent jobs (this is a reusable workflow
           # invoked by many pipelines against the same bucket/prefix) don't clobber
@@ -580,7 +599,8 @@ jobs:
         timeout-minutes: 20
         with:
           submodules: recursive
-          ref: ${{ inputs.ref || github.sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ inputs.ref || job.workflow_sha }}
           fetch-depth: ${{ inputs.fetch-depth }}
           fetch-tags: true # Need tags for `git describe`
           filter: ${{ inputs.checkout-filter }}
@@ -612,9 +632,9 @@ jobs:
 
       - name: 📦 Restore CPM source cache (Garage S3)
         id: cpm-cache
-        # Same fork guard as the ccache S3 steps: forks have no secrets, so skip S3
-        # and let CMake configure fetch CPM sources from scratch.
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        # Remote CPM caching requires the credentials enabled by the ccache setup.
+        # Forks and opted-in credentialless callers fetch sources from scratch.
+        if: ${{ steps.configure-s3-ccache.outputs.enabled == 'true' }}
         env:
           CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
         run: |
@@ -686,20 +706,19 @@ jobs:
           "${build_args[@]}"
 
       - name: 📦 Pack CPM cache
-        # Only pack when we can actually save. For fork PRs the restore step is
-        # skipped (no secrets), so 'hit' is unset and would otherwise trigger a
-        # pointless zstd compression that never gets uploaded.
+        # Only pack when remote caching is enabled; otherwise 'hit' is unset and
+        # compression would not be uploaded.
         if: >-
           steps.cpm-cache.outputs.hit != 'true' &&
-          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+          steps.configure-s3-ccache.outputs.enabled == 'true'
         run: |
           [ -d .cpmcache ] && tar -I 'zstd -T0 --long -9 -v' -cf .cpmcache.tar.zst .cpmcache || true
 
       - name: 📦 Save CPM source cache (Garage S3)
-        # Only upload on a miss, and only where we have S3 creds (same fork guard).
+        # Only upload cache misses when remote caching is enabled.
         if: >-
           steps.cpm-cache.outputs.hit != 'true' &&
-          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+          steps.configure-s3-ccache.outputs.enabled == 'true'
         env:
           CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
         run: |
