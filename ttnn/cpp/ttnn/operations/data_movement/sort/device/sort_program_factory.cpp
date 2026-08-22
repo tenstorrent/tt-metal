@@ -2190,9 +2190,13 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryMergesortRowParallel:
     constexpr uint32_t MERGESORT_K = 2048;
     const uint32_t num_chunks = W / MERGESORT_K;
     TT_FATAL(num_chunks == 1 || num_chunks == 2, "mergesort factory expects W in {{2048, 4096}}, got {}", W);
+    // The engine's native index transport is UINT32; a UINT16 output tensor (the unstable
+    // default at these widths) is served by narrowing each u32 index word on the writer RISC.
+    const bool narrow_indices = (output_tensors.at(1).dtype() == DataType::UINT16);
     TT_FATAL(
-        tensor_args.input_tensor.dtype() == DataType::BFLOAT16 && output_tensors.at(1).dtype() == DataType::UINT32,
-        "mergesort factory: bfloat16 values with UINT32 indices only");
+        tensor_args.input_tensor.dtype() == DataType::BFLOAT16 &&
+            (output_tensors.at(1).dtype() == DataType::UINT32 || narrow_indices),
+        "mergesort factory: bfloat16 values with UINT32 or UINT16 indices only");
 
     auto* device = tensor_args.input_tensor.device();
     const auto grid = device->compute_with_storage_grid_size();
@@ -2281,11 +2285,16 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryMergesortRowParallel:
             .num_entries = 1,
             .data_format_metadata = tt::DataFormat::Float16_b,
         });
+    }
+    if (is_row_major || narrow_indices) {
+        // Index scratch: RM uses it for the slice permute; a UINT16 index output
+        // additionally uses it (both layouts) as the u32->u16 narrowing target, so its
+        // entry width follows the OUTPUT element size.
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = INDICES_SCRATCH,
-            .entry_size = MERGESORT_K * 4,
+            .entry_size = MERGESORT_K * (narrow_indices ? 2 : 4),
             .num_entries = 1,
-            .data_format_metadata = tt::DataFormat::Float32,
+            .data_format_metadata = narrow_indices ? tt::DataFormat::UInt16 : tt::DataFormat::Float32,
         });
     }
 
@@ -2324,6 +2333,8 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryMergesortRowParallel:
             .dfb_spec_name = VALUES_SCRATCH,
             .accessor_name = "values_scratch",
             .endpoint_type = DFBEndpointType::CONSUMER});
+    }
+    if (is_row_major || narrow_indices) {
         writer_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = INDICES_SCRATCH,
             .accessor_name = "indices_scratch",
@@ -2343,6 +2354,10 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryMergesortRowParallel:
         .dfb_spec_name = INDICES_OUT, .accessor_name = "indices_out", .endpoint_type = DFBEndpointType::PRODUCER});
 
     const auto layout_defines_map = layout_defines(is_row_major);
+    auto writer_defines_map = layout_defines_map;
+    if (narrow_indices) {
+        writer_defines_map.insert({"NARROW_INDICES", "1"});
+    }
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
@@ -2362,7 +2377,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryMergesortRowParallel:
     spec.kernels.push_back(KernelSpec{
         .unique_id = WRITER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_mergesort_row.cpp",
-        .compiler_options = {.defines = layout_defines_map},
+        .compiler_options = {.defines = writer_defines_map},
         .dfb_bindings = std::move(writer_dfb_bindings),
         .tensor_bindings =
             {

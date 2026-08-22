@@ -1288,13 +1288,19 @@ def test_sort_small_ht_cross_core_reroute(width, stable, descending, device):
     ), "unstable sort indices are not a permutation per row"
 
 
-@pytest.mark.parametrize("width", [512, 1024, 2048])
+@pytest.mark.parametrize("width", [512, 1024, 2048, 4096])
 def test_sort_unstable_all_ones_permutation(width, device):
     """Regression (adversarial swarm minimal repro): [32, W] all-ones bf16 TILE stable=False
-    must return a valid permutation per row. When the small-Ht reroute predicate did not
-    exclude stable=False, these cells landed on the CrossCore factory whose unstable exchange
-    resolves ties positionally — every row came back with duplicate indices (448/512 duplicate
-    entries per row at W=512). They now run the single-core engine again and pass."""
+    must return a valid permutation per row. History: when the small-Ht reroute predicate did
+    not exclude stable=False, W=512-2048 landed on the CrossCore factory whose unstable
+    exchange resolves ties positionally — every row came back with duplicate indices (448/512
+    duplicate entries per row at W=512; issue #54043). On Blackhole the mergesort row engine
+    now absorbs the unstable W=2048/4096 cells: it is structurally stable, so all-ones must
+    come back as the IDENTITY permutation, retiring #54043 at W=4096 (previously the CrossCore
+    duplicate-index behavior was live there). W=4096 off Blackhole still rides CrossCore with
+    the pre-existing #54043 behavior, so the permutation assertion is BH-only at that width."""
+    if width == 4096 and not is_blackhole():
+        pytest.skip("W=4096 unstable off Blackhole rides CrossCore: pre-existing #54043 duplicate indices")
     input_tensor = torch.full((32, width), 1.0).bfloat16()
 
     ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
@@ -1306,6 +1312,81 @@ def test_sort_unstable_all_ones_permutation(width, device):
     assert torch.equal(
         torch.sort(dev_indices, dim=-1).values, expected_perm
     ), "unstable sort indices are not a permutation per row"
+    if is_blackhole() and width in (2048, 4096):
+        # Mergesort absorption: the engine is structurally stable, so the all-ones
+        # unstable permutation is exactly the identity.
+        assert torch.equal(dev_indices, expected_perm), "mergesort-absorbed unstable all-ones must be identity"
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("width", [2048, 4096])
+def test_sort_unstable_mergesort_absorption(width, descending, device):
+    """Feature U (issue #33492 roadmap): unstable bf16 sorts at the mergesort widths route to
+    the mergesort row engine on Blackhole. The engine produces the torch-STABLE permutation —
+    a strict superset of the unstable contract — with the indices narrowed u32->u16 on the
+    writer RISC, so the public unstable index dtype at these widths (UINT16) does not change.
+    This retires the issue #54043 non-permutation behavior at W=4096 and replaces the slow
+    single-core engine at W=2048. Non-Blackhole archs keep the previous engines and only
+    guarantee values + gather consistency (the torch-stable index equality pins the engine
+    on tie-heavy input, so it doubles as the routing assertion)."""
+    levels = [-1.5, -0.5, -0.5, 0.0, 0.5, 1.5]
+    input_tensor = _tie_heavy_tensor([32, width], levels, seed=89 + width + int(descending))
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=False)
+
+    assert ttnn_indices.dtype == ttnn.uint16  # unstable index dtype contract unchanged
+    dev_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+    if is_blackhole():
+        assert_equal(torch_indices, dev_indices)
+    else:
+        assert_equal(torch_values, torch.gather(input_tensor, -1, dev_indices))
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
+def test_sort_unstable_mergesort_row_major(layout, descending, device):
+    """Unstable absorption parity on the ROW_MAJOR path (and the TILE sibling at the
+    same seed): the writer-side u16 narrowing has a distinct RM code path (narrow +
+    slice-permute fused on the RISC)."""
+    levels = [-2.5, -0.5, -0.5, 0.5, 2.5]
+    input_tensor = _tie_heavy_tensor([32, 2048], levels, seed=97 + int(descending))
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=layout, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=False)
+
+    assert ttnn_indices.dtype == ttnn.uint16
+    dev_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+    if is_blackhole():
+        assert_equal(torch_indices, dev_indices)
+    else:
+        assert_equal(torch_values, torch.gather(input_tensor, -1, dev_indices))
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_unstable_mergesort_prealloc_u32(descending, device):
+    """Unstable + preallocated UINT32 index tensors: the mergesort engine serves them
+    natively (no narrowing). The dtype a caller preallocates is always honored."""
+    levels = [-1.5, -0.5, -0.5, 0.5, 1.5]
+    input_tensor = _tie_heavy_tensor([32, 4096], levels, seed=101)
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    out_values = ttnn.zeros_like(ttnn_input)
+    out_indices = ttnn.zeros((32, 4096), dtype=ttnn.uint32, layout=ttnn.Layout.TILE, device=device)
+    ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=False, out=(out_values, out_indices))
+
+    assert out_indices.dtype == ttnn.uint32
+    dev_indices = ttnn.to_torch(out_indices).to(torch.int64)
+    assert_equal(torch_values, ttnn.to_torch(out_values))
+    if is_blackhole():
+        assert_equal(torch_indices, dev_indices)
+    else:
+        assert_equal(torch_values, torch.gather(input_tensor, -1, dev_indices))
 
 
 @pytest.mark.parametrize("descending", [False, True])
