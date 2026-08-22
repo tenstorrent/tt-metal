@@ -1,6 +1,6 @@
 {
   "last_run": "2026-08-22",
-  "run_id": "32556934732",
+  "run_id": "32572948806",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -13,10 +13,6 @@
     "53113": {
       "issue": 53106,
       "status": "reviewer-blocked (CodeOwners pending, 2 groups: blackhole/wormhole LLK owners); /codeowners ping by blozano-tt 2026-08-14; agentic-threat-detected label is a known tooling-failure false positive, not a real finding"
-    },
-    "52673": {
-      "issue": 52671,
-      "status": "SUPERSEDED: maintainer kpaigwar opened #52790 (assert-only, same approach) and #52789 (fuller fix w/ tests) for issue #52671; sraizada-tt suggested closing #52673; commented 2026-08-18 flagging for maintainer close (no close-PR tool available)"
     },
     "53282_addcmul": {
       "issue": 53282,
@@ -187,6 +183,10 @@
     "53830": {
       "date": "2026-08-21",
       "note": "sfpwriteconfig, already labeled sfpi, assigned"
+    },
+    "53962": {
+      "date": "2026-08-22",
+      "note": "Resnet e2e hang via env vars; already assigned to reporter shengxiangjiTT with repro steps"
     }
   },
   "stale_pr_nudges": {
@@ -243,6 +243,16 @@
       "label": "bug",
       "date": "2026-08-21",
       "note": "GPT-OSS prefill LayerAck race condition"
+    },
+    "54032": {
+      "label": "bug",
+      "date": "2026-08-22",
+      "note": "trace-replay silent hang allocating device buffers during active trace"
+    },
+    "53999": {
+      "label": "bug",
+      "date": "2026-08-22",
+      "note": "KV-cache remount final-chunk write exceeds max_seq_len"
     }
   },
   "issues_commented": {
@@ -255,6 +265,11 @@
     }
   },
   "run_history": [
+    {
+      "run_id": "32572948806",
+      "date": "2026-08-22",
+      "summary": "Labeled #54032 and #53999 as bug; confirmed #52673 closed by maintainer; reviewed #53962 (no action, already assigned); re-verified PRs #53690/#53749/#53113/#51868/#52106 unchanged; no new fix PRs opened; updated Monthly Activity issue #51865."
+    },
     {
       "run_id": "32540359343",
       "date": "2026-08-22",
@@ -290,5 +305,11 @@
     "54000: API contracts tracking issue, no confirmed defect, unlabeled left as-is (2026-08-22)",
     "54006/54005: already labeled+assigned (2026-08-22)",
     "reviewed ~15 fresh community bug issues (53975,53971,53984,53981,53978,53973,53969,53963 etc) 2026-08-22: all already have open linked fix PRs from reporting contributor; no duplicate PR/comment needed"
-  ]
+  ],
+  "resolved": {
+    "52673": {
+      "date": "2026-08-22",
+      "note": "closed by maintainer blozano-tt; superseded by #52789/#52790"
+    }
+  }
 }
