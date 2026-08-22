@@ -45,18 +45,13 @@
 
 #include "ckernel_include.h"
 
-// Two-phase lookup: the config-write builtins are non-dependent names in the
-// cfg_reg_rmw_tensix template, so they must be declared before it.  They must
-// be at global scope (a declaration inside namespace ckernel would resolve to a
-// ckernel:: function, not the compiler's builtin).  Declaring a __builtin_ name
-// is technically a redundant redeclaration of what the compiler knows, so the
-// warning is suppressed here.
+// cfg_store's word builtin is a non-dependent name in a template, so it must be
+// declared before it, and at global scope (a declaration inside namespace
+// ckernel would resolve to a ckernel:: function, not the compiler's builtin).
+// Declaring a __builtin_ name is technically a redundant redeclaration of what
+// the compiler knows, so the warning is suppressed here.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wredundant-decls"
-void __builtin_rvtt_rmwciB0(unsigned, unsigned, unsigned);
-void __builtin_rvtt_rmwciB1(unsigned, unsigned, unsigned);
-void __builtin_rvtt_rmwciB2(unsigned, unsigned, unsigned);
-void __builtin_rvtt_rmwciB3(unsigned, unsigned, unsigned);
 unsigned __builtin_rvtt_cfg_store_word(unsigned, unsigned, unsigned);
 #pragma GCC diagnostic pop
 
@@ -561,31 +556,32 @@ inline void cfg_rmw_gpr(std::uint32_t cfg_addr32, std::uint32_t cfg_shamt, std::
 }
 
 // Byte-granular RMWCIB write of VAL (already shifted to SHAMT) to the Config
-// word CfgAddr32, one lane per byte the Mask spans -- cfg_reg_rmw_tensix's one
-// call.  Issues the config-write intrinsics (__builtin_rvtt_rmwciB0..3), the
-// real Tensix instructions, so pass_rvtt_config consumes and coalesces them.
-// VAL may be constant (hw-configure: always-inline so compile-time formats fold
-// to the immediate instruction) or runtime (reconfig: the compiler emits the
-// __instrn_buffer store form).  Same writes on every arch.
+// word CfgAddr32, one lane per byte the Mask spans.  Through the TT_RMWCIB
+// macros, not the builtins they redirect to: the macro is a store of a const
+// word to __instrn_buffer, which pass_rvtt_config still consumes and coalesces,
+// while a raw builtin call clobbers all of memory and costs every loop around it
+// its hoists.  VAL may be constant (hw-configure: always-inline so compile-time
+// formats fold to the immediate instruction) or runtime (reconfig: the store
+// form).  Same writes on every arch.
 template <std::uint32_t CfgAddr32, std::uint32_t Shamt, std::uint32_t Mask>
 TT_ALWAYS_INLINE void cfg_reg_rmw_tensix(std::uint32_t val)
 {
     std::uint32_t wrdata = val << Shamt;
     std::uint8_t mask_b0 = Mask & 0xff;
     if (mask_b0 != 0)
-        __builtin_rvtt_rmwciB0(mask_b0, wrdata & 0xff, CfgAddr32);
+        TT_RMWCIB0(mask_b0, wrdata & 0xff, CfgAddr32);
     wrdata >>= 8;
     std::uint8_t mask_b1 = (Mask >> 8) & 0xff;
     if (mask_b1 != 0)
-        __builtin_rvtt_rmwciB1(mask_b1, wrdata & 0xff, CfgAddr32);
+        TT_RMWCIB1(mask_b1, wrdata & 0xff, CfgAddr32);
     wrdata >>= 8;
     std::uint8_t mask_b2 = (Mask >> 16) & 0xff;
     if (mask_b2 != 0)
-        __builtin_rvtt_rmwciB2(mask_b2, wrdata & 0xff, CfgAddr32);
+        TT_RMWCIB2(mask_b2, wrdata & 0xff, CfgAddr32);
     wrdata >>= 8;
     std::uint8_t mask_b3 = (Mask >> 24) & 0xff;
     if (mask_b3 != 0)
-        __builtin_rvtt_rmwciB3(mask_b3, wrdata & 0xff, CfgAddr32);
+        TT_RMWCIB3(mask_b3, wrdata & 0xff, CfgAddr32);
 }
 
 inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
