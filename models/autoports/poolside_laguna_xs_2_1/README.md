@@ -9,28 +9,30 @@ the model; no model-optimization knowledge is required.
 
 ## Choose the hardware profile
 
-A **TT-QuietBox 2 contains two P300c cards**. Each P300c card contains two Blackhole ASICs, and each
-ASIC is equivalent to one `p150` in the launcher profile name. In this guide, **P300** means one P300c
-card and **P300x2** means both P300c cards in a TT-QuietBox 2. `tt-smi` lists the individual ASICs,
-not just the physical cards. The `x2` and `x4` in the launcher profiles count ASICs, not P300c cards.
+A P150 card contains one Blackhole ASIC. A **TT-QuietBox 2 contains two internal P300c cards**, and
+each P300c contains two Blackhole ASICs, each equivalent to one P150. P300c cards are not sold as
+standalone products. `tt-smi` lists the individual ASICs, so the `x2` and `x4` in the launcher profiles
+count ASICs rather than physical cards.
 
 | Name used in this guide | Physical hardware | Launcher profile | ASICs selected | Maximum context |
 |---|---|---|---:|---:|
-| **p150x2/P300** | One P300c card | `p150x2` | 2 on the same card | 131,072 tokens |
-| **p150x4/P300x2** | Both P300c cards in one TT-QuietBox 2 | `p150x4` | 4 | 131,072 tokens |
+| **p150x2/P300** | Two P150 cards, or one internal P300c card in a TT-QuietBox 2 | `p150x2` | 2 | 131,072 tokens |
+| **p150x4/P300x2** | Four P150 cards, or both internal P300c cards in a TT-QuietBox 2 | `p150x4` | 4 | 131,072 tokens |
 
 The lowercase values in the **Launcher profile** column are internal configuration names. Use them
-literally in commands; `p300` and `p300x2` are hardware descriptions, not accepted profile values.
+literally in commands. P300 and P300x2 are configuration shorthand in this guide, not standalone
+product names or accepted launcher values.
 
-The recommended default is **p150x2/P300**. Use **p150x4/P300x2** when you want to run the model
-across the full QuietBox 2. Start with one active request at a time; the current performance results
-for both configurations are single-request measurements.
+The recommended default is **p150x2/P300**. Use **p150x4/P300x2** with four P150 cards or the full
+QuietBox 2. Start with one active request at a time; the current performance results for both
+configurations are single-request measurements.
 
 ## Before you start
 
 You need:
 
-- One P300c card or a TT-QuietBox 2 with the Tenstorrent driver, firmware, and `tt-smi` installed.
+- Two or four P150 cards, or a TT-QuietBox 2, with the Tenstorrent driver, firmware, and `tt-smi`
+  installed.
 - A Linux x86-64 host and the tt-metal source-build prerequisites from the repository's
   [`INSTALLING.md`](../../../INSTALLING.md).
 - Access to the gated
@@ -74,11 +76,14 @@ sudo ./install_dependencies.sh
 tt-smi -ls
 ```
 
-For p150x2/P300, select two ASIC IDs that have the same **Board Number**. On a normally enumerated
-TT-QuietBox 2, IDs `0,1` are the first P300c card and `2,3` are the second. Confirm this on your system
-instead of assuming the numbering.
+For p150x2/P300, select exactly two ASIC IDs:
 
-For p150x4/P300x2, select all four ASIC IDs in the QuietBox 2.
+- With two P150 cards, select the one ASIC on each card. Their **Board Numbers are different**.
+- With a TT-QuietBox 2, select the two ASICs with the same **Board Number**; those ASICs are on one of
+  its internal P300c cards. On a normally enumerated QuietBox 2, IDs `0,1` form one pair and `2,3`
+  form the other. Confirm this on your system instead of assuming the numbering.
+
+For p150x4/P300x2, select the four ASIC IDs from four P150 cards or all four ASIC IDs in the QuietBox 2.
 
 ### 3. Build the serving environment
 
@@ -106,19 +111,19 @@ The model weights download automatically during the first server start.
 The server runs in the background on port `8000`. The `config` command below is optional; it prints the
 resolved settings without opening the cards.
 
-### p150x2/P300: one P300c card
+### p150x2/P300: two P150 cards or one internal QuietBox P300c
 
-Use two ASIC IDs from the same P300c card:
+Use the two ASIC IDs identified above:
 
 ```bash
 TT_VISIBLE_DEVICES=0,1 LAGUNA_PROFILE=p150x2 "$MODEL_DIR/serve_vllm.sh" config
 TT_VISIBLE_DEVICES=0,1 LAGUNA_PROFILE=p150x2 "$MODEL_DIR/serve_vllm.sh"
 ```
 
-To use the other P300c card in a normally enumerated QuietBox 2, replace `0,1` with `2,3` after
-confirming the Board Number in `tt-smi -ls`.
+On a QuietBox 2, you can use its other internal P300c by replacing `0,1` with `2,3` after confirming
+the Board Number in `tt-smi -ls`. With two P150 cards, replace `0,1` with the IDs for those two cards.
 
-### p150x4/P300x2: full TT-QuietBox 2
+### p150x4/P300x2: four P150 cards or full TT-QuietBox 2
 
 Use all four ASICs:
 
@@ -217,8 +222,8 @@ Always stop the server with the launcher:
 ```
 
 This stops the server and runs `tt-smi -r all`. It resets **every Tenstorrent ASIC in the system**,
-including the P300c card not used by a p150x2/P300 run. Do not run it while another user or workload is
-using the other card.
+including P150 cards or the internal QuietBox P300c not used by a p150x2/P300 run. Do not run it while
+another user or workload is using any other card.
 
 To restart or switch profiles, stop the current server, wait for the reset to finish, and then run the
 desired start command again.
@@ -227,8 +232,9 @@ desired start command again.
 
 ### The launcher reports the wrong number of ASICs
 
-Run `tt-smi -ls` again. A p150x2/P300 launch needs exactly two unique ASIC IDs with the same Board
-Number. A p150x4/P300x2 launch needs all four ASIC IDs.
+Run `tt-smi -ls` again. A p150x2/P300 launch needs exactly two unique ASIC IDs: one from each of two
+P150 cards, or both ASICs sharing a Board Number inside a QuietBox 2. A p150x4/P300x2 launch needs the
+four ASIC IDs from four P150 cards or the full QuietBox 2.
 
 ### Hugging Face returns 401 or 403
 
