@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
@@ -22,6 +23,7 @@ constexpr auto cb_grad_idx = tt::CBIndex::c_1;
 constexpr auto cb_exp_avg_idx = tt::CBIndex::c_2;
 constexpr auto cb_exp_avg_sq_idx = tt::CBIndex::c_3;
 constexpr auto cb_max_exp_avg_sq_in_idx = tt::CBIndex::c_4;
+constexpr auto cb_scalars_idx = tt::CBIndex::c_5;
 
 constexpr auto cb_output_idx = tt::CBIndex::c_16;
 constexpr auto cb_exp_avg_out_idx = tt::CBIndex::c_17;
@@ -58,6 +60,17 @@ void kernel_main() {
     init_sfpu(cb_param_idx, cb_output_idx);
 #if STOCH_ROUND
     init_prng_seed(seed);
+#endif
+
+#if SCALARS_FROM_TENSOR
+    // Overwrite the placeholder runtime args with the values the reader pulled from
+    // the scalar tensors. Done after init_sfpu so the HW is initialized before
+    // read_tile_value's cross-thread mailbox handshake.
+    cb_wait_front(cb_scalars_idx, 3U);
+    step_size = read_tile_value(cb_scalars_idx, 0U, 0U);
+    inv_sqrt_bc2 = read_tile_value(cb_scalars_idx, 1U, 0U);
+    decay_factor = read_tile_value(cb_scalars_idx, 2U, 0U);
+    cb_pop_front(cb_scalars_idx, 3U);
 #endif
 
     for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_core; tile_idx += block_size) {
