@@ -19,15 +19,13 @@ enum class ExtensionOperation : uint8_t {
     kAntireflect = 4,
 };
 
-/**
- * A compact, allocation-free description of one extended 1D access.
- *
- * kSample/kNegatedSample use source_index. kSmooth uses source_index as the
- * edge, auxiliary_index as its interior neighbour, and distance as the
- * positive distance beyond the edge. kAntireflect uses source_index as the
- * whole-sample-reflected source, period_quotient for repeated periods, and
- * reflected to select the right-edge reflection formula.
- */
+// A compact, allocation-free description of one extended 1D access.
+//
+// kSample/kNegatedSample use source_index. kSmooth uses source_index as the
+// edge, auxiliary_index as its interior neighbour, and distance as the
+// positive distance beyond the edge. kAntireflect uses source_index as the
+// whole-sample-reflected source, period_quotient for repeated periods, and
+// reflected to select the right-edge reflection formula.
 struct ExtendedIndex {
     uint32_t source_index{0};
     uint32_t auxiliary_index{0};
@@ -51,10 +49,8 @@ struct ExtendedIndexI32 {
     bool reflected{false};
 };
 
-/**
- * Compact antireflect descriptor for device paths whose coordinates and
- * logical lengths are already constrained to signed 32-bit values.
- */
+// Compact antireflect descriptor for device paths whose coordinates and
+// logical lengths are already constrained to signed 32-bit values.
 struct AntireflectIndexI32 {
     uint32_t source_index{0};
     int32_t period_quotient{0};
