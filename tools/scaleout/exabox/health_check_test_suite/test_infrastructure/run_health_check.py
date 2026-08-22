@@ -141,6 +141,12 @@ def parse_args() -> argparse.Namespace:
         help="Transition used to close a node's open ticket when it recovers "
         "(falls back to any done-category transition if not found)",
     )
+    jira.add_argument(
+        "--grafana-base-url",
+        default="https://grafana.it.aws.tenstorrent.com",
+        help="Grafana base URL for the node's tt-telemetry dashboard link in failure "
+        "tickets; empty string omits the link",
+    )
 
     p.add_argument(
         "--create-jira",
@@ -454,6 +460,7 @@ def main() -> int:
                         test_output=full_output,
                         attachment_names=attachment_names,
                         restart_count=restart_count,
+                        grafana_base_url=args.grafana_base_url,
                     )
                 )
                 add_comment_to_jira(
@@ -485,6 +492,7 @@ def main() -> int:
                     telemetry_summary=prom_output,
                     attachment_names=attachment_names,
                     restart_count=restart_count,
+                    grafana_base_url=args.grafana_base_url,
                 )
                 if ticket_key:
                     transition_jira_ticket(
