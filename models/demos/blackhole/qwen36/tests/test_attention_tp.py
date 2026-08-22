@@ -445,3 +445,83 @@ def test_attention_tp_qknorm_offset(mesh_device):
     ), f"k_norm must load WITH +1 (uniform-attention fix), but |loaded-raw|={k_err_raw:.4f} (regressed +1?)"
     assert q_err_plus1 < 0.05, "sanity: loaded q_norm must equal raw+1"
     logger.info("PASSED: 27B-TP q_norm/k_norm loaded WITH the +1 offset (uniform-attention fix)")
+
+
+# ---------------------------------------------------------------------------------------------
+# QWEN36_ROPE_PERMUTE A/B: the permuted weights + full-dim rope must reproduce the unpermuted
+# attention layer's OUTPUT (the head-dim permutation cancels in QK^T; V/wo never see it).
+# Decode runs at a nonzero position so the rotation is non-trivial; prefill exercises the causal
+# SDPA over roped keys. Both compare flag-ON against flag-OFF on the same inputs.
+# ---------------------------------------------------------------------------------------------
+
+
+def _build_attn(mesh_device, args, sd):
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device) if mesh_device.get_num_devices() > 1 else None
+    tw = load_attention_weights_tp(mesh_device, sd, args)
+    return TPAttention(mesh_device, args, tw, tt_ccl)
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_attention_tp_decode_rope_permute_ab(mesh_device, reset_seeds, ensure_gc, request, monkeypatch):
+    os.environ.setdefault("HF_MODEL", model_path())
+    B = 8
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "full_attention")
+    sd = load_attn_layer(args.CKPT_DIR, li)
+
+    x = torch.randn(1, 1, B, args.dim, dtype=torch.bfloat16)
+    # Nonzero per-user positions: rope actually rotates (pos0 attention reduces to V and would
+    # pass even with a broken rope).
+    cur = torch.arange(B, dtype=torch.int32) * 3 + 5
+
+    def run(flag):
+        monkeypatch.setenv("QWEN36_ROPE_PERMUTE", flag)
+        attn = _build_attn(mesh_device, args, sd)
+        x_tt = replicate_to_device(mesh_device, x)
+        cur_tt = ttnn.from_torch(
+            cur, dtype=ttnn.int32, device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+        )
+        cos, sin = rot_mats_decode(
+            mesh_device, args.rope_head_dim, args.max_seq_len, args.rope_theta, cur, head_dim=args.head_dim
+        )
+        out = attn.forward_decode(x_tt, cur_tt, cos, sin)
+        return ttnn.to_torch(out, mesh_composer=tp_composer(mesh_device))[0, 0].float()
+
+    ref = run("0")
+    got = run("1")
+    thr = max(get_pcc_threshold(request), 0.999)
+    pccs = [compute_pcc(ref[u], got[u]) for u in range(B)]
+    logger.info(f"ATTENTION TP DECODE rope-permute A/B PCC min={min(pccs):.6f}")
+    bad = [(u, p) for u, p in enumerate(pccs) if p < thr]
+    assert not bad, f"users below A/B PCC {thr}: {bad}"
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_attention_tp_prefill_rope_permute_ab(mesh_device, reset_seeds, ensure_gc, request, monkeypatch):
+    os.environ.setdefault("HF_MODEL", model_path())
+    S = 128
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "full_attention")
+    sd = load_attn_layer(args.CKPT_DIR, li)
+
+    x = torch.randn(1, 1, S, args.dim, dtype=torch.bfloat16)
+
+    def run(flag):
+        monkeypatch.setenv("QWEN36_ROPE_PERMUTE", flag)
+        attn = _build_attn(mesh_device, args, sd)
+        # Prefill input is K-sharded (model's prefill norm skips its AG; fused in-proj gathers).
+        x_tt = shard_to_device(mesh_device, x, dim=-1)
+        cos, sin = rot_mats_prefill(mesh_device, args.rope_head_dim, S, args.rope_theta, head_dim=args.head_dim)
+        out = attn.forward_prefill(x_tt, cos, sin)
+        return ttnn.to_torch(out, mesh_composer=tp_composer(mesh_device))[0, 0].float()
+
+    ref = run("0")
+    got = run("1")
+    thr = max(get_pcc_threshold(request), 0.999)
+    passing, pcc = comp_pcc(ref, got, thr)
+    logger.info(f"ATTENTION TP PREFILL rope-permute A/B PCC = {pcc}")
+    assert passing, f"prefill rope-permute A/B PCC too low: {pcc}"

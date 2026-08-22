@@ -36,6 +36,7 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import (
     apply_partial_rope_decode,
     apply_partial_rope_prefill,
+    rope_head_permutation,
     rot_mats_decode,
     rot_mats_prefill,
 )
@@ -129,3 +130,70 @@ def test_partial_rope_decode(mesh_device, reset_seeds, ensure_gc, request):
     pk, pcck = comp_pcc(k_ref, k_out, thr)
     logger.info(f"partial-RoPE decode PCC  q={pccq}  k={pcck}")
     assert pq and pk, f"partial-RoPE decode PCC too low: q={pccq} k={pcck}"
+
+
+# ---------------------------------------------------------------------------------------------
+# QWEN36_ROPE_PERMUTE=1: the flag replaces slice/rotate/concat with ONE full-dim rotary op on a
+# head-dim-permuted tensor. These tests feed the permuted path a permuted input, inverse-permute
+# its output, and compare against the SAME HF reference the unpermuted tests use — proving the
+# device transform matches partial rope exactly (up to the shared bf16 rounding).
+# ---------------------------------------------------------------------------------------------
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_partial_rope_prefill_permuted(mesh_device, reset_seeds, ensure_gc, request, monkeypatch):
+    from transformers.models.qwen3_5.modeling_qwen3_5 import apply_rotary_pos_emb
+
+    monkeypatch.setenv("QWEN36_ROPE_PERMUTE", "1")
+    S = 128
+    _, HD, rope_dim, theta, NH, NKV = _rope_params(mesh_device, B=1)
+    perm = rope_head_permutation(HD, rope_dim)
+    inv = torch.argsort(perm)
+
+    q = torch.randn(1, NH, S, HD, dtype=torch.bfloat16)
+    k = torch.randn(1, NKV, S, HD, dtype=torch.bfloat16)
+
+    cos_tt, sin_tt = rot_mats_prefill(mesh_device, rope_dim, S, theta, head_dim=HD)
+    q_tt = apply_partial_rope_prefill(replicate_to_device(mesh_device, q[..., perm]), cos_tt, sin_tt, NH, rope_dim)
+    k_tt = apply_partial_rope_prefill(replicate_to_device(mesh_device, k[..., perm]), cos_tt, sin_tt, NKV, rope_dim)
+    q_out, k_out = _read0(mesh_device, q_tt)[..., inv], _read0(mesh_device, k_tt)[..., inv]
+
+    cos, sin = _cos_sin(torch.arange(S), rope_dim, theta)
+    q_ref, k_ref = apply_rotary_pos_emb(q.float(), k.float(), cos.unsqueeze(0), sin.unsqueeze(0), unsqueeze_dim=1)
+
+    thr = get_pcc_threshold(request)
+    pq, pccq = comp_pcc(q_ref, q_out, thr)
+    pk, pcck = comp_pcc(k_ref, k_out, thr)
+    logger.info(f"permuted-RoPE prefill PCC  q={pccq}  k={pcck}")
+    assert pq and pk, f"permuted-RoPE prefill PCC too low: q={pccq} k={pcck}"
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_partial_rope_decode_permuted(mesh_device, reset_seeds, ensure_gc, request, monkeypatch):
+    from transformers.models.qwen3_5.modeling_qwen3_5 import apply_rotary_pos_emb
+
+    monkeypatch.setenv("QWEN36_ROPE_PERMUTE", "1")
+    B = 8
+    _, HD, rope_dim, theta, NH, NKV = _rope_params(mesh_device, B=B)
+    perm = rope_head_permutation(HD, rope_dim)
+    inv = torch.argsort(perm)
+    positions = torch.arange(B, dtype=torch.int32) * 7 + 3
+
+    q = torch.randn(1, B, NH, HD, dtype=torch.bfloat16)
+    k = torch.randn(1, B, NKV, HD, dtype=torch.bfloat16)
+
+    cos_tt, sin_tt = rot_mats_decode(mesh_device, rope_dim, 256, theta, positions, head_dim=HD)
+    q_tt = apply_partial_rope_decode(replicate_to_device(mesh_device, q[..., perm]), cos_tt, sin_tt, NH, B, rope_dim)
+    k_tt = apply_partial_rope_decode(replicate_to_device(mesh_device, k[..., perm]), cos_tt, sin_tt, NKV, B, rope_dim)
+    q_out, k_out = _read0(mesh_device, q_tt)[..., inv], _read0(mesh_device, k_tt)[..., inv]
+
+    cos, sin = _cos_sin(positions, rope_dim, theta)
+    q_ref, k_ref = apply_rotary_pos_emb(q.float(), k.float(), cos.unsqueeze(0), sin.unsqueeze(0), unsqueeze_dim=2)
+
+    thr = get_pcc_threshold(request)
+    pq, pccq = comp_pcc(q_ref, q_out, thr)
+    pk, pcck = comp_pcc(k_ref, k_out, thr)
+    logger.info(f"permuted-RoPE decode PCC  q={pccq}  k={pcck}")
+    assert pq and pk, f"permuted-RoPE decode PCC too low: q={pccq} k={pcck}"

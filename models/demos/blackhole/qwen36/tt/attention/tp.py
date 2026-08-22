@@ -12,7 +12,12 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
-from models.demos.blackhole.qwen36.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
+from models.demos.blackhole.qwen36.tt.attention.rope_tp import (
+    apply_partial_rope_decode,
+    apply_partial_rope_prefill,
+    rope_head_permutation,
+    rope_permute_enabled,
+)
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
@@ -31,17 +36,40 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     # De-interleave [q,gate] per head → contiguous q/gate slices (avoids ~5.3ms relayout).
     qg_deint = fused_qkv
 
+    # QWEN36_ROPE_PERMUTE=1: permute Q/K output rows (and q/k norm dims) along head_dim so
+    # decode/prefill rope runs as ONE full-dim rotary op (see rope_tp.rope_head_permutation).
+    # Exact: the permutation is identical on Q and K, so QK^T, per-head RMS (weight permuted
+    # alongside), and the KV cache are invariant; V/wo/gate rows are untouched. Applied here —
+    # not in weight_mapping — so state_dict stays HF-layout for torch references and the
+    # single-device path. Permuted device caches get a distinct suffix (see _rp below).
+    _rope_permute = rope_permute_enabled()
+    q_w = state_dict["q_proj.weight"]
+    k_w = state_dict["k_proj.weight"]
+    q_norm_w = state_dict["q_norm.weight"]
+    k_norm_w = state_dict["k_norm.weight"]
+    if _rope_permute:
+        hd = args.head_dim
+        perm = rope_head_permutation(hd, args.rope_head_dim)
+        # q_proj rows are per-head [q(hd); gate(hd)] — permute only the q block of each head.
+        q_w = q_w.reshape(-1, 2 * hd, q_w.shape[-1]).clone()
+        q_w[:, :hd, :] = q_w[:, :hd, :][:, perm, :]
+        q_w = q_w.reshape(-1, q_w.shape[-1])
+        k_w = k_w.reshape(-1, hd, k_w.shape[-1])[:, perm, :].reshape(-1, k_w.shape[-1])
+        q_norm_w = q_norm_w[perm]
+        k_norm_w = k_norm_w[perm]
+    _rp = ".ropeP" if _rope_permute else ""
+
     # TP > n_kv_heads (e.g. 27B's 4 KV heads on TP=8): there is no whole KV head per device, so
     # pre-expand K/V to tp*head_dim rows where device d holds the head its GQA query group maps
     # to (devices 2d, 2d+1 share head d at TP=8). The per-device slicing below is then uniform.
     # No-op when tp <= n_kv_heads, so TP=4 weights stay bit-identical.
     kv_rep = lambda w: tpc.replicate_kv_weight(w, args.n_kv_heads, args.num_devices, args.head_dim)
-    k_proj, v_proj = kv_rep(state_dict["k_proj.weight"]), kv_rep(state_dict["v_proj.weight"])
+    k_proj, v_proj = kv_rep(k_w), kv_rep(state_dict["v_proj.weight"])
 
     if fused_qkv:
         if qg_deint:
             fused = tpc.prepare_attn_qkv_deint(
-                state_dict["q_proj.weight"],
+                q_w,
                 k_proj,
                 v_proj,
                 args.n_local_heads,
@@ -51,7 +79,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             )
         else:
             fused = tpc.prepare_attn_qkv(
-                state_dict["q_proj.weight"],
+                q_w,
                 k_proj,
                 v_proj,
                 args.n_local_heads * args.head_dim * 2,
@@ -67,7 +95,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             mesh,
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.attn_qkv_fused_weight_memcfg,
-            cache_path=c(_base + (".il" if _proj1d else ".dramshard")),
+            cache_path=c(_base + (".il" if _proj1d else ".dramshard") + _rp),
             dtype=ttnn.bfloat8_b,
         )
     else:
@@ -77,11 +105,11 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         v_mc = args.attn_v_weight_memcfg if qkv_sharded else ttnn.DRAM_MEMORY_CONFIG
         tag = ".dramshard" if qkv_sharded else ""
         tw["wqkv"] = tpc.shard_w(
-            state_dict["q_proj.weight"],
+            q_w,
             mesh,
             dim=-1,
             memory_config=qg_mc,
-            cache_path=c("wqkv" + tag),
+            cache_path=c("wqkv" + tag + _rp),
             dtype=ttnn.bfloat8_b,
         )
         # k_proj/v_proj are the KV-replicated weights: shard_w splits tp*head_dim rows evenly, so
@@ -91,7 +119,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             mesh,
             dim=-1,
             memory_config=k_mc,
-            cache_path=c("wk" + tag),
+            cache_path=c("wk" + tag + _rp),
             dtype=ttnn.bfloat8_b,
         )
         tw["wv"] = tpc.shard_w(
@@ -112,9 +140,11 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         cache_path=c("wo.dramshard" if wo_sharded else "wo"),
         dtype=ttnn.bfloat8_b,
     )
-    # QK norms: HF-correct zero-centered (1+weight), used uniformly at prefill AND decode
-    tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
-    tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + 1.0, mesh, None)
+    # QK norms: HF-correct zero-centered (1+weight), used uniformly at prefill AND decode.
+    # Permuted alongside Q/K above (RMS denominator is permutation-invariant; the per-dim
+    # weight must follow its dim).
+    tw["q_norm"] = tpc.replicate(q_norm_w.to(torch.float32) + 1.0, mesh, None)
+    tw["k_norm"] = tpc.replicate(k_norm_w.to(torch.float32) + 1.0, mesh, None)
     return tw
 
 

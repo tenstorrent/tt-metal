@@ -639,6 +639,7 @@ class Qwen36Model:
             self.args.max_seq_len,
             self.args.rope_theta,
             torch.tensor([pos + self.rope.rope_delta], dtype=torch.int32),
+            head_dim=self.args.head_dim,
         )
         cur_pos_tt = ttnn.from_torch(
             torch.tensor([pos], dtype=torch.int32),
@@ -984,9 +985,18 @@ class Qwen36Model:
         traced chunk-outer prefill paths (so the captured trace's cos/sin are byte-identical
         to the eager path's). M-RoPE-aware: when a multimodal request staged a per-sequence
         table (build_request_rope) this slices it; otherwise it is ordinary 1D RoPE at
-        positions [start, start+length) — byte-identical to the pre-M-RoPE behaviour."""
+        positions [start, start+length) — byte-identical to the pre-M-RoPE behaviour.
+
+        QWEN36_ROPE_PERMUTE=1: expanded to full-dim permuted tables [1, 1, length, head_dim]
+        (all TP prefill variants and their trace buffers derive shapes from here, so the
+        captured programs stay consistent with the permuted weights)."""
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import permute_rope_tables_full_dim, rope_permute_enabled
+
         rd = self.args.rope_head_dim
         cos_t, sin_t = self.rope.prefill_cos_sin_torch(start, length)  # [length, rd] bf16
+        if rope_permute_enabled():
+            cos_t, sin_t = permute_rope_tables_full_dim(cos_t, sin_t, self.args.head_dim)
+            rd = self.args.head_dim
         cos = cos_t.reshape(1, 1, length, rd)
         sin = sin_t.reshape(1, 1, length, rd)
         return cos, sin
@@ -3205,13 +3215,26 @@ class Qwen36Model:
         # stays the true KV position. rope_delta is 0 for text, so this is a no-op there.
         rope_pos_vec = pos_vec + self.rope.rope_delta
         if self.num_devices > 1:
-            # TP: rope_tp cos/sin [1,B,1,rope_dim] packed on host.
+            # TP: rope_tp cos/sin [1,B,1,rope_dim] packed on host. QWEN36_ROPE_PERMUTE=1 packs
+            # full-dim permuted tables [1,1,B,head_dim] instead (the shape the flag's
+            # apply_partial_rope_decode fast path consumes directly — no per-layer reshape).
+            from models.demos.blackhole.qwen36.tt.attention.rope_tp import (
+                permute_rope_tables_full_dim,
+                rope_permute_enabled,
+            )
+
             rd = self.args.rope_head_dim
             inv_freq = 1.0 / (self.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
             freqs = torch.outer(rope_pos_vec.float(), inv_freq)  # [B, rd/2], per-user rotation
             emb = torch.cat([freqs, freqs], dim=-1)
-            cos = emb.cos().reshape(1, B, 1, rd).to(torch.bfloat16)
-            sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
+            if rope_permute_enabled():
+                hd = self.args.head_dim
+                cos_t, sin_t = permute_rope_tables_full_dim(emb.cos(), emb.sin(), hd)
+                cos = cos_t.reshape(1, 1, B, hd).to(torch.bfloat16)
+                sin = sin_t.reshape(1, 1, B, hd).to(torch.bfloat16)
+            else:
+                cos = emb.cos().reshape(1, B, 1, rd).to(torch.bfloat16)
+                sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
             rope_packed = ttnn.from_torch(torch.cat([cos, sin], dim=0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         else:
             # Single-device decode is B=1 in this port; per-user single-device rope is out of scope.

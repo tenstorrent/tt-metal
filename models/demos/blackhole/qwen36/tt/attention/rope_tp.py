@@ -6,12 +6,64 @@ Ported from models/demos/qwen35_27b/tt/rope.py. Only the rotary portion
 (rope_dim, e.g. 64 of 256) is rotated; the rest passes through. cos/sin are in
 HuggingFace split-halves format. These operate on per-device head shards, so
 they are unchanged by TP (each device rotates its local heads).
+
+QWEN36_ROPE_PERMUTE=1 replaces the partial slice/rotate/concat chain with ONE
+full-head-dim rotary_embedding_hf call. The Q/K projection weights (and the
+q/k norm weights) are permuted offline along head_dim so the rotary pairs land
+exactly where the op's full-dim rotate-half looks for them — pair (i, i+R/2)
+of the R-dim partial rope moves to (i, i+D/2) — and every pass-through dim gets
+cos=1/sin=0 in the table, making it an exact identity there (1.0 and 0.0 are
+exact in bf16). Any fixed head_dim permutation applied identically to Q and K
+is invariant under QK^T, per-head RMS norm (weight permuted alongside), and the
+KV cache (K stored permuted, Q probes permuted); V/wo never see it. See
+rope_head_permutation for the exact index map.
 """
 import itertools
+import os
 
 import torch
 
 import ttnn
+
+
+def rope_permute_enabled():
+    """QWEN36_ROPE_PERMUTE=1: full-dim rope on head-dim-permuted Q/K weights (TP path only)."""
+    return os.environ.get("QWEN36_ROPE_PERMUTE", "0") == "1"
+
+
+def rope_head_permutation(head_dim, rope_dim):
+    """Index map P (new[i] = old[P[i]]) placing partial-rope pairs at full-dim rotate-half slots.
+
+    Partial rope pairs old dims (i, i+R/2) for i < R/2; the full-dim op pairs (i, i+D/2).
+    So the rotary first half goes to [0, R/2), the rotary second half to [D/2, D/2+R/2), and
+    the pass-through dims fill the gaps. R == D degenerates to the identity.
+    """
+    h = rope_dim // 2
+    half_d = head_dim // 2
+    return torch.cat(
+        [
+            torch.arange(0, h),
+            torch.arange(rope_dim, half_d + h),
+            torch.arange(h, rope_dim),
+            torch.arange(half_d + h, head_dim),
+        ]
+    )
+
+
+def permute_rope_tables_full_dim(cos, sin, head_dim):
+    """Expand HF split-halves cos/sin [..., rope_dim] to full-dim [..., head_dim] tables.
+
+    Layout matches rope_head_permutation: rotary halves at [0, R/2) and [D/2, D/2+R/2);
+    pass-through slots get cos=1/sin=0 so full-dim rotate-half is the identity there.
+    """
+    rope_dim = cos.shape[-1]
+    h = rope_dim // 2
+    pad = head_dim // 2 - h
+    ones = torch.ones(*cos.shape[:-1], pad, dtype=cos.dtype)
+    zeros = torch.zeros(*sin.shape[:-1], pad, dtype=sin.dtype)
+    cos_full = torch.cat([cos[..., :h], ones, cos[..., h:], ones], dim=-1)
+    sin_full = torch.cat([sin[..., :h], zeros, sin[..., h:], zeros], dim=-1)
+    return cos_full, sin_full
 
 
 def build_rope_tables(device, rope_dim, max_seq_len, theta):
@@ -249,19 +301,29 @@ def apply_interleaved_mrope(freqs, mrope_section):
     return freqs_t
 
 
-def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions):
+def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions, head_dim=None):
     """Return [cos, sin] each [1, B, 1, rope_dim] for the given per-user positions.
 
     positions: torch.Tensor [B] of int positions. Built on host (small) then
     replicated to the mesh — matches apply_partial_rope_decode's expected layout.
+
+    QWEN36_ROPE_PERMUTE=1: full-dim permuted tables [1, 1, B, head_dim] instead — already in
+    the prefill-mode layout apply_partial_rope_decode's fast path consumes (no per-layer
+    reshape). head_dim is required then.
     """
     inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
     pos = positions.float()
     freqs = torch.outer(pos, inv_freq)  # [B, rope_dim/2]
     emb = torch.cat([freqs, freqs], dim=-1)  # [B, rope_dim]
     B = positions.shape[0]
-    cos = emb.cos().reshape(1, B, 1, rope_dim).to(torch.bfloat16)
-    sin = emb.sin().reshape(1, B, 1, rope_dim).to(torch.bfloat16)
+    if rope_permute_enabled():
+        assert head_dim is not None, "QWEN36_ROPE_PERMUTE=1 requires head_dim for full-dim tables"
+        cos_t, sin_t = permute_rope_tables_full_dim(emb.cos(), emb.sin(), head_dim)
+        cos = cos_t.reshape(1, 1, B, head_dim).to(torch.bfloat16)
+        sin = sin_t.reshape(1, 1, B, head_dim).to(torch.bfloat16)
+    else:
+        cos = emb.cos().reshape(1, B, 1, rope_dim).to(torch.bfloat16)
+        sin = emb.sin().reshape(1, B, 1, rope_dim).to(torch.bfloat16)
     cos_tt = ttnn.from_torch(
         cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=ttnn.ReplicateTensorToMesh(device)
     )
@@ -271,13 +333,17 @@ def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions):
     return cos_tt, sin_tt
 
 
-def rot_mats_prefill(device, rope_dim, seq_len, theta, position_ids=None, mrope_section=None, attention_scaling=1.0):
+def rot_mats_prefill(
+    device, rope_dim, seq_len, theta, position_ids=None, mrope_section=None, attention_scaling=1.0, head_dim=None
+):
     """Return [cos, sin] each [1, 1, seq_len, rope_dim].
 
     position_ids: 3D M-RoPE indices [3, bs, seq_len] (or 2D [bs, seq_len], expanded inside
     get_rot_mats). When None, defaults to text positions arange(seq_len) — the (t==h==w) case
     where interleaved-mrope collapses to ordinary 1D RoPE, so the result is independent of
     mrope_section and identical to the pre-M-RoPE behaviour.
+
+    QWEN36_ROPE_PERMUTE=1: full-dim permuted tables [1, 1, seq_len, head_dim] (head_dim required).
     """
     inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
     if position_ids is None:
@@ -288,6 +354,10 @@ def rot_mats_prefill(device, rope_dim, seq_len, theta, position_ids=None, mrope_
         base = half // 3
         mrope_section = [base, base, half - 2 * base]
     cos, sin = get_rot_mats(inv_freq, position_ids, mrope_section, attention_scaling)
+    if rope_permute_enabled():
+        assert head_dim is not None, "QWEN36_ROPE_PERMUTE=1 requires head_dim for full-dim tables"
+        cos, sin = permute_rope_tables_full_dim(cos, sin, head_dim)
+        rope_dim = head_dim
     cos = ttnn.from_torch(
         cos.reshape(1, 1, seq_len, rope_dim).to(torch.bfloat16),
         dtype=ttnn.bfloat16,
@@ -318,6 +388,19 @@ def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
     """
     hd = x.shape[-1]
     B = batch_size
+    if rope_permute_enabled():
+        # Full-dim path (Q/K weights head-dim-permuted at load): one rotary op between two
+        # transposes; cos/sin arrive pre-shaped [1, 1, B, hd] (rot_mats_decode /
+        # prepare_decode_inputs_host), so no per-layer slice/reshape/concat remains.
+        assert cos_tt.shape[-1] == hd, f"permuted rope wants full-dim cos ({hd}), got {cos_tt.shape}"
+        x_t = ttnn.transpose(x, 1, 2)  # [1, n_heads, B, hd] (batch plays the seq role)
+        roped_t = ttnn.experimental.rotary_embedding_hf(
+            x_t, cos_tt, sin_tt, is_decode_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(x_t)
+        roped = ttnn.transpose(roped_t, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(roped_t)
+        return roped
     x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, B, n_heads, rope_dim))
     x_rope_t = ttnn.transpose(x_rope, 1, 2)  # [1, n_heads, B, rope_dim]
     ttnn.deallocate(x_rope)
@@ -349,6 +432,11 @@ def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
     _L1 = ttnn.L1_MEMORY_CONFIG
     hd = x.shape[-1]
     seq_len = x.shape[-2]
+    if rope_permute_enabled():
+        # Full-dim path: x is already in the op's prefill layout; the whole slice/rotate/concat
+        # collapses to the one rotary op (pass-through dims ride on cos=1/sin=0 in the table).
+        assert cos_tt.shape[-1] == hd, f"permuted rope wants full-dim cos ({hd}), got {cos_tt.shape}"
+        return ttnn.experimental.rotary_embedding_hf(x, cos_tt, sin_tt, is_decode_mode=False, memory_config=_L1)
     x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, n_heads, seq_len, rope_dim), memory_config=_L1)
     roped = ttnn.experimental.rotary_embedding_hf(x_rope, cos_tt, sin_tt, is_decode_mode=False, memory_config=_L1)
     ttnn.deallocate(x_rope)
