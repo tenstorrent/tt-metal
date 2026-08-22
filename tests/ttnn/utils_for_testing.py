@@ -58,6 +58,20 @@ TORCH_INTEGER_DTYPES = [
 NP_INTEGER_DTYPES = [np.byte, np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
 
 
+def dtype_supports_tiny_tile(dtype):
+    return True
+
+
+def select_tile(*dtypes, layout=ttnn.TILE_LAYOUT):
+    if layout == ttnn.TILE_LAYOUT:
+        # return ttnn.Tile((16, 32))
+        if all(dtype_supports_tiny_tile(dtype) for dtype in dtypes):
+            print("Using tiny tile 16 x 32")
+            return ttnn.Tile((16, 32))
+        else:
+            print("Using tile 32 x 32")
+            return ttnn.Tile((16, 32))
+    return None
 def make_disjoint_dram_core_range_set(device):
     num_dram_banks = device.dram_grid_size().x
     first_range_end = 2 if num_dram_banks == 7 else 1
