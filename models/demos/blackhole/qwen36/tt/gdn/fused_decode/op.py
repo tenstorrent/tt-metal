@@ -334,7 +334,9 @@ def recurrence_seq_rows(
     conv_out:    [1, users*w, qkv_dim] bf16 TILE (users*w <= 32: one tile row).
     qkvzab:      [1, users*w, qkvzab_dim] bf16 TILE.
     rec_state:   [users, Nv, Dk, Dv] fp32 TILE — READ ONLY (never written).
-    state_stash: [users, w, Nv, Dk, Dv] fp32 TILE, fully overwritten.
+    state_stash: [users*w, Nv, Dk, Dv] fp32 TILE (row u*w+t = user u's state after
+                 candidate t), fully overwritten. Rank-4: ttnn tensors cap at 4 dims;
+                 the kernel addresses it purely by page index.
     out:         preallocated [1, users*w, Nv*Dv] fp32 TILE.
     """
     assert rec_state.dtype == ttnn.float32 and state_stash.dtype == ttnn.float32
@@ -344,7 +346,7 @@ def recurrence_seq_rows(
     assert dk % _TILE == 0 and dv % _TILE == 0
     assert 2 * nv <= _TILE
     assert w >= 1 and users * w <= _TILE, f"users*w rows must fit one tile row (got {users}x{w})"
-    assert list(state_stash.shape) == [users, w, nv, dk, dv], f"stash shape {list(state_stash.shape)}"
+    assert list(state_stash.shape) == [users * w, nv, dk, dv], f"stash shape {list(state_stash.shape)}"
     dkt, dvt = dk // _TILE, dv // _TILE
     rf = nv // nk
     qkv_dim = conv_out.shape[-1]

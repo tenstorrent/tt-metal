@@ -273,7 +273,7 @@ def _run_seq_rows(device, conv, qkvzab, h0, dt_bias, neg_exp_a, norm_w, nk, nv, 
     conv_d = _dev(device, conv)
     qkvzab_d = _dev(device, qkvzab)
     state_d = _dev(device, h0, dtype=ttnn.float32)
-    stash_d = _dev(device, torch.zeros(users, w, nv, DK, DV), dtype=ttnn.float32)
+    stash_d = _dev(device, torch.zeros(users * w, nv, DK, DV), dtype=ttnn.float32)
     dtb_d = _dev(device, dt_bias)
     nega_d = _dev(device, neg_exp_a)
     w_d = _dev(device, norm_w)
@@ -307,7 +307,7 @@ def test_seq_rows_stash_probe(device):
         conv_d, qkvzab_d, state_ref, dtb_d, nega_d, w_d, out_ref, nk=nk, nv=nv, dk=DK, dv=DV, b_rows=users
     )
 
-    stash = ttnn.to_torch(stash_d).float().reshape(users, nv, DK, DV)
+    stash = ttnn.to_torch(stash_d).float().reshape(users, nv, DK, DV)  # w == 1
     ok, pcc = comp_pcc(ttnn.to_torch(state_ref).float(), stash, 0.9999)
     assert ok, f"stash row vs in-place writeback PCC {pcc}"
     ok, pcc = comp_pcc(ttnn.to_torch(out_ref).float(), ttnn.to_torch(out_seq).float()[:, :users], 0.9999)
@@ -324,7 +324,7 @@ def test_recurrence_seq_rows(device, nk, nv):
     state_d, stash_d, out_d = _run_seq_rows(device, conv, qkvzab, h0, dt_bias, neg_exp_a, norm_w, nk, nv, users, w)
     assert torch.equal(ttnn.to_torch(state_d).float(), h0), "anchor state was written in seq mode"
     out_got = ttnn.to_torch(out_d).float()
-    stash_got = ttnn.to_torch(stash_d).float()
+    stash_got = ttnn.to_torch(stash_d).float().reshape(users, w, nv, DK, DV)
 
     # (a) torch golden trajectory per user.
     conv_bf = _bf16(conv).reshape(users * w, -1)
