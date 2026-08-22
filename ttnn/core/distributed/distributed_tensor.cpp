@@ -485,6 +485,17 @@ public:
         distribution_shape_(distribution_shape),
         config_(config) {}
 
+    // Shape-only ctor for callers without a `MeshDevice` handle.
+    Impl(
+        const MeshShape& mesh_shape,
+        DistributionMode distribution_mode,
+        const MeshShape& distribution_shape,
+        const MeshComposerConfig& config) :
+        global_range_(mesh_shape),
+        distribution_mode_(distribution_mode),
+        distribution_shape_(distribution_shape),
+        config_(config) {}
+
     template <typename T>
     std::pair<std::vector<T>, Shape> compose(const Tensor& tensor) const {
         const auto cpu_tensor = tensor.cpu();
@@ -676,6 +687,26 @@ MeshToTensor MeshToTensor::create(const MeshDevice& mesh_device, const MeshCompo
     validate_mesh_offset(config.mesh_offset_override, distribution_mode, distributed_shape, mesh_device.shape());
 
     return MeshToTensor(std::make_unique<Impl>(mesh_device, distribution_mode, distributed_shape, config));
+}
+
+MeshToTensor MeshToTensor::create(const MeshShape& mesh_shape, const MeshComposerConfig& config) {
+    const auto distributed_shape = config.mesh_shape_override.value_or(mesh_shape);
+    TT_FATAL(
+        distributed_shape.mesh_size() <= mesh_shape.mesh_size(),
+        "The size of the supplied mesh shape {} does not match the mesh shape size {}",
+        distributed_shape,
+        mesh_shape);
+    TT_FATAL(
+        distributed_shape.dims() == config.dims.size(),
+        "The number of dimensions in the mesh shape {} does not match the "
+        "number of dimensions in the config {}",
+        distributed_shape,
+        config);
+
+    const auto distribution_mode = compute_distribution_mode(config.mesh_shape_override, mesh_shape);
+    validate_mesh_offset(config.mesh_offset_override, distribution_mode, distributed_shape, mesh_shape);
+
+    return MeshToTensor(std::make_unique<Impl>(mesh_shape, distribution_mode, distributed_shape, config));
 }
 
 const MeshMapperConfig& TensorToMesh::config() const { return impl_->config(); }
