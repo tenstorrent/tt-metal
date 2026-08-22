@@ -2,12 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <stdexcept>
+
 #include <tt-metalium/shape.hpp>
 #include <tt_stl/reflection.hpp>
 
-#include "gtest/gtest.h"
-
 namespace tt::tt_metal {
+namespace {
+
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
 
 // Regression test: shapes with different ranks but same padded representation
 // must produce different hashes. ShapeBase::init() pads value_ to min-4D with
@@ -47,4 +54,24 @@ TEST(TensorShapeTests, IdenticalShapesProduceSameHash) {
     EXPECT_EQ(hash_a, hash_b);
 }
 
+TEST(TensorShapeTests, GetNormalizedIndexInRange) {
+    tt::tt_metal::Shape shape({32, 64});
+
+    // Normalization is against the logical rank of 2, not the padded 4D storage.
+    EXPECT_EQ(shape.get_normalized_index(1), 1u);
+    EXPECT_EQ(shape.get_normalized_index(-2), 0u);
+}
+
+TEST(TensorShapeTests, GetNormalizedIndexOutOfRangeReportsCallerIndex) {
+    tt::tt_metal::Shape shape({32, 64});
+
+    EXPECT_THAT(
+        ([&shape]() { shape.get_normalized_index(2); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("2 not in [-2, 2)")));
+    EXPECT_THAT(
+        ([&shape]() { shape.get_normalized_index(-3); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("-3 not in [-2, 2)")));
+}
+
+}  // namespace
 }  // namespace tt::tt_metal
