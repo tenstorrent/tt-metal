@@ -205,6 +205,7 @@ from models.experimental.deepseek_v4_flash.tt.attention import (  # noqa: E402
     int32_pos_tensor,
     make_rope_table,
 )
+from models.experimental.deepseek_v4_flash.tt.system_config import active_system_config  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache  # noqa: E402
 from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight  # noqa: E402
@@ -361,7 +362,9 @@ def test_attention_real_weights_decode(
     # Take the DRISC-prefetched weight path wherever the device supports it (Blackhole with
     # programmable DRAM cores); elsewhere the block falls back to the DRAM->L1 copy. Same
     # arithmetic either way, so one PCC threshold covers both.
-    use_prefetcher = ttnn.experimental.is_tensor_prefetcher_supported(device)
+    use_prefetcher = (
+        ttnn.experimental.is_tensor_prefetcher_supported(device) and not active_system_config().decode.packed_l1_weights
+    )
     logger.info(f"attention weights via {'the DRISC tensor prefetcher' if use_prefetcher else 'a DRAM->L1 copy'}")
     attn = DeepSeekV4Attention(
         cfg, layer_idx, weights, device, cache=cache, weight_dtype=_WEIGHT_DTYPE, use_prefetcher=use_prefetcher

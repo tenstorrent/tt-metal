@@ -303,6 +303,318 @@ def _rectangle_core_range_set(width, height, device):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(width - 1, height - 1))})
 
 
+def _row_major_run_core_range_set(start, count, grid_w):
+    """Cores ``[start, start + count)`` of the row-major core index as a ``CoreRangeSet``.
+
+    Built one row segment at a time, in index order, so ROW_MAJOR shard placement and
+    core enumeration over the returned set both follow the run's core-index order.
+    """
+    ranges = []
+    c = start
+    end = start + count - 1
+    while c <= end:
+        x, y = c % grid_w, c // grid_w
+        row_end = min(end, y * grid_w + grid_w - 1)
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(row_end % grid_w, y)))
+        c = row_end + 1
+    return ttnn.CoreRangeSet(ranges)
+
+
+def _tile_stream(slab):
+    """``[R, C]`` -> ``[R*C/32, 32]``: the slab's 32x32 tiles, row-major, stacked one tile wide.
+
+    Tilizing the result reproduces the slab's tiles byte-for-byte in the order a dedicated
+    width-sharded weight shard stores them, which is the order matmul_decode consumes.
+    """
+    r, c = slab.shape
+    rt, ct = r // 32, c // 32
+    return slab.reshape(rt, 32, ct, 32).permute(0, 2, 1, 3).reshape(rt * ct * 32, 32)
+
+
+def _core_slab(w, pos, k_blocks, n_blocks):
+    """The [Kc, Nc] block that zone-relative core ``pos`` holds: core = kb * n_blocks + nb."""
+    K, N = w.shape
+    kc, nc = K // k_blocks, N // n_blocks
+    kb, nb = pos // n_blocks, pos % n_blocks
+    return w[kb * kc : (kb + 1) * kc, nb * nc : (nb + 1) * nc]
+
+
+@pytest.mark.parametrize("m", [32])
+def test_matmul_decode_packed_weights(device, m):
+    """Four DeepSeek-V4-Flash decode matmuls served out of ONE fused L1 weight tensor.
+
+    The model keeps its resident decode weights in a single bfloat4_b tensor, HEIGHT sharded
+    across the chip with one equal-sized, one-tile-wide shard per core (see
+    models/experimental/deepseek_v4_flash/tt/l1_weights.py). Every core's shard is the
+    concatenation of the tile streams of the weight slabs that core owns, zero-padded so all
+    shards match; each matmul then receives the fused tensor plus a
+    ``MatmulDecodePackedWeightSpec`` locating its region (tile offset, [K, N], cores, cut).
+
+    This test packs four of the model's projections into two zones of a 48-core pack:
+
+        zone A (cores 0-31):  q_a_proj [4096, 1024]  partial k_blocks=2, n_blocks=16  @ tile 0
+                              q_b_proj [1024, 32768] full n_blocks=32                 @ tile 128
+        zone B (cores 32-47): kv_proj  [4096, 512]   full n_blocks=16                 @ tile 0
+                              shared_gate_proj [4096, 2048] full n_blocks=16          @ tile 128
+
+    Zone A fills its 1152-tile shard exactly; zone B uses 640 tiles and is zero-padded, so the
+    equal-shard padding path is exercised too. Each matmul runs with ``packed_weight`` and is
+    verified against torch. The activation grid moves per matmul (row-major runs starting at
+    cores 8, 16, 24, 32) so nothing assumes the input is anchored at (0, 0) or shared between
+    the packed matmuls.
+    """
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    grid_w = grid.x
+
+    # name: (K, N, k_blocks, n_blocks, zone) -- zone: (first row-major core, core count)
+    ZONES = {"A": (0, 32), "B": (32, 16)}
+    WEIGHTS = {
+        "q_a_proj": (4096, 1024, 2, 16, "A"),
+        "q_b_proj": (1024, 32768, 1, 32, "A"),
+        "kv_proj": (4096, 512, 1, 16, "B"),
+        "shared_gate_proj": (4096, 2048, 1, 16, "B"),
+    }
+    num_pack_cores = sum(count for _, count in ZONES.values())
+    num_inputA_cores = 32
+    # Each matmul's activation lives on its own 32-core run, starting at 8, 16, 24, 32.
+    inputA_starts = {name: 8 * (i + 1) for i, name in enumerate(WEIGHTS)}
+    num_cores_needed = max(num_pack_cores, max(inputA_starts.values()) + num_inputA_cores)
+    if grid.x * grid.y < num_cores_needed:
+        pytest.skip(f"Skipping test as device doesn't have {num_cores_needed} cores")
+
+    torch_weights = {name: torch.randn((w[0], w[1]), dtype=torch.bfloat16).float() for name, w in WEIGHTS.items()}
+
+    # ---- pack: per-zone tile offsets, then one [num_pack_cores * shard_rows, 32] host tensor ----
+    tile_offsets = {}
+    zone_fill = {zone: 0 for zone in ZONES}
+    for name, (K, N, k_blocks, n_blocks, zone) in WEIGHTS.items():
+        slab_tiles = (K // k_blocks // 32) * (N // n_blocks // 32)
+        tile_offsets[name] = zone_fill[zone]
+        zone_fill[zone] += slab_tiles
+    shard_tiles = max(zone_fill.values())
+    shard_rows = shard_tiles * 32
+    print(f"pack: {num_pack_cores} cores, shard {shard_tiles} tiles, zone fill {zone_fill}, offsets {tile_offsets}")
+
+    fused = torch.zeros((num_pack_cores * shard_rows, 32), dtype=torch.float32)
+    for name, (K, N, k_blocks, n_blocks, zone) in WEIGHTS.items():
+        start, count = ZONES[zone]
+        assert k_blocks * n_blocks == count
+        for pos in range(count):
+            stream = _tile_stream(_core_slab(torch_weights[name], pos, k_blocks, n_blocks))
+            row0 = (start + pos) * shard_rows + tile_offsets[name] * 32
+            fused[row0 : row0 + stream.shape[0]] = stream
+
+    pack_core_range_set = _row_major_run_core_range_set(0, num_pack_cores, grid_w)
+    fused_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(pack_core_range_set, [shard_rows, 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    fused_tensor = ttnn.from_torch(
+        fused,
+        dtype=ttnn.bfloat4_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=fused_memory_config,
+    )
+
+    # ---- run every packed matmul against the same fused tensor ----
+    for name, (K, N, k_blocks, n_blocks, zone) in WEIGHTS.items():
+        start, count = ZONES[zone]
+        spec = ttnn._ttnn.operations.experimental.MatmulDecodePackedWeightSpec(
+            tile_offset=tile_offsets[name],
+            K=K,
+            N=N,
+            cores=_row_major_run_core_range_set(start, count, grid_w),
+            k_blocks=k_blocks,
+        )
+
+        torch_input = torch.randn((m, K), dtype=torch.bfloat16)
+        ref = torch_input.float() @ torch_weights[name]
+        input_a_core_range_set = _row_major_run_core_range_set(inputA_starts[name], num_inputA_cores, grid_w)
+        in0_memory_config = ttnn.create_sharded_memory_config(
+            (m, K // num_inputA_cores),
+            core_grid=input_a_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        input_tensor_a = ttnn.from_torch(
+            torch_input,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=in0_memory_config,
+            dtype=ttnn.bfloat16,
+        )
+
+        output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, fused_tensor, packed_weight=spec)
+
+        assert output_tensor.shape == (m, N)
+        out = ttnn.to_torch(output_tensor).float()
+        assert_with_pcc(ref, out, 0.99)
+        print(
+            f"{name}: [{K}, {N}] @ tile {tile_offsets[name]} on {count} cores, "
+            f"in0 on cores {inputA_starts[name]}-{inputA_starts[name] + num_inputA_cores - 1} ok"
+        )
+
+
+def test_matmul_decode_deepseek_layer_packed_weights(device):
+    """All 13 non-expert linear matmuls in one DeepSeek-V4 CSA layer, packed into one BF4 L1 tensor.
+
+    This mirrors the one-layer subset of deepseek_v4_flash/tt/l1_placement.py:
+
+      Z0 cores 0-63:    q_a, q_b, compressor.gate, o_b
+      Z1 cores 64-95:   compressor.kv, grouped o_a, attn_hc.fn, ffn_hc.fn
+      Z2 cores 96-111:  kv, shared gate, shared up
+      Z3 cores 112-119: shared down, router gate
+
+    Every core receives one equally sized shard. Each zone concatenates its local weight slabs
+    and pads to the largest zone (1184 BF4 tiles/core). Inputs use varying, non-zero 32-core
+    ranges. The test covers full, partial-K, and grouped-batch packed matmul_decode paths.
+    """
+    torch.manual_seed(0)
+    m = 1
+    input_tile = ttnn.Tile((get_tile_height(m), 32))
+    num_cores = 120
+    num_input_cores = 32
+    grid = device.compute_with_storage_grid_size()
+    grid_w = grid.x
+    if grid.x * grid.y < num_cores:
+        pytest.skip("Complete DeepSeek layer placement requires 120 worker cores")
+
+    zones = {
+        "Z0": (0, 64),
+        "Z1": (64, 32),
+        "Z2": (96, 16),
+        "Z3": (112, 8),
+    }
+    # name, K, N, zone, k_blocks, batch, b_blocks
+    weights = [
+        ("q_a_proj", 4096, 1024, "Z0", 2, 1, 1),
+        ("q_b_proj", 1024, 32768, "Z0", 1, 1, 1),
+        ("kv_proj", 4096, 512, "Z2", 1, 1, 1),
+        ("compressor.gate_proj", 4096, 1024, "Z0", 2, 1, 1),
+        ("compressor.kv_proj", 4096, 1024, "Z1", 1, 1, 1),
+        ("o_a_proj", 4096, 1024, "Z1", 1, 8, 8),
+        ("o_b_proj", 8192, 4096, "Z0", 1, 1, 1),
+        ("shared_gate_proj", 4096, 2048, "Z2", 1, 1, 1),
+        ("shared_up_proj", 4096, 2048, "Z2", 1, 1, 1),
+        ("shared_down_proj", 2048, 4096, "Z3", 1, 1, 1),
+        ("router_gate", 4096, 256, "Z3", 1, 1, 1),
+        ("attn_hc.fn", 16384, 32, "Z1", 32, 1, 1),
+        ("ffn_hc.fn", 16384, 32, "Z1", 32, 1, 1),
+    ]
+
+    # Keep source weights in bf16 to limit host memory. o_a is [batch, K, N];
+    # all other weights are ordinary [K, N].
+    torch_weights = {
+        name: torch.randn((batch, K, N) if batch > 1 else (K, N), dtype=torch.bfloat16)
+        for name, K, N, _, _, batch, _ in weights
+    }
+
+    tile_offsets = {}
+    zone_fill = {zone: 0 for zone in zones}
+    for name, K, N, zone, k_blocks, batch, b_blocks in weights:
+        count = zones[zone][1]
+        n_blocks = count // (b_blocks if batch > 1 else k_blocks)
+        slab_rows = (batch // b_blocks) * K if batch > 1 else K // k_blocks
+        slab_tiles = (slab_rows // 32) * (N // n_blocks // 32)
+        tile_offsets[name] = zone_fill[zone]
+        zone_fill[zone] += slab_tiles
+
+    shard_tiles = max(zone_fill.values())
+    shard_rows = shard_tiles * 32
+    assert zone_fill == {"Z0": 1152, "Z1": 1184, "Z2": 1152, "Z3": 1152}
+    fused = torch.zeros((num_cores * shard_rows, 32), dtype=torch.bfloat16)
+
+    for name, K, N, zone, k_blocks, batch, b_blocks in weights:
+        start, count = zones[zone]
+        n_blocks = count // (b_blocks if batch > 1 else k_blocks)
+        weight = torch_weights[name]
+        for pos in range(count):
+            nb = pos % n_blocks
+            nc = N // n_blocks
+            if batch > 1:
+                bb = pos // n_blocks
+                bc = batch // b_blocks
+                slab = weight[bb * bc : (bb + 1) * bc, :, nb * nc : (nb + 1) * nc].reshape(bc * K, nc)
+            else:
+                kb = pos // n_blocks
+                kc = K // k_blocks
+                slab = weight[kb * kc : (kb + 1) * kc, nb * nc : (nb + 1) * nc]
+            stream = _tile_stream(slab)
+            row0 = (start + pos) * shard_rows + tile_offsets[name] * 32
+            fused[row0 : row0 + stream.shape[0]] = stream
+
+    all_cores = _row_major_run_core_range_set(0, num_cores, grid_w)
+    fused_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(all_cores, [shard_rows, 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    fused_tensor = ttnn.from_torch(
+        fused,
+        dtype=ttnn.bfloat4_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=fused_memory_config,
+    )
+    del fused
+
+    packed_spec_type = ttnn._ttnn.operations.experimental.MatmulDecodePackedWeightSpec
+    for index, (name, K, N, zone, k_blocks, batch, b_blocks) in enumerate(weights):
+        start, count = zones[zone]
+        input_start = 4 * (index + 1)
+        input_cores = _row_major_run_core_range_set(input_start, num_input_cores, grid_w)
+        spec = packed_spec_type(
+            tile_offset=tile_offsets[name],
+            K=K,
+            N=N,
+            cores=_row_major_run_core_range_set(start, count, grid_w),
+            k_blocks=k_blocks,
+            batch=batch,
+            b_blocks=b_blocks,
+        )
+
+        if batch > 1:
+            torch_input = torch.randn((1, batch, m, K), dtype=torch.bfloat16)
+            ref = torch.matmul(torch_input.reshape(batch, m, K).float(), torch_weights[name].float())
+            input_shape = (batch * m, K // num_input_cores)
+        else:
+            torch_input = torch.randn((m, K), dtype=torch.bfloat16)
+            ref = torch_input.float() @ torch_weights[name].float()
+            input_shape = (m, K // num_input_cores)
+
+        input_memory_config = ttnn.create_sharded_memory_config(
+            input_shape,
+            core_grid=input_cores,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        input_tensor = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            tile=input_tile,
+            device=device,
+            memory_config=input_memory_config,
+        )
+        output = ttnn.experimental.matmul_decode(input_tensor, fused_tensor, packed_weight=spec)
+        actual = ttnn.to_torch(output).float()
+        if batch > 1:
+            actual = actual.reshape(batch, m, N)
+            assert tuple(output.shape) == (1, batch, m, N)
+        else:
+            assert tuple(output.shape) == (m, N)
+        assert_with_pcc(ref, actual, 0.99)
+        print(
+            f"{name}: [{K}, {N}], {zone} @ tile {tile_offsets[name]}, "
+            f"in0 cores {input_start}-{input_start + num_input_cores - 1} ok"
+        )
+
+
 @pytest.mark.parametrize(
     "d0, d1, m, k, n, b_blocks, n_blocks",
     [

@@ -100,16 +100,21 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     const uint32_t inA_K_tiles_per_core = inputA_shard_shape[1] / tt::constants::TILE_WIDTH;
 
     const bool use_global_cb = operation_attributes.global_cb.has_value();
-    // A prefetcher-fed weight is ND-sharded in DRAM: it has no legacy shard spec, so both the
-    // [Bc*K, Nc] slab shape and the receiver grid come from the ND shard spec and the GCB.
+    // A packed weight is a region of a fused height-sharded tensor: its [Bc*K, Nc] slab shape
+    // and its grid come from the spec, since the fused tensor's shard spec describes the whole
+    // pack. A prefetcher-fed weight is ND-sharded in DRAM: it has no legacy shard spec, so both
+    // come from the ND shard spec and the GCB.
+    const auto& packed = operation_attributes.packed_weight;
     const uint32_t b_shard_height = use_global_cb
                                         ? static_cast<uint32_t>(input_tensor_b.nd_shard_spec()->shard_shape[-2])
-                                        : input_tensor_b.memory_config().shard_spec().value().shape[0];
+                                    : packed.has_value() ? Bc * static_cast<uint32_t>(operation_attributes.K)
+                                                         : input_tensor_b.memory_config().shard_spec().value().shape[0];
     const uint32_t b_shard_K_tiles = b_shard_height / tt::constants::TILE_HEIGHT;  // = Bc * K_tiles
 
     const auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
-    const auto inputB_core_range_set = use_global_cb ? operation_attributes.global_cb->receiver_cores()
-                                                     : input_tensor_b.memory_config().shard_spec().value().grid;
+    const auto inputB_core_range_set = use_global_cb        ? operation_attributes.global_cb->receiver_cores()
+                                       : packed.has_value() ? packed->cores
+                                                            : input_tensor_b.memory_config().shard_spec().value().grid;
 
     const uint32_t num_B_cores = inputB_core_range_set.num_cores();
     TT_FATAL(
@@ -256,6 +261,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
             }}},
         });
     } else {
+        // Globally allocated over the resident weight. For a packed weight the buffer is the
+        // fused tensor's, and the region's byte offset into every core's shard re-bases the CB
+        // onto this weight's slab -- the kernels are none the wiser.
         desc.cbs.push_back(CBDescriptor{
             .total_size = in1_slab_bytes,
             .core_ranges = inputB_core_range_set,
@@ -266,6 +274,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
                 .tile = in1_tile_desc,
             }}},
             .buffer = input_tensor_b.buffer(),
+            .address_offset = packed.has_value() ? packed->tile_offset * in1_tile_size : 0,
         });
     }
     desc.cbs.push_back(CBDescriptor{
