@@ -1840,12 +1840,18 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     MathOperation.UnaryMinInt32: (INT_MAXMIN_SCALAR,),
     MathOperation.UnaryMaxUint32: (INT_MAXMIN_SCALAR,),
     MathOperation.UnaryMinUint32: (INT_MAXMIN_SCALAR,),
+    # IEEE pow(x, 0) == 1 for every x, including a negative base. (-2)**0 must stay +1
+    # rather than picking up the odd-integer sign flip; 2**0 is the matching positive
+    # control. Cartesian-producted with Operand.B's zero encodings in
+    # _OP_OPERAND_EDGE_POINTS, these are the committed (base, -0.0) pairs.
+    MathOperation.SfpuElwpow: (-2.0, 2.0),
 }
 
 
 # Cat D for an operand other than A. _OP_EDGE_POINTS describes the op's own input, which for
 # a unary or binary op is operand A. A ternary op breaks that: lerp is a + c * (b - a), so
-# its interesting values are properties of the *weight*, operand C.
+# its interesting values are properties of the *weight*, operand C. pow's interesting
+# exponent encodings live here for the same reason: the singularity is on the base.
 #
 # A second per-operand table rather than a nested _OP_EDGE_POINTS: one of the 44 entries has
 # per-operand structure, and a dict layer on all of them would read worse.
@@ -1855,6 +1861,14 @@ _OP_OPERAND_EDGE_POINTS: Dict[MathOperation, Dict[Operand, Tuple[float, ...]]] =
     # of which the default uniform(-1, 1) weight lands on. 2.0 is the extrapolating probe;
     # -1.0 extrapolates the other way, which is the same branch and a different sign.
     MathOperation.SfpuLerp: {Operand.C: (-1.0, 0.0, 1.0, 2.0)},
+    # IEEE pow(x, 0) == 1, and SFPSETCC's contract excludes negative zero, so the kernel
+    # compares on setsgn(pow, 0). Without -0.0 here, B falls through to edge_counterparts()
+    # which only contributes +0.0, and removing setsgn would leave 0**0 green while
+    # 0**-0.0 went back to inf. 0.0/1.0/2.0 are the counterparts this entry replaces, so
+    # 0**1 and 0**2 stay in the sweep as the over-firing-guard controls. -0.0 is dropped
+    # by edge_values() where negative_zero_delivered() is false, so the datacopy path
+    # does not claim coverage for a sign it flattened.
+    MathOperation.SfpuElwpow: {Operand.B: (-0.0, 0.0, 1.0, 2.0)},
 }
 
 
@@ -1864,8 +1878,8 @@ def op_edge_points(
     """Discrete edges of *op* for *operand* that are not already a domain boundary.
 
     Operand A reads _OP_EDGE_POINTS, the op's own knees. Any other operand reads
-    _OP_OPERAND_EDGE_POINTS, which today holds only lerp's weight boundaries. Returns ()
-    when there is nothing to probe.
+    _OP_OPERAND_EDGE_POINTS (lerp's weight boundaries, pow's exponent encodings).
+    Returns () when there is nothing to probe.
     """
     if operand == Operand.A:
         return _OP_EDGE_POINTS.get(op, ())
