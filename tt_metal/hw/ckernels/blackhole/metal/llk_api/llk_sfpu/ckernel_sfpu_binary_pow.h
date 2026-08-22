@@ -312,16 +312,34 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow);
 
+// IEEE-754 NaN propagation guard for pow (see #52593).
+// pow(NaN, y) = NaN unless y == +/- 0 (-> 1);
+// pow(x, NaN) = NaN unless x == 1.0   (-> 1).
+sfpi_inline sfpi::vFloat _sfpu_binary_power_nan_guard_(sfpi::vFloat base, sfpi::vFloat pow, sfpi::vFloat y) {
+    v_if(sfpi::is_nan(base)) {
+        v_if(pow == 0.0f) { y = 1.0f; }
+        v_else { y = std::numeric_limits<float>::quiet_NaN(); }
+        v_endif;
+    }
+    v_elseif(sfpi::is_nan(pow)) {
+        v_if(base == 1.0f) { y = 1.0f; }
+        v_else { y = std::numeric_limits<float>::quiet_NaN(); }
+        v_endif;
+    }
+    v_endif;
+    return y;
+}
+
 // is_fp32_dest_acc_en == false
 template <>
 sfpi_inline sfpi::vFloat _sfpu_binary_power_<false>(sfpi::vFloat base, sfpi::vFloat pow) {
-    return _sfpu_binary_power_21f_<false>(base, pow);
+    return _sfpu_binary_power_nan_guard_(base, pow, _sfpu_binary_power_21f_<false>(base, pow));
 }
 
 // is_fp32_dest_acc_en == true
 template <>
 sfpi_inline sfpi::vFloat _sfpu_binary_power_<true>(sfpi::vFloat base, sfpi::vFloat pow) {
-    return _sfpu_binary_power_f32_(base, pow);
+    return _sfpu_binary_power_nan_guard_(base, pow, _sfpu_binary_power_f32_(base, pow));
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
