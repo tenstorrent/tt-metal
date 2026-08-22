@@ -48,6 +48,18 @@ fuser -k /dev/tenstorrent/* 2>/dev/null || true
 sleep 2
 tt-smi -r >/dev/null 2>&1 || echo "WARN: prologue tt-smi -r failed"
 
+# NFS budget guard: /data is a shared, nearly-full volume. A first-time weight-cache
+# generation writes tens of GB — refuse it when free space is scarce.
+FREE_G=$(df -BG --output=avail /data 2>/dev/null | tail -1 | tr -dc '0-9')
+if [[ -n "$FREE_G" && "$FREE_G" -lt 500 ]]; then
+    echo "WARN: /data has only ${FREE_G}G free (<500G) — NFS budget policy active"
+    CACHE_DIR="${TT_CACHE_PATH:-}/${MESH_DEVICE:-}"
+    if [[ -z "${TT_CACHE_PATH:-}" || ! -d "$CACHE_DIR" || -z "$(ls -A "$CACHE_DIR" 2>/dev/null)" ]]; then
+        echo "ABORT: weight cache for $MESH_DEVICE not present and NFS nearly full — skipping cache-generating run"
+        exit 1
+    fi
+fi
+
 if [[ -n "${REF:-}" ]]; then
     git checkout --detach "$REF" 2>/dev/null || {
         git fetch origin "$REF"
