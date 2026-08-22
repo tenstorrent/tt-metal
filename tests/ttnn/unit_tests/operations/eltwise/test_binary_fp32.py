@@ -433,3 +433,44 @@ def test_binary_div_edge_case_ttnn(fast_and_approximate_mode, rounding_mode, dev
             torch.isnan(golden_tensor), torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
         )
     assert_with_ulp(golden_tensor, output_tensor, 0, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        (100.0, 0.0),  # exact answer is 100; exp(100) is not representable
+        (89.0, 0.0),  # just past log(FLT_MAX) = 88.72
+        (90.0, 89.0),
+        (200.0, 199.0),
+        (1000.0, 999.0),
+        (100.0, 100.0),
+        (-100.0, -100.0),  # both exponentials underflow to zero
+        (-1000.0, -1000.0),
+        (5.0, 3.0),  # inside the currently-working band, as a control
+        (0.0, 0.0),
+    ],
+)
+def test_logaddexp_beyond_exp_range_fp32(device, a, b):
+    # logaddexp is bounded by its own inputs:
+    #     max(a, b) <= logaddexp(a, b) <= max(a, b) + ln 2
+    # so a finite pair always has a finite result. Composing it as
+    # log(exp(a) + exp(b)) breaks that: exp() saturates above 88.72 and flushes
+    # to zero below -87, and the composition returned +/-inf on both sides.
+    #
+    # The existing coverage draws from [-64, 64] in
+    # tests/sweep_framework/sweeps/eltwise/binary/logaddexp, and from [1, 4] in
+    # test_logaddexp_fp32 above, so this range was never exercised.
+    x_torch = torch.tensor([[a]], dtype=torch.float32)
+    y_torch = torch.tensor([[b]], dtype=torch.float32)
+    golden_fn = ttnn.get_golden_function(ttnn.logaddexp)
+    z_torch = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.logaddexp(x_tt, y_tt))
+
+    assert torch.isfinite(tt_out).all(), (
+        f"logaddexp({a}, {b}) returned {tt_out.flatten()[0].item()}; "
+        f"the exact result is {z_torch.flatten()[0].item()}"
+    )
+    assert_allclose(tt_out, z_torch, rtol=1e-5, atol=1e-5)
