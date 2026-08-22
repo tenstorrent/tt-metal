@@ -5,33 +5,39 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 
 // #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 
 void kernel_main() {
     Noc noc;
 
-    uint32_t in_tile_offset_by_head = get_arg_val<uint32_t>(0);
-    uint32_t q_start_addr = get_arg_val<uint32_t>(1);
+    uint32_t in_tile_offset_by_head = get_arg(args::in_tile_offset_by_head);
 
-    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(0);
-    constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_q_out = get_compile_time_arg_val(2);
-    constexpr uint32_t head_size = get_compile_time_arg_val(3);
-    constexpr uint32_t batch = get_compile_time_arg_val(4);
-    constexpr uint32_t head_size_num_tiles = get_compile_time_arg_val(5);
+    // Input base address arrives via the tensor binding (was a Buffer* runtime arg). This is a Case 2
+    // (raw-pointer) binding: the kernel keeps its hand-rolled cross-core NoC gather and only pulls the
+    // base pointer through the TensorAccessor bridge.
+    TensorAccessor input(tensor::input);
+    uint32_t q_start_addr = input.get_bank_base_address();
+
+    constexpr uint32_t ELEMENT_SIZE = get_arg(args::element_size);
+    constexpr uint32_t SUBTILE_LINE_BYTES = get_arg(args::sub_tile_line_bytes);
+    constexpr uint32_t head_size = get_arg(args::head_size);
+    constexpr uint32_t batch = get_arg(args::batch);
+    constexpr uint32_t head_size_num_tiles = get_arg(args::head_size_num_tiles);
     constexpr uint32_t PHASES_TO_READ =
-        get_compile_time_arg_val(6);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
+        get_arg(args::phases_to_read);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
 
-    constexpr uint32_t num_x = get_compile_time_arg_val(7);
-    constexpr uint32_t num_y = get_compile_time_arg_val(8);
-    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
-    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + num_x));
+    constexpr uint32_t num_x = get_arg(args::num_x);
+    constexpr uint32_t num_y = get_arg(args::num_y);
+    // The input NoC coordinates arrive as runtime varargs, laid out [x-coords (num_x), y-coords (num_y)];
+    // read positionally via get_vararg (formerly two L1 arrays reached through get_arg_addr).
 
-    CircularBuffer cb_q_out(cb_id_q_out);
+    DataflowBuffer cb_q_out(dfb::q_out);
     UnicastEndpoint src_ep;
 
     // Q
@@ -40,8 +46,8 @@ void kernel_main() {
     uint32_t total_input_cores = num_x * num_y;
     uint32_t num_tiles_per_core = (head_size_num_tiles * batch) / total_input_cores;
 
-    uint32_t qkv_noc_x = in0_mcast_noc_x[qkv_x];
-    uint32_t qkv_noc_y = in0_mcast_noc_y[qkv_y];
+    uint32_t qkv_noc_x = get_vararg(qkv_x);
+    uint32_t qkv_noc_y = get_vararg(num_x + qkv_y);
     uint32_t qkv_read_addr = q_start_addr + in_tile_offset_by_head;
     uint32_t num_tiles_read_cur_core = 0;
     uint32_t q_write_addr = 0;
@@ -84,8 +90,8 @@ void kernel_main() {
                     qkv_x = 0;
                     qkv_y++;
                 }
-                qkv_noc_x = in0_mcast_noc_x[qkv_x];
-                qkv_noc_y = in0_mcast_noc_y[qkv_y];
+                qkv_noc_x = get_vararg(qkv_x);
+                qkv_noc_y = get_vararg(num_x + qkv_y);
                 qkv_read_addr = q_start_addr + in_tile_offset_by_head;
                 num_tiles_read_cur_core = 0;
             }
