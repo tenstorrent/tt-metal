@@ -132,6 +132,7 @@ jobs:
       contents: read
       pull-requests: write
       security-events: write
+      id-token: write            # OIDC for the Tailscale join below
 
     steps:
       - name: Post running notice
@@ -171,6 +172,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r .github/bug_checker/requirements-bug-checker.txt
 
+      # Join the tailnet ephemerally via OIDC so egress to api.anthropic.com routes
+      # through the on-prem connectors with a stable, allowlistable exit IP. Vars are
+      # set by IT onboarding; scoped to an exact repo:branch pair. Same pattern as
+      # .github/workflows/llk-pr-review.yaml.
+      - name: Tailscale
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4.1.2
+        with:
+          oauth-client-id: ${{ vars.TS_GHA_PUBLIC_INTERNET_CLIENT_ID }}
+          audience: ${{ vars.TS_GHA_PUBLIC_INTERNET_AUDIENCE }}
+          tags: tag:tt-github-actions-public-internet-outbound
+
       - name: Run bug checker
         id: check
         env:
@@ -203,3 +215,8 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: .github/bug-checker-results.sarif
+
+      # Remove the ephemeral tailnet node immediately, even on failure.
+      - name: Tailscale cleanup
+        if: always()
+        run: sudo tailscale logout

@@ -184,6 +184,8 @@ tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @kstevensTT @ruizhangTT
 tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @ruizhangTT @tenstorrent/metalium-developers-infra
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho
 tt_metal/llrt/**/CMakeLists.txt @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho @tenstorrent/metalium-developers-infra
+tt_metal/llrt/rtoptions.cpp @tenstorrent/metalium-api-owners @jbaumanTT @abhullar-tt
+tt_metal/llrt/rtoptions.hpp @tenstorrent/metalium-api-owners
 tt_metal/logging/ @abhullar-tt @jbaumanTT
 tt_metal/logging/**/CMakeLists.txt @abhullar-tt @jbaumanTT @tenstorrent/metalium-developers-infra
 tt_metal/programming_examples/ @tt-asaigal @afuller-TT @ebanerjeeTT @ncvetkovicTT @lpremovicTT @rtawfik01 @nvelickovicTT @tenstorrent/metalium-api-owners
