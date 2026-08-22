@@ -278,3 +278,82 @@ form `$TT_METAL_HOME/ttnn:$TT_METAL_HOME:$TT_METAL_HOME/tools` is required, and 
 Also worth knowing: on this branch `pytest --collect-only` is **not** device-free — it opens and
 starts all 32 chips for ~18 s, via `ttnn.get_num_devices()` and `is_blackhole()` at
 decorator/import time.
+
+## 12. Update: the softmax router fix already exists, and halves the error
+
+`GateComputeMode.GPT_DEVICE` is already implemented and **is** Mistral's routing rule —
+`_device_gpt_gate` (`tt/moe/tt_moe_gate_prefill.py:864-880`) does `topk(logits + bias)` then
+`softmax` over the selected top-k. A k-wide softmax suffices because softmax is monotone
+(`topk(softmax(l)) == topk(l)`) and the 128-wide normaliser cancels in `norm_topk_prob`.
+CPU-proven max weight error **1.19e-07**, vs the current sigmoid path's **5.34e-01**.
+
+Measured on device, seq 5120, 8x4:
+
+| | `DEVICE_FP32` (sigmoid) | `GPT_DEVICE` (softmax) | `GPT_HOST` |
+|---|---|---|---|
+| single block, moe | 0.995192 | **0.998185** | — |
+| 2-layer `layer_0` | 0.976044 | **0.987098** | 0.987135 |
+| 2-layer `layer_1` | 0.943361 | **0.968872** | 0.968953 |
+| 2-layer `lm_head` | 0.942780 | **0.968680** | 0.968950 |
+
+**Correcting §5:** I had implied the router was *the* cause. It is a large contributor, not the
+whole. The correct rule cuts per-layer error ~62% on one block and ~46% over two layers, but
+~0.018 PCC/layer remains and the PCC case still fails at 2 layers.
+
+`GPT_HOST` matching `GPT_DEVICE` to four decimals proves the residual is **not** the gate's
+top-k/softmax arithmetic. It sits upstream — most likely the bf16 gate matmul changing expert
+selection (CPU-measured: fp32 vs bf16 logits agree on only **98.02%** of top-4 sets).
+
+Both gate modes are now wired as a test axis, so the wrong rule stays visible as a regression
+witness rather than being silently replaced.
+
+**Next step, and it looks small:** there is no `GPT_DEVICE` + fp32-logits mode. `DEVICE_FP32` is
+fp32 logits with the wrong rule; `GPT_DEVICE` is the right rule with bf16 logits. A
+`GPT_DEVICE_FP32` that typecasts before `ttnn.topk` — mirroring what `DEVICE_FP32` already does —
+would test the bf16-selection hypothesis directly. The production fix remains a `score_func =
+"softmax"` (implemented as `exp`) in `moe_grouped_topk`, ~15 additive lines, which also keeps
+padding-aware dispatch and `route_scale` that `GPT_DEVICE` silently drops.
+
+## 13. CI readiness — what actually has to happen before merge
+
+A separate audit found the entries would **not** have gone green. Fixed in this branch:
+
+| # | problem | fix |
+|---|---|---|
+| 1 | Both checkpoint-dependent entries would attempt a **gated 113 GB HF download** — weights resolve env → `default_local_path` → `shared_path` → `snapshot_download`, and mistral4 sets neither middle option. The fixture raises; it does not skip. | `mistral4_mla` narrowed to `-k "8x4 and random"`; `MISTRAL4_HF_MODEL` **deleted** from `mistral4_mla_chunked` — merely exporting it flipped that entry to pretrained |
+| 2 | `test_mistral4_mla` **hard-asserts** on CI without a host-reference cache, and every selected case is `max_sl` + `check_pcc` | added `MISTRAL4_MLA_REF_CACHE`, mirroring the existing `Blaze - MLA` entry |
+| 3 | Four entries exported vars they never reach | deleted; five of seven need **nothing** staged |
+| 4 | Timeouts were warm-local guesses | tightened to measured values, 137 → 76 min |
+| 5 | Header overstated the ttnn weight cache | corrected — none of the seven ever writes it |
+
+### The one blocker I did not fix, because it isn't mine
+
+**`.github/time_budget.yaml` `models.demo.bh_sc1` must be raised.** The gate runs in
+`load-test-matrix`, which `multihost-tests` depends on, so an over-budget matrix **blocks every leg
+in the pipeline** — including all pre-existing DeepSeek/Kimi/GLM/MiniMax entries, on every nightly.
+
+| branch | requested before | after tightening | budget | required |
+|---|---|---|---|---|
+| `ssalice/mistral4-119b-prefill` | 572 | **511** | 437 | **511** |
+| `ssalice/mistral4-tests` | 616 | **555** | 488 | **555** |
+
+The budget was already at 435/437 before any of this, so no trimming on my side closes it. Last set
+by Lukasz Galas (#50977) on the older base and Janko Mitrovic (#52008) on the newer one — their call.
+
+### Still needs a human with `/mnt/models` write access
+
+Nothing in the repo provisions `/mnt/models`; the pipeline only asserts it is readable
+(`.github/actions/setup-multihost-job/action.yml:163-168`). Existing caches were placed by hand by
+individuals. Two files need staging for the MLA entry: `random_seq5120.pt` and `random_seq25600.pt`
+(45 MB + 226 MB), currently at `/tmp/mistral_small_4_119b_mla_ref_cache/`. **Question to ask the
+runner owners:** is `/mnt/models` writable from a blaze worker pod, under what uid, and what is the
+naming convention for a new model plus its caches?
+
+### And fix `owner_id` before merge
+All seven entries carry `U08RL15T4N8` as a placeholder. It only mis-routes Slack on failure (and is
+gated to `refs/heads/main`), so it will not fail a job — but it is wrong.
+
+### Closed: `transformers` was not the risk I thought
+`tt_metal/python_env/requirements-dev.txt:33` already pins `transformers == 5.12.1` **on main**, and
+the CI dev image builds from it, so the `Mistral4*` classes the new reference package imports are
+present. No entry is affected.
