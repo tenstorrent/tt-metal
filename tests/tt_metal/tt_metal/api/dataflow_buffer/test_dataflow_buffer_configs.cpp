@@ -2287,4 +2287,92 @@ TEST_F(UnitMeshFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
     }
 }
 
+// =====================================================================================
+// BLOCKED access-pattern config-rejection tests
+// =====================================================================================
+// --- REJECTED CONFIG: Tensix BLOCKED producer + implicit DM consumer ---
+// A Tensix producer can only post explicit credits -- the ISR poster is #ifndef COMPILE_FOR_TRISC, so it
+// is compiled out on Tensix. A STRIDED DM consumer takes those per-tile posts fine, but a BLOCKED one
+// spin-waits forever, since the per-block posts never reach its implicit drain's txn signal.
+// finalize_single_dfb_config rejects the combination, turning a device hang into a host error.
+// Use an explicit DM consumer, or a DM producer if the consumer must be implicit.
+static void expect_tensix_blocked_implicit_consumer_rejected(
+    distributed::MeshDevice& mesh_device, uint32_t num_threads, uint32_t num_entries) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::TENSIX,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = num_threads,
+        .num_consumers = num_threads,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = true,
+        .num_entries = num_entries,
+        .block_size = 4,
+    };
+    EXPECT_ANY_THROW(run_single_dfb_program_2_0(mesh_device, params));
+}
+TEST_F(UnitMeshFixture, TensixDMTest1xDFB2Bx2B_blk4_impl_rejected_2_0) {
+    expect_tensix_blocked_implicit_consumer_rejected(this->device(), /*num_threads=*/2, /*num_entries=*/16);
+}
+TEST_F(UnitMeshFixture, TensixDMTest1xDFB4Bx4B_blk4_impl_rejected_2_0) {
+    expect_tensix_blocked_implicit_consumer_rejected(this->device(), /*num_threads=*/4, /*num_entries=*/32);
+}
+
+// --- REJECTED CONFIG: implicit BLOCKED whose txn window doesn't cover every tile counter ---
+// The ISR credits all of a RISC's tile counters equally when a txn ID retires, but a BLOCKED endpoint
+// advances its counter only every block_size entries. At P=1, C=4, block_size=4 and 16 entries the txn
+// window fills 2 of the 4 sub-rings while all 4 counters are credited, so consumers 2 and 3 would read
+// entries nobody wrote. compute_txn_descriptor rejects it; the explicit twin is unaffected.
+TEST_F(UnitMeshFixture, DMTest1xDFB1Bx4B_blk4_impl_rejected_2_0) {
+    auto& mesh_device = this->device();
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 4,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = true,
+        .num_entries = 16,
+        .block_size = 4,
+    };
+    EXPECT_ANY_THROW(run_single_dfb_program_2_0(mesh_device, params));
+}
+
+// B10 — a BLOCKED binding needs block_size > 0 (check_block_size_validity in program_spec.cpp).
+// This config leaves it unset on a BLOCKED consumer, so it must throw.
+TEST_F(UnitMeshFixture, B10_Blocked_Rejected_2_0) {
+    auto& mesh_device = this->device();
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB validation tested on Quasar";
+    }
+    using namespace m2_config_test_helpers;
+    M2ConfigDFBParams p{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 1,
+        .pap = m2::DFBAccessPattern::STRIDED,
+        .cap = m2::DFBAccessPattern::BLOCKED,  // <-- BLOCKED consumer but block_size left 0 (the offense)
+        .implicit_sync = false,
+    };
+    EXPECT_THROW(
+        {
+            Program program = build_single_dfb_program_2_0(mesh_device, p);
+            program.impl().finalize_dataflow_buffer_configs();
+        },
+        std::exception);
+}
+
+// B7 — CB+DFB mix rejection.
+// Not applicable to M2: ProgramSpec doesn't expose a circular-buffer API
+// (CircularBufferConfig is a legacy host-API construct). M2 programs are
+// purely DFB-based; the legacy CB-then-DFB rejection path can't be exercised
+
 }  // end namespace tt::tt_metal

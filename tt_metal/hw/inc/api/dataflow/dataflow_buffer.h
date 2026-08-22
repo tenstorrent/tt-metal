@@ -335,6 +335,13 @@ public:
     uint32_t get_write_ptr() const { return get_write_ptr_impl() + L1_UNCACHED_OFFSET; }
     uint32_t get_read_ptr() const { return get_read_ptr_impl() + L1_UNCACHED_OFFSET; }
 
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+    // How many entries one NoC transaction carries here.
+    // A whole block if this side is BLOCKED and its entries sit next to each other in memory,
+    // otherwise a single entry.
+    uint32_t get_entries_per_txn() const { return get_entries_per_txn_impl(); }
+#endif
+
 #ifndef ARCH_QUASAR
     // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).
     // Not for peeks: use get_*_ptr. Not declared on Quasar (redesign Classes 2–5).
@@ -386,6 +393,9 @@ private:
     friend struct noc_traits_t<DataflowBuffer>;
 
     void write_barrier_impl(const Noc &noc) const;
+#endif
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+    uint32_t get_entries_per_txn_impl() const;
 #endif
 
     struct ScopedLockRegion {
