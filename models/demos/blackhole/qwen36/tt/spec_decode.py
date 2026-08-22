@@ -5,11 +5,14 @@
 Verify = one masked-bucket chunk forward of [committed-tail, drafts] from the
 block-aligned GDN state anchor `a`; per-row logits/hiddens via a one-hot
 row-select + final norm + LM head. GDN state is NEVER committed by a verify —
-every iteration snapshots the state handles (the chunk path reassigns state
-tensors, so a snapshot is just the handles) and restores them; the state
-advances only through periodic block-aligned commit chunks over committed
+every iteration snapshots the state (single device: the handles the chunk path
+reassigns; TP: clones of the in-place carried buffers) and restores it; the
+state advances only through periodic block-aligned commit chunks over committed
 tokens. KV rollback is implicit: the next chunk always starts at `a` and
 rewrites every polluted position before anything attends past it.
+
+Runs single-device or TP (B=1); on TP the drafter head executes fully
+replicated (see tt/mtp.py).
 
 Committed tokens are ALWAYS produced by the target verify rows, so greedy
 spec decode matches plain greedy decode up to bf16 chunk-vs-decode numerics.
@@ -74,7 +77,7 @@ class Qwen36SpeculativeDecoder:
     """Draft (MTP head) -> verify (masked-bucket chunk) -> accept loop, B=1 greedy.
 
     Args:
-        model: Qwen36Model (single device) with paged KV caches allocated.
+        model: Qwen36Model (single device or TP, B=1) with paged KV caches allocated.
         mtp_head: Qwen36MTPHead with its KV cache allocated.
         page_table: torch [1, num_blocks] page table for the target's paged KV.
         draft_len: K draft tokens per iteration.
@@ -95,7 +98,6 @@ class Qwen36SpeculativeDecoder:
     )
 
     def __init__(self, model, mtp_head, page_table, draft_len=4, stop_tokens=None, seed_window=None):
-        assert model.num_devices == 1, "speculative decode is single-device (v1)"
         self.model = model
         self.mtp = mtp_head
         self.page_table = page_table
@@ -104,13 +106,21 @@ class Qwen36SpeculativeDecoder:
         self.stop_tokens = set(stop_tokens or [])
         self.seed_window = int(seed_window if seed_window is not None else os.environ.get("TT_SPEC_SEED_WINDOW", 2048))
         self._dns = [layer.attention for layer in model.layers if not layer.is_full_attention]
+        # TP (B=1): the TPGatedDeltaNet chunk path carries state IN PLACE
+        # (_stable_state, set by the TP allocate_kv_caches) into rec_state /
+        # conv_carry, so snapshots must clone+copy-back; the single-device chunk
+        # path REASSIGNS state tensors, so snapshots are just the handles.
+        self._tp = model.num_devices > 1
+        if self._tp:
+            for dn in self._dns:
+                assert getattr(dn, "_stable_state", False), "TP spec decode needs in-place GDN state (allocate first)"
 
         self.committed = []  # token ids 0..c (prompt + generated)
         self.a = 0  # block-aligned state anchor: GDN state reflects tokens 0..a-1
         self._pending = []  # (input_token, hidden_row, drafter_pos) awaiting MTP catch-up
         self.accepts = []  # accepted drafts per iteration (stats)
 
-    # ── GDN state bookkeeping (handle swap) ──────────────────────────────────
+    # ── GDN state bookkeeping ────────────────────────────────────────────────
     def _gdn_handles(self):
         return [{attr: getattr(dn, attr) for attr in self._GDN_STATE_ATTRS} for dn in self._dns]
 
@@ -119,8 +129,33 @@ class Qwen36SpeculativeDecoder:
         if t is not None and not isinstance(t, list):
             ttnn.deallocate(t)
 
+    def _gdn_snapshot(self):
+        """State snapshot before a verify chunk (never-committed contract).
+
+        TP clones the in-place carried buffers; single-device records handles.
+        (TP note: the chunk's capture_state also refreshes the decode conv
+        window conv_states, which is not restored — spec mode never runs GDN
+        decode, so nothing reads it.)
+        """
+        if self._tp:
+            return [
+                (
+                    ttnn.clone(dn.rec_state, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                    ttnn.clone(dn.conv_carry, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                )
+                for dn in self._dns
+            ]
+        return self._gdn_handles()
+
     def _gdn_restore(self, snap):
-        """Drop the state a verify produced; point layers back at the snapshot."""
+        """Roll GDN state back to the snapshot taken before the verify chunk."""
+        if self._tp:
+            for dn, (rec, conv) in zip(self._dns, snap):
+                ttnn.copy(rec, dn.rec_state)
+                ttnn.copy(conv, dn.conv_carry)
+                ttnn.deallocate(rec)
+                ttnn.deallocate(conv)
+            return
         for dn, s in zip(self._dns, snap):
             for attr, old in s.items():
                 cur = getattr(dn, attr)
@@ -128,9 +163,15 @@ class Qwen36SpeculativeDecoder:
                     self._dealloc(cur)
                 setattr(dn, attr, old)
 
-    def _gdn_free_replaced(self, old):
-        """After a committing chunk, free the handles the chunk replaced."""
-        for dn, s in zip(self._dns, old):
+    def _gdn_commit_ctx(self):
+        """Pre-commit context: single-device must free the handles the chunk
+        replaces; the TP chunk commits in place (nothing to free)."""
+        return None if self._tp else self._gdn_handles()
+
+    def _gdn_commit_done(self, ctx):
+        if ctx is None:
+            return
+        for dn, s in zip(self._dns, ctx):
             for attr, prev in s.items():
                 if getattr(dn, attr) is not prev:
                     self._dealloc(prev)
@@ -153,6 +194,15 @@ class Qwen36SpeculativeDecoder:
         hidden = model._forward_prefill_chunk_masked(buf, valid_len, chunk_start, self.page_table, bucket)
         return hidden, bucket
 
+    def _rows_to_host(self, t, n):
+        """First n rows of a [.., R, D] device tensor as host float [n, D].
+
+        TP tensors here are replicated (post DistributedNorm / lm-head gather),
+        so one replica is the full value.
+        """
+        src = ttnn.get_device_tensors(t)[0] if self._tp else t
+        return ttnn.to_torch(src).float().reshape(-1, t.shape[-1])[:n]
+
     def _extract_rows(self, hidden, bucket, row_start, n, want_logits=True):
         """Post-final-norm hiddens (+ logits) for rows row_start..row_start+n-1.
 
@@ -167,20 +217,30 @@ class Qwen36SpeculativeDecoder:
             0 <= row_start and row_start + n <= bucket
         ), f"row range [{row_start}, {row_start + n}) not in bucket {bucket}"
         rows_padded = ((n + 31) // 32) * 32
-        sel = torch.zeros(1, rows_padded, bucket, dtype=torch.float32)
+        # TP hidden is rank-4 [1,1,bucket,dim/tp] (fractured); single-device is
+        # rank-3 [1,bucket,dim]. The replicated one-hot selects rows either way,
+        # and the final norm (DistributedNorm on TP) hands back full-dim rows.
+        sel_shape = (1, 1, rows_padded, bucket) if self._tp else (1, rows_padded, bucket)
+        sel = torch.zeros(*sel_shape, dtype=torch.float32)
         for j in range(n):
-            sel[0, j, row_start + j] = 1.0
-        sel_tt = ttnn.from_torch(sel, dtype=hidden.dtype, layout=ttnn.TILE_LAYOUT, device=model.device)
-        rows = ttnn.matmul(sel_tt, hidden)  # [1, rows_padded, dim]
+            sel[..., j, row_start + j] = 1.0
+        sel_tt = ttnn.from_torch(
+            sel,
+            dtype=hidden.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=model.device,
+            **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(model.device)) if self._tp else {}),
+        )
+        rows = ttnn.matmul(sel_tt, hidden)
         ttnn.deallocate(sel_tt)
         rows = ttnn.to_memory_config(rows, ttnn.DRAM_MEMORY_CONFIG)
         normed = model.norm(rows, mode=Mode.PREFILL)
         ttnn.deallocate(rows)
-        hid = ttnn.to_torch(normed)[0, :n].float()
+        hid = self._rows_to_host(normed, n)
         logits_host = None
         if want_logits:
             logits = model._lm_head(normed)
-            logits_host = ttnn.to_torch(logits)[0, :n].float()
+            logits_host = self._rows_to_host(logits, n)
             ttnn.deallocate(logits)
         ttnn.deallocate(normed)
         return logits_host, hid
@@ -190,10 +250,10 @@ class Qwen36SpeculativeDecoder:
         k = commit_advance(len(self.committed) - self.a)
         if k == 0:
             return
-        old = self._gdn_handles()
+        ctx = self._gdn_commit_ctx()
         hidden, _ = self._chunk_forward(self.committed[self.a : self.a + k], self.a, k)
         ttnn.deallocate(hidden)
-        self._gdn_free_replaced(old)
+        self._gdn_commit_done(ctx)
         self.a += k
 
     # ── prefill + drafter seeding ────────────────────────────────────────────
@@ -220,17 +280,17 @@ class Qwen36SpeculativeDecoder:
         prompt_hidden = {}  # position -> torch [dim], only within the seed window
         for start in range(0, a0, _PREFILL_SEG):
             length = min(_PREFILL_SEG, a0 - start)
-            old = self._gdn_handles()
+            ctx = self._gdn_commit_ctx()
             hidden, _bucket = self._chunk_forward(self.committed[start : start + length], start, length)
             if start + length > seed_from:
                 normed = model.norm(hidden, mode=Mode.PREFILL)
-                rows = ttnn.to_torch(normed)[0, :length].float()
+                rows = self._rows_to_host(normed, length)
                 if normed is not hidden:
                     ttnn.deallocate(normed)
                 for i in range(max(seed_from, start), start + length):
                     prompt_hidden[i] = rows[i - start]
             ttnn.deallocate(hidden)
-            self._gdn_free_replaced(old)
+            self._gdn_commit_done(ctx)
 
         # Seed the drafter KV over the (windowed) prompt: pair (h_i, t_{i+1}) at
         # drafter position i.
@@ -243,7 +303,7 @@ class Qwen36SpeculativeDecoder:
         """Draft-less verify over the prompt tail: samples the first token and
         yields the tail hiddens that arm the drafter catch-up pairs."""
         tail_len = len(self.committed) - self.a
-        snap = self._gdn_handles()
+        snap = self._gdn_snapshot()
         hidden, bucket = self._chunk_forward(self.committed[self.a :], self.a, tail_len)
         logits, hid = self._extract_rows(hidden, bucket, 0, tail_len)
         ttnn.deallocate(hidden)
@@ -284,7 +344,7 @@ class Qwen36SpeculativeDecoder:
 
             # 2. Verify chunk [t_a..t_c, drafts] at positions a..c+K.
             c = len(self.committed) - 1
-            snap = self._gdn_handles()
+            snap = self._gdn_snapshot()
             chunk_tokens = self.committed[self.a :] + drafts
             hidden, bucket = self._chunk_forward(chunk_tokens, self.a, len(chunk_tokens))
             logits, hid = self._extract_rows(hidden, bucket, c - self.a, K + 1)

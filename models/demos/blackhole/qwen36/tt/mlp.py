@@ -156,6 +156,9 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=(tensor_cache_path / f"mlp.{name}.weight") if tensor_cache_path else None,
+            # Replicate on a mesh: the MTP drafter head runs this dense MLP
+            # fully replicated on TP (args view has num_devices=1). One-device no-op.
+            **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)) if mesh_device.get_num_devices() > 1 else {}),
         )
 
     # gate/up: bfloat4_b (bandwidth); down: bfloat8_b (accuracy).

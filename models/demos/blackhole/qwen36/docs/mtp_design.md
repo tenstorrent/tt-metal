@@ -115,7 +115,19 @@ next step. Drafting inside the existing decode trace is not attempted: the
 decode trace is a single-token program, while spec decode replaces single-token
 decode entirely.
 
-## Batch > 1 (goal: concurrency 8) — design only
+## TP (P150x4 / P150x8), B=1 — built
+
+The spec loop runs on a TP mesh at B=1: the verify/commit chunks go through the
+TP masked-bucket path (`_forward_prefill_chunk_masked_tp`), row extraction uses
+a replicated one-hot + DistributedNorm + the vocab-sharded LM head's gather,
+and the GDN snapshot is COPY-based (`rec_state`/`conv_carry` clones) because
+the TP chunk path carries state in place (`_stable_state`). The drafter head
+executes fully REPLICATED — weights, KV, and inputs on every device, no CCL; a
+1-layer step is small enough that redundant compute beats sharding. It keeps
+its own replicated embed_tokens copy (the target's table is hidden-sharded)
+and reuses the target's vocab-sharded LM head with host shard-concat.
+
+## Batch > 1 (goal: concurrency 8) — design only, NOT built
 
 - Verify: per-user B=1 chunk forwards against the user's page-table row and GDN
   slot (mirroring `prefill_paged_slots`), or a batched GDN chunk kernel at B=8
@@ -128,7 +140,10 @@ decode entirely.
 
 ## v1 limitations (explicit)
 
-- Single device, greedy sampling, batch=1, eager (no trace).
+- Single device or TP mesh at B=1; greedy sampling; eager (no trace). Batched
+  (c8) spec — including spec-on-one-slot-while-others-decode — is not built.
 - Drafter prompt seeding costs one T=1 step per seeded position (window-capped).
 - vLLM serving integration is out of scope; the hook is `TT_SPEC_DECODE=1` in
-  the single-device demo path.
+  the text demo (reachable from every test id — spec ignores `use_trace`; the
+  `spec_128` / `spec_2k` / `paged_128` ids are the probe entry points, and
+  `QWEN36_PROMPT_FILE` overrides the prompt distribution).
