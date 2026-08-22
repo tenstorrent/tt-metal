@@ -166,13 +166,19 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     // select_program_factory routes UINT16 with Wt > SORT_WT_THRESHOLD to
     // MultiCore to work around that.
 
-    // Width must be a multiple of 64 regardless of layout.
+    // Width must be a power of two >= 64 regardless of layout: the bitonic
+    // engines have no j < Wt partner guard and truncate log2(Wt), so a
+    // non-power-of-two width (e.g. 192 — a multiple of 64) silently produces
+    // garbage rather than failing. The public ttnn.sort composite always pads
+    // the sort dim to the next power of two >= 64 with +/-inf sentinels, so
+    // this only rejects direct prim calls.
     // For TILE the relevant dimension is the padded width; for ROW_MAJOR it is
     // the logical width (padding was already applied in pre_sort_transform_tensor).
     const uint32_t checked_w = is_row_major ? input_lshape[-1] : input_pshape[-1];
     TT_FATAL(
-        checked_w % 64 == 0,
-        "Input shape inner dim {} must be a multiple of 64, pad with +/-infinity if necessary",
+        checked_w >= 64 && (checked_w & (checked_w - 1)) == 0,
+        "Input shape inner dim {} must be a power of two >= 64. Use ttnn.sort, which pads the sort dimension "
+        "with +/-infinity to the next power of two.",
         checked_w);
 
     // Height constraint: the kernel always works on TILE_HEIGHT (32) row groups.
