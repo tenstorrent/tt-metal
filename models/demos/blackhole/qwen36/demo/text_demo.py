@@ -87,14 +87,14 @@ def _load_and_cache_context(context_url, max_length=None):
     return context_text
 
 
-def _prompt_from_file(path, tokenizer, cap):
+def _prompt_from_file(path, tokenizer, cap, index=None):
     """QWEN36_PROMPT_FILE prompt override for distribution-specific measurement.
 
     Accepts a JSON file (list of strings, list of {"prompt": ...}, or
     {"prompts": [...]}) or a plain-text file (the whole file is one prompt).
-    QWEN36_PROMPT_INDEX picks the entry (default 0). The chat template is
-    applied (add_generation_prompt=True) so generation measures the assistant
-    distribution; QWEN36_PROMPT_RAW=1 tokenizes the text verbatim instead.
+    `index` (or QWEN36_PROMPT_INDEX; default 0) picks the entry. The chat
+    template is applied (add_generation_prompt=True) so generation measures the
+    assistant distribution; QWEN36_PROMPT_RAW=1 tokenizes the text verbatim.
     """
     raw = Path(path).read_text()
     if path.endswith(".json"):
@@ -104,7 +104,7 @@ def _prompt_from_file(path, tokenizer, cap):
         prompts = [e["prompt"] if isinstance(e, dict) else e for e in data]
     else:
         prompts = [raw]
-    idx = int(os.environ.get("QWEN36_PROMPT_INDEX", "0"))
+    idx = int(os.environ.get("QWEN36_PROMPT_INDEX", "0")) if index is None else int(index)
     prompt = prompts[idx]
     if os.environ.get("QWEN36_PROMPT_RAW", "0") == "1":
         ids = tokenizer(prompt, return_tensors="pt")["input_ids"]
@@ -1233,19 +1233,23 @@ def _run_spec_generation_batched(model, tokenizer, token_ids, max_generated_toke
     if not checkpoint_has_mtp(ckpt):
         pytest.skip(f"checkpoint {ckpt} has no mtp.* weights (needs the 3.8 checkpoint)")
 
-    # Per-user prompts (round-robin from the prompt file when provided).
+    # Per-user prompts. An operator-PINNED QWEN36_PROMPT_INDEX means the uniform
+    # leg: every user gets that one prompt and the row-equality gate ARMS. Only
+    # an unpinned index round-robins the file (the desync/accept-rate leg).
     prompt_file = os.environ.get("QWEN36_PROMPT_FILE")
+    pinned = os.environ.get("QWEN36_PROMPT_INDEX")
+    uniform = prompt_file is None or pinned is not None
     prompts = []
     for u in range(batch):
         if prompt_file:
-            os.environ["QWEN36_PROMPT_INDEX"] = str(u)
+            idx = int(pinned) if pinned is not None else u
             try:
-                prompts.append(_prompt_from_file(prompt_file, tokenizer, token_ids.shape[1]))
+                prompts.append(_prompt_from_file(prompt_file, tokenizer, token_ids.shape[1], index=idx))
             except IndexError:
-                os.environ["QWEN36_PROMPT_INDEX"] = "0"
-                prompts.append(_prompt_from_file(prompt_file, tokenizer, token_ids.shape[1]))
+                prompts.append(_prompt_from_file(prompt_file, tokenizer, token_ids.shape[1], index=0))
         else:
             prompts.append(token_ids.clone())
+    logger.info(f"[spec c{batch}] prompt mode: {'UNIFORM (row-equality armed)' if uniform else 'round-robin desync'}")
 
     # Per-user block budgets over one shared paged KV pool.
     max_t = max(p.shape[1] for p in prompts)
@@ -1298,7 +1302,7 @@ def _run_spec_generation_batched(model, tokenizer, token_ids, max_generated_toke
     )
     for u, r in enumerate(rows):
         logger.info(f"[spec c{batch}] user {u}: {tokenizer.decode(r, skip_special_tokens=True)[:200]!r}")
-    if not prompt_file:
+    if uniform:
         for u in range(1, batch):
             assert rows[u] == rows[0], f"user {u} diverged from user 0 (identical prompts must decode identically)"
     assert all(len(r) >= 1 for r in rows)
