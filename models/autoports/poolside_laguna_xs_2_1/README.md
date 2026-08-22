@@ -29,17 +29,6 @@ configurations are single-request measurements.
 
 ## Before you start
 
-You need:
-
-- Two or four P150 cards, or a TT-QuietBox 2, with the Tenstorrent driver, firmware, and `tt-smi`
-  installed.
-- A Linux x86-64 host and the tt-metal source-build prerequisites from the repository's
-  [`INSTALLING.md`](../../../INSTALLING.md).
-- Access to the gated
-  [`poolside/Laguna-XS-2.1`](https://huggingface.co/poolside/Laguna-XS-2.1) repository on Hugging Face.
-- At least 80 GB of free space for the approximately 63 GB model download, the tt-metal build, and
-  the Python environment. Allow more if you retain build or package caches.
-
 ### 1. Get this tt-metal branch
 
 For a new checkout:
@@ -70,22 +59,7 @@ dependencies:
 sudo ./install_dependencies.sh
 ```
 
-### 2. Check the cards
-
-```bash
-tt-smi -ls
-```
-
-For p150x2/P300, select exactly two ASIC IDs:
-
-- With two P150 cards, select the one ASIC on each card. Their **Board Numbers are different**.
-- With a TT-QuietBox 2, select the two ASICs with the same **Board Number**; those ASICs are on one of
-  its internal P300c cards. On a normally enumerated QuietBox 2, IDs `0,1` form one pair and `2,3`
-  form the other. Confirm this on your system instead of assuming the numbering.
-
-For p150x4/P300x2, select the four ASIC IDs from four P150 cards or all four ASIC IDs in the QuietBox 2.
-
-### 3. Build the serving environment
+### 2. Build the serving environment
 
 From the repository root:
 
@@ -113,7 +87,7 @@ resolved settings without opening the cards.
 
 ### p150x2/P300: two P150 cards or one internal QuietBox P300c
 
-Use the two ASIC IDs identified above:
+Start with ASIC IDs `0,1`:
 
 ```bash
 TT_VISIBLE_DEVICES=0,1 LAGUNA_PROFILE=p150x2 "$MODEL_DIR/serve_vllm.sh" config
@@ -121,7 +95,8 @@ TT_VISIBLE_DEVICES=0,1 LAGUNA_PROFILE=p150x2 "$MODEL_DIR/serve_vllm.sh"
 ```
 
 On a QuietBox 2, you can use its other internal P300c by replacing `0,1` with `2,3` after confirming
-the Board Number in `tt-smi -ls`. With two P150 cards, replace `0,1` with the IDs for those two cards.
+the Board Number in `tt-smi -ls`. With two P150 cards, replace `0,1` with the IDs for those two cards
+from `tt-smi`.
 
 ### p150x4/P300x2: four P150 cards or full TT-QuietBox 2
 
@@ -161,19 +136,6 @@ Check the health endpoint:
 curl -fsS http://localhost:8000/health && echo ready
 ```
 
-Confirm the served model:
-
-```bash
-curl -fsS http://localhost:8000/v1/models \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"][0]["id"])'
-```
-
-Expected output:
-
-```text
-poolside/Laguna-XS-2.1
-```
-
 Send a chat request:
 
 ```bash
@@ -193,9 +155,6 @@ For an OpenAI-compatible client, use:
 export OPENAI_BASE_URL=http://localhost:8000/v1
 export OPENAI_API_KEY=EMPTY
 ```
-
-The server does not require an API key. Keep it on a trusted machine or network unless you add your
-own authentication and access controls.
 
 ## Use the `pool` coding agent
 
