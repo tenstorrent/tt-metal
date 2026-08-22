@@ -212,3 +212,90 @@ Wormhole T3K or a 4/8-chip carve.
 
 `op_unit_tests/test_ttnn_dispatch_combine.py` is the counter-example that proves the diagnosis:
 its scaledown is `// 4`, so mistral4 runs and **passes** on `mesh-8x4` (8/8 cases).
+
+## F0b — the softmax fix already exists in-tree, and it halves the error (but does not close it)
+
+`GateComputeMode.GPT_DEVICE` is already implemented and is **exactly** Mistral's routing rule.
+`_device_gpt_gate` (`tt/moe/tt_moe_gate_prefill.py:864-880`):
+
+```python
+biased = ttnn.add(logits_tiled, self.bias)                       # bias == 0 for Mistral -> identity
+values, indices = ttnn.topk(biased, k=n_activated_experts, dim=-1, sorted=True)
+scores = ttnn.softmax(values, dim=-1, numeric_stable=True)       # == HF's weights
+```
+
+**Why a k-wide softmax is sufficient** (proven on CPU, max weight error **1.19e-07** vs the current
+sigmoid path's **5.34e-01**): softmax is strictly monotone, so `topk(softmax(l)) == topk(l)`, and the
+128-wide normaliser cancels in the `norm_topk_prob` renormalisation —
+`p_i / Σ_{j∈topk} p_j = exp(l_i) / Σ_{j∈topk} exp(l_j)`. No 128-wide reduction is needed.
+Corollary: sum-normalising an activation `f` gives softmax weights **iff `f(l) = c·exp(l)`**, so
+`sigmoid` and `sqrtsoftplus` are *wrong*, not merely different — there is no way to make an existing
+`score_func` equivalent.
+
+### Measured on device
+
+Single block, seq 5120 (`block_gate_compare.log`):
+
+| gate mode | rule | block output PCC | error |
+|---|---|---|---|
+| `DEVICE_FP32` | sigmoid + noaux_tc | 0.995192 | 0.004808 |
+| `GPT_DEVICE` | **softmax over top-k** | **0.998185** | 0.001815 |
+| (`dense` layer, no MoE at all) | — | 0.999877 | 0.000123 |
+
+2-layer transformer (`gate_gpt_device_2L.log`, `gate_gpt_host_2L.log`):
+
+| stage | `DEVICE_FP32` | `GPT_DEVICE` | `GPT_HOST` |
+|---|---|---|---|
+| `embed` | 1.000000 | 1.000000 | 1.000000 |
+| `layer_0` | 0.976044 | **0.987098** | 0.987135 |
+| `layer_1` | 0.943361 | **0.968872** | 0.968953 |
+| `norm` | 0.943421 | 0.968698 | 0.968778 |
+| `lm_head` | 0.942780 | **0.968680** | 0.968950 |
+
+### What this settles, and what it doesn't
+
+**Settled — the router is a large, real error source.** Switching to the correct rule cuts per-layer
+error by ~62% on one block and ~46% across two layers. This is a **one-line change**
+(`adapters/mistral_small_4_119b.py:40`, `default_gate_mode = "DEVICE_FP32"` → `"GPT_DEVICE"`) with
+zero blast radius — DeepSeek/Kimi/GLM/V4 stay on `moe_grouped_topk` and are untouched.
+
+**Settled — the residual is NOT the gate's top-k/softmax arithmetic.** `GPT_HOST` (host fp32 top-k +
+softmax) and `GPT_DEVICE` (device bf16) agree to four decimals, so moving that arithmetic to fp32
+buys nothing.
+
+**Not settled — the residual still accumulates ~0.018 PCC/layer**, so a 36-layer model still will not
+hold, and the PCC test still fails at 2 layers. It sits upstream of the gate arithmetic. Two
+candidates, not separated by these runs:
+1. **bf16 gate matmul → different expert selection.** Measured on CPU: fp32-reference vs
+   bf16-device logits agree on only **98.02%** of top-4 sets (99.51% recall). ~2% of tokens routing
+   to a different 4th expert is a plausible ~0.018/layer.
+2. **Expert-FFN numerics.** The dense block leaves only 0.000123 error, so MLA is essentially exact;
+   the MoE path contributes 0.0017 even with correct routing.
+
+### Recommended sequence
+
+1. **Now, one line:** flip `default_gate_mode` to `GPT_DEVICE`. Halves the error, no C++, no risk to
+   other models. (Residual risk: GPT modes have only ever been exercised in the gate unit test, never
+   through `TtMoe.forward → routing_setup → dispatch → combine` — though both device runs above did
+   exactly that and passed, which is new evidence they work downstream.)
+2. **Next, likely small:** there is **no `GPT_DEVICE` + fp32-logits mode**. `DEVICE_FP32` is fp32
+   logits with the *wrong* rule; `GPT_DEVICE` is the right rule with *bf16* logits. A
+   `GPT_DEVICE_FP32` that typecasts the logits before `ttnn.topk` — mirroring what `DEVICE_FP32`
+   already does — is the obvious next experiment and would test candidate 1 directly.
+3. **Production, ~15 lines of C++:** add `score_func = "softmax"` to `moe_grouped_topk`, implemented
+   as `exp` (the kernel already does gather-then-normalise, so `exp` makes it softmax). Keeps
+   padding-aware dispatch and `route_scale`, which `GPT_DEVICE` silently drops
+   (`_device_gpt_gate` is the only gate path that never reads `self.config.route_scale` — harmless at
+   Mistral's 1.0, a trap otherwise). Caveat: normalising unnormalised `exp(l)` is exact only for
+   logits in roughly `[-35, +80]`; outside that the `1e-20` epsilon or fp32 overflow bites.
+
+### Two adjacent bugs found while investigating
+
+- **`torch.empty` for gate weights** (`tt_moe_gate_prefill.py:211,214`). On a cache *hit* it is inert
+  (`ttnn/ttnn/operations/core.py:718-728` discards the passed tensor). But on a cache **miss in load
+  mode** it writes **uninitialised memory into the `.tensorbin` permanently**, poisoning every later
+  run. One-line `torch.zeros` fix. Not what is biting mistral4 today, but a real latent bug.
+- **Real-weights MoE will `KeyError`** at `utils/transformer_helpers.py:641` (and `:238`) on
+  `mlp.gate.e_score_correction_bias` — `Mistral4TopkRouter` has only `weight`. This needs a zeros
+  injection regardless of which router fix lands, and is **independent** of the router bug. Don't let
+  it get absorbed into "the softmax fix".
