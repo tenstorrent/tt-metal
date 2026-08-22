@@ -209,6 +209,12 @@ class TPGatedDeltaNet:
         self.rec_state = None
         # In-place state updates for decode/prefill traces (set by model allocate_kv_caches)
         self._stable_state = False
+        # Fused GDN decode (2 generic_ops replace the ~55-op composite chain). Requires the
+        # folded qkvzab weight and the fp32 recurrent state; falls back to the composite path
+        # for partial-batch buckets (B < max_batch_size).
+        self._fused_decode = os.environ.get("QWEN36_GDN_FUSED_DECODE") == "1" and self._fuse_ab
+        self._fused_conv_out = None
+        self._fused_gated_out = None
         self.conv_carry = None  # cross-chunk prefill conv carry [1, K-1, qkv_dim_tp]
         # Native ttnn.conv1d depthwise prefill; L1_FULL slice keeps it trace-safe.
         # Only used when valid_len is None (masked buckets keep the MAC FIR).
@@ -251,6 +257,16 @@ class TPGatedDeltaNet:
         if getattr(self, "_batched_conv_carry", None) is not None:
             ttnn.deallocate(self._batched_conv_carry)
         self._batched_conv_carry = None
+        # Fused-decode scratch (persistent so the generic_ops' baked addresses survive traces).
+        if self._fused_decode and self._fused_conv_out is None:
+            self._fused_conv_out = z((1, self.B, self.qkv_dim_tp))
+            self._fused_gated_out = ttnn.from_torch(
+                torch.zeros(1, self.B, self.value_dim_tp, dtype=torch.float32),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
 
     def reset_state_inplace(self):
         """Zero conv + recurrent state in place (preserves trace buffer addresses).
@@ -1025,6 +1041,73 @@ class TPGatedDeltaNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _forward_decode_fused(self, x, B):
+        """Fused decode: qkvzab matmul -> conv_shift_silu -> recurrence -> out proj.
+
+        The two generic_ops absorb the slices, conv shift register, head prep, gates,
+        fp32 delta-rule step, and gated out-norm; conv + recurrent state update in place."""
+        from models.demos.blackhole.qwen36.tt.gdn.fused_decode import op as fused_op
+
+        if not getattr(self, "_fused_decode_logged", False):
+            self._fused_decode_logged = True
+            logger.info(f"GDN fused decode active (B={B}, Nk={self.Nk}, Nv={self.Nv})")
+        tw = self.tw
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        if self._fused_conv_out is None:
+            # Scratch missing but states live (flag enabled after reset_state): allocate only the
+            # scratch — reset_state here would wipe real prefill state.
+            self._fused_conv_out = ttnn.from_torch(
+                torch.zeros(1, self.B, self.qkv_dim_tp, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+            self._fused_gated_out = ttnn.from_torch(
+                torch.zeros(1, self.B, self.value_dim_tp, dtype=torch.float32),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+        # Same qkvzab projection as _project_qkvzab, minus the slices: the fused ops read the
+        # qkv / z / ab blocks straight out of the projection output.
+        if getattr(self.args, "proj_1d_decode", False):
+            qkvzab = tpc.matmul_1d_decode(
+                x, tw["qkvz"], self.args.gdn_qkvz_decode_1d_progcfg, self.cfg, out_memory_config=_L1
+            )
+        else:
+            qkvzab = self._col_proj(x, tw["qkvz"], self.args.gdn_qkvzab_progcfg, out_memory_config=_L1)
+
+        conv = fused_op.conv_shift_silu(qkvzab, self.conv_states, tw["conv_taps"], self._fused_conv_out)
+        gated = fused_op.recurrence(
+            conv,
+            qkvzab,
+            self.rec_state,
+            tw["dt_bias"],
+            tw["neg_exp_A"],
+            tw["norm_w"],
+            self._fused_gated_out,
+            nk=self.Nk,
+            nv=self.Nv,
+            dk=self.Dk,
+            dv=self.Dv,
+            b_rows=B,
+        )
+        ttnn.deallocate(qkvzab)
+
+        partial = self._row_proj(gated, tw["out"])
+        partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
+        return tt_all_reduce(
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def forward_decode(self, x):
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         Bmax = self.B
@@ -1039,6 +1122,11 @@ class TPGatedDeltaNet:
         # preserved. Conv taps are per-channel (broadcast over batch), so the conv weighted-sum
         # works at any width. The B==Bmax path is byte-identical to before.
         B = x.shape[-2]
+
+        # Fused decode: full-batch steps only (partial buckets keep the composite path — the
+        # fused output buffer is Bmax-shaped and the composite already handles prefix widths).
+        if self._fused_decode and B == Bmax and self.rec_state.dtype == ttnn.float32:
+            return self._forward_decode_fused(x, B)
 
         qkv, z, a, b = self._project_qkvzab(x, B, out_mc=_L1)
 
