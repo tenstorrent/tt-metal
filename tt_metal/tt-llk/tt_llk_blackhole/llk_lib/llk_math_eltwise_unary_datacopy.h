@@ -88,8 +88,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
             TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
 
-            // Disable zero flag to prevent mantissa flushing when exponent bits are 0.
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+            math::ZeroFlags::execute_reconfig_unary_preserve();
         }
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
@@ -266,10 +265,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
         {
             TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
-
-            // The 32b path manipulated the flag directly above (tt-llk#449 Fp32_enabled dance); invalidate the
-            // tracked state so the next op re-applies the Src zero-substitution flag.
-            math::_invalidate_src_zero_flag_state_();
         }
     }
     else
@@ -284,7 +279,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
             if (dst_format == to_underlying(DataFormat::UInt16))
             {
                 TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
-                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+                math::ZeroFlags::execute_reconfig_unary_preserve();
                 cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
             }
         }
@@ -315,7 +310,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
             if (dst_format == to_underlying(DataFormat::UInt16))
             {
                 TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
-                math::_invalidate_src_zero_flag_state_();
             }
         }
 

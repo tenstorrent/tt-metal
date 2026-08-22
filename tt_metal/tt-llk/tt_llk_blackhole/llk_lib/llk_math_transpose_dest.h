@@ -43,7 +43,7 @@ inline void transpose_dest_32b()
     // The 32b hi16/lo16 MOV sequence must not flush datums with a zero low byte; own the Src
     // zero-substitution flag via the math state tracker. Asserted here (execute) so it survives any
     // llk_math_hw_configure that ran after the init; skip-if-set keeps it cheap.
-    math::_configure_mov_ops_zero_flag_state_();
+    math::ZeroFlags::execute_reconfig_mov_ops();
 
     // Transpose all the low 16 bit elements of all faces and put them in SrcA.
     // Eventually Dest=0, SrcA=0.
