@@ -411,6 +411,15 @@ def _parse_tool_calls(block: str) -> list[dict]:
 
 SAMPLER_TOP_K = 64
 
+# Generated tokens the live decode rate is averaged over, as
+# ``tests/test_full_model_decode_demo.py`` reports throughput over a rolling window
+# rather than a whole run. A session's first ``sliding_window`` positions replay the
+# masked SDPA variant, whose cost is set by ``--max-context`` instead of by the
+# position, so a turn that starts on a cold cache is slow for that prefix and then
+# speeds up mid-reply when the causal variant takes over. Averaged over the whole
+# reply that prefix hides the rate the turn actually settled at.
+DECODE_RATE_WINDOW = 16
+
 
 def _make_sampler(temperature, top_p):
     """A logits->token sampler honouring OpenAI's ``temperature``/``top_p``, or
@@ -688,7 +697,15 @@ class _Turn:
     PREFILL = "prefill"
     DECODE = "decode"
 
-    def __init__(self, user_key: str, slot: int, body: dict, sampler, max_tokens: int):
+    def __init__(
+        self,
+        user_key: str,
+        slot: int,
+        body: dict,
+        sampler,
+        max_tokens: int,
+        rate_window: int = DECODE_RATE_WINDOW,
+    ):
         self.user_key = user_key
         self.slot = slot
         self.body = body
@@ -724,6 +741,9 @@ class _Turn:
         self.t_admit = 0.0
         self.t_prefill_done = 0.0
         self.t_done = 0.0
+        # One mark per generated token, for the trailing-window rate. Bounded, so the
+        # window slides rather than growing into a whole-reply average.
+        self._marks: deque[float] = deque(maxlen=max(2, rate_window) + 1)
 
     @property
     def prompt_left(self) -> int:
@@ -740,9 +760,28 @@ class _Turn:
             return 0.0
         return max((self.t_done or time.perf_counter()) - self.t_prefill_done, 0.0)
 
+    def mark_token(self) -> None:
+        """Record that a generated token was dispatched, for :attr:`decode_rate`."""
+        self._marks.append(time.perf_counter())
+
     @property
     def decode_rate(self) -> float:
-        """Tokens per second this turn has generated, for this user alone."""
+        """Tokens per second over the last few generated tokens, for this user alone.
+
+        The trailing window is what the turn is decoding at *now*, which is the useful
+        number both for the status pane and for judging the effect of a cold cache: a
+        turn admitted at position 0 climbs to its steady rate part-way through the
+        reply (see :data:`DECODE_RATE_WINDOW`), and this shows that instead of
+        flattening it. Falls back to the mean until two tokens have been marked.
+        """
+        if len(self._marks) < 2:
+            return self.mean_decode_rate
+        span = self._marks[-1] - self._marks[0]
+        return (len(self._marks) - 1) / span if span > 0 else 0.0
+
+    @property
+    def mean_decode_rate(self) -> float:
+        """Tokens per second averaged over the whole reply, for this user alone."""
         seconds = self.decode_seconds
         return len(self.generated) / seconds if seconds > 0 else 0.0
 
@@ -758,6 +797,7 @@ class _Turn:
             "max_tokens": self.max_tokens,
             "prefill_seconds": self.prefill_seconds,
             "decode_rate": self.decode_rate,
+            "mean_decode_rate": self.mean_decode_rate,
             "cancelled": self.cancelled.is_set(),
         }
 
@@ -1091,11 +1131,14 @@ class _Scheduler:
             self._finish(turn)
             return
         turn.generated.append(turn.next_id)
+        turn.mark_token()
         turn.stream.push(turn.generated)
         if len(turn.generated) % 32 == 0:
             logger.debug(
                 f"user {turn.user_key!r}: {len(turn.generated)}/{turn.max_tokens} tokens "
-                f"at {turn.decode_rate:.2f} tok/s, cache at {user.pos}/{self.engine.max_seq}"
+                f"at {turn.decode_rate:.2f} tok/s over the last {DECODE_RATE_WINDOW} "
+                f"({turn.mean_decode_rate:.2f} tok/s for the reply so far), "
+                f"cache at {user.pos}/{self.engine.max_seq}"
             )
         user.activate()
         self._send(turn, user, turn.next_id, last_prompt_token=False)
@@ -1142,7 +1185,8 @@ class _Scheduler:
         self._retire(turn)
         logger.info(
             f"user {turn.user_key!r} (slot {user.index}): prefill {len(turn.ids)} tokens in "
-            f"{turn.prefill_seconds:.2f}s, decoded {len(turn.generated)} at {turn.decode_rate:.2f} tok/s, "
+            f"{turn.prefill_seconds:.2f}s, decoded {len(turn.generated)} at "
+            f"{turn.mean_decode_rate:.2f} tok/s mean, {turn.decode_rate:.2f} tok/s at the end, "
             f"context {user.pos}/{self.engine.max_seq}, finish={'length' if turn.hit_cap else 'stop'}"
             f"{', client gone' if turn.cancelled.is_set() else ''}, {len(self._active)} turns still active"
         )
@@ -1684,8 +1728,11 @@ def _add_model_args(p: argparse.ArgumentParser, sys_cfg) -> None:
         type=int,
         default=decode.max_context,
         help="tokens (all turns) one user's caches are addressed for; rounded up. The "
-        "model handles 524288, but that much per user costs page-table width and pool "
-        "blocks for every session, so the profile default is sized for a busy server",
+        "model handles 524288, but this is a throughput knob as much as a capacity one: "
+        "a session's opening steps attend through a mask that the kernel walks over the "
+        "whole addressed axis, so a reply decoded on a cold cache costs in proportion to "
+        "this value until it passes the sliding window (see the profile's comment). "
+        "Raise it for long conversations and expect slower first replies",
     )
     p.add_argument(
         "--total-context",
