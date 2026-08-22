@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Is the flow decoder's cost non-monotonic in mel length, the way the AR step is?
 
-F45 found that a decode step costs what the *parity* of its key-axis tile count says,
+An earlier decode sweep found that a step costs what the *parity* of its key-axis tile count says,
 not what its size says: 10/12/14/16 tiles cost 6.32/6.73/7.09/7.99 ms while 11/13/15
 cost 7.33/7.92/8.54. Padding a tensor up to an even tile count was worth about a
 millisecond on a 6.7 ms step.
@@ -87,7 +87,7 @@ def main() -> int:
             print(f"  {t:>11}{tiles:>7}{best:>14.4f}{best * 1e3 / tiles:>13.1f}")
 
         print("\n  Saw-toothed (odd tile counts dearer) -> pad the solver to an even tile count.")
-        print("  Smooth and rising                    -> the flow is compute-bound; F45 does not apply.")
+        print("  Smooth and rising                    -> the flow is compute-bound; tile parity does not apply.")
     finally:
         ttnn.close_device(device)
     return 0

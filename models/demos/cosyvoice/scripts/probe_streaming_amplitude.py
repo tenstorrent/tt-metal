@@ -4,8 +4,8 @@
 """Where does the streamed waveform's amplitude go wrong on Wormhole?
 
 `test_device_streamed_matches_non_streamed` fails on n300 with mel-space PCC `0.218`
-against a `0.85` gate, and passes on both Blackhole boards at `0.9019`. F42 recorded it as
-arch-specific and left it there.
+against a `0.85` gate, and passes on both Blackhole boards at `0.9019`. An earlier pass
+recorded it as arch-specific and left it there.
 
 The diagnostic the test already prints says it is not a subtle numerical difference:
 
