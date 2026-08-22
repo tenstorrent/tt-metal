@@ -166,6 +166,29 @@ def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, f
     )
 
 
+def create_swiglu_decode_matmul_config(k, n_packed, grid_w=8):
+    """MinimalMatmulConfig for the decode fused gate/up + SwiGLU matmul (M <= 1 tile).
+
+    The weight is the tile-pair-interleaved [gate|up] pack (prepare_for_fused_swiglu) —
+    the same tensor the prefill AGMM consumes — so every N block must span whole pairs
+    (even tile counts). N is partitioned across the grid's columns; the row-0 senders are
+    the weight's DRAM readers (grid_w of them). Grid height 2, not 1: the op's sender /
+    receiver core-ranges assume at least one receiver row (the second M row is padding —
+    M is a single tile at decode).
+    """
+    k_tiles = k // TILE_SIZE
+    out_pairs = n_packed // (2 * TILE_SIZE)
+    n_block = 2 * math.ceil(out_pairs / grid_w)  # whole per-core range as one block; even by construction
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=1,
+        K_block_size=_find_largest_divisor(k_tiles),
+        N_block_size=n_block,
+        subblock_h=1,
+        subblock_w=2,  # one gate/up pair per subblock; area 2 fits the fp32-acc dest cap of 4
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_w, 2),
+    )
+
+
 def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG):
     """Small-grid 1D (mcast_in0) decode matmul on an interleaved weight; interleaves the K-sharded
     activation first since mcast_in0 needs the full K per core. See test_mlp_matmul_sweep."""

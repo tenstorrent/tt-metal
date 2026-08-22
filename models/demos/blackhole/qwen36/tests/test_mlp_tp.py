@@ -100,3 +100,72 @@ def test_mlp_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     passing, pcc = comp_pcc(ref, out_torch, get_pcc_threshold(request, default=0.97))
     logger.info(f"MLP TP PREFILL PCC (T={T}) = {pcc}")
     assert passing, f"MLP TP prefill PCC too low: {pcc}"
+
+
+# ---------------------------------------------------------------------------------------------
+# QWEN36_MLP_FUSED=1: decode gate/up + SwiGLU as ONE minimal_matmul over the packed AGMM weight.
+# Validated two ways: against the torch SwiGLU reference (absolute), and A/B against the
+# composite w1(silu)/w3/mul path on the same weights and input (relative, tight threshold).
+# ---------------------------------------------------------------------------------------------
+
+
+def _build_mlp(mesh_device, args, mlp_state):
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device) if mesh_device.get_num_devices() > 1 else None
+    return Qwen36MLP(mesh_device, mlp_state, None, args=args, tt_ccl=tt_ccl)
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_mlp_tp_fused_decode(mesh_device, reset_seeds, ensure_gc, request, monkeypatch):
+    """Fused decode path vs torch SwiGLU reference (same shape as test_mlp_tp's decode leg)."""
+    monkeypatch.setenv("QWEN36_MLP_FUSED", "1")
+    os.environ.setdefault("HF_MODEL", model_path())
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    assert args.mlp_fused_decode, "flag must reach model args"
+    mlp_state = load_mlp_layer(args.CKPT_DIR, 0)
+    mlp = _build_mlp(mesh_device, args, mlp_state)
+    assert mlp._mlp_fused_decode and mlp.weights.w_gate_up is not None
+
+    T = 32
+    x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
+    g = mlp_state["gate_proj.weight"].to(torch.float32)
+    u = mlp_state["up_proj.weight"].to(torch.float32)
+    d = mlp_state["down_proj.weight"].to(torch.float32)
+    xf = x.to(torch.float32)[0, 0]
+    ref = (torch.nn.functional.silu(xf @ g.T) * (xf @ u.T)) @ d.T
+
+    out = mlp.forward(replicate_to_device(mesh_device, x))
+    out_torch = ttnn.to_torch(out, mesh_composer=tp_composer(mesh_device))[0, 0].to(torch.float32)
+
+    passing, pcc = comp_pcc(ref, out_torch, get_pcc_threshold(request))
+    logger.info(f"MLP TP FUSED-DECODE PCC = {pcc}")
+    assert passing, f"MLP TP fused-decode PCC too low: {pcc}"
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_mlp_tp_fused_decode_ab(mesh_device, reset_seeds, ensure_gc, request, monkeypatch):
+    """Fused vs composite decode on the same weights + input. Both quantize gate/up to the same
+    bf4 values (the packed weight is a column permutation of w1|w3, and bf4 blocks are row-wise),
+    so the A/B should be near-exact."""
+    os.environ.setdefault("HF_MODEL", model_path())
+    T = 32
+    dim = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256).dim
+    x = torch.randn(1, 1, T, dim, dtype=torch.bfloat16)
+
+    def run(flag):
+        monkeypatch.setenv("QWEN36_MLP_FUSED", flag)
+        args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+        mlp_state = load_mlp_layer(args.CKPT_DIR, 0)
+        mlp = _build_mlp(mesh_device, args, mlp_state)
+        out = mlp.forward(replicate_to_device(mesh_device, x))
+        return ttnn.to_torch(out, mesh_composer=tp_composer(mesh_device))[0, 0].to(torch.float32)
+
+    ref = run("0")
+    got = run("1")
+    thr = max(get_pcc_threshold(request), 0.999)
+    passing, pcc = comp_pcc(ref, got, thr)
+    logger.info(f"MLP TP FUSED-DECODE A/B PCC = {pcc}")
+    assert passing, f"MLP TP fused-decode A/B PCC too low: {pcc}"

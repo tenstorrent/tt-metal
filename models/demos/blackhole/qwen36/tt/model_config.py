@@ -203,6 +203,12 @@ class Qwen36ModelArgs(ModelArgs):
         self.mlp_w2_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M, self.hidden_dim // tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
         )
+        # QWEN36_MLP_FUSED=1: decode gate/up + SwiGLU as ONE minimal_matmul over the packed
+        # prefill-AGMM weight (w_gate_up) — replaces w1(silu) + w3 + mul, -2 dispatches/layer.
+        self.mlp_fused_decode = os.environ.get("QWEN36_MLP_FUSED", "0") == "1"
+        self.mlp_gu_swiglu_decode_progcfg = tpc.create_swiglu_decode_matmul_config(
+            self.dim, 2 * self.hidden_dim // tp, grid_w=self.decode_grid_w
+        )
 
         # Input-projection 1D decode (DEFAULT): same idea for attn QKV+gate and GDN QKVZAB in-projections.
         # Weights load interleaved (prefill AGMM verified bit-identical); tuned grids per test_mlp_matmul_sweep.

@@ -188,6 +188,9 @@ class Qwen36MLP:
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
         self._fuse_gateup_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices)
+        # Fused decode gate/up+SwiGLU (QWEN36_MLP_FUSED=1): rides the packed AGMM weight, so it
+        # requires the prefill fusion's loader gate to have built w_gate_up (true whenever TP).
+        self._mlp_fused_decode = self.num_devices > 1 and getattr(args, "mlp_fused_decode", False)
         self.weights = load_mlp_weights(mesh_device, state_dict, tensor_cache_path, args=args)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
@@ -242,6 +245,25 @@ class Qwen36MLP:
                 x, w.w_gate_up, self.tt_ccl, self.compute_kernel_config_agmm, args.ccl_topology()
             )
             _silu_fused = True
+        elif self._mlp_fused_decode and x.shape[-2] <= ttnn.TILE_SIZE and w.w_gate_up is not None:
+            # QWEN36_MLP_FUSED=1 decode: ONE matmul over the packed [gate|up] weight with
+            # in-kernel SwiGLU — the same weight layout + swiglu compute path the prefill AGMM
+            # already validates — replacing w1(silu) + w3 + mul (two fewer dispatches/layer).
+            # Trade-off vs the split path: weight DRAM readers are the grid's row-0 senders
+            # (grid_w cores) instead of 2x44 matmul cores; the flag exists for the A/B to decide.
+            # mcast_in0-style interleave first: ff-norm hands decode x as a width-shard.
+            x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+            hidden = ttnn.experimental.minimal_matmul(
+                input_tensor=x_il,
+                weight_tensor=w.w_gate_up,
+                config=args.mlp_gu_swiglu_decode_progcfg,
+                compute_kernel_config=ckc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                fuse_swiglu=True,
+            )
+            ttnn.deallocate(x_il)
+            _fused_gu = True  # hidden is complete (SwiGLU in-kernel); skip the mul below
         elif getattr(self, "_dram_sharded", False) and x.shape[-2] <= ttnn.TILE_SIZE:
             # DRAM-WIDTH_SHARDED w1/w3 decode (M=1 tile). Prefill uses fused AGMM above.
             x_sh = ttnn.to_memory_config(x, args.act_shard_hidden)
