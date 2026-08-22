@@ -88,21 +88,53 @@ def snapshot_gdn_tp(model):
     ]
 
 
-def restore_gdn_tp(model, snap):
-    """Restore a snapshot_gdn_tp result via ttnn.copy (preserves trace-baked addresses)."""
+def stage_gdn_tp(model, snap):
+    """Upload a snapshot into fresh device staging tensors.
+
+    MUST be called BEFORE ttnn.begin_trace_capture: these are device allocations,
+    and allocating while a trace exists can land on the trace's intermediate-buffer
+    addresses (allocator warns "potentially unsafe ... active trace"; the observed
+    symptom is a hang on the first ttnn.execute_trace). Returns the staging tensors;
+    keep them alive until after the measured loop.
+    """
     mesh = model.mesh_device
     mapper = ttnn.ShardTensorToMesh(mesh, dim=0)
 
-    def _back(t, dtype):
+    def _up(t, dtype):
         return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper)
 
-    for dn, (rec, convs) in zip(gdn_layers(model), snap):
-        r = _back(rec, dn.rec_state.dtype)
-        ttnn.copy(r, dn.rec_state)
-        ttnn.deallocate(r)
-        for j, c in enumerate(convs):
-            cc = _back(c, dn.conv_states[j].dtype)
+    return [
+        (
+            _up(rec, dn.rec_state.dtype),
+            [_up(c, dn.conv_states[j].dtype) for j, c in enumerate(convs)],
+        )
+        for dn, (rec, convs) in zip(gdn_layers(model), snap)
+    ]
+
+
+def restore_gdn_tp_staged(model, staging):
+    """Copy pre-staged state back into the live GDN buffers.
+
+    Pure ttnn.copy into existing addresses — ZERO device allocations, so it is safe
+    to run after trace capture (the trace's baked buffer addresses stay valid).
+    """
+    for dn, (rec_dev, conv_devs) in zip(gdn_layers(model), staging):
+        ttnn.copy(rec_dev, dn.rec_state)
+        for j, cc in enumerate(conv_devs):
             ttnn.copy(cc, dn.conv_states[j])
+
+
+def restore_gdn_tp(model, snap):
+    """Restore a snapshot_gdn_tp result via ttnn.copy (preserves trace-baked addresses).
+
+    NOTE: allocates device staging tensors — only safe when NO trace is active.
+    For the traced path use stage_gdn_tp (before capture) + restore_gdn_tp_staged.
+    """
+    staging = stage_gdn_tp(model, snap)
+    restore_gdn_tp_staged(model, staging)
+    for rec_dev, conv_devs in staging:
+        ttnn.deallocate(rec_dev)
+        for cc in conv_devs:
             ttnn.deallocate(cc)
 
 

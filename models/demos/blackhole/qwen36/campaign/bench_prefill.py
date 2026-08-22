@@ -52,7 +52,11 @@ _REPEATS = int(os.environ.get("QWEN38_PREFILL_REPEATS", "0"))
 def test_bench_prefill(mesh_device):
     from transformers import AutoTokenizer
 
-    assert all(isl >= CHUNK for isl in _ISLS), f"chunked-path bench needs ISL >= {CHUNK}, got {_ISLS}"
+    # Sub-chunk ISLs (e.g. 1024) are padded up to one 2048 bucket with actual_len
+    # masking below — the padded-chunk cost IS the current serving path's TTFT for
+    # short prompts, so it is a legitimate ladder point (grouped short-prefill is a
+    # separate optimization, benched by its own hook when it lands).
+    assert all(isl >= 1 for isl in _ISLS), f"ISLs must be positive, got {_ISLS}"
     device = mesh_device
     device.enable_program_cache()
 
@@ -84,7 +88,9 @@ def test_bench_prefill(mesh_device):
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
     ids_full = bench_prompt(max_isl, tokenizer)
 
-    for isl in _ISLS:
+    # Descending: the proven >=CHUNK points emit their BENCH_JSON before any
+    # experimental sub-chunk point can fail the test.
+    for isl in sorted(_ISLS, reverse=True):
         reps = _REPEATS if _REPEATS > 0 else (3 if isl <= 16384 else 1)
         ids = ids_full[:, :isl]
         bucket = -(-isl // CHUNK) * CHUNK

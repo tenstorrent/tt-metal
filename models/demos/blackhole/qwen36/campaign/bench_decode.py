@@ -43,8 +43,9 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.campaign.bench_common import (
     bench_prompt,
     emit_bench_json,
-    restore_gdn_tp,
+    restore_gdn_tp_staged,
     snapshot_gdn_tp,
+    stage_gdn_tp,
     stats_ms,
 )
 from models.demos.blackhole.qwen36.demo.text_demo import BLOCK_SIZE, DEVICE_PARAMS, _MESH_SHAPE, _MULTI
@@ -193,6 +194,10 @@ def test_bench_decode(mesh_device):
         ttnn.synchronize_device(mesh)
     else:
         snap = snapshot_gdn_tp(model)
+        # Stage the restore tensors BEFORE capture: allocating device buffers while a
+        # trace exists can land on the trace's intermediate addresses and hang the
+        # first replay (observed on the ISL-10240 B=8 run; allocator warns about it).
+        gdn_staging = stage_gdn_tp(model, snap)
         warm = _fwd()
         if use_shard:
             wi, wv = _argmax_dev_b(warm, warm.shape[2])
@@ -205,7 +210,10 @@ def test_bench_decode(mesh_device):
             # readback per step instead of full [B,1,vocab] logits.
             tt_idx, tt_val = _argmax_dev_b(tt_logits, tt_logits.shape[2])
         ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
-        restore_gdn_tp(model, snap)
+        # Alloc-free restore (pure ttnn.copy into live buffers). Keep gdn_staging
+        # alive for the whole measured loop so its space is never recycled under
+        # the trace.
+        restore_gdn_tp_staged(model, gdn_staging)
 
     generated = [[t] for t in nxt]
     step_times = []
