@@ -89,6 +89,14 @@ static_assert(
     PROFILER_MARKER_TIMER_ID_SHIFT + PROFILER_MARKER_TIMER_ID_BITS == 31,
     "marker H-word: timer-id field must sit just below the valid bit");
 
+// Width of the timestamp a host-side reader gets back after reassembling (H-word high bits << 32) | L-word. The
+// device's wall clock is wider than this -- the high bits that do not fit the H-word are DISCARDED at pack time --
+// so a reassembled timestamp WRAPS at this width, and anything ordering or subtracting two of them must do so
+// modulo it rather than treating them as monotonic.
+static constexpr std::uint32_t PROFILER_MARKER_TS_LOW_BITS = 32;
+static constexpr std::uint32_t PROFILER_MARKER_TS_BITS = PROFILER_MARKER_TS_HIGH_BITS + PROFILER_MARKER_TS_LOW_BITS;
+static_assert(PROFILER_MARKER_TS_BITS <= 64, "reassembled timestamp must fit in a uint64_t");
+
 // timer id sub-layout: [packet type : 3 bits @ 16][static id : 16 bits @ 0], within the marker timer-id field.
 static constexpr std::uint32_t PROFILER_TIMER_STATIC_ID_BITS = 16;
 static constexpr std::uint32_t PROFILER_TIMER_STATIC_ID_MASK = (1u << PROFILER_TIMER_STATIC_ID_BITS) - 1;
