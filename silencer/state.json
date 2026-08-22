@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-08-17",
+  "last_scan_date": "2026-08-22",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -140,8 +140,8 @@
     {
       "branch": "silencer/eth-buffer-movement-log-noise",
       "number": 52996,
-      "status": "pr_opened_no_ci_run_found",
-      "note": "PR #52996 opened (draft, +7/-7, 2 files). No workflow_dispatch run found on branch silencer/eth-buffer-movement-log-noise for runtime-integration-tests.yaml (0 results) as of this check; only generic action_required checks (merge-gate, sanity-tests-pr, pr-gate, all-static-checks) are visible via get_check_runs, none of which exercise the demoted code. mergeable_state=behind. Left as draft pending validation dispatch; will re-check next run rather than re-dispatching now (dispatch budget reserved for this run's new Phase B target)."
+      "status": "validation-redispatched",
+      "note": "No CI run found on branch for runtime-integration-tests (only Cycode security scans present). Re-dispatched runtime-integration-tests on branch 2026-08-22. Status comment posted (/codeowners ping) and PR marked ready for review. Awaiting run completion for re-grep of test-execution logs."
     },
     {
       "branch": "silencer/groupnorm-unused-var-warning",
