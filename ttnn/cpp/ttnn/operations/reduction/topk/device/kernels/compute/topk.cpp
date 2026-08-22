@@ -289,6 +289,9 @@ void kernel_main() {
             // Insertion sort into result preparation buffer
             // Process each output tile position for insertion sort
             for (uint32_t index = 0; index < output_tiles; index++) {
+                // Cases A/B below overwrite `index` to exit the loop; the rank-stamp needs the
+                // cascade level this iteration actually processes.
+                const uint32_t cascade_level = index;
                 // Initialize variables for current insertion iteration
                 uint32_t incr = 1;                        // Default buffer advance increment
                 uint32_t transposed_offset = 0;           // Offset in transposed buffer (0 or 1)
@@ -375,14 +378,27 @@ void kernel_main() {
                 // Results: dest reg 0 = top 32 elements, dest reg 1 = bottom 32 elements
                 // largest flag determines ascending (0) vs descending (1) sort order
                 if constexpr (rank_stamped) {
-                    // Stamp both tiles' value lo16 with sign-conditioned sequence positions (and
-                    // fold -0.0 into +0.0). The accumulator (DEST 0) holds only lower width chunks
-                    // than the incoming tile (DEST 1) and is stably ordered from the previous
-                    // round, so position order == ascending-global-index order among equal values
-                    // in every 64-column — the precondition the tags encode. (This holds because
-                    // output_tiles == 1 is enforced by the factory gate: a multi-tile cascade
-                    // would feed displaced OLD elements against NEWER accumulator entries.)
-                    ckernel::topk_stamp_local_positions<largest != 0>(0);
+                    // Chain-rank stamps: every tag in one insertion round is that element's
+                    // round-start CHAIN position (accumulator tile p = range [32p, 32p+32), the
+                    // fresh chunk = the top range), which is globally consistent with the true
+                    // (value, index) order — the accumulator chain is the (value, index)-sorted
+                    // prefix of everything seen, and the fresh chunk holds the highest indices in
+                    // ascending position order. Each 64-sort therefore compares distinct keys
+                    // whose tie order is the true index order, at every cascade level: the
+                    // accumulator side is re-stamped with its level's range when loaded, while a
+                    // loser tile's tags RIDE unchanged into the next level (raw Float32
+                    // transport), so a displaced OLD element still outranks NEWER accumulator
+                    // entries. The stamp also folds -0.0 into +0.0; every fresh datum passes
+                    // through exactly one stamp (level 0 / first sort) before its first compare.
+                    if (first_sort_from_transposed) {
+                        // Both tiles fresh (width chunks 0 and 1): plain positions [0, 64).
+                        ckernel::topk_stamp_local_positions<largest != 0>(0);
+                    } else {
+                        ckernel::topk_stamp_tile_rank_range<largest != 0>(0, 0, 32 * cascade_level);
+                        if (cascade_level == 0) {
+                            ckernel::topk_stamp_tile_rank_range<largest != 0>(0, 1, 32 * output_tiles);
+                        }
+                    }
                 }
                 ckernel::topk_local_sort<network_stable, false, rank_stamped>(0, (int)!largest, end_phase);
 
