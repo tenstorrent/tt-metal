@@ -408,8 +408,12 @@ models:
     wh_galaxy: 345
     wh_galaxy_perf: 90
     bh_galaxy: 470
-    # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
-    bh_sc1: 437
+    # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840).
+    # 437 -> 513: the seven Mistral-Small-4-119B prefill entries add 76 min (435 -> 511). Their
+    # timeouts are already tightened to measured local wall times (10/8/10/12/12/12/12), so this is
+    # not slack. Keeps the same 2 min of headroom the previous value had, and is still well under
+    # the 840 this was tightened from.
+    bh_sc1: 513
     bh_sc1_high_power: 143
     wh_n150: 500
     wh_n150_civ2: 300
