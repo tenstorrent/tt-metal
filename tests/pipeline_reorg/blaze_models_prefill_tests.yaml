@@ -1081,6 +1081,13 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "mistral4 and 8x4 and scalar and no_determinism and cpu and (plain-5k or rot-aligned_min or rot-midchip_straddle)" -vvv --tb=short
     '
+    # KNOWN HOLLOW ON THIS BRANCH: measured on CI run 32569004247, this leg reported green with
+    # 3 skipped and ZERO tests run. test_mla_chunked_prefill's mesh axis is SHARED across
+    # deepseek_v3_d_p / kimi_k2_6 / kimi_k3 (test_mla.py:410-412, :454-455), and upstream made its
+    # only 8x4 row torus-xy, which skips on the bh_sc1 galaxy. Unlike the block/transformer/MoE
+    # tests, this row is not mistral4's to change -- switching it would alter the axis for three
+    # other models. Treat this leg's green as NO SIGNAL here; on
+    # ssalice/mistral4-119b-prefill the same entry genuinely runs 3 cases (PCC 0.9991-0.9996).
   test_type: mistral4_mla_chunked
   test_group: module
   skus:

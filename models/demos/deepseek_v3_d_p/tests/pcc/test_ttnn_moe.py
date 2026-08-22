@@ -1087,10 +1087,15 @@ def _mistral4_reference_moe(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=Mistral4Small119BConfig.FABRIC_PAYLOAD_SIZE),
+            # fabric2d, not torus_xy, and deliberately unlike the sibling 8x4 rows: measured on CI run
+            # 32567382271, every torus_xy mistral4 case SKIPPED ("Galaxy TorusXY ... requires an
+            # explicit ring/ring descriptor and a cabling-certified allocation"), and a skipped leg
+            # reports green. FABRIC_2D is what this test ran under on ssalice/mistral4-119b-prefill,
+            # where it genuinely passed on CI. Revert once bh_sc1 is ring-cabled.
+            fabric2d_device_params(fabric_payload_size=Mistral4Small119BConfig.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4",
+            id="fabric2d-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
