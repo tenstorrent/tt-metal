@@ -41,6 +41,7 @@ def run_reduce_scatter_impl(
     verify_output=True,
     use_new=False,
     contiguous_staging=None,
+    verify_program_cache_hit=False,
 ):
     use_sub_devices = False
     torch.manual_seed(0)
@@ -249,8 +250,15 @@ def run_reduce_scatter_impl(
             tt_tensor.deallocate(True)
             tt_reduce_scatter_output_list.append(tt_rs_out)
     else:
+        cache_entries_after_first_iteration = None
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
+            if verify_program_cache_hit:
+                if i == 0:
+                    cache_entries_after_first_iteration = mesh_device.num_program_cache_entries()
+                    assert cache_entries_after_first_iteration > 0
+                else:
+                    assert mesh_device.num_program_cache_entries() == cache_entries_after_first_iteration
             tt_rs_out = ttnn.from_device(tt_reduce_scatter_output_tensor)
             tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
             tt_reduce_scatter_output_tensor.deallocate(True)
@@ -1516,19 +1524,26 @@ def test_reduce_scatter_async_ring_intermediate_staging(
     mem_config_rs,
     rs_topology,
 ):
-    run_reduce_scatter_impl(
-        mesh_device,
-        mesh_device.get_num_devices(),
-        rs_input_shape,
-        dim,
-        num_links,
-        rs_input_dtype,
-        layout,
-        mem_config_input,
-        mem_config_rs,
-        rs_topology=rs_topology,
-        enable_trace=False,
-        num_iters=2,
-        use_persistent_buffers=use_persistent_buffers,
-        contiguous_staging=contiguous_staging,
-    )
+    # The second iteration intentionally uses different input/output allocations and a different
+    # semaphore bank with the same program hash. This guards the cached-program runtime-arg override.
+    mesh_device.enable_program_cache()
+    try:
+        run_reduce_scatter_impl(
+            mesh_device,
+            mesh_device.get_num_devices(),
+            rs_input_shape,
+            dim,
+            num_links,
+            rs_input_dtype,
+            layout,
+            mem_config_input,
+            mem_config_rs,
+            rs_topology=rs_topology,
+            enable_trace=False,
+            num_iters=2,
+            use_persistent_buffers=use_persistent_buffers,
+            contiguous_staging=contiguous_staging,
+            verify_program_cache_hit=True,
+        )
+    finally:
+        mesh_device.disable_and_clear_program_cache()
