@@ -444,7 +444,12 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
         {
+            // #53416: issue the dest-base CIB RMW section under mutex::REG_RMW (the in-tree
+            // cross-thread CFG-RMW mutex) so it cannot straddle the semaphore handshake below;
+            // released before wait_for_dest_available(), keeping the original RMW-then-wait order.
+            t6_mutex_acquire(mutex::REG_RMW);
             set_dst_write_addr(unp_cfg_context, unpack_dst_format);
+            t6_mutex_release(mutex::REG_RMW);
             wait_for_dest_available();
         }
     }
