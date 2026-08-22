@@ -758,6 +758,232 @@ def test_tests_present_but_no_enabled_sku_is_fatal(tests_yaml: Path):
     assert "No tests selected for enabled SKUs" in result.stdout
 
 
+# ---------------------------------------------------------------------------
+# Tag filtering: --include-tag (allowlist) / --exclude-tag (denylist)
+#
+# One mechanism serving both intended uses: a caller opting into extra coverage
+# (formerly the L2 nightly `additional_test_categories` jq step keyed on a `category`
+# field, one copy duplicated per impl workflow) and a caller excluding entries its build
+# can't run (formerly a bespoke per-caller need). Both filters run before SKU
+# resolution and are validated against the tags actually present in the file, so a
+# typo'd tag is a hard error rather than a silently empty/under-filtered matrix.
+# ---------------------------------------------------------------------------
+
+
+_TAGGED_YAML = """\
+- name: plain test
+  cmd: echo ok
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: runtime
+- name: tagged list test
+  tags: [profiler]
+  cmd: echo profiler
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: runtime
+- name: tagged string test
+  tags: profiler
+  cmd: echo profiler
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: runtime
+- name: sweep tagged test
+  tags: [sweep]
+  cmd: echo sweep
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: runtime
+"""
+
+
+@pytest.fixture
+def tagged_yaml(tmp_path: Path) -> Path:
+    path = tmp_path / "tagged.yaml"
+    path.write_text(_TAGGED_YAML)
+    return path
+
+
+def test_no_tag_flags_keeps_everything(tagged_yaml: Path):
+    matrix = run_matrix(tagged_yaml, "wh_n150_civ2")
+    assert len(matrix) == 4
+
+
+def test_exclude_tag_drops_tagged_entries(tagged_yaml: Path):
+    """Both list and bare-string `tags` forms are excluded."""
+    matrix = run_matrix(tagged_yaml, "wh_n150_civ2", "--exclude-tag", "profiler")
+    assert [e["name"] for e in matrix] == [
+        "plain test [wh_n150_civ2]",
+        "sweep tagged test [wh_n150_civ2]",
+    ]
+
+
+def test_exclude_tag_is_repeatable(tagged_yaml: Path):
+    matrix = run_matrix(tagged_yaml, "wh_n150_civ2", "--exclude-tag", "profiler", "--exclude-tag", "sweep")
+    assert [e["name"] for e in matrix] == ["plain test [wh_n150_civ2]"]
+
+
+def test_include_tag_keeps_only_matching(tagged_yaml: Path):
+    """Both list and bare-string `tags` forms are matched by --include-tag."""
+    matrix = run_matrix(tagged_yaml, "wh_n150_civ2", "--include-tag", "profiler")
+    assert [e["name"] for e in matrix] == [
+        "tagged list test [wh_n150_civ2]",
+        "tagged string test [wh_n150_civ2]",
+    ]
+
+
+def test_include_tag_is_repeatable(tagged_yaml: Path):
+    """Repeated --include-tag is an OR: keep entries matching any of them."""
+    matrix = run_matrix(tagged_yaml, "wh_n150_civ2", "--include-tag", "profiler", "--include-tag", "sweep")
+    assert {e["name"] for e in matrix} == {
+        "tagged list test [wh_n150_civ2]",
+        "tagged string test [wh_n150_civ2]",
+        "sweep tagged test [wh_n150_civ2]",
+    }
+
+
+def test_include_and_exclude_together_excludes_win(tagged_yaml: Path):
+    """--exclude-tag is applied after --include-tag, so it can carve out of the allowlist."""
+    matrix = run_matrix(
+        tagged_yaml,
+        "wh_n150_civ2",
+        "--include-tag",
+        "profiler",
+        "--include-tag",
+        "sweep",
+        "--exclude-tag",
+        "sweep",
+    )
+    assert {e["name"] for e in matrix} == {
+        "tagged list test [wh_n150_civ2]",
+        "tagged string test [wh_n150_civ2]",
+    }
+
+
+def test_include_tag_unknown_tag_is_a_hard_error(tagged_yaml: Path):
+    """A typo'd category/tag must fail loudly, not silently produce an empty matrix."""
+    result = _run_with_skus(tagged_yaml, "wh_n150_civ2", "--include-tag", "porfiler")
+    assert result.returncode != 0, result.stdout
+    assert "unknown tag" in result.stdout
+    assert "porfiler" in result.stdout
+
+
+def test_exclude_tag_unknown_tag_is_a_hard_error(tagged_yaml: Path):
+    result = _run_with_skus(tagged_yaml, "wh_n150_civ2", "--exclude-tag", "does_not_exist")
+    assert result.returncode != 0, result.stdout
+    assert "unknown tag" in result.stdout
+
+
+def test_tag_flags_applies_under_all_skus_in_tests(tmp_path: Path):
+    """Excluded/non-included entries must not contribute their SKUs to ALL_SKUS_IN_TESTS."""
+    path = tmp_path / "tags.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """\
+            - name: keeper
+              cmd: echo ok
+              skus:
+                wh_n150_civ2:
+                  timeout: 5
+              team: runtime
+            - name: galaxy only profiler entry
+              tags: [profiler]
+              cmd: echo ok
+              skus:
+                wh_galaxy:
+                  timeout: 5
+              team: runtime
+            """
+        )
+    )
+    matrix = run_matrix(path, "ALL_SKUS_IN_TESTS", "--exclude-tag", "profiler")
+    assert concrete_skus(matrix) == {"wh_n150_civ2"}
+
+    matrix = run_matrix(path, "ALL_SKUS_IN_TESTS", "--include-tag", "profiler")
+    assert concrete_skus(matrix) == {"wh_galaxy"}
+
+
+def test_exclude_tag_removing_every_entry_skips_rather_than_fails(tmp_path: Path):
+    """A list that is entirely excluded is vacuously correct: matrix=[], exit 0."""
+    path = tmp_path / "tags.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """\
+            - name: profiler entry
+              tags: [profiler]
+              cmd: echo ok
+              skus:
+                wh_n150_civ2:
+                  timeout: 5
+              team: runtime
+            """
+        )
+    )
+    for enabled in ("wh_n150_civ2", "ALL_SKUS_IN_TESTS"):
+        result = _run_with_skus(path, enabled, "--exclude-tag", "profiler")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert re.search(r"^matrix=\[\]$", result.stdout, re.M)
+
+
+@pytest.mark.parametrize("body", ["", "# placeholder, no tests yet\n"])
+@pytest.mark.parametrize("enabled", ["wh_n150_civ2", "ALL_SKUS_IN_TESTS"])
+def test_tag_flags_bypassed_for_placeholder_yaml(tmp_path: Path, body: str, enabled: str):
+    """An empty/placeholder file skips tag validation entirely rather than hard-failing
+    on 'unknown tag' — matches how ALL_SKUS_IN_TESTS already treats placeholder files as
+    vacuously correct (e.g. ttsim_unit_tests.yaml, whose sole entry is presently
+    commented out, but whose caller still passes --include-tag compute_fused)."""
+    path = tmp_path / "tests.yaml"
+    path.write_text(body)
+    result = _run_with_skus(path, enabled, "--include-tag", "compute_fused")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert re.search(r"^matrix=\[\]$", result.stdout, re.M)
+
+
+def test_ops_unit_tests_yaml_uses_tags_not_category():
+    """Regression guard for the category -> tags migration: no entry should carry the
+    old singular `category` field, and every tag referenced by tt-metal-l2-nightly.yaml's
+    hardcoded schedule-time category list must exist as a real tag in the file, so a
+    future entry removal/rename can't silently orphan a caller's filter."""
+    with open(PIPELINE / "ops_unit_tests.yaml") as f:
+        tests = yaml.safe_load(f)
+
+    assert not any(
+        "category" in t for t in tests
+    ), "ops_unit_tests.yaml still has a `category` field; use `tags` instead"
+
+    known_tags = set()
+    for t in tests:
+        raw = t.get("tags") or []
+        known_tags.update([raw] if isinstance(raw, str) else raw)
+
+    scheduled_categories = {
+        "conv",
+        "matmul",
+        "fused",
+        "reduction",
+        "experimental",
+        "pool",
+        "eltwise",
+        "transformers",
+        "moreh",
+        "misc",
+        "sdpa",
+        "data_movement",
+        "ccl",
+        "docs_examples",
+        "cpp_accessor",
+        "cpp_lab_examples",
+    }
+    missing = scheduled_categories - known_tags
+    assert (
+        not missing
+    ), f"tt-metal-l2-nightly.yaml schedules categories with no matching tag in ops_unit_tests.yaml: {missing}"
+
+
 @pytest.mark.parametrize("body", ["", "# placeholder, no tests yet\n"])
 @pytest.mark.parametrize("enabled", ["wh_n150_civ2", "ALL_SKUS_IN_TESTS"])
 def test_no_tests_in_yaml_warns_and_passes(tmp_path: Path, body: str, enabled: str):

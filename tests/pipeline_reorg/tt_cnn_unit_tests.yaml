@@ -8,10 +8,9 @@
 #       timeout: The maximum allowed runtime for this job in minutes on that SKU.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
-#   category: Selector used by tt-metal-l2-nightly.yaml's additional_test_categories
-#     dispatch input. On dispatch the impl filters this matrix to entries whose
-#     category appears in the comma-separated list; on schedule the filter is
-#     bypassed and every entry runs.
+#   tags: Optional labels; --include-tag/--exclude-tag select on these. Used by
+#     tt-metal-l2-nightly.yaml's additional_test_categories dispatch input, expanded
+#     to repeated --include-tag flags by the impl workflow.
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
@@ -22,7 +21,7 @@
       timeout: 10
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
-  category: cnn_pipeline
+  tags: [cnn_pipeline]
 
 - name: tt-cnn builder unit tests
   cmd: 'pytest models/tt_cnn/tests/test_builder.py'
@@ -31,4 +30,4 @@
       timeout: 10
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
-  category: cnn_builder
+  tags: [cnn_builder]
