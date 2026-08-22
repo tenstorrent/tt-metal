@@ -33,7 +33,7 @@ void bind_embedding_backward(nb::module_& mod) {
 
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            ttnn.Tensor: the gradient with respect to the weight tensor, of shape (num_embeddings, embedding_dim).
 
         Note:
             The input and the output gradient tensors must have the same datatype.
