@@ -127,16 +127,20 @@ class Qwen36Model:
                 f"LM-head vocab {lm_head_weight.shape[-1]} not divisible by num_devices "
                 f"{self.num_devices}; falling back to replicated LM head."
             )
+        # QWEN36_LM_HEAD_BF4=1: bfloat4_b under a distinct .bfp4 cache name (does not touch BF8).
+        lm_head_dtype = ttnn.bfloat4_b if os.environ.get("QWEN36_LM_HEAD_BF4", "0") == "1" else ttnn.bfloat8_b
+        lm_tag = ".bfp4" if lm_head_dtype == ttnn.bfloat4_b else ""
         if self._lmhead_vocab_sharded:
             # Separate cache (.vshard): as_tensor ignores mesh_mapper on reload.
             lm_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
-            lm_cache = tensor_cache_path / "output.weight.vshard" if tensor_cache_path else None
+            lm_cache = tensor_cache_path / f"output.weight.vshard{lm_tag}" if tensor_cache_path else None
         else:
             lm_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if self.num_devices > 1 else None
-            lm_cache = tensor_cache_path / "output.weight" if tensor_cache_path else None
+            lm_cache = tensor_cache_path / f"output.weight{lm_tag}" if tensor_cache_path else None
+        logger.info(f"LM head dtype={lm_head_dtype} cache={lm_cache}")
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
-            dtype=ttnn.bfloat8_b,
+            dtype=lm_head_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

@@ -1,7 +1,7 @@
-# Qwen3.5 / Qwen3.6 on Blackhole
+# Qwen3.5 / Qwen3.6 / Qwen3.8 on Blackhole
 
 This directory implements Tenstorrent Blackhole inference for the hybrid
-**Gated DeltaNet + Gated Full Attention** Qwen3.5/3.6 family. The same code path serves three checkpoints:
+**Gated DeltaNet + Gated Full Attention** Qwen3.5/3.6/3.8 family. The same code path serves these checkpoints:
 
 | Model            | `HF_MODEL`             | Mesh / `MESH_DEVICE` | Parallelism            |
 | ---------------- | ---------------------- | -------------------- | ---------------------- |
@@ -9,6 +9,7 @@ This directory implements Tenstorrent Blackhole inference for the hybrid
 | Qwen3.5-27B      | `Qwen/Qwen3.5-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel  |
 | Qwen3.6-27B      | `Qwen/Qwen3.6-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel  |
 | Qwen3.6-27B      | `Qwen/Qwen3.6-27B`     | P150x8 — `P150x8`    | 8-way tensor parallel  |
+| Qwen3.8-27B      | `Qwen/Qwen3.8-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel  |
 
 - The **9B** runs on a **single Blackhole P150** device. It uses the validated
   single-device forward path (no collectives).
@@ -69,11 +70,15 @@ Face hub id (resolved via `snapshot_download`) or a local checkpoint directory.
 `MESH_DEVICE` selects the mesh shape (`P150` → `(1,1)`, `P150x4` → `(1,4)`,
 `P150x8` → `(1,8)`).
 
-Optional flags:
+Optional flags (defaults are off in code; set `=1` to opt in):
 
 ```bash
-# Run SDPA in BF8 (faster; slightly lower precision).
+# SDPA Q + paged KV in BF8 (needed for 256k on this box).
 export QWEN_SDPA_BF8=1
+# Distinct .bfp4 cache names — does not overwrite default BFP8 bins.
+export QWEN36_LM_HEAD_BF4=1
+export QWEN36_MLP_DOWN_BF4=1
+export QWEN36_GDN_BF4=1
 ```
 
 
@@ -81,7 +86,7 @@ export QWEN_SDPA_BF8=1
 
 The e2e text-generation test lives in `demo/text_demo.py`. It is a single
 parametrized test (`test_demo_text`) covering a range of input sequence lengths
-(ISLs): 128, 4k, 8k, 16k, 32k, 64k, 128k, and 256k tokens. Each ISL runs prefill
+(ISLs): 128, 4k, 8k, 16k, 32k, 64k, 128k, 150k, and 256k tokens. Each ISL runs prefill
 + decode and validates output (non-degenerate generation) and per-ISL
 performance gates (TTFT and decode tok/s).
 

@@ -9,7 +9,16 @@ reduce-scatters on meshes with a dim-1 shape (e.g. P150x4), fracturing hidden.
 import os
 from dataclasses import dataclass
 
+from loguru import logger
+
 import ttnn
+
+
+def _mlp_down_dtype_and_tag():
+    """QWEN36_MLP_DOWN_BF4=1 stores down-proj as bfloat4_b under a distinct .bfp4 cache name."""
+    if os.environ.get("QWEN36_MLP_DOWN_BF4", "0") == "1":
+        return ttnn.bfloat4_b, ".bfp4"
+    return ttnn.bfloat8_b, ""
 
 
 @dataclass(frozen=True)
@@ -64,6 +73,9 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
         def cache(name, tag=""):
             return str(tensor_cache_path / f"mlp.{name}.weight{tag}.tp") if tensor_cache_path else None
 
+        down_dtype, down_tag = _mlp_down_dtype_and_tag()
+        logger.info(f"MLP down-proj dtype={down_dtype} cache_tag={down_tag or '(default bf8)'}")
+
         # Prefill-only packed [gate|up] AGMM weight (decode keeps w1/w3; extra DRAM ~w1+w3/layer).
         wgu = (
             _build_gate_up(
@@ -100,8 +112,8 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                     mesh_device,
                     dim=0,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    cache_path=cache("down_proj"),
-                    dtype=ttnn.bfloat8_b,
+                    cache_path=cache("down_proj", down_tag),
+                    dtype=down_dtype,
                 ),
                 w_gate_up=wgu,
             )
@@ -129,8 +141,8 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 mesh_device,
                 dim=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_path=cache("down_proj"),
-                dtype=ttnn.bfloat8_b,
+                cache_path=cache("down_proj", down_tag),
+                dtype=down_dtype,
             ),
             w_gate_up=wgu,
         )

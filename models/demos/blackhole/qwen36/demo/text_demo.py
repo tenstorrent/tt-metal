@@ -61,6 +61,7 @@ _FRANKENSTEIN_CONFIGS = {
     32768: 1,
     65536: 2,
     131072: 3,  # Frankenstein caps ~104k
+    153600: 4,  # War and Peace (150k packed)
     262144: 4,  # War and Peace (full context)
 }
 
@@ -143,6 +144,8 @@ def _get_prompt(seqlen, tokenizer, max_prompt_len=None):
             suffix = f"\n\nBased on the above text: {instruction}<|im_end|>\n<|im_start|>assistant\n<think>\n"
         wrapper_ids = tokenizer(prefix + suffix, add_special_tokens=False, return_tensors="pt")["input_ids"]
         max_context_tokens = cap - wrapper_ids.shape[1]
+        # Clip chars before tokenize so 150k/256k do not materialize the whole book as token ids.
+        context = context[: max(max_context_tokens * 8, 1)]
         context_ids = tokenizer(context, add_special_tokens=False, return_tensors="pt")["input_ids"][
             :, :max_context_tokens
         ]
@@ -206,6 +209,7 @@ def _blocks_for(seqlen, max_generated_tokens):
         pytest.param(32768, 100, True, 1, 1, id="traced_32k"),
         pytest.param(65536, 500, True, 1, 1, id="traced_64k"),
         pytest.param(131072, 100, True, 1, 1, id="traced_128k"),
+        pytest.param(153600, 100, True, 1, 1, id="traced_150k", marks=pytest.mark.timeout(900)),
         pytest.param(262144, 100, True, 1, 1, id="traced_256k", marks=pytest.mark.timeout(900)),
         # Determinism: re-run the traced 128 case and assert identical output across runs.
         pytest.param(128, 50, True, 1, 2, id="determinism_128"),
