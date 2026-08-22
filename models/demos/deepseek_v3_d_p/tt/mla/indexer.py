@@ -260,6 +260,7 @@ class TtIndexer:
         slot_num: int = 1,
         layer_num: int = 1,
         first_layer_idx: int | None = None,
+        skip_tp_regather: bool = False,
     ):
         """Architecture constants are read from the HF config with no defaults (index_n_heads,
         index_head_dim, index_topk, index_rope_interleave — a sparse config that omits any of them
@@ -360,6 +361,14 @@ class TtIndexer:
                 if first_layer_idx is None
                 else full_indexer_rank(config, first_layer_idx + self.layer_num) - base
             )
+        # When the consumer (ttMLA._sparse_mla) is about to transpose its TP sharding axis heads -> seq
+        # (thin head shards, e.g. GLM/DS-V4's 64 heads at tp=4 -> 16 < 32), the top-k TP regather below is
+        # its exact inverse: gather [1,1,S/(sp·tp),k] -> [1,1,S/sp,k], then mesh_partition back over TP.
+        # skip_tp_regather elides that gather+partition pair; forward then returns the TP-seq-sharded
+        # [1,1,S/(sp·tp),k] directly and _sparse_mla's shape guard consumes it as-is. Injected from ttMLA
+        # (== _needs_head_to_seq_reshard); models with fat head shards (DS-V3.2: 128/tp4 = 32) keep the
+        # gather, which their sparse_sdpa genuinely needs.
+        self.skip_tp_regather = skip_tp_regather
         # Stable, worst-case TP gather outputs.  Indexer layers execute serially, so TT_CCL shares each
         # buffer across them.  This keeps the high-bandwidth gathers allocation-free and their output
         # address fixed on the hot forward path.
@@ -390,12 +399,13 @@ class TtIndexer:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
-            self._topk_indices_all_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
-                name="indexer_topk_indices",
-                shape=[1, 1, self.active_seq_len_local, self.index_topk_capacity],
-                dtype=ttnn.uint32,
-                layout=ttnn.TILE_LAYOUT,
-            )
+            if not self.skip_tp_regather:
+                self._topk_indices_all_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
+                    name="indexer_topk_indices",
+                    shape=[1, 1, self.active_seq_len_local, self.index_topk_capacity],
+                    dtype=ttnn.uint32,
+                    layout=ttnn.TILE_LAYOUT,
+                )
         self._upload_weights(idx_host)
         # DS block-cyclic uses the interleaved rotary_embedding_indexed op, but DS weights emit the
         # half-split (rotate_half) rope arrangement. Permute the rope half (half-split -> interleaved) so
@@ -756,9 +766,14 @@ class TtIndexer:
         topk_valid_length = end_pos
         idx = ttnn.experimental.topk_large_indices(logits, k=self.index_topk_capacity, valid_length=topk_valid_length)
         # TP×SP: topk ran on the TP-seq-sharded rows ([1,1,S/(sp·tp),k]); regather over TP back to the
-        # [1,1,S/sp,k] contract so sparse_sdpa/mla.py are unchanged. (Redundant TP-round-trip for GLM's
-        # head→seq reshard, which re-splits it; correct regardless. tp=1: no-op.)
-        if tpsp:
+        # [1,1,S/sp,k] contract so sparse_sdpa/mla.py are unchanged. (tp=1: no-op.)
+        # skip_tp_regather (GLM/DS-V4 head→seq reshard models): the consumer immediately mesh_partitions
+        # these rows back over TP, so return the TP-seq-sharded [1,1,S/(sp·tp),k] as-is — deletes one
+        # all-gather + one partition per full layer per chunk, plus the RM↔TILE round-trip below.
+        # _sparse_mla's shape guard (idx.shape[2] != q_rm.shape[2]) then skips its partition; GLM-5.2
+        # shared-layer reuse injects the same shape and hits the same guard. The returned tensor stays
+        # the topk op's own output (owned, safe for the transformer's reuse-chain deallocates).
+        if tpsp and not self.skip_tp_regather:
             # Regather the TP-seq-sharded top-k indices back to [1,1,S/sp,k]. topk_large_indices emits
             # ROW_MAJOR uint32, and an all-gather on a ROW_MAJOR tensor is routed by use_composite_all_gather
             # to composite_all_gather -> all_broadcast, whose multicast over a partial cluster-axis line of a

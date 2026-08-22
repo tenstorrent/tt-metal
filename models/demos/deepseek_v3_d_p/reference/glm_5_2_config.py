@@ -41,6 +41,10 @@ class GLM52Config:
 
     # MLA dimensions
     NUM_ATTENTION_HEADS = 64
+    # Indexer top-k TP-regather skip: validated green on the 8x4 blaze pipeline for GLM
+    # (sparse MLA accuracy+determinism, prefill block, chunked accuracy). Do NOT copy to other
+    # models without pipeline validation -- see Kimi PCC~0 note at the mla.py injection site.
+    INDEXER_SKIP_TP_REGATHER = True
     Q_LORA_RANK = 2048
     KV_LORA_RANK = 512
     QK_NOPE_HEAD_DIM = 192
@@ -90,6 +94,7 @@ def glm_5_2_hf_config(max_seq: int = 8192):
         hidden_size=GLM52Config.EMB_SIZE,
         intermediate_size=GLM52Config.INTERMEDIATE_SIZE,  # dense-FFN (layers 0-2) hidden dim = 12288
         num_attention_heads=GLM52Config.NUM_ATTENTION_HEADS,
+        indexer_skip_tp_regather=GLM52Config.INDEXER_SKIP_TP_REGATHER,
         num_key_value_heads=GLM52Config.NUM_ATTENTION_HEADS,
         kv_lora_rank=GLM52Config.KV_LORA_RANK,
         q_lora_rank=GLM52Config.Q_LORA_RANK,
