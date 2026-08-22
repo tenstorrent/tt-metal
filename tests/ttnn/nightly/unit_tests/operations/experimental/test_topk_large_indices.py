@@ -265,57 +265,65 @@ def test_topk_large_indices_production_perf_check(
 def test_topk_large_indices_program_cache_per_engine_regime(device):
     # Engine selection is automatic: the cost model picks the multi-row
     # rectangle engine when 2*ceil(chunks/P) + ceil(log2 P) beats the
-    # row-parallel 2*chunks by the multi-row margin, and the program hash
-    # carries the derived split-config fields. The caching invariant is
-    # therefore PER ENGINE REGIME (P150 13x10 worker grid assumed, as in the
-    # merge-tree tests below):
-    #   - shapes that stay row-parallel share ONE shape-free cached program
-    #     across any row count and width: (2, 3000) declines rects on the
-    #     margin (best rect cost 3 vs row cost 4, short of the required
-    #     margin), while (128, 51200) and (640, 51200) exceed every
-    #     rectangle's row capacity (25 chunks, max capacity 65 rows at P=2).
-    #     At k >= 1024 the compute-body mode is width-independent, so no
-    #     width term enters the hash within the regime;
-    #   - valid_length is runtime-only and the split is modeled on the
-    #     PHYSICAL width, so growing prefixes on one shape NEVER recompile;
-    #   - an engine-crossing shape compiles exactly ONE extra program:
-    #     (2, 131072) is 64 chunks, so the model auto-selects rects
-    #     (P=32: 2*2 + 5 = 9, far under the row-parallel 2*64 = 128) and the
-    #     changed split-config fields hash to a new entry. Repeats of it hit
-    #     the cache; regime growth is bounded because the model quantizes P
-    #     to a handful of choices and fixed-shape callers compile once.
+    # row-parallel 2*chunks by the multi-row margin, the hybrid row split
+    # fires when the row count exceeds one full wave of the worker grid, and
+    # the program hash carries the derived split-config fields. Which regime
+    # each shape lands in therefore depends on the HARVESTED worker grid, so
+    # the caching contract is asserted in two tiers:
+    #   - GRID-FREE (asserted on every device): replaying every call verbatim
+    #     adds ZERO cache entries, and total compilation is bounded — each
+    #     public call launches at most two topk programs (hybrid full-wave +
+    #     remainder) plus one concat, and while distinct valid_length regimes
+    #     may compile distinct remainder programs on the hybrid path (the
+    #     remainder's P is modeled on the searched width, and num_slices is
+    #     hashed), the model quantizes P so growth stays bounded per call.
+    #   - 13x10 GRID ONLY (unharvested P150, as the merge-tree tests below
+    #     assume): the row-parallel regime is ONE shape-free program across
+    #     row counts, widths, and valid_lengths — (2, 3000) declines rects on
+    #     the margin (best rect cost 3 vs row cost 4), (128, 51200) and
+    #     (640, 51200) exceed every rectangle's row capacity (25 chunks, max
+    #     capacity 65 rows at P=2) while fitting in one 130-core wave, and
+    #     valid_length is runtime-only on the single-launch path — and the
+    #     engine-crossing (2, 131072) (64 chunks: rects at P=32 cost
+    #     2*2 + 5 = 9, far under the row-parallel 2*64 = 128) compiles
+    #     exactly ONE extra program. At k >= 1024 the compute-body mode is
+    #     width-independent, so no width term enters the hash within a regime.
     k = 1536
-    row_parallel_cases = [(2, 3000), (128, 51200), (640, 51200)]
-    tt_inputs = [
-        _to_device(_make_large_index_input(num_rows=num_rows, n=n, k=k), device) for num_rows, n in row_parallel_cases
-    ]
-    tt_crossing = _to_device(_make_large_index_input(num_rows=2, n=131072, k=k), device)
+    shapes = [(2, 3000), (128, 51200), (640, 51200), (2, 131072)]
+    tt_inputs = [_to_device(_make_large_index_input(num_rows=r, n=n, k=k), device) for r, n in shapes]
+    # (input index, valid_length): three shapes that stay row-parallel on the
+    # 13x10 grid, two growing valid_length prefixes on one of them, then the
+    # engine-crossing shape.
+    calls = [(0, None), (1, None), (2, None), (1, 4097), (1, 26000), (3, None)]
 
     device.enable_program_cache()
     device.clear_program_cache()
     try:
         cache_entries = []
-        for tt_input, (num_rows, _) in zip(tt_inputs, row_parallel_cases):
-            tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k)
+        for idx, valid_length in calls:
+            tt_indices = ttnn.experimental.topk_large_indices(tt_inputs[idx], k=k, valid_length=valid_length)
             cache_entries.append(device.num_program_cache_entries())
-            _assert_index_metadata(tt_indices, [num_rows, k])
-        for valid_length in (4097, 26000):  # runtime-only: same (128, 51200) program
-            tt_indices = ttnn.experimental.topk_large_indices(tt_inputs[1], k=k, valid_length=valid_length)
-            cache_entries.append(device.num_program_cache_entries())
-            _assert_index_metadata(tt_indices, [128, k])
+            _assert_index_metadata(tt_indices, [shapes[idx][0], k])
 
-        assert cache_entries[0] > 0
-        assert max(cache_entries) == min(cache_entries)  # one program serves the whole regime
-        row_parallel_entries = cache_entries[-1]
+        # Tier 1 (grid-free): compilation happened and is bounded.
+        total_entries = cache_entries[-1]
+        assert total_entries >= 1
+        assert total_entries <= 3 * len(calls)
+        # Tier 1 (grid-free): a verbatim replay of every call is all cache hits.
+        for idx, valid_length in calls:
+            tt_indices = ttnn.experimental.topk_large_indices(tt_inputs[idx], k=k, valid_length=valid_length)
+            _assert_index_metadata(tt_indices, [shapes[idx][0], k])
+            assert device.num_program_cache_entries() == total_entries
 
-        tt_indices = ttnn.experimental.topk_large_indices(tt_crossing, k=k)
-        _assert_index_metadata(tt_indices, [2, k])
-        # Crossing into the rect engine compiles exactly one new program ...
-        assert device.num_program_cache_entries() == row_parallel_entries + 1
-        tt_indices = ttnn.experimental.topk_large_indices(tt_crossing, k=k)
-        _assert_index_metadata(tt_indices, [2, k])
-        # ... and repeat calls of the same shape stay cached.
-        assert device.num_program_cache_entries() == row_parallel_entries + 1
+        # Tier 2 (13x10 grid only): exact per-regime counts are derivable.
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) == (13, 10):
+            assert cache_entries[0] > 0
+            # One program serves the whole row-parallel regime, including the
+            # growing valid_length prefixes ...
+            assert cache_entries[:5] == [cache_entries[0]] * 5
+            # ... and crossing into the rect engine compiles exactly one more.
+            assert cache_entries[5] == cache_entries[0] + 1
     finally:
         device.disable_and_clear_program_cache()
 
@@ -805,12 +813,16 @@ def test_topk_large_indices_column_parallel_valid_length_cache_reuse(device):
 
 def test_topk_large_indices_column_and_row_parallel_programs_coexist_in_cache(device):
     # A single-row wide input takes the column-parallel factory while a
-    # multi-row input of the same width keeps the row-parallel one; the two
-    # must hash to distinct cache entries and both must stay correct. 128
-    # rows exceed every rectangle's row capacity at 32 chunks (max 65 at
-    # P=2 on the 13x10 grid), so the auto-rects cost model declines and the
-    # multi-row call genuinely stays row-parallel; a low row count (e.g. 2)
-    # would itself auto-select the rect engine since the flip.
+    # multi-row input of the same width takes at least one program the
+    # single-row call did not compile; the two must coexist in the cache and
+    # both must stay correct. The exact entry count is grid-dependent: on the
+    # unharvested 13x10 P150 grid, 128 rows exceed every rectangle's row
+    # capacity at 32 chunks (max 65 at P=2) and fit in one 130-core wave, so
+    # the multi-row call genuinely stays row-parallel and adds exactly ONE
+    # entry (a low row count, e.g. 2, would itself auto-select the rect
+    # engine since the flip). On smaller harvested grids (< 128 workers) the
+    # hybrid row split fires instead (full-wave + rect remainder + concat),
+    # so grid-free we assert only growth plus replay-hits-cache.
     n, k = 65536, 2048
     single_row = _make_large_index_input(num_rows=1, n=n, k=k)
     multi_row = _make_large_index_input(num_rows=128, n=n, k=k)
@@ -818,13 +830,26 @@ def test_topk_large_indices_column_and_row_parallel_programs_coexist_in_cache(de
     device.enable_program_cache()
     device.clear_program_cache()
     try:
-        tt_single = ttnn.experimental.topk_large_indices(_to_device(single_row, device), k=k)
+        tt_single_input = _to_device(single_row, device)
+        tt_multi_input = _to_device(multi_row, device)
+        tt_single = ttnn.experimental.topk_large_indices(tt_single_input, k=k)
         entries_after_single = device.num_program_cache_entries()
-        tt_multi = ttnn.experimental.topk_large_indices(_to_device(multi_row, device), k=k)
+        tt_multi = ttnn.experimental.topk_large_indices(tt_multi_input, k=k)
         entries_after_multi = device.num_program_cache_entries()
 
+        # Grid-free: both factories compiled, distinct entries coexist, and
+        # verbatim replays are cache hits.
         assert entries_after_single > 0
-        assert entries_after_multi == entries_after_single + 1
+        assert entries_after_multi > entries_after_single
+        ttnn.experimental.topk_large_indices(tt_single_input, k=k)
+        ttnn.experimental.topk_large_indices(tt_multi_input, k=k)
+        assert device.num_program_cache_entries() == entries_after_multi
+
+        # 13x10 grid only: the multi-row call stays row-parallel, exactly one
+        # extra program.
+        grid = device.compute_with_storage_grid_size()
+        if (grid.x, grid.y) == (13, 10):
+            assert entries_after_multi == entries_after_single + 1
 
         _assert_topk_matches_torch(single_row, tt_single, k)
         _assert_topk_matches_torch(multi_row, tt_multi, k)
