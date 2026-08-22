@@ -32,6 +32,11 @@
 // low index bits. (`fused=false` keeps values and indices in two distinct DST
 // regions.)
 //
+// Under TOPK_XL_STABLE_TIES the u16 stamp is the row-major index itself with
+// a sign-conditioned complement, and the unfused paths rank-stamp the value
+// words' free lo16 before every merge — making ties break by ascending
+// global index on every path (see "Sequential-ties rank stamping" below).
+//
 // Bitonic sort, briefly
 // ---------------------
 // A bitonic sequence is one that first ascends then descends (or vice
@@ -88,7 +93,9 @@
 //   ADDR_MOD_1 : +48 = 32 + 16    (folds trailing +16 into the last store)
 //   ADDR_MOD_0 : +2 (one 32-lane group, which is the two Dest rows a single
 //                SFPU load/store covers). Used by the post-reduction phases
-//                `remove_msb_values` and `separate_indices`.
+//                `remove_msb_values` and `separate_indices`. Under
+//                TOPK_XL_STABLE_TIES the unfused init programs it +4 for the
+//                rank-stamp walk; the post-reduction inits reprogram it.
 //
 // "Folding" means the trailing INCRWC(0, X, ...) advance that would normally
 // follow a store gets absorbed into the store's own ADDR_MOD increment,
@@ -351,8 +358,8 @@ constexpr std::uint32_t sequence_word(std::uint32_t m)
 #endif
 
 // Misc (SFPLOADMACRO.md:53-57): 0xF0 -> every macro's store inherits its
-// LOAD's Mod0 (FP32 here — the value regs are genuine FP32, same mode the
-// shipping software stores use). 0xB00 -> Simple/MAD/Store on
+// LOAD's Mod0 (INT32 — the value words are opaque 32-bit sort keys; see the
+// load8_rows_x2_unfused note). 0xB00 -> Simple/MAD/Store on
 // WaitForElapsedInstructions so the delay chain cannot slide if the frontend
 // bubbles.
 constexpr std::uint32_t MISC_WORD = 0xB00u | 0xF0u;
@@ -372,7 +379,7 @@ constexpr std::uint32_t SFPCFG_IMM16_IS_VALUE     = 1; // SFPCONFIG.md:108
 // VD is u3 and the address low bit is unused (SFPLOAD.md:83), so VD in 0..7
 // never perturbs the address.
 #define TOPK_XL_UNFUSED_LOADMACRO(macro_idx, vd, off) \
-    TTI_SFPLOADMACRO(((macro_idx) << 2) | ((vd) & 3u), InstrModLoadStore::FP32, ADDR_MOD_7, (off) | ((vd) >> 2))
+    TTI_SFPLOADMACRO(((macro_idx) << 2) | ((vd) & 3u), InstrModLoadStore::INT32, ADDR_MOD_7, (off) | ((vd) >> 2))
 
 // Program Sequence[0/1] + Misc. Stages each 32-bit word through LReg[0] (the
 // _init_mul_int_ idiom — the Store byte does not fit the imm16 path).
@@ -428,25 +435,25 @@ inline void ce_first15()
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, indices_offset + group_2_offset + 4);
     if constexpr (ascending)
     {
-        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 0);
+        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 0);
         TOPK_XL_UNFUSED_LOADMACRO(0u, p_sfpu::LREG0, 0);
-        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 4);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 4);
         TOPK_XL_UNFUSED_LOADMACRO(1u, p_sfpu::LREG1, 4);
         TTI_SFPNOP; // m0's store (LREG0 -> 0) fires here
-        TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 0);
+        TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 0);
         TTI_SFPNOP; // m1's store (LREG1 -> 4) fires here
-        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 4);
+        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 4);
     }
     else
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         TOPK_XL_UNFUSED_LOADMACRO(0u, p_sfpu::LREG2, group_2_offset + 0);
-        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, 4);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
         TOPK_XL_UNFUSED_LOADMACRO(1u, p_sfpu::LREG3, group_2_offset + 4);
         TTI_SFPNOP; // m0's store (LREG2 -> group_2_offset) fires here
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         TTI_SFPNOP; // m1's store (LREG3 -> group_2_offset + 4) fires here
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, 4);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
     }
     TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, indices_offset + 0);
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, indices_offset + 4);
@@ -602,6 +609,29 @@ inline void _topk_xl_init_()
 
     if constexpr (fused == false)
     {
+#ifdef TOPK_XL_STABLE_TIES
+        // ADDR_MOD_0 — +4 (one 4-row Dst group). Consumed only by the
+        // sequential-ties rank-stamp walk (`_topk_xl_stamp_seq_ranks_`);
+        // the post-reduction phases reprogram this slot for their own use
+        // and the bitonic hot loops never reference it.
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 4},
+        }
+            .set(ADDR_MOD_0);
+
+        // Rank-stamp constants. These live in programmable constant LREGs
+        // because the stamp runs under index-tracking mode, where HW erratum
+        // TEN-2932 forbids non-{SFPLOAD,SFPLOADI,SFPSWAP,SFPTRANSP} writes
+        // to LReg[4..7] and SFPLOADs to LReg[0..3] capture into LReg[4..7]
+        // — so the stamp can only keep state in LREG0..3 plus constants.
+        // LREG13/14 are also the separate-indices decode masks, but the
+        // stable-ties decode is a chunk-field strip that reads neither.
+        _sfpu_load_config32_(p_sfpu::LREG11, 0x0, 0xFFFF);
+        _sfpu_load_config32_(p_sfpu::LREG13, 0x0, K / 16);
+        _sfpu_load_config32_(p_sfpu::LREG14, 0x0, 2 * K - 1);
+#endif
         // Enable SFPU index-tracking mode (bit [2] of SFPU_CONTROL_REG)
         // so the unfused path can keep indices in a parallel DST region.
         // Bit [1] (DISABLE_BACKDOOR_LOAD) stays 0, keeping the VD >= 12
@@ -760,13 +790,19 @@ inline void store_first_7_rows_x2()
 // Unfused-path load: LREG0..3 carry 4 rows of FP32 values, LREG4..7 carry
 // the corresponding 4 rows of INT32 indices stored at `indices_offset` in
 // the parallel DST region.
+// The VALUE moves use INT32 modes like the fused path: the value word is an
+// opaque 32-bit sort key ([bf16 << 16 | lo16]; lo16 = 0, or a rank stamp
+// under TOPK_XL_STABLE_TIES), and an FP32 store would flush denormal-pattern
+// words (bf16 == +/-0 with non-zero lo16) and erase the stamp. Bit-identical
+// to FP32 moves for the lo16 == 0 payload (bf16 subnormals are canonicalized
+// to +0 upstream); SFPSWAP compares raw bits either way.
 template <int indices_offset = 256, int group_2_offset = 16>
 inline void load8_rows_x2_unfused()
 {
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, 4);
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 0);
-    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 4);
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 0);
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 4);
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, indices_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, indices_offset + 4);
     TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, indices_offset + group_2_offset + 0);
@@ -779,10 +815,10 @@ inline void load8_rows_x2_unfused()
 template <int indices_offset = 256, int group_2_offset = 16>
 inline void store_first_7_rows_x2_unfused()
 {
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, 4);
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 0);
-    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 4);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 0);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 4);
     TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, indices_offset + 0);
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, indices_offset + 4);
     TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, indices_offset + group_2_offset + 0);
@@ -795,10 +831,10 @@ inline void store_first_7_rows_x2_unfused()
 template <int indices_offset = 256, int group_2_offset = 16, int inc_dst_addr = 0>
 inline void store8_rows_x2_unfused()
 {
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, 4);
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 0);
-    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_7, group_2_offset + 4);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 0);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 4);
     TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, indices_offset + 0);
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, indices_offset + 4);
     TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, indices_offset + group_2_offset + 0);
@@ -1995,6 +2031,137 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
 }
 
+#ifdef TOPK_XL_STABLE_TIES
+// =============================================================================
+//  Sequential-ties rank stamping (TOPK_XL_STABLE_TIES)
+// =============================================================================
+//
+// Re-keys the unfused value words' free low 16 bits with a sign-conditioned
+// local rank so the following merge (dual) or standalone rebuild (single)
+// compares distinct keys — the SFPSWAP bodies stay untouched and the u32
+// companion index keeps riding the index-tracking swaps.
+//
+//     value word = [bf16 value | rank XOR (positive ? 0xFFFF : 0x0000)]
+//
+// Under the raw sign-magnitude compare, descending key order within an
+// equal-value class then equals ascending-rank order for both signs.
+//
+// Rank assignment (dual):
+//   slot0 (accumulator, DESCENDING, lower global-index range): r in [0, K)
+//   slot1 (incoming, ASCENDING, higher range): (2K-1) - r in [K, 2K)
+// where r is the run's sort position from the calibrated post-sort layout
+// word(r) = (r % (K/16))*16 + r/(K/16) (rank_to_values_word in the op's
+// chunk-skip header), i.e. r = column*(K/16) + row. Both stamped runs stay
+// strictly monotone by key, so the merge's bitonic precondition holds; the
+// merged tie order comes out as ascending rank = ascending global index.
+// slot0 holds the lower range at every unfused merge in the op: the row and
+// segment folds accumulate ascending chunk ranges, and the tree's level-m
+// partner is slice i + 2^m (strictly higher, including after an empty-slice
+// adopt).
+//
+// The single-run variant stamps slot0 only, before a rebuild NOT preceded by
+// a merge (single-chunk survivors): a rebuild of tied [bf16|0] keys would
+// scramble the tie order the fused sort established. Both variants require
+// `_topk_xl_init_<K, false>` first (ADDR_MOD_0 = +4, ADDR_MOD_7 = 0).
+//
+// Clobbers LREG0..LREG3 (plus the loads' LREG6/7 index captures) and the
+// lane enables (left fully enabled); reads constants LREG11/13/14 programmed
+// by `_topk_xl_init_<K, false>`. Consumes replay slots [0, 18) — merge /
+// rebuild re-record their bodies right after.
+
+// One 4-row group of one run: the even-column word at `off` and the odd-
+// column word at `off + 2` (SFPLOAD covers the even or odd columns of four
+// consecutive Dst rows; Addr bit 1 selects the parity). LREG0 holds the
+// group's even-column rank iota; the odd column is `rank + K/16`
+// (bit-disjoint, so a single XOR against LREG13); a complemented run
+// (slot1) goes through LREG14 = 2K-1 first ((2K-1) ^ r == (2K-1) - r for
+// r < 2K). The odd-column store carries the +4 group advance (ADDR_MOD_0);
+// LREG0 advances +4 to match (rank tracks the Dst row). Index-tracking mode
+// is live here, so only LREG0..3 may be written (erratum TEN-2932) and the
+// loads' capture writes to LREG6/7 are dead by construction.
+template <int off, bool complement_run>
+inline void stamp_seq_ranks_group()
+{
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    if constexpr (complement_run)
+    {
+        TTI_SFPXOR(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);
+    }
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, off);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, 0);
+    TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
+    TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG2, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, off);
+    TTI_SFPXOR(0, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, off + 2);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, 0);
+    TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
+    TTI_SFPSETCC(0, p_sfpu::LREG3, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG3, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_0, off + 2);
+    TTI_SFPIADD(4, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+}
+
+// Per-lane even-column rank iota base into LREG0 (LREG1/2 scratch). Lane j
+// covers Dst word w = ((Addr & ~3) + j/8)*16 + (j & 7)*2 + (Addr & 2 ? 1 : 0),
+// so at group base 4g the even-column rank is (j & 7)*2*(K/16) + 4g + j/8.
+// LTILEID = 2j per lane; j << (log2_rows + 1) splits into the disjoint
+// fields (j & 7)*2*(K/16) + (j >> 3)*K, so one XOR strips the K field.
+template <int log2_rows, int log2_k>
+inline void stamp_seq_ranks_iota()
+{
+    TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
+    TTI_SFPSHFT((-1) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1); // j
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPSHFT((-3) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG1, 1); // j >> 3
+    TTI_SFPSHFT(log2_rows + 1, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
+    TTI_SFPSHFT(log2_k, p_sfpu::LREG2, p_sfpu::LREG2, 1);
+    TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0); // (j & 7)*2*(K/16)
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+}
+
+template <std::uint32_t K, bool dual>
+inline void _topk_xl_stamp_seq_ranks_()
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    constexpr int num_tiles_per_sequence = (K == 2048) ? 2 : 1;
+    // slot1's values region sits one full unfused sequence past slot0 — the
+    // merge's `distance`.
+    constexpr int distance  = 128 * num_tiles_per_sequence;
+    constexpr int log2_rows = (K == 512) ? 5 : (K == 1024) ? 6 : 7; // log2(K/16)
+    constexpr int log2_k    = (K == 512) ? 9 : (K == 1024) ? 10 : 11;
+    constexpr int n_groups  = K / 64; // one body covers 4 rows x both parities
+    constexpr int body_len  = 17;     // stamp_seq_ranks_group<off, false>
+
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    // slot0 pass. Recording IS the first group.
+    stamp_seq_ranks_iota<log2_rows, log2_k>();
+    load_replay_buf<Exec>(0, body_len, [] { stamp_seq_ranks_group<0, false>(); });
+    for (int i = 1; i < n_groups; i++)
+    {
+        lltt::replay(0, body_len);
+    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    if constexpr (dual)
+    {
+        // slot1 pass: fresh iota, complemented through LREG14 in the body.
+        stamp_seq_ranks_iota<log2_rows, log2_k>();
+        load_replay_buf<Exec>(0, body_len + 1, [] { stamp_seq_ranks_group<distance, true>(); });
+        for (int i = 1; i < n_groups; i++)
+        {
+            lltt::replay(0, body_len + 1);
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    }
+}
+#endif // TOPK_XL_STABLE_TIES
+
 // =============================================================================
 //  Public entry: merge
 // =============================================================================
@@ -2073,6 +2240,12 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
     }
     else
     {
+#ifdef TOPK_XL_STABLE_TIES
+        // Sequential ties: re-key both runs' value-word lo16 with sign-
+        // conditioned local ranks so every compare in this merge (and the
+        // rebuild that follows it) sees distinct keys. See the stamp helper.
+        _topk_xl_stamp_seq_ranks_<K, true>();
+#endif
 #if TOPK_XL_UNFUSED_MACRO
         // SFPLOADMACRO body: the two SFPSWAPs ride the loads' Simple slots
         // and the macroVD stores ride their Store slots. The merge always
@@ -2699,6 +2872,15 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
 //                           end, leaving only the index in each DST word so
 //                           the caller can pack the indices to output.
 
+// Replayed index-stamp body length: 16 (4 loads + 4 ORs + 4 IADDs + 4
+// stores), plus 12 under TOPK_XL_STABLE_TIES (a SETCC/XOR/ENCC triple per
+// stamped word). 28 still fits the 32-slot replay window.
+#ifdef TOPK_XL_STABLE_TIES
+constexpr int TOPK_XL_IDX_STAMP_BODY_LEN = 28;
+#else
+constexpr int TOPK_XL_IDX_STAMP_BODY_LEN = 16;
+#endif
+
 // Programs the ADDR_MODs used by `_topk_xl_add_lsb_indices_`. Reuses
 // ADDR_MOD_4 for a +16 advance — the other ADDR_MOD_4 user is the unfused
 // topk path, but `distributed_topk` runs fused, so the reuse is safe.
@@ -2721,6 +2903,13 @@ inline void _topk_xl_add_lsb_indices_init_()
         .dest = {.incr = 16},
     }
         .set(ADDR_MOD_4);
+
+#ifdef TOPK_XL_STABLE_TIES
+    // LREG11 = 0x0000FFFF for the sign-conditioned stamp complement (stamp
+    // sites and every lo16 consumer). Clobbers the hardware default (-1.0f)
+    // for the rest of the program, like the LREG12..14 writes below.
+    _sfpu_load_config32_(p_sfpu::LREG11, 0x0, 0xFFFF);
+#endif
 }
 
 // Builds the per-element global index in LREG0..LREG3 and ORs it into the
@@ -2821,6 +3010,31 @@ inline void _topk_xl_add_lsb_indices_()
 
     TTI_SFPTRANSP(0, 0, 0, 0);
 
+#ifdef TOPK_XL_STABLE_TIES
+    // Stamp the row-major within-chunk index itself (chunk id above it at
+    // bit log2K), so the u16's NUMERIC order equals global-index order —
+    // the property the sign-conditioned tie-break below relies on. LREG0
+    // holds the lane's engine column c in [0, 32): its row-major weight is
+    // (c & 15) + (c >> 4)*256; the row/tile counter advances +16 per row
+    // step ({+16,+32,+48} across the load positions, +64 per replay, +256
+    // per face pair).
+    constexpr int log2_k = (K == 512) ? 9 : (K == 1024) ? 10 : 11;
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPSHFT((-4) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
+    TTI_SFPSHFT(4, p_sfpu::LREG2, p_sfpu::LREG2, 1);
+    TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);  // c & 15
+    TTI_SFPSHFT(8, p_sfpu::LREG1, p_sfpu::LREG1, 1); // (c >> 4)*256
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, core_id);
+    TTI_SFPSHFT(log2_k, 1, p_sfpu::LREG1, 1);
+
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(16, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(32, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(48, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+#else
     // Multiply by 64 (one row per 64 lanes), so per-column start values are
     // (0, 64, 128, 192, ..., 1920, 1984).
     // NOTE: SFPSHFT_MOD1_SHIFT_IMM in sfpi is buggy — passing 1 as the imm
@@ -2838,6 +3052,7 @@ inline void _topk_xl_add_lsb_indices_()
     TTI_SFPIADD(1, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPIADD(2, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPIADD(3, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+#endif
 
     TTI_SFPTRANSP(0, 0, 0, 0);
 
@@ -2845,7 +3060,7 @@ inline void _topk_xl_add_lsb_indices_()
     // The body (12 instructions: 4 loads + 4 ORs + 4 stores + 4 IADDs) is
     // recorded into replay slots [0..15] once and replayed for the
     // remaining iters.
-    lltt::record<lltt::Exec>(0, 16);
+    lltt::record<lltt::Exec>(0, TOPK_XL_IDX_STAMP_BODY_LEN);
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
     TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 0);
@@ -2856,10 +3071,37 @@ inline void _topk_xl_add_lsb_indices_()
     TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
     TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
 
+#ifdef TOPK_XL_STABLE_TIES
+    // Complement the stamped u16 when the fused word is positive: under the
+    // raw sign-magnitude compare this makes descending tie order equal
+    // ascending-index order for both signs (negatives already order that
+    // way on the raw stamp). LREG11 = 0x0000FFFF from the init.
+    TTI_SFPSETCC(0, p_sfpu::LREG4, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG4, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+    TTI_SFPSETCC(0, p_sfpu::LREG5, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG5, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+    TTI_SFPSETCC(0, p_sfpu::LREG6, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG6, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+    TTI_SFPSETCC(0, p_sfpu::LREG7, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG7, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+#endif
+
+#ifdef TOPK_XL_STABLE_TIES
+    // Row-major stamps advance +64 per replay (4 row steps x 16).
+    TTI_SFPIADD(64, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(64, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(64, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(64, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+#else
     TTI_SFPIADD(4, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPIADD(4, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPIADD(4, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPIADD(4, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+#endif
 
     TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
@@ -2868,7 +3110,7 @@ inline void _topk_xl_add_lsb_indices_()
 
     for (int i = 1; i < 4; i++)
     {
-        lltt::replay(0, 16);
+        lltt::replay(0, TOPK_XL_IDX_STAMP_BODY_LEN);
     }
 
     // Outer loop over the remaining face-pairs. We hoist the
@@ -2889,10 +3131,18 @@ inline void _topk_xl_add_lsb_indices_()
     for (int j = 1; j < row_scale_factor; j++)
     {
         TTI_SFPLOAD(p_sfpu::LREG4, 10, ADDR_MOD_4, 0);
+#ifdef TOPK_XL_STABLE_TIES
+        // Face-pair boundary: the row_hi/tile weight jumps by 512 while the
+        // four replays only advanced +256, so re-base the stamp iotas.
+        TTI_SFPIADD(256, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(256, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(256, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(256, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+#endif
 
         for (int i = 0; i < 4; i++)
         {
-            lltt::replay(0, 16);
+            lltt::replay(0, TOPK_XL_IDX_STAMP_BODY_LEN);
         }
     }
 }
@@ -2916,6 +3166,29 @@ inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
 
     TTI_SFPTRANSP(0, 0, 0, 0);
 
+#ifdef TOPK_XL_STABLE_TIES
+    // Row-major stamp layout — see the template variant above.
+    constexpr int log2_k = (K == 512) ? 9 : (K == 1024) ? 10 : 11;
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPSHFT((-4) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
+    TTI_SFPSHFT(4, p_sfpu::LREG2, p_sfpu::LREG2, 1);
+    TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);  // c & 15
+    TTI_SFPSHFT(8, p_sfpu::LREG1, p_sfpu::LREG1, 1); // (c >> 4)*256
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+
+    // Load chunk_id (runtime), masked to the <=32-chunk caller contract at
+    // composition (the stamp field itself is 16 - log2K bits wide): an
+    // out-of-contract id can only wrap within the index field, never spill
+    // into the BF16 value half.
+    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, chunk_id & 0x1Fu);
+    TTI_SFPSHFT(log2_k, 1, p_sfpu::LREG1, 1);
+
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(16, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(32, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(48, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+#else
     TTI_SFPSHFT(6, 0, p_sfpu::LREG0, 1);
 
     // Load chunk_id (runtime) and place it in bits [15:11] of every lane.
@@ -2930,10 +3203,11 @@ inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
     TTI_SFPIADD(1, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPIADD(2, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPIADD(3, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+#endif
 
     TTI_SFPTRANSP(0, 0, 0, 0);
 
-    lltt::record<lltt::Exec>(0, 16);
+    lltt::record<lltt::Exec>(0, TOPK_XL_IDX_STAMP_BODY_LEN);
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
     TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 0);
@@ -2944,10 +3218,37 @@ inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
     TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
     TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
 
+#ifdef TOPK_XL_STABLE_TIES
+    // Complement the stamped u16 when the fused word is positive: under the
+    // raw sign-magnitude compare this makes descending tie order equal
+    // ascending-index order for both signs (negatives already order that
+    // way on the raw stamp). LREG11 = 0x0000FFFF from the init.
+    TTI_SFPSETCC(0, p_sfpu::LREG4, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG4, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+    TTI_SFPSETCC(0, p_sfpu::LREG5, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG5, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+    TTI_SFPSETCC(0, p_sfpu::LREG6, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG6, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+    TTI_SFPSETCC(0, p_sfpu::LREG7, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG7, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+#endif
+
+#ifdef TOPK_XL_STABLE_TIES
+    // Row-major stamps advance +64 per replay (4 row steps x 16).
+    TTI_SFPIADD(64, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(64, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(64, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(64, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+#else
     TTI_SFPIADD(4, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPIADD(4, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPIADD(4, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPIADD(4, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+#endif
 
     TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
@@ -2956,17 +3257,25 @@ inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
 
     for (int i = 1; i < 4; i++)
     {
-        lltt::replay(0, 16);
+        lltt::replay(0, TOPK_XL_IDX_STAMP_BODY_LEN);
     }
 
     constexpr int row_scale_factor = K == 512 ? 1 : K == 1024 ? 2 : 4;
     for (int j = 1; j < row_scale_factor; j++)
     {
         TTI_SFPLOAD(p_sfpu::LREG4, 10, ADDR_MOD_4, 0);
+#ifdef TOPK_XL_STABLE_TIES
+        // Face-pair boundary: the row_hi/tile weight jumps by 512 while the
+        // four replays only advanced +256, so re-base the stamp iotas.
+        TTI_SFPIADD(256, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(256, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(256, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(256, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+#endif
 
         for (int i = 0; i < 4; i++)
         {
-            lltt::replay(0, 16);
+            lltt::replay(0, TOPK_XL_IDX_STAMP_BODY_LEN);
         }
     }
 }
@@ -2991,9 +3300,10 @@ inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
 // ADDR_MOD_7 (zero advance) for the load part of the sequence.
 inline void _topk_xl_remove_msb_values_init_()
 {
-    // ADDR_MOD_0, +2 (one group of 32 lanes). Not programmed by
-    // `_topk_xl_init_`, so this never collides with the unfused +24
-    // fold living in ADDR_MOD_2.
+    // ADDR_MOD_0, +2 (one group of 32 lanes). Under TOPK_XL_STABLE_TIES
+    // `_topk_xl_init_` programs the same +2 into ADDR_MOD_0 (rank stamps),
+    // so re-latching here is redundant-but-idempotent; either way it never
+    // collides with the unfused +24 fold living in ADDR_MOD_2.
     addr_mod_t {
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
@@ -3008,6 +3318,11 @@ inline void _topk_xl_remove_msb_values_init_()
         .dest = {.incr = 0},
     }
         .set(ADDR_MOD_7);
+
+#ifdef TOPK_XL_STABLE_TIES
+    // LREG11 = 0x0000FFFF for the stamp-complement inverse below.
+    _sfpu_load_config32_(p_sfpu::LREG11, 0x0, 0xFFFF);
+#endif
 }
 
 // Store zero into the hi16 half of every DST word in the K-sized region.
@@ -3033,6 +3348,13 @@ inline void _topk_xl_remove_msb_values_()
     for (int i = 0; i < row_scale_factor * 16; i++)
     {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);  // fused [value|index]
+#ifdef TOPK_XL_STABLE_TIES
+        // Undo the sign-conditioned stamp complement while the value half
+        // (the sign) is still present. LREG11 = 0x0000FFFF.
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+        TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG0, 0);
+        TTI_SFPENCC(0, 0, 0, 0);
+#endif
         TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);            // clear hi16, keep the index
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0); // [0|index], advance one group
     }
@@ -3056,6 +3378,11 @@ inline void _topk_xl_separate_indices_init_(std::uint32_t group_id_bit_shift)
     // Save the runtime group_id bit shift into a programmable SFPU constant
     // register (LREG12), so _topk_xl_separate_indices_ can SFPSHFT by it.
     _sfpu_load_config32_(p_sfpu::LREG12, /*upper16=*/0, /*lower16=*/group_id_bit_shift);
+
+#ifdef TOPK_XL_STABLE_TIES
+    // LREG11 = 0x0000FFFF for the stamp-complement inverse in the body.
+    _sfpu_load_config32_(p_sfpu::LREG11, 0x0, 0xFFFF);
+#endif
 }
 
 // ============================================================================
@@ -3143,6 +3470,15 @@ inline void _topk_xl_decode_row_major_index_()
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
 
+#ifdef TOPK_XL_STABLE_TIES
+    // The stable-ties stamp is [chunk id at bit log2K | row-major index], so
+    // decoding is just stripping the chunk field.
+    constexpr int log2_k = (K == 512) ? 9 : (K == 1024) ? 10 : 11;
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+    TTI_SFPSHFT((-log2_k) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG2, 1);
+    TTI_SFPSHFT(log2_k, p_sfpu::LREG2, p_sfpu::LREG2, 1);
+    TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+#else
     // part0 = col_low4: ((raw >> 6) & 0xf)
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
     TTI_SFPSHFT((-6) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG2, 1);
@@ -3179,6 +3515,7 @@ inline void _topk_xl_decode_row_major_index_()
     }
 
     TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+#endif
 }
 
 template <std::uint32_t K>
@@ -3196,6 +3533,14 @@ inline void _topk_xl_separate_indices_row_major_()
         // Value region: keep BF16 value high half and clear low half.
         TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0);
+
+#ifdef TOPK_XL_STABLE_TIES
+        // Undo the sign-conditioned stamp complement while the value half
+        // (the sign) is still present. LREG11 = 0x0000FFFF.
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+        TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG0, 0);
+        TTI_SFPENCC(0, 0, 0, 0);
+#endif
 
         // Index region: clear high half, decode low tile coordinate, OR chunk base.
         TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
@@ -3251,10 +3596,21 @@ inline void _topk_xl_separate_indices_row_major_global_()
         TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0);
 
+#ifdef TOPK_XL_STABLE_TIES
+        // Undo the sign-conditioned stamp complement while the value half
+        // (the sign) is still present. LREG11 = 0x0000FFFF.
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+        TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG0, 0);
+        TTI_SFPENCC(0, 0, 0, 0);
+#endif
+
         // Index region: clear high half, save the raw u16 (incl. chunk id),
         // decode the within-chunk coordinate, then OR the rescaled chunk
         // field back in.
         TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
+#ifndef TOPK_XL_STABLE_TIES
+        // (Stable ties: the stamp is chunk_id * K + row-major index already,
+        // so LREG0 needs no further decoding.)
         TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
         _topk_xl_decode_row_major_index_<K>();
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG4, 0);
@@ -3263,6 +3619,7 @@ inline void _topk_xl_separate_indices_row_major_global_()
             TTI_SFPSHFT(chunk_field_shift & 0xFFF, p_sfpu::LREG4, p_sfpu::LREG4, 1);
         }
         TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+#endif
 
         TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, indices_offset);
@@ -3294,7 +3651,18 @@ inline void _topk_xl_separate_indices_row_major_global_base_(std::uint32_t seg_b
         TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0);
 
+#ifdef TOPK_XL_STABLE_TIES
+        // Undo the sign-conditioned stamp complement while the value half
+        // (the sign) is still present. LREG11 = 0x0000FFFF.
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+        TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG0, 0);
+        TTI_SFPENCC(0, 0, 0, 0);
+#endif
+
         TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
+#ifndef TOPK_XL_STABLE_TIES
+        // (Stable ties: the stamp is chunk_id * K + row-major index already,
+        // so LREG0 needs no further decoding.)
         TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
         _topk_xl_decode_row_major_index_<K>();
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG4, 0);
@@ -3303,6 +3671,7 @@ inline void _topk_xl_separate_indices_row_major_global_base_(std::uint32_t seg_b
             TTI_SFPSHFT(chunk_field_shift & 0xFFF, p_sfpu::LREG4, p_sfpu::LREG4, 1);
         }
         TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+#endif
         TTI_SFPOR(0, p_sfpu::LREG5, p_sfpu::LREG0, 0);
 
         TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
@@ -3349,9 +3718,21 @@ inline void _topk_xl_separate_indices_()
     constexpr int num_tiles_per_sequence = K == 512 ? 1 : K == 1024 ? 1 : 2;
     constexpr int indices_offset         = num_tiles_per_sequence * 64;
 
-    lltt::record<lltt::Exec>(0, 9);
+#ifdef TOPK_XL_STABLE_TIES
+    constexpr int body_len = 12;
+#else
+    constexpr int body_len = 9;
+#endif
+    lltt::record<lltt::Exec>(0, body_len);
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+#ifdef TOPK_XL_STABLE_TIES
+    // Undo the sign-conditioned stamp complement while the value half
+    // (the sign) is still present. LREG11 = 0x0000FFFF.
+    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPXOR(0, p_sfpu::LREG11, p_sfpu::LREG0, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+#endif
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0);
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, group_id);
@@ -3362,7 +3743,7 @@ inline void _topk_xl_separate_indices_()
 
     for (int i = 1; i < row_scale_factor * 16; i++)
     {
-        lltt::replay(0, 9);
+        lltt::replay(0, body_len);
     }
 }
 
