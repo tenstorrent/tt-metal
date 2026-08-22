@@ -1676,6 +1676,9 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     if (not this->local_circular_buffer_allocation_needed_) {
         // Report CB allocations for any NEW devices (using cached addresses)
         if (!new_devices.empty() && !this->circular_buffers_.empty()) {
+            // Homogeneous mesh: get_total_cb_allocated() is identical across sub-devices, so
+            // compute it once and share it across this per-sub-device update loop.
+            std::optional<uint64_t> cached_cb_total;
             for (const IDevice* dev : new_devices) {
                 for (const auto& circular_buffer : this->circular_buffers_) {
                     if (!circular_buffer->globally_allocated()) {
@@ -1693,7 +1696,11 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
                 if (device_obj) {
                     device_obj->register_program(this);
                     if (device_obj->get_shm_stats_provider()) {
-                        device_obj->get_shm_stats_provider()->update_from_allocator(device_obj, getpid());
+                        if constexpr (!kCbL1LayoutIsDeviceIndependent) {
+                            cached_cb_total.reset();  // per-device layout: force per-device recompute
+                        }
+                        device_obj->get_shm_stats_provider()->update_from_allocator(
+                            device_obj, getpid(), cached_cb_total);
                     }
                 }
             }
@@ -1752,28 +1759,37 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         circular_buffer->set_locally_allocated_address(computed_addr);
     }
 
-    // Register program ONLY with NEW devices (prevents duplicate registration)
+    // Register program ONLY with NEW devices (prevents duplicate registration).
+    // Homogeneous mesh: get_total_cb_allocated() is identical across sub-devices, so compute it
+    // once and share it across this per-sub-device update loop.
+    std::optional<uint64_t> cached_cb_total;
     for (const IDevice* dev : new_devices) {
         auto* device_obj = dynamic_cast<Device*>(const_cast<IDevice*>(dev));
         if (device_obj) {
             device_obj->register_program(this);
             // Update locally-allocated CB stats via query (accurate even for cached programs)
             if (device_obj->get_shm_stats_provider()) {
-                device_obj->get_shm_stats_provider()->update_from_allocator(device_obj, getpid());
+                if constexpr (!kCbL1LayoutIsDeviceIndependent) {
+                    cached_cb_total.reset();  // per-device layout: force per-device recompute
+                }
+                device_obj->get_shm_stats_provider()->update_from_allocator(device_obj, getpid(), cached_cb_total);
             }
         }
     }
     this->local_circular_buffer_allocation_needed_ = false;
 }
 
-std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> detail::ProgramImpl::get_cb_l1_regions_per_core(
-    int device_id, size_t num_devices) const {
+void detail::ProgramImpl::get_cb_l1_regions_per_core(
+    CbL1RegionsPerCore& regions_per_core, int device_id, size_t num_devices) const {
+    // NOTE: this result is currently independent of device_id / num_devices. That independence is
+    // relied upon by Device::get_total_cb_allocated() and the "compute once per mesh" SHM update
+    // fast path. If you start using either argument here, set
+    // ProgramImpl::kCbL1LayoutIsDeviceIndependent = false (program_impl.hpp) so the fast path
+    // falls back to per-device computation.
     (void)device_id;    // TODO: Use device_id once per-device or heterogeneous mesh CB layouts are supported
     (void)num_devices;  // TODO: Use num_devices for multi-device filtering or layout partitioning when implemented
 
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_core;
-
-    // For each allocator, iterate through all cores in its CoreRange
+    // For each allocator, iterate through all cores in its CoreRange.
     for (const auto& cb_allocator : cb_allocators_) {
         const auto& l1_regions = cb_allocator.l1_regions;
 
@@ -1782,12 +1798,11 @@ std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> detail::ProgramI
             for (uint32_t y = cb_allocator.core_range.start_coord.y; y <= cb_allocator.core_range.end_coord.y; y++) {
                 CoreCoord core(x, y);
                 auto& core_regions = regions_per_core[core];
+                core_regions.reserve(core_regions.size() + l1_regions.size());
                 core_regions.insert(core_regions.end(), l1_regions.begin(), l1_regions.end());
             }
         }
     }
-
-    return regions_per_core;
 }
 
 void detail::ProgramImpl::deallocate_circular_buffers() {
@@ -1798,14 +1813,20 @@ void detail::ProgramImpl::deallocate_circular_buffers() {
             tt::tt_metal::GraphTracker::instance().track_deallocate_cb(idevice);
         }
 
-        // Unregister program from ALL devices (matches registration)
+        // Unregister program from ALL devices (matches registration).
+        // Homogeneous mesh: after the same program is removed from each sub-device,
+        // get_total_cb_allocated() is identical across them, so compute it once and share.
+        std::optional<uint64_t> cached_cb_total;
         for (const IDevice* idevice : this->cb_devices_) {
             auto* device = dynamic_cast<Device*>(const_cast<IDevice*>(idevice));
             if (device) {
                 device->unregister_program(this);
                 // Update locally-allocated CB stats via query (accurate after deallocation)
                 if (device->get_shm_stats_provider()) {
-                    device->get_shm_stats_provider()->update_from_allocator(device, getpid());
+                    if constexpr (!kCbL1LayoutIsDeviceIndependent) {
+                        cached_cb_total.reset();  // per-device layout: force per-device recompute
+                    }
+                    device->get_shm_stats_provider()->update_from_allocator(device, getpid(), cached_cb_total);
                 }
             }
         }

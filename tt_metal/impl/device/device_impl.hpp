@@ -4,10 +4,15 @@
 
 #pragma once
 
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
@@ -184,6 +189,9 @@ public:
     void register_program(detail::ProgramImpl* program);
     void unregister_program(detail::ProgramImpl* program);
     uint64_t get_total_cb_allocated() const;
+    // Reference/validation path (used by tests): recomputes the CB-allocated total from scratch
+    // using the pre-incremental O(active_programs) algorithm. Not on any hot path.
+    uint64_t get_total_cb_allocated_from_scratch() const;
 
 private:
     // Deprecated overrides for sub_device_manager_tracker
@@ -276,6 +284,38 @@ private:
     // Program tracking for CB memory reporting
     std::unordered_set<detail::ProgramImpl*> active_programs_;
     mutable std::mutex active_programs_mutex_;
+
+    // --- Incremental CB-allocated tracking (all guarded by active_programs_mutex_) -------------
+    // get_total_cb_allocated() previously rescanned every active program on each call (an
+    // O(active_programs) per-core interval merge). Instead, register_program/unregister_program
+    // fold a program's per-core CB L1 intervals into a per-core sweep-line (L1 address ->
+    // coverage-count delta); the device-wide total is the sum of each core's union measure, so the
+    // query is O(1). The original from-scratch algorithm is retained as a debug oracle.
+    struct CbCoreCoordHash {
+        size_t operator()(const CoreCoord& c) const noexcept {
+            return (static_cast<size_t>(c.x) << 32) ^ static_cast<size_t>(c.y);
+        }
+    };
+    // Per-core interval lists ([start, end) L1 regions), keyed by core. Structurally matches
+    // detail::ProgramImpl::CbL1RegionsPerCore but uses a device-local hash so this header does not
+    // need the full ProgramImpl definition.
+    using CbL1Regions = std::unordered_map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>, CbCoreCoordHash>;
+    struct CbCoreCoverage {
+        std::map<uint64_t, int> deltas;  // L1 address -> coverage-count delta (sorted ascending)
+        uint64_t covered_length = 0;     // cached measure of the union of intervals on this core
+    };
+    std::unordered_map<CoreCoord, CbCoreCoverage, CbCoreCoordHash> cb_core_coverage_;
+    uint64_t total_cb_allocated_ = 0;  // running sum of covered_length across all cores
+    // Snapshot of each active program's per-core intervals, captured at register time so unregister
+    // removes exactly what was folded in (robust even if the program mutates while registered). The
+    // incremental total is validated against get_total_cb_allocated_from_scratch() by a unit test.
+    std::unordered_map<const detail::ProgramImpl*, CbL1Regions> active_program_cb_regions_;
+
+    // Fold per-core intervals into cb_core_coverage_ with sign +1 (add) or -1 (remove), updating
+    // total_cb_allocated_. Caller must hold active_programs_mutex_.
+    void apply_cb_coverage_locked(const CbL1Regions& regions, int sign);
+    // Debug oracle: original O(active_programs) from-scratch total. Caller must hold the mutex.
+    uint64_t compute_total_cb_allocated_from_scratch_locked() const;
 
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(

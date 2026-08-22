@@ -370,9 +370,27 @@ public:
     // Deallocate circular buffers and unregister from devices
     void deallocate_circular_buffers();
 
-    // CB tracking for SHM memory reporting
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> get_cb_l1_regions_per_core(
-        int device_id, size_t num_devices) const;
+    // CB tracking for SHM memory reporting.
+    struct CbCoreCoordHash {
+        size_t operator()(const CoreCoord& c) const noexcept {
+            return (static_cast<size_t>(c.x) << 32) ^ static_cast<size_t>(c.y);
+        }
+    };
+    using CbL1RegionsPerCore =
+        std::unordered_map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>, CbCoreCoordHash>;
+
+    // True iff get_cb_l1_regions_per_core() (and therefore
+    // Device::get_total_cb_allocated()) is independent of device_id / num_devices.
+    //
+    // When true, the CB-allocated SHM stat is identical across every sub-device of a homogeneous
+    // mesh, so the per-sub-device update loops in allocate/deallocate_circular_buffers compute it
+    // once and reuse it (eliminating a redundant ~O(active_programs) rescan per sub-device).
+    //
+    // IMPORTANT: if you start using device_id or num_devices in get_cb_l1_regions_per_core to
+    // produce per-device / heterogeneous CB layouts, set this to false.
+    static constexpr bool kCbL1LayoutIsDeviceIndependent = true;
+
+    void get_cb_l1_regions_per_core(CbL1RegionsPerCore& regions_per_core, int device_id, size_t num_devices) const;
     size_t get_num_cb_devices() const { return cb_devices_.size(); }
 
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);

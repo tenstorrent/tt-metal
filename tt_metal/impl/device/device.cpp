@@ -1096,34 +1096,106 @@ std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh
 // Program tracking for accurate CB memory reporting
 void Device::register_program(detail::ProgramImpl* program) {
     std::lock_guard<std::mutex> lock(active_programs_mutex_);
-    active_programs_.insert(program);
+    bool inserted = active_programs_.insert(program).second;
+    if (!inserted) {
+        return;  // already tracked; its CB coverage is already folded in
+    }
+
+    // Snapshot this program's per-core CB L1 regions and fold them into the running total. Same
+    // source of truth as the from-scratch oracle: ProgramImpl::get_cb_l1_regions_per_core.
+    detail::ProgramImpl::CbL1RegionsPerCore prog_regions;
+    program->get_cb_l1_regions_per_core(prog_regions, this->id(), program->get_num_cb_devices());
+
+    // Copy into the device-local region-map type (it differs from CbL1RegionsPerCore only in the
+    // hash functor) so the snapshot can be stored without pulling ProgramImpl's full definition
+    // into the header.
+    CbL1Regions regions(prog_regions.begin(), prog_regions.end());
+
+    apply_cb_coverage_locked(regions, +1);
+    active_program_cb_regions_.emplace(program, std::move(regions));
 }
 
 void Device::unregister_program(detail::ProgramImpl* program) {
     std::lock_guard<std::mutex> lock(active_programs_mutex_);
-    active_programs_.erase(program);
+    if (active_programs_.erase(program) == 0) {
+        return;  // not tracked
+    }
+    // Remove exactly the intervals that were folded in at register time.
+    if (active_program_cb_regions_.count(program) != 0) {
+        apply_cb_coverage_locked(active_program_cb_regions_.at(program), -1);
+        active_program_cb_regions_.erase(program);
+    }
+}
+
+void Device::apply_cb_coverage_locked(const CbL1Regions& regions, int sign) {
+    // Fold the given per-core intervals into the per-core sweep-line, recomputing only the touched
+    // cores' union measure and adjusting the running device total accordingly.
+    for (const auto& core_entry : regions) {
+        const CoreCoord& core = core_entry.first;
+        const std::vector<std::pair<uint64_t, uint64_t>>& intervals = core_entry.second;
+
+        CbCoreCoverage& cov = cb_core_coverage_[core];
+        total_cb_allocated_ -= cov.covered_length;
+
+        for (const std::pair<uint64_t, uint64_t>& interval : intervals) {
+            uint64_t start = interval.first;
+            uint64_t end = interval.second;
+            if (start >= end) {
+                continue;  // skip empty/degenerate interval (contributes zero to the measure)
+            }
+            cov.deltas[start] += sign;
+            cov.deltas[end] -= sign;
+        }
+
+        // Recompute this core's union measure as the total length where the running coverage count
+        // is > 0 -- identical to the sort-and-merge in the from-scratch oracle. Prune zeroed keys
+        // so the map does not grow unboundedly as programs come and go.
+        uint64_t covered = 0;
+        int count = 0;
+        uint64_t prev_addr = 0;
+        std::map<uint64_t, int>::iterator delta_it = cov.deltas.begin();
+        while (delta_it != cov.deltas.end()) {
+            if (delta_it->second == 0) {
+                delta_it = cov.deltas.erase(delta_it);
+                continue;
+            }
+            if (count > 0) {
+                covered += delta_it->first - prev_addr;
+            }
+            count += delta_it->second;
+            prev_addr = delta_it->first;
+            ++delta_it;
+        }
+
+        cov.covered_length = covered;
+        total_cb_allocated_ += covered;
+        if (cov.deltas.empty()) {
+            cb_core_coverage_.erase(core);
+        }
+    }
 }
 
 uint64_t Device::get_total_cb_allocated() const {
     std::lock_guard<std::mutex> lock(active_programs_mutex_);
+    return total_cb_allocated_;
+}
 
+uint64_t Device::get_total_cb_allocated_from_scratch() const {
+    std::lock_guard<std::mutex> lock(active_programs_mutex_);
+    return compute_total_cb_allocated_from_scratch_locked();
+}
+
+uint64_t Device::compute_total_cb_allocated_from_scratch_locked() const {
     // For PHYSICAL CB tracking accounting for address reuse:
     // Collect L1 regions per core and merge overlapping addresses
     // This handles cached/traced programs that share the same physical L1 addresses on the same core
-
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> device_regions_per_core;
+    detail::ProgramImpl::CbL1RegionsPerCore device_regions_per_core;
 
     for (const auto* program : active_programs_) {
         size_t num_devices = program->get_num_cb_devices();
 
-        // Get L1 regions per core for this program on this device
-        auto program_regions = program->get_cb_l1_regions_per_core(this->id(), num_devices);
-
-        // Merge into device-wide map
-        for (const auto& [core, regions] : program_regions) {
-            auto& core_regions = device_regions_per_core[core];
-            core_regions.insert(core_regions.end(), regions.begin(), regions.end());
-        }
+        // Append this program's per-core L1 regions directly into the device-wide map
+        program->get_cb_l1_regions_per_core(device_regions_per_core, this->id(), num_devices);
     }
 
     // Merge overlapping regions per core to get actual physical usage

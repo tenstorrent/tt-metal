@@ -7,6 +7,7 @@ set(UNIT_TESTS_API_SOURCES
     allocator/test_overlapped_bank_manager.cpp
     allocator/test_per_core_bank_manager.cpp
     circular_buffer/test_CircularBuffer_allocation.cpp
+    circular_buffer/test_CircularBuffer_cb_tracking.cpp
     circular_buffer/test_CircularBuffer_creation.cpp
     circular_buffer/test_CircularBuffer_non_blocking.cpp
     circular_buffer/test_CircularBuffer_wrapping.cpp
