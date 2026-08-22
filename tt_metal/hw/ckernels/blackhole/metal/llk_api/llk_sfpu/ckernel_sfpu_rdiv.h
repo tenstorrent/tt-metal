@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,8 +34,18 @@ inline void calculate_rdiv(const uint value) {
 
         if constexpr (rounding_mode == RoundingMode::Trunc) {
             result = _trunc_body_(result);
+            sfpi::vFloat residual = val - result * in;
+            v_if(residual >= in) {
+                result = result + 1.0f;
+            }
+            v_endif;
         } else if constexpr (rounding_mode == RoundingMode::Floor) {
             result = _floor_body_(result);
+            sfpi::vFloat residual = val - result * in;
+            v_if(residual >= in) {
+                result = result + 1.0f;
+            }
+            v_endif;
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
