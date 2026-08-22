@@ -105,13 +105,14 @@ void kernel_main() {
     // A frame costs the downstream pipe the same whether it carries 200 live words or 2,000, so a core
     // ships only when ANY of these holds (else its heads are untouched and it is re-read next sweep):
     //   live >= kShipMinWords            -- worth its fixed cost
-    //   peak + growth >= kShipSafeWords  -- PREDICTIVE valve: "does the ring survive one more service
-    //                                       interval at the rate just observed"; a fixed valve measurably
-    //                                       stalled burst onsets (first stalls at loop iteration 3, 7/8 chips)
+    //   any lane >= kLaneShipWords       -- PER-LANE trigger: the producer that blocks is a lane, and one
+    //                                       hot lane is invisible in span fill (90% of a lane ~= 18% of span)
     //   age >= kShipMaxAgeSweeps         -- bounded staleness for trickling cores
     //   stop seen                        -- the sweep-to-empty contract ships everything
     constexpr uint32_t kShipMinPct = get_compile_time_arg_val(39);
-    constexpr uint32_t kShipSafeWords = (3u * kernel_profiler::PROFILER_L1_VECTOR_SIZE) / 4u;
+    // Half a lane's ring, as OBSERVED tail: the batched publish can hide up to SPSC_PUBLISH_BATCH_WORDS
+    // more, so the true worst occupancy at trigger is ~62%, leaving ~190 words of service headroom.
+    constexpr uint32_t kLaneShipWords = kernel_profiler::PROFILER_L1_VECTOR_SIZE / 2u;
     constexpr uint32_t kShipMaxAgeSweeps = 512u;
     constexpr uint32_t kShipMinWords = (kLiveWords * kShipMinPct) / 100u;
     // CV-FIRST SWEEPS. A filler's sweep is two phases: read each core's ring TAILS (32 B), decide the ship
@@ -321,12 +322,10 @@ void kernel_main() {
     static uint32_t head_mirror[kMaxCores * kNumRisc];
     static uint8_t seeded[kMaxCores];
     static uint16_t ship_age[kMaxCores];
-    static uint16_t ship_prev_peak[kMaxCores];
     static uint8_t ship_list[kMaxCores];  // CV-first: this sweep's ship set, dense core indices
     for (uint32_t i = 0; i < kMaxCores; i++) {
         seeded[i] = 0;
         ship_age[i] = 0;
-        ship_prev_peak[i] = 0;
     }
     uint32_t ship_deferred = 0;  // core visits left unstaged by the ship threshold
     uint32_t ship_aged = 0;      // ships forced by kShipMaxAgeSweeps
@@ -998,10 +997,12 @@ void kernel_main() {
                             if (live == 0) {
                                 continue;
                             }
-                            const uint32_t growth = peak - ship_prev_peak[c];
-                            if (stop_seen_at == 0 && live < kShipMinWords && peak + growth < kShipSafeWords &&
+                            // PER-LANE trigger, not span fill: a single hot lane at 90% of its own ring is
+                            // only ~18% of the span, and the producer that blocks is always a LANE. Level
+                            // check only -- no growth term, so the producer's batched tail publish (64-word
+                            // lumps) cannot misfire it either way.
+                            if (stop_seen_at == 0 && live < kShipMinWords && peak < kLaneShipWords &&
                                 ship_age[c] < kShipMaxAgeSweeps) {
-                                ship_prev_peak[c] = static_cast<uint16_t>(peak);
                                 ship_age[c]++;
                                 ship_deferred++;
                                 continue;
@@ -1010,7 +1011,6 @@ void kernel_main() {
                                 ship_aged++;
                             }
                             ship_age[c] = 0;
-                            ship_prev_peak[c] = 0;
                             ship_list[n_ship++] = static_cast<uint8_t>(c);
                         }
                         c_proc += get_timestamp() - t_cv1;
