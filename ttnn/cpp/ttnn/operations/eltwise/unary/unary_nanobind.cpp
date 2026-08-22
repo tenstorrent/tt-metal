@@ -1738,7 +1738,7 @@ void py_module(nb::module_& mod) {
         mod,
         &ttnn::i1,
         R"doc(\mathrm{{output\_tensor}}_i = I_1(\mathrm{{input\_tensor}}_i))doc",
-        "[Validated range: -10 to 10]",
+        "[Supported range: all finite inputs; i1 leaves FP32 at |x| = 91.90626, above which the result is +/-inf]",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(Computes the modified Bessel function of the first kind of order 1.)doc");
     bind_unary_operation_subcoregrids<"isfinite">(
