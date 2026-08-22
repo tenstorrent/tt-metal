@@ -14,11 +14,6 @@ void Ilwt2DDeviceOperation::validate_on_program_cache_miss(
     detail::validate_ilwt_2d(operation_attributes, tensor_args);
 }
 
-void Ilwt2DDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    detail::validate_ilwt_2d(operation_attributes, tensor_args);
-}
-
 Ilwt2DDeviceOperation::spec_return_value_t Ilwt2DDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return detail::compute_ilwt_2d_output_spec(operation_attributes, tensor_args);

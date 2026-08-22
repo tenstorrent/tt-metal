@@ -1346,8 +1346,7 @@ void kernel_main() {
             const auto* route_words = reinterpret_cast<const uint32_t*>(
                 reader_config_addr +
                 route_index * ttnn::operations::wavelet::device_protocol::kLwt2DRouteConfigPageBytes);
-            const ConfigWords route_config{
-                route_words, ttnn::operations::wavelet::device_protocol::kLwt2DRouteConfigWordCount};
+            const ConfigWords route_config{route_words};
             const uint32_t flags = route_words[ttnn::operations::wavelet::device_protocol::kLwt2DRouteFlags];
             if ((flags & ttnn::operations::wavelet::device_protocol::kLwt2DRouteFlagMetadataOnly) != 0) {
                 continue;

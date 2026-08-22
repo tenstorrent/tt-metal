@@ -14,11 +14,6 @@ void Lwt2DDeviceOperation::validate_on_program_cache_miss(
     detail::validate_lwt_2d(operation_attributes, tensor_args);
 }
 
-void Lwt2DDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    detail::validate_lwt_2d(operation_attributes, tensor_args);
-}
-
 Lwt2DDeviceOperation::spec_return_value_t Lwt2DDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return detail::compute_lwt_2d_output_specs(operation_attributes, tensor_args);

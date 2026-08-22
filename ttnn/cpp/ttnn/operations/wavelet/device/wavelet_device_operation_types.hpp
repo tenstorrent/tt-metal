@@ -17,19 +17,6 @@
 
 namespace ttnn::prim {
 
-enum class WaveletBoundaryMode : uint8_t {
-    Zero,
-    Constant,
-    Symmetric,
-    Reflect,
-    Periodic,
-    Smooth,
-    Antisymmetric,
-    Antireflect,
-};
-
-enum class WaveletTransform : uint8_t { Lwt1D, Ilwt1D, Lwt2D, Ilwt2D };
-
 using Lwt1DOutputSpecs = std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
 using Lwt1DOutputs = std::tuple<Tensor, Tensor>;
 
