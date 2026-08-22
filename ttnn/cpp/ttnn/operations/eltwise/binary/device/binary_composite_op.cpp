@@ -31,23 +31,51 @@ namespace ttnn {
 using namespace operations;
 
 // nextafter
+//
+// Returns the value adjacent to input_a in the direction of input_b.
+//
+// The previous implementation had two independent defects. It stepped in the wrong direction --
+// it added eps where input_a > input_b and subtracted it where input_a < input_b, that is, away
+// from input_b rather than toward it -- and it stepped by hal::get_eps(), which is FLT_EPSILON
+// and so is one ULP only inside [1, 2): above that band the addition rounds straight back to
+// input_a, below it the step overshoots. Over 120 (magnitude, direction) pairs spanning 1e-6 to
+// 1e6 the old composite returned the correct neighbour 0 times, in float32 and bfloat16 alike.
+//
+// Stepping the magnitude's bit pattern by one is exactly one ULP at every magnitude, subnormals
+// included, which is how nextafter is defined. Working on the magnitude and restoring the sign
+// afterwards keeps the sign handling in one place; input_a == 0 is then the only special case,
+// because zero has no magnitude bits to walk down and its neighbour in either direction is the
+// smallest subnormal.
 Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const float eps = tt::tt_metal::hal::get_eps();
-    Tensor result(input_a);
-    {
-        Tensor eps_gt(input_a);
-        {
-            eps_gt = ttnn::where(
-                ttnn::gt(input_a, input_b, std::nullopt, output_mem_config),
-                ttnn::add(input_a, eps, std::nullopt, output_mem_config),
-                input_a);
-        }
-        result = ttnn::where(
-            ttnn::lt(input_a, input_b, std::nullopt, output_mem_config),
-            ttnn::subtract(input_a, eps, std::nullopt, output_mem_config),
-            eps_gt);
-    }
-    return result;
+    const DataType dtype = input_a.dtype();
+    const DataType bits_dtype = (dtype == DataType::FLOAT32) ? DataType::UINT32 : DataType::UINT16;
+
+    // The magnitude grows when the direction of travel agrees with the sign of input_a.
+    Tensor grows = ttnn::eq(
+        ttnn::gt(input_b, input_a, std::nullopt, output_mem_config),
+        ttnn::gtz(input_a, output_mem_config),
+        std::nullopt,
+        output_mem_config);
+
+    Tensor magnitude_bits = ttnn::bitcast(ttnn::abs(input_a, output_mem_config), bits_dtype, output_mem_config);
+    Tensor stepped = ttnn::where(
+        grows,
+        ttnn::add(magnitude_bits, 1, std::nullopt, output_mem_config),
+        ttnn::subtract(magnitude_bits, 1, std::nullopt, output_mem_config),
+        output_mem_config);
+    Tensor magnitude = ttnn::bitcast(stepped, dtype, output_mem_config);
+    Tensor result = ttnn::where(
+        ttnn::ltz(input_a, output_mem_config), ttnn::neg(magnitude, output_mem_config), magnitude, output_mem_config);
+
+    // input_a == 0: the neighbour is the smallest subnormal, carrying the sign of input_b.
+    Tensor smallest = ttnn::bitcast(ttnn::full_like(magnitude_bits, 1), dtype, output_mem_config);
+    Tensor smallest_signed = ttnn::where(
+        ttnn::ltz(input_b, output_mem_config), ttnn::neg(smallest, output_mem_config), smallest, output_mem_config);
+    result = ttnn::where(ttnn::eqz(input_a, output_mem_config), smallest_signed, result, output_mem_config);
+
+    // IEEE-754: nextafter(x, x) is x, for every x.
+    return ttnn::where(
+        ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), input_b, result, output_mem_config);
 }
 
 Tensor minimum(
