@@ -406,3 +406,48 @@ def test_unary_composite_clamp_int_ttnn(input_shapes, min_val, max_val, device, 
         golden_tensor = golden_function(in_data1, min, max)
         comp_pass = compare_pcc([output_tensor], [golden_tensor])
         assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    ((torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)),
+    ids=("float32", "bfloat16"),
+)
+@pytest.mark.parametrize("ttnn_op", (ttnn.tril, ttnn.triu), ids=("tril", "triu"))
+def test_unary_composite_trilu_non_finite_ttnn(
+    input_shapes, torch_dtype, ttnn_dtype, ttnn_op, device
+):
+    # The masked-out triangle is defined as zero, and the registered goldens are
+    # torch.tril / torch.triu, which return zero there. Composing the mask as a
+    # multiply agrees with that only for finite operands: -inf * 0 is NaN.
+    #
+    # float32 is the failing path. bfloat16 already returns zero and is covered
+    # here so a later change cannot regress it quietly -- it is not padding: the
+    # two dtypes genuinely differ today, so a test that only ran bfloat16 would
+    # pass without the fix.
+    #
+    # The existing tril/triu coverage draws from [-100, 100], here and in
+    # tests/sweep_framework/sweeps/eltwise/unary/{tril,triu}, so non-finite
+    # inputs are not exercised anywhere.
+    in_data = torch.full(input_shapes, float("-inf"), dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(
+        in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    output_tensor = ttnn.to_torch(ttnn_op(input_tensor))
+    golden_tensor = ttnn.get_golden_function(ttnn_op)(in_data)
+
+    n_nan = int(torch.isnan(output_tensor).sum())
+    assert n_nan == 0, (
+        f"{ttnn_op.__name__}(-inf) [{torch_dtype}] returned {n_nan} NaN of "
+        f"{output_tensor.numel()}; the golden has "
+        f"{int(torch.isnan(golden_tensor).sum())}"
+    )
+    assert torch.equal(output_tensor, golden_tensor)
