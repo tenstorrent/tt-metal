@@ -1434,12 +1434,27 @@ def _mistral4_reference_snapshots(config, state_dict: dict, token_ids, num_layer
 @pytest.mark.parametrize("isl_total, dispatch_buffer_capacity_factor", [(SEQ_LEN_5K, 8)], ids=["5k"])
 @pytest.mark.parametrize("num_layers", [2, 5], ids=["2_layers", "5_layers"])
 # The model's real expert count, unreduced: n_routed_experts is read off the shared cached config by
-# the device path, so shrinking it would mean mutating that object. DEVICE_FP32 is the adapter's
-# default_gate_mode (n_group = 1 with a device gate).
+# the device path, so shrinking it would mean mutating that object.
+#
+# Both gate modes are exercised because they implement DIFFERENT routing rules, and only one of them
+# is Mistral's:
+#   DEVICE_FP32 -> moe_grouped_topk, whose score_func is sigmoid-only. Mistral routes with softmax
+#                  (modeling_mistral4.py:226), so this mode is wrong by construction. It is kept as
+#                  the regression witness: it fails, and the failure accumulates ~0.0355 PCC/layer.
+#   GPT_DEVICE  -> topk on the raw (x@W + bias) logits, then softmax over the selected top-k
+#                  (_device_gpt_gate, tt_moe_gate_prefill.py:864-880). That IS Mistral's rule: softmax
+#                  is monotone so topk(softmax(l)) == topk(l), and the 128-wide normaliser cancels in
+#                  the norm_topk_prob renormalisation, leaving softmax over just the k selected
+#                  logits. Requires bias == 0, which holds -- Mistral4TopkRouter has no
+#                  e_score_correction_bias and the weight helpers below emit zeros.
 @pytest.mark.parametrize(
     "n_routed_experts, gate_fallback_mode",
-    [(128, GateComputeMode.DEVICE_FP32)],
-    ids=["e128_device_fp32"],
+    [
+        (128, GateComputeMode.DEVICE_FP32),
+        (128, GateComputeMode.GPT_DEVICE),
+        (128, GateComputeMode.GPT_HOST),
+    ],
+    ids=["e128_device_fp32", "e128_gpt_device", "e128_gpt_host"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",

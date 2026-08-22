@@ -1205,11 +1205,23 @@ class _Mistral4SyntheticDenseConfig(Mistral4Small119BConfig):
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
+# Two gate modes, because they implement DIFFERENT routing rules and only one is Mistral's.
+# DEVICE_FP32 (the adapter default) is moe_grouped_topk, whose score_func is sigmoid-only; Mistral
+# routes with softmax (modeling_mistral4.py:226). GPT_DEVICE is topk on the raw (x@W + bias) logits
+# then softmax over the selected top-k (_device_gpt_gate, tt_moe_gate_prefill.py:864-880), which IS
+# Mistral's rule -- softmax is monotone so topk(softmax(l)) == topk(l), and the 128-wide normaliser
+# cancels in norm_topk_prob. Requires bias == 0, which holds for this model.
+@pytest.mark.parametrize(
+    "gate_fallback_mode",
+    [GateComputeMode.DEVICE_FP32, GateComputeMode.GPT_DEVICE],
+    ids=["device_fp32", "gpt_device"],
+)
 @pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
 @pytest.mark.parametrize("variant", ["mistral_small_4_119b"], indirect=True, ids=["mistral4"])
 @pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 is validated on Blackhole only")
 @pytest.mark.timeout(0)
 def test_mistral4_prefill_block(
+    gate_fallback_mode,
     variant,
     config_only,
     random_weights,
@@ -1298,7 +1310,7 @@ def test_mistral4_prefill_block(
         # n_group = 1 with a device gate, so the adapter routes the routing all-gather's semaphores
         # into L1_SMALL (paired with l1_small_size=768 in device_params above).
         routing_use_l1_small_for_semaphores=True,
-        gate_fallback_mode=GateComputeMode.DEVICE_FP32,  # the adapter's default_gate_mode
+        gate_fallback_mode=gate_fallback_mode,
         # Random weights only (see the header): nothing is loaded from, or written to, a ttnn cache.
         weight_cache_path=None,
         # No layer_num: dense MLA's single-shot cache write goes through fill_cache_for_user_, which
