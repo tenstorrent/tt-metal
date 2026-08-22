@@ -54,12 +54,6 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // First iteration of Newton-Raphson: t = 1.0 - x*y.
     sfpi::vFloat t = 1.0f + negative_x * y;
 
-    // Scale factor adjustment: scale = scale*0.5.
-    // If scale = ±inf, then scale*0.5 = ±inf and scale.Exp=255.
-    // If scale = ±0, then scale*0.5 = 0 and scale.Exp=0.
-    // Otherwise, scale.Exp = scale.Exp-1 = 255-in.Exp-1 = 254-in.Exp.
-    scale *= 0.5f;
-
     // Continue Newton-Raphson: y = y + y*t.
     y = y + y * t;
 
@@ -69,7 +63,8 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
         y = y + y * t;
     }
 
-    // Apply scaling factor, and set sign to match input.
+    // Apply scaling factor and exponent adjustment (addexp(y, -1) replaces scale*=0.5 to prevent underflow at in.Exp==254)
+    y = sfpi::addexp(y, -1);
     y = y * scale;
     y = sfpi::copysgn(y, in);
 
