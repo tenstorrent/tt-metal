@@ -11,6 +11,7 @@ Handles:
 - Renaming lm_head.weight → output.weight
 - Renaming embed_tokens → tok_embeddings
 """
+
 import json
 from pathlib import Path
 from typing import Dict
@@ -29,11 +30,14 @@ LINEAR_Q_DIM = 2048
 LINEAR_K_DIM = 2048
 
 
-def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor], include_mtp: bool = False) -> Dict[str, torch.Tensor]:
     """Remap HF Qwen3.5-9B state dict to internal format.
 
     Args:
         state_dict: Raw HuggingFace state dict loaded from safetensors.
+        include_mtp: Keep the MTP head weights under their raw ``mtp.`` namespace
+            (their sub-keys already match the internal layer scheme). Default drops
+            them — the backbone never reads them.
 
     Returns:
         Remapped state dict with internal naming convention.
@@ -44,8 +48,10 @@ def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
         # Filter out vision encoder weights (check original key — no prefix stripping yet)
         if "visual" in key or key.startswith("model.visual"):
             continue
-        # Filter out MTP (multi-token prediction) weights (original key)
+        # MTP (multi-token prediction) head weights (original key)
         if key.startswith("mtp"):
+            if include_mtp:
+                remapped[key] = tensor
             continue
 
         # Strip the language-model prefix. Two checkpoint sources produce different
@@ -106,6 +112,80 @@ def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
         remapped[new_key] = tensor
 
     return remapped
+
+
+def remap_mtp_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """Extract the MTP head weights from a raw HF state dict, stripping ``mtp.``.
+
+    The result uses the same per-layer key scheme as the backbone
+    (``layers.0.self_attn.*`` / ``layers.0.mlp.*`` / ``layers.0.*layernorm``),
+    plus the head-specific ``fc`` / ``pre_fc_norm_embedding`` /
+    ``pre_fc_norm_hidden`` / ``norm`` weights.
+    """
+    return {key[len("mtp.") :]: tensor for key, tensor in state_dict.items() if key.startswith("mtp.")}
+
+
+def checkpoint_has_mtp(model_path) -> bool:
+    """True when the checkpoint's safetensors index lists any ``mtp.*`` weight."""
+    index_path = Path(model_path) / "model.safetensors.index.json"
+    if not index_path.is_file():
+        return False
+    try:
+        with open(index_path) as f:
+            weight_map = json.load(f)["weight_map"]
+    except (KeyError, ValueError, OSError):
+        return False
+    return any(k.startswith("mtp.") for k in weight_map)
+
+
+def load_qwen36_mtp_state_dict(model_path) -> Dict[str, torch.Tensor]:
+    """Load ONLY the MTP head weights, straight from the safetensors shards.
+
+    The backbone loader goes through HF ``Qwen3_5ForCausalLM``, which silently
+    drops ``mtp.*`` (``_keys_to_ignore_on_load_unexpected``), so the MTP head
+    must read the shards directly. Keys are returned with the ``mtp.`` prefix
+    stripped (see ``remap_mtp_state_dict``). FP8 checkpoints keep the MTP head
+    unquantized, but dequantize defensively if scales are present.
+    """
+    from safetensors import safe_open
+
+    model_path = Path(model_path)
+    index_path = model_path / "model.safetensors.index.json"
+    with open(index_path) as f:
+        weight_map = json.load(f)["weight_map"]
+
+    file_to_keys: Dict[str, list] = {}
+    for key, filename in weight_map.items():
+        if key.startswith("mtp."):
+            file_to_keys.setdefault(filename, []).append(key)
+    assert file_to_keys, f"no mtp.* weights in {index_path}"
+
+    raw: Dict[str, torch.Tensor] = {}
+    for filename, keys in file_to_keys.items():
+        with safe_open(str(model_path / filename), framework="pt") as sf:
+            present = set(sf.keys())
+            for key in keys:
+                if key in present:
+                    raw[key] = sf.get_tensor(key)
+                scale_key = key + "_scale_inv"
+                if scale_key in present:
+                    raw[scale_key] = sf.get_tensor(scale_key)
+
+    dequantized: Dict[str, torch.Tensor] = {}
+    for key, tensor in raw.items():
+        if key.endswith(".weight_scale_inv"):
+            continue
+        if tensor.dtype == torch.float8_e4m3fn:
+            from models.demos.blackhole.qwen36.tt.tp_common import dequant_fp8_block
+
+            scale_key = key + "_scale_inv"
+            dequantized[key] = (
+                dequant_fp8_block(tensor, raw[scale_key]) if scale_key in raw else tensor.to(torch.bfloat16)
+            )
+        else:
+            dequantized[key] = tensor
+
+    return remap_mtp_state_dict(dequantized)
 
 
 def is_fp8_checkpoint(model_path) -> bool:

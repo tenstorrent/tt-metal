@@ -7,6 +7,7 @@ hub ids are snapshot_download'd first (AutoConfig on bare hub id is unreliable h
 Qwen3.5-specific params (GDN, partial RoPE, layer types) come from HF text config.
 load_state_dict/weight_cache_path override the base meta-key (wq/wk/wv) scheme.
 """
+
 import os
 from pathlib import Path
 
@@ -79,6 +80,12 @@ class Qwen36ModelArgs(ModelArgs):
         self.attention_type_list = getattr(text_config, "layer_types", None) or (
             ["linear_attention", "linear_attention", "linear_attention", "full_attention"] * 8
         )
+
+        # MTP (multi-token prediction) head, present on the 3.8 checkpoints. The backbone
+        # never reads mtp.* weights; tt/mtp.py loads them from safetensors when spec decode
+        # is enabled. mtp_use_dedicated_embeddings=False => the head shares embed + lm_head.
+        self.mtp_num_hidden_layers = getattr(text_config, "mtp_num_hidden_layers", 0)
+        self.mtp_use_dedicated_embeddings = getattr(text_config, "mtp_use_dedicated_embeddings", False)
 
         # Derived
         self.linear_q_dim = self.linear_num_key_heads * self.linear_key_head_dim

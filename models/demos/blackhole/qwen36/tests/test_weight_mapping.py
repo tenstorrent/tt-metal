@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for Qwen3.5-9B HF -> internal weight remapping."""
+
 import pytest
 import torch
 
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.tp_common import replicate_kv_weight
-from models.demos.blackhole.qwen36.tt.weight_mapping import remap_qwen36_state_dict
+from models.demos.blackhole.qwen36.tt.weight_mapping import remap_mtp_state_dict, remap_qwen36_state_dict
 
 HIDDEN_SIZE = 4096
 NUM_LAYERS = 32
@@ -166,6 +167,36 @@ class TestAllLayersPresent:
         expected = [3, 7, 11, 15, 19, 23, 27, 31]
         for i in expected:
             assert f"layers.{i}.self_attn.q_proj.weight" in remapped, f"Layer {i} should be full attention"
+
+
+class TestMTPMapping:
+    """MTP key handling — synthetic tensors, no checkpoint / device needed."""
+
+    def _synthetic(self):
+        return {
+            "mtp.fc.weight": torch.zeros(4, 8),
+            "mtp.pre_fc_norm_hidden.weight": torch.zeros(4),
+            "mtp.layers.0.self_attn.q_proj.weight": torch.zeros(6, 4),
+            "lm_head.weight": torch.zeros(16, 4),
+            "model.language_model.norm.weight": torch.zeros(4),
+        }
+
+    def test_default_drops_mtp(self):
+        remapped = remap_qwen36_state_dict(self._synthetic())
+        assert not any(k.startswith("mtp.") for k in remapped)
+        assert "output.weight" in remapped and "norm.weight" in remapped
+
+    def test_include_mtp_keeps_raw_namespace(self):
+        remapped = remap_qwen36_state_dict(self._synthetic(), include_mtp=True)
+        assert "mtp.fc.weight" in remapped
+        assert "mtp.layers.0.self_attn.q_proj.weight" in remapped
+        # Backbone remap unchanged by the flag.
+        assert "output.weight" in remapped and "norm.weight" in remapped
+
+    def test_remap_mtp_strips_prefix_and_filters(self):
+        mtp = remap_mtp_state_dict(self._synthetic())
+        assert set(mtp) == {"fc.weight", "pre_fc_norm_hidden.weight", "layers.0.self_attn.q_proj.weight"}
+        assert mtp["fc.weight"].shape == (4, 8)
 
 
 class TestReplicateKVWeight:
