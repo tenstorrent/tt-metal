@@ -4,49 +4,67 @@ TTNN bring-up of [CosyVoice-300M](https://github.com/FunAudioLLM/CosyVoice), Ali
 FunAudioLLM's multilingual TTS model, for
 [tenstorrent/tt-metal#32178](https://github.com/tenstorrent/tt-metal/issues/32178).
 
+## Platforms
+
+- Blackhole (`p150a`, `p150b`)
+- Wormhole (`n300`)
+
+## Overview
+
 CosyVoice generates speech in three stages: an **LLM** predicts supervised semantic
 tokens from text, a **flow-matching decoder** turns those tokens into a mel
 spectrogram, and a **HiFTNet vocoder** turns the mel into a waveform. All three run
 through TTNN here — including the vocoder, which is the part that is normally left
-on the host.
+on the host. [Why that was the hard part](#why-the-vocoder-is-the-interesting-part).
 
-| | |
+| property | value |
 |---|---|
 | Parameters | ~300 M (llm 1.24 GB + flow 0.42 GB + hift 0.08 GB, fp32) |
 | Sample rate | 22 050 Hz |
 | Languages | Chinese, English, Japanese, Cantonese, Korean |
 | Modes | SFT, zero-shot, cross-lingual, instruct |
-| Status | **All three stages on device.** flow tokens->mel PCC 0.99920 · tokens->waveform 0.99514 · vocoder 0.99964 · LLM prefill 0.99974 |
+| Status | **All three stages on device**, per-module PCC ≥ 0.99 against the reference. Figures in [PERF.md § Accuracy](PERF.md#accuracy) |
 
 ---
 
-## Why the vocoder is the interesting part
+## Quick start
 
-TTNN has **no FFT of any kind**. A case-insensitive search for `fft|rfft|irfft|stft|istft`
-across `ttnn/` and `tt_metal/` returns nothing. HiFTNet ends in an inverse STFT, so at
-first glance the vocoder cannot run on device at all — and the previous attempt at this
-bring-up left it on the host, which is why it was rejected.
+Every command in this file assumes these paths:
 
-It does not actually block anything, because CosyVoice uses **`n_fft = 16`**. At that
-size the inverse DFT of 9 one-sided bins is a fixed 16×9 real matrix pair — smaller than
-a single 32×32 tile — so it is a **matmul**, and a matmul maps onto the FPU, the widest
-unit on a Tensix core. Windowing and overlap-add then fuse into a single
-**transposed convolution** with a diagonal kernel, because OLA
-(`out[t·h + j] += frames[j,t]·w[j]`) and `conv_transpose1d`
-(`out[o, t·s + k] += in[i,t]·W[i,o,k]`) are the same operation. The NOLA normalisation
-depends only on the frame count, so it is a precomputed constant and one multiply.
-
-Net: `matmul + conv_transpose2d + multiply`. All of which TTNN already has.
-
-Verified against the real vocoder's captured magnitude/phase — spanning
-1.06e-13 to 1.21e+01, fourteen decades:
-
-```
-PCC fp32      1.0000000000   max|Δ| 2.98e-07
-PCC bf16-in   0.9999765688   max|Δ| 5.25e-03
+```bash
+export TT_METAL_HOME=/path/to/tt-metal
+export COSYVOICE_REF=/mnt/CosyVoice                 # the upstream checkout
+export COSYVOICE_ENV=/mnt/cosyvoice_env             # the reference venv
+export COSYVOICE_PY=$COSYVOICE_ENV/bin/python
+export COSYVOICE_PYTHONPATH=$COSYVOICE_REF:$COSYVOICE_REF/third_party/Matcha-TTS
 ```
 
-See `tt/hifigan/istft.py` for the derivation and `tests/pcc/test_istft.py` for the checks.
+From a clean checkout to a `.wav`:
+
+```bash
+cd $TT_METAL_HOME/models/demos/cosyvoice
+
+# 1. reference environment (host only, no device)
+uv venv --python 3.10 $COSYVOICE_ENV
+VIRTUAL_ENV=$COSYVOICE_ENV uv pip install -r requirements-reference.txt
+
+git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git $COSYVOICE_REF
+git -C $COSYVOICE_REF checkout 074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc
+git -C $COSYVOICE_REF submodule update --init --recursive
+
+# 2. checkpoints (~6.9 GB)
+$COSYVOICE_PY scripts/download_model.py --skip-onnx-trt
+
+# 3. goldens and weights
+export PYTHONPATH=$COSYVOICE_PYTHONPATH
+$COSYVOICE_PY scripts/gen_golden.py --mode zero_shot
+for m in hift flow llm; do
+  $COSYVOICE_PY scripts/export_weights.py --module $m --fp16
+done
+
+# 4. synthesise on device
+PYTHONPATH=$TT_METAL_HOME python demo/demo.py --out out.wav
+```
 
 ---
 
@@ -63,36 +81,20 @@ The reference pins its own `torch` and `transformers` — see `requirements-refe
 which records why each pin is where it is. Forcing those into the tt-metal environment
 would risk the tt-metal build for no benefit, since the reference never runs on device.
 
-### 1. Reference environment (host only, no device)
-
-```bash
-cd $TT_METAL_HOME/models/demos/cosyvoice
-
-uv venv --python 3.10 /mnt/cosyvoice_env
-VIRTUAL_ENV=/mnt/cosyvoice_env uv pip install -r requirements-reference.txt
-
-git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git /mnt/CosyVoice
-git -C /mnt/CosyVoice checkout 074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc
-git -C /mnt/CosyVoice submodule update --init --recursive
-
-/mnt/cosyvoice_env/bin/python scripts/download_model.py --skip-onnx-trt
-```
-
-`--skip-onnx-trt` omits `flow.decoder.estimator.fp32.onnx` (329 MB × 2), which only the
-TensorRT export path reads. The three checkpoints then total ~6.9 GB.
+**Checkpoints.** `--skip-onnx-trt` omits `flow.decoder.estimator.fp32.onnx` (329 MB × 2),
+which only the TensorRT export path reads. The three checkpoints then total ~6.9 GB.
 
 > **First inference downloads more.** The text frontend fetches ~31 MB of `wetext` FSTs
 > from ModelScope the first time it normalises text — not at import. A network-isolated
-> run will fail there unless `/root/.cache/modelscope` is already populated.
+> run will fail there unless `~/.cache/modelscope` is already populated.
 
-### 2. Goldens
+**Goldens.** `gen_golden.py` writes `tests/golden/*.npz` — one per module boundary, plus
+`manifest.json`.
 
-```bash
-export PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS
-/mnt/cosyvoice_env/bin/python scripts/gen_golden.py --mode zero_shot
-```
-
-Writes `tests/golden/*.npz` — one per module boundary, plus `manifest.json`.
+**Weights.** `export_weights.py` flattens each submodule's `state_dict` into
+`tests/golden/<module>_weights.npz` with a JSON `__meta__` blob carrying the architectural
+constants that cannot be read off a tensor shape. `weight_norm` is folded at export
+(verified bit-exact) so the device never recomputes a constant normalisation.
 
 ---
 
@@ -121,69 +123,21 @@ python models/demos/cosyvoice/demo/demo.py --out out.wav
 Runs all three stages on device and writes a 22.05 kHz wav. With no arguments it
 synthesises the captured golden utterance, which needs no front-end.
 
-The front-end — text normalisation, the Whisper-family tokenizer, and the two **ONNX**
-encoders (`speech_tokenizer_v1.onnx`, `campplus.onnx`) — is not ported: three of those
-four are ONNX blobs and none is on the bounty's critical path. It runs once in the
-CosyVoice venv via `scripts/prepare_inputs.py`, which writes a flat `.npz` the device
-side loads without importing cosyvoice or onnxruntime — the same boundary
-`export_weights.py` draws.
-
-### Weight export
-
-```bash
-export PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS
-for m in hift flow llm; do
-  /mnt/cosyvoice_env/bin/python scripts/export_weights.py --module $m --fp16
-done
-```
-
-Flattens each submodule's `state_dict` into `tests/golden/<module>_weights.npz` with a
-JSON `__meta__` blob carrying the architectural constants that cannot be read off a
-tensor shape. `weight_norm` is folded at export (verified bit-exact) so the device never
-recomputes a constant normalisation.
+The front-end is not ported. `scripts/prepare_inputs.py` runs it once in the reference
+venv and writes the flat `.npz` the demo loads — see [What runs where](#what-runs-where).
 
 ### Reference baseline and scoring
 
 ```bash
-export PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS
-/mnt/cosyvoice_env/bin/python scripts/run_reference.py --out /tmp/ref
-/mnt/cosyvoice_env/bin/python scripts/eval_wer_sim.py --run-dir /tmp/ref
+export PYTHONPATH=$COSYVOICE_PYTHONPATH
+$COSYVOICE_PY scripts/run_reference.py --out /tmp/ref
+$COSYVOICE_PY scripts/eval_wer_sim.py --run-dir /tmp/ref
 ```
 
 > **Never run scoring and synthesis at the same time.** Whisper large-v3 is ~9 GB
 > resident on CPU and synthesis is ~4.6 GB; together they OOM an 11 GB host. The harness
 > preflights available memory and refuses rather than getting killed mid-run. Pass
 > `--asr-model medium` on a small box.
-
----
-
-## Validation strategy
-
-Designed first rather than last, because the previous attempt at this bounty had working
-code and was still rejected on validation.
-
-**Token accuracy is exact agreement, not top-k overlap.** Two gates: teacher-forced argmax
-match per position, and free-running greedy (`top_k=1`) full-sequence comparison. RAS
-sampling (`top_p 0.8`, `top_k 25`) is stochastic and is reported for audio quality only —
-it is never the accuracy gate.
-
-**Per-module PCC ≥ 0.99** against goldens captured from the reference.
-
-**Streaming is compared on content**, not chunk count: concatenated streamed audio versus
-non-streamed audio for the same text and seed.
-
-**Perf targets are ordinary passing tests.** If a target is missed the number is reported
-and the gap explained; `xfail` reads as concealment. **Every measured figure lives in
-[`PERF.md`](PERF.md) and nowhere else** — this file deliberately quotes none of them, so
-there is no second copy to drift. That includes the end-to-end RTF, the per-stage
-breakdown, the Blackhole/Wormhole comparison, and which targets are met on which part.
-
-**Two things cannot be gated on exact agreement, and both say so explicitly.** RAS
-sampling is a multinomial draw, so the LLM is gated on its *logits* and the audio chain
-on the reference's *captured tokens*. And NSF excitation phase is chaotically sensitive
-to f0 — a 0.03 Hz error accumulates a tenth of a cycle over an utterance, finer than
-Tensix arithmetic delivers — so waveform *samples* are gated with the reference
-excitation injected (PCC 0.9951) and the *envelope* without it (0.9975).
 
 ---
 
@@ -196,6 +150,12 @@ excitation injected (PCC 0.9951) and the *envelope* without it (0.9975).
 | mel -> waveform | `tt/hifigan/` — f0 predictor, NSF excitation, 40-odd convolutions, inverse STFT | yes |
 | RAS sampling | `tt/llm/sampling.py` | host (Stage 1) |
 | front-end (tokenizer, 2 ONNX encoders) | `scripts/prepare_inputs.py` | host, by design |
+
+The front-end — text normalisation, the Whisper-family tokenizer, and the two **ONNX**
+encoders (`speech_tokenizer_v1.onnx`, `campplus.onnx`) — stays on host by design: three
+of the four are ONNX blobs, and none is on the bounty's critical path. `prepare_inputs.py`
+writes a flat `.npz` the device side loads without importing cosyvoice or onnxruntime —
+the same boundary `export_weights.py` draws.
 
 `tt/flow/reference.py` and `tt/llm/reference.py` reimplement their stages in plain torch
 from the flat weight export alone — no cosyvoice, no diffusers, no device. Both reproduce
@@ -213,6 +173,63 @@ against itself, because TTNN cannot consume the torch RNG stream in the same ord
 `gen_golden.py` **captures every draw as a named array**, and the TTNN modules take them as
 explicit inputs during PCC tests. Get this wrong and a perfectly correct vocoder port scores
 PCC ≈ 0.3.
+
+---
+
+## Why the vocoder is the interesting part
+
+TTNN has **no FFT of any kind**. A case-insensitive search for `fft|rfft|irfft|stft|istft`
+across `ttnn/` and `tt_metal/` returns nothing. HiFTNet ends in an inverse STFT, so the
+vocoder looks unportable — and is usually left on the host.
+
+It does not actually block anything, because CosyVoice uses **`n_fft = 16`**. At that
+size the inverse DFT of 9 one-sided bins is a fixed 16×9 real matrix pair, smaller than a
+single 32×32 tile. So it is a **matmul** — and a matmul maps onto the FPU, the widest unit
+on a Tensix core. Windowing and overlap-add then fuse into a single
+**transposed convolution** with a diagonal kernel, because OLA
+(`out[t·h + j] += frames[j,t]·w[j]`) and `conv_transpose1d`
+(`out[o, t·s + k] += in[i,t]·W[i,o,k]`) are the same operation. The NOLA normalisation
+depends only on the frame count, so it is a precomputed constant and one multiply.
+
+Net: `matmul + conv_transpose2d + multiply`. All of which TTNN already has.
+
+Verified against the real vocoder's captured magnitude/phase — spanning
+1.06e-13 to 1.21e+01, fourteen decades:
+
+```
+PCC fp32      1.0000000000   max|Δ| 2.98e-07
+PCC bf16-in   0.9999765688   max|Δ| 5.25e-03
+```
+
+See `tt/hifigan/istft.py` for the derivation and `tests/pcc/test_istft.py` for the checks.
+
+---
+
+## Validation strategy
+
+Designed first rather than last — the gates below were written before the port, not
+fitted to it.
+
+| what is gated | how |
+|---|---|
+| Token accuracy | Exact agreement, not top-k overlap: teacher-forced argmax match per position, plus free-running greedy (`top_k=1`) full-sequence comparison. RAS sampling (`top_p 0.8`, `top_k 25`) is stochastic — reported for audio quality, never the gate. |
+| Per-module numerics | PCC ≥ 0.99 against goldens captured from the reference. |
+| Streaming | Content, not chunk count: concatenated streamed audio versus non-streamed, same text and seed. |
+| Perf targets | Ordinary passing tests. A missed target is reported with the gap explained rather than marked `xfail`. |
+
+**Every measured figure lives in [`PERF.md`](PERF.md) and nowhere else** — the end-to-end
+RTF, the per-stage breakdown, the Blackhole/Wormhole comparison, which targets are met on
+which part, and the per-module PCCs under [§ Accuracy](PERF.md#accuracy). The handful of
+PCCs quoted in this file support an argument; PERF.md is the record.
+
+### Two things cannot be gated on exact agreement
+
+RAS sampling is a multinomial draw, so the LLM is gated on its *logits* and the audio
+chain on the reference's *captured tokens*.
+
+NSF excitation phase is chaotically sensitive to f0. A 0.03 Hz error accumulates a tenth
+of a cycle over an utterance — finer than Tensix arithmetic delivers. So waveform
+*samples* are gated with the reference excitation injected, and the *envelope* without it.
 
 ---
 
@@ -238,7 +255,7 @@ models/demos/cosyvoice/
     ├── golden/                  captured .npz + manifest.json
     ├── pcc/                     per-module PCC >= 0.99
     ├── e2e/                     4 modes x 5 languages, exact-token, WER, SIM
-    └── perf/                    tok/s and RTF gates (passing, never xfail)
+    └── perf/                    tok/s and RTF gates
 ```
 
 ---
