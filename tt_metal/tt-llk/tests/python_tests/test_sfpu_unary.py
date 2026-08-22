@@ -543,13 +543,19 @@ _EDGE_SWEEP_OPS = sorted(
 #
 # STILL OPEN — not explained by the ISA:
 #
-#   rsqrt at 0 saturates instead of returning inf. RsqrtCompat returns 1.7014118e38
-#   (0x7F000000) where the golden gives inf, on all 8 combinations, while plain Rsqrt over
-#   the same probe does *not* diverge — two implementations of one function disagreeing at
-#   their shared pole. Nothing in the ISA prescribes either answer.
-#
 #   Erfinv at ±1: golden ∓inf/±inf against a saturated result, on the two fp32-dest
 #   combinations only, so tolerance-shaped rather than semantic.
+#
+# CLOSED:
+#
+#   rsqrt_compat at 0 returned 1.7014118e38 instead of inf on all 8 combinations, while
+#   plain Rsqrt over the same probe did not diverge. Root-caused to _reciprocal_compat_,
+#   whose exponent-difference arithmetic (126 - exexp(0) = 254) has no pole guard, and
+#   fixed by adding that guard in place. The kernel is otherwise untouched, so every
+#   non-pole value stays bit-identical -- deliberately, because eight production
+#   normalization kernels select this path by name to match a model baseline. Verified on
+#   Wormhole n300 and Blackhole p100a silicon; see
+#   docs/sfpu_52930_reciprocal_compat_pole.md.
 _EDGE_KNOWN_DIVERGENCES = {
     MathOperation.Sign: (
         (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
@@ -557,16 +563,6 @@ _EDGE_KNOWN_DIVERGENCES = {
     ),
     MathOperation.Heaviside: (
         (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
-    ),
-    MathOperation.RsqrtCompat: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.No),
         (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
     ),
     MathOperation.Erfinv: (
@@ -619,9 +615,6 @@ _EDGE_DIVERGENCE_REASON = {
     "pass vacuously.",
     MathOperation.Heaviside: "heaviside(-0.0) returns 0; -0.0 == 0 makes it 0.5. Same "
     "SFPSETCC negative-zero caveat as Sign, and the same unpack-to-dest scoping.",
-    MathOperation.RsqrtCompat: "rsqrt(0) saturates to 1.7014118e38 (0x7F000000) instead "
-    "of inf, while plain Rsqrt does not diverge at the same pole. Not prescribed by the "
-    "ISA either way.",
     MathOperation.Erfinv: "erfinv(±1) saturates instead of returning ±inf.",
     MathOperation.Reciprocal: "1/NaN returns +0: the kernel does not propagate NaN, where "
     "IEEE, torch and the golden all give NaN. Every other special agrees (1/±inf = ±0, "
@@ -632,8 +625,8 @@ _EDGE_DIVERGENCE_REASON = {
     "unpack-to-dest combinations, the only ones where a real -0.0 reaches the LREG — at "
     "dest_acc=No the kernel is handed +0.0 and agrees, so the probe is not sent there.",
     MathOperation.Rsqrt: "rsqrt(-0) returns NaN; IEEE and the golden give -inf. Same cause "
-    "and same unpack-to-dest scoping as Sqrt. Distinct from the RsqrtCompat entry above, "
-    "which is about the +0 pole saturating rather than about -0.",
+    "and same unpack-to-dest scoping as Sqrt. This is about -0, not about the +0 pole that "
+    "RsqrtCompat used to saturate at.",
 }
 
 

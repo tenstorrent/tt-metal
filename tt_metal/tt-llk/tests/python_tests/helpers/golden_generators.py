@@ -2365,6 +2365,7 @@ class UnarySFPUGolden:
             MathOperation.TanhDerivative: self._tanh_derivative,
             MathOperation.TanhDerivativeLut: self._tanh_derivative_lut,
             MathOperation.RsqrtCompat: self._rsqrt,
+            MathOperation.ReciprocalCompat: self._reciprocal,
             MathOperation.Expm1Cw: self._expm1,
             MathOperation.Hardmish: self._hardmish,
             MathOperation.Lgamma: self._lgamma,
