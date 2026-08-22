@@ -41,39 +41,19 @@ def situ_glu(
 
         softcap(gate, situ_beta) * sigmoid(gate) * softcap(up, situ_linear_beta)
 
-    Identical math to ``ttnn.situ_glu``, which this delegates to when the caller has no sub-device
-    to respect. The hand-composed form exists only for the shared expert: it runs on a sub-device
-    (it overlaps with the MoE dispatch) and ``ttnn.situ_glu`` takes no ``sub_core_grids``, while
-    softcap / sigmoid / multiply each do. sigmoid's ttnn defaults (ACCURATE, vector_mode RC) are
-    the ones ``ttnn.situ_glu`` passes explicitly, so the two paths agree bit-for-bit.
+    ``ttnn.situ_glu`` is the math; this wrapper exists only to free the two matmul accumulators,
+    which an op may not do to its own inputs.
 
-    Blackhole only, since ``ttnn.softcap`` is. Both inputs are freed as soon as they are dead.
+    Blackhole only, since ``ttnn.softcap`` is.
 
-    The hand-composed branch leaves its three intermediates wherever ``gate_out`` lives, i.e. DRAM.
-    ``ttnn.situ_glu`` would place them in L1 instead below a 3072 hidden -- a bound on the per-chip
-    width, ``hidden_dim // TP``, not the model's, so the shared expert's 1536 at TP=4 clears it and
-    the width is not what keeps them in DRAM. What does is that these ops take ``sub_core_grids``
-    but no ``sub_device_id``: an interleaved-L1 tensor would come from the global allocator and
-    span banks the concurrently-dispatched MoE's sub-device is allocating from. Whether it can be
-    made safe is the open perf question here.
+    ``sub_core_grids`` confines every composed step to the shared expert's sub-device, so this can
+    run overlapped with the MoE dispatch. It also keeps the intermediates in DRAM: the op's L1 fast
+    path allocates interleaved, i.e. on the dispatch sub-device's cores as well.
     """
-    if sub_core_grids is None:
-        activated = ttnn.situ_glu(gate_out, up_out, situ_beta, situ_linear_beta)
-        ttnn.deallocate(gate_out)
-        ttnn.deallocate(up_out)
-        return activated
-
-    situ_a = ttnn.softcap(gate_out, situ_beta, sub_core_grids=sub_core_grids)
-    gate_sigmoid = ttnn.sigmoid(gate_out, sub_core_grids=sub_core_grids)
+    activated = ttnn.situ_glu(gate_out, up_out, situ_beta, situ_linear_beta, sub_core_grids=sub_core_grids)
     ttnn.deallocate(gate_out)
-    ttnn.multiply_(situ_a, gate_sigmoid, sub_core_grids=sub_core_grids)
-    ttnn.deallocate(gate_sigmoid)
-
-    up_half = ttnn.softcap(up_out, situ_linear_beta, sub_core_grids=sub_core_grids)
     ttnn.deallocate(up_out)
-    ttnn.multiply_(situ_a, up_half, sub_core_grids=sub_core_grids)
-    ttnn.deallocate(up_half)
-    return situ_a
+    return activated
 
 
 COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
