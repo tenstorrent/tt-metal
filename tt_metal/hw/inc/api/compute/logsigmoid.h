@@ -14,14 +14,14 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs logsigmoid operation: logsigmoid(x) = -softplus(-x) = -log(1 + exp(-x))
+ * Performs logsigmoid operation: logsigmoid(x) = log(sigmoid(x)) = min(x, 0) - log1p(exp(-|x|))
  *
  * Return value: None
  *
  * | Argument       | Description                                       | Type     | Valid Range                                           | Required |
  * |----------------|---------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst_in0       | Index of tile in DST with input (x)               | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idst_in1       | Index of tile in DST with exp(-x)                 | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst_in1       | Index of tile in DST with exp(-x) (unused)        | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst_out       | Index of tile in DST for output                   | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
@@ -43,6 +43,9 @@ ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_ou
  *
  * Return value: None
  */
-ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
+ALWI void logsigmoid_tile_init() {
+    MATH((SFPU_BINARY_INIT(unused)));
+    MATH(sfpu::logsigmoid_init<APPROX>());
+}
 
 }  // namespace ckernel

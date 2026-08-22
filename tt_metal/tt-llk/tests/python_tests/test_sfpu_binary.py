@@ -482,11 +482,11 @@ def _comparison_stimuli_specs():
 
 
 def _logsigmoid_stimuli_spec():
-    # logsigmoid(x) = -softplus(-x). in1 (exp(-x)) is only read in the x > 4 branch, so
-    # restrict x to [-8, 3.9] (never uses in1) and sweep the passthrough (x < -4) and
-    # polynomial (-4 < x < 4) branches. The distribution is invoked per 16x16 face (size 256).
+    # logsigmoid(x) = min(x, 0) - log1p(exp(-|x|)).  The kernel computes exp(-|x|)
+    # internally and does not read in1, so sweep the full validated range [-30, 30]
+    # covering both tails and the old +/-4 branch boundaries.
     def dist(size, dtype, generator):
-        return torch.linspace(-8.0, 3.9, size).to(dtype)
+        return torch.linspace(-30.0, 30.0, size).to(dtype)
 
     return StimuliSpec(distribution=dist, seed=0)
 
