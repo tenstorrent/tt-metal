@@ -158,6 +158,15 @@ Run builds and tests **in the background and read the log file**, rather than le
 into your context — a failed compile in this repo prints the full clang invocation, hundreds of
 include flags per error. You want the failures, not the command lines.
 
+**But let a run finish before you touch a kernel.** Your build does not compile the kernels; the
+runtime compiles them from disk at every program-cache miss, so they are read throughout a run
+rather than once at its start. Edit one while a run is in flight and it is compiled as-edited
+partway through — the run then measures neither the state you launched on nor the one you have now.
+That matters most in [Step 4](#step-4--re-verify), where a run spanning an edit can report a pass
+for a tree that never existed, and a false green is the one outcome the before/after check cannot
+survive. Host-side edits are safe, since the run is executing an already-linked binary; this covers
+only the kernel sources and any header they `#include`.
+
 **Run both from the repository root.** From anywhere else, tests fail with *"Root Directory is not
 set"* — dozens or hundreds of them at once, which reads like broken code rather than a wrong working
 directory, and costs an investigation before anyone thinks to check `pwd`.
