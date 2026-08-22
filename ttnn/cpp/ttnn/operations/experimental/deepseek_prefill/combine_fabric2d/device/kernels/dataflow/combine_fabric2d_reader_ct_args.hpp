@@ -120,7 +120,8 @@ struct ReaderCtArgs {
         // Chunk descriptors for our own region of the forwarding buffer, in arrival order — which is the
         // order the upstream sender emits them, because both sides derive it from the same generator. They
         // are what lets the reader compute every chunk's length, and so its page range, with nothing
-        // exchanged between the two chips.
+        // exchanged between the two chips. One set serves every local expert: the reader walks them again
+        // per expert, which is the order the upstream sender emits them in too.
         const auto forwarding =
             op::forwarding_chunks(plan.stream, op::my_dg_index(args, coord), op::ring_extent(args), args.num_links);
         num_forwarding_chunks = static_cast<uint32_t>(forwarding.size());
