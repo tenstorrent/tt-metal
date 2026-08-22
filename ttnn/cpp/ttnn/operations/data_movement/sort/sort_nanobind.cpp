@@ -71,8 +71,12 @@ void bind_sort_operation(nb::module_& mod) {
 
             With stable=False, the returned indices always gather the sorted values from the
             input but need not form a permutation within tie groups on the CrossCore path
-            (duplicate indices may appear inside a tie group; see issue #54043). Use
-            stable=True when a true permutation is required.
+            (duplicate indices may appear inside a tie group; see issue #54043). On Blackhole,
+            BFLOAT16 sorts of power-of-two padded width 512..65536 are served by the mergesort
+            row engine, whose unstable output IS the torch-stable permutation — #54043 is
+            unreachable there. The residue remains for FLOAT32 unstable widths on the CrossCore
+            path and for non-Blackhole devices. Use stable=True when a true permutation is
+            required.
 
         Memory Support:
             - Interleaved: DRAM and L1
