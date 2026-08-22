@@ -185,7 +185,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // The builtin takes all 12 PACR fields; this keeps the six the test varies
 // and zeroes the rest, which is what it always meant.
 #define INTR_PACR(cfg_context, addr_mode, addr_cnt_context, read_intf_sel, zero_write, last) \
-    __builtin_rvtt_bh_pacr(cfg_context, 0, 0, addr_mode, addr_cnt_context, zero_write, read_intf_sel, 0, 0, 0, 0, last)
+    __instrn_buffer[0] = __builtin_rvtt_bh_pacr(cfg_context, 0, 0, addr_mode, addr_cnt_context, zero_write, read_intf_sel, 0, 0, 0, 0, last)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {

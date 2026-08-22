@@ -281,22 +281,16 @@ inline void dest_section_flip()
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
 }
 
-// The builtin rather than TT_SETC16, unlike every other config write here.
-// SETC16 is the one config write whose word is already hoisted out of the raw
-// call: pass_rvtt_preword sums it at gimple and issues it through the _issue
-// form, which still recognises as the SETC16 insn.  Through the macro the word
-// arrives as a store instead, and one pass_rvtt_issue cannot fuse back becomes
-// a push, which the config model can only read as a barrier.
 template <DstStart Dst>
 inline void set_dest_section_base()
 {
     if constexpr (Dst == DstStart::StartZero)
     {
-        __builtin_rvtt_bh_setc16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, 0);
+        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, 0);
     }
     else
     {
-        __builtin_rvtt_bh_setc16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, DEST_REGISTER_HALF_SIZE);
+        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, DEST_REGISTER_HALF_SIZE);
     }
 }
 

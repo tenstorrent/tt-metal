@@ -44,7 +44,7 @@ TT_ALWAYS_INLINE void _llk_math_hw_configure_(const std::uint32_t srca_data_form
 {
     llk::san::math_operand_configure(srca_data_format, srcb_data_format);
 
-    __builtin_rvtt_stallwait(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+    TT_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
     std::uint32_t config_data       = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |
                                 (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
