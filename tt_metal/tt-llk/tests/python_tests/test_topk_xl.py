@@ -173,6 +173,7 @@ def _variant(
     fused_reduce=False,
     chunk_base_mode=TopKXLChunkBaseMode.Static,
     chunk_base=0,
+    full_sort=False,
     dest_sync=DestSync.Full,
     formats=FORMATS,
 ):
@@ -213,6 +214,7 @@ def _variant(
                 fused_reduce=fused_reduce,
                 chunk_base_mode=chunk_base_mode,
                 chunk_base=chunk_base,
+                full_sort=full_sort,
             ),
         ],
         variant_stimuli=StimuliConfig(
@@ -666,3 +668,99 @@ def test_topk_xl_dest_sync_half(K):
     (K,) = K
 
     _run_test_topk(K, num_chunks=2, num_rows=2, dest_sync=DestSync.Half)
+
+
+# ---------------------------------------------------------------------------
+# Full sort (mergesort merge level): both-halves merge + rebuild of each half
+# ---------------------------------------------------------------------------
+
+
+def _rank_to_word(r, K):
+    """Dst word offset of sorted-rank `r` inside one rebuilt K-run's fused
+    region (campaign-validated Dst rank interleave, K=512/1024/2048):
+    word(r) = (r % (K/16)) * 16 + r // (K/16)."""
+    rows = K // 16
+    return (r % rows) * 16 + (r // rows)
+
+
+def _check_full_sort(result, K, rows, ascending):
+    """The packed result is 2*TILES_PER_SEQ tiles per row of raw fused
+    [bf16 value | u16 (chunk<<11 | coord)] words: the first K words (one
+    K-run region) are one sorted half, the next K the other. Ascending puts
+    the min half first. Exact checks: every input element appears exactly
+    once (the both-halves property), and reading each half through the rank
+    interleave reproduces the golden full sort (values AND positions)."""
+    res = torch.tensor(result, dtype=format_dict[FORMATS.output_format])
+    region = _tiles_per_sequence(K) * ELEMENTS_PER_TILE  # K words
+    per_row = 2 * region
+    num_rows = rows.shape[0]
+    assert res.numel() == num_rows * per_row
+
+    for r in range(num_rows):
+        block = res[r * per_row : (r + 1) * per_row]
+        row = rows[r]
+        golden_values, golden_indices = torch.sort(
+            row, descending=not ascending, stable=True
+        )
+
+        # Decode every fused word: value (hi16), chunk (bits 15:11), coord (bits 10:0).
+        values = _bitcast_float32((block >> 16) << 16)
+        chunk = (block >> 11) & 0x1F
+        pos = torch.tensor(
+            [_decode_row_major(int(c), K) for c in (block & 0x7FF).tolist()],
+            dtype=torch.int64,
+        )
+        global_pos = chunk.to(torch.int64) * K + pos
+
+        # Collect the run through the rank interleave, both halves. For K < 1024
+        # a run fills only the first K words of its region; the rest is the
+        # copy path's -inf padding and is never part of the run.
+        hw_values_in_rank_order = []
+        hw_pos_in_rank_order = []
+        for half in range(2):
+            base = half * region
+            for rank in range(K):
+                w = base + _rank_to_word(rank, K)
+                hw_values_in_rank_order.append(float(values[w]))
+                hw_pos_in_rank_order.append(int(global_pos[w]))
+
+        # Both-halves property: the run is a permutation of the input.
+        got = sorted(zip(hw_pos_in_rank_order, hw_values_in_rank_order))
+        expected = sorted(enumerate(row.tolist()))
+        assert got == expected, (
+            f"row {r}: output is not a permutation of the input; "
+            f"first diffs: {[(g, e) for g, e in zip(got, expected) if g != e][:8]}"
+        )
+
+        gold_v = [float(v) for v in golden_values.tolist()]
+        assert hw_values_in_rank_order == gold_v, (
+            f"row {r}: sorted value order mismatch; first diffs: "
+            f"{[(i, a, b) for i, (a, b) in enumerate(zip(hw_values_in_rank_order, gold_v)) if a != b][:8]}"
+        )
+        gold_i = [int(i) for i in golden_indices.tolist()]
+        assert hw_pos_in_rank_order == gold_i, (
+            f"row {r}: sorted position order mismatch; first diffs: "
+            f"{[(i, a, b) for i, (a, b) in enumerate(zip(hw_pos_in_rank_order, gold_i)) if a != b][:8]}"
+        )
+
+
+# The full-sort merge level: two fused leaves (asc + desc), one both-halves
+# merge (`_topk_xl_merge_both_halves_`), then `_topk_xl_rebuild_` on EACH
+# half — the mergesort building block for the ttnn.sort outer schedule.
+# Distinct-value modes keep the golden exact (tags never break a tie);
+# stability of the fused tag scheme is exercised at the op layer.
+@parametrize(
+    K=[512, 1024, 2048],
+    sort_direction=[TopKSortDirection.Ascending, TopKSortDirection.Descending],
+    mode=["positive", "signed"],
+)
+def test_topk_xl_full_sort_both_halves(K, sort_direction, mode):
+    result, rows = _run(
+        K,
+        num_chunks=2,
+        num_rows=2,
+        mode=mode,
+        full_sort=True,
+        sort_direction=sort_direction,
+    )
+    _check_full_sort(result, K, rows, sort_direction == TopKSortDirection.Ascending)

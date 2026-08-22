@@ -1739,6 +1739,86 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
 }
 
 // =============================================================================
+//  Public entry: both-halves merge (full-sort merge level)
+// =============================================================================
+//
+// `_topk_xl_merge_` is a top-K reduction: it keeps the per-pair extremum half
+// and drops the other half (`store4_rows_top_only`). A full-sort merge level
+// must keep BOTH halves: for two adjacent sorted K-runs forming a bitonic
+// 2K-sequence, the distance-K compare-exchange leaves the elementwise-min
+// half and the elementwise-max half each bitonic, with every min-half element
+// <= every max-half element. `_topk_xl_rebuild_` on each half then yields a
+// fully sorted 2K-run in place. Fused [bf16|u16] payloads only.
+//
+// Direction: `ascending` selects which half lands in the FIRST run's tiles
+// (LREG0..3 store back to the load base):
+//   ascending  — min half at `dst_index`, max half one sequence further:
+//                rebuild both halves ascending => sorted ascending 2K-run.
+//   descending — max half first: rebuild both descending => descending run.
+// The two input runs must be sorted in opposite directions (either order),
+// exactly as `_topk_xl_merge_`'s callers already prepare them.
+//
+// Body: load16 (8) + sort_k (4) + store16 (8) = 20 instructions — 4 more
+// than the top-K merge body (the min-half stores it drops), so the merge
+// MOP program left by `_topk_xl_init_` (REPLAY(0, 16)) does not fit and a
+// REPLAY(0, 20) program is installed for the call and the merge program is
+// restored afterwards, preserving `_topk_xl_merge_`'s init-time invariant.
+inline void topk_mop_config_both_halves()
+{
+    constexpr int body_len              = 20;
+    constexpr std::uint32_t replay_body = lltt::replay_insn(0, body_len);
+    ckernel_unpack_template tmpl        = ckernel_unpack_template::lA(replay_body, TT_OP_NOP);
+    tmpl.program();
+}
+
+template <std::uint32_t K, bool APPROXIMATION_MODE>
+inline void _topk_xl_merge_both_halves_(const std::uint32_t dst_index, const bool ascending)
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+
+    constexpr int num_tiles_per_sequence = (K == 2048) ? 2 : 1;
+    constexpr int row_scale_factor       = (K == 512) ? 1 : (K == 1024) ? 2 : 4;
+    constexpr int distance               = 64 * num_tiles_per_sequence; // fused
+    const std::uint32_t tile_offset      = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+
+    constexpr int body_len = 20;
+    constexpr int n_iters  = row_scale_factor * 2;
+    static_assert(n_iters >= 2, "n_iters < 2 would skip the MOP firing of col=0");
+
+    topk_mop_config_both_halves();
+
+    // Record the loop body once into replay slots [0, body_len); the Exec-mode
+    // recording IS iter 0 of col=0. `bitonic_sort_len_k(true)` places the
+    // per-pair MIN in LREG0..3 (stored at the load base) and the MAX in
+    // LREG4..7 (stored at base+distance); `false` is the top-K merge's
+    // polarity (max at base).
+    load_replay_buf<Exec>(
+        0,
+        body_len,
+        [ascending]
+        {
+            load16_rows_x2<distance>();
+            bitonic_sort_len_k(ascending);
+            store16_rows_x2<distance, 16>();
+        });
+
+    // col=0: fire the remaining (n_iters - 1) iters via one MOP issue.
+    ckernel_unpack_template::run(n_iters - 1);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    // Switch the Dst write pointer to the odd column group.
+    set_dst_write_addr_offset(tile_offset + 2);
+
+    // col=1: full n_iters worth of work, again as one MOP issue.
+    ckernel_unpack_template::run(n_iters);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    set_dst_write_addr_offset(tile_offset + 0);
+
+    // Restore the top-K merge MOP program `_topk_xl_init_` installed.
+    topk_mop_config<true>();
+}
+
+// =============================================================================
 //  Public entry: rebuild
 // =============================================================================
 //
