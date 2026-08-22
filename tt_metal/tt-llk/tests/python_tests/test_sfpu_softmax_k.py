@@ -383,3 +383,151 @@ def test_sfpu_blaze_softmax_k_device_profile(perf_report, blaze_impl):
     print(
         f"BLAZE_SOFTMAX_K {_BLAZE_IMPL_IDS[blaze_impl]} k=5 math_cycles={int(cycles)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Lane FE multi-tile rows: blaze original vs lift at tile_count 8 / 32 on the
+# vehicle's existing runtime TILE_CNT loop.  Each input tile carries its own
+# staged logits/max layout; goldens and checks apply per tile.  The
+# SOFTMAX_K_BODY zone sits inside the tile loop, so its profiled figure is
+# the mean per-tile body time at every count; the KERNEL zone carries the
+# end-to-end verdict.
+# ---------------------------------------------------------------------------
+
+_MT_TILE_COUNTS = [8, 32]
+_MT_K = 5  # the odd-tail predication path — the parent blaze row's point
+
+
+def _mt_build_tiles(tile_cnt, torch_format):
+    """tile_cnt staged input tiles (per-tile logits) + goldens, seed 0 once."""
+    torch.manual_seed(0)
+    golden_generator = get_golden_generator(SoftmaxKGolden)
+    tiles, goldens = [], []
+    for _ in range(tile_cnt):
+        input_tile, logits = _build_input_tile(_MT_K, torch_format)
+        tiles.append(input_tile)
+        goldens.append(
+            golden_generator(
+                input_tile, logits, _MT_K, DestAccumulation.No, SOFTMAX_ROWS, FACE_DIM
+            )
+        )
+    return tiles, goldens
+
+
+@skip_for_wormhole
+@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("tile_cnt", _MT_TILE_COUNTS, ids=lambda n: f"t{n}")
+def test_sfpu_blaze_softmax_k_mt(tile_cnt, blaze_impl):
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    torch_format = format_dict[formats.input_format]
+
+    tiles, goldens = _mt_build_tiles(tile_cnt, torch_format)
+    src_A = torch.cat(
+        [
+            tilize_block(
+                t.flatten(), [TILE_DIM, TILE_DIM], stimuli_format=formats.input_format
+            ).flatten()
+            for t in tiles
+        ]
+    )
+    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+
+    configuration = TestConfig(
+        "sources/sfpu_softmax_k_test.cpp",
+        formats,
+        templates=[SOFTMAX_K(softmax_k=_MT_K), BLAZE_IMPL(blaze_impl)],
+        runtimes=[TILE_COUNT(tile_cnt)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=1,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+
+    res_from_L1 = configuration.run().result
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    assert len(res_tensor) == tile_cnt * ELEMENTS_PER_TILE
+
+    for t in range(tile_cnt):
+        res_tile = untilize_block(
+            res_tensor[t * ELEMENTS_PER_TILE : (t + 1) * ELEMENTS_PER_TILE],
+            formats.output_format,
+            [TILE_DIM, TILE_DIM],
+        ).reshape(TILE_DIM, TILE_DIM)
+        golden_tile = goldens[t]
+        tag = f"[{_BLAZE_IMPL_IDS[blaze_impl]}] tile {t}/{tile_cnt}"
+
+        assert passed_test(
+            golden_tile[:SOFTMAX_ROWS, :FACE_DIM].flatten(),
+            res_tile[:SOFTMAX_ROWS, :FACE_DIM].flatten(),
+            formats.output_format,
+            print_errors=True,
+        ), f"{tag} softmax over k={_MT_K} columns mismatch"
+        padding = res_tile[:SOFTMAX_ROWS, _MT_K:FACE_DIM]
+        assert bool(
+            (padding.to(torch.float32) == 0.0).all()
+        ), f"{tag} padding columns must be exactly 0.0:\n{padding}"
+        for row in range(SOFTMAX_ROWS):
+            row_sum = res_tile[row, :_MT_K].to(torch.float32).sum().item()
+            assert abs(row_sum - 1.0) < 5e-2, f"{tag} row {row} sums to {row_sum}"
+        assert passed_test(
+            golden_tile[SOFTMAX_ROWS:, :].flatten(),
+            res_tile[SOFTMAX_ROWS:, :].flatten(),
+            formats.output_format,
+        ), f"{tag} modified DEST rows outside the 4-row band"
+
+
+@skip_for_wormhole
+@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("tile_cnt", _MT_TILE_COUNTS, ids=lambda n: f"t{n}")
+def test_sfpu_blaze_softmax_k_device_profile_mt(perf_report, tile_cnt, blaze_impl):
+    """Multi-tile MATH-zone sample of SOFTMAX_K_BODY (per-tile readout, k=5)."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    torch_format = format_dict[formats.input_format]
+    tiles, _ = _mt_build_tiles(tile_cnt, torch_format)
+    src_A = torch.cat(
+        [
+            tilize_block(
+                t.flatten(), [TILE_DIM, TILE_DIM], stimuli_format=formats.input_format
+            ).flatten()
+            for t in tiles
+        ]
+    )
+    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+
+    configuration = PerfConfig(
+        "sources/sfpu_softmax_k_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[SOFTMAX_K(softmax_k=_MT_K), BLAZE_IMPL(blaze_impl)],
+        runtimes=[TILE_COUNT(tile_cnt)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=1,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+    configuration.run(perf_report, run_count=1)
+    frame = perf_report.frame()
+    rows = frame[frame["marker"] == "SOFTMAX_K_BODY"]
+    assert len(rows) == 1, frame.to_string(index=False)
+    cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(
+        f"BLAZE_SOFTMAX_K_MT {_BLAZE_IMPL_IDS[blaze_impl]} k={_MT_K} "
+        f"tiles={tile_cnt} math_cycles_per_tile={int(cycles)}"
+    )

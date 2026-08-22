@@ -47,6 +47,7 @@ from helpers.test_variant_parameters import (
     BLAZE_OP,
     BLAZE_PARAMS,
     BLAZE_SUBOP,
+    TILE_COUNT,
 )
 from helpers.utils import passed_test
 
@@ -143,22 +144,36 @@ def _run_blaze(
     src_B_override=None,
     atol=None,
     rtol=None,
+    tile_cnt=1,
 ):
-    """Drive one blaze-op variant and gate it against golden_fn(src_A, src_B)."""
+    """Drive one blaze-op variant and gate it against golden_fn(src_A, src_B).
+
+    tile_cnt > 1 (lane FE multi-tile rows) drives the vehicle's runtime
+    TILE_CNT loop: tile_cnt input tiles in buffer_A, the golden applied
+    per tile (every golden here models exactly one tile's transform; for
+    rope the single cos/sin tile in buffer_B is shared by every x tile).
+    """
     torch.manual_seed(0)
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
-        input_dimensions_A=[32, 32],
+        input_dimensions_A=[32, 32 * tile_cnt],
         stimuli_format_B=formats.input_format,
         input_dimensions_B=[32, 32],
         spec_A=spec_A,
         spec_B=spec_B,
     )
+    assert tile_cnt_A == tile_cnt
     if src_B_override is not None:
         src_B = src_B_override.to(src_B.dtype).reshape(src_B.shape)
 
-    golden = golden_fn(src_A.flatten(), src_B.flatten())
+    src_A_flat = src_A.flatten()
+    golden = torch.cat(
+        [
+            golden_fn(src_A_flat[t * 1024 : (t + 1) * 1024], src_B.flatten())
+            for t in range(tile_cnt)
+        ]
+    )
 
     templates = [
         BLAZE_OP(op),
@@ -172,7 +187,7 @@ def _run_blaze(
         "sources/sfpu_blaze_test.cpp",
         formats,
         templates=templates,
-        runtimes=[],
+        runtimes=[TILE_COUNT(tile_cnt)],
         variant_stimuli=StimuliConfig(
             src_A.flatten(),
             formats.input_format,
@@ -189,7 +204,7 @@ def _run_blaze(
     )
 
     res_from_L1 = configuration.run().result
-    res_from_L1 = res_from_L1[:1024]
+    res_from_L1 = res_from_L1[: 1024 * tile_cnt]
 
     assert len(res_from_L1) == len(
         golden
@@ -548,10 +563,12 @@ _PERF_POINTS = {
 }
 
 
-@pytest.mark.perf
-@pytest.mark.parametrize("point", list(_PERF_POINTS), ids=lambda p: p)
-def test_sfpu_blaze_device_profile(perf_report, point):
-    """One on-device MATH-zone sample of the BLAZE_BODY zone per op/arm."""
+def _run_blaze_device_profile(perf_report, point, tile_cnt, tag):
+    """Shared driver: one on-device MATH-zone sample of the BLAZE_BODY zone.
+
+    The zone sits INSIDE the vehicle's tile loop, so mean(MATH_ISOLATE) is
+    the mean per-tile body time at every tile_cnt — directly comparable
+    across tile counts (lane FE multi-tile rows)."""
     cfg = _PERF_POINTS[point]
     formats = cfg.get("formats", _BF16)
     dest_acc = cfg.get("dest_acc", DestAccumulation.No)
@@ -559,7 +576,7 @@ def test_sfpu_blaze_device_profile(perf_report, point):
     torch.manual_seed(0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
-        input_dimensions_A=[32, 32],
+        input_dimensions_A=[32, 32 * tile_cnt],
         stimuli_format_B=formats.input_format,
         input_dimensions_B=[32, 32],
         spec_A=(
@@ -581,7 +598,7 @@ def test_sfpu_blaze_device_profile(perf_report, point):
             ),
             APPROX_MODE(ApproximationMode.No),
         ],
-        runtimes=[],
+        runtimes=[TILE_COUNT(tile_cnt)],
         variant_stimuli=StimuliConfig(
             src_A.flatten(),
             formats.input_format,
@@ -602,4 +619,172 @@ def test_sfpu_blaze_device_profile(perf_report, point):
     assert len(rows) == 1, frame.to_string(index=False)
     cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
     assert cycles > 0
-    print(f"BLAZE_DEVICE_PROFILE {point} math_cycles={int(cycles)}")
+    print(f"{tag} {point} tiles={tile_cnt} math_cycles_per_tile={int(cycles)}")
+
+
+@pytest.mark.perf
+@pytest.mark.parametrize("point", list(_PERF_POINTS), ids=lambda p: p)
+def test_sfpu_blaze_device_profile(perf_report, point):
+    """One on-device MATH-zone sample of the BLAZE_BODY zone per op/arm."""
+    _run_blaze_device_profile(perf_report, point, 1, "BLAZE_DEVICE_PROFILE")
+
+
+# --------------------------------------------------------------------------
+# Lane FE multi-tile rows: the same op/arm points at tile_count 8 and 32.
+# tiles=1 stays anchored by the nodes above; goldens/checks are per tile;
+# the BLAZE_BODY diagnostic zone reads out per-tile at every count (mean
+# across zone instances), the KERNEL zone gives the end-to-end verdict.
+# --------------------------------------------------------------------------
+
+_MT_TILE_COUNTS = [8, 32]
+
+
+def _mt_rope_cs():
+    """The rope test's interleaved cos/sin tile (same construction/seed)."""
+    torch.manual_seed(1)
+    theta = torch.rand(256) * 6.28318530718
+    cs = torch.zeros(1024)
+    cs[:512] = torch.cos(theta).repeat_interleave(2)
+    cs[512:] = torch.sin(theta).repeat_interleave(2)
+    return _bf16(cs)
+
+
+def _g_csilu_gate(a, _b):
+    x = torch.clamp(a.to(torch.float32), max=_CSILU_LIMIT)
+    return x * torch.sigmoid(_CSILU_ALPHA * x)
+
+
+def _g_csilu_up(a, _b):
+    return torch.clamp(a.to(torch.float32), -_CSILU_LIMIT, _CSILU_LIMIT) + 1.0
+
+
+def _g_csilu_clamped(a, _b):
+    return torch.clamp(a.to(torch.float32), -_CSILU_LIMIT, _CSILU_LIMIT)
+
+
+def _g_situ_gate(a, _b):
+    x = a.to(torch.float32)
+    return _SITU_BETA * torch.tanh(x / _SITU_BETA) * torch.sigmoid(x)
+
+
+def _g_scaledtanh(a, _b):
+    return _SITU_BETA * torch.tanh(a.to(torch.float32) / _SITU_BETA)
+
+
+def _g_logitsoftcap(a, _b):
+    return _SOFTCAP_CAP * torch.tanh(a.to(torch.float32))
+
+
+def _g_siluscaled(a, _b):
+    x = _SILU_SCALE * a.to(torch.float32)
+    return _SILU_SCALE * (x * torch.sigmoid(x))
+
+
+def _g_sparsekfilter(a, _b):
+    x = a.to(torch.int64)
+    bank = (x >> _SKF_GLOBAL_BANK_SHIFT) & _SKF_BANK_MASK
+    local = x & _SKF_WITHIN_BANK_MASK
+    y = torch.where(
+        bank == _SKF_MY_BANK, (local + 1) << _SKF_OUT_SHIFT, torch.zeros_like(x)
+    )
+    return y.to(torch.int32)
+
+
+def _g_zeropad(a, _b):
+    out = a.clone()
+    out[_ZERO_PAD_VALID_ROWS * 32 :] = 0.0
+    return out
+
+
+def _g_addrsqrt(a, _b):
+    return torch.rsqrt(a.to(torch.float32) + _ADD_RSQRT_EPS)
+
+
+def _g_sdpaexp(a, _b):
+    return torch.exp(a.to(torch.float32))
+
+
+_U44 = dict(spec_A=StimuliSpec.uniform(low=-4.0, high=4.0))
+
+# Per-point correctness wiring for the multi-tile nodes: golden + stimuli +
+# tolerances, mirroring each single-tile test above one-for-one (op / impl /
+# subop / param bits come from _PERF_POINTS).
+_MT_CORR = {
+    "clampedsilu-gate": dict(golden=_g_csilu_gate, atol=0.02, rtol=0.05, **_U44),
+    "clampedsilu-up": dict(golden=_g_csilu_up, **_U44),
+    "clampedsilu-clamped": dict(golden=_g_csilu_clamped, atol=0.0, rtol=0.0, **_U44),
+    "situ-gate": dict(golden=_g_situ_gate, atol=0.03, rtol=0.05, **_U44),
+    "scaledtanh": dict(golden=_g_scaledtanh, atol=0.03, rtol=0.05, **_U44),
+    "logitsoftcap": dict(golden=_g_logitsoftcap, atol=0.25, rtol=0.05, **_U44),
+    "siluscaled": dict(golden=_g_siluscaled, atol=0.02, rtol=0.05, **_U44),
+    "sparsekfilter": dict(golden=_g_sparsekfilter, atol=0.0, rtol=0.0),
+    "zeropad": dict(golden=_g_zeropad, atol=0.0, rtol=0.0),
+    "addrsqrt": dict(
+        golden=_g_addrsqrt,
+        atol=0.05,
+        rtol=0.05,
+        spec_A=StimuliSpec.uniform(low=0.05, high=6.0),
+    ),
+    "sdpaexp": dict(golden=_g_sdpaexp, spec_A=StimuliSpec.uniform(low=-8.0, high=0.0)),
+    "rope-orig": dict(
+        golden=_rope_golden, spec_A=StimuliSpec.uniform(low=-1.0, high=1.0), rope=True
+    ),
+    "rope-lift": dict(
+        golden=_rope_golden, spec_A=StimuliSpec.uniform(low=-1.0, high=1.0), rope=True
+    ),
+    "sdpareducerow-max-orig": dict(pool="max"),
+    "sdpareducerow-max-lift": dict(pool="max"),
+    "sdpareducerow-sum-orig": dict(pool="sum"),
+    "sdpareducerow-sum-lift": dict(pool="sum"),
+}
+
+
+@pytest.mark.parametrize("tile_cnt", _MT_TILE_COUNTS, ids=lambda n: f"t{n}")
+@pytest.mark.parametrize("point", list(_MT_CORR), ids=lambda p: p)
+def test_sfpu_blaze_multitile(point, tile_cnt):
+    """Multi-tile correctness for every raced op/arm: goldens per tile."""
+    cfg = _PERF_POINTS[point]
+    spec = _MT_CORR[point]
+
+    kwargs = dict(
+        impl=cfg.get("impl", 0),
+        subop=cfg.get("subop", 0),
+        tile_cnt=tile_cnt,
+    )
+    if "formats" in cfg:
+        kwargs["formats"] = cfg["formats"]
+    if "dest_acc" in cfg:
+        kwargs["dest_acc"] = cfg["dest_acc"]
+    if "p0" in cfg:
+        kwargs["param0_bits"] = cfg["p0"]
+    if "p1" in cfg:
+        kwargs["param1_bits"] = cfg["p1"]
+    if point == "siluscaled":
+        kwargs["param1_bits"] = 0  # the corr contract (perf's default 1.0f is inert)
+    if "spec_A" in spec:
+        kwargs["spec_A"] = spec["spec_A"]
+    for k in ("atol", "rtol"):
+        if k in spec:
+            kwargs[k] = spec[k]
+    if point == "sparsekfilter":
+        kwargs["spec_A"] = _INT_SPEC
+
+    if spec.get("rope"):
+        kwargs["src_B_override"] = _mt_rope_cs()
+        golden = lambda a, b: _rope_golden(a, b)  # noqa: E731
+    elif "pool" in spec:
+        pool = spec["pool"]
+        kwargs["spec_A"] = StimuliSpec.uniform(low=0.1, high=2.0)
+        golden = lambda a, _b: _sdpa_reduce_row_golden(a, pool)  # noqa: E731
+    else:
+        golden = spec["golden"]
+
+    _run_blaze(cfg["op"], golden, **kwargs)
+
+
+@pytest.mark.perf
+@pytest.mark.parametrize("tile_cnt", _MT_TILE_COUNTS, ids=lambda n: f"t{n}")
+@pytest.mark.parametrize("point", list(_PERF_POINTS), ids=lambda p: p)
+def test_sfpu_blaze_device_profile_mt(perf_report, point, tile_cnt):
+    """Multi-tile MATH-zone sample per op/arm (per-tile BLAZE_BODY readout)."""
+    _run_blaze_device_profile(perf_report, point, tile_cnt, "BLAZE_DEVICE_PROFILE_MT")

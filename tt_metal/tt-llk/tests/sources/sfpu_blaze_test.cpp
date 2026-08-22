@@ -31,6 +31,16 @@
 // Ops 1-11 are typed already-semantic sources (sem == orig): BLAZE_IMPL is 0.
 // BLAZE_PARAM0/BLAZE_PARAM1: per-op scalar bits (see BLAZE_PARAMS in
 // helpers/test_variant_parameters.py).
+//
+// Lane FE multi-tile extension: the vehicle drives params.TILE_CNT tiles per
+// run (the softmax_k-vehicle runtime TILE_COUNT mechanism).  Per-op inits are
+// hoisted BEFORE the tile loop (run once per kernel — the amortization under
+// measurement); the loop body is wait-dest / datacopy / BLAZE_BODY zone /
+// section-done per tile.  The BLAZE_BODY zone stays per-tile INSIDE the loop,
+// so its profiled figure is the mean per-tile body time at every TILE_CNT
+// (the report's _stats_timings takes the mean across zone instances) and
+// cells stay directly comparable across tile counts.  rope re-unpacks the
+// single cos/sin tile (buffer_B[0]) every iteration.
 
 #include <algorithm>
 #include <cstdint>
@@ -89,10 +99,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, 4), UNPACK_FMT, UNPACK_FMT);
-    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_A[0]), UNPACK_FMT, UNPACK_FMT);
-    if constexpr (BLAZE_TWO_TILE)
+    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_B[0]), UNPACK_FMT, UNPACK_FMT);
+        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_A[tile]), UNPACK_FMT, UNPACK_FMT);
+        if constexpr (BLAZE_TWO_TILE)
+        {
+            // The single cos/sin tile is shared by every x tile.
+            _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                L1_ADDRESS(params.buffer_B[0]), UNPACK_FMT, UNPACK_FMT);
+        }
     }
 }
 
@@ -203,7 +218,7 @@ inline void blaze_sdpa_exp_tile()
 } // namespace ckernel
 #endif // BLAZE_OP == 11
 
-void run_kernel(RUNTIME_PARAMETERS)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
     const bool is_int_fpu_en    = false;
     const std::uint8_t MATH_FMT = UNPACK_A_IN;
@@ -212,23 +227,30 @@ void run_kernel(RUNTIME_PARAMETERS)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(MATH_FMT, MATH_FMT);
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
         4 /* num_faces */, MATH_FMT);
-    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        0 /* dst_index */, MATH_FMT, MATH_FMT);
-    if constexpr (BLAZE_TWO_TILE)
-    {
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            1 /* dst_index */, MATH_FMT, MATH_FMT);
-    }
-    // Reset dest addressing before the SFPU op (coverage-vehicle convention).
-    _llk_math_eltwise_unary_datacopy_uninit_<BroadcastType::NONE, unpack_to_dest>();
 
+    // Per-op inits hoisted before the tile loop: they program SFPU config /
+    // PRGM constants / replay buffers, never Dst data, so they are legal
+    // before the first wait-for-dest — and running them ONCE per kernel is
+    // the fixed cost whose amortization the multi-tile rows measure.
     SFPU_UNARY_INIT(unused);
     blaze_op_init();
 
+    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
-        // Named device-profile zone (test_sfpu_blaze.py::*_device_profile).
-        START_PERF_MEASURE("BLAZE_BODY")
+        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+            0 /* dst_index */, MATH_FMT, MATH_FMT);
+        if constexpr (BLAZE_TWO_TILE)
+        {
+            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                1 /* dst_index */, MATH_FMT, MATH_FMT);
+        }
+        // Reset dest addressing before the SFPU op (coverage-vehicle convention).
+        _llk_math_eltwise_unary_datacopy_uninit_<BroadcastType::NONE, unpack_to_dest>();
+
+        {
+            // Named device-profile zone (test_sfpu_blaze.py::*_device_profile).
+            START_PERF_MEASURE("BLAZE_BODY")
 
 #if BLAZE_OP == 1
         SFPU_UNARY_CALL(
@@ -349,9 +371,10 @@ void run_kernel(RUNTIME_PARAMETERS)
 #else
 #error "unknown BLAZE_OP"
 #endif
-    }
+        }
 
-    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif
@@ -370,9 +393,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(PACK_FMT);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
 
-    _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile */, L1_ADDRESS(params.buffer_Res[0]));
-    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+    {
+        _llk_packer_wait_for_math_done_();
+        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile */, L1_ADDRESS(params.buffer_Res[tile]));
+        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif

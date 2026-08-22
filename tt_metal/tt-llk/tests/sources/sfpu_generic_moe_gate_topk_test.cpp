@@ -82,7 +82,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
 
-    for (std::uint32_t tile = 0; tile < MOE_GATE_NUM_INPUT_TILES; ++tile)
+    // Lane FE multi-tile extension: params.TILE_CNT independent gate
+    // instances back to back (runtime TILE_COUNT mechanism); instance b's
+    // scores/bias pair sits at buffer_A[2b] / buffer_A[2b+1].
+    for (std::uint32_t tile = 0; tile < MOE_GATE_NUM_INPUT_TILES * params.TILE_CNT; ++tile)
     {
         _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             L1_ADDRESS(params.buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
@@ -136,14 +139,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    (void)params;
-
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 
+    // Inits hoisted before the instance loop (lane FE multi-tile): run once
+    // per kernel, the fixed cost whose amortization the multi-tile rows
+    // measure.  They program SFPU state, never Dst data.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
 #if BLAZE_IMPL == 2
     ckernel::sfpu::semantic::_init_semantic_moe_gate_topk_();
@@ -151,20 +155,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
     ckernel::sfpu::_init_generic_moe_gate_topk_();
 #endif
 
-    _llk_math_wait_for_dest_available_<DST_SYNC>();
-
-    // Stage the two inputs the SFPU kernel expects: raw scores in tile 0 and the
-    // biased sort key in tile 2. (Tile 1 is written by the kernel itself.)
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        MOE_GATE_SCORES_DST_TILE, formats.math, formats.math);
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        MOE_GATE_BIAS_DST_TILE, formats.math, formats.math);
-
-    // RC_custom: the kernel walks DEST itself off the tile-0 base.
+    // params.TILE_CNT independent gate instances; the MOE_GATE_TOPK_BODY
+    // zone stays per instance inside the loop, so its profiled figure is the
+    // mean per-instance body time at every count.
+    for (std::uint32_t inst = 0; inst < params.TILE_CNT; ++inst)
     {
-        // Isolated device-profile zone (test_sfpu_generic_moe_gate_topk_device_profile):
-        // profiler-only L1 bookkeeping, compiles away in functional builds.
-        START_PERF_MEASURE("MOE_GATE_TOPK_BODY")
+        _llk_math_wait_for_dest_available_<DST_SYNC>();
+
+        // Stage the two inputs the SFPU kernel expects: raw scores in tile 0 and the
+        // biased sort key in tile 2. (Tile 1 is written by the kernel itself.)
+        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+            MOE_GATE_SCORES_DST_TILE, formats.math, formats.math);
+        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+            MOE_GATE_BIAS_DST_TILE, formats.math, formats.math);
+
+        // RC_custom: the kernel walks DEST itself off the tile-0 base.
+        {
+            // Isolated device-profile zone (test_sfpu_generic_moe_gate_topk_device_profile):
+            // profiler-only L1 bookkeeping, compiles away in functional builds.
+            START_PERF_MEASURE("MOE_GATE_TOPK_BODY")
 #if BLAZE_IMPL == 2
         SFPU_UNARY_CALL(
             DST_SYNC,
@@ -198,9 +207,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             MOE_GATE_EPS_BITS,
             MOE_GATE_SCALE_BITS);
 #endif
-    }
+        }
 
-    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+        _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif
@@ -221,20 +231,53 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 
-    _llk_packer_wait_for_math_done_();
-
-    // Winner scores: float, packed with the configured format.
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(MOE_GATE_SCORES_DST_TILE, L1_ADDRESS(params.buffer_Res[0]));
-
-    // Winner indices: the kernel keeps them in the LO16 of the DEST word, so they
-    // have to be packed as UInt16 (same trick as the bitonic topk test).
     const std::uint32_t index_format = ckernel::to_underlying(DataFormat::UInt16);
-    _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en, false /* is_tile_dim_reconfig_en */>(
-        index_format, index_format, TILE_SIZE, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, false /* partial_face */, false /* narrow_tile */, 1 /* num_tiles */);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(index_format);
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(MOE_GATE_INDICES_DST_TILE, L1_ADDRESS(params.buffer_Res[1]));
+    const std::uint32_t float_format = formats.pack_src;
 
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    // Lane FE multi-tile: one scores/indices result pair per gate instance
+    // (buffer_Res[2b] / buffer_Res[2b+1]).  The per-instance UInt16<->float
+    // pack reconfig ping-pong is the honest per-instance cost of this
+    // kernel's packed-id contract.
+    for (std::uint32_t inst = 0; inst < params.TILE_CNT; ++inst)
+    {
+        if (inst != 0)
+        {
+            // Back to the float config for this instance's scores tile.
+            _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en, false /* is_tile_dim_reconfig_en */>(
+                float_format,
+                float_format,
+                TILE_SIZE,
+                FACE_R_DIM,
+                TILE_C_DIM,
+                TILE_NUM_FACES,
+                false /* partial_face */,
+                false /* narrow_tile */,
+                1 /* num_tiles */);
+            _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(float_format);
+        }
+
+        _llk_packer_wait_for_math_done_();
+
+        // Winner scores: float, packed with the configured format.
+        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(MOE_GATE_SCORES_DST_TILE, L1_ADDRESS(params.buffer_Res[2 * inst]));
+
+        // Winner indices: the kernel keeps them in the LO16 of the DEST word, so they
+        // have to be packed as UInt16 (same trick as the bitonic topk test).
+        _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en, false /* is_tile_dim_reconfig_en */>(
+            index_format,
+            index_format,
+            TILE_SIZE,
+            FACE_R_DIM,
+            TILE_C_DIM,
+            TILE_NUM_FACES,
+            false /* partial_face */,
+            false /* narrow_tile */,
+            1 /* num_tiles */);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(index_format);
+        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(MOE_GATE_INDICES_DST_TILE, L1_ADDRESS(params.buffer_Res[2 * inst + 1]));
+
+        _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif

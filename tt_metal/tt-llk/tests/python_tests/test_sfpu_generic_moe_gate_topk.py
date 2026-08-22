@@ -106,6 +106,7 @@ from helpers.test_variant_parameters import (
     BLAZE_IMPL,
     MOE_GATE_NORMALIZE_PARAMS,
     MOE_GATE_TOPK,
+    TILE_COUNT,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
@@ -246,7 +247,7 @@ def test_sfpu_generic_moe_gate_topk(
             ),
             MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
         ],
-        runtimes=[],
+        runtimes=[TILE_COUNT(1)],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -390,7 +391,7 @@ def test_sfpu_generic_moe_gate_topk_device_profile(perf_report):
             ),
             MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
         ],
-        runtimes=[],
+        runtimes=[TILE_COUNT(1)],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -466,7 +467,7 @@ def test_sfpu_blaze_moe_gate_topk(blaze_impl):
             MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
             BLAZE_IMPL(blaze_impl),
         ],
-        runtimes=[],
+        runtimes=[TILE_COUNT(1)],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -571,7 +572,7 @@ def test_sfpu_blaze_moe_gate_topk_device_profile(perf_report, blaze_impl):
             MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
             BLAZE_IMPL(blaze_impl),
         ],
-        runtimes=[],
+        runtimes=[TILE_COUNT(1)],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -593,4 +594,173 @@ def test_sfpu_blaze_moe_gate_topk_device_profile(perf_report, blaze_impl):
     assert cycles > 0
     print(
         f"BLAZE_MOE_GATE_TOPK {_BLAZE_IMPL_IDS[blaze_impl]} math_cycles={int(cycles)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lane FE multi-tile rows: blaze original vs lift at tile_count (= gate
+# instances) 8 / 32 on the vehicle's runtime TILE_CNT batch loop.  Instance b
+# has its own scores/biased pair (buffer_A[2b] / buffer_A[2b+1]) and its own
+# result pair (buffer_Res[2b] / buffer_Res[2b+1]); the full single-instance
+# check battery applies per instance.  The MOE_GATE_TOPK_BODY zone sits
+# inside the instance loop, so its profiled figure is the mean per-instance
+# body time at every count; the KERNEL zone carries the end-to-end verdict.
+# ---------------------------------------------------------------------------
+
+_MT_TILE_COUNTS = [8, 32]
+
+
+def _mt_build_instances(tile_cnt, formats, torch_format):
+    """tile_cnt independent gate problems + their concatenated src_A stream."""
+    torch.manual_seed(0)
+    problems = []
+    chunks = []
+    for _ in range(tile_cnt):
+        biased = _distinct_bf16_keys()
+        scores = (
+            torch.empty(NUM_TOTAL_EXPERTS, dtype=torch.float32)
+            .uniform_(0.05, 0.95)
+            .to(torch_format)
+            .to(torch.float32)
+        )
+        problems.append((biased, scores))
+        for t in (scores, biased):
+            chunks.append(
+                tilize_block(
+                    _face0_tile(t, torch_format).flatten(),
+                    [TILE_DIM, TILE_DIM],
+                    stimuli_format=formats.input_format,
+                ).flatten()
+            )
+    return problems, torch.cat(chunks)
+
+
+def _mt_config(cls, tile_cnt, blaze_impl, formats, src_A, src_B, **extra):
+    return cls(
+        "sources/sfpu_generic_moe_gate_topk_test.cpp",
+        formats,
+        templates=[
+            MOE_GATE_TOPK(num_total_experts=NUM_TOTAL_EXPERTS, **_BLAZE_POINT),
+            MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
+            BLAZE_IMPL(blaze_impl),
+        ],
+        runtimes=[TILE_COUNT(tile_cnt)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=2 * tile_cnt,
+            tile_count_B=1,
+            tile_count_res=NUM_RESULT_TILES * tile_cnt,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+        **extra,
+    )
+
+
+@skip_for_wormhole
+@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("tile_cnt", _MT_TILE_COUNTS, ids=lambda n: f"t{n}")
+def test_sfpu_blaze_moe_gate_topk_mt(tile_cnt, blaze_impl):
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    torch_format = format_dict[formats.input_format]
+
+    problems, src_A = _mt_build_instances(tile_cnt, formats, torch_format)
+    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+
+    configuration = _mt_config(TestConfig, tile_cnt, blaze_impl, formats, src_A, src_B)
+
+    res_from_L1 = configuration.run().result
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    assert len(res_tensor) == 2 * tile_cnt * ELEMENTS_PER_TILE
+
+    emitted_rows, num_winners = _expected_live_winners(
+        _BLAZE_POINT["num_selected_experts"],
+        _BLAZE_POINT["normalize"],
+        _BLAZE_POINT["zero_tail"],
+    )
+    golden_generator = get_golden_generator(MoeGateTopkGolden)
+    scale = _bits_to_float(SCALE_BITS)
+    eps = _bits_to_float(EPS_BITS)
+
+    for inst, (biased, scores) in enumerate(problems):
+        base = 2 * inst * ELEMENTS_PER_TILE
+        score_words = res_tensor[base : base + ELEMENTS_PER_TILE]
+        index_words = res_tensor[
+            base + ELEMENTS_PER_TILE : base + 2 * ELEMENTS_PER_TILE
+        ]
+
+        result_scores = untilize_block(
+            score_words, formats.output_format, [TILE_DIM, TILE_DIM]
+        ).reshape(TILE_DIM, TILE_DIM)
+        result_indices = (
+            untilize_block(index_words, formats.output_format, [TILE_DIM, TILE_DIM])
+            .contiguous()
+            .view(torch.uint16)
+            .to(torch.int32)
+            .reshape(TILE_DIM, TILE_DIM)
+        )
+
+        tag = f"[{_BLAZE_IMPL_IDS[blaze_impl]}] instance {inst}/{tile_cnt}"
+        golden_ids, _ = golden_generator(
+            biased, scores, num_winners, _BLAZE_POINT["normalize"], eps=eps, scale=scale
+        )
+        got_ids = [int(result_indices[row, 0].item()) for row in range(num_winners)]
+        got_scores = torch.tensor(
+            [result_scores[row, 0].item() for row in range(num_winners)],
+            dtype=torch.float32,
+        )
+
+        assert sorted(got_ids) == sorted(golden_ids), (
+            f"{tag} selected expert ids differ.\n"
+            f"  got    {sorted(got_ids)}\n"
+            f"  golden {sorted(golden_ids)}"
+        )
+        expected_paired = golden_generator.scores_for_ids(
+            got_ids, golden_ids, scores, _BLAZE_POINT["normalize"], eps=eps, scale=scale
+        )
+        assert passed_test(
+            expected_paired, got_scores, formats.output_format, print_errors=True
+        ), f"{tag} returned scores are not the (normalized) scores of the returned ids"
+        assert got_ids == golden_ids, (
+            f"{tag} full_sort=True must return winners in descending-key order.\n"
+            f"  got    {got_ids}\n  golden {golden_ids}"
+        )
+        assert_odd_columns_untouched(
+            result_indices, result_scores, scores, emitted_rows
+        )
+
+
+@skip_for_wormhole
+@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("tile_cnt", _MT_TILE_COUNTS, ids=lambda n: f"t{n}")
+def test_sfpu_blaze_moe_gate_topk_device_profile_mt(perf_report, tile_cnt, blaze_impl):
+    """Multi-instance MATH-zone sample of MOE_GATE_TOPK_BODY (per-instance)."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    torch_format = format_dict[formats.input_format]
+
+    _, src_A = _mt_build_instances(tile_cnt, formats, torch_format)
+    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+
+    configuration = _mt_config(
+        PerfConfig,
+        tile_cnt,
+        blaze_impl,
+        formats,
+        src_A,
+        src_B,
+        run_types=[PerfRunType.MATH_ISOLATE],
+    )
+    configuration.run(perf_report, run_count=1)
+    frame = perf_report.frame()
+    rows = frame[frame["marker"] == "MOE_GATE_TOPK_BODY"]
+    assert len(rows) == 1, frame.to_string(index=False)
+    cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(
+        f"BLAZE_MOE_GATE_TOPK_MT {_BLAZE_IMPL_IDS[blaze_impl]} tiles={tile_cnt} "
+        f"math_cycles_per_instance={int(cycles)}"
     )
