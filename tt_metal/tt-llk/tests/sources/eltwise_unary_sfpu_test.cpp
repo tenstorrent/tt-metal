@@ -169,6 +169,54 @@ inline void calculate_reciprocal_semantic()
     }
 }
 
+// Lane-FI envelope-attack twin of calculate_reciprocal_semantic: identical
+// per-element math, TWO independent rows in flight per iteration (software
+// pipelining written at source).  The impl-1 body is a 9-slot fully serial
+// chain (load -> arecip -> 3 dependent MADs -> min-swap -> MAD -> store, plus
+// a scheduled SFPNOP pad); the replay window it forms executes ~18.7 c/row on
+// silicon while the hand kernel's SFPLOADMACRO packing runs ~14.6 c/row, and
+// the KERNEL (e2e drain-inclusive) metric exposes the difference the BODY
+// zone hides (weekly-e2e-weekly-20260821: recip 924 vs 792 = +16.67% LOSS).
+// Interleaving two rows gives the scheduler/replay window cross-row ILP with
+// no algorithm change: the mechanism certificate for a future compiler
+// window-pairing pass.  LREG budget: peak 6 live vector values (<= 8).
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_reciprocal_semantic_ilv2()
+{
+    static_assert(ITERATIONS % 2 == 0, "interleave-2 body consumes rows in pairs");
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d += 2)
+    {
+        sfpi::vFloat inA = sfpi::dst_reg[0];
+        sfpi::vFloat inB = sfpi::dst_reg[1];
+#ifdef ARCH_BLACKHOLE
+        sfpi::vFloat rA = sfpi::approx_recip(inA);
+        sfpi::vFloat rB = sfpi::approx_recip(inB);
+        if constexpr (!APPROXIMATION_MODE)
+        {
+            // Same cubic Newton correction as calculate_reciprocal_semantic,
+            // element-for-element; only the row pairing differs.
+            sfpi::vFloat eA = 1.0f - inA * rA;
+            sfpi::vFloat eB = 1.0f - inB * rB;
+            sfpi::vFloat cA = eA * eA + eA;
+            sfpi::vFloat cB = eB * eB + eB;
+            cA              = cA * eA + eA;
+            cB              = cB * eB + eB;
+            cA              = sfpi::min(cA, 1.0f);
+            cB              = sfpi::min(cB, 1.0f);
+            rA              = cA * rA + rA;
+            rB              = cB * rB + rB;
+        }
+#else
+        sfpi::vFloat rA = sfpu_reciprocal<APPROXIMATION_MODE>(inA);
+        sfpi::vFloat rB = sfpu_reciprocal<APPROXIMATION_MODE>(inB);
+#endif
+        sfpi::dst_reg[0] = rA;
+        sfpi::dst_reg[1] = rB;
+        sfpi::dst_reg += 2;
+    }
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -795,6 +843,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     calculate_reciprocal_semantic<APPROX_MODE, iterations>,
                     block_tile,
                     VectorMode::None);
+            }
+            else if constexpr (RECIPROCAL_IMPL == 2 && SFPU_UNARY_OPERATION == SfpuType::reciprocal)
+            {
+                _llk_math_eltwise_unary_sfpu_params_(calculate_reciprocal_semantic_ilv2<APPROX_MODE, iterations>, block_tile, VectorMode::None);
             }
             else
             {
