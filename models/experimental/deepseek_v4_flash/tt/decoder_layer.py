@@ -58,12 +58,17 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
+        packed_weights=None,
     ):
         self.config = config
         self.layer_idx = layer_idx
         self.device = device
         eps = config.rms_norm_eps
         cache = _as_cache(cache)
+        packed_bundle = None
+        if packed_weights is not None:
+            (packed_tensor, packed_layout), packed_slot = packed_weights
+            packed_bundle = (packed_tensor, packed_layout, packed_slot)
 
         self.self_attn = DeepSeekV4Attention(
             config,
@@ -74,6 +79,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             weight_dtype=weight_dtype,
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
+            packed_weights=packed_bundle,
         )
         self.mlp = DeepSeekV4SparseMoeBlock(
             config,
@@ -85,6 +91,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             weight_dtype=weight_dtype,
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
+            packed_weights=packed_bundle,
         )
         self.input_layernorm = DeepSeekV4RMSNorm(
             weights["input_layernorm.weight"], eps, device, cache.file("input_layernorm"), sharded=True
@@ -97,10 +104,20 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             sharded=True,
         )
         self.attn_hc = DeepSeekV4HyperConnection(
-            config, _strip_prefix(weights, "attn_hc"), device, cache=cache.sub("attn_hc")
+            config,
+            _strip_prefix(weights, "attn_hc"),
+            device,
+            cache=cache.sub("attn_hc"),
+            packed_weights=packed_bundle,
+            packed_name="attn_hc.fn",
         )
         self.ffn_hc = DeepSeekV4HyperConnection(
-            config, _strip_prefix(weights, "ffn_hc"), device, cache=cache.sub("ffn_hc")
+            config,
+            _strip_prefix(weights, "ffn_hc"),
+            device,
+            cache=cache.sub("ffn_hc"),
+            packed_weights=packed_bundle,
+            packed_name="ffn_hc.fn",
         )
         _profile(self.device)
 

@@ -3,7 +3,8 @@ from typing import Optional
 import ttnn
 
 from .common import DeepSeekV4Module, _profile, width_sharded_l1_config
-from .layers import Linear, _rms_norm_unweighted
+from .l1_weights import packed_weight_spec
+from .layers import Linear, LinearDecode, _rms_norm_unweighted
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
 
 
@@ -27,7 +28,15 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
     See ``modular_deepseek_v4.py`` for the reference math.
     """
 
-    def __init__(self, config, weights: dict, device: ttnn.MeshDevice, cache: Optional[WeightCache] = None):
+    def __init__(
+        self,
+        config,
+        weights: dict,
+        device: ttnn.MeshDevice,
+        cache: Optional[WeightCache] = None,
+        packed_weights=None,
+        packed_name: str | None = None,
+    ):
         self.device = device
         self.hc = config.hc_mult
         self.hidden = config.hidden_size
@@ -61,7 +70,24 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         # overflows L1 before the weight is even considered (measured: the program's static CB
         # region ends at 1293248, past the L1 buffer floor). Prefetching this weight therefore
         # needs the real K-split reduction, not a re-blocking of the existing op.
-        self.fn = Linear(lambda: fn()[: 2 * hc + hc * hc], device, cache.file("fn"))
+        if packed_weights is None:
+            self.fn = Linear(lambda: fn()[: 2 * hc + hc * hc], device, cache.file("fn"))
+        else:
+            tensor, layout, slot = packed_weights
+            spec = packed_weight_spec(layout, slot, packed_name)
+            self.fn = LinearDecode(
+                lambda: fn()[: 2 * hc + hc * hc],
+                device,
+                cache.file("fn"),
+                dtype=ttnn.bfloat4_b,
+                K=spec.K,
+                N=spec.N,
+                partial_width_sharded=True,
+                k_blocks=spec.k_blocks,
+                n_blocks=spec.n_blocks,
+                packed_weight_tensor=tensor,
+                packed_weight_spec=spec,
+            )
         self.pre_b = _load_weight(
             _materialize(lambda: base()[:hc].reshape(1, 1, 1, hc), cache.file("pre_b"), ttnn.bfloat16),
             device,
@@ -89,7 +115,11 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         t = b * s
 
         # Flatten streams to [1,1,T,H*D] and unweighted-RMSNorm over H*D.
-        flat_mem_config = width_sharded_l1_config(t, hc * d, self.device)
+        tile_height = hidden_streams.get_tile().tile_shape[0]
+        if isinstance(self.fn, LinearDecode):
+            flat_mem_config = self.fn.get_input_memory_config(t, hc * d, tile_height)
+        else:
+            flat_mem_config = width_sharded_l1_config(t, hc * d, self.device)
         flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d], memory_config=flat_mem_config)
         flat = _rms_norm_unweighted(flat, self.norm_eps)
 
