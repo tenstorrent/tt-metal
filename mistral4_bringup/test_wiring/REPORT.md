@@ -357,3 +357,82 @@ gated to `refs/heads/main`), so it will not fail a job — but it is wrong.
 `tt_metal/python_env/requirements-dev.txt:33` already pins `transformers == 5.12.1` **on main**, and
 the CI dev image builds from it, so the `Mistral4*` classes the new reference package imports are
 present. No entry is affected.
+
+## 14. CI results (measured, not predicted)
+
+Four dispatched runs. **Case counts were read from every job log** — a skipped leg reports green, so
+colour alone proves nothing, and that caution turned out to be the whole story on one branch.
+
+### `ssalice/mistral4-119b-prefill` @ `ed82fad614c` — run 32566158505, conclusion `success`
+
+**7/7 legs green, 21 real cases, nothing hollow.**
+
+| leg | cases |
+|---|---|
+| Mistral4 MLA | 2 passed |
+| Mistral4 MLA Chunked | 3 passed |
+| Mistral4 Prefill Block | 4 passed |
+| Mistral4 MoE | 1 passed |
+| Mistral4 KV Cache Table | 1 passed |
+| Mistral4 MoE Dispatch/Combine Ops | 8 passed, 24 skipped |
+| Mistral4 Prefill Transformer Smoke | 2 passed |
+
+The staged cache is provably in use — from the MLA job log:
+`Loading cached reference results from /mnt/models/deepseek-prefill-cache/mistral_small_4_119b_mla_ref_cache/random_seq{5120,25600}.pt`
+
+**This is the branch to trust.**
+
+### First full run (32562083327) — what actually failed
+
+13 failures, split by the step that failed:
+
+- **8 were `Set up job`** — infra, before any test code runs. Six were pre-existing legs (MoE Gate,
+  Kimi MoE, Kimi DFlash drafter, Kimi Prefill Runner, GLM-5.2 Prefill Block, Prefill Block
+  Determinism); two were mistral4 MLA legs, which passed untouched on a clean runner.
+- **5 were real test failures**, of which **one** was mine: the transformer smoke step ran
+  12 min 13 s against a 12 min timeout. Self-inflicted — the timeout was measured when
+  `-k "smoke-random"` matched 2 cases, then the gate-mode axis multiplied it to 6. Fixed by
+  narrowing to `gpt_device` (2 cases, 5.4 min) rather than spending more budget.
+  The other 4 are pre-existing: 2x Chunked Kimi Padded Accuracy, MiniMax-M3 Prefill Perf,
+  Chunked GLM Accuracy.
+
+So that pipeline is not green on its own baseline — do not read a red run as "mistral4 broke it".
+
+### `ssalice/mistral4-tests` — the hollow-green trap, and the fix
+
+Run 32567382271 reported **`success` on all 7 legs while 5 of them ran zero tests**:
+MLA 2 passed, KV Cache Table 1 passed, and then Prefill Block 4 *skipped*, MoE 1 *skipped*,
+Transformer Smoke 2 *skipped*, MLA Chunked 3 *skipped*, MoE Ops 44+16 *skipped*.
+
+Reason, from the log:
+> Wrapped fabric requires a compatible physical ring; Galaxy TorusXY additionally requires an
+> explicit ring/ring descriptor and a cabling-certified allocation
+
+The `fabric_profiles` port during the cherry-pick put the mistral4 rows on
+`torus_xy_device_params` — correct by convention (DeepSeek, Kimi and GLM all use it for their 8x4
+rows) and wrong in practice, because `bh_sc1` is not ring-cabled. The skip comes from the shared
+`mesh_device`/`device_params` fixture guard, so it is generic to TorusXY, not model-specific.
+
+Switched the three mistral4-owned rows to `fabric2d_device_params`
+(`test_prefill_block.py`, `test_prefill_transformer.py`, `pcc/test_ttnn_moe.py`), each verified on
+device against this branch's own build before pushing. **Every PCC is identical to the other
+branch** — block 0.995178 / 0.998168, MoE reference 0.972469 — so FABRIC_2D vs TorusXY changes only
+whether the test runs, not the arithmetic.
+
+Final state (run 32570341936): MLA 2, MoE 1, Transformer Smoke 2, Prefill Block 4, KV Cache Table 1
+= **10 real cases passing**, up from 3. Two legs remain unrunnable here and are labelled
+**NO SIGNAL** in the yaml rather than left looking green:
+
+| leg | why it cannot be fixed from mistral4's side |
+|---|---|
+| `mistral4_mla_chunked` | `test_mla_chunked_prefill`'s mesh axis is **shared** with `deepseek_v3_d_p` / `kimi_k2_6` / `kimi_k3` (`test_mla.py:410-412`); upstream made its only 8x4 row torus-xy. Changing it would alter three other models' coverage. |
+| `mistral4_moe_ops` | its mesh row comes from `mesh_configs.py`, which upstream rewrote so the only marker-carrying 8x4 row is torus-xy. |
+
+Both run genuinely on `ssalice/mistral4-119b-prefill` (3 and 8 cases), so the coverage exists — it is
+this branch's fabric profiles that cannot exercise it without ring cabling.
+
+### The lesson worth keeping
+
+Two of the four runs were **green while proving nothing**, and one `failure` verdict came entirely
+from an infra flake in `Setup multihost job`. On this pipeline, neither colour is informative on its
+own: read the per-leg case counts, and read which *step* failed.
