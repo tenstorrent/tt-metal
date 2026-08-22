@@ -265,6 +265,77 @@ class FRESH_CPP_IMPL(TemplateParameter):
 
 
 @dataclass
+class BLAZE_OP(TemplateParameter):
+    """Select the vendored tt-blaze kernel in ``sfpu_blaze_test.cpp``.
+
+    Lane FD blaze-registration vehicle: integer ids mirror the table at the
+    top of ``sources/sfpu_blaze_test.cpp`` (1 clampedsilu_gate,
+    2 clampedsilu_up, 3 clampedsilu_clamped, 4 situ_gate, 5 scaledtanh,
+    6 logitsoftcap, 7 siluscaled, 8 sparsekfilter, 9 zeropad, 10 addrsqrt,
+    11 sdpaexp, 12 rope, 13 sdpareducerow).
+    """
+
+    blaze_op: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"#define BLAZE_OP {self.blaze_op}"
+
+
+@dataclass
+class BLAZE_SUBOP(TemplateParameter):
+    """Sub-op axis for blaze ops that carry one (see BLAZE_OP).
+
+    sdpareducerow: 0 MAX / 1 SUM.
+    """
+
+    blaze_subop: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"#define BLAZE_SUBOP {self.blaze_subop}"
+
+
+@dataclass
+class BLAZE_IMPL(TemplateParameter):
+    """Racing-arm selector for vendored tt-blaze kernel pairs.
+
+    0 = the byte-exact vendored blaze ORIGINAL (hand arm; for the in-tree
+    vehicles gaining this axis, 0 keeps the in-tree canon kernel),
+    1 = the vendored blaze original (in-tree vehicles only),
+    2 = the vendored typed semantic LIFT (sem arm, blaze_vendored/
+    blaze/kernels/sfpu/semantic/).  ``sfpu_blaze_test.cpp`` uses only 0/2
+    (it has no in-tree canon arm).
+    """
+
+    blaze_impl: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"#define BLAZE_IMPL {self.blaze_impl}"
+
+
+@dataclass
+class BLAZE_PARAMS(TemplateParameter):
+    """Two scalar parameters for the blaze kernels, as raw fp32 bit patterns.
+
+    Decoded on device via ``sfpi::as<vFloat>(vInt(bits))`` /
+    ``Converter::as_float``, so emitting bit patterns keeps kernel and torch
+    golden exactly aligned.  Meaning per BLAZE_OP: gate (limit, alpha),
+    up/clamped (limit, -), situ/scaledtanh (beta, 1/beta), logitsoftcap
+    (cap, -), siluscaled (scale, post_scale), addrsqrt (eps, -), rope
+    (scale, -).
+    """
+
+    param0_bits: int = 0x3F800000  # 1.0f
+    param1_bits: int = 0x3F800000  # 1.0f
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t BLAZE_PARAM0 = {self.param0_bits}u;",
+            f"constexpr std::uint32_t BLAZE_PARAM1 = {self.param1_bits}u;",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class SFPU_BINOP_MODE(TemplateParameter):
     """Select the float unary-with-scalar binop at compile time.
 

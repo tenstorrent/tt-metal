@@ -7,12 +7,15 @@ repos:
       language: system
       args: ["--fix", "--quiet"]
       files: \.(cpp|cc|h|hpp|py)$
-      exclude: tensix\.h$
+      # tensix.h + the byte-exact vendored tt-blaze kernels (VENDORED.md)
+      exclude: (tensix\.h$|tests/helpers/include/blaze_vendored/)
 - repo: https://github.com/pre-commit/mirrors-clang-format
   rev: v19.1.7
   hooks:
   - id: clang-format
     args: ["-style=file"]
+    # Byte-exact vendored tt-blaze kernels must never be reformatted.
+    exclude: tests/helpers/include/blaze_vendored/
 - repo: https://github.com/PyCQA/autoflake
   rev: v2.3.1
   hooks:

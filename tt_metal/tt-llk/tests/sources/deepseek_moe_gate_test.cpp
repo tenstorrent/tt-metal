@@ -12,8 +12,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "profiler.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -137,10 +139,34 @@ using namespace ckernel;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
 #pragma GCC diagnostic ignored "-Wunused-parameter"
+// BLAZE_IMPL selects the SFPU-phase racing arm (lane FD blaze registration;
+// default 0 = the vendored ttnn kernel, this vehicle's original single arm):
+//   0 ttnn vendored kernel (via its metal wrapper header)
+//   1 byte-exact vendored tt-blaze original (helpers/include/blaze_vendored/)
+//   2 lane-EX typed semantic lift (same vendored tree)
+// The ttnn tt-llk-layer kernel and the blaze original define the same
+// ckernel::sfpu symbol names, so exactly one is included per TU.  The FPU
+// transpose steps (step0/1/2) are shared protocol on every arm.  Blackhole
+// only (the blaze tree is BH-targeted).
+#ifndef BLAZE_IMPL
+#define BLAZE_IMPL 0
+#endif
 #ifdef ARCH_BLACKHOLE
 #include "deepseek/moe/deepseek_moe_gate/device/kernel_includes/tt_llk/tt_llk_blackhole/llk_lib/llk_math_deepseek_moe_gate_eltwise_binary.h"
 #include "deepseek/moe/deepseek_moe_gate/device/kernel_includes/tt_llk/tt_llk_blackhole/llk_lib/llk_math_deepseek_moe_gate_transpose_dest_single_face.h"
+#if BLAZE_IMPL == 0
 #include "deepseek/moe/deepseek_moe_gate/device/kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_deepseek_moe_gate_topk_single_face.h"
+#elif BLAZE_IMPL == 1
+#ifndef TRISC_MATH
+#define TRISC_MATH 1
+#endif
+#include "blaze/kernels/kernel_includes/tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_deepseek_moe_gate_topk_single_face.h"
+#else
+#ifndef TRISC_MATH
+#define TRISC_MATH 1
+#endif
+#include "blaze/kernels/sfpu/semantic/deepseek_moe_gate_topk_single_face.hpp"
+#endif
 #else
 #include "deepseek/moe/deepseek_moe_gate/device/kernel_includes/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_deepseek_moe_gate_eltwise_binary.h"
 #include "deepseek/moe/deepseek_moe_gate/device/kernel_includes/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_deepseek_moe_gate_transpose_dest_single_face.h"
@@ -168,17 +194,55 @@ static inline void mop_dest_reset()
 
 static inline void run_gate()
 {
+#if BLAZE_IMPL == 0
     DMG_SFPU_CALL(deepseek_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
+#elif BLAZE_IMPL == 1
+    DMG_SFPU_CALL(_deepseek_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
+#else
+#if defined(BLAZE_HYBRID_PHASES) && !(BLAZE_HYBRID_PHASES & 1)
+    DMG_SFPU_CALL(_deepseek_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
+#else
+    DMG_SFPU_CALL(semantic::_semantic_deepseek_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
+#endif
+#endif
 
     _llk_math_deepseek_moe_gate_transpose_dest_single_face_step0_init_<IS_32BIT>();
     _llk_math_deepseek_moe_gate_transpose_dest_single_face_step0_<is_fp32_dest_acc_en, IS_32BIT>();
 
+#if BLAZE_IMPL == 0
     DMG_SFPU_CALL(deepseek_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
+#elif BLAZE_IMPL == 1
+    DMG_SFPU_CALL(_deepseek_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
+#else
+    // PARTIAL LIFT ARM (lane FD registration): sum_top2 and top8 run the
+    // lane-EX typed lifts (execution-proven after the lane-FD bridge and
+    // window-store fixes); sort_top4 stays the byte-exact ORIGINAL — its lift
+    // is execution-refuted on the pinned sim (wrong winner set) and is a
+    // named lane-EX follow-up.  BLAZE_HYBRID_PHASES (debug knob, bit k = use
+    // the lift for phase k in {1 sum_top2, 2 sort_top4, 4 top8}) overrides.
+#if defined(BLAZE_HYBRID_PHASES) && (BLAZE_HYBRID_PHASES & 2)
+    DMG_SFPU_CALL(semantic::_semantic_deepseek_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
+#else
+    DMG_SFPU_CALL(_deepseek_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
+#endif
+#endif
 
     _llk_math_deepseek_moe_gate_transpose_dest_single_face_step1_init_<IS_32BIT>();
     _llk_math_deepseek_moe_gate_transpose_dest_single_face_step1_<is_fp32_dest_acc_en, IS_32BIT>();
 
+#if BLAZE_IMPL == 0
     DMG_SFPU_CALL(deepseek_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), DMG_EPS, DMG_SCALE);
+#elif BLAZE_IMPL == 1
+    // The blaze original takes a third extra_scale argument (function-pointer
+    // call: the C++ default does not apply).
+    DMG_SFPU_CALL(_deepseek_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), DMG_EPS, DMG_SCALE, 0u);
+#else
+#if defined(BLAZE_HYBRID_PHASES) && !(BLAZE_HYBRID_PHASES & 4)
+    DMG_SFPU_CALL(_deepseek_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), DMG_EPS, DMG_SCALE, 0u);
+#else
+    DMG_SFPU_CALL(semantic::_semantic_deepseek_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), DMG_EPS, DMG_SCALE, 0u);
+#endif
+#endif
 
     _llk_math_deepseek_moe_gate_transpose_dest_single_face_step2_init_<IS_32BIT>();
     _llk_math_deepseek_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, IS_32BIT>();
@@ -346,12 +410,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (DMG_MODE != MODE_BINARY)
     {
         _llk_math_deepseek_moe_gate_transpose_dest_single_face_common_init_<IS_32BIT>();
+#if BLAZE_IMPL == 0
         SFPU_UNARY_INIT_FN(unused, sfpu::deepseek_moe_gate_topk_init, (APPROX_MODE, is_fp32_dest_acc_en));
+#elif BLAZE_IMPL == 1
+        SFPU_UNARY_INIT_FN(unused, sfpu::_init_deepseek_moe_gate_topk, (APPROX_MODE, is_fp32_dest_acc_en));
+#else
+        SFPU_UNARY_INIT_FN(unused, sfpu::semantic::_init_semantic_deepseek_moe_gate_topk, (APPROX_MODE, is_fp32_dest_acc_en));
+#endif
     }
 
     if constexpr (DMG_MODE == MODE_GATE)
     {
-        run_gate();
+        {
+            // Isolated device-profile zone (test_sfpu_blaze_deepseek_moe_gate_
+            // device_profile): profiler-only, compiles away in functional builds.
+            START_PERF_MEASURE("DMG_GATE_BODY")
+            run_gate();
+        }
         dmg_sanitize_scratch();
     }
     else if constexpr (DMG_MODE == MODE_MOVE)

@@ -68,7 +68,7 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import SOFTMAX_K, TILE_COUNT
+from helpers.test_variant_parameters import BLAZE_IMPL, SOFTMAX_K, TILE_COUNT
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
@@ -259,3 +259,127 @@ def test_sfpu_softmax_k_device_profile(perf_report):
     cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
     assert cycles > 0
     print(f"SOFTMAX_K_DEVICE_PROFILE k=16 math_cycles={int(cycles)}")
+
+
+# ---------------------------------------------------------------------------
+# Lane FD blaze registration: the byte-exact vendored tt-blaze original vs the
+# lane-EX typed semantic lift, on this vehicle's stimuli/golden/checks.
+# k in {5, 8}: the odd-tail predication path (5, lane-EX's dissolved
+# SFPCONFIG-LREG11 mechanism) and the even path (8).  bf16 / dest_acc=No — the
+# only legal region for k < 16 (see the skip predicates above).
+# ---------------------------------------------------------------------------
+
+_BLAZE_IMPL_IDS = {1: "blaze_original", 2: "semantic_lift"}
+
+
+@skip_for_wormhole
+@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("k", [5, 8], ids=lambda k: f"k{k}")
+def test_sfpu_blaze_softmax_k(k, blaze_impl):
+    torch.manual_seed(0)
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    dest_acc = DestAccumulation.No
+    torch_format = format_dict[formats.input_format]
+
+    input_tile, logits = _build_input_tile(k, torch_format)
+
+    golden_generator = get_golden_generator(SoftmaxKGolden)
+    golden_tile = golden_generator(
+        input_tile, logits, k, dest_acc, SOFTMAX_ROWS, FACE_DIM
+    )
+
+    src_A = tilize_block(
+        input_tile.flatten(), [TILE_DIM, TILE_DIM], stimuli_format=formats.input_format
+    ).flatten()
+    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+
+    configuration = TestConfig(
+        "sources/sfpu_softmax_k_test.cpp",
+        formats,
+        templates=[SOFTMAX_K(softmax_k=k), BLAZE_IMPL(blaze_impl)],
+        runtimes=[TILE_COUNT(1)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=1,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=False,
+    )
+
+    res_from_L1 = configuration.run().result
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tile = untilize_block(
+        res_tensor, formats.output_format, [TILE_DIM, TILE_DIM]
+    ).reshape(TILE_DIM, TILE_DIM)
+
+    assert passed_test(
+        golden_tile[:SOFTMAX_ROWS, :FACE_DIM].flatten(),
+        res_tile[:SOFTMAX_ROWS, :FACE_DIM].flatten(),
+        formats.output_format,
+        print_errors=True,
+    ), f"[{_BLAZE_IMPL_IDS[blaze_impl]}] softmax over k={k} columns mismatch"
+    if k < FACE_DIM:
+        padding = res_tile[:SOFTMAX_ROWS, k:FACE_DIM]
+        assert bool((padding.to(torch.float32) == 0.0).all()), (
+            f"[{_BLAZE_IMPL_IDS[blaze_impl]}] padding columns must be exactly 0.0 "
+            f"(k={k}):\n{padding}"
+        )
+    for row in range(SOFTMAX_ROWS):
+        row_sum = res_tile[row, :k].to(torch.float32).sum().item()
+        assert (
+            abs(row_sum - 1.0) < 5e-2
+        ), f"[{_BLAZE_IMPL_IDS[blaze_impl]}] row {row} sums to {row_sum} (k={k})"
+    assert passed_test(
+        golden_tile[SOFTMAX_ROWS:, :].flatten(),
+        res_tile[SOFTMAX_ROWS:, :].flatten(),
+        formats.output_format,
+    ), "blaze softmax_k modified DEST rows outside its 4-row band"
+
+
+@skip_for_wormhole
+@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+def test_sfpu_blaze_softmax_k_device_profile(perf_report, blaze_impl):
+    """MATH-zone sample of SOFTMAX_K_BODY for the blaze original / lift (k=5)."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    torch.manual_seed(0)
+    torch_format = format_dict[formats.input_format]
+    input_tile, _ = _build_input_tile(5, torch_format)
+    src_A = tilize_block(
+        input_tile.flatten(), [TILE_DIM, TILE_DIM], stimuli_format=formats.input_format
+    ).flatten()
+    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+
+    configuration = PerfConfig(
+        "sources/sfpu_softmax_k_test.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[SOFTMAX_K(softmax_k=5), BLAZE_IMPL(blaze_impl)],
+        runtimes=[TILE_COUNT(1)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=1,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+    configuration.run(perf_report, run_count=1)
+    frame = perf_report.frame()
+    rows = frame[frame["marker"] == "SOFTMAX_K_BODY"]
+    assert len(rows) == 1, frame.to_string(index=False)
+    cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    print(
+        f"BLAZE_SOFTMAX_K {_BLAZE_IMPL_IDS[blaze_impl]} k=5 math_cycles={int(cycles)}"
+    )

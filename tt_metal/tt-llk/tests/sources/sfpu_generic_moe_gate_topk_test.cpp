@@ -98,7 +98,36 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+
+// BLAZE_IMPL selects the racing arm (lane FD blaze registration; default 0 =
+// the in-tree canon kernel, the vehicle's original single arm):
+//   0 in-tree canon sfpu/experimental kernel
+//   1 byte-exact vendored tt-blaze original (helpers/include/blaze_vendored/)
+//   2 lane-EX typed semantic lift (same vendored tree)
+// The canon and blaze-original headers define the same ckernel::sfpu symbol
+// names, so exactly one of them is included per TU.
+#ifndef BLAZE_IMPL
+#define BLAZE_IMPL 0
+#endif
+#if BLAZE_IMPL == 0
 #include "sfpu/experimental/ckernel_sfpu_generic_moe_gate_topk.h"
+#elif BLAZE_IMPL == 1
+// The vendored blaze body gates helpers on the tt-metal JIT thread define and
+// expects Converter in scope from its include environment.
+#ifndef TRISC_MATH
+#define TRISC_MATH 1
+#endif
+#include "sfpu/ckernel_sfpu_converter.h"
+// Converter first (own block so clang-format keeps the order).
+#include "blaze/kernels/kernel_includes/tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_generic_moe_gate_topk.h"
+#else
+#ifndef TRISC_MATH
+#define TRISC_MATH 1
+#endif
+#include "sfpu/ckernel_sfpu_converter.h"
+// Converter first (own block so clang-format keeps the order).
+#include "blaze/kernels/sfpu/semantic/generic_moe_gate_topk.hpp"
+#endif
 
 using namespace ckernel;
 
@@ -116,7 +145,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         TILE_NUM_FACES, formats.math);
 
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+#if BLAZE_IMPL == 2
+    ckernel::sfpu::semantic::_init_semantic_moe_gate_topk_();
+#else
     ckernel::sfpu::_init_generic_moe_gate_topk_();
+#endif
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
@@ -132,6 +165,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Isolated device-profile zone (test_sfpu_generic_moe_gate_topk_device_profile):
         // profiler-only L1 bookkeeping, compiles away in functional builds.
         START_PERF_MEASURE("MOE_GATE_TOPK_BODY")
+#if BLAZE_IMPL == 2
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            semantic::_semantic_moe_gate_topk_,
+            (MOE_GATE_NORMALIZE, MOE_GATE_NUM_SELECTED_EXPERTS, MOE_GATE_NUM_TOTAL_EXPERTS, MOE_GATE_ZERO_TAIL, MOE_GATE_FULL_SORT),
+            MOE_GATE_SCORES_DST_TILE,
+            VectorMode::RC_custom,
+            MOE_GATE_EPS_BITS,
+            MOE_GATE_SCALE_BITS,
+            0u /* extra_scale (no do_extra_scale) */);
+#elif BLAZE_IMPL == 1
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            _generic_moe_gate_topk_,
+            (MOE_GATE_NORMALIZE, MOE_GATE_NUM_SELECTED_EXPERTS, MOE_GATE_NUM_TOTAL_EXPERTS, MOE_GATE_ZERO_TAIL, MOE_GATE_FULL_SORT),
+            MOE_GATE_SCORES_DST_TILE,
+            VectorMode::RC_custom,
+            MOE_GATE_EPS_BITS,
+            MOE_GATE_SCALE_BITS,
+            0u /* extra_scale (no do_extra_scale) */);
+#else
         SFPU_UNARY_CALL(
             DST_SYNC,
             is_fp32_dest_acc_en,
@@ -141,6 +197,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             VectorMode::RC_custom,
             MOE_GATE_EPS_BITS,
             MOE_GATE_SCALE_BITS);
+#endif
     }
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();

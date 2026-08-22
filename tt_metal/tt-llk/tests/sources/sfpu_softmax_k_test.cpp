@@ -82,8 +82,36 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 
+// BLAZE_IMPL selects the racing arm (lane FD blaze registration; default 0 =
+// the in-tree canon kernel):
+//   0 in-tree canon sfpu/experimental kernel
+//   1 byte-exact vendored tt-blaze original (helpers/include/blaze_vendored/)
+//   2 lane-EX typed semantic lift (same vendored tree)
+// Canon and blaze-original define the same ckernel::sfpu symbols: one per TU.
+#ifndef BLAZE_IMPL
+#define BLAZE_IMPL 0
+#endif
 #define DST_ACCUM_MODE is_fp32_dest_acc_en
+#if BLAZE_IMPL == 0
 #include "sfpu/experimental/ckernel_sfpu_softmax_k.h"
+#elif BLAZE_IMPL == 1
+// The blaze original relies on its includer for the exp/reduce helpers and
+// the tt-metal JIT thread define.
+#ifndef TRISC_MATH
+#define TRISC_MATH 1
+#endif
+#include "llk_sfpu/ckernel_sfpu_exp.h"
+#include "llk_sfpu/ckernel_sfpu_reduce.h"
+// Helpers first (own block so clang-format keeps the order).
+#include "blaze/kernels/kernel_includes/tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_softmax_k.h"
+#else
+#ifndef TRISC_MATH
+#define TRISC_MATH 1
+#endif
+#include "llk_sfpu/ckernel_sfpu_exp.h"
+// Helpers first (own block so clang-format keeps the order).
+#include "blaze/kernels/sfpu/semantic/softmax_k.hpp"
+#endif
 #undef DST_ACCUM_MODE
 
 using namespace ckernel;
@@ -102,7 +130,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         TILE_NUM_FACES, formats.math);
 
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+#if BLAZE_IMPL == 2
+    ckernel::sfpu::semantic::_init_semantic_softmax_k_();
+#else
     ckernel::sfpu::_init_softmax_k_();
+#endif
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
@@ -116,7 +148,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Isolated device-profile zone (test_sfpu_softmax_k_device_profile):
             // profiler-only L1 bookkeeping, compiles away in functional builds.
             START_PERF_MEASURE("SOFTMAX_K_BODY")
+#if BLAZE_IMPL == 2
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, semantic::_semantic_softmax_k_, (SOFTMAX_K), 0 /* dst_index */, VectorMode::RC_custom);
+#else
             SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _softmax_k_, (SOFTMAX_K), 0 /* dst_index */, VectorMode::RC_custom);
+#endif
         }
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();

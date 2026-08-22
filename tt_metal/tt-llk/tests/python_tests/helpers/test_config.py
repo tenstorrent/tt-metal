@@ -537,6 +537,11 @@ class TestConfig:
                 "-I../../hw/inc",
                 "-Ifirmware/riscv/common",
                 "-Ihelpers/include",
+                # Vendored tt-blaze SFPU kernels (lane FD, helpers/include/
+                # blaze_vendored/VENDORED.md): the byte-exact originals keep
+                # their in-repo "blaze/kernels/..." include spellings, which
+                # resolve against this root.  Harness-side only (R7).
+                "-Ihelpers/include/blaze_vendored",
                 "-I../../hostdevcommon/api",
             ]
             + hw_specific_includes

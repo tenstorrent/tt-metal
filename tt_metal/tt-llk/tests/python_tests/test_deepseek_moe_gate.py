@@ -16,8 +16,9 @@ tile 1 a 16-bit id, tile 2 the payload+bias sort key, tile 3 scratch.
 
 import struct
 
+import pytest
 import torch
-from conftest import skip_for_quasar
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import GeneralizedMoeGateGolden, get_golden_generator
 from helpers.llk_params import (
@@ -25,13 +26,16 @@ from helpers.llk_params import (
     DestSync,
     MathFidelity,
     MathOperation,
+    PerfRunType,
 )
 from helpers.param_config import parametrize
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     APPROX_MODE,
+    BLAZE_IMPL,
     DEEPSEEK_MOE_GATE,
     DEST_SYNC,
     MATH_FIDELITY,
@@ -603,3 +607,106 @@ def test_deepseek_moe_gate_step2():
         assert torch.equal(
             regions[region], tags[region]
         ), f"step2 touched region {region}, which its num_tiles=2 mop does not reach"
+
+
+# ---------------------------------------------------------------------------
+# Lane FD blaze registration: SFPU phases (sum_top2 / sort_top4_groups / top8)
+# from the byte-exact vendored tt-blaze original vs the lane-EX typed semantic
+# lift, on this vehicle's stimuli/golden/checks.  The FPU transpose steps are
+# shared protocol on every arm.  BLAZE_IMPL: 1 = blaze original, 2 = lift.
+# ---------------------------------------------------------------------------
+
+_BLAZE_IMPL_IDS = {1: "blaze_original", 2: "semantic_lift"}
+
+
+def _blaze_gate_config(blaze_impl, payload, bias):
+    return TestConfig(
+        "sources/deepseek_moe_gate_test.cpp",
+        FORMATS,
+        templates=[
+            DEEPSEEK_MOE_GATE(
+                dmg_mode=MODE_GATE, dmg_eps=_fp32_bits(EPS), dmg_scale=_fp32_bits(SCALE)
+            ),
+            MATH_OP(mathop=MathOperation.Elwadd),
+            MATH_FIDELITY(MathFidelity.HiFi4),
+            APPROX_MODE(ApproximationMode.No),
+            ACC_TO_DEST(False),
+            DEST_SYNC(DestSync.Half),
+            BLAZE_IMPL(blaze_impl),
+        ],
+        runtimes=[TILE_COUNT(4), NUM_FACES(4, 4, 4)],
+        variant_stimuli=StimuliConfig(
+            torch.cat([_tile(t) for t in _gate_tiles(payload)]),
+            DataFormat.Float16_b,
+            _tile(bias),
+            DataFormat.Float16_b,
+            DataFormat.UInt16,
+            tile_count_A=4,
+            tile_count_B=1,
+            tile_count_res=4,
+            num_faces=4,
+        ),
+    )
+
+
+@skip_for_wormhole
+@pytest.mark.parametrize("blaze_impl", [1, 2], ids=lambda i: _BLAZE_IMPL_IDS[i])
+@pytest.mark.parametrize("seed", [19, 128])
+def test_sfpu_blaze_deepseek_moe_gate(seed, blaze_impl):
+    payload, bias, keys = _gate_stimuli(seed)
+    regions = _regions(_blaze_gate_config(blaze_impl, payload, bias))
+    _assert_gate_output(
+        regions,
+        _golden(keys, payload),
+        **_weight_tolerance(ApproximationMode.No),
+    )
+
+
+@skip_for_wormhole
+@pytest.mark.parametrize(
+    "blaze_impl",
+    [0, 1, 2],
+    ids=lambda i: {0: "ttnn_vendored"}.get(i) or _BLAZE_IMPL_IDS[i],
+)
+def test_sfpu_blaze_deepseek_moe_gate_device_profile(perf_report, blaze_impl):
+    """MATH-zone sample of DMG_GATE_BODY per arm (0 ttnn, 1 blaze, 2 lift)."""
+    if True:
+        payload, bias, _keys = _gate_stimuli(seed=19)
+        configuration = PerfConfig(
+            "sources/deepseek_moe_gate_test.cpp",
+            FORMATS,
+            run_types=[PerfRunType.MATH_ISOLATE],
+            templates=[
+                DEEPSEEK_MOE_GATE(
+                    dmg_mode=MODE_GATE,
+                    dmg_eps=_fp32_bits(EPS),
+                    dmg_scale=_fp32_bits(SCALE),
+                ),
+                MATH_OP(mathop=MathOperation.Elwadd),
+                MATH_FIDELITY(MathFidelity.HiFi4),
+                APPROX_MODE(ApproximationMode.No),
+                ACC_TO_DEST(False),
+                DEST_SYNC(DestSync.Half),
+                BLAZE_IMPL(blaze_impl),
+            ],
+            runtimes=[TILE_COUNT(4), NUM_FACES(4, 4, 4)],
+            variant_stimuli=StimuliConfig(
+                torch.cat([_tile(t) for t in _gate_tiles(payload)]),
+                DataFormat.Float16_b,
+                _tile(bias),
+                DataFormat.Float16_b,
+                DataFormat.UInt16,
+                tile_count_A=4,
+                tile_count_B=1,
+                tile_count_res=4,
+                num_faces=4,
+            ),
+        )
+        configuration.run(perf_report, run_count=1)
+    frame = perf_report.frame()
+    rows = frame[frame["marker"] == "DMG_GATE_BODY"]
+    assert len(rows) == 1, frame.to_string(index=False)
+    cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
+    assert cycles > 0
+    name = {0: "ttnn_vendored"}.get(blaze_impl) or _BLAZE_IMPL_IDS[blaze_impl]
+    print(f"BLAZE_DEEPSEEK_GATE {name} math_cycles={int(cycles)}")
