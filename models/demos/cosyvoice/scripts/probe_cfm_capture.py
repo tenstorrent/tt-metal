@@ -12,8 +12,8 @@ buys 1.43x rather than 2x.
 Reading `solve_euler` says where it goes: it calls `self._capture(...)` at line 294 and
 `self._release()` at line 342, so **the estimator trace is captured and thrown away on
 every call**. One utterance, one capture. That is correct and it is also the single
-largest remaining op-level cost in the model -- larger than anything F30-F48 addressed
-in the flow.
+largest remaining op-level cost in the model -- larger than anything the op-level work so
+far addressed in the flow.
 
 The question this settles is whether that cost is *inherent* or *amortisable*:
 

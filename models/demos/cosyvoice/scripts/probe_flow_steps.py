@@ -12,7 +12,8 @@ So the arithmetic is inviting, and that is exactly the shape of claim this proje
 learned to distrust. Two questions have to be answered together:
 
   1. Is the speed-up actually linear, or does a fixed per-call cost dominate at low step
-     counts? F47 found the flow's cost-per-tile *falls* with length, the signature of a
+     counts? An earlier length sweep found the flow's cost-per-tile *falls* with length,
+     the signature of a
      large fixed cost — if that cost is per-*stage* rather than per-*step*, halving the
      steps buys much less than half.
   2. What does the output lose? The checkpoint ships `n_timesteps = 10` and every

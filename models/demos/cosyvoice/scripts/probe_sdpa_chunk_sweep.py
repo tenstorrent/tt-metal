@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Which `k_chunk_size` values does `sdpa_decode` accept and then get wrong?
 
-F48 found that `k_chunk_size = 32` passes validation on this model's key widths and
+The fused-decode-attention work found that `k_chunk_size = 32` passes validation on this
+model's key widths and
 returns a wrong answer -- PCC 0.016 at width 384 against 0.99998 at 128. That is enough
 to fix the model and not enough to report upstream: "32 is bad, 128 is good" is an
 anecdote. A useful report needs the boundary.

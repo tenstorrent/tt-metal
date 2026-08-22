@@ -192,7 +192,8 @@ class TtRelPosAttention:
 
     def __init__(self, device, bag, n_head: int, d_k: int, dtype=ttnn.bfloat16, cc=None, weights_dtype=None):
         self.device, self.h, self.d_k, self.dtype = device, n_head, d_k, dtype
-        # HiFi4 + fp32 accumulation: see F20 in the notes. The flow encoder is 6
+        # HiFi4 + fp32 accumulation: high fidelity belongs on the matmuls, not only the
+        # convolutions (PERF.md, *Two levers that mattered more than expected*). The flow encoder is 6
         # blocks and the AR decoder is 14, and the decoder runs hundreds of times.
         self.cc = accurate_compute_config(device) if cc is None else cc
         self.scale = 1.0 / math.sqrt(d_k)
@@ -250,7 +251,7 @@ class TtRelPosAttention:
                 compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
                 q_chunk_size=32,
                 k_chunk_size=min(128, pow2),
-                exp_approx_mode=False,  # accuracy is the gate; see F20
+                exp_approx_mode=False,  # accuracy is the gate, not throughput
             )
             self._sdpa_prog[key_w] = prog
         return prog
@@ -517,8 +518,8 @@ class TtRelPosAttention:
         #
         # 3.3x on the attention block with the two layout permutes charged, 1.10 ms
         # per token at W=384 and 1.26 at 448, PCC 0.99998 against a torch golden
-        # where the chain it replaces scores 0.99998. See F48 and
-        # `scripts/probe_sdpa_decode.py`.
+        # where the chain it replaces scores 0.99998. See `scripts/probe_sdpa_decode.py`
+        # and PERF.md, *The decode attention is expressible as flash attention*.
         #
         # `03_plan.md` P5 scoped this as ~1500 LOC of new C++ at high risk. None of
         # it was needed; the module docstring above had the identity right all along.

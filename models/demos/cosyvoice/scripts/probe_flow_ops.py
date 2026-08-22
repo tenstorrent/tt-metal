@@ -4,7 +4,8 @@
 """Which op class is Wormhole's flow penalty in?
 
 The flow decoder is the model's most architecture-penalised stage -- ~1.8x Blackhole on
-Wormhole -- and F55 closed off the obvious explanation: it is **not** parallelism-shaped.
+Wormhole -- and an earlier probe closed off the obvious explanation: it is **not**
+parallelism-shaped.
 The estimator at batch 2 costs 0.90x batch 1, so its cores are already idle at the size it
 runs; splitting the two classifier-free-guidance rows across chips would buy nothing. That
 leaves per-op cost, which is what this measures.

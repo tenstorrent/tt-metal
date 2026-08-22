@@ -19,8 +19,9 @@ mask folds into the same tensor.
 It lands on 61 % of runtime. Every other item in `03_plan.md` targets the vocoder, which
 is 3 %.
 
-Whether it *pays* is the open question, and `F35` is the reason to ask rather than
-assume: fusing QKV took the flow 1.075 -> 0.719 s and the decode step 8.29 -> 8.31 ms.
+Whether it *pays* is the open question, and the QKV-fusion result is the reason to ask
+rather than assume: fusing QKV took the flow 1.075 -> 0.719 s and the decode step
+8.29 -> 8.31 ms.
 Same change, opposite outcomes, because op count is a proxy for cost and not the cost.
 Here the arithmetic is unpromising on its face -- four ops out, three in -- and the case
 rests entirely on the `[1, 16, 1, W]` score matrix never being written.
@@ -37,7 +38,7 @@ says the two disagree without saying which is wrong, and the first run of this p
 burned a cycle on that: it read a mismatch as a broadcast bug when the open question was
 the *convention* -- whether the kernel computes `QK^T*scale + M` or `(QK^T + M)*scale`.
 The two need different bias tensors and only one of them is right. A third number
-settles it, the same way F45's width control did.
+settles it, the same way the key-width control did.
 """
 from __future__ import annotations
 
