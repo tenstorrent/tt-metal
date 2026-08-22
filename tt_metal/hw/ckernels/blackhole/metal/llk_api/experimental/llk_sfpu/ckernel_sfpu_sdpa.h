@@ -35,7 +35,14 @@ inline void calculate_recip_first_column() {
     if constexpr (legacy_compat) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
+            // _reciprocal_compat_signed_ is the bare _reciprocal_compat_ plus the negate that
+            // restores the sign the primitive drops; this path used to call the primitive
+            // directly and so returned 1/|x| rather than 1/x. The one consumer that still takes
+            // it bare is sampling_recip_value in blackhole's ckernel_sfpu_sampling.h, which keeps |1/x|
+            // deliberately because its legacy path has to stay bit-identical for blaze. No such
+            // contract covers legacy_compat here -- it selects the algorithm, nothing pins the
+            // output bits -- so the sign is restored rather than documented.
+            sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_signed_<APPROX ? 2 : 3>(in);
             if constexpr (!(DST_ACCUM_MODE || APPROX)) {
                 out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
             }
@@ -67,7 +74,7 @@ template <
     bool USE_SFPARECIP_INSTR,
     int POLY_DEGREE,
     bool IS_FP32_DEST_ACC_EN,
-    uint16_t SCALE_BF16>
+    std::uint16_t SCALE_BF16>
 inline void calculate_exponential_polynomial() {
     addr_mod_t{
         .srca = {.incr = 0},
@@ -205,7 +212,7 @@ inline void calculate_exponential_polynomial() {
     }
 }
 
-template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
+template <bool SDPA_EXP_APPROX_MODE, std::uint16_t scale_bf16>
 inline void calculate_exponential_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     if constexpr (SDPA_EXP_APPROX_MODE) {
@@ -231,11 +238,11 @@ inline void calculate_exponential_first_column() {
 
 inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     constexpr int ITERATIONS_HALF_FACE = 4;
-    constexpr uint32_t prev_max_base_idx = 0;
-    constexpr uint32_t worker_max_base_idx = 32;
-    constexpr uint32_t cur_max_base_idx = 64;
-    constexpr uint32_t prev_sum_base_idx = 96;
-    constexpr uint32_t worker_sum_base_idx = 128;
+    constexpr std::uint32_t prev_max_base_idx = 0;
+    constexpr std::uint32_t worker_max_base_idx = 32;
+    constexpr std::uint32_t cur_max_base_idx = 64;
+    constexpr std::uint32_t prev_sum_base_idx = 96;
+    constexpr std::uint32_t worker_sum_base_idx = 128;
 
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
         sfpi::vFloat prev_max_vec = sfpi::dst_reg[prev_max_base_idx];
@@ -269,7 +276,7 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     }
 }
 
-inline void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
+inline void calculate_softplus_first_column(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     float beta = ckernel::sfpu::Converter::as_float(param0);
     float beta_reciprocal = ckernel::sfpu::Converter::as_float(param1);
