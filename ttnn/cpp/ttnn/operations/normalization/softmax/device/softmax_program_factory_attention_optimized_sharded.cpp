@@ -229,7 +229,10 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
             reader_defines["SHARDED_CAUSAL_MASK"] = "1";
         }
     }
-    KernelSpec::CompilerOptions::Defines compute_defines = reader_defines;
+    KernelSpec::CompilerOptions::Defines compute_defines;
+    if (has_mask) {
+        compute_defines["FUSED_SCALE_MASK"] = "1";
+    }
     if (attributes.numeric_stable) {
         compute_defines["NUMERIC_STABLE"] = "1";
     }
@@ -377,7 +380,10 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
             {{"block_h", program_config.block_h},
              {"block_w", program_config.block_w},
              {"subblock_w", program_config.subblock_w},
-             {"num_subblocks_w", num_subblocks_w}},
+             {"num_subblocks_w", num_subblocks_w},
+             {"causal_mask", static_cast<std::uint32_t>(attributes.is_causal_mask)},
+             {"sharded_causal_mask", static_cast<std::uint32_t>(mask_sharded_resident)},
+             {"numeric_stable", static_cast<std::uint32_t>(attributes.numeric_stable)}},
         .hw_config = compute_hw,
     };
 

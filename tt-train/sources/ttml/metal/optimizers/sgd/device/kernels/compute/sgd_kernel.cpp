@@ -4,168 +4,208 @@
 
 #include <cstdint>
 
-#include "api/compute/bcast.h"
-#include "api/compute/common.h"
-#include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
-#include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
-constexpr auto cb_param_in_idx = tt::CBIndex::c_0;
-constexpr auto cb_grad_idx = tt::CBIndex::c_1;
-constexpr auto cb_momentum_in_idx = tt::CBIndex::c_2;
+namespace ckl = compute_kernel_lib;
 
-constexpr auto cb_param_wd_idx = tt::CBIndex::c_3;
-constexpr auto cb_grad_wd_idx = tt::CBIndex::c_4;
+constexpr auto dfb_param_in_idx_id = tt::CBIndex::c_0;
+constexpr auto dfb_grad_idx_id = tt::CBIndex::c_1;
+constexpr auto dfb_momentum_in_idx_id = tt::CBIndex::c_2;
 
-constexpr auto cb_momentum_scaled_idx = tt::CBIndex::c_5;
-constexpr auto cb_momentum_out_idx = tt::CBIndex::c_6;
-constexpr auto cb_momentum_dram_idx = tt::CBIndex::c_7;
+constexpr auto dfb_param_wd_idx_id = tt::CBIndex::c_3;
+constexpr auto dfb_grad_wd_idx_id = tt::CBIndex::c_4;
 
-constexpr auto cb_grad_dampened_idx = tt::CBIndex::c_8;
+constexpr auto dfb_momentum_scaled_idx_id = tt::CBIndex::c_5;
+constexpr auto dfb_momentum_out_idx_id = tt::CBIndex::c_6;
+constexpr auto dfb_momentum_dram_idx_id = tt::CBIndex::c_7;
 
-constexpr auto cb_nesterov_momentum_idx = tt::CBIndex::c_9;
-constexpr auto cb_nesterov_update_idx = tt::CBIndex::c_10;
+constexpr auto dfb_grad_dampened_idx_id = tt::CBIndex::c_8;
 
-constexpr auto cb_update_idx = tt::CBIndex::c_11;
+constexpr auto dfb_nesterov_momentum_idx_id = tt::CBIndex::c_9;
+constexpr auto dfb_nesterov_update_idx_id = tt::CBIndex::c_10;
 
-constexpr auto cb_bcast_lr_idx = tt::CBIndex::c_12;
-constexpr auto cb_bcast_momentum_idx = tt::CBIndex::c_13;
-constexpr auto cb_bcast_one_minus_dampening_idx = tt::CBIndex::c_14;
-constexpr auto cb_bcast_wd_idx = tt::CBIndex::c_15;
+constexpr auto dfb_update_idx_id = tt::CBIndex::c_11;
 
-constexpr auto cb_output_idx = tt::CBIndex::c_16;
+constexpr auto dfb_bcast_lr_idx_id = tt::CBIndex::c_12;
+constexpr auto dfb_bcast_momentum_idx_id = tt::CBIndex::c_13;
+constexpr auto dfb_bcast_one_minus_dampening_idx_id = tt::CBIndex::c_14;
+constexpr auto dfb_bcast_wd_idx_id = tt::CBIndex::c_15;
+
+constexpr auto dfb_output_idx_id = tt::CBIndex::c_16;
 
 constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 
+template <uint32_t Dfb, bool Consume, ckl::InputTileMapping Kind = ckl::InputTileMapping::Block>
+constexpr ckl::InputSpec block_input() {
+    if constexpr (Consume) {
+        return ckl::input(Dfb, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, Kind);
+    } else {
+        return ckl::input(Dfb, ckl::WaitPolicy::None, ckl::PopPolicy::None, Kind);
+    }
+}
+
+template <
+    uint32_t DfbA,
+    uint32_t DfbB,
+    uint32_t DfbOut,
+    ckl::BinaryFpuOp Op,
+    ckl::BroadcastDim Bcast = ckl::BroadcastDim::None,
+    bool ConsumeA = true,
+    bool ConsumeB = true,
+    ckl::InputTileMapping BKind = ckl::InputTileMapping::Block>
+ALWI void binary_block() {
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(block_size).block_size(block_size),
+        ckl::BinaryFpu<Op, block_input<DfbA, ConsumeA>(), ckl::input(block_input<DfbB, ConsumeB, BKind>(), Bcast)>{},
+        ckl::PackTile<ckl::output(
+            DfbOut,
+            ckl::ReservePolicy::PerBlockSize,
+            ckl::PushPolicy::PerBlockSize,
+            ckl::DataFormatReconfig::Enabled)>{});
+}
+
+template <uint32_t GradDfb>
+ALWI void finish_momentum() {
+    DataflowBuffer grad_dfb(GradDfb);
+    grad_dfb.wait_front(block_size);
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(block_size).block_size(block_size),
+        ckl::BinaryFpu<
+            ckl::BinaryFpuOp::Add,
+            block_input<dfb_momentum_scaled_idx_id, true>(),
+            block_input<GradDfb, false>()>{},
+        ckl::PackTile<ckl::output(
+            dfb_momentum_out_idx_id,
+            ckl::ReservePolicy::PerBlockSize,
+            ckl::PushPolicy::PerBlockSize,
+            ckl::DataFormatReconfig::Enabled)>{},
+        ckl::PackTile<ckl::output(
+            dfb_momentum_dram_idx_id,
+            ckl::ReservePolicy::PerBlockSize,
+            ckl::PushPolicy::PerBlockSize,
+            ckl::DataFormatReconfig::Enabled)>{});
+
+#if USE_NESTEROV
+    binary_block<
+        dfb_momentum_out_idx_id,
+        dfb_bcast_momentum_idx_id,
+        dfb_nesterov_momentum_idx_id,
+        ckl::BinaryFpuOp::Mul,
+        ckl::BroadcastDim::Scalar,
+        true,
+        false,
+        ckl::InputTileMapping::Scalar>();
+    binary_block<
+        dfb_nesterov_momentum_idx_id,
+        GradDfb,
+        dfb_nesterov_update_idx_id,
+        ckl::BinaryFpuOp::Add,
+        ckl::BroadcastDim::None,
+        true,
+        false>();
+    grad_dfb.pop_front(block_size);
+#else
+    grad_dfb.pop_front(block_size);
+#endif
+}
+
+template <uint32_t GradDfb>
+ALWI void process_update(bool use_dampening, DataflowBuffer& dfb_param_in) {
+#if USE_MOMENTUM
+    binary_block<
+        dfb_momentum_in_idx_id,
+        dfb_bcast_momentum_idx_id,
+        dfb_momentum_scaled_idx_id,
+        ckl::BinaryFpuOp::Mul,
+        ckl::BroadcastDim::Scalar,
+        true,
+        false,
+        ckl::InputTileMapping::Scalar>();
+
+    if (use_dampening) {
+        binary_block<
+            GradDfb,
+            dfb_bcast_one_minus_dampening_idx_id,
+            dfb_grad_dampened_idx_id,
+            ckl::BinaryFpuOp::Mul,
+            ckl::BroadcastDim::Scalar,
+            true,
+            false,
+            ckl::InputTileMapping::Scalar>();
+        finish_momentum<dfb_grad_dampened_idx_id>();
+    } else {
+        finish_momentum<GradDfb>();
+    }
+
+#if USE_NESTEROV
+    constexpr auto update_not_scaled = dfb_nesterov_update_idx_id;
+#else
+    constexpr auto update_not_scaled = dfb_momentum_out_idx_id;
+#endif
+#else
+    constexpr auto update_not_scaled = GradDfb;
+#endif
+
+    binary_block<
+        update_not_scaled,
+        dfb_bcast_lr_idx_id,
+        dfb_update_idx_id,
+        ckl::BinaryFpuOp::Mul,
+        ckl::BroadcastDim::Scalar,
+        true,
+        false,
+        ckl::InputTileMapping::Scalar>();
+    binary_block<
+        dfb_param_in_idx_id,
+        dfb_update_idx_id,
+        dfb_output_idx_id,
+        ckl::BinaryFpuOp::Sub,
+        ckl::BroadcastDim::None,
+        false,
+        true>();
+    dfb_param_in.pop_front(block_size);
+}
+
 void kernel_main() {
+    compute_kernel_hw_startup(dfb_grad_idx_id, dfb_bcast_lr_idx_id, dfb_update_idx_id);
+
     uint32_t runtime_args_counter = 0;
     const bool use_weight_decay = get_arg_val<uint32_t>(runtime_args_counter++);
     const bool use_dampening = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    compute_kernel_hw_startup(cb_grad_idx, cb_bcast_lr_idx, cb_update_idx);
+    DataflowBuffer dfb_param_in(dfb_param_in_idx_id);
+    DataflowBuffer dfb_bcast_lr(dfb_bcast_lr_idx_id);
+    DataflowBuffer dfb_bcast_momentum(dfb_bcast_momentum_idx_id);
+    DataflowBuffer dfb_bcast_one_minus_dampening(dfb_bcast_one_minus_dampening_idx_id);
+    DataflowBuffer dfb_bcast_wd(dfb_bcast_wd_idx_id);
 
-    cb_wait_front(cb_bcast_lr_idx, 1);
-    cb_wait_front(cb_bcast_momentum_idx, 1);
-    cb_wait_front(cb_bcast_one_minus_dampening_idx, 1);
-    cb_wait_front(cb_bcast_wd_idx, 1);
+    dfb_bcast_lr.wait_front(1);
+    dfb_bcast_momentum.wait_front(1);
+    dfb_bcast_one_minus_dampening.wait_front(1);
+    dfb_bcast_wd.wait_front(1);
     for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_core; tile_idx += block_size) {
-        uint32_t alias_grad_modified = cb_grad_idx;
-        cb_wait_front(cb_param_in_idx, block_size);
+        dfb_param_in.wait_front(block_size);
         if (use_weight_decay) {
-            // param * wd
-            mul_bcast_scalar_init(cb_param_in_idx, cb_bcast_wd_idx);
-            tile_regs_acquire();
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                mul_tiles_bcast_scalar(cb_param_in_idx, cb_bcast_wd_idx, block_idx, 0, block_idx);
-            }
-            tile_regs_commit();
-            pack_and_push_block(cb_param_wd_idx, block_size);
-
-            // param * wd + grad
-            cb_wait_front(cb_param_wd_idx, block_size);
-            cb_wait_front(cb_grad_idx, block_size);
-            add_init(cb_param_wd_idx, cb_grad_idx);
-            tile_regs_acquire();
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                add_tiles(cb_param_wd_idx, cb_grad_idx, block_idx, block_idx, block_idx);
-            }
-            tile_regs_commit();
-            pack_and_push_block(cb_grad_wd_idx, block_size);
-            cb_pop_front(cb_param_wd_idx, block_size);
-            cb_pop_front(cb_grad_idx, block_size);
-            alias_grad_modified = cb_grad_wd_idx;
+            binary_block<
+                dfb_param_in_idx_id,
+                dfb_bcast_wd_idx_id,
+                dfb_param_wd_idx_id,
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::Scalar,
+                false,
+                false,
+                ckl::InputTileMapping::Scalar>();
+            binary_block<dfb_param_wd_idx_id, dfb_grad_idx_id, dfb_grad_wd_idx_id, ckl::BinaryFpuOp::Add>();
+            process_update<dfb_grad_wd_idx_id>(use_dampening, dfb_param_in);
+        } else {
+            process_update<dfb_grad_idx_id>(use_dampening, dfb_param_in);
         }
-
-        uint32_t alias_update_not_scaled = alias_grad_modified;
-#if USE_MOMENTUM
-        cb_wait_front(cb_momentum_in_idx, block_size);
-        mul_bcast_scalar_init(cb_momentum_in_idx, cb_bcast_momentum_idx);
-        tile_regs_acquire();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            mul_tiles_bcast_scalar(cb_momentum_in_idx, cb_bcast_momentum_idx, block_idx, 0, block_idx);
-        }
-        tile_regs_commit();
-        pack_and_push_block(cb_momentum_scaled_idx, block_size);
-        cb_pop_front(cb_momentum_in_idx, block_size);
-
-        uint32_t alias_grad_dampened = alias_grad_modified;
-        if (use_dampening) {
-            cb_wait_front(alias_grad_modified, block_size);
-            mul_bcast_scalar_init(alias_grad_modified, cb_bcast_one_minus_dampening_idx);
-            tile_regs_acquire();
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                mul_tiles_bcast_scalar(alias_grad_modified, cb_bcast_one_minus_dampening_idx, block_idx, 0, block_idx);
-            }
-            tile_regs_commit();
-            pack_and_push_block(cb_grad_dampened_idx, block_size);
-            cb_pop_front(alias_grad_modified, block_size);
-            alias_grad_dampened = cb_grad_dampened_idx;
-        }
-
-        cb_wait_front(alias_grad_dampened, block_size);
-        cb_wait_front(cb_momentum_scaled_idx, block_size);
-        add_init(cb_momentum_scaled_idx, alias_grad_dampened);
-        tile_regs_acquire();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            add_tiles(cb_momentum_scaled_idx, alias_grad_dampened, block_idx, block_idx, block_idx);
-        }
-        tile_regs_commit();
-        pack_and_push_two_blocks(cb_momentum_out_idx, cb_momentum_dram_idx, block_size);
-        cb_pop_front(cb_momentum_scaled_idx, block_size);
-#if USE_NESTEROV
-        cb_wait_front(cb_momentum_out_idx, block_size);
-        mul_bcast_scalar_init(cb_momentum_out_idx, cb_bcast_momentum_idx);
-        tile_regs_acquire();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            mul_tiles_bcast_scalar(cb_momentum_out_idx, cb_bcast_momentum_idx, block_idx, 0, block_idx);
-        }
-        tile_regs_commit();
-        pack_and_push_block(cb_nesterov_momentum_idx, block_size);
-        cb_pop_front(cb_momentum_out_idx, block_size);
-
-        cb_wait_front(cb_nesterov_momentum_idx, block_size);
-        add_init(cb_nesterov_momentum_idx, alias_grad_dampened);
-        tile_regs_acquire();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            add_tiles(cb_nesterov_momentum_idx, alias_grad_dampened, block_idx, block_idx, block_idx);
-        }
-        tile_regs_commit();
-        pack_and_push_block(cb_nesterov_update_idx, block_size);
-        cb_pop_front(cb_nesterov_momentum_idx, block_size);
-        cb_pop_front(alias_grad_dampened, block_size);
-        alias_update_not_scaled = cb_nesterov_update_idx;
-#else
-        cb_pop_front(alias_grad_dampened, block_size);
-        alias_update_not_scaled = cb_momentum_out_idx;
-#endif
-#endif
-        // grad * lr
-        cb_wait_front(alias_update_not_scaled, block_size);
-        mul_bcast_scalar_init(alias_update_not_scaled, cb_bcast_lr_idx);
-        tile_regs_acquire();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            mul_tiles_bcast_scalar(alias_update_not_scaled, cb_bcast_lr_idx, block_idx, 0, block_idx);
-        }
-        tile_regs_commit();
-        pack_and_push_block(cb_update_idx, block_size);
-        cb_pop_front(alias_update_not_scaled, block_size);
-
-        // param - grad * lr
-        cb_wait_front(cb_update_idx, block_size);
-        sub_init(cb_param_in_idx, cb_update_idx);
-        tile_regs_acquire();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            sub_tiles(cb_param_in_idx, cb_update_idx, block_idx, block_idx, block_idx);
-        }
-        tile_regs_commit();
-        pack_and_push_block(cb_output_idx, block_size);
-
-        cb_pop_front(cb_param_in_idx, block_size);
-        cb_pop_front(cb_update_idx, block_size);
     }
-    cb_pop_front(cb_bcast_lr_idx, 1);
-    cb_pop_front(cb_bcast_momentum_idx, 1);
-    cb_pop_front(cb_bcast_one_minus_dampening_idx, 1);
-    cb_pop_front(cb_bcast_wd_idx, 1);
+    dfb_bcast_lr.pop_front(1);
+    dfb_bcast_momentum.pop_front(1);
+    dfb_bcast_one_minus_dampening.pop_front(1);
+    dfb_bcast_wd.pop_front(1);
 }

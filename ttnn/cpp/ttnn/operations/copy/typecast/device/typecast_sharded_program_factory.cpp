@@ -157,20 +157,6 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
-    KernelSpec::CompilerOptions::Defines unary_defines;
-    unary_defines.emplace(
-        "TYPECAST_LLK_INIT",
-        fmt::format(
-            "typecast_tile_init<{0}u, {1}u>",
-            static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-            static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype))));
-    unary_defines.emplace(
-        "TYPECAST_LLK",
-        fmt::format(
-            "typecast_tile<{0}u, {1}u>",
-            static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-            static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype))));
-
     // Legacy set unpack_to_dest_mode[in_cb] = UnpackToDestFp32 when preserve_fp32_precision and left
     // every other CB at Default; the named equivalent is an UnpackToDest entry for the input DFB.
     ComputeUnpackModes unpack_modes;
@@ -194,7 +180,6 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
     const KernelSpec compute{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
-        .compiler_options = {.defines = std::move(unary_defines)},
         // The output DFB has no other toucher — no writer kernel drains it, the borrowed output
         // buffer *is* the result — so compute binds it as both PRODUCER and CONSUMER (self-loop).
         .dfb_bindings =

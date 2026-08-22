@@ -142,6 +142,25 @@
   team: ttnn
   category: pool
 
+- name: ttnn kernel-lib eltwise chain tests
+  cmd: >-
+    pytest tests/ttnn/unit_tests/kernel_lib -xv
+    --ignore=tests/ttnn/unit_tests/kernel_lib/test_chain_perf.py
+    --ignore=tests/ttnn/unit_tests/kernel_lib/test_chain_skip_compute_perf.py
+    --timeout=600
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    wh_n300_civ2:
+      timeout: 10
+    bh_p100:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U08ADLJ4PLP # Aleksandar Stancov
+  team: ttnn
+  category: kernel_lib
+
 - name: ttnn nightly eltwise tests group 1
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 1 -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:

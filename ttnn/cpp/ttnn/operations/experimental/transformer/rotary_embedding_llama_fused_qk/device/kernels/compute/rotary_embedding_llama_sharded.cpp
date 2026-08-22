@@ -9,7 +9,10 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "api/dataflow/circular_buffer.h"
+
+namespace ckl = compute_kernel_lib;
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -58,9 +61,6 @@ void kernel_main() {
 
     CircularBuffer in_cb_obj(in_cb);
     CircularBuffer out_cb_obj(out_cb);
-    CircularBuffer cos_cb_obj(cos_cb);
-    CircularBuffer sin_cb_obj(sin_cb);
-    CircularBuffer trans_mat_cb_obj(trans_mat_cb);
     CircularBuffer rotated_in_interm_cb_obj(rotated_in_interm_cb);
     CircularBuffer cos_interm_cb_obj(cos_interm_cb);
     CircularBuffer sin_interm_cb_obj(sin_interm_cb);
@@ -91,18 +91,28 @@ void kernel_main() {
         }
         REL();
         rotated_in_interm_cb_obj.push_back(Wt);
-        rotated_in_interm_cb_obj.wait_front(Wt);
 
         mul_bcast_rows_init(rotated_in_interm_cb, sin_cb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // sin_interim = rotated * sin
-            mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb, sin_cb, j, j, j);
-            pack_tile(j, sin_interm_cb, j);
-        }
-        REL();
-        sin_interm_cb_obj.push_back(Wt);
-        rotated_in_interm_cb_obj.pop_front(Wt);
+        // sin_interim = rotated * sin
+        ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+            ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Mul,
+                ckl::input(
+                    rotated_in_interm_cb,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::InputTileMapping::Block,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    sin_cb,
+                    ckl::BroadcastDim::Row,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::InputTileMapping::Block,
+                    ckl::DataFormatReconfig::Disabled)>{},
+            ckl::PackTile<ckl::output(
+                sin_interm_cb, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{});
 
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {

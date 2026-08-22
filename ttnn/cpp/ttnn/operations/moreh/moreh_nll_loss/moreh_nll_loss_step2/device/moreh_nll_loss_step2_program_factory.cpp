@@ -90,9 +90,7 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_step2_impl_2d(
         desc, all_cores, static_cast<uint8_t>(CBIndex::c_24), 1, fp32_dest_acc_en_data_format);  // tmp_weight to reduce
     push_cb(
         desc, all_cores, static_cast<uint8_t>(CBIndex::c_25), 1, fp32_dest_acc_en_data_format);  // tmp_input to reduce
-    push_cb(desc, all_cores, static_cast<uint8_t>(CBIndex::c_26), 1, fp32_dest_acc_en_data_format);  // tmp1
     push_cb(desc, all_cores, static_cast<uint8_t>(CBIndex::c_27), 1, fp32_dest_acc_en_data_format);  // tmp2
-    push_cb(desc, all_cores, static_cast<uint8_t>(CBIndex::c_28), 1, fp32_dest_acc_en_data_format);  // tmp3
     push_cb(desc, all_cores, static_cast<uint8_t>(CBIndex::c_16), 1, data_format);                   // output
 
     if (weight_has_value) {
@@ -301,9 +299,7 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_step2_impl_3d(
         desc, all_cores, static_cast<uint8_t>(CBIndex::c_24), 1, fp32_dest_acc_en_data_format);  // tmp_weight to reduce
     push_cb(
         desc, all_cores, static_cast<uint8_t>(CBIndex::c_25), 1, fp32_dest_acc_en_data_format);  // tmp_input to reduce
-    push_cb(desc, all_cores, static_cast<uint8_t>(CBIndex::c_26), 1, fp32_dest_acc_en_data_format);  // tmp1
     push_cb(desc, all_cores, static_cast<uint8_t>(CBIndex::c_27), 1, fp32_dest_acc_en_data_format);  // tmp2
-    push_cb(desc, all_cores, static_cast<uint8_t>(CBIndex::c_28), 1, fp32_dest_acc_en_data_format);  // tmp3
     push_cb(desc, all_cores, static_cast<uint8_t>(CBIndex::c_16), 1, data_format);                   // output
 
     if (weight_has_value) {
@@ -531,9 +527,7 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_step2_impl_4d(
         desc, all_cores, static_cast<uint8_t>(CBIndex::c_24), 1, fp32_dest_acc_en_data_format);  // tmp_weight to reduce
     push_cb(
         desc, all_cores, static_cast<uint8_t>(CBIndex::c_25), 1, fp32_dest_acc_en_data_format);  // tmp_input to reduce
-    push_cb(desc, all_cores, static_cast<uint8_t>(CBIndex::c_26), 1, fp32_dest_acc_en_data_format);  // tmp1
     push_cb(desc, all_cores, static_cast<uint8_t>(CBIndex::c_27), 1, fp32_dest_acc_en_data_format);  // tmp2
-    push_cb(desc, all_cores, static_cast<uint8_t>(CBIndex::c_28), 1, fp32_dest_acc_en_data_format);  // tmp3
     push_cb(desc, all_cores, static_cast<uint8_t>(CBIndex::c_16), 1, data_format);                   // output
 
     if (weight_has_value) {

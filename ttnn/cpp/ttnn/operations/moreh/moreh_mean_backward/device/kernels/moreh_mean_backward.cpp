@@ -10,6 +10,11 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     // compile-time args
@@ -17,58 +22,36 @@ void kernel_main() {
     constexpr bool wt_need_bcast = (get_arg(args::wt_need_bcast) == 1);
     constexpr bool ht_need_bcast = (get_arg(args::ht_need_bcast) == 1);
 
-    DataflowBuffer dfb_in0_obj(dfb::in);         // input
-    DataflowBuffer dfb_in1_obj(dfb::zero);       // zero tile
-    DataflowBuffer dfb_scalar_obj(dfb::scalar);  // 1/num_dim bcast scalar
-    DataflowBuffer dfb_out0_obj(dfb::out);       // output
-    DataflowBuffer dfb_intermed0_obj(dfb::intermed);
+    DataflowBuffer dfb_zero_obj(dfb::zero);  // zero tile
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
 
     compute_kernel_hw_startup(dfb::in, dfb::zero, dfb::out);
-    dfb_in1_obj.wait_front(onetile);
+    dfb_zero_obj.wait_front(onetile);
+
+    constexpr bool has_bcast = ht_need_bcast || wt_need_bcast;
+    constexpr auto bcast_dim = (ht_need_bcast && wt_need_bcast) ? ckl::BroadcastDim::Scalar
+                               : ht_need_bcast                  ? ckl::BroadcastDim::Row
+                               : wt_need_bcast                  ? ckl::BroadcastDim::Col
+                                                                : ckl::BroadcastDim::None;
+
     for (uint32_t i = 0; i < num_output_tiles; i++) {
-        tile_regs_acquire();
-        dfb_in0_obj.wait_front(onetile);
-        if (ht_need_bcast && wt_need_bcast) {
-            add_bcast_scalar_init_with_dt(dfb_in1_obj, dfb_in0_obj);
-            add_tiles_bcast_scalar(dfb::zero, dfb::in, 0, 0, dst0);
-        } else if (ht_need_bcast) {
-            add_bcast_rows_init_with_dt(dfb_in1_obj, dfb_in0_obj);
-            add_tiles_bcast_rows(dfb::zero, dfb::in, 0, 0, dst0);
-        } else if (wt_need_bcast) {
-            add_bcast_cols_init_with_dt(dfb_in1_obj, dfb_in0_obj);
-            add_tiles_bcast_cols(dfb::zero, dfb::in, 0, 0, dst0);
-        } else {
-            copy_tile_init_with_dt(dfb_in0_obj);
-            copy_tile(dfb::in, 0, dst0);
-        }
-        tile_regs_commit();
-
-        dfb_intermed0_obj.reserve_back(onetile);
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, dfb_intermed0_obj);
-        tile_regs_release();
-
-        dfb_intermed0_obj.push_back(onetile);
-        dfb_in0_obj.pop_front(onetile);
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(onetile),
+            ckl::Optional<
+                has_bcast,
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ckl::input(dfb::zero, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::input(dfb::in, bcast_dim)>>{},
+            ckl::Optional<!has_bcast, ckl::CopyTile<ckl::input(dfb::in)>>{},
+            ckl::PackTile<ckl::output(dfb::intermed)>{});
 
         // output * (1 / number_of_elements)
-        tile_regs_acquire();
-        dfb_intermed0_obj.wait_front(onetile);
-        mul_bcast_scalar_init_with_dt(dfb_intermed0_obj, dfb_scalar_obj);
-        mul_tiles_bcast<BroadcastType::SCALAR>(dfb::intermed, dfb::scalar, 0, 0, 0);
-        tile_regs_commit();
-
-        dfb_out0_obj.reserve_back(onetile);
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, dfb_out0_obj);
-        tile_regs_release();
-
-        dfb_out0_obj.push_back(onetile);
-        dfb_intermed0_obj.pop_front(onetile);
+        ckl::mul<
+            ckl::input(dfb::intermed),
+            // 1/num_dim bcast scalar
+            ckl::input(dfb::scalar, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::output(dfb::out)>(ckl::IterationShape::tiles(onetile));
     }
-    dfb_in1_obj.pop_front(onetile);
+    dfb_zero_obj.pop_front(onetile);
 }
