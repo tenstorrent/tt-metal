@@ -148,12 +148,21 @@ void SDMeshCommandQueue::read_shard_from_device(
         return;
     }
     // In compile-only mode nothing has been dispatched, so device tensor data is uninitialized.
-    // A read here means an op needs computed values (a data-dependent shape/arg) and therefore
-    // cannot be pre-compiled without executing.
-    TT_FATAL(
-        !MetalContext::instance().rtoptions().get_compile_only(),
-        "Reading device tensor data is not allowed in compile-only mode: an op requires computed "
-        "values (a data-dependent shape or argument) and cannot be compiled without executing.");
+    // Skip the read so the caller can proceed and all downstream kernels still get compiled.
+    // If an op uses the read-back values to pick a data-dependent shape/argument, the kernels
+    // compiled past this point will be wrong -- warn once so that case is visible.
+    if (MetalContext::instance().rtoptions().get_compile_only()) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            log_warning(
+                LogMetal,
+                "compile-only mode: skipping device tensor read (returning host buffer as-is). Any op "
+                "that depends on read-back VALUES for a data-dependent shape/argument will compile "
+                "incorrect kernels.");
+        }
+        return;
+    }
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip hardware read for mock devices
     }
