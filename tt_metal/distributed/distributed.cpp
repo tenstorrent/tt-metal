@@ -131,7 +131,12 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         // call is synchronous, nothing captures the caller's workload by pointer, so there is no
         // lifetime hazard. This branch is only entered when the compile_only flag is set; the normal
         // path below is unchanged.
-        mesh_workload.impl().compile(mesh_cq.device());
+        //
+        // defer_kernel_builds=true selects the deferred build path inside compile() and skips
+        // finalize_offsets (safe: this workload is never dispatched here). Infrastructure programs
+        // (fabric/dispatch/device init) never pass through here, so they keep the normal synchronous
+        // build + finalize.
+        mesh_workload.impl().compile(mesh_cq.device(), /*defer_kernel_builds=*/true);
         return;
     }
 

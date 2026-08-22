@@ -55,7 +55,8 @@ private:
     void set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status);
     ProgramConfig& get_program_config(uint32_t index, bool using_fast_dispatch);
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
-    void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
+    void compile_program(
+        const MeshCoordinateRange& device_range, MeshDevice* mesh_device, bool defer_kernel_builds = false);
     void finalize_offsets(MeshDevice* mesh_device);
 
     std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status_;
@@ -94,7 +95,10 @@ public:
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
-    void compile(MeshDevice* mesh_device);
+    // defer_kernel_builds (compile-only pre-compilation): defer each program's kernel builds to the
+    // shared executor and skip finalize_offsets(), since the workload is not dispatched on this pass.
+    // See ProgramImpl::compile().
+    void compile(MeshDevice* mesh_device, bool defer_kernel_builds = false);
 
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);

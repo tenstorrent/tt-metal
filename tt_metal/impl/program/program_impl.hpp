@@ -236,8 +236,14 @@ public:
     void init_semaphores(
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     std::vector<std::vector<CoreCoord>> logical_cores() const;
-    void compile(IDevice* device, bool force_slow_dispatch = false);
-    void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
+    // defer_kernel_builds (compile-only pre-compilation): run the workload-mutating prep on the
+    // caller thread but submit each kernel's pure file-build to the shared executor WITHOUT a
+    // per-program barrier (joined later via wait_for_pending_kernel_builds()), and skip
+    // read_binaries()/watcher registration. Valid ONLY for programs that will not be dispatched or
+    // finalized on this pass (i.e. model workloads in compile-only mode); infrastructure programs
+    // (fabric/dispatch/device init) that finalize immediately must use the default (false).
+    void compile(IDevice* device, bool force_slow_dispatch = false, bool defer_kernel_builds = false);
+    void compile_and_allocate(IDevice* device, bool force_slow_dispatch, bool defer_kernel_builds = false);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
     // Always used in conjunction with validate_circular_buffer_region and compile

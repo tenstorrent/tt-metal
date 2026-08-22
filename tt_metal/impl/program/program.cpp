@@ -2475,7 +2475,7 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
     }
 }
 
-void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
+void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch, bool defer_kernel_builds) {
     TTZoneScopedD(PROGRAM);
 
     const ContextId device_context_id = extract_context_id(device);
@@ -2631,9 +2631,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
             Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
         }
-    } else if (MetalContext::instance().rtoptions().get_compile_only()) {
-        // Compile-only path: warm the on-disk kernel cache without dispatching, and do so with
-        // maximum host-core utilization.
+    } else if (defer_kernel_builds) {
+        // Deferred compile-only path: warm the on-disk kernel cache without dispatching, and do so
+        // with maximum host-core utilization. Reached only for programs the caller guarantees will
+        // NOT be finalized/dispatched on this pass (model workloads in compile-only mode).
         //
         // The workload-mutating prep (prep_kernel: sets build options / full name, and on first
         // compile set_remote_circular_buffer_init, set_cb_data_fmt_and_tile) runs SERIALLY on this
@@ -2697,11 +2698,12 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     Inspector::program_compile_finished(this, device, build_env.build_key());
 }
 
-void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_dispatch) {
-    this->compile(device, force_slow_dispatch);
-    // Compile-only mode warms the kernel cache without dispatching. It's run asynchronously
-    // so steps below would be invalid, therefore return early.
-    if (MetalContext::instance().rtoptions().get_compile_only()) {
+void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_dispatch, bool defer_kernel_builds) {
+    this->compile(device, force_slow_dispatch, defer_kernel_builds);
+    // Deferred compile-only pre-compilation warms the kernel cache without dispatching: kernel
+    // builds are still in flight (joined later) and the program is never finalized, so the
+    // allocation/finalization steps below are both invalid and unnecessary. Return early.
+    if (defer_kernel_builds) {
         return;
     }
     this->allocate_circular_buffers(device);

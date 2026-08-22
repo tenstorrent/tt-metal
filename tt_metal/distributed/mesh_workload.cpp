@@ -97,28 +97,35 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
     programs_[device_range] = std::move(program);
 }
 
-void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
+void MeshWorkloadImpl::compile_program(
+    const MeshCoordinateRange& device_range, MeshDevice* mesh_device, bool defer_kernel_builds) {
     auto& program = programs_.at(device_range);
-    program.impl().compile_and_allocate(mesh_device, false);
+    program.impl().compile_and_allocate(mesh_device, false, defer_kernel_builds);
 }
 
-void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
+void MeshWorkloadImpl::compile(MeshDevice* mesh_device, bool defer_kernel_builds) {
     // Multi-Step Compile:
     // 1. Compile Kernel Binaries
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
     if (programs_.size() == 1) {
         // Compile from main thread for homogeneous workloads
-        this->compile_program(programs_.begin()->first, mesh_device);
+        this->compile_program(programs_.begin()->first, mesh_device, defer_kernel_builds);
     } else {
         for (auto& [device_range, _] : programs_) {
             // Multi-Threaded Compile: Useful for heterogeneous MeshWorkloads
-            mesh_device->enqueue_to_thread_pool(
-                [device_range, mesh_device, this]() { this->compile_program(device_range, mesh_device); });
+            mesh_device->enqueue_to_thread_pool([device_range, mesh_device, this, defer_kernel_builds]() {
+                this->compile_program(device_range, mesh_device, defer_kernel_builds);
+            });
         }
         mesh_device->wait_for_thread_pool();
     }
-    finalize_offsets(mesh_device);
+    // Compile-only pre-compilation defers the kernel builds (still in flight, joined later) and does
+    // not dispatch, so the L1 offset finalization -- which reads compiled binary sizes via
+    // Kernel::binaries() -- is both impossible (binaries not loaded) and unnecessary here.
+    if (!defer_kernel_builds) {
+        finalize_offsets(mesh_device);
+    }
 }
 
 void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
