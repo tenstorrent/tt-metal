@@ -580,10 +580,16 @@ def test_the_anchored_divisor_is_the_one_the_ceiling_divides_by(tmp_path, monkey
 
     root = tmp_path / "m"
     root.mkdir()
+    # A UNIT MUST EXIST FOR AN ANCHOR TO. The producer declines without one, because the only moment
+    # it runs -- setup -- is before any trace has reported the unit, and it used to invent the key
+    # "unit" instead. This test read back under that same placeholder, so it agreed with the producer
+    # about a key nothing else looks up and never saw the divergence it exists to catch.
+    monkeypatch.setenv("PERF_MCP_LAST_HEADLINE_UNIT", "token")
     run._emit_perf_target_inputs(root, root, None, {})
     facts = json.loads((root / "perf_target_inputs.json").read_text())
+    assert facts.get("unit") == "token"
 
-    pinned_mb = led.anchor_value(led.KIND_ACTIVE_BYTES, depth=facts.get("unit") or "unit", model="m")
+    pinned_mb = led.anchor_value(led.KIND_ACTIVE_BYTES, depth="token", model="m")
     assert pinned_mb, "nothing anchored"
     pinned_bytes = int(round(float(pinned_mb) * 1e6))
 

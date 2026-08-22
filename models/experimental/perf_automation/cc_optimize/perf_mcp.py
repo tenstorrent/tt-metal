@@ -5791,6 +5791,19 @@ def _recurring_subtree_share(mf: dict) -> float:
         return 1.0
 
 
+# A depth that is not a unit of work. The byte anchor's producer used to fall back to the literal
+# string "unit" when no unit had been observed yet, so legacy ledgers carry rows keyed under it. The
+# fallback scans below read a row's depth AS the unit, so accepting one of these does not merely
+# return the wrong bytes -- it reports the model's unit of work as "unit", and the band, the at-floor
+# verdict and the headline rate all inherit that. Refused on both scans; a run whose only anchor is a
+# placeholder is a run with no anchor, which lands on the documented floor fallback.
+_PLACEHOLDER_DEPTHS = frozenset({"unit", "unknown", ""})
+
+
+def _is_real_unit(depth) -> bool:
+    return str(depth or "").strip().lower() not in _PLACEHOLDER_DEPTHS
+
+
 def _anchored_ceiling_bytes(mf: dict) -> float:
     """The PINNED baseline bytes-per-unit from the ledger, or 0.0 when nothing is pinned.
 
@@ -5815,6 +5828,8 @@ def _anchored_ceiling_bytes(mf: dict) -> float:
         # floor, while the report still showed the pinned ceiling. The anchored row carries the unit it
         # was pinned under, so the baseline is recoverable without the file and without guessing.
         for r in led.rows(led.KIND_ACTIVE_BYTES, led.PHASE_BEFORE, model, task):
+            if not _is_real_unit(r.get("depth")):
+                continue
             try:
                 v = float(r.get("value_ms"))
             except (TypeError, ValueError):
@@ -5843,7 +5858,7 @@ def _anchored_ceiling_facts():
             os.environ.get("PERF_MCP_TASK", "main"),
         ):
             d = str(r.get("depth") or "").strip().lower()
-            if d:
+            if _is_real_unit(d):
                 return {"unit": d}
     except Exception:  # noqa: BLE001
         pass

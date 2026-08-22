@@ -5679,14 +5679,38 @@ def _emit_perf_target_inputs(model_root, demo_dir, model_id_hint, manifest) -> N
             from agent import perf_target as _pt_div
 
             _divisor = _pt_div.simple_active_bytes(facts) or float(facts["weight_bytes"])
-            led.anchor(
-                led.KIND_ACTIVE_BYTES,
-                float(_divisor) / 1e6,
-                depth=str(facts.get("unit") or "unit"),
-                mode="bytes_mb",
-                source=facts["source"][:120],
-                model=Path(model_root).name,
-            )
+            # NO UNIT, NO ANCHOR. This ran `depth=str(facts.get("unit") or "unit")`, so a run with no
+            # unit yet filed the anchor under the literal string "unit" -- a key nothing looks up.
+            #
+            # The unit is missing here BY DESIGN. It is set only from an observation
+            # (PERF_MCP_LAST_HEADLINE_UNIT), because an HF tag names the TASK and cannot say whether a
+            # model loops -- `text-to-speech` covers XTTS, which emits tokens, and Kokoro, which
+            # produces a whole waveform in one pass. And this function runs ONCE AT SETUP, before any
+            # trace exists. So the one moment the anchor is written is the one moment the thing it
+            # must be keyed by does not yet exist.
+            #
+            # What that cost, measured on voxtral run 18: the report looks up depth="token" and MISSES,
+            # falling back to the snapshot (4.777 GB); the gate scans rows depth-agnostically and HITS
+            # the placeholder row (7.223 GB). One run, two divisors, 1.51x apart -- the exact failure
+            # the anchor was introduced to prevent, and it passed test_the_gate_and_the_report_divide_
+            # by_the_same_bytes because both sides agreed on a key that was wrong.
+            #
+            # Declining is what the rest of this chain already does: "No recoverable unit means no
+            # ceiling, which lands on the floor fallback: weaker, but not wrong." Defaulting to
+            # "token" would be worse than the placeholder -- it is the bug that once labelled every
+            # diffusion and classifier model per-token. Nothing is lost by waiting: before the first
+            # trace there is no measurement, so there is no ceiling for the two readers to disagree
+            # about, and once a trace reports, the rebuild path anchors with the observed unit.
+            _unit = str(facts.get("unit") or "").strip().lower()
+            if _unit:
+                led.anchor(
+                    led.KIND_ACTIVE_BYTES,
+                    float(_divisor) / 1e6,
+                    depth=_unit,
+                    mode="bytes_mb",
+                    source=facts["source"][:120],
+                    model=Path(model_root).name,
+                )
         except Exception:  # noqa: BLE001
             pass
         print(
