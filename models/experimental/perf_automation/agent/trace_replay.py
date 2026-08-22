@@ -28,6 +28,7 @@ FORWARD_WALL_MS.
 from __future__ import annotations
 
 import os
+import sys
 import time
 
 import ttnn
@@ -65,20 +66,34 @@ _TRACED_OP_DISPATCH_MAX = int(os.environ.get("TT_TRACE_DISPATCH_MAX", "32"))
 
 
 def _signpost(name: str) -> None:
-    """Emit a tracy signpost, or do nothing when the profiler is not present.
+    """Emit a tracy signpost. Silent when no capture is running; LOUD when one is and it fails.
 
-    Best-effort by design: the marker is only useful under a profiled run, and a normal trace_replay
-    has no tracy module at all. A missing signpost costs the per-stage split, never the measurement,
-    and tt-perf-report treats an unmarked capture as a whole-file one -- the behaviour every profile
-    has had until now.
+    The mark is always attempted -- tracy resolves in the workload's venv on both paths, and
+    `signpost()` goes out through ttnn.tracy_message, so it travels the same channel as the op
+    records rather than being a host-only marker. What differs is whether anything is listening:
+    _run_full_pipeline_ms pops TT_METAL_DEVICE_PROFILER because a full-depth tracy capture overflows
+    the 12000-marker buffer, so those runs are a stopwatch with no capture for a mark to land in.
+
+    SO THE FAILURE IS ONLY A FAILURE WHEN A CAPTURE IS RUNNING, and then it is one worth shouting
+    about: the roofline silently drops to a single math-fidelity peak shared by every stack, and the
+    stacks differ by up to 4x. Swallowing that is the exact pattern that let a dead byte reader, an
+    anchor under an unread key, and this very signpost filter survive -- each fell back quietly and
+    each looked like it was working.
     """
+    _profiling = bool(str(os.environ.get("TT_METAL_DEVICE_PROFILER") or "").strip())
     try:
         from tracy import signpost as _sp
-    except Exception:  # noqa: BLE001
-        return
-    try:
+
         _sp(name)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        if _profiling:
+            print(
+                "  [trace_replay] PROFILED RUN COULD NOT EMIT SIGNPOST %r (%s: %s) -- the capture "
+                "will carry no stage marks, so every stack shares one math-fidelity peak instead of "
+                "its own." % (name, type(exc).__name__, str(exc)[:160]),
+                file=sys.stderr,
+                flush=True,
+            )
         return
 
 

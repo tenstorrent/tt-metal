@@ -160,12 +160,9 @@ def test_the_stage_marks_are_emitted_around_the_isolated_run():
     assert "_capture_step_trace" not in mid, "a mark landed inside the trace capture"
 
 
-def test_a_missing_profiler_costs_the_split_not_the_measurement():
-    """A normal trace_replay has no tracy module at all -- the marker is only useful under a profiled
-    run, and its absence must cost the split, never the measurement.
-
-    ttnn is stubbed rather than skipped: skipping here would leave the emission path untested on any
-    machine without a device, which is every machine that runs this suite in CI."""
+def _tr():
+    """trace_replay against a stubbed ttnn -- stubbed rather than skipped, or the emission path is
+    untested on every machine without a device, which is every machine that runs this suite."""
     import types
 
     if "ttnn" not in sys.modules:
@@ -184,7 +181,33 @@ def test_a_missing_profiler_costs_the_split_not_the_measurement():
         import agent.trace_replay as tr
     except Exception as exc:  # noqa: BLE001
         pytest.fail("trace_replay must import against a stubbed ttnn: %s" % exc)
-    assert tr._signpost("stage:decode") is None  # no tracy module -> no raise, no effect
+    return tr
+
+
+def test_no_capture_running_means_no_complaint(monkeypatch):
+    """_run_full_pipeline_ms pops TT_METAL_DEVICE_PROFILER -- a full-depth tracy capture overflows
+    the 12000-marker buffer -- so those runs are a stopwatch with nothing for a mark to land in. 65
+    of run 19's 66 measurement calls were that path; warning on each would be noise about nothing."""
+    tr = _tr()
+    monkeypatch.delenv("TT_METAL_DEVICE_PROFILER", raising=False)
+    tr._signpost("stage:decode")  # no raise, no output
+
+
+def test_a_profiled_run_that_cannot_mark_says_so(monkeypatch, capsys):
+    """THE CASE THAT MUST NOT BE SILENT. A capture IS running and the mark failed, so the roofline
+    drops to one math-fidelity peak shared by every stack -- and the stacks differ by up to 4x.
+
+    Swallowing this is the pattern that let three defects live in this neighbourhood: a byte reader
+    that always returned 0, an anchor filed under a key nothing looked up, and a signpost filter
+    asking for a window nobody had marked."""
+    tr = _tr()
+    monkeypatch.setenv("TT_METAL_DEVICE_PROFILER", "1")
+    monkeypatch.setitem(sys.modules, "tracy", None)  # import raises
+    tr._signpost("stage:decode")
+    err = capsys.readouterr().err
+    assert "COULD NOT EMIT SIGNPOST" in err, err
+    assert "stage:decode" in err
+    assert "one math-fidelity peak" in err, "the warning must say what it costs"
 
 
 def test_windows_are_read_from_the_capture_not_from_the_expected_stage_list(tmp_path):
