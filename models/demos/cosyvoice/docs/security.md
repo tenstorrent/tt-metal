@@ -1,4 +1,4 @@
-# Dependency and input-handling review (R6)
+# Dependency and input-handling review
 
 `pip-audit` run 2026-08-05; re-worked 2026-08-12 against the Cycode scan on the PR, which
 flagged 38 advisories across 10 pinned packages plus one SAST finding. A 39th arrived on
@@ -21,8 +21,8 @@ installs nothing.**
 
 `scripts/` is the reference side — golden capture, weight export, front-end preparation, WER/SIM
 scoring. It runs once, on a host, in its own venv, and never on device. That boundary is not a
-convenience: installing whisper into tt-metal's `python_env` during P0 pulled a `triton` that broke
-`import torch` outright, which is what established the rule.
+convenience: installing whisper into tt-metal's `python_env` during early bring-up pulled a
+`triton` that broke `import torch` outright, which is what established the rule.
 
 ## Audit findings, and where they live
 
@@ -41,9 +41,9 @@ help. So the pins moved.
 
 | | advisories | disposition |
 |---|---|---|
-| removed with the package | 1 CRITICAL, 10 HIGH, 6 MEDIUM | `gradio`, `onnx` — never imported |
-| fixed by a version bump | 3 CRITICAL, 9 HIGH, 7 MEDIUM | `torch`, `lightning`, `diffusers`, `pyarrow`, `protobuf`, `modelscope`, `gdown`, `transformers`, `hydra-core` |
-| **outstanding** | **3 MEDIUM** | `torch` ×3 |
+| removed with the package | 1 CRITICAL, 10 HIGH, 6 MODERATE | `gradio`, `onnx` — never imported |
+| fixed by a version bump | 3 CRITICAL, 9 HIGH, 7 MODERATE | `torch`, `lightning`, `diffusers`, `pyarrow`, `protobuf`, `modelscope`, `gdown`, `transformers`, `hydra-core` |
+| **outstanding** | **3 MODERATE** | `torch` ×3 |
 
 **36 of 39 closed, including every CRITICAL and every HIGH.** The three that remain are all
 `torch` MODERATE local-DoS: CVE-2025-3730 (fixed 2.8.0), CVE-2025-2999 (fixed 2.9.1), and
