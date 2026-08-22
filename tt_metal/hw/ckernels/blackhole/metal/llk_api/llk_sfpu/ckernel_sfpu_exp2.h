@@ -52,11 +52,15 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
         // e < 255
         v_block {
             sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
-            y = sfpi::setexp(r, e);
-            // e < 1
-            v_if(e_lt_255 < -254) {
-                // Underflow, including subnormals.
-                y = 0.0f;
+            // Overflow guard (e >= 255): keep the precomputed y = r * inf = +inf.
+            v_if(e_lt_255 < 0) {
+                y = sfpi::setexp(r, e);
+                // e < 1
+                v_if(e_lt_255 < -254) {
+                    // Underflow, including subnormals.
+                    y = 0.0f;
+                }
+                v_endif;
             }
             v_endif;
         }
