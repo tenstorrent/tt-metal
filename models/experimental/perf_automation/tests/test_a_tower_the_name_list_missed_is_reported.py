@@ -18,7 +18,8 @@ the read set gone, erring toward a HIGHER ceiling. One silent error traded for a
 
 WHY NEITHER IS THE REAL FIX. There is no measurement of what a token read. _stage_roofs says so:
 "_top_ops keys on (op_code, shape, memory) and records nothing about which phase an op ran in", and
-_stage_measured_bytes returns 0 on every real profile because buckets carry no stage tag. Until the
+the per-stage byte reader that once stood in summary returned 0 on every real profile and is now
+deleted -- buckets carry no `bytes` key and their regime tag is "na" for all of them. Until the
 profiler tags a phase, every route is a guess, and the least-bad guess is the one whose failure mode
 is known and bounded.
 

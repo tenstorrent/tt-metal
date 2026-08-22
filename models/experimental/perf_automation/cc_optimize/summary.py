@@ -469,10 +469,10 @@ def _pinned_stage_bytes(stage, model: str = "", task: str = ""):
 def _measured_stage_bytes(model: str = "", task: str = "") -> dict:
     """trace_replay's per-stage READ SET in bytes, or {}.
 
-    The only measurement of what a stage streams. _stage_measured_bytes(profile, stage) was meant to
-    be this and cannot be: it filters profile buckets by a `stage` tag the profiler never writes, so
-    it returns 0 for every stage on every real profile -- which means the "measured first" line in
-    _bytes_for has always silently taken its estimate branch.
+    The only measurement of what a stage streams. What stood here before -- reading a per-stage
+    `bytes` figure off the profile's buckets -- could never work: buckets carry no `bytes` key and
+    their regime tag is "na" for every one, so it returned 0 always and _bytes_for silently used the
+    checkpoint estimate while appearing to prefer a measurement.
     """
     m = _perf_mcp()
     try:
@@ -1027,25 +1027,6 @@ def _request_batch() -> int:
     return 1
 
 
-def _stage_measured_bytes(profile, stage) -> int:
-    """Bytes the ops of ONE stage actually read, or 0 when the profile does not say.
-
-    Zero is a refusal, not an estimate: a stage whose read set is unknown gets no memory roof rather
-    than the backbone's, which would be the wrong divisor entirely for a separate tower.
-    """
-    total = 0.0
-    for b in (profile or {}).get("buckets") or []:
-        if not isinstance(b, dict) or b.get("id") == "host_overhead":
-            continue
-        if str(b.get("stage") or b.get("regime") or "").strip().lower() != str(stage).strip().lower():
-            continue
-        try:
-            total += float(b.get("bytes") or 0.0)
-        except (TypeError, ValueError):
-            continue
-    return int(total)
-
-
 _SECTION_BYTES = None
 
 
@@ -1508,20 +1489,19 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # the language model, so the whole-model divisor is wrong for it rather than approximate. When
         # neither a measurement nor a subtree share is available the roof is WITHHELD -- and the stage
         # still gets its row, because the measurement is real and the gap is worth seeing.
-        # MEASURED, THEN THE PROFILE, THEN THE ESTIMATE. _measured_stage_bytes is trace_replay's
-        # observation of the distinct device tensors this stage's ops touched, taken while the stage
-        # ran in isolation -- the first actual measurement of a stage's read set. Ahead of
-        # _stage_measured_bytes, which reads a profile-bucket `stage` tag the profiler does not write
-        # and so returns 0 on every real profile, and ahead of _bytes_for, which apportions the
-        # checkpoint using a tower NAME LIST.
-        # PINNED BASELINE FIRST, then this build's reading, then the estimate. The pin is what keeps
-        # the target still while the ladder shrinks the read set underneath it.
-        _b = (
-            _pinned_stage_bytes(name, model, task)
-            or int((_meas_bytes or {}).get(name) or 0)
-            or _stage_measured_bytes(profile, name)
-            or _bytes_for(name, toks)
-        )
+        # PINNED BASELINE, THEN THIS BUILD'S READING, THEN THE ESTIMATE. _measured_stage_bytes is
+        # trace_replay's observation of the distinct device tensors this stage's ops touched, taken
+        # while the stage ran in isolation. The pin keeps the target still while the ladder shrinks
+        # the read set underneath it; _bytes_for is the last resort, apportioning the checkpoint with
+        # a tower NAME LIST.
+        #
+        # There used to be a fourth entry here, _stage_measured_bytes(profile, name), which looked
+        # like the measurement and was not one: it summed a `bytes` key buckets do not carry, keyed on
+        # a `stage`/`regime` field it read at the wrong level, and the right level says "na" for every
+        # bucket anyway. Three ways of returning 0, so the line always fell through to the estimate
+        # while reading as though it preferred a measurement. Deleted rather than repaired -- the real
+        # observation is the one above it now.
+        _b = _pinned_stage_bytes(name, model, task) or int((_meas_bytes or {}).get(name) or 0) or _bytes_for(name, toks)
         _b_now = int((_meas_bytes or {}).get(name) or 0)
         mem_ms = (_b / (float(peak_bw_gbps) * 1e9)) * 1000.0 if _b else None
         out[name] = {

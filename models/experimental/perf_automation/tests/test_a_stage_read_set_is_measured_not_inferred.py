@@ -10,12 +10,13 @@ WHAT THE DIVISOR HAD TO COME FROM, before this. All three are inferences from th
 
 And the thing that looks like a measurement is not one. summary._bytes_for reads
 
-    _b = _stage_measured_bytes(profile, name) or _bytes_for(name, toks)
+    _b = <per-stage bytes off the profile> or _bytes_for(name, toks)
 
-but _stage_measured_bytes filters profile buckets by a `stage` tag the profiler never writes, so it
-returns 0 for every stage on every real profile and that line has always taken its estimate branch.
-_stage_roofs says why: "_top_ops keys on (op_code, shape, memory) and records nothing about which
-phase an op ran in".
+and that reader could never work: buckets carry no `bytes` key, and the regime tag it keyed on reads
+"na" for every one of them -- three ways of returning 0, so the line always took its estimate branch
+while appearing to prefer a measurement. It has since been deleted. _stage_roofs says why it could
+not have worked: "_top_ops keys on (op_code, shape, memory) and records nothing about which phase an
+op ran in".
 
 WHERE THE MEASUREMENT WAS ALREADY SITTING. trace_replay runs each stage in isolation and, to decide
 whether the step was traced or eager, wraps ttnn's Operation.__call__ to count dispatches -- so it
@@ -156,10 +157,20 @@ def test_the_consumer_prefers_the_measurement_over_the_estimate():
     import cc_optimize.summary as S
 
     src = (_PA / "cc_optimize" / "summary.py").read_text()
-    lines = src.splitlines()
-    i = next(n for n, ln in enumerate(lines) if ln.strip() == "_b = (")
-    block = "\n".join(lines[i : i + 6])
-    for nxt in ("_meas_bytes", "_stage_measured_bytes(profile, name)", "_bytes_for(name, toks)"):
+    # AST, not line matching. The first version keyed on the literal line `_b = (`, which black
+    # deleted by collapsing the expression onto one line once it fit -- a test of formatting, not of
+    # behaviour, and it failed on a reformat that changed nothing.
+    import ast
+
+    tree = ast.parse(src)
+    block = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and "_pinned_stage_bytes" in ast.unparse(node.value):
+            block = ast.unparse(node.value)
+            break
+    assert block, "the byte-preference chain is gone"
+    assert "_stage_measured_bytes" not in block, "the dead reader is back in the chain"
+    for nxt in ("_meas_bytes", "_bytes_for(name, toks)"):
         assert nxt in block, block
     assert block.index("_pinned_stage_bytes") < block.index("_meas_bytes") < block.index("_bytes_for")
     assert callable(S._measured_stage_bytes) and callable(S._pinned_stage_bytes)
@@ -203,3 +214,36 @@ def test_the_marker_survives_the_round_trip():
     assert 'line.split("TRACE_STAGE_BYTES[", 1)' in mcp, "emitted but never parsed"
     assert '"bytes": stage_bytes or {},' in mcp, "parsed but never persisted"
     assert "def read_stage_bytes(" in mcp, "persisted but never read back"
+
+
+def test_it_uses_the_census_definition_of_a_device_tensor():
+    """ONE DEFINITION of "how big is this device tensor". The first version re-implemented
+    weight_census._tensor_entry inline and got it subtly wrong -- it read `.dtype` only, missing the
+    `get_dtype()` fallback, so a tensor exposing the latter counted as zero bytes. Two definitions of
+    one quantity is how the ceiling's divisor came to disagree with itself before."""
+    src = (_PA / "agent" / "trace_replay.py").read_text()
+    assert "from .weight_census import _tensor_entry as _entry" in src
+    i = src.index("def _note(x):")
+    body = src[i : src.index("def counting", i)]
+    assert "_entry(x)" in body
+    for reimplemented in ("_on_device", "padded_shape", "for d in tuple(shape)"):
+        assert reimplemented not in body, "still re-implementing the census: %s" % reimplemented
+
+
+def test_a_tensor_that_only_exposes_get_dtype_is_counted():
+    """The bug the duplication carried: `.dtype` absent, `get_dtype()` present."""
+
+    class _GetDtypeOnly:
+        shape = (1_000_000,)
+
+        def get_dtype(self):
+            class _D:
+                name = "BFLOAT16"
+
+            return _D()
+
+        def storage_type(self):
+            return "DEVICE"
+
+    _n, b = _hooked(lambda op: op(_GetDtypeOnly()))
+    assert b == 2_000_000, b

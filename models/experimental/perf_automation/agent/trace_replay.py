@@ -72,8 +72,9 @@ def _count_op_dispatches(fn):
     (`audio_tower|vision_tower|...`), or the stage_roots section map -- which was tried and dropped
     lm_head on every untied model. _stage_roofs already said why the profile could not settle it:
     "_top_ops keys on (op_code, shape, memory) and records nothing about which phase an op ran in",
-    and summary._stage_measured_bytes consequently returns 0 on every real profile, so the
-    "observed-first" line in _bytes_for has always taken its fallback branch.
+    and the per-stage byte reader that once stood in summary consequently returned 0 on every real
+    profile -- buckets carry no `bytes` key and their regime tag is "na" for all of them -- so the
+    "observed-first" line in _bytes_for always took its fallback branch. That reader is now deleted.
 
     But the hook that counts dispatches sees EVERY op the stage runs, with its arguments -- and
     trace_replay already runs each stage in isolation. So the read set is right here: the distinct
@@ -102,31 +103,29 @@ def _count_op_dispatches(fn):
     except Exception:  # noqa: BLE001
         fn()
         return None, 0
+    # ONE DEFINITION OF "HOW BIG IS THIS DEVICE TENSOR". The first version of this re-implemented
+    # weight_census._tensor_entry inline -- the residency check, the shape fallback, the numel loop,
+    # the dtype resolution -- and got it subtly wrong: it read `.dtype` only, missing the
+    # `get_dtype()` fallback the census has, so a tensor exposing the latter counted as zero bytes.
+    # Two definitions of one quantity is how the ceiling's divisor came to disagree with itself
+    # before; this calls the census's.
     try:
-        from .weight_census import _on_device as _dev, bytes_per_elem as _bpe, dtype_name as _dtn
+        from .weight_census import _tensor_entry as _entry, bytes_per_elem as _bpe
     except Exception:  # noqa: BLE001
-        _dev = None
+        _entry = None
     n = [0]
     seen: dict = {}
 
     def _note(x):
-        if _dev is None:
+        if _entry is None:
             return
         try:
-            if not _dev(x):
-                return
             key = id(x)
             if key in seen:
                 return
-            shape = getattr(x, "shape", None) or getattr(x, "padded_shape", None)
-            dt = getattr(x, "dtype", None)
-            if shape is None or dt is None:
-                return
-            ne = 1
-            for d in tuple(shape):
-                ne *= int(d)
-            if ne > 0:
-                seen[key] = ne * _bpe(_dtn(dt))
+            ent = _entry(x)  # (numel, dtype_name) for a DEVICE tensor, None otherwise
+            if ent:
+                seen[key] = ent[0] * _bpe(ent[1])
         except Exception:  # noqa: BLE001
             return
 

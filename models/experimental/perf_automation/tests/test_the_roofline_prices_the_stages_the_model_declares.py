@@ -110,10 +110,21 @@ def test_a_single_tower_model_still_prices_every_stage(monkeypatch):
     assert r["prefill"]["memory_ms"] is not None
 
 
-def test_a_stage_with_measured_bytes_does_get_a_roof():
-    """When the profile records what that stage read, the same formula applies to it."""
-    prof = {"buckets": [{"id": "matmul", "stage": "encode", "bytes": 512_000_000}]}
-    r = _roofs({"encode": 12.79, "decode": 6.11}, profile=prof)
+def test_a_stage_with_measured_bytes_does_get_a_roof(monkeypatch):
+    """When a stage's read set has been MEASURED, the same formula applies to it.
+
+    This used to hand _stage_roofs a synthetic bucket carrying top-level `stage` and `bytes` keys --
+    the shape the old profile reader expected. Real profiles never have it: buckets carry no `bytes`
+    key at all and their regime tag is "na" for every one, so that reader returned 0 on every run and
+    was deleted. The test passed throughout, because the fixture supplied a shape the profiler does
+    not produce -- which is how a feature can be green in the suite and absent in the product.
+
+    The measurement now comes from trace_replay, which runs each stage alone and sums the distinct
+    device tensors its ops touched, so the fixture is that reader instead."""
+    import cc_optimize.summary as S
+
+    monkeypatch.setattr(S, "_measured_stage_bytes", lambda model="", task="": {"encode": 512_000_000})
+    r = _roofs({"encode": 12.79, "decode": 6.11})
     assert r["encode"]["bytes"] == 512_000_000
     assert abs(r["encode"]["memory_ms"] - 1.0) < 1e-6  # 0.512 GB / 512 GB/s = 1.0 ms
 
