@@ -111,7 +111,19 @@ inline void calculate_remainder() {
             quotient = quotient - 1;
         }
         v_endif;
-        v = v - quotient * s;
+
+        // Compute remainder via fused multiply-add: v = quotient * (-s) + v.
+        // SFPMAD keeps the full-precision product quotient*s in the fp32
+        // accumulator before adding v, avoiding the intermediate rounding
+        // that caused wrong results when |v/s| > ~2^23 (issue #54048).
+        v = quotient * (-s) + v;
+
+        // Bidirectional cleanup: the quotient estimate (from the imprecise
+        // reciprocal) can be off by 1 in either direction.
+        v_if(v < 0.0f) { v = v + s; }
+        v_endif;
+        v_if(v >= s) { v = v - s; }
+        v_endif;
 
         v_if(val < 0 && v != 0) { v = s - v; }
         v_endif;
@@ -122,11 +134,6 @@ inline void calculate_remainder() {
         v_if(s == 0) { v = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
 
-        constexpr auto iter = 10;
-        for (int l = 0; l < iter; l++) {
-            v_if(v >= s) { v = v - s; }
-            v_endif;
-        }
         v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }
         v_endif;
         sfpi::dst_reg[0] = v;
