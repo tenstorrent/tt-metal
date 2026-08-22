@@ -554,6 +554,14 @@ Tensor fmod(
 
 Tensor floor_div(
     const Tensor& input_a, unary::ScalarVariant value, const std::optional<MemoryConfig>& output_mem_config) {
+    // Integer input goes to the integer floor divide. The reciprocal multiply
+    // below cannot work for it: multiply truncates a float scalar against an
+    // integer tensor, so 1/2 becomes 0 and the whole result collapses to zero
+    // (7 // 2 returned 0). It would also lose precision above 2^24 even if the
+    // scalar survived. This mirrors the tensor-tensor overload below.
+    if (!is_floating_point(input_a.dtype())) {
+        return ttnn::div(input_a, value, false, "floor", std::nullopt, output_mem_config);
+    }
     float value_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, value);
     if (value_f == 0) {
         float t_inf = std::numeric_limits<float>::infinity();
@@ -568,6 +576,17 @@ Tensor floor_div(
 }
 
 Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    // When both inputs are integer the quotient cannot be Inf/NaN, so the guard
+    // below has nothing to select and would instead mix a float32 `temp` with an
+    // int32 `result` in the where, reinterpreting the integer bit pattern as
+    // float (7 / 2 came back as 4.2e-45). The integer path is also exact across
+    // the whole int32 range, whereas routing through float32 loses precision
+    // above 2^24. Both dtypes are checked because a float operand on either side
+    // can still divide by zero, and those combinations must keep the guard.
+    if (!is_floating_point(input_a.dtype()) && !is_floating_point(input_b.dtype())) {
+        return ttnn::div(input_a, input_b, false, "floor", std::nullopt, output_mem_config);
+    }
+
     Tensor temp = ttnn::div(input_a, input_b, false, std::nullopt, std::nullopt, output_mem_config);
     Tensor result = ttnn::div(input_a, input_b, false, "floor", std::nullopt, output_mem_config);
     // floor(inf, -inf) = inf, -inf. isinf tests both in a single SFPU pass,
