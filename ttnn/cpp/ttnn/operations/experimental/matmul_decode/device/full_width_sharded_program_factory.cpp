@@ -90,10 +90,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     IDevice* device = input_tensor_a.device();
     auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
     const bool use_global_cb = operation_attributes.global_cb.has_value();
+    // A packed weight is a region of a fused height-sharded tensor whose shard spec spans the
+    // whole chip, so this weight's grid comes from the spec.
+    const auto& packed = operation_attributes.packed_weight;
     // A prefetcher-fed weight is ND-sharded in DRAM (no legacy shard spec), so the receiver
     // grid is the GCB's receiver set. Otherwise it is the weight's own shard grid.
-    auto inputB_core_range_set = use_global_cb ? operation_attributes.global_cb->receiver_cores()
-                                               : input_tensor_b.memory_config().shard_spec().value().grid;
+    auto inputB_core_range_set = use_global_cb        ? operation_attributes.global_cb->receiver_cores()
+                                 : packed.has_value() ? packed->cores
+                                                      : input_tensor_b.memory_config().shard_spec().value().grid;
     auto output_core_range_set = output_tensor.memory_config().shard_spec().value().grid;
     TT_FATAL(
         inputB_core_range_set == output_core_range_set,
@@ -118,16 +122,19 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     uint32_t inA_K_tiles_per_core = inputA_shard_shape[1] / tt::constants::TILE_WIDTH;
 
     uint32_t inB_N_tiles_per_core;
-    if (use_global_cb) {
+    if (use_global_cb || packed.has_value()) {
+        // Neither a GCB-fed nor a packed weight has a legacy [K, N/n] shard spec to read the
+        // per-core width from; it is N split across the weight's cores by definition.
         const uint32_t N_tiles = div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
-        const uint32_t num_gcb_receivers = inputB_core_range_set.num_cores();
+        const uint32_t num_weight_cores = inputB_core_range_set.num_cores();
         TT_FATAL(
-            N_tiles % num_gcb_receivers == 0,
-            "full_width_sharded matmul_decode with global_cb requires N in tiles ({}) to be divisible by the GCB "
-            "receiver count ({})",
+            N_tiles % num_weight_cores == 0,
+            "full_width_sharded matmul_decode with {} requires N in tiles ({}) to be divisible by the weight core "
+            "count ({})",
+            use_global_cb ? "global_cb" : "packed_weight",
             N_tiles,
-            num_gcb_receivers);
-        inB_N_tiles_per_core = N_tiles / num_gcb_receivers;
+            num_weight_cores);
+        inB_N_tiles_per_core = N_tiles / num_weight_cores;
     } else {
         std::array<uint32_t, 2> inputB_shard_shape = input_tensor_b.memory_config().shard_spec().value().shape;
         TT_FATAL(
@@ -242,6 +249,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             }}},
         });
     } else {
+        // Globally allocated over the resident weight. For a packed weight the buffer is the
+        // fused tensor's, and the region's byte offset into every core's shard re-bases the CB
+        // onto this weight's slab -- the kernels are none the wiser.
         desc.cbs.push_back(CBDescriptor{
             .total_size = in1_slab_bytes,
             .core_ranges = all_compute_cores_with_bbox,
@@ -252,6 +262,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
                 .tile = in1_tile_desc,
             }}},
             .buffer = input_tensor_b.buffer(),
+            .address_offset = packed.has_value() ? packed->tile_offset * in1_tile_size : 0,
         });
     }
 

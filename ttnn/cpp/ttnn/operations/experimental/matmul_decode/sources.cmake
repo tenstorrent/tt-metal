@@ -3,6 +3,7 @@
 
 set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_API_HEADERS
     matmul_decode.hpp
+    packed_weight_spec.hpp
     device/matmul_decode_device_operation.hpp
     device/matmul_decode_descriptor.hpp
 )
