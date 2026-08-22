@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,58 +6,100 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "sfpu/ckernel_sfpu_converter.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_log1p.h"
+#include "ckernel_sfpu_softplus.h"
+#include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_logsigmoid(
-    const uint dst_index_in0,  // Index for input (x)
-    const uint dst_index_in1,  // Index for exp(-x)
-    const uint dst_index_out)  // Index for output
-{
-    // logsigmoid(x) = -softplus(-x)
+// logsigmoid(x) = min(x, 0) - log1p(exp(-|x|))
+//
+// The residual log1p(exp(-|x|)) is softplus's, reused rather than rebuilt: the
+// same tuned polynomial on [0, 5], the same purpose-built exponential for a
+// negative argument, and the same three term series for the tail. logsigmoid(x)
+// is -softplus(-x), so the two were always computing the same thing, and only
+// this one had it wrong.
+//
+// The form this replaces split the domain at +-4 with no arm for x <= -4, so an
+// input there was returned unchanged and lost the residual entirely. Above +4 it
+// used a one term series, e rather than e - e^2/2 + e^3/3, on an exponential the
+// caller had computed in approximate mode. Both are gone: the split that remains
+// is inside the residual, at 5, and both of its arms are present.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void calculate_logsigmoid() {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        constexpr uint dst_tile_size_sfpi = 32;
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat a = sfpi::setsgn(x, 0);
 
-        // Read inputs from destination registers
-        sfpi::vFloat x = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat exp_neg_x = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-
-        // Save original x as result; negate x since we compute softplus(-x)
-        sfpi::vFloat result = x;
-        x = -x;
-
-        v_if(x < -4.0f) {
-            // For very negative: use exp
-            result = -exp_neg_x;
+        sfpi::vFloat residual;
+#ifdef INP_FLOAT32
+        {
+            // float32 needs the residual to relative precision, not absolute:
+            // for large positive x it is the whole answer and it is tiny. The
+            // polynomial and three term tail softplus uses are accurate in
+            // absolute terms and measured 3914 ulp here, so this path pays for
+            // the accurate exponential and a real log1p instead.
+            // float32 needs the residual to relative precision, not absolute:
+            // for a positive input it is the whole answer and it is tiny.
+            // softplus's polynomial is tuned in absolute terms and measured
+            // 3914 ulp here at the same cost, so this path pays for the
+            // accurate exponential and a real log1p.
+            sfpi::vFloat t = _sfpu_exp_fp32_accurate_(-a);
+            residual = calculate_log1p_fp32<true>(t);
         }
-        v_elseif(x >= -4.0f && x < 4.0f) {
-            // Polynomial approximation for softplus(-x) in the mid-range
-            result = PolynomialEvaluator::eval(
-                x,
-                0.6924354434013367f,
-                0.49275708198547363f,
-                0.12142381817102432f,
-                0.0031102809589356184f,
-                -0.00330807245336473f,
-                -0.00028794066747650504f,
-                5.3185409342404455e-05f,
-                7.1853546614875086e-06f,
-                7.4961114648886e-08f);
-            result = -result;
+#else
+        {
+            // bfloat16 has eight bits of mantissa, which softplus's tuned
+            // degree-6 polynomial covers on [0, 5]. Past that the residual is
+            // below 0.0068 and exp(-a) alone is within half a bfloat16 ulp of
+            // log1p(exp(-a)), so the tail needs no series.
+            residual = PolynomialEvaluator::eval(
+                a,
+                SOFTPLUS_BF16_POLY_C0,
+                SOFTPLUS_BF16_POLY_C1,
+                SOFTPLUS_BF16_POLY_C2,
+                SOFTPLUS_BF16_POLY_C3,
+                SOFTPLUS_BF16_POLY_C4,
+                SOFTPLUS_BF16_POLY_C5,
+                SOFTPLUS_BF16_POLY_C6);
+            // Past the polynomial's range the residual is exp(-a), below 0.0068
+            // and within half a bfloat16 ulp of log1p(exp(-a)). Eight bits of
+            // mantissa do not need softplus's Cody-Waite reduction, so this uses
+            // the cheap 21f exponential instead.
+            v_if(a > SOFTPLUS_POLY_BOUNDARY) {
+                residual = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(sfpi::setsgn(a, 1));
+            }
+            v_endif;
         }
+#endif
+
+        // min(x, 0), the linear term the two branches were approximating on
+        // either side of the old split.
+        sfpi::vFloat lin = x;
+        v_if(x > 0.0f) { lin = 0.0f; }
         v_endif;
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+
+        sfpi::vFloat result = lin - residual;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
+
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE>
-void logsigmoid_init() {}
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void logsigmoid_init() {
+    softplus_init();
+#ifdef INP_FLOAT32
+    log1p_init<APPROXIMATION_MODE, /*FAST_APPROX=*/false, true>();
+#endif
+}
 
 }  // namespace sfpu
 }  // namespace ckernel
