@@ -73,20 +73,39 @@ class AsyncDecodeStep:
         self.per_shard = args.vocab_size // self.nd
         assert self.per_shard + _TIE_SENTINEL < 2**24, "sentinel arithmetic assumes vocab < 16M"
         self.B = batch
-        self.rd = args.rope_head_dim
         self.table_len = table_len
         self.dev_tokens = dev_tokens  # [B,1] uint32 ROW_MAJOR (trace token input)
         self.dev_pos = dev_pos  # [B]   int32  ROW_MAJOR (trace cur_pos input)
-        self.dev_rope = dev_rope  # [2,B,1,rd] bf16 TILE  (trace packed-rope input)
+        # Packed-rope trace input. Its shape is OWNED by prepare_decode_inputs_host:
+        # [2,B,1,rope_head_dim] stock, [2,1,B,head_dim] under QWEN36_ROPE_PERMUTE=1
+        # (full-dim permuted tables). Derive the in-trace refresh from the live
+        # tensor + the same producer branch, never from hardcoded widths.
+        self.dev_rope = dev_rope
+        self.rope_shape = tuple(dev_rope.shape)
         self._stale_reason = None
 
         # cos/sin lookup table, one row per position: rows [0,T) cos, rows
-        # [T,2T) sin. Same torch math as prepare_decode_inputs_host, so the
-        # gathered bf16 rows are bit-identical to the host-computed rope.
-        inv_freq = 1.0 / (args.rope_theta ** (torch.arange(0, self.rd, 2).float() / self.rd))
+        # [T,2T) sin. Same torch math (and permute branch) as
+        # prepare_decode_inputs_host, so the gathered bf16 rows are bit-identical
+        # to the host-computed rope in either rope mode.
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import (
+            permute_rope_tables_full_dim,
+            rope_permute_enabled,
+        )
+
+        rd = args.rope_head_dim
+        inv_freq = 1.0 / (args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
         freqs = torch.outer(torch.arange(table_len).float(), inv_freq)
         emb = torch.cat([freqs, freqs], dim=-1)
-        table = torch.cat([emb.cos(), emb.sin()], dim=0).to(torch.bfloat16)
+        cos_t, sin_t = emb.cos(), emb.sin()
+        if rope_permute_enabled():
+            cos_t, sin_t = permute_rope_tables_full_dim(cos_t, sin_t, args.head_dim)
+        table = torch.cat([cos_t, sin_t], dim=0).to(torch.bfloat16)
+        assert table.shape[-1] == self.rope_shape[-1], (
+            f"rope table width {table.shape[-1]} != packed-rope input width {self.rope_shape[-1]} — "
+            "the producer (prepare_decode_inputs_host) and this table disagree on the rope mode"
+        )
+        assert self.rope_shape[0] == 2 and self.B in self.rope_shape[1:3], f"unrecognized rope packing {self.rope_shape}"
         self.rope_table = ttnn.from_torch(
             table,
             dtype=ttnn.bfloat16,
@@ -195,8 +214,10 @@ class AsyncDecodeStep:
         # read of the buffers in the captured body, so no intra-trace hazard.
         ttnn.plus_one(self.dev_pos)
         ttnn.plus_one(self.rope_idx)
-        rope = ttnn.embedding(self.rope_idx, self.rope_table, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1,2B,rd]
-        rope = ttnn.reshape(rope, (2, self.B, 1, self.rd))
+        rope = ttnn.embedding(self.rope_idx, self.rope_table, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1,2B,table_w]
+        # Row order is [cos_0..cos_{B-1}, sin_0..sin_{B-1}] — a row-major view of the
+        # producer's packed layout in both rope modes ([2,B,1,rd] and [2,1,B,hd]).
+        rope = ttnn.reshape(rope, self.rope_shape)
         rope = ttnn.to_layout(rope, ttnn.TILE_LAYOUT)
         ttnn.copy(rope, self.dev_rope)
 
