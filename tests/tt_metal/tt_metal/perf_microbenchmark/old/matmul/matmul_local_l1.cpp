@@ -130,7 +130,8 @@ std::vector<T> slice(std::vector<T> const& v, int m, int n) {
 
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
+        log_info(tt::LogTest, "Test not supported w/ slow dispatch, skipping");
+        return 0;
     }
 
     bool pass = true;
