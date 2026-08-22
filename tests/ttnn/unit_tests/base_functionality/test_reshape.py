@@ -27,6 +27,22 @@ def test_view_preserves_root_buffer_unique_id(device):
     assert ttnn.mark_corruptible(reshaped_tensor) == input_buffer_id
 
 
+def test_view_buffer_unique_id_after_root_force_deallocated(device, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.rand((1, 1, 32, 32), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    reshaped_tensor = ttnn.experimental.view(input_tensor, (1, 32, 32))
+    ttnn.deallocate(input_tensor, force=True)
+
+    # The view's own holder still reports allocated, but the root buffer is gone.
+    assert reshaped_tensor.buffer_unique_id() is None
+    with expect_error(ValueError, "mark_corruptible expected a tensor with a valid device buffer_unique_id"):
+        ttnn.mark_corruptible(reshaped_tensor)
+
+
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [

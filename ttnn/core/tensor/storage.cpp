@@ -223,6 +223,8 @@ void DeviceStorage::deallocate() {
 
 bool DeviceStorage::is_allocated() const { return mesh_tensor_holder_->is_allocated(); }
 
+bool DeviceStorage::is_root_allocated() const { return get_root_mesh_tensor()->is_allocated(); }
+
 bool DeviceStorage::is_uniform_storage() const { return coords_.size() == get_mesh_tensor().device().num_devices(); }
 
 std::span<const tt::tt_metal::distributed::MeshCoordinate> DeviceStorage::get_coords() const {

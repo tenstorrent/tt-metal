@@ -12,6 +12,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/unordered_set.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn/common/queue_id.hpp"
@@ -40,7 +41,23 @@ void py_module(nb::module_& mod) {
         nb::arg("mesh_device"),
         nb::kw_only(),
         nb::arg("cq_id") = nb::none(),
-        nb::call_guard<nb::gil_scoped_release>());
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Begins recording commands for a trace on the mesh device.
+
+            The trace is created under the currently active sub-device manager. The returned trace ID is scoped to
+            that manager. If another manager is loaded later, reload the original manager before ending, executing,
+            or releasing this trace.
+
+            Args:
+                mesh_device (ttnn.MeshDevice): Mesh device on which to capture the trace.
+
+            Keyword Args:
+                cq_id (Optional[ttnn.QueueId]): Command queue to capture. Defaults to the current command queue.
+
+            Returns:
+                ttnn.MeshTraceId: ID of the trace under the active sub-device manager.
+        )doc");
 
     mod.def(
         "end_trace_capture",
@@ -51,7 +68,20 @@ void py_module(nb::module_& mod) {
         nb::arg("trace_id"),
         nb::kw_only(),
         nb::arg("cq_id") = nb::none(),
-        nb::call_guard<nb::gil_scoped_release>());
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Ends recording commands for a trace.
+
+            ``trace_id`` is interpreted under the currently active sub-device manager. The same manager that was
+            active when capture began must be active for this call.
+
+            Args:
+                mesh_device (ttnn.MeshDevice): Mesh device on which the trace was captured.
+                trace_id (ttnn.MeshTraceId): ID of the trace under the active sub-device manager.
+
+            Keyword Args:
+                cq_id (Optional[ttnn.QueueId]): Command queue being captured. Defaults to the current command queue.
+        )doc");
 
     mod.def(
         "execute_trace",
@@ -63,14 +93,38 @@ void py_module(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("cq_id") = nb::none(),
         nb::arg("blocking") = true,
-        nb::call_guard<nb::gil_scoped_release>());
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Replays a captured trace.
+
+            ``trace_id`` is interpreted under the currently active sub-device manager. The manager under which the
+            trace was captured must be active for this call.
+
+            Args:
+                mesh_device (ttnn.MeshDevice): Mesh device on which the trace was captured.
+                trace_id (ttnn.MeshTraceId): ID of the trace under the active sub-device manager.
+
+            Keyword Args:
+                cq_id (Optional[ttnn.QueueId]): Command queue on which to replay. Defaults to the current command queue.
+                blocking (bool): Whether to wait for trace execution to complete. Defaults to ``True``.
+        )doc");
 
     mod.def(
         "release_trace",
         [](MeshDevice* device, MeshTraceId trace_id) { ttnn::operations::trace::release_trace(device, trace_id); },
         nb::arg("mesh_device"),
         nb::arg("trace_id"),
-        nb::call_guard<nb::gil_scoped_release>());
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Releases a captured trace and its storage.
+
+            ``trace_id`` is interpreted under the currently active sub-device manager. The manager under which the
+            trace was captured must be active for this call.
+
+            Args:
+                mesh_device (ttnn.MeshDevice): Mesh device on which the trace was captured.
+                trace_id (ttnn.MeshTraceId): ID of the trace under the active sub-device manager.
+        )doc");
 
     // Unsafe allocation tracking
     mod.def(
@@ -88,7 +142,7 @@ void py_module(nb::module_& mod) {
         nb::arg("mesh_device"),
         nb::arg("buffer_unique_id"));
     mod.def("drain_pending_traceback_ids", []() { return ttnn::operations::trace::drain_pending_traceback_ids(); });
-    mod.def("drain_retired_traceback_ids", []() { return ttnn::operations::trace::drain_retired_traceback_ids(); });
+    mod.def("get_all_unsafe_tracked_ids", []() { return ttnn::operations::trace::get_all_unsafe_tracked_ids(); });
     mod.def(
         "push_corruptible_allocation_scope",
         [](MeshDevice* device) { ttnn::operations::trace::push_corruptible_allocation_scope(device); },

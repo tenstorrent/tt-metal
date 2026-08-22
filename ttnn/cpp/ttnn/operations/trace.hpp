@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "ttnn/types.hpp"
@@ -28,7 +29,7 @@ void release_trace(MeshDevice* device, MeshTraceId trace_id);
 std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(MeshDevice* device, MeshTraceId trace_id);
 void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id);
 std::vector<size_t> drain_pending_traceback_ids();
-std::vector<size_t> drain_retired_traceback_ids();
+std::unordered_set<size_t> get_all_unsafe_tracked_ids();
 void push_corruptible_allocation_scope(MeshDevice* device);
 void pop_corruptible_allocation_scope(MeshDevice* device);
 
