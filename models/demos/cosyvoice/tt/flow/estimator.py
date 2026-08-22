@@ -214,9 +214,20 @@ class TtGroupNorm:
         ttnn.deallocate(t2)
 
         m2 = ttnn.multiply(mean, mean)
-        var = ttnn.subtract(ex2, m2)
+        var_raw = ttnn.subtract(ex2, m2)
         ttnn.deallocate(ex2)
         ttnn.deallocate(m2)
+        # E[x^2] - E[x]^2 is catastrophic cancellation waiting to happen: when the
+        # true variance is small relative to the mean's square, bfloat16 rounding
+        # can push this negative even though variance is mathematically >= 0.
+        # rsqrt of that -- silently, no exception -- is where zero_shot's real
+        # (non-golden) inputs produced an outright Inf mel (22795 of 50560
+        # elements) that the rest of the chain propagated as full-spectrum clipped
+        # noise. Every existing GroupNorm test uses one fixed golden geometry,
+        # which apparently never lands in the cancellation regime; a real,
+        # varying-length utterance did on its first real exercise.
+        var = ttnn.relu(var_raw)
+        ttnn.deallocate(var_raw)
         veps = ttnn.add(var, self.eps)
         inv = ttnn.rsqrt(veps)
         ttnn.deallocate(var)

@@ -127,12 +127,21 @@ def run_multi_mode(args) -> int:
     a wav per mode to listen to. One utterance per mode, not the full
     mode x language sweep `prepare_inputs.py`/`run_reference.py` already cover.
     """
+    # hift is bit-identical across CosyVoice-300M / -SFT / -Instruct (checksums
+    # compared directly), so one export covers all four modes. llm differs across
+    # all three checkpoints; flow differs only for -SFT (-Instruct's flow.pt is
+    # byte-identical to the base checkpoint's). scripts/export_weights.py
+    # --checkpoint CosyVoice-300M-SFT/-Instruct produced the per-mode files this
+    # reads -- see tests/golden/per_mode/.
     hift_path = os.path.join(args.weights_dir, "hift_weights.npz")
-    flow_path = os.path.join(args.weights_dir, "flow_weights.npz")
-    llm_path = os.path.join(args.weights_dir, "llm_weights.npz")
-    for p in (hift_path, flow_path, llm_path):
-        if not os.path.exists(p):
-            raise SystemExit(f"missing {p} -- run scripts/export_weights.py first")
+    per_mode_dir = os.path.join(args.weights_dir, "per_mode")
+    llm_path_for = {
+        "sft": os.path.join(per_mode_dir, "llm_weights_sft.npz"),
+        "instruct": os.path.join(per_mode_dir, "llm_weights_instruct.npz"),
+    }
+    flow_path_for = {"sft": os.path.join(per_mode_dir, "flow_weights_sft.npz")}
+    base_llm_path = os.path.join(args.weights_dir, "llm_weights.npz")
+    base_flow_path = os.path.join(args.weights_dir, "flow_weights.npz")
 
     modes = args.modes.split(",") if args.modes else list(MODES)
     # `--out`'s default is a filename sized for the single-wav golden path; a
@@ -157,6 +166,11 @@ def run_multi_mode(args) -> int:
             print(f"  skip {mode}: {npz_path} not found (did prepare_inputs.py write --langs including {args.lang!r}?)")
             continue
         ctx, meta = PromptContext.from_npz(npz_path)
+        llm_path = llm_path_for.get(mode, base_llm_path)
+        flow_path = flow_path_for.get(mode, base_flow_path)
+        for p in (llm_path, flow_path, hift_path):
+            if not os.path.exists(p):
+                raise SystemExit(f"missing {p} -- run scripts/export_weights.py --checkpoint ... first")
         device = ttnn.open_device(device_id=0, l1_small_size=32768)
         try:
             model = CosyVoiceTTNN(
@@ -187,7 +201,7 @@ def main() -> int:
     ap.add_argument(
         "--inputs", default=None, help="a scripts/prepare_inputs.py --out-dir; omit to use the golden utterance"
     )
-    ap.add_argument("--lang", default="zh", help="which --inputs language to pick per mode (multi-mode path only)")
+    ap.add_argument("--lang", default="en", help="which --inputs language to pick per mode (multi-mode path only)")
     ap.add_argument("--modes", default=None, help=f"comma-separated subset of {','.join(MODES)} (default: all four)")
     ap.add_argument("--out", default="cosyvoice_ttnn.wav", help="a .wav path, or with --inputs, an output directory")
     ap.add_argument("--weights-dir", default=GOLDEN_DIR)
