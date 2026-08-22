@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Exact token agreement -- `02_plan.md` §6's first gate, and R2.
+"""Exact token agreement -- the bring-up's first gate.
 
-The plan puts this before everything else.
+This comes before everything else.
 
 **Top-k overlap is not agreement.** Two gates, both deterministic, neither
 involving the sampler:

@@ -12,7 +12,7 @@ The flow encoder is 6 pre-norm blocks, 8 heads, d=512, FFN 2048. Despite the
 
 with a final `after_norm` because `normalize_before` is True. The same structure
 serves the LLM's text encoder (6 blocks, 16 heads, d=1024) and its AR decoder
-(14 blocks), so this module is the reusable piece of P3 and P4 both.
+(14 blocks), so this module is the reusable piece of both stages.
 
 Attention (see tests/pcc/test_rel_pos_attention.py, which verifies this against a
 captured layer bit-exactly):
@@ -24,11 +24,11 @@ captured layer bit-exactly):
 `rel_shift` is the awkward part on device: it is a *skew* of the score matrix,
 done by padding a column, reinterpreting the last two axes transposed, dropping a
 row and slicing. In tile layout that is a strided gather rather than an
-elementwise op, which is why `03_plan.md` P5 rates a native rel-pos SDPA as its
+elementwise op, which is why a native rel-pos SDPA was scoped as the bring-up's
 high-risk item. Here it is composed from concat + reshape + slice, all of which
 TTNN has.
 
-Stage 1 computes the positional term explicitly, as `02_plan.md` §3.3 prescribes.
+Stage 1 computes the positional term explicitly.
 Folding it into an SDPA `attn_mask` is a Stage 3 change, and the identity that
 makes it legal is already proven -- with the caveat that the bias must be
 pre-divided by sqrt(d_k), since SDPA scales before adding.
@@ -521,7 +521,7 @@ class TtRelPosAttention:
         # where the chain it replaces scores 0.99998. See `scripts/probe_sdpa_decode.py`
         # and PERF.md, *The decode attention is expressible as flash attention*.
         #
-        # `03_plan.md` P5 scoped this as ~1500 LOC of new C++ at high risk. None of
+        # This was scoped up front as ~1500 LOC of new C++ at high risk. None of
         # it was needed; the module docstring above had the identity right all along.
         # The trigger is the mask's *form*: `[b, 1, h, W]` means the caller ran it
         # through `decode_mask` and is asking for the fused path; `[b, 1, 1, W]` is

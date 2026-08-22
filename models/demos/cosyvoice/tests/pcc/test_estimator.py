@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""The CFM estimator UNet -- `02_plan.md` P3's last and largest piece.
+"""The CFM estimator UNet -- the flow stage's last and largest piece.
 
 Three tiers, cheapest first:
 

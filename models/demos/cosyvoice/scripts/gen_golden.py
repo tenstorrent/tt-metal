@@ -310,8 +310,7 @@ def build_recorder(model, rec: Recorder) -> None:
     rec.hook_module("flow.input_embedding", flow.input_embedding, ["tokens"], ["emb"])
     rec.hook_module("flow.encoder", flow.encoder, ["xs", "xs_lens"], ["xs", "masks"])
     # One RelPositionMultiHeadedAttention layer, with its weights. ESPnet rel-pos
-    # attention is NOT standard SDPA (02_plan.md sec.3.3) and is the second-hardest
-    # risk in the bring-up, so it gets a golden of its own rather than being
+    # attention is NOT standard SDPA, and is the second-hardest risk in the bring-up, so it gets a golden of its own rather than being
     # validated only through the encoder it sits inside.
     attn = flow.encoder.encoders[0].self_attn
     rec.patch(
@@ -355,7 +354,7 @@ def build_recorder(model, rec: Recorder) -> None:
     rec.patch("hift.decode", hift, "decode", ["x", "s"], ["speech"])
     rec.patch("hift.inference", hift, "inference", ["speech_feat", "cache_source"], ["speech", "source"])
     # THE iSTFT boundary -- the single most important golden in this file.
-    # P1 of the plan reproduces exactly this mapping on silicon.
+    # `tests/pcc/test_istft.py` reproduces exactly this mapping on silicon.
     rec.patch("hift.istft", hift, "_istft", ["magnitude", "phase"], ["waveform"])
     rec.patch("hift.stft", hift, "_stft", ["x"], ["real", "imag"])
     for i, rb in enumerate(hift.resblocks[:2]):

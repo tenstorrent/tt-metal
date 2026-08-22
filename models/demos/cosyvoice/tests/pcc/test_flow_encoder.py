@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The flow Conformer encoder: 6 pre-norm blocks with rel-pos attention.
 
-Part of `02_plan.md` P3. The same block structure serves the LLM's text encoder
-and its 14-block AR decoder, so what passes here is reusable for P4.
+Part of the flow stage. The same block structure serves the LLM's text encoder
+and its 14-block AR decoder, so what passes here is reusable there too.
 """
 from __future__ import annotations
 
