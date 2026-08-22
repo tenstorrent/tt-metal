@@ -487,15 +487,6 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
 
 }  // namespace execution_detail
 
-/**
- * Build the exact one-dimensional dependency cone for a requested pair of
- * terminal stream intervals.
- *
- * The returned route records retain both sides of every lifting transition.
- * Predict/update source and base intervals are therefore directly reusable by
- * a 2D planner: a horizontal route changes only x, while a vertical route
- * changes only y.
- */
 [[nodiscard]] inline AxisConePlan build_axis_cone(
     const LiftingForwardPlan& plan,
     const IndexInterval final_even,
