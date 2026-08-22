@@ -567,12 +567,24 @@ check(
     and "gmg_sanitize_scratch" in by["gmgsingleface"]["note"],
     by["gmgsingleface"]["note"][:160],
 )
+# Lane FK (2026-08-22): ema-fresh's SKIP_NOT_FEASIBLE verdict is DISSOLVED
+# by the typed cross-lane surface (fresh_cpp/ema.h, sfpi::transp8 + typed
+# cross-call state) — the row is now a measured full2x2.  cumsum-fresh
+# likewise.  moegatetopk-fresh and sfpureduce-fresh keep their skips (their
+# blockers — bitonic SFPSHFT2 networks raced on the SAME vehicle as the
+# lifted arms, and the S4 subvec_shflror1 ruling — are owned elsewhere).
 check(
-    "ops v4: feasibility-class skips are untouched (ema/moegatetopk/sfpureduce)",
+    "ops v4: remaining feasibility-class skips are untouched (moegatetopk/sfpureduce)",
     all(
         by[o]["kind"] == "skip" and "SKIP" in by[o]["note"]
-        for o in ("ema-fresh", "moegatetopk-fresh", "sfpureduce-fresh")
+        for o in ("moegatetopk-fresh", "sfpureduce-fresh")
     ),
+)
+check(
+    "ops v4: ema-fresh feasibility skip DISSOLVED by the cross-lane surface (lane FK)",
+    by["ema-fresh"]["kind"] == "full2x2"
+    and "DISSOLVED" in by["ema-fresh"]["note"]
+    and by["cumsum-fresh"]["kind"] == "full2x2",
 )
 
 # invalid sem_class must refuse at load
