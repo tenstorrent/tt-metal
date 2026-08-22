@@ -1080,12 +1080,68 @@ def test_sort_stable_row_major(descending, device):
 
 
 @pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_single_core_fused_dtype(descending, device):
+    """Single-core-factory stable bf16 sorts (Wt <= 64) run the FUSED true-index-tag engine in
+    32-bit DEST, so their index output dtype is UINT32 (the same rule fp32/u16 inputs follow).
+    Tie-heavy parity at the widest single-core shape."""
+    levels = [-1.5, -0.5, -0.5, 0.5, 1.5]
+    input_tensor = _tie_heavy_tensor([32, 2048], levels, seed=31)
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    assert ttnn_indices.dtype == ttnn.uint32
+    assert_equal(torch_indices, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_multicore_dram_comparator(descending, device):
+    """W=32768: Wt=1024 exceeds the CrossCore capacity, so this is the SingleRowMultiCore
+    DRAM factory, which deliberately keeps the index-aware COMPARATOR stable engine with u16
+    index transport: it is data-movement-bound (its comparator runs within ~0.3% of the
+    unstable floor), so the fused engine's u32-index transport only adds cost there (+10%
+    measured at this width). Tie groups straddle every per-substage pair boundary."""
+    levels = [-2.0, -1.0, -1.0, 0.0, 1.0, 3.0]
+    input_tensor = _tie_heavy_tensor([32, 32768], levels, seed=23)
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    assert ttnn_indices.dtype == ttnn.uint16
+    assert_equal(torch_indices, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+
+
+@pytest.mark.parametrize("descending", [False, True])
 def test_sort_stable_wide_u32_index(descending, device):
     """W=65536 >= the u16 index ceiling: UINT32 indices, 32-bit DEST, and (on a
     grid whose core count does not divide Wt=2048) the SingleRowMultiCore DRAM
     factory. Tie groups straddle every per-core partition boundary."""
     levels = [-2.0, -1.0, -1.0, 0.0, 1.0, 3.0]
     input_tensor = _tie_heavy_tensor([32, 65536], levels, seed=17)
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    assert ttnn_indices.dtype == ttnn.uint32
+    assert_equal(torch_indices, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_stable_past_tag_ceiling_comparator(descending, device):
+    """W=131072: stable sort keeps the index-aware comparator network — the width exceeds the
+    fused engine's u16 tag ceiling (a 16-bit tag cannot address 131072 positions), and
+    per-merge position-derived rank stamps are unsound at the bitonic network's inner
+    substages (tiles there hold elements of MIXED half-origin, so no static per-pair rank
+    range assignment orders cross-tile ties by true index). Tie-heavy parity must hold on
+    the comparator across every per-substage boundary."""
+    levels = [-2.0, -1.0, -1.0, 0.0, 1.0, 3.0]
+    input_tensor = _tie_heavy_tensor([32, 131072], levels, seed=29)
 
     torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
     ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
