@@ -27,6 +27,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
+#include "impl/program/program_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -227,7 +228,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     };
     experimental::SetProgramRunArgs(program, params);
 
-    tt::tt_metal::detail::LaunchProgram(dev, program, true);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<std::uint32_t> result_vec;
     tt::tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);

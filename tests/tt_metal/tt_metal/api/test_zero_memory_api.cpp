@@ -45,6 +45,7 @@
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 #include "gtest/gtest.h"
 
@@ -176,7 +177,7 @@ TEST_F(UnitMeshFixture, ZeroMemoryApi) {
     params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{tensor}}};
     experimental::SetProgramRunArgs(program, params);
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     // ----- Host verifies -----
     // L1: kernel reports its in-kernel verify result via the flag word.
@@ -280,7 +281,7 @@ TEST_F(UnitMeshFixture, ZeroMemoryApiBatchedL1) {
     params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{tensor}}};
     experimental::SetProgramRunArgs(program, params);
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     // The batched producer's in-kernel verify is the primary signal: kStatusOk only if
     // every byte across all chunks is zero after the single barrier.
