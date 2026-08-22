@@ -110,7 +110,7 @@ sfpi_inline void moe_store_8_rows(const SortBank &b)
 sfpi_inline void moe_build_bitonic8(SortBank &b)
 {
     // P1 - Bitonic 2.
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     indexed_swap<1>(b.v0, b.v1, b.c0, b.c1);
     indexed_swap<1>(b.v3, b.v2, b.c3, b.c2);
     // P2 - Bitonic 4.
@@ -119,27 +119,27 @@ sfpi_inline void moe_build_bitonic8(SortBank &b)
     indexed_swap<3>(b.v0, b.v1, b.c0, b.c1);
     indexed_swap<3>(b.v2, b.v3, b.c2, b.c3);
     // P3 - Bitonic 8.
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     indexed_swap<1>(b.v0, b.v1, b.c0, b.c1);
     indexed_swap<1>(b.v3, b.v2, b.c3, b.c2);
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     indexed_swap<2>(b.v0, b.v2, b.c0, b.c2);
     indexed_swap<2>(b.v1, b.v3, b.c1, b.c3);
     indexed_swap<2>(b.v0, b.v1, b.c0, b.c1);
     indexed_swap<2>(b.v2, b.v3, b.c2, b.c3);
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
 }
 
 sfpi_inline void moe_bitonic8_steps_3_to_1(SortBank &b)
 {
     indexed_swap<1>(b.v0, b.v1, b.c0, b.c1);
     indexed_swap<1>(b.v3, b.v2, b.c3, b.c2);
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     indexed_swap<2>(b.v0, b.v2, b.c0, b.c2);
     indexed_swap<2>(b.v1, b.v3, b.c1, b.c3);
     indexed_swap<2>(b.v0, b.v1, b.c0, b.c1);
     indexed_swap<2>(b.v2, b.v3, b.c2, b.c3);
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
 }
 
 // ---- shared tails --------------------------------------------------------
@@ -156,7 +156,7 @@ sfpi_inline void moe_zero_tail_lregs(SortBank &b)
         b.c1 = 0;
     }
     if constexpr (num_selected_experts != 4 && num_selected_experts != 8) {
-        transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+        ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
         b.c3 = 0;
         if constexpr (num_selected_experts != 7 && num_selected_experts != 3) {
             b.c2 = 0;
@@ -164,7 +164,7 @@ sfpi_inline void moe_zero_tail_lregs(SortBank &b)
                 b.c1 = 0;
             }
         }
-        transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+        ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     }
     if constexpr (num_selected_experts > 4) {
         b.c0 = load_companion(moe_gate_interm_tile, moe_gate_interm_tile + 2);
@@ -335,14 +335,14 @@ sfpi_inline void moe_top8_sort_rows(SortBank &b)
 {
     indexed_swap<1>(b.v0, b.v1, b.c0, b.c1);
     if constexpr (num_selected_experts != 4 || full_sort) {
-        transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+        ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
         indexed_swap<2>(b.v0, b.v2, b.c0, b.c2);
         indexed_swap<2>(b.v1, b.v3, b.c1, b.c3);
         if constexpr ((num_selected_experts != 6 && num_selected_experts != 2) || full_sort) {
             indexed_swap<2>(b.v0, b.v1, b.c0, b.c1);
             indexed_swap<2>(b.v2, b.v3, b.c2, b.c3);
         }
-        transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+        ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     }
     // D4: the original's constexpr-else TTI_NOP is dropped.
 }
@@ -456,7 +456,7 @@ sfpi_inline void moe_top16_bitonic16_directional(SortBank &b)
         indexed_swap<1>(b.v1, b.v3, b.c1, b.c3);
         indexed_swap<1>(b.v0, b.v1, b.c0, b.c1);  // Step 3.
         indexed_swap<1>(b.v2, b.v3, b.c2, b.c3);
-        transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+        ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
         indexed_swap<1>(b.v0, b.v2, b.c0, b.c2);  // Step 2.
         indexed_swap<1>(b.v1, b.v3, b.c1, b.c3);
         indexed_swap<1>(b.v0, b.v1, b.c0, b.c1);  // Step 1.
@@ -467,21 +467,21 @@ sfpi_inline void moe_top16_bitonic16_directional(SortBank &b)
         indexed_swap<1>(b.v3, b.v1, b.c3, b.c1);
         indexed_swap<1>(b.v1, b.v0, b.c1, b.c0);  // Step 3.
         indexed_swap<1>(b.v3, b.v2, b.c3, b.c2);
-        transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+        ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
         indexed_swap<1>(b.v2, b.v0, b.c2, b.c0);  // Step 2.
         indexed_swap<1>(b.v3, b.v1, b.c3, b.c1);
         indexed_swap<1>(b.v1, b.v0, b.c1, b.c0);  // Step 1.
         indexed_swap<1>(b.v3, b.v2, b.c3, b.c2);
     }
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
 }
 
 sfpi_inline void moe_top16_reverse_sort_order(SortBank &b)
 {
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     indexed_swap<0>(b.v0, b.v3, b.c0, b.c3);  // UNCONDITIONALLY
     indexed_swap<0>(b.v1, b.v2, b.c1, b.c2);
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
 }
 
 template <uint32_t offset>

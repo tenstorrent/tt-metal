@@ -179,12 +179,12 @@ sfpi_inline void t32_ph3_st4_to_1(T32Bank &b)
     indexed_swap<1>(b.v1, b.v3, b.c1, b.c3);
     indexed_swap<1>(b.v0, b.v1, b.c0, b.c1);  // Step 3
     indexed_swap<1>(b.v2, b.v3, b.c2, b.c3);
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
     indexed_swap<1>(b.v0, b.v2, b.c0, b.c2);  // Step 4
     indexed_swap<1>(b.v1, b.v3, b.c1, b.c3);
     indexed_swap<1>(b.v0, b.v1, b.c0, b.c1);  // Step 3
     indexed_swap<1>(b.v2, b.v3, b.c2, b.c3);
-    transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
+    ckernel::sfpu::semantic::transp8(b.v0, b.v1, b.v2, b.v3, b.c0, b.c1, b.c2, b.c3);
 
     if constexpr (dir == static_cast<bool>(SortDir::ArgMin)) {
         t32_set_lane_config_imm<0x004>();  // G3: restore
