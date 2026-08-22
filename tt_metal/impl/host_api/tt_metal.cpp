@@ -952,7 +952,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         if (MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Emule)
 #endif
         {
-            detail::CompileProgram(device, program);
+            program.impl().compile(device);
         }
         program.impl().finalize_dataflow_buffer_configs();
         if (!program.impl().is_finalized()) {

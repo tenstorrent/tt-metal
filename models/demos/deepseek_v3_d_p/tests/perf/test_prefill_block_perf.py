@@ -50,8 +50,8 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
     [
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4-2link and layer3 and gate_device and no_ref and isl_6k4'",
-            38_638_478,  # Recalibrated 2026-08-14 after #51019 balanced dispatch across both links.
-            # Two local LoudBox runs (38.364, 38.397 ms) and BH E2E CI (39.154 ms); mean 38.638 ms.
+            30_330_761,  # Recalibrated 2026-08-21 on this LoudBox with the routed experts folded
+            # into one program. Single run, where the previous value was a mean of three.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe_fabric2d",
             1,
