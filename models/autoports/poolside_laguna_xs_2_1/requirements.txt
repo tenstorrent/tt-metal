@@ -1,5 +1,5 @@
 # Serving env for Laguna-XS-2.1 on vLLM. Installed by setup_vllm.sh; see
-# README.md ("Serving") for the runbook.
+# README.md for the end-user runbook.
 #
 # Not a plain `pip install -r` target: vLLM must be built from sdist with
 # VLLM_TARGET_DEVICE=empty (the PyPI wheel is CUDA) against the CPU torch index,
@@ -9,7 +9,7 @@
 # ttnn is deliberately NOT pinned here: it is installed editable from THIS
 # checkout, which carries a tt-metal change no released wheel has — SDPA's
 # chunked path accepts sliding_window_size, which the sliding-window layers
-# require on a prefix-cache hit. See README.md ("Serving").
+# require on a prefix-cache hit. setup_vllm.sh installs ttnn from this checkout.
 
 # The TT plugin is only tested against 0.24.0 (vllm-tt-plugin README) and it
 # monkeypatches upstream internals, so this pin is load-bearing, not cosmetic.
