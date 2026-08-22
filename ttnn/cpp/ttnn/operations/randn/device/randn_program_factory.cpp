@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstring>
+#include <random>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -15,6 +16,9 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 std::uniform_int_distribution distribution(1, std::numeric_limits<int32_t>::max());
+
+// Persistent generator for the unseeded path, so consecutive calls advance instead of repeating.
+std::mt19937 default_rng(std::random_device{}());
 
 auto get_random_seed(std::mt19937& rng) -> uint32_t { return distribution(rng); }
 
@@ -79,8 +83,8 @@ RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::Pro
             .defines = compute_defines,
         });
 
-    std::mt19937 rng = operation_attributes.seed.has_value() ? std::mt19937(*operation_attributes.seed)
-                                                             : std::mt19937(std::time(nullptr));
+    std::mt19937 seeded_rng(operation_attributes.seed.value_or(0));
+    std::mt19937& rng = operation_attributes.seed.has_value() ? seeded_rng : default_rng;
 
     uint32_t tile_offset = 0;
     for (auto core : cores) {
@@ -121,8 +125,8 @@ void RandnDeviceOperation::ProgramFactory::override_runtime_arguments(
 
     const uint32_t output_addr = output.buffer()->address();
 
-    std::mt19937 rng = operation_attributes.seed.has_value() ? std::mt19937(*operation_attributes.seed)
-                                                             : std::mt19937(std::time(nullptr));
+    std::mt19937 seeded_rng(operation_attributes.seed.value_or(0));
+    std::mt19937& rng = operation_attributes.seed.has_value() ? seeded_rng : default_rng;
 
     for (auto core : cores) {
         {

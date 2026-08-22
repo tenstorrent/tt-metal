@@ -154,7 +154,11 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
 
     uint32_t B = input_tensor.padded_shape()[-2];
     uint32_t Bcache = cache_tensor.padded_shape()[0];
-    const uint32_t granularity = std::min(static_cast<uint32_t>(2), Bcache);  // granularity = 2 best for performance
+    // Each kernel walks u_count iterations of an inner loop of `granularity` user rows, so
+    // granularity must divide u_range exactly or the trailing rows are never visited.
+    // Deriving granularity from u_range preserves that invariant.
+    const uint32_t u_range = std::min(static_cast<uint32_t>(32), Bcache);
+    const uint32_t granularity = (u_range % 2 == 0) ? 2u : 1u;  // granularity = 2 best for performance
     uint32_t num_batched_heads = input_tensor.padded_shape()[1] * B / tt::constants::TILE_HEIGHT;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -275,7 +279,6 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
         }}},
     });
 
-    const uint32_t u_range = std::min(static_cast<uint32_t>(32), Bcache);
     const uint32_t u_count = u_range / granularity;
 
     // Reader kernel
