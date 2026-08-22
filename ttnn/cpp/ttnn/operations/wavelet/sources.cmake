@@ -15,6 +15,8 @@ set(TTNN_OP_WAVELET_SRCS
     device/lwt_2d_program_factory.cpp
     device/wavelet_1d_operation_impl.cpp
     device/wavelet_2d_operation_impl.cpp
+    device/wavelet_program_utils.cpp
+    device/wavelet_tensor_validation.cpp
     wavelet.cpp
 )
 

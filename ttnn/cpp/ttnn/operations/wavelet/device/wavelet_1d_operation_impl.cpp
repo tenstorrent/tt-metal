@@ -28,6 +28,8 @@
 #include "ttnn/operations/wavelet/common/storage_contract.hpp"
 #include "ttnn/operations/wavelet/common/wavelet_host.hpp"
 #include "ttnn/operations/wavelet/device/protocol/lwt_config.hpp"
+#include "ttnn/operations/wavelet/device/wavelet_program_utils.hpp"
+#include "ttnn/operations/wavelet/device/wavelet_tensor_validation.hpp"
 #include "ttnn/operations/wavelet/planner/inverse_plan.hpp"
 #include "ttnn/operations/wavelet/planner/l1_accounting.hpp"
 #include "ttnn/operations/wavelet/planner/policy.hpp"
@@ -36,6 +38,11 @@
 namespace ttnn::prim {
 
 using namespace operations::wavelet;
+using wavelet_program_utils::checked_u32;
+using wavelet_program_utils::core_range_set;
+using wavelet_program_utils::CoreChunkWork;
+using wavelet_tensor_validation::validate_input_memory_config;
+using wavelet_tensor_validation::validate_output_memory_config;
 
 namespace {
 
@@ -91,28 +98,11 @@ struct IlwtWorkingBuffers {
     [[nodiscard]] uint32_t slot_id(const StorageSlot slot) const noexcept { return static_cast<uint32_t>(slot); }
 };
 
-struct UploadedBufferOwner {
-    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> buffer;
-    std::vector<uint32_t> payload;
-};
-
-struct CoreChunkWork {
-    tt::tt_metal::CoreCoord core;
-    uint32_t chunk_begin{0};
-    uint32_t chunk_count{0};
-};
-
 struct Logical1DShape {
     uint32_t batch_count{1};
     uint32_t length{0};
     bool rank_four{false};
 };
-
-[[nodiscard]] uint32_t checked_u32(const size_t value, const char* label) {
-    TT_FATAL(
-        value <= static_cast<size_t>(std::numeric_limits<uint32_t>::max()), "{} {} overflows uint32_t", label, value);
-    return static_cast<uint32_t>(value);
-}
 
 [[nodiscard]] Logical1DShape logical_1d_shape(const Tensor& tensor, const char* tensor_name) {
     const auto& shape = tensor.logical_shape();
@@ -281,43 +271,6 @@ template <typename Plan>
            plan.chunks.front().routes.size() <= kAlignedNocMaxRouteCount;
 }
 
-[[nodiscard]] uint32_t core_limit(tt::tt_metal::distributed::MeshDevice& mesh_device) {
-    const auto grid = mesh_device.compute_with_storage_grid_size();
-    const uint32_t hardware_cores = static_cast<uint32_t>(grid.x * grid.y);
-    TT_FATAL(hardware_cores > 0, "LWT requires at least one hardware worker core");
-    return hardware_cores;
-}
-
-[[nodiscard]] std::vector<tt::tt_metal::CoreCoord> select_cores(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, const uint32_t active_core_count) {
-    const auto grid = mesh_device.compute_with_storage_grid_size();
-    return tt::tt_metal::grid_to_cores(
-        active_core_count, static_cast<uint32_t>(grid.x), static_cast<uint32_t>(grid.y), true);
-}
-
-[[nodiscard]] tt::tt_metal::CoreRangeSet core_range_set(const std::vector<tt::tt_metal::CoreCoord>& cores) {
-    std::vector<tt::tt_metal::CoreRange> ranges;
-    ranges.reserve(cores.size());
-    for (const auto& core : cores) {
-        ranges.emplace_back(core);
-    }
-    return tt::tt_metal::CoreRangeSet(std::move(ranges)).merge_ranges();
-}
-
-[[nodiscard]] std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_dram_buffer(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, const size_t page_count, const uint32_t page_bytes) {
-    const size_t physical_page_count = std::max(page_count, size_t{1});
-    const tt::tt_metal::distributed::DeviceLocalBufferConfig local_config{
-        .page_size = page_bytes,
-        .buffer_type = tt::tt_metal::BufferType::DRAM,
-        .bottom_up = false,
-    };
-    const tt::tt_metal::distributed::ReplicatedBufferConfig replicated_config{
-        .size = static_cast<uint64_t>(physical_page_count * page_bytes),
-    };
-    return tt::tt_metal::distributed::MeshBuffer::create(replicated_config, local_config, &mesh_device);
-}
-
 void add_circular_buffer(
     tt::tt_metal::ProgramDescriptor& descriptor,
     const tt::tt_metal::CoreRangeSet& cores,
@@ -370,30 +323,6 @@ void add_narrow_tile_circular_buffer(
             .tile = tt::tt_metal::TileDescriptor{32, 16, false},
         }}},
     });
-}
-
-[[nodiscard]] std::vector<CoreChunkWork> partition_chunk_work(
-    const std::vector<tt::tt_metal::CoreCoord>& cores, const uint32_t chunk_count) {
-    TT_FATAL(!cores.empty(), "LWT chunk partition requires cores");
-    TT_FATAL(chunk_count >= cores.size(), "LWT active core count exceeds chunk count");
-
-    const uint32_t active_core_count = checked_u32(cores.size(), "LWT core count");
-    const uint32_t base_chunks = chunk_count / active_core_count;
-    const uint32_t extra_chunks = chunk_count % active_core_count;
-    uint32_t chunk_begin = 0;
-    std::vector<CoreChunkWork> work;
-    work.reserve(cores.size());
-    for (uint32_t core_index = 0; core_index < active_core_count; ++core_index) {
-        const uint32_t count = base_chunks + (core_index < extra_chunks ? 1U : 0U);
-        work.push_back(CoreChunkWork{
-            .core = cores[core_index],
-            .chunk_begin = chunk_begin,
-            .chunk_count = count,
-        });
-        chunk_begin += count;
-    }
-    TT_FATAL(chunk_begin == chunk_count, "LWT chunk partition is incomplete");
-    return work;
 }
 
 [[nodiscard]] uint32_t resolve_output_address(const LwtWorkingBuffers& buffers, const RouteOutputRef output) {
@@ -952,31 +881,8 @@ void add_narrow_tile_circular_buffer(
 
 namespace {
 
-void validate_output_memory_config(const MemoryConfig& memory_config, const char* operation_name) {
-    TT_FATAL(
-        memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
-            memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM && !memory_config.is_sharded(),
-        "{} supports only DRAM-interleaved outputs in its first TTNN version",
-        operation_name);
-}
-
-void validate_input_memory_config(const MemoryConfig& memory_config, const char* tensor_name) {
-    const bool supported_buffer = memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM ||
-                                  memory_config.buffer_type() == tt::tt_metal::BufferType::L1;
-    TT_FATAL(
-        memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED && supported_buffer &&
-            !memory_config.is_sharded(),
-        "{} must use INTERLEAVED memory with DRAM or L1 storage; sharded inputs are unsupported",
-        tensor_name);
-}
-
 void validate_1d_tensor(const Tensor& tensor, const char* tensor_name) {
-    TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} must be a device tensor", tensor_name);
-    TT_FATAL(
-        tensor.is_allocated() && tensor.buffer() != nullptr, "{} must have an allocated device buffer", tensor_name);
-    TT_FATAL(tensor.device() != nullptr, "{} has no device", tensor_name);
-    TT_FATAL(tensor.device()->num_devices() == 1, "{} must be placed on exactly one physical device", tensor_name);
-    TT_FATAL(tensor.dtype() == DataType::FLOAT32, "{} must have FLOAT32 dtype", tensor_name);
+    wavelet_tensor_validation::validate_device_tensor(tensor, tensor_name);
     TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "{} must use ROW_MAJOR layout", tensor_name);
     const Logical1DShape shape = logical_1d_shape(tensor, tensor_name);
     TT_FATAL(shape.length > 0, "{} must be non-empty", tensor_name);
@@ -1014,8 +920,7 @@ void validate_preallocated_output(
     const tt::tt_metal::distributed::MeshDevice* expected_device,
     const char* output_name) {
     validate_1d_tensor(output, output_name);
-    validate_output_memory_config(output.memory_config(), output_name);
-    TT_FATAL(output.device() == expected_device, "{} must be on the same device as the inputs", output_name);
+    wavelet_tensor_validation::validate_preallocated_output_placement(output, expected_device, output_name);
     TT_FATAL(
         output.logical_shape() == expected_spec.logical_shape(),
         "{} logical shape does not match the wavelet output specification",
@@ -1034,43 +939,6 @@ void validate_preallocated_output(
         expected_spec.compute_packed_buffer_size_bytes());
 }
 
-[[nodiscard]] std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> upload_metadata(
-    tt::tt_metal::distributed::MeshDevice& mesh_device,
-    const size_t page_count,
-    const uint32_t page_bytes,
-    std::vector<uint32_t> payload,
-    tt::tt_metal::WorkloadDescriptor& workload) {
-    auto buffer = create_dram_buffer(mesh_device, page_count, page_bytes);
-    const size_t physical_words = static_cast<size_t>(buffer->get_backing_buffer()->size()) / sizeof(uint32_t);
-    TT_FATAL(
-        payload.size() <= physical_words,
-        "Wavelet metadata payload has {} words but its device buffer holds only {}",
-        payload.size(),
-        physical_words);
-    payload.resize(physical_words, 0);
-
-    auto owner = std::make_shared<UploadedBufferOwner>(UploadedBufferOwner{
-        .buffer = buffer,
-        .payload = std::move(payload),
-    });
-    tt::tt_metal::distributed::EnqueueWriteMeshBuffer(
-        mesh_device.mesh_command_queue(), owner->buffer, owner->payload, false);
-    workload.buffers.push_back({owner, buffer->get_backing_buffer()});
-    return buffer;
-}
-
-void append_programs(
-    tt::tt_metal::WorkloadDescriptor& workload,
-    tt::tt_metal::ProgramDescriptor descriptor,
-    const MeshCoordinateRangeSet& tensor_coords) {
-    const auto& ranges = tensor_coords.ranges();
-    TT_FATAL(!ranges.empty(), "Wavelet workload has no mesh coordinate range");
-    for (size_t index = 0; index + 1 < ranges.size(); ++index) {
-        workload.programs.push_back({ranges[index], descriptor});
-    }
-    workload.programs.push_back({ranges.back(), std::move(descriptor)});
-}
-
 template <typename Scheme>
 [[nodiscard]] LwtExecutionPlan make_forward_execution_plan(
     tt::tt_metal::distributed::MeshDevice& mesh_device,
@@ -1087,7 +955,8 @@ template <typename Scheme>
         full_plan.preprocess_layout.padded_length() <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
         "LWT padded input length exceeds the device signed-index range");
 
-    const uint32_t max_cores = core_limit(mesh_device);
+    const uint32_t max_cores =
+        wavelet_program_utils::worker_core_count(mesh_device, "LWT requires at least one hardware worker core");
     const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
     const std::optional<WorkspaceLayout> workspace_override = workspace_layout_override();
     const WorkspaceLayout initial_layout = workspace_override.value_or(WorkspaceLayout::kRowMajor);
@@ -1139,7 +1008,7 @@ template <typename Scheme>
         "ILWT padded signal length exceeds the device signed-index range");
     IlwtExecutionPlan plan = make_ilwt_execution_plan(
         std::move(full_plan),
-        core_limit(mesh_device),
+        wavelet_program_utils::worker_core_count(mesh_device, "LWT requires at least one hardware worker core"),
         signal_budget_bytes,
         architecture_policy.ilwt_layout,
         architecture_policy.final_interleave_direct);
@@ -1151,7 +1020,7 @@ template <typename Scheme>
             make_architecture_policy(architecture_policy.architecture, preferred_layout);
         plan = make_ilwt_execution_plan(
             std::move(plan.full_plan),
-            core_limit(mesh_device),
+            wavelet_program_utils::worker_core_count(mesh_device, "LWT requires at least one hardware worker core"),
             signal_budget_bytes,
             preferred_layout,
             preferred_policy.final_interleave_direct);
@@ -1189,8 +1058,12 @@ template <typename Scheme>
     const uint32_t chunks_per_sample = checked_u32(plan.chunks.size(), "LWT chunks per sample");
     const uint32_t total_work_items =
         checked_u32(static_cast<size_t>(chunks_per_sample) * input_shape.batch_count, "LWT total batch work items");
-    std::vector<tt::tt_metal::CoreCoord> cores =
-        select_cores(mesh_device, std::min(core_limit(mesh_device), total_work_items));
+    std::vector<tt::tt_metal::CoreCoord> cores = wavelet_program_utils::select_row_major_cores(
+        mesh_device,
+        std::min(
+            wavelet_program_utils::worker_core_count(mesh_device, "LWT requires at least one hardware worker core"),
+            total_work_items),
+        "LWT active core count exceeds the worker grid");
 
     static_assert(executable_step_count<Scheme>() > 0, "DWT schemes require an executable terminal scale step");
     constexpr size_t expected_route_count = executable_step_count<Scheme>() - 1U;
@@ -1202,9 +1075,10 @@ template <typename Scheme>
             expected_route_count);
     }
     const size_t route_count = plan.chunks.front().routes.size();
-    auto route_config =
-        create_dram_buffer(mesh_device, plan.chunks.size() * route_count, device_protocol::kRouteConfigPageBytes);
-    auto chunk_config = create_dram_buffer(mesh_device, plan.chunks.size(), device_protocol::kLwtChunkConfigPageBytes);
+    auto route_config = wavelet_program_utils::create_replicated_dram_pages(
+        mesh_device, std::max(plan.chunks.size() * route_count, size_t{1}), device_protocol::kRouteConfigPageBytes);
+    auto chunk_config = wavelet_program_utils::create_replicated_dram_pages(
+        mesh_device, std::max(plan.chunks.size(), size_t{1}), device_protocol::kLwtChunkConfigPageBytes);
     LwtWorkingBuffers buffers{
         .final_even = std::get<0>(tensor_return_value).buffer(),
         .final_odd = std::get<1>(tensor_return_value).buffer(),
@@ -1226,12 +1100,23 @@ template <typename Scheme>
         "LWT detail stream does not cover the canonical coefficient interval");
     const std::vector<uint32_t> chunk_words = build_chunk_config_words(plan);
     const std::vector<uint32_t> route_words = build_route_config_words(plan, buffers);
-    buffers.chunk_config = upload_metadata(
-        mesh_device, plan.chunks.size(), device_protocol::kLwtChunkConfigPageBytes, chunk_words, workload);
-    buffers.route_config = upload_metadata(
-        mesh_device, plan.chunks.size() * route_count, device_protocol::kRouteConfigPageBytes, route_words, workload);
+    buffers.chunk_config = wavelet_program_utils::upload_replicated_dram_metadata(
+        mesh_device,
+        std::max(plan.chunks.size(), size_t{1}),
+        device_protocol::kLwtChunkConfigPageBytes,
+        chunk_words,
+        workload,
+        "Wavelet metadata payload");
+    buffers.route_config = wavelet_program_utils::upload_replicated_dram_metadata(
+        mesh_device,
+        std::max(plan.chunks.size() * route_count, size_t{1}),
+        device_protocol::kRouteConfigPageBytes,
+        route_words,
+        workload,
+        "Wavelet metadata payload");
 
-    const std::vector<CoreChunkWork> work = partition_chunk_work(buffers.cores, total_work_items);
+    const std::vector<CoreChunkWork> work =
+        wavelet_program_utils::partition_chunk_work(buffers.cores, total_work_items, "LWT");
     const auto [min_work, max_work] = std::minmax_element(
         work.begin(), work.end(), [](const auto& lhs, const auto& rhs) { return lhs.chunk_count < rhs.chunk_count; });
     log_debug(
@@ -1276,7 +1161,8 @@ template <typename Scheme>
         chunks_per_sample,
         input_pages_per_sample,
         output_pages_per_sample);
-    append_programs(workload, std::move(descriptor), tensor_coords);
+    wavelet_program_utils::append_program_to_mesh_ranges(
+        workload, std::move(descriptor), tensor_coords, "Wavelet workload has no mesh coordinate range");
     return workload;
 }
 
@@ -1308,8 +1194,12 @@ template <typename Scheme>
     const uint32_t chunks_per_sample = checked_u32(plan.chunks.size(), "ILWT chunks per sample");
     const uint32_t total_work_items = checked_u32(
         static_cast<size_t>(chunks_per_sample) * coefficient_shape.batch_count, "ILWT total batch work items");
-    std::vector<tt::tt_metal::CoreCoord> cores =
-        select_cores(mesh_device, std::min(core_limit(mesh_device), total_work_items));
+    std::vector<tt::tt_metal::CoreCoord> cores = wavelet_program_utils::select_row_major_cores(
+        mesh_device,
+        std::min(
+            wavelet_program_utils::worker_core_count(mesh_device, "LWT requires at least one hardware worker core"),
+            total_work_items),
+        "ILWT active core count exceeds the worker grid");
 
     static_assert(
         executable_step_count<InverseScheme>() >= 2,
@@ -1323,9 +1213,10 @@ template <typename Scheme>
             expected_route_count);
     }
     const size_t route_count = plan.chunks.front().routes.size();
-    auto route_config =
-        create_dram_buffer(mesh_device, plan.chunks.size() * route_count, device_protocol::kRouteConfigPageBytes);
-    auto chunk_config = create_dram_buffer(mesh_device, plan.chunks.size(), device_protocol::kLwtChunkConfigPageBytes);
+    auto route_config = wavelet_program_utils::create_replicated_dram_pages(
+        mesh_device, std::max(plan.chunks.size() * route_count, size_t{1}), device_protocol::kRouteConfigPageBytes);
+    auto chunk_config = wavelet_program_utils::create_replicated_dram_pages(
+        mesh_device, std::max(plan.chunks.size(), size_t{1}), device_protocol::kLwtChunkConfigPageBytes);
     IlwtWorkingBuffers buffers{
         .output = tensor_return_value.buffer(),
         .route_config = route_config,
@@ -1335,12 +1226,23 @@ template <typename Scheme>
 
     const std::vector<uint32_t> chunk_words = build_inverse_chunk_config_words(plan, buffers);
     const std::vector<uint32_t> route_words = build_inverse_route_config_words(plan, buffers);
-    buffers.chunk_config = upload_metadata(
-        mesh_device, plan.chunks.size(), device_protocol::kLwtChunkConfigPageBytes, chunk_words, workload);
-    buffers.route_config = upload_metadata(
-        mesh_device, plan.chunks.size() * route_count, device_protocol::kRouteConfigPageBytes, route_words, workload);
+    buffers.chunk_config = wavelet_program_utils::upload_replicated_dram_metadata(
+        mesh_device,
+        std::max(plan.chunks.size(), size_t{1}),
+        device_protocol::kLwtChunkConfigPageBytes,
+        chunk_words,
+        workload,
+        "Wavelet metadata payload");
+    buffers.route_config = wavelet_program_utils::upload_replicated_dram_metadata(
+        mesh_device,
+        std::max(plan.chunks.size() * route_count, size_t{1}),
+        device_protocol::kRouteConfigPageBytes,
+        route_words,
+        workload,
+        "Wavelet metadata payload");
 
-    const std::vector<CoreChunkWork> work = partition_chunk_work(buffers.cores, total_work_items);
+    const std::vector<CoreChunkWork> work =
+        wavelet_program_utils::partition_chunk_work(buffers.cores, total_work_items, "ILWT");
     const auto [min_work, max_work] = std::minmax_element(
         work.begin(), work.end(), [](const auto& lhs, const auto& rhs) { return lhs.chunk_count < rhs.chunk_count; });
     log_debug(
@@ -1388,7 +1290,8 @@ template <typename Scheme>
         chunks_per_sample,
         input_pages_per_sample,
         output_pages_per_sample);
-    append_programs(workload, std::move(descriptor), tensor_coords);
+    wavelet_program_utils::append_program_to_mesh_ranges(
+        workload, std::move(descriptor), tensor_coords, "Wavelet workload has no mesh coordinate range");
     return workload;
 }
 
@@ -1416,14 +1319,14 @@ void validate_forward_inputs(const Lwt1DParams& operation_attributes, const Lwt1
             std::get<1>(expected_specs),
             tensor_args.input.device(),
             "DWT detail output");
-        TT_FATAL(
-            std::get<0>(*tensor_args.preallocated_outputs).buffer() !=
-                std::get<1>(*tensor_args.preallocated_outputs).buffer(),
+        wavelet_tensor_validation::validate_distinct_buffers(
+            std::get<0>(*tensor_args.preallocated_outputs),
+            std::get<1>(*tensor_args.preallocated_outputs),
             "DWT approximation and detail outputs must not alias");
-        TT_FATAL(
-            std::get<0>(*tensor_args.preallocated_outputs).buffer() != tensor_args.input.buffer() &&
-                std::get<1>(*tensor_args.preallocated_outputs).buffer() != tensor_args.input.buffer(),
-            "DWT outputs must not alias the input");
+        wavelet_tensor_validation::validate_distinct_buffers(
+            std::get<0>(*tensor_args.preallocated_outputs), tensor_args.input, "DWT outputs must not alias the input");
+        wavelet_tensor_validation::validate_distinct_buffers(
+            std::get<1>(*tensor_args.preallocated_outputs), tensor_args.input, "DWT outputs must not alias the input");
     }
 }
 
@@ -1432,15 +1335,15 @@ void validate_inverse_inputs(const Ilwt1DParams& operation_attributes, const Ilw
     validate_1d_tensor(tensor_args.detail, "IDWT detail input");
     const Logical1DShape coefficient_shape = logical_1d_shape(tensor_args.approximation, "IDWT approximation input");
     validate_output_memory_config(operation_attributes.output_memory_config, "IDWT");
-    TT_FATAL(
-        tensor_args.approximation.device() == tensor_args.detail.device(),
+    wavelet_tensor_validation::validate_same_device(
+        tensor_args.detail,
+        tensor_args.approximation.device(),
         "IDWT approximation and detail inputs must be on the same device");
     TT_FATAL(
         tensor_args.approximation.logical_shape() == tensor_args.detail.logical_shape(),
         "IDWT approximation and detail inputs must have identical shapes");
-    TT_FATAL(
-        tensor_args.approximation.buffer() != tensor_args.detail.buffer(),
-        "IDWT approximation and detail inputs must not alias");
+    wavelet_tensor_validation::validate_distinct_buffers(
+        tensor_args.approximation, tensor_args.detail, "IDWT approximation and detail inputs must not alias");
     TT_FATAL(operation_attributes.original_length > 0, "IDWT original_length must be greater than zero");
     TT_FATAL(
         operation_attributes.scheme_id != SchemeId::kUnknown, "IDWT received an invalid wavelet scheme identifier");
@@ -1471,10 +1374,10 @@ void validate_inverse_inputs(const Ilwt1DParams& operation_attributes, const Ilw
             detail::compute_ilwt_1d_output_spec(operation_attributes, tensor_args),
             tensor_args.approximation.device(),
             "IDWT output");
-        TT_FATAL(
-            tensor_args.preallocated_output->buffer() != tensor_args.approximation.buffer() &&
-                tensor_args.preallocated_output->buffer() != tensor_args.detail.buffer(),
-            "IDWT output must not alias an input");
+        wavelet_tensor_validation::validate_distinct_buffers(
+            *tensor_args.preallocated_output, tensor_args.approximation, "IDWT output must not alias an input");
+        wavelet_tensor_validation::validate_distinct_buffers(
+            *tensor_args.preallocated_output, tensor_args.detail, "IDWT output must not alias an input");
     }
 }
 
