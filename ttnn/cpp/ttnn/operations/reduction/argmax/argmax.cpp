@@ -167,7 +167,9 @@ Tensor argmax(
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
+    std::optional<Tensor> optional_output_tensor,
+    bool use_rvv,
+    std::optional<Tensor> optional_maxval_tensor) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
@@ -232,6 +234,25 @@ Tensor argmax(
 
         return preallocated_tensor;
     }
+
+    // Opt-in RVV path: TILE-layout last-dim argmax scanned on the pack RISC's
+    // vector unit (Blackhole). Takes TILE input DIRECTLY — no to_layout /
+    // untilize hop — and optionally returns the max values alongside the
+    // indices. Eligibility is validated by the device op.
+    if (use_rvv) {
+        return prim::argmax(
+            input_tensor,
+            tt::tt_metal::DataType::UINT32,
+            dim,
+            keepdim,
+            sub_core_grids,
+            output_memory_config,
+            std::move(optional_output_tensor),
+            /*use_rvv=*/true,
+            std::move(optional_maxval_tensor));
+    }
+    TT_FATAL(
+        !optional_maxval_tensor.has_value(), "argmax: the max-value output tensor is only supported with use_rvv=true");
 
     // Register-based NC path for reductions along any non-HW dimension.
     // Uses DST accumulation (similar to fast_reduce_nc). Supports sub_core_grids.

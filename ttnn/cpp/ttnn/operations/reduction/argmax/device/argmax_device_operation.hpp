@@ -23,12 +23,20 @@ struct ArgMaxMultiCoreProgramFactory {
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
 };
 
+// Opt-in TILE-layout last-dim argmax on the pack RISC's RVV (Zve32f) unit
+// (Blackhole). Single core; returns indices and (optionally) max values.
+struct ArgMaxRvvTileProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
+};
+
 struct ArgMaxDeviceOperation {
     using operation_attributes_t = ArgmaxParams;
     using tensor_args_t = ArgmaxInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<ArgMaxSingleCoreProgramFactory, ArgMaxMultiCoreProgramFactory>;
+    using program_factory_t =
+        std::variant<ArgMaxSingleCoreProgramFactory, ArgMaxMultiCoreProgramFactory, ArgMaxRvvTileProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -46,6 +54,8 @@ ttnn::Tensor argmax(
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt);
+    std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt,
+    bool use_rvv = false,
+    std::optional<ttnn::Tensor> optional_maxval_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

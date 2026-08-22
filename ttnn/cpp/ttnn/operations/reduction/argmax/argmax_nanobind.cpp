@@ -27,6 +27,12 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
                 sub_core_grids (CoreRangeSet, optional): Limits execution to a subset of cores. Supported on ROW_MAJOR last-dim reductions (<= 2 ranges) and batch/channel dim reductions. Default: ``None``.
                 memory_config (ttnn.MemoryConfig, optional): Output memory (INTERLEAVED DRAM/L1). Default: input's memory_config.
                 output_tensor (ttnn.Tensor, optional): Preallocated output (must be UINT32, ROW_MAJOR, INTERLEAVED, same device). Default: ``None``.
+                use_rvv (bool, optional): Opt-in Blackhole-only path: TILE-layout last-dim argmax scanned on the
+                    pack RISC's RVV vector unit. Takes TILE input directly (no untilize needed); requires BFLOAT16
+                    input whose last dim is a multiple of the tile width. Default: ``False``.
+                maxval_tensor (ttnn.Tensor, optional): Preallocated BFLOAT16 ROW_MAJOR tensor with the same logical
+                    shape as the index output. Only with ``use_rvv=True``: receives the winning max VALUES, so greedy
+                    sampling does not need a separate ``ttnn.max``. Default: ``None``.
 
             Supported:
 
@@ -66,7 +72,9 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("sub_core_grids") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("output_tensor") = nb::none());
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("use_rvv") = false,
+        nb::arg("maxval_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::detail

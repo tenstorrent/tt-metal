@@ -12,6 +12,8 @@ Tensor argmax(
     bool keepdim = false,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<Tensor> optional_output_tensor = std::nullopt);
+    std::optional<Tensor> optional_output_tensor = std::nullopt,
+    bool use_rvv = false,
+    std::optional<Tensor> optional_maxval_tensor = std::nullopt);
 
 }  // namespace ttnn

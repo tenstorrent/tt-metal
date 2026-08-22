@@ -7,6 +7,8 @@
 #include "ttnn/device_operation.hpp"
 #include "argmax_utils.hpp"
 
+#include <tt-metalium/hal.hpp>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -75,6 +77,10 @@ ttsl::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const s
 
 ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (args.use_rvv) {
+        // Eligibility is enforced in validate_on_program_cache_miss.
+        return ArgMaxRvvTileProgramFactory{};
+    }
     if (uses_multicore_path(args, tensor_args)) {
         return ArgMaxMultiCoreProgramFactory{};
     }
@@ -191,6 +197,59 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
         grid_opts.sub_grid_label = "Multicore argmax sub_core_grids";
         validate_reduce_op_tensor(tensor_args.input, "Argmax", "input", &grid_opts);
     }
+
+    // RVV (Zve32f pack-RISC) path eligibility — opt-in, so requesting it with
+    // an unsupported configuration is a hard error rather than a silent
+    // fallback (keeps A/B measurements unambiguous).
+    if (args.use_rvv) {
+        TT_FATAL(
+            tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE,
+            "argmax use_rvv=true requires a Blackhole device (TRISC vector unit)");
+        TT_FATAL(input_layout == Layout::TILE, "argmax use_rvv=true requires TILE layout input, got {}", input_layout);
+        TT_FATAL(
+            input_tensor_a.dtype() == DataType::BFLOAT16,
+            "argmax use_rvv=true requires BFLOAT16 input, got {}",
+            input_tensor_a.dtype());
+        TT_FATAL(args.dim.has_value(), "argmax use_rvv=true requires an explicit dim (last dim)");
+        const int32_t rank = static_cast<int32_t>(input_tensor_a.logical_shape().rank());
+        const int32_t normalized_dim = normalize_dim(static_cast<int32_t>(args.dim.value()), rank);
+        TT_FATAL(
+            normalized_dim == rank - 1,
+            "argmax use_rvv=true supports only last-dim reduction, got dim={} (normalized={}) for rank {}",
+            args.dim.value(),
+            normalized_dim,
+            rank);
+        const uint32_t tile_w = input_tensor_a.tensor_spec().tile().get_width();
+        const uint32_t tile_h = input_tensor_a.tensor_spec().tile().get_height();
+        TT_FATAL(tile_w == 32 && tile_h == 32, "argmax use_rvv=true requires standard 32x32 tiles");
+        const auto& logical_shape = input_tensor_a.logical_shape();
+        TT_FATAL(
+            logical_shape[-1] % tile_w == 0,
+            "argmax use_rvv=true requires the reduction dim ({}) to be a multiple of the tile width {} "
+            "(no width padding)",
+            logical_shape[-1],
+            tile_w);
+    }
+
+    const auto& optional_maxval = tensor_args.optional_maxval_tensor;
+    if (optional_maxval.has_value()) {
+        TT_FATAL(args.use_rvv, "argmax max-value output is only produced by the use_rvv=true path");
+        const auto& maxval = optional_maxval.value();
+        TT_FATAL(
+            maxval.dtype() == DataType::BFLOAT16, "argmax max-value tensor must be BFLOAT16, got {}", maxval.dtype());
+        TT_FATAL(
+            maxval.layout() == Layout::ROW_MAJOR, "argmax max-value tensor must be ROW_MAJOR, got {}", maxval.layout());
+        TT_FATAL(
+            maxval.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "argmax max-value tensor must be INTERLEAVED, got {}",
+            maxval.memory_config().memory_layout());
+        const auto expected_shape = ttnn::Shape(get_output_shape(input_tensor_a, args.dim, args.keepdim));
+        TT_FATAL(
+            maxval.logical_shape() == expected_shape,
+            "argmax max-value tensor has shape {}, expected the index output shape {}",
+            maxval.logical_shape(),
+            expected_shape);
+    }
 }
 
 tt::tt_metal::TensorSpec ArgMaxDeviceOperation::compute_output_specs(
@@ -221,7 +280,9 @@ ttnn::Tensor argmax(
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    std::optional<ttnn::Tensor> optional_output_tensor) {
+    std::optional<ttnn::Tensor> optional_output_tensor,
+    bool use_rvv,
+    std::optional<ttnn::Tensor> optional_maxval_tensor) {
     return ttnn::device_operation::launch<ArgMaxDeviceOperation>(
         ArgMaxDeviceOperation::operation_attributes_t{
             .output_dtype = output_dtype,
@@ -229,9 +290,12 @@ ttnn::Tensor argmax(
             .keepdim = keepdim,
             .sub_core_grids = sub_core_grids,
             .output_mem_config = output_mem_config,
+            .use_rvv = use_rvv,
         },
         ArgMaxDeviceOperation::tensor_args_t{
-            .input = input, .optional_output_tensor = std::move(optional_output_tensor)});
+            .input = input,
+            .optional_output_tensor = std::move(optional_output_tensor),
+            .optional_maxval_tensor = std::move(optional_maxval_tensor)});
 }
 
 }  // namespace ttnn::prim
