@@ -131,7 +131,7 @@ public:
 
     std::vector<uint32_t> compile_time_args() const;
     std::vector<uint32_t> runtime_args(const CoreCoord& core) const;
-    uint32_t num_active() const;
+    uint32_t ack_count() const;
 
 private:
     using Channel = std::variant<ttnn::kernel_lib::host::Mcast1D, ttnn::kernel_lib::host::Mcast2D>;

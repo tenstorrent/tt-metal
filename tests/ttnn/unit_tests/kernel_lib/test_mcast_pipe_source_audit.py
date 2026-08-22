@@ -276,7 +276,7 @@ def test_argmax_multicore_composes_two_counter_wires_and_keeps_done_fanin():
     assert "group0_start_args.next_compile_time_args_offset()" in kernel
     assert "group0_start_args.next_runtime_args_offset()" in kernel
     assert kernel.count("send_signal();") == 2
-    assert "start_receiver.receive_signal();" in kernel
+    assert kernel.count("start_receiver->receive_signal();") == 2
     assert "set_multicast" not in kernel
     assert "done_sem.up(" in kernel and "done_sem.wait(num_cores)" in kernel
     assert factory.count("DataReadyMode::Counter") == 1

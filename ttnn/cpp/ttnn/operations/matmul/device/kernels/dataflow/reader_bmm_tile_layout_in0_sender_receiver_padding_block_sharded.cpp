@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <optional>
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
@@ -59,8 +60,16 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
     DataflowBuffer dfb_in2(dfb_id_in2);
-    auto in0_sender_pipe = in0_mcast_args.sender(noc);
-    auto in0_receiver_pipe = in0_mcast_args.receiver(noc);
+    using In0SenderPipe = decltype(in0_mcast_args.sender(noc));
+    using In0ReceiverPipe = decltype(in0_mcast_args.receiver(noc));
+    std::optional<In0SenderPipe> in0_sender_pipe;
+    std::optional<In0ReceiverPipe> in0_receiver_pipe;
+    if (in0_mcast_args.can_send()) {
+        in0_sender_pipe.emplace(in0_mcast_args.sender(noc));
+    }
+    if (in0_mcast_args.can_receive()) {
+        in0_receiver_pipe.emplace(in0_mcast_args.receiver(noc));
+    }
 
     constexpr uint32_t num_remote_senders = (num_blocks_inner_dim + num_blocks_per_shard - 1) / num_blocks_per_shard;
     static_assert(num_remote_senders <= in0_mcast_args.num_senders);
@@ -95,7 +104,7 @@ void kernel_main() {
 
                     dfb_in0.reserve_back(in0_block_num_tiles);
 
-                    if (block_id == sender_id) {
+                    if (in0_mcast_args.should_send(block_id)) {
                         // Operand 0
                         uint32_t in0_tensor_local_l1_write_addr = dfb_in0.get_write_ptr();
 
@@ -170,10 +179,10 @@ void kernel_main() {
                             }
                         }
 
-                        in0_sender_pipe.send(
+                        in0_sender_pipe->send(
                             in0_tensor_read_addr, in0_tensor_local_l1_write_addr, in0_block_size_bytes);
-                    } else if (in0_sender_pipe.core_in_receiver_rect()) {
-                        in0_receiver_pipe.receive(block_id);
+                    } else if (in0_mcast_args.can_receive()) {
+                        in0_receiver_pipe->receive(block_id);
                     }
                     dfb_in0.push_back(in0_block_num_tiles);
 

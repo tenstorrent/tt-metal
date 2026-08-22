@@ -1699,7 +1699,7 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     constexpr uint32_t substage_data_ready_semaphore_id = 2;
     constexpr uint32_t cores_to_coordinator_done_semaphore_id = 3;
     // Target the complete worker bounding box, including inactive holes in a partial final row,
-    // while keeping num_active equal to the number of real worker kernels. This separates the NoC
+    // while keeping ack_count equal to the number of real worker kernels. This separates the NoC
     // fanout count from the row-start handshake count.
     const CoreRange multicast_bbox = core_range.bounding_box();
     const ttnn::kernel_lib::host::Mcast2D row_start_mcast(

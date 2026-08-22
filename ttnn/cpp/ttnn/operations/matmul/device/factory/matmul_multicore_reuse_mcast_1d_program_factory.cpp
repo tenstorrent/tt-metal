@@ -532,7 +532,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
     }
 
-    if (!in0_mcast.active()) {
+    if (!in0_mcast.has_receivers()) {
         mm_kernel_in0_sender_writer_defines["SKIP_MCAST"] = "1";
     }
 
@@ -3397,7 +3397,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
     }
 
-    if (!in0_mcast.active()) {
+    if (!in0_mcast.has_receivers()) {
         mm_kernel_in0_sender_writer_defines["SKIP_MCAST"] = "1";
     }
 

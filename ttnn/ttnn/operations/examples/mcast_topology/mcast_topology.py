@@ -139,7 +139,7 @@ void kernel_main() {
     constexpr uint32_t B_SENDS = get_compile_time_arg_val(1);  // this core injects B down its COLUMN
 
     // Two independent mcast families on one grid: the PerRow family (A) then the PerColumn family
-    // (B). Each self-parses a fixed 5-word CT block and a 4-word RT block, laid out back to back.
+    // (B). Each self-parses a fixed 6-word CT block and a 6-word RT block, laid out back to back.
     constexpr auto mc_a = McastArgs</*CT=*/2, /*RT=*/2>();  // RT 0,1 = a_addr,b_addr
     constexpr auto mc_b = McastArgs<mc_a.next_compile_time_args_offset(), mc_a.next_runtime_args_offset()>();
     constexpr uint32_t S = mc_b.next_compile_time_args_offset();
@@ -173,7 +173,7 @@ void kernel_main() {
         }
         noc.async_read_barrier();
         auto pipe = mc_a.sender(noc);
-        if constexpr (mc_a.active) { pipe.send(a_dst, a_dst, Mloc * Kt * tile_bytes); }
+        if constexpr (mc_a.has_receivers) { pipe.send(a_dst, a_dst, Mloc * Kt * tile_bytes); }
     } else {
         auto pipe = mc_a.receiver(noc);
         pipe.receive();
@@ -193,7 +193,7 @@ void kernel_main() {
         }
         noc.async_read_barrier();
         auto pipe = mc_b.sender(noc);
-        if constexpr (mc_b.active) { pipe.send(b_dst, b_dst, Kt * Nloc * tile_bytes); }
+        if constexpr (mc_b.has_receivers) { pipe.send(b_dst, b_dst, Kt * Nloc * tile_bytes); }
     } else {
         auto pipe = mc_b.receiver(noc);
         pipe.receive();

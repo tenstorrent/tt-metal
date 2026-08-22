@@ -32,17 +32,19 @@
 // lockstep. See helper_design/NEW_HOST_HELPER/{API_SKETCH,IMPL_PLAN}.md.
 //
 //   CT (per family, contiguous, 6 words):
-//                                [ active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags,
+//                                [ has_receivers, data_ready_sem_id, consumer_ready_sem_id, ack_count, flags,
 //                                  rotating_span ]
 //                                flags bit0 = pre_handshake, bit1 = data-ready signal (0 Flag / 1 Counter)
 //                                rotating_span = 0 fixed; sender count when rotating
-//   RT, FIXED (per family, 4 words):
+//   RT, FIXED (per family, 6 words):
 //                                sender   -> [ rect_x0, rect_y0, rect_x1, rect_y1 ]  (virtual, NOC-ordered)
 //                                receiver -> [ sender_x, sender_y, 0, 0 ]
-//                                degenerate (no receivers) -> [ 0, 0, 0, 0 ]
-//   RT, ROTATING (per family, 4 + 2*span words):
+//                                degenerate -> the true self rectangle
+//                                followed by [ role_flags, sender_phase ]
+//   RT, ROTATING (per family, 6 + 2*span words):
 //                                every core -> [ rect_x0, rect_y0, rect_x1, rect_y1,     (full-line rect)
-//                                                s0_x, s0_y, ... s{span-1}_x, s{span-1}_y ]  (sender per round)
+//                                                s0_x, s0_y, ... s{span-1}_x, s{span-1}_y,
+//                                                role_flags, sender_phase ]
 // =============================================================================
 
 #pragma once
@@ -129,6 +131,10 @@ inline void create_owned_semaphores(
 // Shared coord math, used by both Mcast1D and Mcast2D.
 namespace detail {
 
+static constexpr uint32_t CAN_SEND = 1u << 0;
+static constexpr uint32_t CAN_RECEIVE = 1u << 1;
+static constexpr uint32_t NO_SENDER_ROUND = 0xFFFFFFFFu;
+
 // logical -> virtual (worker) coord.
 inline std::pair<uint32_t, uint32_t> virt_coord(tt::tt_metal::IDevice* device, const tt::tt_metal::CoreCoord& logical) {
     const auto w = device->worker_core_from_logical_core(logical);
@@ -152,6 +158,12 @@ inline uint32_t mcast_flags(const McastConfig& cfg, std::optional<bool> pre_hand
         f |= 0x2u;
     }
     return f;
+}
+
+inline void append_role_args(
+    std::vector<uint32_t>& args, bool can_send, bool can_receive, uint32_t sender_round = NO_SENDER_ROUND) {
+    args.push_back((can_send ? CAN_SEND : 0u) | (can_receive ? CAN_RECEIVE : 0u));
+    args.push_back(sender_round);
 }
 
 // Bounding box over a set of virtual coords, NOC-ordered. NoC0 walks +x/+y (start = low corner);
@@ -209,7 +221,7 @@ public:
         // The broadcast extent along the mcast axis; >1 => the family actually multicasts.
         span_ = (shape_ == Mcast1DShape::PerRow) ? GC_ : GR_;
         receiver_span_ = span_;
-        active_ = span_ > 1;
+        has_receivers_ = span_ > 1;
 
         // Diagonal is a FIXED-sender placement; combining it with rotating sender is contradictory.
         TT_FATAL(
@@ -305,7 +317,7 @@ public:
                 if (!sender_in_receiver_line) {
                     participating_ranges.emplace_back(sender, sender);
                 }
-                active_ = active_ || receiver_span_ > (sender_in_receiver_line ? 1u : 0u);
+                has_receivers_ = has_receivers_ || receiver_span_ > (sender_in_receiver_line ? 1u : 0u);
             }
         }
 
@@ -363,8 +375,8 @@ public:
 
     // Uniform (grid-wide) config, spliced into the reader CT list. Fixed 6-word block the kernel's
     // McastArgs<CT, RT> self-parses:
-    // [active, data_ready, consumer_ready, num_active, flags, rotating_span].
-    // `consumer_ready` is UNUSED_SEM_ID with no handshake; `num_active` is the sender's ack wait-count
+    // [has_receivers, data_ready, consumer_ready, ack_count, flags, rotating_span].
+    // `consumer_ready` is UNUSED_SEM_ID with no handshake; `ack_count` is the sender's ack wait-count
     // (or ACK_EQUALS_FANOUT for an independent sequence containing both inside and outside senders);
     // `flags` carries pre_handshake + the data-ready signal (see detail::mcast_flags). rotating_span
     // is zero for fixed mode and the sender count for rotating mode, making the CT wire the only source
@@ -376,10 +388,10 @@ public:
     // off ONE object. Omit it for the common case (all faces = cfg.handshake).
     std::vector<uint32_t> compile_time_args(std::optional<bool> pre_handshake = std::nullopt) const {
         return {
-            active_ ? 1u : 0u,
+            has_receivers_ ? 1u : 0u,
             data_ready_id_,
             consumer_ready_id_,
-            num_active(),
+            ack_count(),
             detail::mcast_flags(cfg_, pre_handshake),
             cfg_.rotating_sender ? span_ : 0u};
     }
@@ -387,24 +399,24 @@ public:
     // Sender's handshake ACK policy on the wire. The default line family uses its dense EXCLUDE
     // fan-out. Independent sequences use ACK_EQUALS_FANOUT because inside and outside senders have
     // different dense fan-outs for the same receiver line.
-    uint32_t num_active() const { return independent_rotating_senders_ ? 0xFFFFFFFFu : (active_ ? (span_ - 1u) : 0u); }
+    uint32_t ack_count() const {
+        return independent_rotating_senders_ ? 0xFFFFFFFFu : (has_receivers_ ? (span_ - 1u) : 0u);
+    }
 
-    // Per-core runtime args. FIXED: 4 words (sender rect | receiver sender-coords). ROTATING:
-    // 4 + 2*span words (full-line rect, then one sender coord pair per round). See file header.
+    // Per-core runtime args. The topology block is followed by [role flags, sender phase].
     std::vector<uint32_t> runtime_args(const tt::tt_metal::CoreCoord& core) const {
+        std::vector<uint32_t> args;
         if (cfg_.rotating_sender) {
-            return rotating_rt_(core);
+            args = rotating_rt_(core);
+        } else if (is_sender(core)) {
+            args = line_rect_(core);
+        } else {
+            const auto sender = sender_of_(core);
+            const auto virtual_sender = virt_(sender);
+            args = {virtual_sender.first, virtual_sender.second, 0, 0};
         }
-        if (is_sender(core)) {
-            if (!active_) {
-                return {0, 0, 0, 0};  // degenerate: the only core on the broadcast axis, no receivers.
-            }
-            return sender_rect_(core);
-        }
-        // Receiver: the sender it listens to, in virtual coords.
-        const auto s = sender_of_(core);
-        const auto v = virt_(s);
-        return {v.first, v.second, 0, 0};
+        detail::append_role_args(args, is_sender(core), is_receiver_(core), sender_round_(core));
+        return args;
     }
 
     // ---- queryables (not args) ----------------------------------------------
@@ -420,7 +432,7 @@ public:
                 }
                 return false;
             }
-            return active_;
+            return receiver_grid_.bounding_box().contains(core);
         }
         const uint32_t sender_index = sender_index_for_(core);
         return (shape_ == Mcast1DShape::PerRow) ? (static_cast<uint32_t>(core.x) == origin_x_ + sender_index)
@@ -430,7 +442,7 @@ public:
     // Number of receiver cores a broadcast lands on (0 for a non-sender or a degenerate sender).
     // Rotating: each sender round reaches the other span-1 cores, so every active core sees span-1.
     uint32_t num_receivers(const tt::tt_metal::CoreCoord& core) const {
-        if (!active_) {
+        if (!has_receivers_) {
             return 0;
         }
         if (cfg_.rotating_sender) {
@@ -445,11 +457,7 @@ public:
         return is_sender(core) ? (span_ - 1) : 0;
     }
 
-    // Rounds the sender role rotates through = cores on the axis (1 when the line is degenerate).
-    // FIXED mode has a single sender. This is the count of sender-coord pairs in the rotating RT block.
-    uint32_t num_senders() const { return cfg_.rotating_sender ? span_ : 1u; }
-
-    bool active() const { return active_; }
+    bool has_receivers() const { return has_receivers_; }
 
     // Logical topology partitions. These let a program factory place operation work on the receiver
     // grid while still launching sender-only participants and allocating shared resources on the
@@ -458,9 +466,6 @@ public:
     const tt::tt_metal::CoreRangeSet& participating_cores() const { return grid_; }
     tt::tt_metal::CoreRangeSet sender_only_cores() const { return grid_.subtract(receiver_grid_); }
 
-    // Semaphores this helper created from base_sem_id: 0 (sem_ids adopted) | 1 (no handshake) | 2.
-    // Answers "how many did this family consume".
-    uint32_t num_semaphores() const { return owns_sems_ ? (cfg_.handshake ? 2u : 1u) : 0u; }
     // The base_sem_id the NEXT family on the same grid should use so their ids don't overlap. Mirrors
     // the CT-chaining idiom (McastArgs::next_compile_time_args_offset()). Only valid when this family
     // created its own semaphores — under adopted sem_ids there is no base to chain from and the caller
@@ -470,7 +475,7 @@ public:
             owns_sems_,
             "Mcast1D::next_base_sem_id() is only valid when the helper created its own semaphores; this "
             "instance adopted explicit sem_ids, so the caller owns semaphore-id allocation.");
-        return cfg_.base_sem_id + num_semaphores();
+        return cfg_.base_sem_id + (cfg_.handshake ? 2u : 1u);
     }
 
 private:
@@ -558,21 +563,11 @@ private:
         return detail::noc_ordered_bbox(cfg_.noc, vs);
     }
 
-    // FIXED sender's dest rectangle, virtualized + NOC-ordered. Preserve the compact receiver-only
-    // rectangle for edge senders. An interior sender uses the full line; SenderPipe detects that the
-    // sender lies inside and EXCLUDE-source mode broadcasts to exactly the other span-1 cores.
-    std::vector<uint32_t> sender_rect_(const tt::tt_metal::CoreCoord& core) const {
-        const uint32_t sender_index = sender_index_for_(core);
-        if (sender_index == 0) {
-            return noc_ordered_bbox_({virt_(line_coord_(core, 1u)), virt_(line_coord_(core, span_ - 1u))});
-        }
-        if (sender_index == span_ - 1u) {
-            return noc_ordered_bbox_({virt_(line_coord_(core, 0u)), virt_(line_coord_(core, span_ - 2u))});
-        }
-
+    // Full receiver line, virtualized and NOC-ordered. SenderPipe excludes an in-line source.
+    std::vector<uint32_t> line_rect_(const tt::tt_metal::CoreCoord& core) const {
         std::vector<std::pair<uint32_t, uint32_t>> coords;
-        coords.reserve(span_);
-        for (uint32_t i = 0; i < span_; ++i) {
+        coords.reserve(receiver_span_);
+        for (uint32_t i = 0; i < receiver_span_; ++i) {
             coords.push_back(virt_(line_coord_(core, i)));
         }
         return noc_ordered_bbox_(coords);
@@ -602,13 +597,36 @@ private:
         for (uint32_t i = 0; i < span_; ++i) {
             coords.push_back(virt_(line_coord_(core, i)));
         }
-        // rect: the full line (all span cores). No receivers on a degenerate line => zeroed rect.
-        std::vector<uint32_t> out = active_ ? noc_ordered_bbox_(coords) : std::vector<uint32_t>{0, 0, 0, 0};
+        std::vector<uint32_t> out = has_receivers_ ? line_rect_(core) : std::vector<uint32_t>{0, 0, 0, 0};
         for (const auto& c : coords) {
             out.push_back(c.first);
             out.push_back(c.second);
         }
         return out;
+    }
+
+    bool is_receiver_(const tt::tt_metal::CoreCoord& core) const {
+        if (!receiver_grid_.bounding_box().contains(core)) {
+            return false;
+        }
+        return !is_sender(core) || (cfg_.rotating_sender && span_ > 1u);
+    }
+
+    uint32_t sender_round_(const tt::tt_metal::CoreCoord& core) const {
+        if (!cfg_.rotating_sender) {
+            return is_sender(core) ? 0u : detail::NO_SENDER_ROUND;
+        }
+        if (independent_rotating_senders_) {
+            const auto& senders = sender_lines_[line_index_(core)];
+            const auto it = std::find(senders.begin(), senders.end(), core);
+            return it == senders.end() ? detail::NO_SENDER_ROUND
+                                       : static_cast<uint32_t>(std::distance(senders.begin(), it));
+        }
+        if (!is_sender(core)) {
+            return detail::NO_SENDER_ROUND;
+        }
+        return shape_ == Mcast1DShape::PerRow ? static_cast<uint32_t>(core.x) - origin_x_
+                                              : static_cast<uint32_t>(core.y) - origin_y_;
     }
 
     tt::tt_metal::IDevice* device_;
@@ -626,7 +644,7 @@ private:
     uint32_t receiver_span_ = 1;
     bool independent_rotating_senders_ = false;
     std::vector<std::vector<tt::tt_metal::CoreCoord>> sender_lines_;
-    bool active_ = false;
+    bool has_receivers_ = false;
     bool owns_sems_ = true;
     uint32_t data_ready_id_ = 0;
     uint32_t consumer_ready_id_ = UNUSED_SEM_ID;
@@ -646,21 +664,22 @@ private:
 //     constructor accepts one outside sender. The independent rotating overload accepts an ordered
 //     sender sequence containing any mix of inside and outside senders without widening the rect.
 //
-// num_active is the sender's handshake ACK wait-count (how many receivers actually ack): the dense
+// ack_count is the sender's handshake ACK wait-count (how many receivers actually ack): the dense
 // default (ctor arg 0) is the whole fan-out, a divergent caller (mcast box holds noop cores that
 // receive but never ack) passes a smaller count. It rides CT as the 4th word; the receiver ignores
 // it. The participating set that needs the semaphores (and reader runtime args) is the rect, or
 // rect ∪ {sender} when the sender is separate; the helper owns that union in owned_semaphores().
 //
-//   CT (6 words): [ active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags, rotating_span ]
+//   CT (6 words): [ has_receivers, data_ready_sem_id, consumer_ready_sem_id, ack_count, flags, rotating_span ]
 //                 flags bit0 = pre_handshake, bit1 = data-ready signal (0 Flag / 1 Counter)
 //                 rotating_span = 0 fixed; ordered sender count when rotating
-//   RT, FIXED (4 words):    sender   -> [ rect_x0, rect_y0, rect_x1, rect_y1 ]  (virtual, NOC-ordered)
+//   RT, FIXED (6 words):    sender   -> [ rect_x0, rect_y0, rect_x1, rect_y1 ]  (virtual, NOC-ordered)
 //                           receiver -> [ sender_x, sender_y, 0, 0 ]
-//                           degenerate (single-core rect, no receivers) -> [ 0, 0, 0, 0 ]
-//   RT, ROTATING (4 + 2*sender_count words):
+//                           degenerate (single-core rect, no receivers) -> true self rectangle
+//                           followed by [ role_flags, sender_phase ]
+//   RT, ROTATING (6 + 2*sender_count words):
 //                           every core -> [ rect_x0, rect_y0, rect_x1, rect_y1,     (full-rect rect)
-//                                           s0_x, s0_y, ... ]  (sender coords, row-major over the rect)
+//                                           s0_x, s0_y, ..., role_flags, sender_phase ]
 //
 // Kernel side: one McastArgs<CT_BASE, RT_BASE> — the same decoder as Mcast1D. The rotating rectangle's
 // area rides the shared CT block; the sender/receiver take no knobs.
@@ -672,7 +691,7 @@ public:
         const tt::tt_metal::CoreRangeSet& mcast_rect,
         tt::tt_metal::CoreCoord sender,
         const McastConfig& cfg,
-        uint32_t num_active = 0) :
+        uint32_t ack_count = 0) :
         device_(device), sender_(sender), cfg_(cfg) {
         TT_FATAL(device_ != nullptr, "Mcast2D: device must not be null");
 
@@ -702,13 +721,13 @@ public:
 
         // Receiver fan-out: the sender is excluded from the receivers only when it sits in the rect.
         const uint32_t receivers = sender_in_rect_ ? (area_ - 1) : area_;
-        active_ = receivers > 0;
+        has_receivers_ = receivers > 0;
 
-        // num_active = handshake ack wait-count; 0 => dense (every receiver acks = the fan-out).
-        ack_count_ = (num_active == 0) ? receivers : num_active;
+        // ack_count = handshake ack wait-count; 0 => dense (every receiver acks = the fan-out).
+        ack_count_ = (ack_count == 0) ? receivers : ack_count;
         TT_FATAL(
             ack_count_ <= receivers,
-            "Mcast2D: num_active ({}) exceeds the receiver fan-out ({})",
+            "Mcast2D: ack_count ({}) exceeds the receiver fan-out ({})",
             ack_count_,
             receivers);
 
@@ -771,7 +790,7 @@ public:
             if (!sender_in_rect) {
                 participating_ranges.emplace_back(senders_[i], senders_[i]);
             }
-            active_ = active_ || area_ > (sender_in_rect ? 1u : 0u);
+            has_receivers_ = has_receivers_ || area_ > (sender_in_rect ? 1u : 0u);
         }
         sender_ = senders_.front();
         sender_in_rect_ = in_rect_(sender_);
@@ -811,37 +830,38 @@ public:
 
     // Uniform (grid-wide) config, spliced into the reader CT list. 6-word block the kernel's
     // McastArgs<CT, RT> self-parses:
-    // [active, data_ready, consumer_ready, num_active, flags, rotating_span].
-    // num_active is the sender's ack wait-count (receiver ignores it); flags carries pre_handshake +
+    // [has_receivers, data_ready, consumer_ready, ack_count, flags, rotating_span].
+    // ack_count is the sender's ack wait-count (receiver ignores it); flags carries pre_handshake +
     // the data-ready signal (see detail::mcast_flags). `pre_handshake` overrides the flags bit for THIS
     // emission (one semantic mcast whose faces pick their own handshake per kernel — e.g. a divergent
     // ack-count where some receivers ack and some don't, off ONE object).
     std::vector<uint32_t> compile_time_args(std::optional<bool> pre_handshake = std::nullopt) const {
         return {
-            active_ ? 1u : 0u,
+            has_receivers_ ? 1u : 0u,
             data_ready_id_,
             consumer_ready_id_,
             ack_count_,
             detail::mcast_flags(cfg_, pre_handshake),
-            cfg_.rotating_sender ? num_senders() : 0u};
+            cfg_.rotating_sender ? (independent_rotating_senders_ ? senders_.size() : area_) : 0u};
     }
 
-    // Per-core runtime args. FIXED: 4 words (sender rect | receiver sender-coords).
-    // ROTATING: 4 + 2*sender_count words (full rect, then one sender coord pair per round). See header.
+    // Per-core topology followed by [role flags, sender phase].
     std::vector<uint32_t> runtime_args(const tt::tt_metal::CoreCoord& core) const {
+        std::vector<uint32_t> args;
         if (cfg_.rotating_sender) {
-            return rotating_rt_();
-        }
-        if (is_sender(core)) {
+            args = rotating_rt_();
+        } else if (is_sender(core)) {
             // Always the TRUE rect corners — including the fully-inside area==1 self-rect. The kernel's
             // SenderPipe reads degenerate as (area==1 && in_rect_), so it needs the box on the sender's
             // OWN core to collapse to a local copy; a synthetic {0,0,0,0} would place it off-core and
             // turn a local copy into a stray unicast.
-            return rect_corners_();
+            args = rect_corners_();
+        } else {
+            const auto virtual_sender = detail::virt_coord(device_, sender_);
+            args = {virtual_sender.first, virtual_sender.second, 0, 0};
         }
-        // Receiver: the sender it listens to, in virtual coords.
-        const auto v = detail::virt_coord(device_, sender_);
-        return {v.first, v.second, 0, 0};
+        detail::append_role_args(args, is_sender(core), is_receiver_(core), sender_round_(core));
+        return args;
     }
 
     // ---- queryables (not args) ----------------------------------------------
@@ -852,15 +872,15 @@ public:
             if (independent_rotating_senders_) {
                 return std::find(senders_.begin(), senders_.end(), core) != senders_.end();
             }
-            return active_ && in_rect_(core);
+            return in_rect_(core);
         }
         return core == sender_;
     }
 
     // Number of receiver cores a broadcast lands on (the geometric fan-out: area-1 when the sender is
-    // in the rect, else area). Distinct from num_active (the ack subset — noop cores still receive).
+    // in the rect, else area). Distinct from ack_count (the ack subset — noop cores still receive).
     uint32_t num_receivers(const tt::tt_metal::CoreCoord& core) const {
-        if (!active_) {
+        if (!has_receivers_) {
             return 0;
         }
         const uint32_t receivers = sender_in_rect_ ? (area_ - 1) : area_;
@@ -874,20 +894,13 @@ public:
     }
 
     // The handshake ACK wait-count on the wire (== fan-out in the dense case; smaller when divergent).
-    uint32_t num_active() const { return ack_count_; }
+    uint32_t ack_count() const { return ack_count_; }
 
-    // Rounds the sender role rotates through = cores in the rect (1 in fixed mode).
-    uint32_t num_senders() const {
-        return cfg_.rotating_sender ? (independent_rotating_senders_ ? senders_.size() : area_) : 1u;
-    }
-
-    bool active() const { return active_; }
+    bool has_receivers() const { return has_receivers_; }
 
     // Whether the sender sits inside the rect (fully-inside mode) vs is a separate core.
     bool sender_in_rect() const { return sender_in_rect_; }
 
-    // Semaphores this helper created: 0 (sem_ids adopted) | 1 (no handshake) | 2.
-    uint32_t num_semaphores() const { return owns_sems_ ? (cfg_.handshake ? 2u : 1u) : 0u; }
     // The base_sem_id the NEXT family on the same grid should use (mirrors Mcast1D). Only valid when
     // this instance created its own semaphores.
     uint32_t next_base_sem_id() const {
@@ -895,7 +908,7 @@ public:
             owns_sems_,
             "Mcast2D::next_base_sem_id() is only valid when the helper created its own semaphores; this "
             "instance adopted explicit sem_ids, so the caller owns semaphore-id allocation.");
-        return cfg_.base_sem_id + num_semaphores();
+        return cfg_.base_sem_id + (cfg_.handshake ? 2u : 1u);
     }
 
 private:
@@ -903,6 +916,29 @@ private:
         const auto x = static_cast<uint32_t>(core.x);
         const auto y = static_cast<uint32_t>(core.y);
         return x >= rx0_ && x <= rx1_ && y >= ry0_ && y <= ry1_;
+    }
+
+    bool is_receiver_(const tt::tt_metal::CoreCoord& core) const {
+        if (!in_rect_(core)) {
+            return false;
+        }
+        const uint32_t sender_count = independent_rotating_senders_ ? senders_.size() : area_;
+        return !is_sender(core) || (cfg_.rotating_sender && sender_count > 1u);
+    }
+
+    uint32_t sender_round_(const tt::tt_metal::CoreCoord& core) const {
+        if (!cfg_.rotating_sender) {
+            return is_sender(core) ? 0u : detail::NO_SENDER_ROUND;
+        }
+        if (independent_rotating_senders_) {
+            const auto it = std::find(senders_.begin(), senders_.end(), core);
+            return it == senders_.end() ? detail::NO_SENDER_ROUND
+                                        : static_cast<uint32_t>(std::distance(senders_.begin(), it));
+        }
+        if (!in_rect_(core)) {
+            return detail::NO_SENDER_ROUND;
+        }
+        return (static_cast<uint32_t>(core.y) - ry0_) * (rx1_ - rx0_ + 1u) + (static_cast<uint32_t>(core.x) - rx0_);
     }
 
     // Virtual coords of every core in the rect, row-major (y outer, x inner).
@@ -952,7 +988,7 @@ private:
     bool independent_rotating_senders_ = false;
     std::vector<tt::tt_metal::CoreCoord> senders_;
     bool sender_in_rect_ = true;
-    bool active_ = false;
+    bool has_receivers_ = false;
     bool owns_sems_ = true;
     uint32_t ack_count_ = 0;
     uint32_t data_ready_id_ = 0;

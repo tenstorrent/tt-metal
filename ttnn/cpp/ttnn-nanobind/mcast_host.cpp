@@ -131,34 +131,26 @@ void py_module(nb::module_& mod) {
             "compile_time_args",
             &kh::Mcast1D::compile_time_args,
             nb::arg("pre_handshake") = std::optional<bool>{},
-            R"doc(Uniform mcast config for the reader CT list: [active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags] (flags bit0=pre_handshake, bit1=data-ready signal). Pass pre_handshake to override the flags bit for this emission (one semantic mcast, per-kernel handshake).)doc")
+            R"doc(Uniform mcast config for the reader CT list: [has_receivers, data_ready_sem_id, consumer_ready_sem_id, ack_count, flags, rotating_span]. Six words, matching McastArgs.)doc")
         .def(
             "runtime_args",
             &kh::Mcast1D::runtime_args,
             nb::arg("core"),
-            R"doc(Per-core runtime args. Fixed: 4 words (sender -> dest rect, receiver -> [sender_x, sender_y, 0, 0]); an interior fixed sender's rect is the full line and excludes the source in the device pipe. Rotating: 4 + 2*num_senders() words (full-line rect, then one sender coord pair per round).)doc")
+            R"doc(Per-core runtime args. Fixed: 6 words. Rotating: 6 + 2*rotating_span words. The final two words encode this core's roles and sender phase.)doc")
         .def("is_sender", &kh::Mcast1D::is_sender, nb::arg("core"))
         .def("num_receivers", &kh::Mcast1D::num_receivers, nb::arg("core"))
         .def(
-            "num_active",
-            &kh::Mcast1D::num_active,
+            "ack_count",
+            &kh::Mcast1D::ack_count,
             R"doc(The sender's handshake ACK wait-count on the wire (Mcast1D is always dense: the EXCLUDE fan-out span-1).)doc")
-        .def(
-            "num_senders",
-            &kh::Mcast1D::num_senders,
-            R"doc(Rounds the sender role rotates through (= sender coord pairs in the rotating RT block); 1 in fixed mode.)doc")
-        .def(
-            "num_semaphores",
-            &kh::Mcast1D::num_semaphores,
-            R"doc(Semaphores this family created from base_sem_id: 0 (sem_ids adopted) | 1 (no handshake) | 2.)doc")
         .def(
             "next_base_sem_id",
             &kh::Mcast1D::next_base_sem_id,
             R"doc(base_sem_id the next family on the same grid should use so their ids don't overlap.)doc")
-        .def("active", &kh::Mcast1D::active);
+        .def("has_receivers", &kh::Mcast1D::has_receivers);
 
     // Mcast2D — ONE mcast over a single rectangle. sender ∈ rect => fully-inside (rotating OK,
-    // fan-out area-1); sender ∉ rect => separate sender (fixed only, fan-out area). num_active is the
+    // fan-out area-1); sender ∉ rect => separate sender (fixed only, fan-out area). ack_count is the
     // handshake ack wait-count (0 => the dense fan-out).
     static_cast<nb::class_<kh::Mcast2D>>(mod.attr("Mcast2D"))
         .def(
@@ -168,12 +160,12 @@ void py_module(nb::module_& mod) {
                const CoreRangeSet& mcast_rect,
                const CoreCoord& sender,
                const kh::McastConfig& config,
-               uint32_t num_active) { new (self) kh::Mcast2D(device, mcast_rect, sender, config, num_active); },
+               uint32_t ack_count) { new (self) kh::Mcast2D(device, mcast_rect, sender, config, ack_count); },
             nb::arg("device"),
             nb::arg("mcast_rect"),
             nb::arg("sender"),
             nb::arg("config") = kh::McastConfig{},
-            nb::arg("num_active") = 0)
+            nb::arg("ack_count") = 0)
         .def(
             "__init__",
             [](kh::Mcast2D* self,
@@ -193,26 +185,18 @@ void py_module(nb::module_& mod) {
             "compile_time_args",
             &kh::Mcast2D::compile_time_args,
             nb::arg("pre_handshake") = std::optional<bool>{},
-            R"doc(Uniform mcast config for the reader CT list: [active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags] (flags bit0=pre_handshake, bit1=data-ready signal). Pass pre_handshake to override the flags bit for this emission (one semantic mcast, per-kernel handshake).)doc")
+            R"doc(Uniform mcast config for the reader CT list: [has_receivers, data_ready_sem_id, consumer_ready_sem_id, ack_count, flags, rotating_span]. Six words, matching McastArgs.)doc")
         .def(
             "runtime_args",
             &kh::Mcast2D::runtime_args,
             nb::arg("core"),
-            R"doc(Per-core runtime args. Fixed: 4 words (sender -> dest rect, receiver -> [sender_x, sender_y, 0, 0]). Rotating: 4 + 2*num_senders() words (full-rect rect, then one sender coord pair per round).)doc")
+            R"doc(Per-core runtime args. Fixed: 6 words. Rotating: 6 + 2*rotating_span words. The final two words encode this core's roles and sender phase.)doc")
         .def("is_sender", &kh::Mcast2D::is_sender, nb::arg("core"))
         .def("num_receivers", &kh::Mcast2D::num_receivers, nb::arg("core"))
         .def(
-            "num_active",
-            &kh::Mcast2D::num_active,
+            "ack_count",
+            &kh::Mcast2D::ack_count,
             R"doc(The handshake ack wait-count on the wire (= fan-out when dense, smaller when divergent).)doc")
-        .def(
-            "num_senders",
-            &kh::Mcast2D::num_senders,
-            R"doc(Rounds the sender role rotates through (= sender coord pairs in the rotating RT block); 1 in fixed mode.)doc")
-        .def(
-            "num_semaphores",
-            &kh::Mcast2D::num_semaphores,
-            R"doc(Semaphores this helper created: 0 (sem_ids adopted) | 1 (no handshake) | 2.)doc")
         .def(
             "next_base_sem_id",
             &kh::Mcast2D::next_base_sem_id,
@@ -221,7 +205,7 @@ void py_module(nb::module_& mod) {
             "sender_in_rect",
             &kh::Mcast2D::sender_in_rect,
             R"doc(True if the sender sits inside the rect (fully-inside mode) vs is a separate core.)doc")
-        .def("active", &kh::Mcast2D::active);
+        .def("has_receivers", &kh::Mcast2D::has_receivers);
 }
 
 }  // namespace ttnn::mcast_host

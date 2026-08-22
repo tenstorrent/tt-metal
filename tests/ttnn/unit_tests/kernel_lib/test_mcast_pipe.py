@@ -73,9 +73,9 @@ def _run_pipe(
 
     nrx, nry = rx1 - rx0 + 1, ry1 - ry0 + 1
     num_recv = nrx * nry
-    # ttnn.Mcast2D owns the fan-out (from the rect area) and the ack count. num_active=0 => the dense
+    # ttnn.Mcast2D owns the fan-out (from the rect area) and the ack count. ack_count=0 => the dense
     # default (every rect core acks == the fan-out); a test may override to drive the split-count case.
-    num_active = 0 if ack_count is None else ack_count
+    ack_count = 0 if ack_count is None else ack_count
 
     page_bytes = TILE_BYTES
     payload_pages = payload_tiles
@@ -115,7 +115,7 @@ def _run_pipe(
             handshake=pre_handshake,
             data_ready=data_ready_mode,
         ),
-        num_active=num_active,
+        ack_count=ack_count,
     )
 
     # ---- CBs (both on union so index->addr map is identical across all cores) ----
@@ -142,7 +142,7 @@ def _run_pipe(
 
     # ---- sender kernel ----
     # CT: [cb_src, cb_dst] + McastArgs block
-    # [active, data_ready, consumer_ready, num_active, flags, rotating_span] + scalars.
+    # [active, data_ready, consumer_ready, ack_count, flags, rotating_span] + scalars.
     # pre_handshake + signal are in the mcast block (flags word) now — no separate pre_handshake CT word.
     sender_ct = [cb_src, cb_dst]
     sender_ct += list(mc.compile_time_args())
@@ -433,7 +433,7 @@ def test_runtime_fanout(device, rect_name):
         payload_tiles=2,
         n_iters=4,
         pre_handshake=False,
-        ack_count=None,  # num_active=0 (dense): ack tracks the runtime fan-out too
+        ack_count=None,  # ack_count=0 (dense): ack tracks the runtime fan-out too
     )
 
 
@@ -441,7 +441,7 @@ def test_runtime_fanout(device, rect_name):
 # Models conv-WS / dram-sharded / conv-1D-weights: the mcast box has cores that RECEIVE the broadcast
 # but do NOT ack. The data fan-out is the full rect area (4); only a subset (2) acks. The sender must
 # wait on the SEPARATE ack count, not the fan-out. A 1x4 box: 2 acking receivers (pre_handshake=true) +
-# 2 non-acking (pre_handshake=false). All 4 receive data; the acking config carries num_active=2 as the
+# 2 non-acking (pre_handshake=false). All 4 receive data; the acking config carries ack_count=2 as the
 # ack count.
 #
 # pre_handshake rides the mcast WIRE, but ONE Mcast2D object serves the whole family (the layernorm
@@ -483,10 +483,10 @@ def _run_split_count(device, payload_tiles, recv_rect=((0, 0), (0, 3)), ack_subs
         ]
     )
 
-    # ONE Mcast2D (handshake=True, num_active=2): the sender waits on 2 acks though it broadcasts to all
+    # ONE Mcast2D (handshake=True, ack_count=2): the sender waits on 2 acks though it broadcasts to all
     # 4 (fan-out == area). Every receiver rides THIS object; the acking vs non-acking split is a per-kernel
     # pre_handshake bit on compile_time_args() below, not a second object.
-    mc = ttnn.Mcast2D(device, recv_crs, ttnn.CoreCoord(sx, sy), ttnn.McastConfig(base_sem_id=0), num_active=ack_subset)
+    mc = ttnn.Mcast2D(device, recv_crs, ttnn.CoreCoord(sx, sy), ttnn.McastConfig(base_sem_id=0), ack_count=ack_subset)
 
     cb_src, cb_dst = 0, 1
     cbs = [
@@ -509,7 +509,7 @@ def _run_split_count(device, payload_tiles, recv_rect=((0, 0), (0, 3)), ack_subs
     semaphores = mc.owned_semaphores()
 
     # ---- sender: pre_handshake=true (from mc's wire); fan-out=area(4) from the rect, but the wire's
-    #      num_active=2 is the ack subset the sender waits on (the D2 split-count regression) ----
+    #      ack_count=2 is the ack subset the sender waits on (the D2 split-count regression) ----
     sender_ct = [cb_src, cb_dst]
     sender_ct += list(mc.compile_time_args())
     sender_ct += [payload_pages, page_bytes, 1, 1]  # one iteration; default guarded source lifetime
@@ -638,7 +638,7 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
 
     # sender kernel (writes its own shard 0)
     # CT: [cb_src, cb_dst] + McastArgs block
-    # [active, data_ready, consumer_ready(UNUSED), num_active, flags, rotating_span].
+    # [active, data_ready, consumer_ready(UNUSED), ack_count, flags, rotating_span].
     # handshake=False -> flags pre_handshake bit clear, so the sender/receiver run without the ack.
     sender_ct = [cb_src, cb_dst]
     sender_ct += list(mc.compile_time_args())
@@ -718,7 +718,7 @@ def test_f3_degenerate(device):
 # End-to-end proof of the rotating WIRE (not just the pipe's shared-cell mechanics above):
 # ttnn.Mcast1D(PerRow, rotating_sender=True) emits the semaphores, CT, and the per-core RT block (full-line rect
 # + ordered per-round sender coords); pipe_rotating_line.cpp decodes it with ONE
-# McastArgs<1,5> (owns both arg lists and reads rotating_span from CT) and runs the N-core rotating line --
+# McastArgs<1,4> (owns both arg lists and reads rotating_span from CT) and runs the N-core rotating line --
 # the 1D mirror of block-sharded
 # matmul in0. Each core i holds a distinct constant shard (i+1). Over N rounds core r broadcasts its
 # shard to the whole line; every core records what it saw per round to DRAM. The check
@@ -765,7 +765,7 @@ def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_i
             sender_lines,
             ttnn.McastConfig(rotating_sender=True),
         )
-    assert mc.num_senders() == span, f"expected {span} sender rounds, got {mc.num_senders()}"
+    assert mc.compile_time_args()[5] == span, f"expected {span} sender rounds"
     semaphores = mc.owned_semaphores()
 
     cb = 0  # one CB per core: mcast source (in place) + landing region
@@ -779,14 +779,13 @@ def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_i
         ),
     ]
 
-    # CT: [cb] + McastArgs<1,5> block (6 words) + [payload_pages, page_bytes] + TA(in) + TA(out)
-    ct = [cb] + list(mc.compile_time_args()) + [payload_pages, page_bytes]
+    # CT: [cb] + McastArgs<1,4> block (6 words) + [num_rounds, payload_pages, page_bytes] + TA(in) + TA(out)
+    ct = [cb] + list(mc.compile_time_args()) + [span, payload_pages, page_bytes]
     ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
-    # RT: [in_addr, in_start, out_addr, out_start, my_index] + McastArgs<1,5> RT block (rect + coords)
+    # RT: [in_addr, in_start, out_addr, out_start] + McastArgs<1,4> RT block (topology + per-core role)
     rt = ttnn.RuntimeArgs()
-    sender_rounds = {sender: round_id for round_id, sender in enumerate(sender_indices)}
     for X in range(N):
         core = ttnn.CoreCoord(X, 0)
         rt[X][0] = [
@@ -794,7 +793,6 @@ def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_i
             X * payload_pages,
             output_tensor.buffer_address(),
             X * span * payload_pages,
-            sender_rounds.get(X, 0xFFFFFFFF),
         ] + list(mc.runtime_args(core))
 
     k = ttnn.KernelDescriptor(
@@ -845,7 +843,7 @@ def test_rotating_line(device, span, payload_tiles):
 # the original same-column sender; diagonal placement advances the sender column once per row and
 # wraps at GC. The sender streams `num_blocks` blocks of its row (the matmul K-block loop): each block
 # is staged from DRAM and multicast, and every receiver receives each block. pipe_fixed_line.cpp
-# decodes the wire with ONE McastArgs<1,5> (owns both arg lists; sender() reads its rect off RT,
+# decodes the wire with ONE McastArgs<1,4> (owns both arg lists; sender() reads its rect off RT,
 # receiver().receive() reads the sender coords off RT) and -- because the role is fixed for the whole
 # loop -- builds the pipe ONCE above the block loop. Each (row Y, block b) holds a distinct constant
 # (Y*NB + b + 1);
@@ -904,7 +902,7 @@ def _run_fixed_line(
             sender_placement=sender_placement,
             config=ttnn.McastConfig(),
         )
-    assert mc.num_senders() == 1, "fixed mode has a single sender per line"
+    assert mc.compile_time_args()[5] == 0, "fixed mode has no rotating span"
     if sender_placement == ttnn.Mcast1DSenderPlacement.Diagonal:
         for Y in range(GR):
             expected_sender = ttnn.CoreCoord((starting_sender_index + Y) % GC, Y)
@@ -922,12 +920,12 @@ def _run_fixed_line(
         ),
     ]
 
-    # CT: [cb] + McastArgs<1,5> block (6 words) + [num_blocks, payload_pages, page_bytes] + TA(in) + TA(out)
+    # CT: [cb] + McastArgs<1,4> block (6 words) + [num_blocks, payload_pages, page_bytes] + TA(in) + TA(out)
     ct = [cb] + list(mc.compile_time_args()) + [NB, payload_pages, page_bytes]
     ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
-    # RT: [in_addr, in_start, out_addr, out_start, is_sender] + McastArgs<1,5> RT block (sender rect | sender coords)
+    # RT: [in_addr, in_start, out_addr, out_start] + McastArgs<1,4> RT block (topology + per-core role)
     rt = ttnn.RuntimeArgs()
     for Y in range(GR):
         for X in range(GC):
@@ -937,7 +935,6 @@ def _run_fixed_line(
                 Y * NB * payload_pages,  # row Y's first block (sender only; unused by receivers)
                 output_tensor.buffer_address(),
                 (Y * GC + X) * NB * payload_pages,
-                int(mc.is_sender(core)),
             ] + list(mc.runtime_args(core))
 
     k = ttnn.KernelDescriptor(

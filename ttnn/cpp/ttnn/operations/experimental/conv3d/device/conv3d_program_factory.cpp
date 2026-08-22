@@ -1056,7 +1056,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 device, group_rect, CoreCoord{sender_x_log, sender_y_log}, weights_mcast_config);
             const auto& weights_mcast = weights_mcasts.back();
             TT_FATAL(
-                weights_mcast.active() && weights_mcast.num_receivers(CoreCoord{sender_x_log, sender_y_log}) > 0,
+                weights_mcast.has_receivers() && weights_mcast.num_receivers(CoreCoord{sender_x_log, sender_y_log}) > 0,
                 "Conv3D multicast group {} must contain at least one receiver",
                 gid);
             TT_FATAL(

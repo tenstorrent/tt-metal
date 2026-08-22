@@ -13,6 +13,7 @@
 #include "ttnn/kernel_lib/mcast_pipe.hpp"
 
 #include <cstdint>
+#include <optional>
 
 /**
  * @brief Finds the argmax (argument of maximum value) for a specific core in a multicore reduction operation.
@@ -335,9 +336,22 @@ void kernel_main() {
 
     // The two fixed Counter wires share the start semaphore but target disjoint rectangles. Keeping
     // both sender views and the selected receiver view alive preserves their state across rounds.
-    auto group0_start_sender = group0_start_args.sender(noc);
-    auto group1_start_sender = group1_start_args.sender(noc);
-    auto start_receiver = core_id < num_cores0 ? group0_start_args.receiver(noc) : group1_start_args.receiver(noc);
+    using Group0Sender = decltype(group0_start_args.sender(noc));
+    using Group1Sender = decltype(group1_start_args.sender(noc));
+    using Group0Receiver = decltype(group0_start_args.receiver(noc));
+    using Group1Receiver = decltype(group1_start_args.receiver(noc));
+    std::optional<Group0Sender> group0_start_sender;
+    std::optional<Group1Sender> group1_start_sender;
+    std::optional<Group0Receiver> group0_start_receiver;
+    std::optional<Group1Receiver> group1_start_receiver;
+    if (is_reduce_core) {
+        group0_start_sender.emplace(group0_start_args.sender(noc));
+        group1_start_sender.emplace(group1_start_args.sender(noc));
+    } else if (core_id < num_cores0) {
+        group0_start_receiver.emplace(group0_start_args.receiver(noc));
+    } else {
+        group1_start_receiver.emplace(group1_start_args.receiver(noc));
+    }
 
     // The worker-arrival counter remains operation-owned.
     Semaphore<> done_sem(done_sem_idx);
@@ -361,11 +375,11 @@ void kernel_main() {
                 done_sem.set(0);
             }
             if (k > 0) {
-                if constexpr (group0_start_args.active) {
-                    group0_start_sender.send_signal();
+                if constexpr (group0_start_args.has_receivers) {
+                    group0_start_sender->send_signal();
                 }
-                if constexpr (group1_start_args.active) {
-                    group1_start_sender.send_signal();
+                if constexpr (group1_start_args.has_receivers) {
+                    group1_start_sender->send_signal();
                 }
             }
         }
@@ -373,7 +387,11 @@ void kernel_main() {
         // Counter readiness is monotone and reset-free, so reduce_all workers cannot miss a round
         // when the reducer free-runs without the per-iteration done counter.
         if (k > 0 && !is_reduce_core) {
-            start_receiver.receive_signal();
+            if (core_id < num_cores0) {
+                group0_start_receiver->receive_signal();
+            } else {
+                group1_start_receiver->receive_signal();
+            }
         }
 
         find_argmax_for_core<reduce_all, src_cb_addr_data_format>(

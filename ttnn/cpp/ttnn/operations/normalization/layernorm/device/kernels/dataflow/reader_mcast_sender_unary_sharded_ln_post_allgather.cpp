@@ -37,7 +37,7 @@ void kernel_main() {
     const uint32_t src_l1 = dfb_stats_reduced_obj.get_read_ptr();
     const uint32_t dst_l1 = dfb_ex_global_obj.get_write_ptr();
     const uint32_t size = stats_tiles * num_tiles_per_worker_bytes;
-    const bool sender_in_rect = reduce_pipe.core_in_receiver_rect();
+    const bool sender_in_rect = reduce_mcast_args.can_receive();
     if (!sender_in_rect) {
         UnicastEndpoint local_ep;
         noc.async_write(

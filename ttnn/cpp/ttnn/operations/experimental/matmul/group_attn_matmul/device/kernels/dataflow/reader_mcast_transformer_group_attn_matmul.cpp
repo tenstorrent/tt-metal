@@ -84,7 +84,7 @@ void kernel_main() {
     uint32_t local_noc_y = my_y[noc.get_noc_id()];
     UnicastEndpoint local_src;
 
-    const bool in1_sender_in_receiver_grid = in1_sender_pipe.core_in_receiver_rect();
+    const bool in1_sender_in_receiver_grid = in1_mcast_args.can_receive();
     bool mcast_in1_to_local_cb = false;
     uint32_t in1_sharded_cb_addr = cb_in2_obj.get_read_ptr();
 #ifdef IN1_SHARDED

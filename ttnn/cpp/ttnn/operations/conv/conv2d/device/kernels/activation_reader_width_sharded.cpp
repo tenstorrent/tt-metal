@@ -7,6 +7,8 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
+#include <optional>
+
 #define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
@@ -93,8 +95,16 @@ void kernel_main() {
     DataflowBuffer sharded_act_dfb(cb_id_sharded_act);
     Noc noc;
 
-    auto act_send_pipe = act_mcast_args.sender(noc);
-    auto act_recv_pipe = act_mcast_args.receiver(noc);
+    using ActSendPipe = decltype(act_mcast_args.sender(noc));
+    using ActRecvPipe = decltype(act_mcast_args.receiver(noc));
+    std::optional<ActSendPipe> act_send_pipe;
+    std::optional<ActRecvPipe> act_recv_pipe;
+    if (act_mcast_args.can_send()) {
+        act_send_pipe.emplace(act_mcast_args.sender(noc));
+    }
+    if (act_mcast_args.can_receive()) {
+        act_recv_pipe.emplace(act_mcast_args.receiver(noc));
+    }
 
     load_config_tensor_if_in_dram<
         act_post_mcast_ct_offset + 9,
@@ -186,14 +196,15 @@ void kernel_main() {
 #ifndef SKIP_MCAST
             for (uint32_t act_w_outer_i = 0; act_w_outer_i < num_input_cores; act_w_outer_i++) {
                 act_dfb.reserve_back(act_block_num_tiles);
-                if (act_w_outer_i == this_core_id) {
+                if (act_mcast_args.should_send(act_w_outer_i)) {
                     // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
                     tilized_in0_dfb.wait_front(act_block_num_tiles);
 
-                    act_send_pipe.send(
+                    act_send_pipe->send(
                         tilized_in0_dfb.get_read_ptr(), act_dfb.get_write_ptr(), act_mcast_sender_size_bytes);
                 } else {
-                    act_recv_pipe.receive(act_w_outer_i);
+                    ASSERT(act_mcast_args.can_receive());
+                    act_recv_pipe->receive(act_w_outer_i);
                 }
 
                 act_dfb.push_back(act_block_num_tiles);

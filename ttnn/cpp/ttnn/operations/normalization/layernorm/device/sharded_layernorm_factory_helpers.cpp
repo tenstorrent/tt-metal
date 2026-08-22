@@ -498,7 +498,7 @@ DistributedLayerNormMcast::DistributedLayerNormMcast(
     }
     const uint32_t expected_active =
         use_two_stage_reduce ? (row_wise ? bbox_.grid_size().x : bbox_.grid_size().y) - 1 : bbox_.size() - 1;
-    TT_FATAL(is_post_allgather || num_active() == expected_active, "LayerNorm multicast fan-out mismatch");
+    TT_FATAL(is_post_allgather || ack_count() == expected_active, "LayerNorm multicast fan-out mismatch");
 }
 
 const DistributedLayerNormMcast::Channel& DistributedLayerNormMcast::channel(const CoreCoord& core) const {
@@ -517,8 +517,8 @@ std::vector<uint32_t> DistributedLayerNormMcast::runtime_args(const CoreCoord& c
     return std::visit([&core](const auto& channel) { return channel.runtime_args(core); }, channel(core));
 }
 
-uint32_t DistributedLayerNormMcast::num_active() const {
-    return std::visit([](const auto& channel) { return channel.num_active(); }, channels_.front());
+uint32_t DistributedLayerNormMcast::ack_count() const {
+    return std::visit([](const auto& channel) { return channel.ack_count(); }, channels_.front());
 }
 
 //////////////////////////////////////////////////////////////////////////////
