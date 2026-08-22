@@ -46,15 +46,11 @@ def _cb(index, data_format, page_size, num_pages, core_ranges):
 
 
 def _reader_config():
-    return ttnn.DataMovementConfigDescriptor(
-        processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default
-    )
+    return ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default)
 
 
 def _writer_config():
-    return ttnn.DataMovementConfigDescriptor(
-        processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_1_default
-    )
+    return ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_1_default)
 
 
 def _runtime_args(cores, per_core):
@@ -229,12 +225,14 @@ def recurrence(conv_out, qkvzab, rec_state, dt_bias, neg_exp_a, norm_w, out, *, 
         ("sp_thr_bits", _fbits(20.0)),
         ("inv_dv_bits", _fbits(1.0 / dv)),
         ("norm_eps_bits", _fbits(eps)),
+        ("seq_rows", 0),
     ]
     named_writer = [
         ("nv", nv),
         ("dkt", dkt),
         ("dvt", dvt),
         ("b_rows", b_rows),
+        ("seq_rows", 0),
         ("state_is_dram", _is_dram(rec_state)),
         ("out_is_dram", _is_dram(out)),
     ]
@@ -318,4 +316,168 @@ def recurrence(conv_out, qkvzab, rec_state, dt_bias, neg_exp_a, norm_w, out, *, 
 
     program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], cbs=cbs)
     io_tensors = [conv_out, qkvzab, rec_state, dt_bias, neg_exp_a, norm_w, out]
+    return ttnn.generic_op(io_tensors, program)
+
+
+def recurrence_seq_rows(
+    conv_out, qkvzab, rec_state, state_stash, dt_bias, neg_exp_a, norm_w, out, *, nk, nv, dk, dv, users, w, eps=1e-6
+):
+    """Speculative-verify GDN recurrence: W candidate rows per user, sequential
+    IN-KERNEL, with per-row state stashes and NO writeback of the anchor state.
+
+    Row u*w + t of the width-(users*w) activations is user u's candidate t at its
+    own position. One core per (user, v-head) loads rec_state[u, vh] (the user's
+    committed ANCHOR) into L1 once, loops the w rows locally, and writes each
+    step's post-update state to state_stash[u, t, vh] — the host later commits by
+    row-copying state_stash[u, m_u] into rec_state[u] (commit-by-select).
+
+    conv_out:    [1, users*w, qkv_dim] bf16 TILE (users*w <= 32: one tile row).
+    qkvzab:      [1, users*w, qkvzab_dim] bf16 TILE.
+    rec_state:   [users, Nv, Dk, Dv] fp32 TILE — READ ONLY (never written).
+    state_stash: [users, w, Nv, Dk, Dv] fp32 TILE, fully overwritten.
+    out:         preallocated [1, users*w, Nv*Dv] fp32 TILE.
+    """
+    assert rec_state.dtype == ttnn.float32 and state_stash.dtype == ttnn.float32
+    assert out.dtype == ttnn.float32
+    for t in [conv_out, qkvzab, dt_bias, neg_exp_a, norm_w]:
+        assert t.dtype == ttnn.bfloat16 and t.layout == ttnn.TILE_LAYOUT
+    assert dk % _TILE == 0 and dv % _TILE == 0
+    assert 2 * nv <= _TILE
+    assert w >= 1 and users * w <= _TILE, f"users*w rows must fit one tile row (got {users}x{w})"
+    assert list(state_stash.shape) == [users, w, nv, dk, dv], f"stash shape {list(state_stash.shape)}"
+    dkt, dvt = dk // _TILE, dv // _TILE
+    rf = nv // nk
+    qkv_dim = conv_out.shape[-1]
+    kd_t = nk * dkt
+    voff_t = 2 * nk * dkt
+    zoff_t = qkv_dim // _TILE
+    ab_t = (qkv_dim + nv * dv) // _TILE
+    b_rows = users * w
+
+    device = conv_out.device()
+    grid = device.compute_with_storage_grid_size()
+    units = users * nv
+    assert units <= grid.x * grid.y, f"one (user, head) per core: {units} units > {grid.x * grid.y} cores"
+    core_ranges = ttnn.num_cores_to_corerangeset(units, grid, row_wise=True)
+    cores = ttnn.corerange_to_cores(core_ranges, row_wise=True)
+    unit_args = [(uidx // nv, uidx % nv) for uidx in range(units)]  # (user, vh)
+
+    named_reader = [
+        ("nv", nv),
+        ("rf", rf),
+        ("dkt", dkt),
+        ("dvt", dvt),
+        ("kd_t", kd_t),
+        ("voff_t", voff_t),
+        ("zoff_t", zoff_t),
+        ("ab_t", ab_t),
+        ("conv_is_dram", _is_dram(conv_out)),
+        ("qkvzab_is_dram", _is_dram(qkvzab)),
+        ("state_is_dram", _is_dram(rec_state)),
+        ("params_is_dram", _is_dram(dt_bias)),
+    ]
+    named_compute = [
+        ("nv", nv),
+        ("dkt", dkt),
+        ("dvt", dvt),
+        ("eps_bits", _fbits(eps)),
+        ("scale_bits", _fbits(dk**-0.5)),
+        ("sp_beta_bits", _fbits(1.0)),
+        ("sp_beta_recip_bits", _fbits(1.0)),
+        ("sp_thr_bits", _fbits(20.0)),
+        ("inv_dv_bits", _fbits(1.0 / dv)),
+        ("norm_eps_bits", _fbits(eps)),
+        ("seq_rows", w),
+    ]
+    named_writer = [
+        ("nv", nv),
+        ("dkt", dkt),
+        ("dvt", dvt),
+        ("b_rows", b_rows),
+        ("seq_rows", w),
+        # The writer's state accessor targets the STASH in seq mode.
+        ("state_is_dram", _is_dram(state_stash)),
+        ("out_is_dram", _is_dram(out)),
+    ]
+
+    reader = ttnn.KernelDescriptor(
+        kernel_source=f"{_KDIR}/gdn_recurrence_reader.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_ranges,
+        compile_time_args=[],
+        named_compile_time_args=named_reader,
+        common_runtime_args=[
+            conv_out.buffer_address(),
+            qkvzab.buffer_address(),
+            rec_state.buffer_address(),
+            dt_bias.buffer_address(),
+            neg_exp_a.buffer_address(),
+            norm_w.buffer_address(),
+        ],
+        runtime_args=_runtime_args(cores, unit_args),
+        config=_reader_config(),
+    )
+    writer = ttnn.KernelDescriptor(
+        kernel_source=f"{_KDIR}/gdn_recurrence_writer.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_ranges,
+        compile_time_args=[],
+        named_compile_time_args=named_writer,
+        common_runtime_args=[state_stash.buffer_address(), out.buffer_address()],
+        runtime_args=_runtime_args(cores, unit_args),
+        config=_writer_config(),
+    )
+    compute = ttnn.KernelDescriptor(
+        kernel_source=f"{_KDIR}/gdn_recurrence_compute.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_ranges,
+        compile_time_args=[],
+        named_compile_time_args=named_compute,
+        common_runtime_args=[],
+        runtime_args=_runtime_args(cores, unit_args),
+        config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=False,
+        ),
+    )
+
+    bf, fp = ttnn.bfloat16, ttnn.float32
+    kv = dkt * dvt
+    cbs = [
+        _cb(0, bf, _BF16_TILE, dkt, core_ranges),  # qin
+        _cb(1, bf, _BF16_TILE, dkt, core_ranges),  # kin
+        _cb(2, bf, _BF16_TILE, dvt, core_ranges),  # vin (retained across the w steps)
+        _cb(3, bf, _BF16_TILE, dvt, core_ranges),  # zin (retained)
+        _cb(4, bf, _BF16_TILE, 1, core_ranges),  # ab
+        _cb(5, bf, _BF16_TILE, 1, core_ranges),  # dt_bias
+        _cb(6, bf, _BF16_TILE, 1, core_ranges),  # neg_exp_A
+        _cb(7, bf, _BF16_TILE, dvt, core_ranges),  # norm_w (retained)
+        _cb(8, fp, _FP32_TILE, 1, core_ranges),  # ones
+        _cb(9, fp, _FP32_TILE, kv, core_ranges),  # h (anchor)
+        _cb(10, fp, _FP32_TILE, 1, core_ranges),  # beta_full (retained)
+        _cb(11, fp, _FP32_TILE, 1, core_ranges),  # decay_full (retained)
+        _cb(12, fp, _FP32_TILE, max(4, dkt), core_ranges),  # scr
+        _cb(13, fp, _FP32_TILE, 1, core_ranges),  # decay_s
+        _cb(14, fp, _FP32_TILE, 1, core_ranges),  # beta_s
+        _cb(15, fp, _FP32_TILE, max(dkt, dvt), core_ranges),  # sq
+        _cb(16, fp, _FP32_TILE, 1, core_ranges),  # colscale
+        _cb(17, fp, _FP32_TILE, dkt, core_ranges),  # qn (retained)
+        _cb(18, fp, _FP32_TILE, dkt, core_ranges),  # kn (retained)
+        _cb(19, fp, _FP32_TILE, kv, core_ranges),  # hd
+        _cb(20, fp, _FP32_TILE, dvt, core_ranges),  # vread / silu(z)
+        _cb(21, fp, _FP32_TILE, dvt, core_ranges),  # delta / normed o
+        _cb(22, fp, _FP32_TILE, dvt, core_ranges),  # delta*beta / normed*w
+        _cb(23, fp, _FP32_TILE, dkt, core_ranges),  # k col-broadcast
+        _cb(24, fp, _FP32_TILE, kv, core_ranges),  # outer
+        _cb(25, fp, _FP32_TILE, kv, core_ranges),  # h_new (next step's input)
+        _cb(26, fp, _FP32_TILE, dvt, core_ranges),  # o
+        _cb(27, fp, _FP32_TILE, dvt, core_ranges),  # out
+        _cb(28, fp, _FP32_TILE, 1, core_ranges),  # writer zero scratch
+        _cb(29, fp, _FP32_TILE, kv, core_ranges),  # h stash stream (writer)
+    ]
+
+    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], cbs=cbs)
+    io_tensors = [conv_out, qkvzab, rec_state, state_stash, dt_bias, neg_exp_a, norm_w, out]
     return ttnn.generic_op(io_tensors, program)

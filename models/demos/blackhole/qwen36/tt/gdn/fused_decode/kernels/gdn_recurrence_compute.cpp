@@ -43,6 +43,9 @@ constexpr uint32_t cb_qn = 17, cb_kn = 18, cb_hd = 19;
 // cb_vread is reused as silu(z), cb_delta as the normed o, cb_dm as normed*weight.
 constexpr uint32_t cb_vread = 20, cb_delta = 21, cb_dm = 22;
 constexpr uint32_t cb_kcb = 23, cb_outer = 24, cb_hnew = 25, cb_o = 26, cb_out = 27;
+// seq_rows mode only: per-row state stash stream to the writer (cb 28 is the
+// writer's zero scratch).
+constexpr uint32_t cb_hstash = 29;
 
 namespace {
 
@@ -227,6 +230,12 @@ void kernel_main() {
     constexpr uint32_t kSpThrBits = get_named_compile_time_arg_val("sp_thr_bits");
     constexpr uint32_t kInvDvBits = get_named_compile_time_arg_val("inv_dv_bits");
     constexpr uint32_t kNormEpsBits = get_named_compile_time_arg_val("norm_eps_bits");
+    // seq_rows W: 0 = single-token decode (state written back in place). W > 0 =
+    // the speculative verify: arg0 is a USER index u whose W candidate rows are
+    // u*W + t; the anchor state is read once, each step's state goes to the
+    // per-row stash (rec_state is never written), and every per-row quantity
+    // (gates, k/delta row selects, output row) advances with t.
+    constexpr uint32_t kSeqRows = get_named_compile_time_arg_val("seq_rows");
 
     const uint32_t b = get_arg_val<uint32_t>(0);
     const uint32_t vh = get_arg_val<uint32_t>(1);
@@ -287,6 +296,170 @@ void kernel_main() {
     POP(cb_ab, 1);
     POP(cb_dtb, 1);
     POP(cb_nega, 1);
+
+    if constexpr (kSeqRows > 0) {
+        // ---- speculative-verify sequential mode ----------------------------------
+        constexpr uint32_t kKvSeq = kDkt * kDvt;
+        const uint32_t u = b;  // arg0 is the user index
+
+        // Row-wise stages are valid for every row at once: L2-normed q/k computed
+        // ONCE and retained across the W steps (as are the gate fulls, v, z, w).
+        WAIT(cb_qin, kDkt);
+        square(cb_qin, cb_sq, kDkt);
+        WAIT(cb_sq, kDkt);
+        rowsum_rsqrt(cb_sq, cb_colscale, kDkt, 0, kEpsBits, kScaleBits);
+        POP(cb_sq, kDkt);
+        WAIT(cb_colscale, 1);
+        bcols_mul(cb_qin, cb_colscale, cb_qn, kDkt);
+        POP(cb_colscale, 1);
+        POP(cb_qin, kDkt);
+
+        WAIT(cb_kin, kDkt);
+        square(cb_kin, cb_sq, kDkt);
+        WAIT(cb_sq, kDkt);
+        rowsum_rsqrt(cb_sq, cb_colscale, kDkt, 0, kEpsBits, 0);
+        POP(cb_sq, kDkt);
+        WAIT(cb_colscale, 1);
+        bcols_mul(cb_kin, cb_colscale, cb_kn, kDkt);
+        POP(cb_colscale, 1);
+        POP(cb_kin, kDkt);
+
+        WAIT(cb_decay_full, 1);
+        WAIT(cb_beta_full, 1);
+        WAIT(cb_qn, kDkt);
+        WAIT(cb_kn, kDkt);
+        WAIT(cb_vin, kDvt);
+        WAIT(cb_zin, kDvt);
+        WAIT(cb_w, kDvt);
+
+        for (uint32_t t = 0; t < kSeqRows; t++) {
+            const uint32_t bt = u * kSeqRows + t;
+            extract_scalar(cb_decay_full, cb_decay_s, bt, vh);
+            extract_scalar(cb_beta_full, cb_beta_s, bt, kNv + vh);
+
+            // hd = h * decay; h is the anchor at t=0, then the previous h_new.
+            const uint32_t cur_h = (t == 0) ? cb_h : cb_hnew;
+            WAIT(cur_h, kKvSeq);
+            WAIT(cb_decay_s, 1);
+            bscalar_mul(cur_h, cb_decay_s, cb_hd, kKvSeq);
+            POP(cur_h, kKvSeq);
+            POP(cb_decay_s, 1);
+
+            // delta = (v - kn @ hd) * beta (only row bt is consumed downstream).
+            WAIT(cb_hd, kKvSeq);
+            mm_row_state(cb_kn, cb_hd, cb_hd, cb_vread, kDkt, kDvt);
+            WAIT(cb_vread, kDvt);
+            ew(cb_vin, cb_vread, cb_delta, kDvt, 1);
+            POP(cb_vread, kDvt);
+            WAIT(cb_delta, kDvt);
+            WAIT(cb_beta_s, 1);
+            bscalar_mul(cb_delta, cb_beta_s, cb_dm, kDvt);
+            POP(cb_delta, kDvt);
+            POP(cb_beta_s, 1);
+
+            // outer = kn_bt^T (x) delta_bt.
+            cb_reserve_back(cb_scr, kDkt);
+            for (uint32_t m = 0; m < kDkt; m++) {
+                brow_mul_one(cb_ones, cb_kn, 0, m, cb_scr, m, bt);
+            }
+            cb_push_back(cb_scr, kDkt);
+            WAIT(cb_scr, kDkt);
+            cb_reserve_back(cb_kcb, kDkt);
+            pack_reconfig_data_format(cb_kcb);
+            reconfig_data_format_srca(cb_scr);
+            transpose_init(cb_scr);
+            for (uint32_t m = 0; m < kDkt; m++) {
+                tile_regs_acquire();
+                transpose_tile(cb_scr, m, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_kcb, m);
+                tile_regs_release();
+            }
+            cb_push_back(cb_kcb, kDkt);
+            POP(cb_scr, kDkt);
+
+            WAIT(cb_kcb, kDkt);
+            WAIT(cb_dm, kDvt);
+            cb_reserve_back(cb_outer, kKvSeq);
+            for (uint32_t m = 0; m < kDkt; m++) {
+                for (uint32_t n = 0; n < kDvt; n++) {
+                    brow_mul_one(cb_kcb, cb_dm, m, n, cb_outer, m * kDvt + n, bt);
+                }
+            }
+            cb_push_back(cb_outer, kKvSeq);
+            POP(cb_kcb, kDkt);
+            POP(cb_dm, kDvt);
+
+            // h_new twice: cb_hnew feeds step t+1, cb_hstash streams to the writer.
+            WAIT(cb_outer, kKvSeq);
+            ew(cb_hd, cb_outer, cb_hnew, kKvSeq, 0);
+            ew(cb_hd, cb_outer, cb_hstash, kKvSeq, 0);
+
+            // o = qn @ hd + qn @ outer.
+            mm_row_state(cb_qn, cb_hd, cb_outer, cb_o, kDkt, kDvt);
+            POP(cb_hd, kKvSeq);
+            POP(cb_outer, kKvSeq);
+
+            // gated rmsnorm * silu(z) — row bt is what the writer emits.
+            WAIT(cb_o, kDvt);
+            square(cb_o, cb_sq, kDvt);
+            WAIT(cb_sq, kDvt);
+            rowsum_rsqrt(cb_sq, cb_colscale, kDvt, kInvDvBits, kNormEpsBits, 0);
+            POP(cb_sq, kDvt);
+            WAIT(cb_colscale, 1);
+            bcols_mul(cb_o, cb_colscale, cb_delta, kDvt);
+            POP(cb_colscale, 1);
+            POP(cb_o, kDvt);
+
+            WAIT(cb_delta, kDvt);
+            cb_reserve_back(cb_dm, kDvt);
+            pack_reconfig_data_format(cb_dm);
+            reconfig_data_format(cb_delta, cb_w);
+            mul_bcast_rows_init(cb_delta, cb_w);
+            for (uint32_t n = 0; n < kDvt; n++) {
+                tile_regs_acquire();
+                mul_tiles_bcast_rows(cb_delta, cb_w, n, n, 0, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_dm, n);
+                tile_regs_release();
+            }
+            cb_push_back(cb_dm, kDvt);
+            POP(cb_delta, kDvt);
+
+            cb_reserve_back(cb_vread, kDvt);
+            pack_reconfig_data_format(cb_vread);
+            reconfig_data_format_srca(cb_zin);
+            copy_tile_init(cb_zin);
+            silu_tile_init();
+            for (uint32_t n = 0; n < kDvt; n++) {
+                tile_regs_acquire();
+                copy_tile(cb_zin, n, 0);
+                silu_tile(0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_vread, n);
+                tile_regs_release();
+            }
+            cb_push_back(cb_vread, kDvt);
+
+            WAIT(cb_dm, kDvt);
+            WAIT(cb_vread, kDvt);
+            ew(cb_dm, cb_vread, cb_out, kDvt, 2);
+            POP(cb_dm, kDvt);
+            POP(cb_vread, kDvt);
+        }
+        POP(cb_decay_full, 1);
+        POP(cb_beta_full, 1);
+        POP(cb_qn, kDkt);
+        POP(cb_kn, kDkt);
+        POP(cb_vin, kDvt);
+        POP(cb_zin, kDvt);
+        POP(cb_w, kDvt);
+        POP(cb_ones, 1);
+        return;
+    }
 
     WAIT(cb_decay_full, 1);
     extract_scalar(cb_decay_full, cb_decay_s, b, vh);

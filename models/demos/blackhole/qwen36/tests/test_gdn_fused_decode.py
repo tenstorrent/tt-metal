@@ -221,3 +221,145 @@ def test_state_evolution(device, nk, nv):
         assert ok, f"step {step}: state trajectory PCC {pcc}"
         ok, pcc = comp_pcc(out_ref, ttnn.to_torch(out_d).float(), 0.999)
         assert ok, f"step {step}: gated output PCC {pcc}"
+
+
+# --------------------------------------------------------------------------- #
+# seq_rows mode (speculative verify): W candidate rows per user, sequential
+# in-kernel, per-row state stash, anchor state never written.
+# --------------------------------------------------------------------------- #
+def _golden_row_step(conv_row, zab_row, h, dt_bias, neg_exp_a, norm_w, nk, nv):
+    """One recurrence step for ONE activation row against per-user state h."""
+    kd, qkv_dim, z_dim, _ = _dims(nk, nv)
+    rf = nv // nk
+    q = conv_row[:kd].reshape(nk, DK).repeat_interleave(rf, dim=0)
+    k = conv_row[kd : 2 * kd].reshape(nk, DK).repeat_interleave(rf, dim=0)
+    v = conv_row[2 * kd :].reshape(nv, DV)
+    z = zab_row[qkv_dim : qkv_dim + z_dim].reshape(nv, DV)
+    a = zab_row[qkv_dim + z_dim : qkv_dim + z_dim + nv]
+    b_ = zab_row[qkv_dim + z_dim + nv : qkv_dim + z_dim + 2 * nv]
+
+    beta = torch.sigmoid(b_)
+    g = _bf16(neg_exp_a).reshape(nv) * torch.nn.functional.softplus(a + _bf16(dt_bias).reshape(nv), 1.0, 20.0)
+    decay = torch.exp(g)
+
+    qn = q / torch.sqrt(q.pow(2).sum(-1, keepdim=True) + EPS) * DK**-0.5
+    kn = k / torch.sqrt(k.pow(2).sum(-1, keepdim=True) + EPS)
+
+    hd = h * decay[..., None, None]
+    v_read = torch.einsum("hk,hkv->hv", kn, hd)
+    delta = (v - v_read) * beta[..., None]
+    h_new = hd + torch.einsum("hk,hv->hkv", kn, delta)
+    o = torch.einsum("hk,hkv->hv", qn, h_new)
+    out = o / torch.sqrt(o.pow(2).mean(-1, keepdim=True) + EPS)
+    out = out * _bf16(norm_w).reshape(DV) * torch.nn.functional.silu(z)
+    return out.reshape(nv * DV), h_new
+
+
+def _seq_inputs(nk, nv, users, w, seed):
+    torch.manual_seed(seed)
+    _, qkv_dim, _, qkvzab_dim = _dims(nk, nv)
+    rows = users * w
+    conv = torch.randn(1, rows, qkv_dim, dtype=torch.float32) * 0.5
+    qkvzab = torch.randn(1, rows, qkvzab_dim, dtype=torch.float32) * 0.5
+    h0 = torch.randn(users, nv, DK, DV, dtype=torch.float32) * 0.1
+    dt_bias = torch.randn(1, 1, nv, dtype=torch.float32) * 0.5
+    neg_exp_a = -torch.exp(torch.randn(1, 1, nv, dtype=torch.float32) * 0.3)
+    norm_w = torch.randn(1, 1, DV, dtype=torch.float32) * 0.5 + 1.0
+    return conv, qkvzab, h0, dt_bias, neg_exp_a, norm_w
+
+
+def _run_seq_rows(device, conv, qkvzab, h0, dt_bias, neg_exp_a, norm_w, nk, nv, users, w):
+    rows = users * w
+    conv_d = _dev(device, conv)
+    qkvzab_d = _dev(device, qkvzab)
+    state_d = _dev(device, h0, dtype=ttnn.float32)
+    stash_d = _dev(device, torch.zeros(users, w, nv, DK, DV), dtype=ttnn.float32)
+    dtb_d = _dev(device, dt_bias)
+    nega_d = _dev(device, neg_exp_a)
+    w_d = _dev(device, norm_w)
+    out_d = _dev(device, torch.zeros(1, rows, nv * DV), dtype=ttnn.float32)
+    fused_op.recurrence_seq_rows(
+        conv_d, qkvzab_d, state_d, stash_d, dtb_d, nega_d, w_d, out_d, nk=nk, nv=nv, dk=DK, dv=DV, users=users, w=w
+    )
+    return state_d, stash_d, out_d
+
+
+def test_seq_rows_stash_probe(device):
+    """Minimal probe of the one untested assumption: the writer addressing the
+    NEW stash tensor with the in-place TensorAccessor pattern. W=1: the stash
+    row must equal what the in-place op writes, and the anchor must be
+    untouched."""
+    nk, nv, users, w = 2, 6, 8, 1
+    conv, qkvzab, h0, dt_bias, neg_exp_a, norm_w = _seq_inputs(nk, nv, users, w, seed=10)
+
+    state_d, stash_d, out_seq = _run_seq_rows(device, conv, qkvzab, h0, dt_bias, neg_exp_a, norm_w, nk, nv, users, w)
+    assert torch.equal(ttnn.to_torch(state_d).float(), h0), "anchor state was written in seq mode"
+
+    # The existing in-place op on the same inputs (B=8 rows == the packed rows).
+    conv_d = _dev(device, conv)
+    qkvzab_d = _dev(device, qkvzab)
+    state_ref = _dev(device, h0, dtype=ttnn.float32)
+    dtb_d = _dev(device, dt_bias)
+    nega_d = _dev(device, neg_exp_a)
+    w_d = _dev(device, norm_w)
+    out_ref = _dev(device, torch.zeros(1, users, nv * DV), dtype=ttnn.float32)
+    fused_op.recurrence(
+        conv_d, qkvzab_d, state_ref, dtb_d, nega_d, w_d, out_ref, nk=nk, nv=nv, dk=DK, dv=DV, b_rows=users
+    )
+
+    stash = ttnn.to_torch(stash_d).float().reshape(users, nv, DK, DV)
+    ok, pcc = comp_pcc(ttnn.to_torch(state_ref).float(), stash, 0.9999)
+    assert ok, f"stash row vs in-place writeback PCC {pcc}"
+    ok, pcc = comp_pcc(ttnn.to_torch(out_ref).float(), ttnn.to_torch(out_seq).float()[:, :users], 0.9999)
+    assert ok, f"W=1 output vs in-place op PCC {pcc}"
+
+
+@pytest.mark.parametrize("nk,nv", [(2, 6), (4, 12)], ids=["tp8", "tp4"])
+def test_recurrence_seq_rows(device, nk, nv):
+    """seq_rows W=4 x 8 users vs (a) the torch per-row golden trajectory and
+    (b) W sequential calls of the existing in-place recurrence op."""
+    users, w = 8, 4
+    conv, qkvzab, h0, dt_bias, neg_exp_a, norm_w = _seq_inputs(nk, nv, users, w, seed=11)
+
+    state_d, stash_d, out_d = _run_seq_rows(device, conv, qkvzab, h0, dt_bias, neg_exp_a, norm_w, nk, nv, users, w)
+    assert torch.equal(ttnn.to_torch(state_d).float(), h0), "anchor state was written in seq mode"
+    out_got = ttnn.to_torch(out_d).float()
+    stash_got = ttnn.to_torch(stash_d).float()
+
+    # (a) torch golden trajectory per user.
+    conv_bf = _bf16(conv).reshape(users * w, -1)
+    zab_bf = _bf16(qkvzab).reshape(users * w, -1)
+    for u in range(users):
+        h = h0[u].clone()
+        for t in range(w):
+            r = u * w + t
+            out_ref, h = _golden_row_step(conv_bf[r], zab_bf[r], h, dt_bias, neg_exp_a, norm_w, nk, nv)
+            ok, pcc = comp_pcc(out_ref, out_got[0, r], 0.999)
+            assert ok, f"user {u} step {t}: output PCC {pcc}"
+            ok, pcc = comp_pcc(h, stash_got[u, t], 0.999)
+            assert ok, f"user {u} step {t}: stash PCC {pcc}"
+
+    # (b) W sequential in-place ops over the same rows (row u of step t = packed
+    # row u*w+t), state trajectory must match the stash at every step.
+    _, qkv_dim, _, qkvzab_dim = _dims(nk, nv)
+    state_ref = _dev(device, h0, dtype=ttnn.float32)
+    dtb_d = _dev(device, dt_bias)
+    nega_d = _dev(device, neg_exp_a)
+    w_d = _dev(device, norm_w)
+    for t in range(w):
+        rows_t = [u * w + t for u in range(users)]
+        conv_t = conv[:, rows_t, :]
+        zab_t = qkvzab[:, rows_t, :]
+        conv_td = _dev(device, conv_t)
+        zab_td = _dev(device, zab_t)
+        out_td = _dev(device, torch.zeros(1, users, nv * DV), dtype=ttnn.float32)
+        fused_op.recurrence(
+            conv_td, zab_td, state_ref, dtb_d, nega_d, w_d, out_td, nk=nk, nv=nv, dk=DK, dv=DV, b_rows=users
+        )
+        step_state = ttnn.to_torch(state_ref).float()
+        ok, pcc = comp_pcc(step_state, stash_got[:, t], 0.9999)
+        assert ok, f"step {t}: seq stash vs sequential in-place state PCC {pcc}"
+        out_t = ttnn.to_torch(out_td).float()
+        for u in range(users):
+            ok, pcc = comp_pcc(out_t[0, u], out_got[0, u * w + t], 0.9999)
+            assert ok, f"step {t} user {u}: seq output vs sequential op PCC {pcc}"
