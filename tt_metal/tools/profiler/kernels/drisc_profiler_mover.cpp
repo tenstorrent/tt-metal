@@ -297,6 +297,7 @@ void kernel_main() {
     // uses slot 0 only.
     uint32_t ring_hi[2] = {0, 0};
     uint32_t hs_bad = 0;        // MOVER: head reads that were structurally impossible -- MUST stay 0
+    bool peer_retired[2] = {false, false};  // MOVER: peer published its final head and is about to flip
 
     // Every frame's prefix is IDENTICAL and the bulk read lands past it (at slot + 16 words), so it is
     // written once here. Word 1 -- the packed payload length -- is the exception: ship_once patches it at
@@ -983,6 +984,9 @@ void kernel_main() {
                 // socket, so they could not have overlapped anyway. Cost of getting this wrong is direct -- halving
                 // the batch doubles the per-frame credit-wait/notify overhead, which is where the knee lives.
                 for (uint32_t peer = 0; peer < kNPeer; peer++) {
+                    if (peer_retired[peer]) {
+                        continue;
+                    }
                     const uint32_t pxy = kPeerXYs[peer];
                     const uint64_t t_r0 = get_timestamp();
                     uint32_t head;
@@ -1009,15 +1013,27 @@ void kernel_main() {
                         noc_async_read_barrier(NOC_INDEX);
                         invalidate_l1_cache();
                         head = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch);
+                        // The filler sets kHsRetireBit on its FINAL head, before restoring NOC2AXI mode.
+                        // Drain to that head, then stop reading this peer for good: past the flip the same
+                        // untagged address reads the profiler's DRAM region instead, which returns records
+                        // that pass every plausibility test a head has.
+                        const bool retiring = (head & kHsRetireBit) != 0u;
+                        head &= ~kHsRetireBit;
                         n = head - mv_tail[peer];
+                        if (retiring && n == 0) {
+                            peer_retired[peer] = true;
+                            continue;
+                        }
                         // n > kDramFrames is structurally impossible (head is monotonic, the filler can
-                        // never be a whole ring ahead), so it means the read is not a head at all --
-                        // observed when a released NIU (NOC2AXI) forwarded this L1 read to GDDR and a clamp
-                        // turned the garbage into "7 frames ready". Bail instead of clamp.
+                        // never be a whole ring ahead), so it means the read is not a head at all. The one
+                        // mechanism that produced it was a peer whose NIU had gone back to NOC2AXI while we
+                        // were still polling, which routes this untagged address to GDDR -- and the profiler's
+                        // own DRAM region answers with well-formed zone records, so the garbage looks like a
+                        // head. kHsRetireBit closes that window, which makes this an invariant again: skip
+                        // the visit and count, and let the host's "MUST stay 0" check speak if it ever fires.
                         if (n > kDramFrames) {
                             hs_bad++;
                             n = 0;
-                            egress_dead = true;  // the peer is gone or unreadable; shipping anything more is corruption
                         }
                         if (n > ring_hi[peer]) {
                             ring_hi[peer] = n;

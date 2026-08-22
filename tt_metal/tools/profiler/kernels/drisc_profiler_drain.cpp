@@ -413,6 +413,7 @@ void kernel_main() {
     uint32_t ring_hi[2] = {0, 0};
     uint32_t ring_blocked = 0;  // FILLER: stage_run calls that had to wait for ring room at all
     uint32_t hs_bad = 0;        // MOVER: head reads that were structurally impossible -- MUST stay 0
+    bool peer_retired[2] = {false, false};  // MOVER: peer published its final head and is about to flip
     if constexpr (kRole == kRoleFiller) {
         *hs_head = 0;
         // NOT hs_tail: the host zeroes it before launch and the MOVER owns it from then on. Zeroing it here
@@ -1261,6 +1262,9 @@ void kernel_main() {
                 // socket, so they could not have overlapped anyway. Cost of getting this wrong is direct -- halving
                 // the batch doubles the per-frame credit-wait/notify overhead, which is where the knee lives.
                 for (uint32_t peer = 0; peer < kNPeer; peer++) {
+                    if (peer_retired[peer]) {
+                        continue;
+                    }
                     const uint32_t pxy = kPeerXYs[peer];
                     const uint64_t t_r0 = get_timestamp();
                     uint32_t head;
@@ -1287,15 +1291,27 @@ void kernel_main() {
                         noc_async_read_barrier(NOC_INDEX);
                         invalidate_l1_cache();
                         head = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch);
+                        // The filler sets kHsRetireBit on its FINAL head, before restoring NOC2AXI mode.
+                        // Drain to that head, then stop reading this peer for good: past the flip the same
+                        // untagged address reads the profiler's DRAM region instead, which returns records
+                        // that pass every plausibility test a head has.
+                        const bool retiring = (head & kHsRetireBit) != 0u;
+                        head &= ~kHsRetireBit;
                         n = head - mv_tail[peer];
+                        if (retiring && n == 0) {
+                            peer_retired[peer] = true;
+                            continue;
+                        }
                         // n > kDramFrames is structurally impossible (head is monotonic, the filler can
-                        // never be a whole ring ahead), so it means the read is not a head at all --
-                        // observed when a released NIU (NOC2AXI) forwarded this L1 read to GDDR and a clamp
-                        // turned the garbage into "7 frames ready". Bail instead of clamp.
+                        // never be a whole ring ahead), so it means the read is not a head at all. The one
+                        // mechanism that produced it was a peer whose NIU had gone back to NOC2AXI while we
+                        // were still polling, which routes this untagged address to GDDR -- and the profiler's
+                        // own DRAM region answers with well-formed zone records, so the garbage looks like a
+                        // head. kHsRetireBit closes that window, which makes this an invariant again: skip
+                        // the visit and count, and let the host's "MUST stay 0" check speak if it ever fires.
                         if (n > kDramFrames) {
                             hs_bad++;
                             n = 0;
-                            egress_dead = true;  // the peer is gone or unreadable; shipping anything more is corruption
                         }
                         if (n > ring_hi[peer]) {
                             ring_hi[peer] = n;
@@ -2206,6 +2222,11 @@ void kernel_main() {
     // happen HERE (by teardown the mesh device can no longer launch a program) and LAST: in NOC2AXI mode an
     // inbound DRAM-range address is forwarded to GDDR, so the flip takes this L1 -- `done`, the results,
     // the socket's bytes_acked -- out of the host's view.
+    // Retire the ring before the flip, not after: the flip re-routes the mover's untagged reads of this
+    // head to GDDR, and the spin below is bounded, so a mover that is still polling gets no other warning.
+    if constexpr (kRole == kRoleFiller) {
+        *hs_head = frames_staged | kHsRetireBit;
+    }
     for (uint32_t spins = 0; spins < 200000000u && *stop != 2u; spins++) {
         invalidate_l1_cache();
     }

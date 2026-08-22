@@ -48,6 +48,8 @@ TT_ZONE_DEFINE_ID(DRISC_ZONE_SYNC, "DRISC-SYNC");                // common-trigg
 TT_ZONE_DEFINE_ID(SPSC_DATA_ID_NOCFP, "DRISC-NOC-FOOTPRINT");    // the per-sweep NoC-counter PP_DATA sample
 }  // namespace kernel_profiler
 
+constexpr uint32_t kHsRetireBit = kernel_profiler::SPSC_DRAIN_HEAD_RETIRE_BIT;
+
 // D2H: write L1 to PCIe host RAM in NOC_MAX_BURST_SIZE chunks. The caller runs
 // noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC) once per push -- the packed
 // gather calls this ~11 times per frame, so a per-call init would repeat command-buffer setup that

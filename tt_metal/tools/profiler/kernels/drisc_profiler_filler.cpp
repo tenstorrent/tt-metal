@@ -1613,6 +1613,11 @@ void kernel_main() {
     // happen HERE (by teardown the mesh device can no longer launch a program) and LAST: in NOC2AXI mode an
     // inbound DRAM-range address is forwarded to GDDR, so the flip takes this L1 -- `done`, the results,
     // the socket's bytes_acked -- out of the host's view.
+    // Retire the ring before the flip, not after: the flip re-routes the mover's untagged reads of this
+    // head to GDDR, and the spin below is bounded, so a mover that is still polling gets no other warning.
+    if constexpr (kRole == kRoleFiller) {
+        *hs_head = frames_staged | kHsRetireBit;
+    }
     for (uint32_t spins = 0; spins < 200000000u && *stop != 2u; spins++) {
         invalidate_l1_cache();
     }

@@ -2273,6 +2273,8 @@ void PerfDebugProfiler::dump_drainer_state(DeviceCtx& ctx, uint32_t d, const cha
         const uint64_t hs = ctx.drisc_l1_noc[d] + (ctx.hs_addr[d] - ctx.drisc_l1_base[d]);
         cluster.read_core(&hd, sizeof(hd), drisc, hs + kHsHead);
         cluster.read_core(&tl, sizeof(tl), drisc, hs + kHsTail);
+        const bool retired = (hd & kernel_profiler::SPSC_DRAIN_HEAD_RETIRE_BIT) != 0u;
+        hd &= ~kernel_profiler::SPSC_DRAIN_HEAD_RETIRE_BIT;
         log_warning(
             tt::LogMetal,
             "[perf-debug profiler]   filler {}: DRAM ring head {} tail {} => {} frames in flight of {} "
@@ -2282,8 +2284,10 @@ void PerfDebugProfiler::dump_drainer_state(DeviceCtx& ctx, uint32_t d, const cha
             tl,
             hd - tl,
             ctx.dram_frames,
-            (ctx.dram_frames != 0 && (hd - tl) >= ctx.dram_frames) ? "  <<< RING FULL: the mover is not consuming"
-                                                                   : "");
+            retired ? "  <<< RETIRED: final head published, this filler's NIU is back in NOC2AXI mode"
+                    : (ctx.dram_frames != 0 && (hd - tl) >= ctx.dram_frames)
+                          ? "  <<< RING FULL: the mover is not consuming"
+                          : "");
     }
     if (have_fifo && b[1] == a[1] && !exited && b[2] == 3 && np == 0) {
         log_warning(
@@ -2468,6 +2472,7 @@ void PerfDebugProfiler::stop() {
                     sizeof(head),
                     tt_cxy_pair(ctx.chip_id, ctx.drisc_virtual[p]),
                     ctx.drisc_l1_noc[p] + (ctx.hs_addr[p] - ctx.drisc_l1_base[p]) + kHsHead);
+                head &= ~kernel_profiler::SPSC_DRAIN_HEAD_RETIRE_BIT;
                 const auto dl = std::chrono::steady_clock::now() + std::chrono::seconds(5);
                 uint32_t tail = 0;
                 while (std::chrono::steady_clock::now() < dl) {
@@ -2707,9 +2712,11 @@ void PerfDebugProfiler::stop() {
                         log_warning(
                             tt::LogMetal,
                             "[perf-debug profiler] role split DRISC {}: {} IMPOSSIBLE head reads (head - tail "
-                            "exceeded the ring capacity, summed over its rings). The mover declared egress dead "
-                            "and stopped shipping. A filler's L1 became unreadable mid-run -- most likely an NIU "
-                            "released early.",
+                            "exceeded the ring capacity, summed over its rings). A peer's head word read back as "
+                            "something that cannot be a head, so those visits were skipped. The known cause -- a "
+                            "peer NIU back in NOC2AXI mode, which routes the untagged read to GDDR and answers out "
+                            "of the profiler's own DRAM region -- is closed by the retire handshake, so a non-zero "
+                            "count here means a NEW way for a peer's L1 to stop being readable.",
                             d,
                             res[57]);
                     }

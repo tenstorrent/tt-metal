@@ -211,6 +211,14 @@ enum SpscControlBuffer {
 // block unless kMiscBytes grows, which costs a staging slot. Check that arithmetic, not just this constant.
 static constexpr std::uint32_t SPSC_DRAIN_RESULT_WORDS = 208;
 
+// Bit 31 of a filler's published DRAM-ring head, set as its last act before restoring its NIU to NOC2AXI
+// mode. A head is a frame count, so the bit is free. It has to travel IN BAND, in the word the mover
+// already polls: past that flip an untagged peer-L1 address is routed to GDDR instead
+// (experimental/drisc_mode.h), landing in the device profiler's DRAM region -- which returns well-formed
+// zone records, i.e. a plausible head that is wrong forever, with no out-of-band channel left to say so.
+// Every reader of the head word must mask it off before differencing against a tail.
+static constexpr std::uint32_t SPSC_DRAIN_HEAD_RETIRE_BIT = 0x80000000u;
+
 // ---- DRAINER-AUTHORED zones (DRISC self-profiling) --------------------------------------------------
 //
 // The drainer emits its own zones, and they are now ORDINARY zones in every respect that matters: an
