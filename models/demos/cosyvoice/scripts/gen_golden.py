@@ -10,8 +10,8 @@ against, so they are the definition of correct for this bring-up.
 
 RUN THIS IN THE CosyVoice VENV, NOT THE TT-METAL ONE:
 
-    PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS \
-    /mnt/cosyvoice_env/bin/python gen_golden.py --out <dir>
+    PYTHONPATH=$COSYVOICE_REPO:$COSYVOICE_REPO/third_party/Matcha-TTS \
+    $COSYVOICE_ENV/bin/python gen_golden.py --out <dir>
 
 Why the reference is not deterministic, and what this script does about it
 -------------------------------------------------------------------------
@@ -41,7 +41,7 @@ import numpy as np
 import torch
 from torch.distributions.uniform import Uniform
 
-DEFAULT_COSYVOICE = os.environ.get("COSYVOICE_ROOT", "/mnt/CosyVoice")
+DEFAULT_COSYVOICE = os.environ.get("COSYVOICE_REPO", "/mnt/CosyVoice")
 SEED = 1986  # the seed cosyvoice.yaml itself sets, kept for continuity
 
 
@@ -463,7 +463,7 @@ def _git_head(path: str) -> str:
     """The checked-out commit of the CosyVoice tree, read straight off disk.
 
     This deliberately does not shell out to `git`. `path` arrives from `--cosyvoice-root`
-    or `$COSYVOICE_ROOT`, and `git -C <path> ...` would parse a value beginning with `-`
+    or `$COSYVOICE_REPO`, and `git -C <path> ...` would parse a value beginning with `-`
     as an option rather than a directory -- argument injection, which the argv-list form
     does nothing to prevent (it only rules out *shell* metacharacters). Reading `.git`
     directly removes the process spawn, so there is no argument vector at all.

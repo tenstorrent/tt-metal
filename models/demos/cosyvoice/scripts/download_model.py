@@ -101,7 +101,7 @@ def fetch(url: str, dest: str, expect: int) -> str:
 
 def main() -> int:
     here = os.path.dirname(os.path.abspath(__file__))
-    default_dest = os.environ.get("COSYVOICE_ROOT", "/mnt/CosyVoice") + "/pretrained_models"
+    default_dest = os.environ.get("COSYVOICE_REPO", "/mnt/CosyVoice") + "/pretrained_models"
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--dest", default=default_dest)

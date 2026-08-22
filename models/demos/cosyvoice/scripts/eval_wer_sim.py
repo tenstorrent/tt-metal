@@ -10,8 +10,8 @@ PyTorch reference and the TTNN port, and the two are directly comparable.
 
 RUN THIS IN THE CosyVoice VENV:
 
-    /mnt/cosyvoice_env/bin/python eval_wer_sim.py --run-dir <dir>
-    /mnt/cosyvoice_env/bin/python eval_wer_sim.py --run-dir <ttnn> --baseline <ref>
+    $COSYVOICE_ENV/bin/python eval_wer_sim.py --run-dir <dir>
+    $COSYVOICE_ENV/bin/python eval_wer_sim.py --run-dir <ttnn> --baseline <ref>
 
 Protocol, and where it departs from Seed-TTS Eval
 -------------------------------------------------
@@ -385,7 +385,7 @@ def main() -> int:
         default="large-v3",
         help="whisper size; Seed-TTS Eval uses large-v3. 'medium'/'small' iterate faster.",
     )
-    ap.add_argument("--cosyvoice-root", default=os.environ.get("COSYVOICE_ROOT", "/mnt/CosyVoice"))
+    ap.add_argument("--cosyvoice-root", default=os.environ.get("COSYVOICE_REPO", "/mnt/CosyVoice"))
     ap.add_argument("--no-campplus", action="store_true")
     ap.add_argument("--out", default=None, help="default <run-dir>/scores.json")
     args = ap.parse_args()
