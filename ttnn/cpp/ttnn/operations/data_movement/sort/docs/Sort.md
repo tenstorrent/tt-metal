@@ -33,11 +33,11 @@ requires; users do not need to pre-format inputs.
 | Tensor   | Supported dtypes              |
 | -------- | ----------------------------- |
 | Values   | `bfloat16`, `float32`, `uint16` |
-| Indices  | `uint16`, `uint32` (auto-promoted to `uint32` when the sort dim ≥ 65 535, the input is `float32`/`uint16`, `stable=True` with `bfloat16` input on the single-core factory — padded sort dim ≤ 2 048 — or `stable=True` with `bfloat16` input at padded sort dim 2 048/4 096 on Blackhole, where the mergesort row engine runs) |
+| Indices  | `uint16`, `uint32` — auto-promoted to `uint32` when any of the following holds: the sort dim is ≥ 65 535; the input is `float32`/`uint16`; `stable=True` with `bfloat16` input at padded sort dim ≤ 2 048 (fused-key single-core engine, any architecture); or `stable=True` with `bfloat16` input at power-of-two padded sort dim 2 048–65 536 on Blackhole (mergesort row engine). **Behavior change:** the Blackhole promotion at padded widths 8 192–32 768 is new — those stable `bfloat16` sorts previously returned `uint16` from the comparator engines (padded width 65 536 was already `uint32` via the ≥ 65 535 rule). Preallocating `uint16` index tensors for a stable sort opts out of the mergesort engine and keeps `uint16` on the comparator engines. Unstable `bfloat16` sorts keep `uint16` at every width the mergesort engine serves (the writer RISC narrows the engine's native 32-bit words), so no unstable caller sees a dtype change. The composite early exits (scalar, dim-size-1, and zero-size tensors) follow the same rule: `uint32` for stable `bfloat16`/`float32`/`uint16`, `uint16` otherwise. |
 
 **NaN input is unsupported (undefined ordering) for `bfloat16`.** The `bfloat16` datapath canonicalizes NaN to same-sign infinity before any comparison (measured on silicon: NaN merges into the `+inf`/`-inf` tie class), so NaN placement deviates from `torch.sort`'s NaN-last ordering in both values and indices. Callers who need torch NaN semantics must mask or replace NaNs before sorting.
 
-**Unstable index contract (`stable=False`).** The returned indices always gather the sorted values from the input, but need not form a permutation within tie groups on the CrossCore path — that engine resolves ties positionally and can emit duplicate indices inside a tie group (see issue #54043). Use `stable=True` when a true permutation is required.
+**Unstable index contract (`stable=False`).** The returned indices always gather the sorted values from the input, but need not form a permutation within tie groups on the CrossCore path — that engine resolves ties positionally and can emit duplicate indices inside a tie group (issue #54043; measured on silicon at every width that path serves, W = 512–4 096, on plain randn input — not only tie-heavy data). On Blackhole, `bfloat16` sorts of power-of-two padded width 512–65 536 are served by the mergesort row engine (widths 512/1 024 via the composite pad-to-2 048 rider), whose unstable output IS the torch-stable permutation — #54043 is unreachable there. The residue is `float32` unstable widths on the CrossCore path and non-Blackhole devices. Use `stable=True` when a true permutation is required.
 
 #### Supported layouts
 
@@ -67,9 +67,22 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
   layer transposes the chosen dim to the innermost position before invoking
   the kernel and reverses the transpose on output.
 - Logical shapes need not be tile-aligned; the composite layer pads with
-  ±∞ sentinels and slices back to the original size after sorting.
+  ±∞ sentinels and slices back to the original size after sorting. `uint16`
+  inputs have no ±inf: their pad sentinels are 65 535 (ascending) / 0
+  (descending), which are valid `uint16` values — full-range `uint16` inputs
+  containing the sentinel value may see incorrect indices for tied values at
+  the padded boundary.
 - The minimum effective sort dim is 2 tiles (64 elements). Smaller dims are
-  padded up internally.
+  padded up internally. On Blackhole, `bfloat16` rows whose power-of-two pad
+  would be 512 or 1 024 are padded to 2 048 instead (the pad-to-2 048 rider)
+  so they ride the mergesort row engine — measured 2–13× faster than the
+  engines previously serving those widths; correctness of the raise leans on
+  the engine being structurally stable, so real elements always sort ahead of
+  the sentinel pad. A stable caller who preallocates `uint16` index tensors
+  opts out of the raise along with the engine.
+- Zero-size tensors (any dimension of size 0) early-exit with empty
+  values/indices of the input shape, matching `torch.sort`. Scalar and
+  dim-size-1 inputs early-exit with the input and zero indices.
 
 #### Preallocated outputs (`out=(values, indices)`)
 
@@ -90,11 +103,16 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
 - `stable` (bool): preserve the original (ascending-index) order of equal
   elements, matching `torch.sort(stable=True)`. Three engines, selected per
   program factory (issue #33492):
-  - **Mergesort row engine** — Blackhole, `bfloat16` values at padded sort dim
-    2 048/4 096: a full per-row sort on the TopK XL SFPU kernels with LINEAR
-    position tags fused into the value words, one row per core. Stability is
-    structural (tag order == element order), indices are `uint32`. See the
-    Strategy Comparison section.
+  - **Mergesort row engine** — Blackhole, `bfloat16` values at power-of-two
+    padded sort dim 2 048–65 536 (512/1 024 arrive via the composite
+    pad-to-2 048 rider): a full per-row sort on the TopK XL SFPU kernels with
+    LINEAR position tags fused into the value words, one row per core; padded
+    widths ≥ 8 192 run an L1-staged merge tree (ping-pong Float32 run buffers
+    between DEST passes). Stability is structural (tag order == element
+    order); the engine serves BOTH stabilities (its unstable output is the
+    stable permutation). Stable cells return `uint32` indices; unstable cells
+    keep `uint16` via writer-RISC narrowing. See the Strategy Comparison
+    section.
   - **Fused-key engine** — `bfloat16` values on the SingleRowSingleCore
     factory (padded sort dim ≤ 2 048): every network call tags each value
     word's free low 16 bits with its TRUE index (sign-conditioned complement
@@ -105,7 +123,10 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
     indices** (the same 32-bit-DEST rule that `float32`/`uint16` inputs
     already follow). Measured −7% device-kernel time vs the comparator.
   - **Index-aware comparator network** — everything else: `float32` values,
-    `uint16` values, and every wider `bfloat16` sort. On exact value ties
+    `uint16` values, `bfloat16` sorts wider than the mergesort band (padded
+    width > 65 536), non-Blackhole `bfloat16` sorts above the single-core
+    band, and stable `bfloat16` callers who opt out of the mergesort engine
+    via preallocated `uint16` index tensors. On exact value ties
     each compare-exchange also compare-exchanges the paired index tiles,
     with the tie-break polarity programmed once from the *global* sort
     order (never the per-block bitonic direction). The CrossCore and
@@ -205,8 +226,8 @@ The TTNN Sort operation provides three sorting strategies, each optimized for di
   * The **L1 memory size** of each core.
 * **Single Row Multi Core** is the **most scalable and robust** strategy. It guarantees sorting of **tensors of any size**, regardless of how large they are, though it may be slower due to increased synchronization and DRAM involvement. This strategy ensures that even extremely large tensors are always supported.
 * **Single Row Single Core** is efficient for small tensors where the entire sort fits easily within one core's working memory — provided there are enough tile-rows (`Ht`) to occupy the grid. Each core sorts whole tile-rows, so at small `Ht` the rest of the grid idles while one core pays the full tile-network cost.
-* **Mergesort row engine (Blackhole)**: stable `bfloat16` sorts of padded width 2048 or 4096 run a fourth strategy — a full per-row sort on the TopK XL SFPU kernels (fused `[bf16 | u16]` keys carrying LINEAR position tags, a both-halves merge level, and a rebuild per half), one row per core. Stability is structural (tag order == element order; sign-conditioned tag complement handles the sign-magnitude compare), so no comparator or index tiles ride the network. Measured on p150a (tie-heavy bf16, Tracy device-kernel duration): `32×2048` stable 1.98 ms → 33.5 µs, `32×4096` stable 380 µs → 60.6 µs. These cells return `uint32` indices (the fused tags live in 32-bit DEST; a preallocated `uint16` index tensor opts back into the previous routing). Blackhole-only — the TopK XL LLKs have no Wormhole tree.
-* **Small-`Ht` reroute**: **stable** cells in the single-core width band (`stable=True`, `Wt` in `[16, 64]`, TILE layout, non-UINT16, Blackhole only) with `Ht <= Wt/8` are routed to **Cross Core Data Exchange** instead, which splits the tile-row across `~Wt/2` cores (measured 5–12× faster on those cells; e.g. a `32×2048` stable bfloat16 sort drops from 1.98 ms to ~0.19 ms). Unstable cells are deliberately **not** rerouted: the Cross Core unstable exchange resolves ties positionally and can emit duplicate indices inside tie groups, so those cells keep the single-core engine, which always returns a valid permutation. The reroute is gated to Blackhole because that is the only silicon it has been validated on. The index-dtype rules are unaffected by this reroute — stable bfloat16 sorts in the single-core width band return `uint32` indices on either factory.
+* **Mergesort row engine (Blackhole)**: `bfloat16` sorts of power-of-two padded width 2 048–65 536 — BOTH stabilities — run a fourth strategy: a full per-row sort on the TopK XL SFPU kernels (fused `[bf16 | u16]` keys carrying LINEAR position tags, a both-halves merge level, and a rebuild per half), one row per core. Padded widths 2 048/4 096 run fully in DEST; widths 8 192–65 536 run an L1-staged merge tree that ping-pongs Float32 run buffers between DEST passes (≤ 576 KB L1 at W = 65 536). The hard ceiling is W = 65 536: the fused word's 16 free tag bits address exactly 65 536 positions (max tag 0xFFFF, zero slack) — wider rows decline to the comparator engines. Widths 512/1 024 arrive via the composite pad-to-2 048 rider. Stability is structural (tag order == element order; sign-conditioned tag complement handles the sign-magnitude compare), so no comparator or index tiles ride the network, and the unstable output is the torch-stable permutation (this retires issue #54043 for `bfloat16` on Blackhole). Measured on p150a (Tracy device-kernel duration): `32×2048` stable 1.98 ms → 33.5 µs, unstable 1.56 ms → 42.5 µs; `32×4096` stable 380 µs → 60.6 µs, unstable 376 µs → 78.8 µs; `32×8192` stable 972 µs → 109.5 µs; `32×16384` stable 3.17 ms → 217 µs; `32×32768` stable 6.53 ms → 472 µs; `32×65536` stable 13.5 ms → 1.00 ms. Stable cells return `uint32` indices (the fused tags live in 32-bit DEST; a preallocated `uint16` index tensor opts back into the previous routing); unstable cells keep `uint16` via writer-RISC narrowing. Blackhole-only — the TopK XL LLKs have no Wormhole tree.
+* **Small-`Ht` reroute**: **stable** cells in the single-core width band (`stable=True`, `Wt` in `[16, 64]`, TILE layout, non-UINT16, Blackhole only) with `Ht <= Wt/8` are routed to **Cross Core Data Exchange** instead, which splits the tile-row across `~Wt/2` cores (measured 5–12× faster on those cells). On Blackhole this reroute's remaining `bfloat16` constituency is the stable preallocated-`uint16` opt-out — every other Blackhole `bfloat16` cell in the band rides the mergesort row engine (via the pad-to-2 048 rider); its main live constituency is stable `float32` small-`Ht` cells. Unstable cells are deliberately **not** rerouted: the Cross Core unstable exchange resolves ties positionally and can emit duplicate indices inside tie groups (issue #54043), so unstable cells that reach this branch (`float32` on Blackhole; all dtypes elsewhere) keep the single-core engine, which always returns a valid permutation. The reroute is gated to Blackhole because that is the only silicon it has been validated on. The index-dtype rules are unaffected by this reroute — stable bfloat16 sorts in the single-core width band return `uint32` indices on either factory.
 
 ## Strategies description
 
