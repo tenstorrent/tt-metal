@@ -230,6 +230,11 @@ set(JITAPI_FILES
     tools/profiler/noc_debugging_profiler.hpp
     tools/profiler/noc_debugging_metadata.hpp
     tools/profiler/cpp_device_analyses.json
+    tools/profiler/kernels/drisc_drain_common.hpp
+    tools/profiler/kernels/drisc_niu_mode.cpp
+    tools/profiler/kernels/drisc_profiler_drain.cpp
+    tools/profiler/kernels/drisc_profiler_filler.cpp
+    tools/profiler/kernels/drisc_profiler_mover.cpp
     impl/dispatch/kernels/cq_dispatch.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp

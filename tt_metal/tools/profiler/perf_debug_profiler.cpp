@@ -1952,7 +1952,16 @@ bool PerfDebugProfiler::boot_device(
                 my_cores * 32u <= 4u * kernel_profiler::PROFILER_L1_BUFFER_SIZE,
                 "CV-first tails staging ({} cores x 32 B) does not fit the self slot's dead ring space",
                 my_cores);
-            const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
+            // TT_METAL_PERF_DEBUG_SPLIT_KERNELS=1: per-role kernel files (bring-up; monolith is the default
+            // until the split passes its gates).
+            static const bool ksplit = [] {
+                const char* s = std::getenv("TT_METAL_PERF_DEBUG_SPLIT_KERNELS");
+                return s != nullptr && *s != '\0' && *s != '0';
+            }();
+            const std::string kdrain = !ksplit     ? "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp"
+                                       : is_mover  ? "tt_metal/tools/profiler/kernels/drisc_profiler_mover.cpp"
+                                       : is_filler ? "tt_metal/tools/profiler/kernels/drisc_profiler_filler.cpp"
+                                                   : "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
                     CreateKernel(
                           *ctx.drain_program[d],

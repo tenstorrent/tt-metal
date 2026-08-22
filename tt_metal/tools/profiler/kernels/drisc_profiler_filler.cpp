@@ -2,86 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// The DRISC streaming-profiler drainer: worker SPSC rings -> DRISC -> D2H socket -> host.
+// The streaming profiler's FILLER (kRole = 1): sweep a quarter of the worker grid's SPSC rings and write
+// complete frames into this filler's own device-DRAM ring. No socket, no PCIe, no host MMIO -- its
+// back-pressure is a DRAM ring of tens of MB, not the 12 MiB host FIFO. Four fillers cover the grid.
 //
-// The DRISC is a CONDUIT. It bulk-reads a worker's whole profiler_msg_t into a staging slot and ships out
-// of that same slot -- it never copies the payload, and authors exactly 8 words about it: a 2-word frame
-// header (word 1 patched to the packed payload length at push), 5 patched heads. Identity, per-lane
-// progress and extent all reach the host inside the worker's own control vector, which rides at the front
-// of the span.
+// Sweep shape (CV-first): read each core's ring TAILS (32 B), decide the ship set (per-core threshold +
+// predictive valve + age bound), bulk-read whole spans only for the ship set -- ONE unsplit NoC read per
+// span, because the shipped control vector is the span's own first bytes and only a single ascending read
+// guarantees every tail is captured before the data it points at. Frames are staged in L1 and written to
+// the DRAM ring in runs; each frame gets a trailing 4 B seq stamp on the same route, so the mover can
+// verify landing ("stamp visible => frame landed") and heads publish at write-ISSUE time.
 //
-// ---- Why the CPU never touches the payload: a copy was 45% of the drainer ----
-//
-// An early version packed each lane's live run exactly, with CPU loads and stores out of the staged
-// snapshot. Per-phase instrumentation killed it: a busy sweep cost 2,271 us against an idle sweep's 36 us,
-// and 2,244 us of that was the copy -- 20.4 us to move one core's 2,490 words, i.e. ~11 CYCLES PER WORD.
-// A `volatile tt_l1_ptr` word-at-a-time loop cannot be unrolled, widened or pipelined by the compiler.
-//
-// Its replacement shipped the raw span whole, which zeroed the copy -- and made host cost frames x
-// 10,560 B regardless of fill. ship_once now does the exact packing the copy died for, WITHOUT the
-// copy: the NIU gathers each live window straight from the staged slot into the host FIFO (layout and
-// the congruence-pad rule in profiler_common.h). The saving is the dead ring bytes, so it scales
-// inversely with fill: ~9% on a saturated delay-15 capture whose snapshots run ~90-96% full, up to ~30x
-// on a sparse workload whose spans are nearly empty. The price is write ISSUES -- ~11 NoC writes per
-// frame instead of one burst per batch, measured 6.98 us per 7-frame push at ~96% fill (~9.9 GB/s per
-// mover, still above the device's ~15.9 GB/s offered aggregate, so egress stays off the critical path).
-//
-// ---- Layout: the prefix lives IN FRONT of the staging slot ----
-//
-//   slot = [16-word prefix][2,624-word span: 64-word control vector + 5 x 512-word rings]
-//        = 2,640 words = 10,560 B = exactly 165 socket pages.
-//
-// The bulk read lands at slot+64 B, so prefix and span are contiguous and a frame stages in one piece.
-// Slots are contiguous too, so a run of adjacent cores that all have data moves to a DRAM ring as a
-// SINGLE write (stage_run); only the socket push gathers per frame (ship_once).
-//
-// The staged span is reused by the next batch's reads, so the write must land before then -- hence one
-// write barrier per batch. That costs PCIe latency rather than bandwidth, and the measured write phase was
-// 0.1%, so serialising it is the cheap side of this trade.
-//
-// The NIU must already be in stream mode -- a DRISC in the default NOC2AXI mode cannot initiate NoC, and
-// the socket config write has to be able to land in L1.
-//
-// ---- ROLE SPLIT (compile arg 20; 0 = off, the whole file behaves exactly as above) ----
-//
-// The knee is set by the WORST sweep and that sweep is dominated by CREDIT-WAIT: 50-97 us of an 86-127 us
-// worst sweep, against 1.3 us when the host is keeping up. It is a BURST problem, not a bandwidth one --
-// sustained egress is ~1.37 GB/s aggregate (~8% of the 16.5 GB/s ceiling) but one busy sweep ships 581 KB
-// in 35.2 us, which IS the ceiling. The 12 MiB host FIFO is only ~21 busy sweeps of slack, and it cannot be
-// enlarged: the FW maps nwin = ceil((in_off + bytes + 64) / 2 MiB) consecutive TLB windows per socket and
-// kNSockets * nwin <= 16, so 12 MiB already uses 14 of 16.
-//
-// So split the job across SIX DRISCs instead of making two do all of it:
-//
-//   FILLER (kRole=1)  sweep worker rings -> write frames into its OWN device-DRAM ring. No socket, no PCIe,
-//                     no host MMIO at all. Its back-pressure is a DRAM ring of hundreds of MB, not 12 MiB.
-//                     FOUR of them, each owning a quarter of the grid, because the knee is the filler's SCAN.
-//   MOVER  (kRole=2)  read frames out of kNPeer DRAM rings -> push to the existing D2H socket, byte-for-byte
-//                     the same protocol the full-job drainer uses, so the host path is untouched. TWO of
-//                     them, each draining TWO rings, because there are only two host-facing-safe cores.
-//
-// One ring per filler, so the ring is structurally single-producer/single-consumer and no de-interleaving is
-// ever needed -- a DUAL-RING mover is still one consumer per ring, it just visits two of them. The handshake
-// is a monotonic frame count: the filler publishes `head` into a word in its own L1; the mover NoC-reads head,
-// moves head-tail frames, and NoC-writes `tail` back into that same block.
-// Every wait on either side is BOUNDED with a give-up -- an unbounded spin on a DRISC is unkillable and
-// unfeedable, and because the producers are lossless it takes the workload down with it.
-//
-// A dual-ring mover walks its peers SEQUENTIALLY, each getting the WHOLE staging area, with the same
-// per-push write barrier in between that a single-ring mover already had. That is why `max batch` stays at
-// kNStage (7) per peer instead of halving to 3-4: splitting the staging slots between peers would only pay
-// off if the two peers' egress could overlap, and it cannot -- both push into ONE socket.
-//
-// Placement is evidence-based, not arbitrary. Only DRAM cores in NoC row y == 0 are safe to HOST-FACE
-// (FINDINGS N+29: y==0 1/75 failures vs y!=0 16/125, Fisher p ~ 0.006), which is exactly two cores on this
-// part -- so the movers take those and the fillers go on y!=0 banks. That is measured to be safe for the
-// FILLER duty specifically: two 25-run blocks on bank 5, N+29's worst core at 5/25 for a full-job drainer,
-// produced 0/25 failures held in stream mode and 0/25 doing filler-only duty. The hazard lives in the
-// egress/host-facing half.
-//
-// A DRAM ring slot is the same raw 2,640-word prefix+span the full-job drainer stages, so the mover copies
-// whole slots out of the ring and packs only at its socket push -- every role puts one wire format on the
-// socket and the host decoder cannot tell them apart.
+// The full architecture story (roles, placement evidence, wire format) lives in
+// drisc_profiler_drain.cpp, the single-drainer fallback this file was carved from.
 
 #include "drisc_drain_common.hpp"
 
@@ -128,7 +61,7 @@ void kernel_main() {
     // holds kGenSlots spans, so doubling outstanding transactions is the one lever that costs nothing.
     // ---- ROLE SPLIT (see the header). 0 = today's full-job drainer, and every arg below is then 0. ----
     constexpr uint32_t kRoleFull = 0, kRoleFiller = 1, kRoleMover = 2;
-    constexpr uint32_t kRole = get_compile_time_arg_val(20);
+    constexpr uint32_t kRole = kRoleFiller;  // this file IS the filler; carg 20 stays reserved
     constexpr uint32_t kDramBank = get_compile_time_arg_val(21);    // allocator bank id of this ring
     constexpr uint32_t kDramAddr = get_compile_time_arg_val(22);    // bank-relative base of this ring
     constexpr uint32_t kDramFrames = get_compile_time_arg_val(23);  // ring capacity in whole frames
@@ -190,13 +123,9 @@ void kernel_main() {
     // DMA engine -- separate hardware from the NIU, so ring reads pipeline against the PCIe push in
     // kGenSlots-frame sub-batches across the two staging generations. Args 42/43 are CHANNEL-local ring
     // bases (raw DMA addresses; bank offsets exist only for get_noc_addr_from_bank_id).
-    constexpr uint32_t kPeerDmas[2] = {get_compile_time_arg_val(42), get_compile_time_arg_val(43)};
-    static_assert(kGenSlots * kSlotBytes <= 262128u, "a DMA sub-batch must fit one 14-bit DMA transfer");
-    static_assert((kSlotBytes & 0xFu) == 0, "GDDR DMA transfers must be 16 B multiples");
     // Per-visit cap bounds PEER STARVATION (the other ring waits one visit). 24 over-throttled (~2.4
     // us/frame, rings filled); 192 (~2 MB) amortizes overheads to ~1 us/frame while starvation stays ~10x
     // below the unbounded 6.7 ms whole-ring visit that motivated the cap.
-    constexpr uint32_t kDmaVisitCap = 64u * kGenSlots;
     // Frame-sequence verification (replaces the distance-based chase guard). The spec leaves NoC-write vs
     // DMA-read same-address ordering UNDEFINED and WR_ACK is not a cross-master fence, so instead of
     // predicting visibility the mover VERIFIES it: the filler stamps every frame's monotonic ring index
@@ -211,7 +140,6 @@ void kernel_main() {
     constexpr uint32_t kSeqSrcWord = 7u;
     // In-place re-reads per sub-batch before deferring to the next visit: each costs one partial DMA
     // round (~1-2 us), sized to cover the trailing stamp's NoC flight, not to poll indefinitely.
-    constexpr uint32_t kSeqReReads = 3u;
     // TAILS ONLY: the decision needs each ring's tail (delta against the local head mirror); heads are
     // needed once, for seeding, and an unseeded core is simply shipped on first sight so the span read
     // seeds it exactly as before. One 32 B read per core instead of the whole control vector.
@@ -248,12 +176,6 @@ void kernel_main() {
     constexpr uint32_t kSelfSlot = kNStage;
     // Indexed by peer slot. constexpr arrays of compile-time args, so nothing is loaded from memory to reach
     // them; the loop over kNPeer is a fully-known trip count.
-    constexpr uint32_t kPeerXYs[2] = {kPeerXY, kPeerXY1};
-    constexpr uint32_t kPeerHss[2] = {kPeerHsAddr, kPeerHsAddr1};
-    constexpr uint32_t kPeerBanks[2] = {kDramBank, kDramBank1};
-    constexpr uint32_t kPeerAddrs[2] = {kDramAddr, kDramAddr1};
-    static_assert(kNPeer <= 2, "a mover drains at most two rings (see kNPeerMax on the host)");
-    static_assert(kRole != kRoleMover || kNPeer >= 1, "a mover with no ring would spin forever doing nothing");
     // Handshake block: four words, 16 B apart so each is independently addressable by a 4 B NoC write
     // without a read-modify-write on its neighbours.
     //   +0  head     filler stores locally,  mover NoC-reads
@@ -324,18 +246,6 @@ void kernel_main() {
     const uint32_t noc_index_after = noc_index;
     UnicastEndpoint src;
 
-    // A FILLER owns no socket: nothing wrote a config into its L1, so `create_sender_socket_interface` would
-    // read uninitialised L1 and `set_sender_socket_page_size` would then compute pointers from garbage and
-    // scribble somewhere unrelated. Skip the whole thing rather than pass it a zeroed decoy.
-    SocketSenderInterface sender;
-    uint32_t pcie_xy_enc = 0;
-    uint64_t pcie_base = 0;
-    if constexpr (kRole != kRoleFiller) {
-        sender = create_sender_socket_interface(kSocketConfigAddr);
-        pcie_xy_enc = kPcieEncOverride != 0 ? kPcieEncOverride : sender.d2h.pcie_xy_enc;
-        pcie_base = (static_cast<uint64_t>(sender.d2h.data_addr_hi) << 32) | sender.downstream_fifo_addr;
-        set_sender_socket_page_size(sender, kPageBytes);
-    }
 
     volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStopAddr);
     *stop = 0;
@@ -379,21 +289,6 @@ void kernel_main() {
     *hb = 0;
     *phase = kPhaseInit;
 
-    // ---- role-split state: per-peer probe/telemetry words in the 64 B pad behind `done`, host-readable
-    // WHILE the loop runs (the results block only publishes on exit). Per peer, 16 B apart: probe_f echo |
-    // first frame word | live head | live tail.
-    volatile tt_l1_ptr uint32_t* mv_probe_f[2] = {
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 20),
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 36)};
-    volatile tt_l1_ptr uint32_t* mv_probe_frame[2] = {
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 24),
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 40)};
-    volatile tt_l1_ptr uint32_t* mv_live_head[2] = {
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 28),
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 44)};
-    volatile tt_l1_ptr uint32_t* mv_live_tail[2] = {
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 32),
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 48)};
     // FILLER: its own handshake block. head is stored locally and read over the NoC by its mover; tail is
     // written over the NoC by that mover and read locally here.
     volatile tt_l1_ptr uint32_t* hs_head = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHsAddr + kHsHead);
@@ -402,16 +297,10 @@ void kernel_main() {
     uint32_t frames_flushed = 0;  // FILLER: of those, how many are barrier-flushed and safe to publish
     // MOVER, per peer ring. Nothing here may be shared between peers: one `mv_tail` for two rings would ack
     // frames on one ring that were only read from the other, i.e. hand the filler room it does not have.
-    uint32_t mv_tail[2] = {0, 0};   // frames consumed out of peer p's ring (monotonic)
-    uint32_t seq_rereads = 0;  // bounded in-place partial re-reads (stamp still in NoC flight)
-    uint32_t seq_truncs = 0;   // sub-batches deferred to the next visit after the re-read budget
-    uint32_t mv_moved[2] = {0, 0};  // frames shipped to the host out of peer p's ring
-    uint32_t mv_max_n[2] = {0, 0};  // largest batch moved in one visit to peer p
     // head - tail high-water per ring: how much elastic buffer is REALLY used. A FILLER has one ring and
     // uses slot 0 only.
     uint32_t ring_hi[2] = {0, 0};
     uint32_t ring_blocked = 0;  // FILLER: stage_run calls that had to wait for ring room at all
-    uint32_t hs_bad = 0;        // MOVER: head reads that were structurally impossible -- MUST stay 0
     if constexpr (kRole == kRoleFiller) {
         *hs_head = 0;
         // NOT hs_tail: the host zeroes it before launch and the MOVER owns it from then on. Zeroing it here
@@ -472,7 +361,6 @@ void kernel_main() {
     // push_pages is local bookkeeping and notify_receiver is a PCIe write of the producer pointer -- one per
     // push regardless of size, so it is the part that punishes small pushes.
     uint64_t c_ph_head = 0;  // the per-core head write-back inside proc (see process_batch)
-    uint64_t c_pack = 0;     // pack_frame_words geometry scans (mover; previously unaccounted)
     uint64_t c_wr_chunk = 0;
     uint64_t c_wr_push = 0;
     uint64_t c_wr_notify = 0;
@@ -642,193 +530,6 @@ void kernel_main() {
     // never fires in normal operation -- it exists purely to convert "wait forever" into "lose a frame".
     constexpr uint64_t kCreditWaitCycles = 67500000ull;
 
-    // Above this payload the frame ships RAW: packing costs ~10 extra NoC write issues (~0.35 us,
-    // measured 6.88 vs ~4.5 us per 7-frame push), worth ~3.5 KB of transfer at the mover's ~10 GB/s --
-    // so below ~2/3 fill packing wins on bytes, above it the single burst wins on issues, and the
-    // mover's worst-case (full-span) cost stays exactly the raw path's.
-    constexpr uint32_t kPackMaxPayload = kCtrlWords + (kLiveWords * 2u) / 3u;
-
-    // Frame geometry, derived from the staged control vector exactly as the host re-derives it
-    // (profiler_common.h), and the header patch that publishes the chosen layout. Non-volatile loads
-    // on purpose, same argument as process_batch: staging is a landed, barrier-waited snapshot.
-    auto pack_frame_words = [&](uint32_t slot) -> uint32_t {
-        const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
-        uint32_t off = kPrefix + kCtrlWords;
-        for (uint32_t r = 0; r < kNumRisc; r++) {
-            const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
-            const uint32_t run =
-                kernel_profiler::spsc_span_live(cv[kernel_profiler::SPSC_RING_HEAD_0 + r], tail, kRingWords);
-            if (run != 0) {
-                off += kernel_profiler::spsc_span_pack_pad(tail - run, off) + run;
-            }
-        }
-        volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
-        if (off - kPrefix > kPackMaxPayload) {
-            pfx[0] = kernel_profiler::spsc_span_w0() | kernel_profiler::SPSC_SPAN_RAW_FLAG;
-            pfx[1] = kSpanWords;
-            return kSlotWords;
-        }
-        pfx[0] = kernel_profiler::spsc_span_w0();
-        pfx[1] = off - kPrefix;
-        return kernel_profiler::spsc_span_frame_words(off - kPrefix);
-    };
-
-    // Ship `count` adjacent staged slots as PACKED frames: per frame, the prefix + control vector and then
-    // each live lane's window, NIU-gathered straight out of the slot. Nothing is copied; the dead ring
-    // tails simply never ship.
-    // Returns false if this send was dropped (credit wait expired), so an amplified run stops repeating
-    // into a consumer that is not acking instead of billing one dropped frame per repeat.
-    // Set when pushes advanced bytes_sent without a notify. The notify is what publishes bytes_sent to the
-    // host, and the host can only ack what it was told about -- so ANY exit path that grew bytes_sent must
-    // eventually notify, or credit never returns and every later reserve times out (measured: one skipped
-    // notify on a drop path cascaded into 4,7xx 50 ms credit timeouts and a full-run capture loss).
-    bool notify_pending = false;
-    auto ship_once = [&](uint32_t start, uint32_t count, bool do_notify) -> bool {
-        uint32_t npages = 0;
-        {
-            const uint64_t t_k0 = get_timestamp();
-            for (uint32_t f = 0; f < count; f++) {
-                npages += pack_frame_words(kStageBase + (start + f) * kSlotBytes) / kPageWords;
-            }
-            c_pack += get_timestamp() - t_k0;
-        }
-        // The NIU reads the patched length words; Blackhole stores can reach SRAM out of order.
-        asm volatile("fence" ::: "memory");
-        const uint64_t t0 = get_timestamp();
-        *phase = kPhaseReserve;  // if the host sees this stuck, the credit wait is the deadlock
-        bool credited;
-        {
-            // The credit wait, as an ordinary zone. Suppressed automatically while self_publish ships the
-            // self frame through this same path (self_busy), so the self frame's own egress is never a zone.
-            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_CREDIT_WAIT, SelfMarkPhase> z_credit(
-                self_mark_phase);
-            credited = reserve_pages_bounded(sender, npages, t0 + kCreditWaitCycles, stop);
-        }
-        *phase = kPhaseWrite;
-        if (!credited) {
-            // The consumer is gone or wedged. DROP this frame rather than block: the heads for these slots
-            // were already written back, so the producers stay unblocked and the workload runs to
-            // completion. Capture is best-effort; the workload is not. Any EARLIER un-notified pushes must
-            // still be announced here, or their pages wedge the credit loop forever (see notify_pending).
-            if (notify_pending) {
-                socket_notify_receiver(sender);
-                notify_pending = false;
-            }
-            *phase = kPhDropped;
-            credit_timeouts++;
-            dropped_frames += count;
-            c_reserve += get_timestamp() - t0;
-            return false;
-        }
-        const uint64_t t1 = get_timestamp();
-        c_reserve += t1 - t0;
-        if (static_cast<uint32_t>(t1 - t0) > max_reserve) {
-            max_reserve = static_cast<uint32_t>(t1 - t0);
-        }
-        // The egress write (gather + push + notify), as one zone; the t1..t4 reads stay for the counters.
-        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WRITE, SelfMarkPhase> z_write(self_mark_phase);
-        *phase = kPhWrChunk;
-        // Do NOT hoist out of ship_once: socket_notify_receiver re-inits this same write_cmd_buf for its
-        // bytes_sent write, so the state must be re-established per push.
-        noc_write_init_state<write_cmd_buf, CQ_NOC_mkp>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
-        const uint32_t fifo_size = sender.downstream_fifo_curr_size;
-        uint32_t wr = sender.write_ptr;
-        // Every gather piece is split where the FIFO wraps; socket_push_pages only wraps the pointer, it
-        // does not split a transfer. Pad and page-tail words are skipped, never written.
-        auto put = [&](uint32_t src, uint32_t len) {
-            const uint32_t first = (wr + len > fifo_size) ? fifo_size - wr : len;
-            write_to_host_chunked(pcie_xy_enc, src, pcie_base + wr, first);
-            if (first < len) {
-                write_to_host_chunked(pcie_xy_enc, src + first, pcie_base, len - first);
-            }
-            wr += len;
-            if (wr >= fifo_size) {
-                wr -= fifo_size;
-            }
-        };
-        auto skip = [&](uint32_t len) {
-            wr += len;
-            if (wr >= fifo_size) {
-                wr -= fifo_size;
-            }
-        };
-        for (uint32_t f = 0; f < count; f++) {
-            const uint32_t slot = kStageBase + (start + f) * kSlotBytes;
-            const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
-            if (reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) {
-                put(slot, kSlotBytes);
-                continue;
-            }
-            put(slot, (kPrefix + kCtrlWords) * 4u);
-            uint32_t off = kPrefix + kCtrlWords;
-            for (uint32_t r = 0; r < kNumRisc; r++) {
-                const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
-                const uint32_t run =
-                    kernel_profiler::spsc_span_live(cv[kernel_profiler::SPSC_RING_HEAD_0 + r], tail, kRingWords);
-                if (run == 0) {
-                    continue;
-                }
-                const uint32_t pad = kernel_profiler::spsc_span_pack_pad(tail - run, off);
-                skip(pad * 4u);
-                const uint32_t hm = (tail - run) & (kRingWords - 1u);
-                const uint32_t ring_l1 = slot + (kPrefix + kCtrlWords + r * kRingWords) * 4u;
-                const uint32_t chunk = run <= kRingWords - hm ? run : kRingWords - hm;
-                put(ring_l1 + hm * 4u, chunk * 4u);
-                if (chunk < run) {
-                    put(ring_l1, (run - chunk) * 4u);
-                }
-                off += pad + run;
-            }
-            skip((kernel_profiler::spsc_span_frame_words(off - kPrefix) - off) * 4u);
-        }
-        const uint64_t t2 = get_timestamp();
-        c_wr_chunk += t2 - t1;
-        *phase = kPhWrPush;
-        socket_push_pages(sender, npages);
-        const uint64_t t3 = get_timestamp();
-        c_wr_push += t3 - t2;
-        *phase = kPhWrNotify;
-        if (do_notify) {
-            socket_notify_receiver(sender);
-            notify_pending = false;
-        } else {
-            notify_pending = true;
-        }
-        const uint64_t t4 = get_timestamp();
-        c_wr_notify += t4 - t3;
-        c_write += t4 - t1;
-        *phase = kPhWrDone;
-        pages += npages;
-        pushes++;
-        return true;
-    };
-
-    // One logical frame = kShipRepeat sends of the same staged bytes. At kShipRepeat == 1 this is exactly the
-    // old ship_run. The drop/dead checks stay OUT here so a dead consumer costs the whole run's worth of
-    // frames once, not once per repeat.
-    auto ship_run = [&](uint32_t start, uint32_t count, bool do_notify = true) {
-        if (count == 0) {
-            return;
-        }
-        if (egress_dead) {
-            *phase = kPhDropped;
-            dropped_frames += count;
-            return;
-        }
-        for (uint32_t rep = 0; rep < kShipRepeat; rep++) {
-            if (!ship_once(start, count, do_notify) || egress_dead) {
-                break;
-            }
-        }
-    };
-
-    // FILLER egress: the same `count` adjacent, already-framed slots, but written into this filler's DRAM
-    // ring instead of to the host. Structurally identical to ship_run -- wait for room, one write, account
-    // the phases -- and deliberately so, because that shape is what the WORST-sweep breakdown is built on.
-    //
-    // c_reserve stays pointed at the blocking wait (now ring room rather than socket credit), so the host's
-    // "WORST sweep = read + proc + credit-wait + write + wr-barrier" line keeps meaning the same thing.
-    // Getting that wrong would hide the very quantity this change exists to move.
     auto stage_run = [&](uint32_t start, uint32_t count) {
         // Guarded as a whole rather than per-statement: kDramFrames is 0 on every non-filler build, and
         // `frames_staged % kDramFrames` would then be a compile-time divide by zero even though nothing
@@ -960,14 +661,9 @@ void kernel_main() {
         }
     };
 
-    // What process_batch calls. One name, so the sweep body is byte-identical across roles.
     auto emit_run = [&](uint32_t start, uint32_t count, bool do_notify = true) {
-        if constexpr (kRole == kRoleFiller) {
-            (void)do_notify;
-            stage_run(start, count);
-        } else {
-            ship_run(start, count, do_notify);
-        }
+        (void)do_notify;
+        stage_run(start, count);
     };
 
     // Publish the ring's live window as one self frame, then barrier AT THE END: after a publish the next
@@ -1080,28 +776,6 @@ void kernel_main() {
         }
     };
 
-    // ---- MOVER bring-up probe: prove BOTH directions of the peer-L1 handshake before any data moves.
-    // A wrong peer coordinate reads plausible garbage, not an error -- so echo the host's planted magic and
-    // write our own back; the host refuses the run if either direction is wrong. probe_m is separate from
-    // tail because a magic written into TAIL would read as an enormous consumed-count.
-    if constexpr (kRole == kRoleMover) {
-        // Both directions, for EVERY peer. A dual-ring mover has two independent chances to be pointed at the
-        // wrong L1, and the failure mode is silent either way.
-        for (uint32_t p = 0; p < kNPeer; p++) {
-            const uint32_t pxy = kPeerXYs[p];
-            const uint64_t peer_hs = get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[p] + kHsProbeF);
-            noc_async_read(peer_hs, kHeadScratch, 4u, NOC_INDEX);
-            noc_async_read_barrier(NOC_INDEX);
-            invalidate_l1_cache();
-            *mv_probe_f[p] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch);
-            volatile tt_l1_ptr uint32_t* msrc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch + 32u);
-            *msrc = kProbeMoverMagic + p;  // + slot, so the host can tell peer 0's write from peer 1's
-            noc_async_write(
-                kHeadScratch + 32u, get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[p] + kHsProbeM), 4u, NOC_INDEX);
-            // Barrier per peer: the scratch word is reused by the next peer's write, so it must have landed.
-            (void)write_barrier_bounded(get_timestamp() + kCreditWaitCycles);
-        }
-    }
 
     // ---- NoC FOOTPRINT sampling: the only place NIU registers are read; folds to nothing when off.
     // BOTH NoCs are sampled -- which NoC carries what is the thing being verified, and the zeros are part
@@ -1249,241 +923,7 @@ void kernel_main() {
             // constructed off -- only its post-arm children. Closed BEFORE the pacing gap below, because
             // PACE is deliberately SWEEP's sibling at depth 0, not its child.
             kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_SWEEP, SelfMarkNow> z_sweep(self_mark_now);
-            if constexpr (kRole == kRoleMover) {
-                // ---- MOVER: kNPeer DRAM rings -> staging -> the existing D2H socket ----
-                //
-                // No worker grid, no control-vector scan, no head write-back. The frames in the ring are already
-                // complete (prefix + span, written by the filler), so this is a copy and a push -- which is why the
-                // socket protocol, the host FIFO and the host decoder are all untouched by the role split.
-                //
-                // The peers are visited SEQUENTIALLY and each gets the whole staging area. The write barrier at the
-                // end of a peer's visit is what makes that safe (it already had to be there for staging reuse), and
-                // it is also why splitting the slots between peers would buy nothing: the two pushes go into ONE
-                // socket, so they could not have overlapped anyway. Cost of getting this wrong is direct -- halving
-                // the batch doubles the per-frame credit-wait/notify overhead, which is where the knee lives.
-                for (uint32_t peer = 0; peer < kNPeer; peer++) {
-                    const uint32_t pxy = kPeerXYs[peer];
-                    const uint64_t t_r0 = get_timestamp();
-                    uint32_t head;
-                    uint32_t n;
-                    {
-                        // The visit's READ -- the head poll, plus the contiguous DRAM batch read when the ring
-                        // has frames -- as ONE ordinary RAII zone (there is no issue/wait split to make on a
-                        // mover). On the visit that DISCOVERS work this scope was constructed before self_arm()
-                        // ran, so that visit's READ goes unrecorded (SpscZoneScope::started_); the knee phases
-                        // that follow -- CREDIT-WAIT, WRITE, WR-BARRIER -- arm in time and are captured. Within
-                        // an armed window every visit's READ is whole, idle visits included: the head poll and
-                        // its barrier are what an idle mover sweep is made of (185,097 of 185,409 sweeps), and
-                        // leaving them out would hide the whole idle cost.
-                        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ, SelfMarkPhase> z_read(
-                            self_mark_phase);
-                        noc_async_read(
-                            get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[peer] + kHsHead),
-                            kHeadScratch,
-                            4u,
-                            NOC_INDEX);
-                        // The FREE-function barrier, matching the free-function read above. Noc{}::async_read_barrier()
-                        // is a different accounting path, and a barrier that watches the wrong counters returns EARLY
-                        // -- which here would mean reading a head value that has not landed yet.
-                        noc_async_read_barrier(NOC_INDEX);
-                        invalidate_l1_cache();
-                        head = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch);
-                        n = head - mv_tail[peer];
-                        // n > kDramFrames is structurally impossible (head is monotonic, the filler can
-                        // never be a whole ring ahead), so it means the read is not a head at all --
-                        // observed when a released NIU (NOC2AXI) forwarded this L1 read to GDDR and a clamp
-                        // turned the garbage into "7 frames ready". Bail instead of clamp.
-                        if (n > kDramFrames) {
-                            hs_bad++;
-                            n = 0;
-                            egress_dead = true;  // the peer is gone or unreadable; shipping anything more is corruption
-                        }
-                        if (n > ring_hi[peer]) {
-                            ring_hi[peer] = n;
-                        }
-                        if (n != 0) {
-                            // A MOVER's definition of work, known before anything expensive happens. This is the arm
-                            // that matters most: a mover is idle in ~199,584 of ~199,918 sweeps (0.17% busy), and the
-                            // socket credit wait that sets the knee exists only on this path and only when n != 0.
-                            if constexpr (kSelfZones != 0) {
-                                if (!self_on) {
-                                    self_arm();
-                                }
-                            }
-                            const uint32_t off = mv_tail[peer] % kDramFrames;
-                                // DMA path: clamp to the ring wrap, then to the per-visit cap. The cap exists
-                                // for PEER FAIRNESS: an uncapped visit was measured draining a whole 6,355-frame
-                                // ring in one 6.7 ms sweep -- ~10 GB/s, but the mover's OTHER ring starved the
-                                // entire time and filled. kGenSlots sub-batches keep the DMA/push pipeline full
-                                // either way.
-                                if (off + n > kDramFrames) {
-                                    n = kDramFrames - off;
-                                }
-                                if (n > kDmaVisitCap) {
-                                    n = kDmaVisitCap;
-                                }
-                                const uint32_t n0 = n < kGenSlots ? n : kGenSlots;
-                                experimental::dma_async_read(
-                                    0, kPeerDmas[peer] + off * kSlotBytes, kStageBase, n0 * kSlotBytes);
-                        }
-                    }  // z_read closes: the READ zone ends at the read barrier, busy or idle
-                    c_read += get_timestamp() - t_r0;
-                        // ---- Pipelined DMA drain: sub-batch k lands in generation k%2 while sub-batch k-1
-                        // pushes to the host from the other generation. Per iteration: flush the OTHER
-                        // generation's previous push (its slots are the next DMA's destination -- and the same
-                        // barrier makes the +32 tail scratch reusable), wait this sub-batch's DMA, issue the
-                        // next sub-batch's DMA, release the ring region (bytes are in staging), then ship.
-                        // The GDDR read never touches the NIU, so the DMA genuinely overlaps the PCIe push.
-                        if (n != 0) {
-                            const uint32_t off0 = mv_tail[peer] % kDramFrames;
-                            if (n > mv_max_n[peer]) {
-                                mv_max_n[peer] = n;  // per-VISIT total on this path (sub-batches are kGenSlots)
-                            }
-                            uint32_t done = 0;
-                            uint32_t k = 0;
-                            while (done < n && !egress_dead) {
-                                const uint32_t nk = (n - done) < kGenSlots ? (n - done) : kGenSlots;
-                                const uint32_t g = k & 1u;
-                                if (k != 0) {
-                                    const uint64_t t_b0 = get_timestamp();
-                                    *phase = kPhBar2;
-                                    {
-                                        kernel_profiler::SpscZoneScope<
-                                            kernel_profiler::DRISC_ZONE_WR_BARRIER,
-                                            SelfMarkPhase>
-                                            z_bar(self_mark_phase);
-                                        if (!write_barrier_bounded(
-                                                t_b0 + kCreditWaitCycles)) {
-                                            egress_dead = true;
-                                        }
-                                    }
-                                    c_barrier += get_timestamp() - t_b0;
-                                    if (egress_dead) {
-                                        break;
-                                    }
-                                }
-                                const uint64_t t_d0 = get_timestamp();
-                                experimental::dma_async_read_barrier(0);
-                                // VISIBILITY VERIFICATION AS FLOW CONTROL: heads publish when the filler
-                                // ISSUES its DRAM writes, so a frame may legitimately not be visible yet.
-                                // The stamp trails its slot by only the NoC flight (~us), so a SHORT bounded
-                                // set of in-place re-reads absorbs the common chase case; only after those
-                                // does the visit defer the remainder (tail never advances past it). Aborting
-                                // the visit on first miss instead was measured at kimi burst rates collapsing
-                                // the mover into per-visit re-entry overhead: 193k producer stalls. A HIGH
-                                // stamp cannot be produced by any in-flight state and means corruption.
-                                uint32_t nv = 0;
-                                bool corrupt = false;
-                                for (uint32_t attempt = 0;; attempt++) {
-                                    invalidate_l1_cache();
-                                    nv = 0;
-                                    corrupt = false;
-                                    // Route order proves everything before a visible stamp landed, so the
-                                    // matched prefix is consumable and a zero/old-lap value ends it.
-                                    // mv_tail already includes this visit's earlier sub-batches (bumped
-                                    // per sub-batch for the incremental tail release), so it IS the ring
-                                    // index of this sub-batch's first frame.
-                                    for (uint32_t j = 0; j < nk; j++) {
-                                        const uint32_t got = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                            kStageBase + (g * kGenSlots + j) * kSlotBytes)[kSeqWord];
-                                        const uint32_t want = mv_tail[peer] + j + 1u;
-                                        if (got == want) {
-                                            nv++;
-                                            continue;
-                                        }
-                                        corrupt = got > want;
-                                        break;
-                                    }
-                                    if (nv == nk || corrupt || attempt == kSeqReReads) {
-                                        break;
-                                    }
-                                    seq_rereads++;
-                                    experimental::dma_async_read(
-                                        0,
-                                        kPeerDmas[peer] + (off0 + done + nv) * kSlotBytes,
-                                        kStageBase + (g * kGenSlots + nv) * kSlotBytes,
-                                        (nk - nv) * kSlotBytes);
-                                    experimental::dma_async_read_barrier(0);
-                                }
-                                c_read += get_timestamp() - t_d0;
-                                if (corrupt) {
-                                    *mv_probe_frame[peer] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                        kStageBase + (g * kGenSlots + nv) * kSlotBytes)[kSeqWord];
-                                    *mv_probe_f[peer] = mv_tail[peer] + nv + 1u;
-                                    hs_bad++;
-                                    egress_dead = true;
-                                    break;
-                                }
-                                if (nv == 0) {
-                                    seq_truncs++;
-                                    break;
-                                }
-                                // A partial prefix is ROUTINE with per-batch stamps: the window straddles a
-                                // filler batch boundary whenever batch sizes misalign with kGenSlots. Consume
-                                // what is proven and continue the visit -- the already-issued prefetch is for
-                                // the wrong offset, so reissue it (the engine serializes, last write wins).
-                                // Only an empty prefix ends the visit: nothing is landed yet at the tail.
-                                const bool trunc = nv < nk;
-                                if (trunc) {
-                                    seq_truncs++;
-                                }
-                                const uint32_t nkv = nv;
-                                const uint32_t next = done + nkv;
-                                if (!trunc && next < n) {
-                                    const uint32_t nn = (n - next) < kGenSlots ? (n - next) : kGenSlots;
-                                    experimental::dma_async_read(
-                                        0,
-                                        kPeerDmas[peer] + (off0 + next) * kSlotBytes,
-                                        kStageBase + (g ^ 1u) * kGenSlots * kSlotBytes,
-                                        nn * kSlotBytes);
-                                }
-                                if (*mv_probe_frame[peer] == 0) {
-                                    *mv_probe_frame[peer] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                        kStageBase + g * kGenSlots * kSlotBytes);
-                                }
-                                mv_tail[peer] += nkv;
-                                volatile tt_l1_ptr uint32_t* tsrc =
-                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch + 32u);
-                                *tsrc = mv_tail[peer];
-                                noc_async_write(
-                                    kHeadScratch + 32u,
-                                    get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[peer] + kHsTail),
-                                    4u,
-                                    NOC_INDEX);
-                                *mv_live_head[peer] = head;
-                                *mv_live_tail[peer] = mv_tail[peer];
-                                emit_run(g * kGenSlots, nkv, /*do_notify=*/trunc || next >= n);
-                                frames += nkv;
-                                mv_moved[peer] += nkv;
-                                done = next;
-                                if (trunc) {
-                                    break;
-                                }
-                                k++;
-                            }
-                            // The end-of-visit barrier below covers the LAST sub-batch's push, tail write and
-                            // scratch reuse, exactly as it covered the whole visit on the NoC path.
-                            const uint64_t t_b0 = get_timestamp();
-                            *phase = kPhBar2;
-                            {
-                                kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WR_BARRIER, SelfMarkPhase>
-                                    z_bar(self_mark_phase);
-                                if (!write_barrier_bounded(t_b0 + kCreditWaitCycles)) {
-                                    egress_dead = true;
-                                }
-                            }
-                            c_barrier += get_timestamp() - t_b0;
-                        }
-                        if (egress_dead) {
-                            break;
-                        }
-                    // Never start the second peer once egress is dead: staging may hold unflushed bytes, and an
-                    // impossible head on one ring says nothing good about the other.
-                    if (egress_dead) {
-                        break;
-                    }
-                }  // for peer
-            } else {
+            {
                 // ---- software pipeline: read generation G on kReadNoc while generation G^1 ships on NOC_INDEX ----
                 //
                 // Per iteration: free the generation we are about to refill (its ship was issued last iteration),
@@ -1908,24 +1348,6 @@ void kernel_main() {
                 gap = (gap + inc > kCvIdleGapMax) ? kCvIdleGapMax : gap + inc;
             }
         }
-        // MOVER PACING: collapse to 0 the instant frames exist, creep toward a 10 us ceiling when the ring
-        // is empty -- idle head-polls were nearly all of a mover's traffic. The ceiling is deliberately
-        // ~15x below the filler's: pacing a CONSUMER is only safe while the backoff cannot materially
-        // extend the drain tail.
-        if constexpr (kRole == kRoleMover) {
-            constexpr uint32_t kMoverGapMax = 13500;  // 10 us at 1.35 GHz
-            // Same busy/idle signal the sweep bookkeeping already uses at both roles, so there is no second
-            // definition of "did this sweep do anything" to drift.
-            if (frames != frames_at_sweep_start) {
-                gap = 0;  // frames were there: drain flat out, never pace a productive consumer
-            } else {
-                uint32_t inc = gap >> 1;
-                if (inc < 256u) {
-                    inc = 256u;
-                }
-                gap = (gap + inc > kMoverGapMax) ? kMoverGapMax : gap + inc;
-            }
-        }
         // THE PACING GAP, as its own depth-0 zone -- an ordinary RAII scope over the wait, a sibling of the
         // SWEEP scope that closed above, never its child. A FILLER's controller settled it at 17,156 cycles
         // (12.7 us) against an 8.5 us sweep, so it is the majority of that core's wall time -- and without a
@@ -1971,15 +1393,7 @@ void kernel_main() {
     // like the write barrier did. Skip both when we already know the consumer is gone.
     // A FILLER has no socket at all, so both socket calls in this tail are skipped for it -- not because they
     // would be slow but because `sender` was never initialised.
-    const bool consumer_gone = egress_dead || credit_timeouts != 0 || kRole == kRoleFiller;
     *phase = kPhSockBar;
-    if (!consumer_gone) {
-        if (notify_pending) {
-            socket_notify_receiver(sender);  // announce any pushes a broken-off visit left unannounced
-            notify_pending = false;
-        }
-        socket_barrier(sender);
-    }
     *phase = kPhBarTail;
     *phase = kPhTailBar;  // distinct from kPhBar1: the tail barrier used to run while phase still read 11
     (void)write_barrier_bounded(get_timestamp() + kCreditWaitCycles);
@@ -2056,26 +1470,26 @@ void kernel_main() {
     // clean. ring_hi says how much of the elastic buffer is actually used (the whole justification for it);
     // ring_blocked says whether the ring ever became the new bottleneck.
     out[48] = kRole;
-    out[49] = (kRole == kRoleFiller) ? frames_staged : mv_moved[0];
+    out[49] = frames_staged;
     out[50] = ring_hi[0];    // head - tail high-water on peer 0's ring (the filler's own ring), in frames
     out[51] = ring_blocked;  // FILLER: pushes that had to wait for ring room
     out[52] = kDramFrames;
-    out[53] = (kRole == kRoleFiller) ? *hs_tail : mv_tail[0];
-    out[54] = mv_max_n[0];
-    out[55] = (kRole == kRoleMover) ? *mv_probe_frame[0] : 0u;
-    out[56] = (kRole == kRoleMover) ? *mv_probe_f[0] : 0u;
+    out[53] = *hs_tail;
+    out[54] = 0;
+    out[55] = 0;
+    out[56] = 0;
     // MUST BE ZERO. Non-zero means the mover read something that cannot be a head (see the check site), so
     // every frame it shipped from then on is suspect. Summed over both rings -- there is nothing to gain from
     // knowing WHICH ring lied, because the mover declares egress dead either way.
-    out[57] = hs_bad;
+    out[57] = 0;
     // ---- PEER 1 of a dual-ring mover. Mirrors 49/53/54/55/50 above, so nothing had to be renumbered. ----
     // A per-peer copy of every quantity the verification bar checks: frames staged == frames moved must hold
     // PER RING, and a single summed figure could hide one ring shipping short while the other over-ships.
-    out[58] = (kRole == kRoleMover) ? mv_moved[1] : 0u;
-    out[59] = (kRole == kRoleMover) ? mv_tail[1] : 0u;
-    out[60] = mv_max_n[1];
-    out[61] = (kRole == kRoleMover) ? *mv_probe_frame[1] : 0u;
-    out[62] = (kRole == kRoleMover) ? *mv_probe_f[1] : 0u;
+    out[58] = 0;
+    out[59] = 0;
+    out[60] = 0;
+    out[61] = 0;
+    out[62] = 0;
     out[63] = ring_hi[1];
     static_assert(kNPeer <= 2, "the results block only carries two peers (out[58..63])");
     // ---- DRISC SELF-PROFILING counters (0 on the default path) ----
@@ -2127,10 +1541,10 @@ void kernel_main() {
     out[137] = static_cast<uint32_t>(c_pace >> 32);
     out[170] = ship_deferred;
     out[171] = ship_aged;
-    out[172] = static_cast<uint32_t>(c_pack & 0xFFFFFFFFu);
-    out[173] = static_cast<uint32_t>(c_pack >> 32);
-    out[174] = seq_rereads;
-    out[175] = seq_truncs;
+    out[172] = 0;
+    out[173] = 0;
+    out[174] = 0;
+    out[175] = 0;
     // ---- NoC FOOTPRINT counters (0 on the default path) --------------------------------------------------
     //
     // TWO BLOCKS, NEVER BLENDED. `life` covers every sweep this drain loop ran; `win` covers the workload
@@ -2188,13 +1602,6 @@ void kernel_main() {
         "the results block must hold the self-profiling, NoC-footprint, stop-drain and histogram counters");
 
     *phase = kPhaseExit;
-    // Only hand the socket back if the consumer was still alive. update_socket_config() talks to the same
-    // host FIFO the credit wait just gave up on, so on a dead consumer it blocks and the kernel never
-    // exits -- which strands a resident drainer on the core and forces a card reset before the next run.
-    // Skipping it costs nothing: the socket is being torn down anyway.
-    if (!consumer_gone) {
-        update_socket_config(sender);
-    }
 
     // Published last, after the socket barrier, so the host only sees `done` once every page is out.
     volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr);
