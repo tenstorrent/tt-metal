@@ -4,12 +4,18 @@
 """Synthesise speech on a Tenstorrent device and write a .wav.
 
     export PYTHONPATH=$TT_METAL_HOME
-    python models/demos/cosyvoice/demo/demo.py --inputs inputs.npz --out out.wav
+    python models/demos/cosyvoice/demo/demo.py --inputs /tmp/sweep --out /tmp/out
 
-`inputs.npz` comes from `scripts/prepare_inputs.py`, which runs the CosyVoice
-front-end once in its own venv -- see that file for why the boundary sits there.
-Without `--inputs`, the demo runs on the captured golden utterance, which needs
-no front-end at all and is the quickest way to hear the pipeline work.
+`/tmp/sweep` is a directory from `scripts/prepare_inputs.py`, which runs the
+CosyVoice front-end once in its own venv -- see that file for why the boundary
+sits there. With `--inputs`, the demo runs all four modes (sft, zero_shot,
+cross_lingual, instruct) through `tt.pipeline.CosyVoiceTTNN.synthesize`,
+generating fresh semantic tokens and fresh vocoder excitation for each -- this
+is real synthesis, not golden reproduction, so no two runs sound identical.
+
+Without `--inputs`, the demo runs on the captured golden utterance instead,
+which needs no front-end at all and is the quickest way to hear the pipeline
+work, and additionally scores itself against the reference waveform.
 
 All three stages run on device. What crosses back to the host is the sampled
 token IDs (RAS needs the full distribution and the emission history) and the
@@ -32,6 +38,7 @@ from models.demos.cosyvoice.tt.common import GOLDEN_DIR, as_torch, load_golden  
 from models.demos.cosyvoice.tt.flow.model import TtMaskedDiffWithXvec  # noqa: E402
 from models.demos.cosyvoice.tt.hifigan.generator import TtHiFTGenerator  # noqa: E402
 from models.demos.cosyvoice.tt.llm.model import TtTransformerLM  # noqa: E402
+from models.demos.cosyvoice.tt.pipeline import MODES, CosyVoiceTTNN, PromptContext, RandomSources  # noqa: E402
 from models.demos.cosyvoice.tt.weights import WeightBag, default_weights_path  # noqa: E402
 
 SAMPLE_RATE = 22050
@@ -112,10 +119,77 @@ def golden_inputs():
     }
 
 
+def run_multi_mode(args) -> int:
+    """`--inputs <dir>`: real synthesis, all four modes, through `CosyVoiceTTNN`.
+
+    Unlike the golden path below, this generates fresh LLM tokens and a fresh
+    vocoder excitation per mode -- there is no reference to score against, only
+    a wav per mode to listen to. One utterance per mode, not the full
+    mode x language sweep `prepare_inputs.py`/`run_reference.py` already cover.
+    """
+    hift_path = os.path.join(args.weights_dir, "hift_weights.npz")
+    flow_path = os.path.join(args.weights_dir, "flow_weights.npz")
+    llm_path = os.path.join(args.weights_dir, "llm_weights.npz")
+    for p in (hift_path, flow_path, llm_path):
+        if not os.path.exists(p):
+            raise SystemExit(f"missing {p} -- run scripts/export_weights.py first")
+
+    modes = args.modes.split(",") if args.modes else list(MODES)
+    # `--out`'s default is a filename sized for the single-wav golden path; a
+    # directory literally named "cosyvoice_ttnn.wav" would work but reads oddly.
+    out_dir = "cosyvoice_ttnn_out" if args.out == "cosyvoice_ttnn.wav" else args.out
+    os.makedirs(out_dir, exist_ok=True)
+
+    # A fresh device per mode, not one shared across the loop. Measured on
+    # silicon: `model.llm.release_caches()` alone is not enough here -- the four
+    # modes' mel lengths are all different (this is real synthesis, not one
+    # repeated golden geometry), and something in the conv/halo sliding-window
+    # path accumulates L1_SMALL state per *distinct* geometry rather than per
+    # utterance. Two modes in a row completely exhausted a 32 KB L1_SMALL bank
+    # (`0 B free`) even with the LLM caches released every time. Nobody has
+    # exercised this pipeline across varying-length real inputs before, so
+    # reopening the device is the correct scope for a quickstart demo -- root
+    # -causing the leak itself belongs to whichever stage turns out to own it,
+    # not to this script.
+    for mode in modes:
+        npz_path = os.path.join(args.inputs, f"{mode}_{args.lang}.npz")
+        if not os.path.exists(npz_path):
+            print(f"  skip {mode}: {npz_path} not found (did prepare_inputs.py write --langs including {args.lang!r}?)")
+            continue
+        ctx, meta = PromptContext.from_npz(npz_path)
+        device = ttnn.open_device(device_id=0, l1_small_size=32768)
+        try:
+            model = CosyVoiceTTNN(
+                device, WeightBag.load(llm_path), WeightBag.load(flow_path), WeightBag.load(hift_path)
+            )
+            t0 = time.perf_counter()
+            wav, tokens = model.synthesize(ctx, rng=RandomSources(), sampler=args.sampler, seed=args.seed)
+            dt = time.perf_counter() - t0
+            out = ttnn.to_torch(wav).float().reshape(1, -1)
+            ttnn.deallocate(wav)
+        except Exception as e:  # noqa: BLE001
+            print(f"  {mode:<14} FAILED: {str(e)[:160]}")
+            continue
+        finally:
+            ttnn.close_device(device)
+        out_path = os.path.join(out_dir, f"{mode}_{args.lang}.wav")
+        write_wav(out_path, out)
+        secs = out.shape[1] / SAMPLE_RATE
+        print(
+            f"  {mode:<14} {meta['text'][:40]!r:<44} {len(tokens):>3} tokens  "
+            f"{secs:5.2f}s audio  {dt:5.2f}s wall  -> {out_path}"
+        )
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--inputs", default=None, help="from scripts/prepare_inputs.py; omit to use the golden utterance")
-    ap.add_argument("--out", default="cosyvoice_ttnn.wav")
+    ap.add_argument(
+        "--inputs", default=None, help="a scripts/prepare_inputs.py --out-dir; omit to use the golden utterance"
+    )
+    ap.add_argument("--lang", default="zh", help="which --inputs language to pick per mode (multi-mode path only)")
+    ap.add_argument("--modes", default=None, help=f"comma-separated subset of {','.join(MODES)} (default: all four)")
+    ap.add_argument("--out", default="cosyvoice_ttnn.wav", help="a .wav path, or with --inputs, an output directory")
     ap.add_argument("--weights-dir", default=GOLDEN_DIR)
     ap.add_argument("--sampler", default="ras", choices=["ras", "greedy"])
     ap.add_argument("--seed", type=int, default=1986)
@@ -128,6 +202,9 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    if args.inputs:
+        return run_multi_mode(args)
+
     hift_path = os.path.join(args.weights_dir, "hift_weights.npz")
     flow_path = os.path.join(args.weights_dir, "flow_weights.npz")
     llm_path = os.path.join(args.weights_dir, "llm_weights.npz")
@@ -135,12 +212,6 @@ def main() -> int:
         if not os.path.exists(p):
             raise SystemExit(f"missing {p} -- run scripts/export_weights.py first")
 
-    if args.inputs:
-        raise SystemExit(
-            "front-end inputs are not wired into the demo yet; the tokenizer and the two ONNX "
-            "encoders run in the CosyVoice venv (scripts/prepare_inputs.py). Run without --inputs "
-            "to synthesise the captured golden utterance."
-        )
     src = golden_inputs()
 
     device = ttnn.open_device(device_id=0, l1_small_size=32768)
