@@ -272,8 +272,9 @@ void run_alias_dfb_program(
     auto input_a = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words_a);
     auto input_b = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words_b);
 
-    slow_dispatch::WriteToBuffer(in_a.mesh_buffer(), input_a);
-    slow_dispatch::WriteToBuffer(in_b.mesh_buffer(), input_b);
+    auto& cq = mesh_device.mesh_command_queue();
+    cq.enqueue_write_mesh_buffer(in_a.mesh_buffer(), input_a, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(in_b.mesh_buffer(), input_b, /*blocking=*/true);
 
     if (mesh_device.arch() == ARCH::QUASAR) {
         // TODO #38042: barrier for Quasar DRAM write visibility.
@@ -283,8 +284,8 @@ void run_alias_dfb_program(
     LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_a, result_b;
-    slow_dispatch::ReadFromBuffer(out_a.mesh_buffer(), result_a);
-    slow_dispatch::ReadFromBuffer(out_b.mesh_buffer(), result_b);
+    cq.enqueue_read_mesh_buffer(result_a, out_a.mesh_buffer(), /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(result_b, out_b.mesh_buffer(), /*blocking=*/true);
 
     EXPECT_EQ(result_a, input_a)
         << "Phase A output mismatch: DFB_A data did not round-trip correctly";
@@ -606,10 +607,11 @@ TEST_F(UnitMeshFixture, AliasDFBDisjointHalvesDataFlow) {
     auto input_ra = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words_a);
     auto input_rb = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words_b);
 
-    slow_dispatch::WriteToBuffer(left.in_a.mesh_buffer(), input_la);
-    slow_dispatch::WriteToBuffer(left.in_b.mesh_buffer(), input_lb);
-    slow_dispatch::WriteToBuffer(right.in_a.mesh_buffer(), input_ra);
-    slow_dispatch::WriteToBuffer(right.in_b.mesh_buffer(), input_rb);
+    auto& cq = this->device().mesh_command_queue();
+    cq.enqueue_write_mesh_buffer(left.in_a.mesh_buffer(), input_la, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(left.in_b.mesh_buffer(), input_lb, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(right.in_a.mesh_buffer(), input_ra, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(right.in_b.mesh_buffer(), input_rb, /*blocking=*/true);
     if (is_quasar) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -617,10 +619,10 @@ TEST_F(UnitMeshFixture, AliasDFBDisjointHalvesDataFlow) {
     LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> out_la, out_lb, out_ra, out_rb;
-    slow_dispatch::ReadFromBuffer(left.out_a.mesh_buffer(), out_la);
-    slow_dispatch::ReadFromBuffer(left.out_b.mesh_buffer(), out_lb);
-    slow_dispatch::ReadFromBuffer(right.out_a.mesh_buffer(), out_ra);
-    slow_dispatch::ReadFromBuffer(right.out_b.mesh_buffer(), out_rb);
+    cq.enqueue_read_mesh_buffer(out_la, left.out_a.mesh_buffer(), /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(out_lb, left.out_b.mesh_buffer(), /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(out_ra, right.out_a.mesh_buffer(), /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(out_rb, right.out_b.mesh_buffer(), /*blocking=*/true);
 
     EXPECT_EQ(out_la, input_la) << "left half DFB_A round-trip mismatch";
     EXPECT_EQ(out_lb, input_lb) << "left half DFB_B (alias) round-trip mismatch";
@@ -867,8 +869,9 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
     auto input_a = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words);
     auto input_b = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words);
 
-    slow_dispatch::WriteToBuffer(in_a.mesh_buffer(), input_a);
-    slow_dispatch::WriteToBuffer(in_b.mesh_buffer(), input_b);
+    auto& cq = this->device().mesh_command_queue();
+    cq.enqueue_write_mesh_buffer(in_a.mesh_buffer(), input_a, /*blocking=*/true);
+    cq.enqueue_write_mesh_buffer(in_b.mesh_buffer(), input_b, /*blocking=*/true);
 
     if (this->device().arch() == ARCH::QUASAR) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -877,8 +880,8 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
     LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_a, result_b;
-    slow_dispatch::ReadFromBuffer(out_a.mesh_buffer(), result_a);
-    slow_dispatch::ReadFromBuffer(out_b.mesh_buffer(), result_b);
+    cq.enqueue_read_mesh_buffer(result_a, out_a.mesh_buffer(), /*blocking=*/true);
+    cq.enqueue_read_mesh_buffer(result_b, out_b.mesh_buffer(), /*blocking=*/true);
 
     EXPECT_EQ(result_a, input_a)
         << "Phase A (dfb_borrowed) data did not round-trip correctly";

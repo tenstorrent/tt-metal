@@ -241,7 +241,8 @@ TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     // Positive bf16 inputs → double-relu identity.
     const uint32_t total_bytes = entry_size * num_entries;
     auto input = create_random_vector_of_bfloat16(total_bytes, 1.0f, 0xC2C2);
-    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    auto& cq = this->device().mesh_command_queue();
+    cq.enqueue_write_mesh_buffer(in_tensor.mesh_buffer(), input, /*blocking=*/true);
     m2_writeshard_barrier_uint32(this->device(), in_tensor, input);
 
     // Finalize early so host can assert INTRA remapper assignment before launch.
@@ -261,7 +262,7 @@ TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> output;
-    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    cq.enqueue_read_mesh_buffer(output, out_tensor.mesh_buffer(), /*blocking=*/true);
     EXPECT_TRUE(packed_uint32_t_vector_comparison(output, input, [](float a, float b) {
         return std::abs(a - b) < 0.01f;
     })) << "M2 C2 double-relu identity mismatch";
@@ -528,7 +529,8 @@ TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
     // Fill DRAM input; DM NOC-reads this into the remapper ring's L1.
     auto input_remapper =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, num_entries * entry_size / sizeof(uint32_t));
-    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input_remapper);
+    this->device().mesh_command_queue().enqueue_write_mesh_buffer(
+        in_tensor.mesh_buffer(), input_remapper, /*blocking=*/true);
     m2_writeshard_barrier_uint32(this->device(), in_tensor, input_remapper);
 
     // Ring L1 address is fixed by finalize, so read it while the program is still owned here: the launch moves

@@ -169,7 +169,8 @@ TEST_F(UnitMeshFixture, CoreRangeSet) {
 
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    slow_dispatch::WriteToBuffer(*src_dram_buffer, src_vec);
+    auto& cq = this->device().mesh_command_queue();
+    cq.enqueue_write_mesh_buffer(*src_dram_buffer, src_vec, /*blocking=*/true);
 
     const std::array reader_rt_args = {(uint32_t)src_dram_buffer->address(), uint(0), num_tiles};
     for (const auto& [core, dst_l1_buffer] : core_to_l1_buffer) {
@@ -194,7 +195,7 @@ TEST_F(UnitMeshFixture, CoreRangeSet) {
 
     for (const auto& [core, dst_l1_buffer] : core_to_l1_buffer) {
         std::vector<uint32_t> result_vec;
-        slow_dispatch::ReadFromBuffer(*dst_l1_buffer, result_vec);
+        cq.enqueue_read_mesh_buffer(result_vec, *dst_l1_buffer, /*blocking=*/true);
         EXPECT_EQ(src_vec, result_vec) << "Mismatch on core " << core.x << "," << core.y;
     }
 }

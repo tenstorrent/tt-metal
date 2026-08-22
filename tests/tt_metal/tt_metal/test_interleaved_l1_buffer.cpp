@@ -9,9 +9,9 @@
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -29,10 +29,11 @@ void test_interleaved_l1_buffer_impl(
     std::vector<uint32_t> host_buffer =
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
-    slow_dispatch::WriteToBuffer(*interleaved_buffer, host_buffer);
+    auto& cq = device.mesh_command_queue();
+    cq.enqueue_write_mesh_buffer(*interleaved_buffer, host_buffer, /*blocking=*/true);
 
     std::vector<uint32_t> readback_buffer;
-    slow_dispatch::ReadFromBuffer(*interleaved_buffer, readback_buffer);
+    cq.enqueue_read_mesh_buffer(readback_buffer, *interleaved_buffer, /*blocking=*/true);
 
     EXPECT_EQ(host_buffer, readback_buffer);
 
@@ -46,10 +47,10 @@ void test_interleaved_l1_buffer_impl(
     std::vector<uint32_t> second_host_buffer = create_random_vector_of_bfloat16(
         second_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
-    slow_dispatch::WriteToBuffer(*second_interleaved_buffer, second_host_buffer);
+    cq.enqueue_write_mesh_buffer(*second_interleaved_buffer, second_host_buffer, /*blocking=*/true);
 
     std::vector<uint32_t> second_readback_buffer;
-    slow_dispatch::ReadFromBuffer(*second_interleaved_buffer, second_readback_buffer);
+    cq.enqueue_read_mesh_buffer(second_readback_buffer, *second_interleaved_buffer, /*blocking=*/true);
 
     EXPECT_EQ(second_host_buffer, second_readback_buffer);
 }
