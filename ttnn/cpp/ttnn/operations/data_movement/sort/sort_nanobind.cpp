@@ -69,6 +69,11 @@ void bind_sort_operation(nb::module_& mod) {
             canonicalizes NaN to same-sign infinity before comparing, so NaN placement deviates
             from torch.sort's NaN-last ordering. Mask or replace NaNs before sorting.
 
+            With stable=False, the returned indices always gather the sorted values from the
+            input but need not form a permutation within tie groups on the CrossCore path
+            (duplicate indices may appear inside a tie group; see issue #54043). Use
+            stable=True when a true permutation is required.
+
         Memory Support:
             - Interleaved: DRAM and L1
             - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED (DRAM and L1)
