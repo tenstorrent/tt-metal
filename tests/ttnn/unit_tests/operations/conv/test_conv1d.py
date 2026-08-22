@@ -1065,3 +1065,32 @@ def test_conv1d_depthwise_default_route_long_seq(device):
         packer_l1_acc=True,
         pcc=0.999,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+def test_conv1d_depthwise_wide_channel_group_aware_l1_estimate(device):
+    """Regression for #53303 / #53304: group-blind L1 weight estimate.
+
+    Depthwise conv1d (groups == C), K=4, T=12, pad=3. The old estimate sized
+    weights as {1, 1, C*K, C} regardless of groups (~838 MB at C=10240 vs
+    ~80 KB actual) and the DRAM auto-slicer TT_FATAL'd.
+
+    After the fix the estimate is {1, 1, (C/groups)*K, C}. Silicon-verified
+    on Blackhole at C=2560 bf16 (PCC 0.999994) and C=5120 bf8 (PCC 0.999824).
+    C=10240 still exceeds per-core L1 even with the corrected estimate
+    (true CB capacity, not estimate error) and is not asserted here.
+    """
+    C = 2560
+    run_conv1d_route(
+        device,
+        batch_size=1,
+        in_channels=C,
+        out_channels=C,
+        input_length=12,
+        kernel_size=4,
+        stride=1,
+        padding=3,
+        groups=C,
+        shard_layout=None,
+        slice_config=None,
+    )
