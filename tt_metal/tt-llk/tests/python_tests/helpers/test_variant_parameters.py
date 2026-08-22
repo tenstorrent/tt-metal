@@ -769,7 +769,7 @@ class TOPK_XL(TemplateParameter):
     sort_mode: TopKXLSortMode = TopKXLSortMode.Dispatch
     lsb_row_major: bool = False
     reinit_after_copy: bool = False
-    full_sort: bool = False
+    merge_both_halves: bool = False
     linear_stamp: bool = False
 
     def convert_to_cpp(self) -> str:
@@ -791,7 +791,7 @@ class TOPK_XL(TemplateParameter):
             f"constexpr std::uint32_t TOPK_XL_SORT_MODE = {self.sort_mode.value};",
             f"constexpr bool TOPK_XL_LSB_ROW_MAJOR = {str(self.lsb_row_major).lower()};",
             f"constexpr bool TOPK_XL_REINIT_AFTER_COPY = {str(self.reinit_after_copy).lower()};",
-            f"constexpr bool TOPK_XL_FULL_SORT = {str(self.full_sort).lower()};",
+            f"constexpr bool TOPK_XL_FULL_SORT = {str(self.merge_both_halves).lower()};",
             f"constexpr bool TOPK_XL_LINEAR_STAMP = {str(self.linear_stamp).lower()};",
         ]
         return "\n".join(lines)

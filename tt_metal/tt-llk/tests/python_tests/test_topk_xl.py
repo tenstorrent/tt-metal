@@ -279,7 +279,7 @@ def _variant(
                 sort_mode=sort_mode,
                 lsb_row_major=lsb_row_major,
                 reinit_after_copy=reinit_after_copy,
-                full_sort=full_sort,
+                merge_both_halves=full_sort,
                 linear_stamp=linear_stamp,
             ),
         ],
