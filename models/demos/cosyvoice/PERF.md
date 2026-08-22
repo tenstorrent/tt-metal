@@ -10,7 +10,7 @@ a target is missed the number is stated with the reason and the identified lever
 Both architectures, same tt-metal commit. Headline figures below are Blackhole; the Wormhole
 side-by-side has its own section.
 
-| | Blackhole `p150a` | Blackhole `p150b` | Wormhole n300 |
+| property | Blackhole `p150a` | Blackhole `p150b` | Wormhole n300 |
 |---|---|---|---|
 | Form factor | single card | Quietbox, 4 cards | T3000, 4 cards |
 | Devices | 1 × 32 GB | 4 × 32 GB, one used | 4 × 12 GB, one used |
@@ -29,7 +29,7 @@ That 5 % is the same order as several real optimisations in this document, so **
 are separate columns and neither backfills the other's missing cells.** `p150a` is the headline
 part.
 
-**Two sets of measurements postdate that commit** and are marked where they appear, because the
+**Three sets of measurements postdate that commit** and are marked where they appear, because the
 table's claim is that one commit produced everything under it and quietly widening that is how an
 environment table stops meaning anything:
 
@@ -42,30 +42,24 @@ environment table stops meaning anything:
   branch head)**. n300 was also unreachable for part of that window; see *Wormhole re-verified*
   below for what was re-measured and why.
 
-## Benchmark commands
-```bash
-pytest models/demos/cosyvoice/tests/perf/test_pipeline_perf.py -v -s   # end-to-end RTF
-pytest models/demos/cosyvoice/tests/perf/test_trace.py          -v -s   # trace speedup
-pytest models/demos/cosyvoice/tests/perf/test_llm_perf.py       -v -s   # decode throughput
-```
-
 ## Summary metrics
 
 Measured on the captured utterance: 164 generated tokens producing 3.27 s of audio at 22 050 Hz.
 
 | Metric | Value | Target |
 |---|---:|---:|
-| **End-to-end RTF, best measured** (`p150b`, everything on) | **`0.365`** | `< 0.5` ✅ |
+| **End-to-end RTF, best measured** (`p150a` + `COSYVOICE_FF2_GRID=8x2`) | **`0.354`** | `< 0.5` ✅ |
+| End-to-end RTF, `p150b`, everything on | `0.365` | `< 0.5` ✅ |
+| End-to-end RTF, `p150a` default | `0.377` | `< 0.5` ✅ |
+| End-to-end RTF, `p150a` + `COSYVOICE_KV_INPLACE=1` † | `0.449` | `< 0.5` ✅ |
 | End-to-end RTF, Wormhole n300, default (in-place KV is now default there) | `0.559` | `< 0.5` ❌ |
 | End-to-end RTF, Wormhole n300, default + `COSYVOICE_FF2_GRID=8x2` | `0.557` | `< 0.5` ❌ |
-| End-to-end RTF, `p150a` default | `0.377` | `< 0.5` ✅ |
-| End-to-end RTF, `p150a` + `COSYVOICE_FF2_GRID=8x2` | **`0.354`** | `< 0.5` ✅ |
-| End-to-end RTF, `p150a` + `COSYVOICE_KV_INPLACE=1` † | `0.449` | `< 0.5` ✅ |
-| **LLM throughput, best measured** (`p150a`, `FF2_GRID`) | **`190.0 tok/s`** | `>= 60` ✅ |
+| **LLM throughput, best measured** (`p150a` + `COSYVOICE_KV_INPLACE=1`) | **`200.8 tok/s`** | `>= 60` ✅ |
+| LLM throughput, `p150b` + in-place KV | `190.8 tok/s` | `>= 60` ✅ |
+| LLM throughput, `p150a` + `COSYVOICE_FF2_GRID=8x2` | `190.0 tok/s` | `>= 60` ✅ |
 | LLM throughput, `p150a` default | `175.1 tok/s` | `>= 60` ✅ |
 | LLM throughput, n300 default (in-place KV) | `127.6 tok/s` | `>= 60` ✅ |
-| LLM throughput, `p150b` + in-place KV | `190.8 tok/s` | `>= 60` ✅ |
-| LLM decode latency, best measured (`p150a`) | `4.98 ms` | — |
+| LLM decode latency, best measured (`p150a` + `COSYVOICE_KV_INPLACE=1`) | `4.98 ms` | — |
 | Token agreement, teacher-forced | `99.04 %` | `> 95 %` ✅ |
 | Token agreement, through the KV cache | `100.00 %` | `> 95 %` ✅ |
 | WER (English) | `0.00 %` | `< 3.0` ✅ |
@@ -82,15 +76,15 @@ footnote was for: it kept a stale figure from reading as current and named what 
 gap closed the day the hardware returned.
 
 **The single Wormhole test failure is gone.** `test_device_streamed_matches_non_streamed` scored
-mel-space PCC `0.218` on n300 against a `0.85` gate from F42 until now; it was a `ttnn.conv1d`
+mel-space PCC `0.218` on n300 against a `0.85` gate until now; it was a `ttnn.conv1d`
 defect, not a streaming one — see *A Wormhole convolution defect* below. Both architectures now
 pass every device test.
 
 ### RTF breakdown
 
 Blackhole `p150a`, default settings — the configuration the rest of this document's narrative is
-built on. The best measured configuration is `p150b` with everything enabled; see *Three parts side
-by side*.
+built on. The best measured configuration is `p150a` with `COSYVOICE_FF2_GRID=8x2`; see *Blackhole
+and Wormhole side by side* for the cross-architecture comparison.
 
 | Stage | Cost | RTF | Share |
 |---|---:|---:|---:|
@@ -99,18 +93,19 @@ by side*.
 | HiFT vocoder | `0.045 s` | `0.014` | 4 % |
 | **Total** | `1.234 s` | **`0.377`** | |
 
-**The LLM is now 76 % of an utterance, up from 59 %.** The flow stage more than halved
+**The LLM is now 76 % of a `p150a` utterance at default settings, up from 59 %.** The flow stage more than halved
 (`0.589 -> 0.253 s`) between the CFM trace cache and the permute-free GroupNorm, and the vocoder came
 down with it, while the decode step did not move. Whatever is left to win is in the decode step, and
 it is a larger share of the total than when this document started.
 
 **`COSYVOICE_KV_INPLACE=1`** writes the KV cache in place with `ttnn.update_cache` instead of
 rebuilding it, taking the decode step to `4.98 ms` (`200.8 tok/s`) and the total to `1.470 s`,
-**RTF `0.449`**. It is opt-in because it costs two things the default does not: a 384 MB trace
+**RTF `0.449`**. This is the Blackhole account; *Decode step* carries the per-architecture figures,
+and *Where each change is worth what* explains why the trade runs the other way on Wormhole. It is opt-in because it costs two things the default does not: a 384 MB trace
 region for the 65 traces it captures, and bit-exactness — worst PCC `0.9986` over 72 steps against
 the moving cache's exact `1.0`, non-accumulating. The width it needs has to keep the key axis on an
-**even tile count**; a one-tile scratch zone made it *slower*. Findings F45 and F46 in the notes
-carry that account.
+**even tile count**; a one-tile scratch zone made it *slower*. *Decode step, and what each change
+is worth* carries that account.
 
 **`COSYVOICE_FF2_GRID=8x2`** hands the FFN's second linear an explicit 16-core grid during decode,
 taking the step to `5.26 ms` (`190.0 tok/s`) and the total to `1.160 s`, **RTF `0.354`** — measured
@@ -130,19 +125,77 @@ Three things about it are worth stating plainly:
 - **It applies at `T == 1` only.** The optimum is a property of `M = 1`; prefill runs the same linear
   at `M = 209`, where a 16-core grid would be a pessimisation. The flow and vocoder stage timings are
   bit-identical across the A/B, which is the evidence the guard holds.
-- **It is free on accuracy.** `bf8-alone` and `bf8-plus-grid` measure identically to ten digits, so the
-  grid changes scheduling and not arithmetic. Correction: `test_device_end_to_end_rtf` was previously
-  cited here as asserting PCC against the goldens; it does not -- its only assertion is `total_s > 0`,
-  and it is a timing harness, not a correctness gate (`tests/pcc/` is the accuracy suite). The
-  bf8-comparison above is the accuracy evidence for this flag; it was never re-verified against
-  `tests/pcc/` specifically with the flag on, and that gap is still open.
+- **It is free on accuracy, as far as it has been checked.** `bf8-alone` and `bf8-plus-grid` measure
+  identically to ten digits, so the grid changes scheduling and not arithmetic. That A/B is the whole
+  of the accuracy evidence for this flag: `tests/pcc/` has never been run with it on, and
+  `test_device_end_to_end_rtf` does not close the gap — its only assertion is `total_s > 0`, which
+  makes it a timing harness, not a correctness gate. **That gap is open.**
 - **It is opt-in because the best shape is not portable**, not because it is risky. `8x2` is a good
   choice on both parts measured, but a default tuned on one architecture and mediocre on another is
-  worse than a flag that says so.
+  worse than a flag that says so. The Wormhole figure is smaller and has its own account in
+  *Wormhole re-verified*; *Tensor parallelism* records why it does not stack with TP.
 
 RTF has come down **1.096 → 0.354** (and **2.120 → 0.354** since before either stage was traced),
 and **the `< 0.5` target is met**. The rest of this section is the account of where the time went,
 because the last step of it was the one that had been ruled out on a false premise.
+
+## Reproducing these numbers
+
+```bash
+pytest models/demos/cosyvoice/tests/perf/test_pipeline_perf.py -v -s   # end-to-end RTF
+pytest models/demos/cosyvoice/tests/perf/test_trace.py          -v -s   # trace speedup
+pytest models/demos/cosyvoice/tests/perf/test_llm_perf.py       -v -s   # decode throughput
+```
+
+Those three suites are the reproducible set — every headline figure in this document comes
+from one of them. `scripts/` also holds 34 exploratory probes; the nine cited below name
+themselves where their measurement appears, and are run directly:
+
+```bash
+python3 models/demos/cosyvoice/scripts/probe_op_floor.py        # per-op dispatch floor
+python3 models/demos/cosyvoice/scripts/probe_matmul_config.py   # explicit core grids
+python3 models/demos/cosyvoice/scripts/probe_kv_alignment.py    # KV slice/concat by tile alignment
+python3 models/demos/cosyvoice/scripts/probe_decode_profile.py  # decode layer, op by op
+python3 models/demos/cosyvoice/scripts/probe_flow_steps.py      # solver depth vs cost and PCC
+python3 models/demos/cosyvoice/scripts/probe_flow_ops.py        # flow block classes, untraced
+python3 models/demos/cosyvoice/scripts/probe_flow_ops_traced.py # the same, traced -- see below
+python3 models/demos/cosyvoice/scripts/probe_cfm_reuse.py       # CFM trace reuse across utterances
+python3 models/demos/cosyvoice/scripts/repro_conv1d_wormhole.py # the Wormhole conv1d defect
+```
+
+They are exploratory and carry no gates. A probe that contradicts a suite result means the
+probe is wrong or measuring something else — *The estimator's largest cost was a GroupNorm*
+is the worked example of how that goes wrong.
+
+## Tuning flags
+
+Everything ships at a default that was measured, not assumed. Defaults are read from the
+code, not from this document; each row names the section that carries the measurement.
+
+| flag | default | what it does | what it is worth |
+|---|---|---|---|
+| `COSYVOICE_KV_INPLACE` | follows `device.arch()` — on for Wormhole, off for Blackhole | writes the KV cache with `ttnn.update_cache` instead of rebuilding it | `1.42×` on the n300 step, `1.12–1.15×` on Blackhole; costs a 384 MB trace region and bit-exactness (worst PCC `0.9986` over 72 steps). *Decode step* |
+| `COSYVOICE_FF2_GRID` | unset | explicit core grid for the FFN's second linear during decode, `T == 1` only | `8x2`: RTF `0.377 → 0.354` on `p150a`, `0.559 → 0.557` on n300. *RTF breakdown* |
+| `COSYVOICE_SDPA_DECODE` | `1` | fused `sdpa_decode` for the AR decoder's relative-position attention | `−17.1 %` on the Blackhole step, `−11.0 %` on Wormhole. *The decode attention is expressible as flash attention* |
+| `COSYVOICE_SDPA` | `1` | fused SDPA in the flow estimator | flow `0.707 → 0.600 s`, and more accurate on every gate. *Flash attention, where the model allows it* |
+| `COSYVOICE_CFM_TRACE_CACHE` | `1` | keeps the CFM estimator trace across utterances of the same mel length | `1.81×` on the flow stage (`p150b`), `1.50×` (n300). *Half the flow solve was trace capture* |
+| `COSYVOICE_GN_PERMUTE` | unset (matmul form) | restores the permute-based GroupNorm | the matmul form is `1.41×` / `1.34×` on the stage. *The estimator's largest cost was a GroupNorm* |
+| `COSYVOICE_FLOW_STEPS` | `10` | Euler solver depth | 5 steps buys `1.43×` at PCC `0.9825` — below every gate here. *Half the flow solve was trace capture* |
+| `COSYVOICE_FIDELITY` | `HiFi4` | math fidelity for the matmuls | free in time; HiFi2 is worse on 9 of 11 modules. *Why it stops here* |
+| `COSYVOICE_HIFT_TRACE` | unset (per-stream heuristic) | forces vocoder trace capture on or off | effect never isolated. *Wormhole re-verified* |
+| `COSYVOICE_WEIGHT_BF8` | `0` | `bfloat8_b` decoder linear weights | `1.00×`, measured twice: a memory option (352 → 176 MB), not a speed one. *What the decode step is actually bound by* |
+| `COSYVOICE_FLOW_BF8` | `0` | `bfloat8_b` flow-estimator weights | carries its own measurement rather than inheriting the decoder's verdict |
+| `COSYVOICE_FP32_ACC` | `1` | fp32 accumulation in the vocoder convolutions | off *moves* the Wormhole `conv1d` bad-length band rather than closing it. *A Wormhole convolution defect* |
+| `COSYVOICE_CONV_PREPARE` | unset (per-geometry verification) | overrides the prepared-weight verdict either way | disabling preparation outright cost the flow stage `0.683 → 1.723 s` on n300. *A Wormhole convolution defect* |
+
+Two of these are opt-in because the best setting is not portable rather than because they
+are risky — `COSYVOICE_FF2_GRID` and, on Blackhole, `COSYVOICE_KV_INPLACE`. A default
+tuned on one architecture and mediocre on another is worse than a flag that says so.
+
+## The LLM decode step
+
+76 % of an utterance on `p150a`, and the stage where whatever is left to win now sits. The
+sections below are in the order the work landed.
 
 ### The decode attention is expressible as flash attention
 
@@ -266,7 +319,9 @@ its 8.25 ms.
 **`bfloat8_b` weights measure 1.00×, twice.** First at 27 GB/s effective, then again after the work
 above at 42 GB/s — `8.77` vs `8.77 ms`, PCC `0.9997040033`. Halving weight traffic changed nothing at
 either operating point, which rules out DRAM bandwidth as the constraint. Kept as a memory option
-(352 MB → 176 MB), not a speed one.
+(352 MB → 176 MB), not a speed one: `COSYVOICE_WEIGHT_BF8=1` on the decoder's linears,
+`COSYVOICE_FLOW_BF8=1` on the flow estimator's, which carries its own measurement rather than
+inheriting this verdict.
 
 **Explicit core grids are worse than the default** (`scripts/probe_matmul_config.py`). Per-matmul,
 traced:
@@ -282,26 +337,6 @@ TTNN's default choice already reaches 65–168 GB/s on individual matmuls. More 
 linears total **201 µs per layer — 2.82 ms across 14 layers, only 34 % of the step**. The weights
 were never the bottleneck; the remaining ~280 non-linear ops are, at ~19 µs each against the 6.3 µs
 floor.
-
-### Flash attention, where the model allows it
-
-The estimator's self-attention is **plain SDPA** — no mask, no relative-position term —
-so unlike the AR decoder it takes `ttnn.transformer.scaled_dot_product_attention` as a
-drop-in. The score matrix it stops materialising is `[2, 8, 282, 282]`: ~2.5 MB written
-and read back per block, 64 blocks × 10 Euler steps.
-
-| | explicit chain | fused SDPA |
-|---|---:|---:|
-| flow decoder | `0.707 s` | **`0.600 s`** |
-| end-to-end RTF | `0.647` | **`0.611`** |
-| `solve_euler` PCC | `0.9992047752` | **`0.9993701398`** |
-| flow tokens → mel PCC | `0.9992029011` | **`0.9993962895`** |
-| CFM estimator, first / last step | `0.9998326979` / `0.9991904460` | **`0.9998480374` / `0.9994887951`** |
-
-Faster *and* more accurate on every gate, components included — which is the reason it
-ships on by default while the HiFi2 experiment below did not. `scale=1.0` because
-`1/sqrt(d_head)` is folded into the q half of the fused weight; SDPA's own default would
-scale twice. `COSYVOICE_SDPA=0` restores the explicit chain.
 
 ### The KV-cache shift costs what it does because of tile layout, not bytes
 
@@ -388,7 +423,7 @@ op-level work: it needs the flow decoder to cost a fraction of what it does, or 
 utterances, which single-utterance TTS does not offer.
 
 **The per-token tail outside the traced step is 0.352 ms — 2.7 %** — and its breakdown is what
-settled P4's on-device sampling item:
+settled the on-device sampling question:
 
 | | ms | share of tail |
 |---|---:|---:|
@@ -435,6 +470,142 @@ assuming the queries are the last `t1` of the `K` key positions. Left-aligning g
 relative geometry of a position it is not at — wrong everywhere, obviously wrong nowhere, and no
 shape assertion catches it. `test_device_fixed_shape_cache_matches_the_growing_one` does.
 
+## The flow decoder
+
+21 % of an utterance on `p150a`, down from 48 % — the stage that more than halved
+(`0.589 -> 0.253 s`) between the CFM trace cache and the permute-free GroupNorm.
+
+### Flash attention, where the model allows it
+
+The estimator's self-attention is **plain SDPA** — no mask, no relative-position term —
+so unlike the AR decoder it takes `ttnn.transformer.scaled_dot_product_attention` as a
+drop-in. The score matrix it stops materialising is `[2, 8, 282, 282]`: ~2.5 MB written
+and read back per block, 64 blocks × 10 Euler steps.
+
+| | explicit chain | fused SDPA |
+|---|---:|---:|
+| flow decoder | `0.707 s` | **`0.600 s`** |
+| end-to-end RTF | `0.647` | **`0.611`** |
+| `solve_euler` PCC | `0.9992047752` | **`0.9993701398`** |
+| flow tokens → mel PCC | `0.9992029011` | **`0.9993962895`** |
+| CFM estimator, first / last step | `0.9998326979` / `0.9991904460` | **`0.9998480374` / `0.9994887951`** |
+
+Faster *and* more accurate on every gate, components included — which is the reason it
+ships on by default while the HiFi2 experiment below did not. `scale=1.0` because
+`1/sqrt(d_head)` is folded into the q half of the fused weight; SDPA's own default would
+scale twice. `COSYVOICE_SDPA=0` restores the explicit chain.
+
+### Half the flow solve was trace capture
+
+Sweeping the solver depth (`probe_flow_steps.py`) shows the flow stage is **not linear in
+`n_timesteps`**, which the obvious arithmetic assumes it is:
+
+| steps | s | ms/step | vs 10 | PCC vs 10 steps |
+|---:|---:|---:|---:|---:|
+| 10 | `0.7081` | `70.8` | 1.00× | `1.00000000` |
+| 8 | `0.6297` | `78.7` | 1.12× | `0.98979415` |
+| 5 | `0.4942` | `98.8` | 1.43× | `0.98253800` |
+| 4 | `0.4557` | `113.9` | 1.55× | `0.96111237` |
+| 3 | `0.4181` | `139.4` | 1.69× | `0.73646301` |
+| 1 | `0.3861` | `386.1` | 1.83× | `0.22612770` |
+
+Fitting it gives **`T(n) ≈ 0.350 s + 35.8 ms per step`**. Halving the solver buys 1.43×, not 2×,
+and *deleting* it buys only 1.83× — so **solver depth is not the lever**. It is also not an
+acceptable trade: 5 steps costs PCC `0.9825` against the shipped 10-step result, below every gate
+this port holds, with a cliff to `0.7365` at 3 steps. `COSYVOICE_FLOW_STEPS` exists for anyone who
+wants to take that trade knowingly; nothing here does.
+
+The fixed `0.350 s` is where the finding is. `solve_euler` called `_capture()` and `_release()` on
+**every** call, so the estimator trace was recorded and thrown away each time. Timing the phases
+directly agrees with the fit to within 10 ms:
+
+| phase | s | share |
+|---|---:|---:|
+| trace capture | `0.3144` | **46.6 %** |
+| replay, 10 Euler steps | `0.3570` | 52.9 % |
+| release | `0.0032` | 0.5 % |
+
+**Keeping the trace across utterances of the same mel length is worth 1.67× on the solver**
+(`0.601 → 0.359 s` steady state) and takes Wormhole end-to-end from `0.736` to `0.628`.
+
+Reuse turns on one detail: the trace bakes `_packed_const`'s **address**, and that buffer holds the
+utterance's conditioning. Refilling it in place is correct; reassigning it would leave the replay
+reading the *previous* utterance's conditioning — fluent audio in the wrong voice, with no exception,
+no shape mismatch, and nothing a per-module PCC against a single golden would catch.
+`probe_cfm_reuse.py` is built to catch exactly that: three consecutive solves with different
+conditioning, cached against uncached, compared solve by solve. **PCC `1.0000000000` on all three.**
+`COSYVOICE_CFM_TRACE_CACHE=0` restores the old behaviour.
+
+### The estimator's largest cost was a GroupNorm, and only a traced profile could see it
+
+`probe_flow_ops.py` times each block class of the flow estimator at the shapes the real forward
+uses, with a `synchronize_device` around each. It answers the wrong question, and usefully so:
+
+| | `p150b` | n300 |
+|---|---:|---:|
+| whole estimator, untraced | `85.80 ms` | **`70.80 ms`** |
+| transformer block @ T=141 | `0.707` | `0.601` |
+| resnet 256→256 @ T=141 | `2.331` | `1.925` |
+
+**Wormhole is faster untraced, on every block class**, while the traced stage is `1.82×` slower.
+Both are true: untraced this model is host-dispatch-bound and the accelerator barely participates,
+exactly as *Decode step* above records for the AR loop. A per-call wall time measures the host. The
+same trap invalidates the earlier evidence that the estimator's CFG batch-2 costs `0.90×` batch 1 — that
+was also an untraced measurement, so it says the two batches dispatch the same number of ops, not
+that the second row is free. (That conclusion survives for its other reason: the fabric would not
+initialise.)
+
+`probe_flow_ops_traced.py` captures each block class in its own trace and divides. That profile
+names something no matmul or convolution explains:
+
+| inside one resnet block, traced | `p150b` | n300 |
+|---|---:|---:|
+| conv1d k3 256→256 @141 | `0.0320 ms` | `0.0556 ms` |
+| **groupnorm(8) @141** | **`0.2197 ms`** | **`0.3809 ms`** |
+| mish @141 | `0.0076 ms` | `0.0079 ms` |
+
+**GroupNorm costs ~7× the convolution it follows.** 33 of them run per Euler step — two per ResNet
+block, one in the final block — putting them at ~36 % of the whole estimator. Untraced it looks
+ordinary (`0.4465` against the conv's `0.3383` on n300), which is why it went unexamined for the
+whole bring-up.
+
+The cost is not the statistic, it is the route to it. `TtGroupNorm` reshaped `[B, T, C]` to
+`[B, G, T·C/G]` through two `permute`s so `layer_norm` could reduce over the last axis; under
+`TILE_LAYOUT` those permutes swap the tiled row axis, which is a re-tiling shuffle rather than a
+view, and the intermediate's tiled face is `8 × 32` — one tile carrying 8 useful rows out of 32.
+
+The same statistic without changing shape: each group's channel sum is a **matmul against a
+`[C, G]` indicator**, what remains is a reduction over `T` (an axis that needs no re-tiling), and
+normalise-plus-affine folds into one multiply and one add.
+
+| | `p150b` | n300 | PCC vs torch |
+|---|---:|---:|---:|
+| `[2, 141, 256]` permute → matmul | `0.2190` → `0.0940` (**2.33×**) | `0.3805` → `0.1839` (**2.07×**) | `0.99998885` |
+| `[2, 282, 256]` permute → matmul | `0.3975` → `0.0978` (**4.06×**) | `0.6656` → `0.2000` (**3.33×**) | `0.99999225` |
+
+The matmul form is nearly **independent of T** where the permute form doubles with it, which is the
+re-tiling cost showing itself directly. On the stage, A/B-ed: flow `1.41×` on `p150b` and `1.34×` on
+n300 — see *Where the time goes* for the runs. `COSYVOICE_GN_PERMUTE=1` restores the old form.
+
+TTNN's native `ttnn.group_norm` is not an alternative here and the reason has changed: `estimator.py`
+recorded it as less accurate, but at `G=8` it **rejects these shapes outright** on both parts.
+
+**The matmul form needed a variance clamp, and the PCCs above did not catch why.** Computing the
+statistic this way leaves variance as `E[x^2] - E[x]^2`, which is catastrophic-cancellation-prone:
+where the true variance is small against the mean's square, bfloat16 rounding drives it negative,
+`rsqrt` returns `Inf` without raising, and the mel comes out full-spectrum clipped noise — 22 795
+`Inf` values in a 50 560-element tensor on the first real zero-shot utterance. `ttnn.relu` on the
+variance before `eps` closes it, the guard every framework uses for this formula. **The two PCCs in
+the table are measured on one fixed golden geometry, which never lands in the cancellation regime**,
+so they are evidence for the transform's arithmetic and not for its robustness across shapes — the
+distinction that let this ship. The timings above predate the added `relu` by one op per GroupNorm,
+33 per Euler step; they have not been re-measured since.
+
+## The vocoder
+
+4 % of an utterance, and the part that was supposed to be the hard one. The inverse
+transform is negligible; the op standing in for a missing `ttnn.conv_transpose1d` is not.
+
 ### Vocoder op costs
 
 | op | shape | latency |
@@ -449,7 +620,59 @@ shape assertion catches it. `test_device_fixed_shape_cache_matches_the_growing_o
 hard part is negligible; the op standing in for a missing `ttnn.conv_transpose1d` dominates the
 stage.
 
-## Three parts side by side
+### A Wormhole convolution defect, and the streaming failure it was causing
+
+An earlier run recorded `test_device_streamed_matches_non_streamed` failing on n300 at mel-space PCC `0.218`
+against a `0.85` gate, passing on both Blackhole boards, and filed it as *arch-specific, in the
+streaming cache path*. It is neither streaming nor cache.
+
+The test's own diagnostic was already shouting: `RMS streamed 0.63250 / non-streamed 0.04970` —
+**12.7× too loud**, against a `±0.99` clamp, so the waveform was saturated rather than merely wrong.
+Bisecting inward: chunk 0 is fine and chunk 1 is not → of the three carried caches only `hift_mel`
+changes it → but a **known-good mel** vocoded at chunk 1's length fails identically, so the cache's
+contents are innocent and its *length* is the variable (prepending 20 frames takes the chunk from
+110 to 130 mel frames) → the NSF source branch → a Snake activation returning `inf` → the
+convolution feeding it, whose input maxes at `1.46` and whose output reaches `1.58e38`.
+
+`ttnn.conv1d` gives two different answers there depending on whether its weight went through
+`ttnn.prepare_conv_weights` first. `scripts/repro_conv1d_wormhole.py` reproduces it with a random
+weight and a random input, no model involved — `Conv1d(128 → 128, k=11, pad=5)`, bfloat16, HiFi4:
+
+| input length | prepared | op's own preparation | torch |
+|---|---:|---:|---:|
+| ≤ 8192 | `9.438` | `9.438` | `9.422` |
+| **8193 – 8704** | **`60` … `7e37`** | `9.438` | `9.422` |
+| ≥ 8705 | `9.438` | `9.438` | `9.422` |
+
+Blackhole: **0 of 21 lengths disagree**, on two boards. Five explanations were measured and
+discarded — the input's tile padding (zeroing it changes nothing), the HiFi4 + fp32-accumulate
+combination tt-metal warns about on Wormhole (`HiFi3` fails identically), fp32 accumulation itself
+(`COSYVOICE_FP32_ACC=0` turns it off, which *moves* the band rather than closing it), the input data
+(a different activation returns the identical wrong value), and the weight values (the prepared
+weight reads back at
+`max|w| = 0.1816`, exactly the stored weight, with no non-finite elements). At `HiFi2` one length
+came back with **two** bad elements in a million, which is what settled it: overflow does not
+produce two bad elements.
+
+The model-side fix is not to disable preparation — the first attempt did, and cost the **flow**
+stage `0.683 → 1.723 s` on n300, because `TtConv1d` is also the estimator's convolution and those
+run inside a captured trace, which unprepared weights make impossible. Instead the vocoder
+**verifies each geometry once**: run the convolution both ways the first time a
+`(length, batch)` is seen and keep the prepared weight only where the two agree. One extra call per
+geometry, amortised to nothing; the affected geometries fall back and the rest keep the fast path.
+`COSYVOICE_CONV_PREPARE` overrides the verdict in either direction, so the A/B stays runnable.
+
+That choice aged well. The vocoder can now be trace-captured too
+(`TtHiFTGenerator.enable_trace()`, off by default), and this verification is a host read that a
+trace cannot contain — but capture waits for a geometry's *second* sighting, so the read has always
+happened before the recording starts.
+
+Measured on n300: vocoder `0.084 → 0.077 s` (the check is free at the utterance level), and the
+streamed test goes from mel-space PCC `0.218` to **`0.9024`** — matching Blackhole's `0.9019` — with
+`RMS streamed 0.05173 / non-streamed 0.04934`, a ratio of `1.05×` where it was `12.73×`. The check
+fires 12 times, all at `stft_frames = 8321`, all in the source ResBlocks.
+
+## Blackhole and Wormhole side by side
 
 Same commit, same tests, same utterance — 164 tokens producing 3.27 s of audio, on all three parts.
 Wormhole is the architecture the issue names (*"N150 or N300"*), so it gets a column rather than a
@@ -470,12 +693,15 @@ reads top to bottom as the order the work landed.
 | | `p150a` | `p150b` | n300 |
 |---|---:|---:|---:|
 | explicit chain, no CFM cache | `0.533` | `0.584` | `0.950` |
-| **+ fused decode attention** (F48) | **`0.477`** ✅ | `0.523` | `0.891` |
-| **+ cached CFM trace** (F53) | *`0.367` projected* | **`0.436`** ✅ | — |
+| **+ fused decode attention** | **`0.477`** ✅ | `0.523` | `0.891` |
+| **+ cached CFM trace** | *`0.367` projected* | **`0.436`** ✅ | — |
 | **+ in-place KV** (`COSYVOICE_KV_INPLACE=1`) | `0.449`* ✅ | `0.398` ✅ | `0.628` |
 | **+ permute-free GroupNorm** (and, on n300, the conv fix) | — | **`0.365`** ✅ | **`0.575`** |
 
-**Best measured: `0.365` on Blackhole `p150b`, `0.575` on Wormhole.** `RTF < 0.5` is met on both
+**Best in this table: `0.365` on Blackhole `p150b`, `0.575` on Wormhole.** Both are superseded
+elsewhere in this document — `p150a` reaches `0.354` with `COSYVOICE_FF2_GRID=8x2` (*Summary
+metrics*), and the Wormhole figure was re-measured at `0.559` under the flag set that actually
+produced it (*Wormhole re-verified*). `RTF < 0.5` is met on both
 Blackhole boards and missed on Wormhole.
 
 The last row is a **median over four runs on `p150b` (`0.362`–`0.368`) and six on n300
@@ -538,14 +764,52 @@ everything else fixed rather than compared against the older rows above:
 Both `permute` baselines reproduce their previously recorded stage figures (`0.375` / `0.683`),
 which is what makes the comparison a measurement of the change rather than of the week.
 
-The flow is no longer the stage carrying the worst architecture ratio — and the LLM is now **71 %**
-of a Wormhole utterance and **71 %** of a Blackhole one, up from ~63 %, so it is where any further
-RTF work has to go.
+The flow is no longer the stage carrying the worst architecture ratio — and, fully loaded, the LLM
+is now **68 %** of a Wormhole utterance and **71 %** of a Blackhole one, up from ~63 %, so it is
+where any further RTF work has to go. (*RTF breakdown* quotes 76 % for the same stage: that is
+`p150a` at default settings, which does not carry the in-place KV cache these figures do.)
 
 The overall ratio, `1.58×`, sits well inside the **2.03× ratio in core count** (130 vs 64), so
 neither part is disproportionately hurt. The spread between stages is wider than it looks — the
-vocoder is nearly architecture-neutral at `1.22×` because it is dominated by two large
-`conv_transpose2d` calls, while the flow at `1.82×` is the most core-hungry stage in the model.
+vocoder is nearly architecture-neutral at `1.18×` because it is dominated by two large
+`conv_transpose2d` calls, while the flow at `1.78×` is the most core-hungry stage in the model.
+
+### Decode step, and what each change is worth
+
+| | Blackhole | Wormhole |
+|---|---:|---:|
+| untraced | `20.83 ms` (48.0 tok/s) | `20.10 ms` (49.7 tok/s) |
+| traced, moving cache @ 384 | `5.60 ms` (178.7) | `11.68 ms` (85.6) |
+| traced, moving cache @ 448 | `5.88 ms` | `10.12 ms` |
+| traced, in-place @ 448 | **`4.99 ms`** (200.4) | **`8.20 ms`** (122.0) |
+| trace speedup | **3.72×** | **1.72×** |
+| fused attention is worth | `−1.15 ms/token` (−17.1 %) | `−1.37 ms/token` (−11.0 %) |
+| in-place KV is worth | `+0.61 ms` (**1.12×**) | `+3.48 ms` (**1.42×**) |
+| cost of widening 384 → 448 | `+0.28 ms` | **`−1.55 ms`** — *faster* |
+
+Four things in that table are worth stating rather than leaving to be read off.
+
+**Untraced decode is the same speed on both — `20.83` vs `20.10 ms`.** Untraced, this model is
+host-dispatch-bound, and the two hosts are the same class of machine; the accelerator barely
+participates. The architecture gap appears only once tracing removes the dispatch overhead, which is
+also why trace capture is worth 3.72× on Blackhole and 1.72× on Wormhole. **A per-op cost measured
+untraced says almost nothing about the silicon.**
+
+**The in-place KV cache is worth 1.42× on Wormhole against 1.12× on Blackhole.** It ships opt-in
+because on Blackhole it buys 12 % for a 384 MB trace region and the loss of bit-exactness — a thin
+trade. On Wormhole the same trade buys 42 %, which is not thin. **Recommend it on n300; keep it
+optional on p150a.**
+
+**The tile-parity effect changes sign between architectures.** An earlier Blackhole sweep had
+widening the key axis 384 → 448 cost `+0.28 ms`, and it does. On Wormhole the *wider* buffer is
+`1.55 ms` **faster**. Whatever the scheduling heuristic behind that is, its optimum is
+architecture-specific, and a width tuned on one part is not tuned on the other.
+
+**The fused attention pays more in absolute terms on Wormhole and less in relative terms.**
+`1.37 ms` against `1.15 ms`, but 11.0 % of a slower step against 17.1 % of a faster one. The
+prediction going in was that it would favour n300, because narrower memory is the one place
+`bfloat8_b` ever showed a gain, and this kernel stops writing the score matrix. Half right: the
+milliseconds went the predicted way, the percentage did not.
 
 ### Wormhole re-verified — the recipe held; a benchmarking mistake in between did not
 
@@ -578,7 +842,9 @@ its own already-default in-place-free measurement — confirmed by `device.arch(
 `Arch.WORMHOLE_B0` and `Arch.BLACKHOLE` on the two parts. `test_device_end_to_end_rtf` passes on both
 with the new default active, so the PCC gates hold.
 
-**`COSYVOICE_FF2_GRID=8x2`, at the corrected Wormhole baseline**, three runs:
+**`COSYVOICE_FF2_GRID=8x2`, at the corrected Wormhole baseline**, three runs — the Blackhole
+account of the same flag is in *RTF breakdown*, and this is the second of its two measurements,
+not a restatement of the first:
 
 | | ms/token | RTF |
 |---|---:|---:|
@@ -592,210 +858,6 @@ isolation against `1.98×` on `p150b`'s. Wormhole's default grid is `8×8 = 64` 
 Blackhole's `13×10 = 130` — half the "too many cores for one row" problem the small grid fixes is
 smaller to begin with on the part with fewer cores. `RTF < 0.5` remains missed on Wormhole, now
 honestly at `0.557` rather than at a figure built on the wrong flag set.
-
-### Decode step, and what each change is worth
-
-| | Blackhole | Wormhole |
-|---|---:|---:|
-| untraced | `20.83 ms` (48.0 tok/s) | `20.10 ms` (49.7 tok/s) |
-| traced, moving cache @ 384 | `5.60 ms` (178.7) | `11.68 ms` (85.6) |
-| traced, moving cache @ 448 | `5.88 ms` | `10.12 ms` |
-| traced, in-place @ 448 | **`4.99 ms`** (200.4) | **`8.20 ms`** (122.0) |
-| trace speedup | **3.72×** | **1.72×** |
-| fused attention is worth | `−1.15 ms/token` (−17.1 %) | `−1.37 ms/token` (−11.0 %) |
-| in-place KV is worth | `+0.61 ms` (**1.12×**) | `+3.48 ms` (**1.42×**) |
-| cost of widening 384 → 448 | `+0.28 ms` | **`−1.55 ms`** — *faster* |
-
-Four things in that table are worth stating rather than leaving to be read off.
-
-**Untraced decode is the same speed on both — `20.83` vs `20.10 ms`.** Untraced, this model is
-host-dispatch-bound, and the two hosts are the same class of machine; the accelerator barely
-participates. The architecture gap appears only once tracing removes the dispatch overhead, which is
-also why trace capture is worth 3.72× on Blackhole and 1.72× on Wormhole. **A per-op cost measured
-untraced says almost nothing about the silicon.**
-
-**The in-place KV cache is worth 1.42× on Wormhole against 1.12× on Blackhole.** It ships opt-in
-because on Blackhole it buys 12 % for a 384 MB trace region and the loss of bit-exactness — a thin
-trade. On Wormhole the same trade buys 42 %, which is not thin. **Recommend it on n300; keep it
-optional on p150a.**
-
-**The tile-parity effect changes sign between architectures.** F45 measured that widening the key
-axis 384 → 448 costs `+0.28 ms` on Blackhole, and it does. On Wormhole the *wider* buffer is
-`1.55 ms` **faster**. Whatever the scheduling heuristic behind F45 is, its optimum is
-architecture-specific, and a width tuned on one part is not tuned on the other.
-
-**The fused attention pays more in absolute terms on Wormhole and less in relative terms.**
-`1.37 ms` against `1.15 ms`, but 11.0 % of a slower step against 17.1 % of a faster one. The
-prediction going in was that it would favour n300, because narrower memory is the one place
-`bfloat8_b` ever showed a gain (F42) and this kernel stops writing the score matrix. Half right: the
-milliseconds went the predicted way, the percentage did not.
-
-### Half the flow solve was trace capture
-
-Sweeping the solver depth (`probe_flow_steps.py`) shows the flow stage is **not linear in
-`n_timesteps`**, which the obvious arithmetic assumes it is:
-
-| steps | s | ms/step | vs 10 | PCC vs 10 steps |
-|---:|---:|---:|---:|---:|
-| 10 | `0.7081` | `70.8` | 1.00× | `1.00000000` |
-| 8 | `0.6297` | `78.7` | 1.12× | `0.98979415` |
-| 5 | `0.4942` | `98.8` | 1.43× | `0.98253800` |
-| 4 | `0.4557` | `113.9` | 1.55× | `0.96111237` |
-| 3 | `0.4181` | `139.4` | 1.69× | `0.73646301` |
-| 1 | `0.3861` | `386.1` | 1.83× | `0.22612770` |
-
-Fitting it gives **`T(n) ≈ 0.350 s + 35.8 ms per step`**. Halving the solver buys 1.43×, not 2×,
-and *deleting* it buys only 1.83× — so **solver depth is not the lever**. It is also not an
-acceptable trade: 5 steps costs PCC `0.9825` against the shipped 10-step result, below every gate
-this port holds, with a cliff to `0.7365` at 3 steps. `COSYVOICE_FLOW_STEPS` exists for anyone who
-wants to take that trade knowingly; nothing here does.
-
-The fixed `0.350 s` is where the finding is. `solve_euler` called `_capture()` and `_release()` on
-**every** call, so the estimator trace was recorded and thrown away each time. Timing the phases
-directly agrees with the fit to within 10 ms:
-
-| phase | s | share |
-|---|---:|---:|
-| trace capture | `0.3144` | **46.6 %** |
-| replay, 10 Euler steps | `0.3570` | 52.9 % |
-| release | `0.0032` | 0.5 % |
-
-**Keeping the trace across utterances of the same mel length is worth 1.67× on the solver**
-(`0.601 → 0.359 s` steady state) and takes Wormhole end-to-end from `0.736` to `0.628`.
-
-Reuse turns on one detail: the trace bakes `_packed_const`'s **address**, and that buffer holds the
-utterance's conditioning. Refilling it in place is correct; reassigning it would leave the replay
-reading the *previous* utterance's conditioning — fluent audio in the wrong voice, with no exception,
-no shape mismatch, and nothing a per-module PCC against a single golden would catch.
-`probe_cfm_reuse.py` is built to catch exactly that: three consecutive solves with different
-conditioning, cached against uncached, compared solve by solve. **PCC `1.0000000000` on all three.**
-`COSYVOICE_CFM_TRACE_CACHE=0` restores the old behaviour.
-
-### The estimator's largest cost was a GroupNorm, and only a traced profile could see it
-
-`probe_flow_ops.py` times each block class of the flow estimator at the shapes the real forward
-uses, with a `synchronize_device` around each. It answers the wrong question, and usefully so:
-
-| | `p150b` | n300 |
-|---|---:|---:|
-| whole estimator, untraced | `85.80 ms` | **`70.80 ms`** |
-| transformer block @ T=141 | `0.707` | `0.601` |
-| resnet 256→256 @ T=141 | `2.331` | `1.925` |
-
-**Wormhole is faster untraced, on every block class**, while the traced stage is `1.82×` slower.
-Both are true: untraced this model is host-dispatch-bound and the accelerator barely participates,
-exactly as *Decode step* above records for the AR loop. A per-call wall time measures the host. The
-same trap invalidates F55's evidence that the estimator's CFG batch-2 costs `0.90×` batch 1 — that
-was also an untraced measurement, so it says the two batches dispatch the same number of ops, not
-that the second row is free. (F55's conclusion survives for its other reason: the fabric would not
-initialise.)
-
-`probe_flow_ops_traced.py` captures each block class in its own trace and divides. That profile
-names something no matmul or convolution explains:
-
-| inside one resnet block, traced | `p150b` | n300 |
-|---|---:|---:|
-| conv1d k3 256→256 @141 | `0.0320 ms` | `0.0556 ms` |
-| **groupnorm(8) @141** | **`0.2197 ms`** | **`0.3809 ms`** |
-| mish @141 | `0.0076 ms` | `0.0079 ms` |
-
-**GroupNorm costs ~7× the convolution it follows.** 33 of them run per Euler step — two per ResNet
-block, one in the final block — putting them at ~36 % of the whole estimator. Untraced it looks
-ordinary (`0.4465` against the conv's `0.3383` on n300), which is why it went unexamined for the
-whole bring-up.
-
-The cost is not the statistic, it is the route to it. `TtGroupNorm` reshaped `[B, T, C]` to
-`[B, G, T·C/G]` through two `permute`s so `layer_norm` could reduce over the last axis; under
-`TILE_LAYOUT` those permutes swap the tiled row axis, which is a re-tiling shuffle rather than a
-view, and the intermediate's tiled face is `8 × 32` — one tile carrying 8 useful rows out of 32.
-
-The same statistic without changing shape: each group's channel sum is a **matmul against a
-`[C, G]` indicator**, what remains is a reduction over `T` (an axis that needs no re-tiling), and
-normalise-plus-affine folds into one multiply and one add.
-
-| | `p150b` | n300 | PCC vs torch |
-|---|---:|---:|---:|
-| `[2, 141, 256]` permute → matmul | `0.2190` → `0.0940` (**2.33×**) | `0.3805` → `0.1839` (**2.07×**) | `0.99998885` |
-| `[2, 282, 256]` permute → matmul | `0.3975` → `0.0978` (**4.06×**) | `0.6656` → `0.2000` (**3.33×**) | `0.99999225` |
-
-The matmul form is nearly **independent of T** where the permute form doubles with it, which is the
-re-tiling cost showing itself directly. On the stage, A/B-ed: flow `1.41×` on `p150b` and `1.34×` on
-n300 — see *Where the time goes* for the runs. `COSYVOICE_GN_PERMUTE=1` restores the old form.
-
-TTNN's native `ttnn.group_norm` is not an alternative here and the reason has changed: `estimator.py`
-recorded it as less accurate, but at `G=8` it **rejects these shapes outright** on both parts.
-
-### A Wormhole convolution defect, and the streaming failure it was causing
-
-F42 recorded `test_device_streamed_matches_non_streamed` failing on n300 at mel-space PCC `0.218`
-against a `0.85` gate, passing on both Blackhole boards, and filed it as *arch-specific, in the
-streaming cache path*. It is neither streaming nor cache.
-
-The test's own diagnostic was already shouting: `RMS streamed 0.63250 / non-streamed 0.04970` —
-**12.7× too loud**, against a `±0.99` clamp, so the waveform was saturated rather than merely wrong.
-Bisecting inward: chunk 0 is fine and chunk 1 is not → of the three carried caches only `hift_mel`
-changes it → but a **known-good mel** vocoded at chunk 1's length fails identically, so the cache's
-contents are innocent and its *length* is the variable (prepending 20 frames takes the chunk from
-110 to 130 mel frames) → the NSF source branch → a Snake activation returning `inf` → the
-convolution feeding it, whose input maxes at `1.46` and whose output reaches `1.58e38`.
-
-`ttnn.conv1d` gives two different answers there depending on whether its weight went through
-`ttnn.prepare_conv_weights` first. `scripts/repro_conv1d_wormhole.py` reproduces it with a random
-weight and a random input, no model involved — `Conv1d(128 → 128, k=11, pad=5)`, bfloat16, HiFi4:
-
-| input length | prepared | op's own preparation | torch |
-|---|---:|---:|---:|
-| ≤ 8192 | `9.438` | `9.438` | `9.422` |
-| **8193 – 8704** | **`60` … `7e37`** | `9.438` | `9.422` |
-| ≥ 8705 | `9.438` | `9.438` | `9.422` |
-
-Blackhole: **0 of 21 lengths disagree**, on two boards. Five explanations were measured and
-discarded — the input's tile padding (zeroing it changes nothing), the HiFi4 + fp32-accumulate
-combination tt-metal warns about on Wormhole (`HiFi3` fails identically), fp32 accumulation itself
-(turning it off *moves* the band rather than closing it), the input data (a different activation
-returns the identical wrong value), and the weight values (the prepared weight reads back at
-`max|w| = 0.1816`, exactly the stored weight, with no non-finite elements). At `HiFi2` one length
-came back with **two** bad elements in a million, which is what settled it: overflow does not
-produce two bad elements.
-
-The model-side fix is not to disable preparation — the first attempt did, and cost the **flow**
-stage `0.683 → 1.723 s` on n300, because `TtConv1d` is also the estimator's convolution and those
-run inside a captured trace, which unprepared weights make impossible. Instead the vocoder
-**verifies each geometry once**: run the convolution both ways the first time a
-`(length, batch)` is seen and keep the prepared weight only where the two agree. One extra call per
-geometry, amortised to nothing; the affected geometries fall back and the rest keep the fast path.
-
-That choice aged well. The vocoder can now be trace-captured too
-(`TtHiFTGenerator.enable_trace()`, off by default), and this verification is a host read that a
-trace cannot contain — but capture waits for a geometry's *second* sighting, so the read has always
-happened before the recording starts.
-
-Measured on n300: vocoder `0.084 → 0.077 s` (the check is free at the utterance level), and the
-streamed test goes from mel-space PCC `0.218` to **`0.9024`** — matching Blackhole's `0.9019` — with
-`RMS streamed 0.05173 / non-streamed 0.04934`, a ratio of `1.05×` where it was `12.73×`. The check
-fires 12 times, all at `stft_frames = 8321`, all in the source ResBlocks.
-
-### Accuracy and tests
-
-| | `p150a` | `p150b` | n300 |
-|---|---:|---:|---:|
-| traced vs untraced | `1.0000000000` | `1.0000000000` | `1.0000000000` |
-| in-place, worst PCC over 72 steps | `0.9987379437` | — | `0.9991855486` |
-| CFM trace cache, 3 solves, new conditioning each | — | `1.0000000000` | `1.0000000000` |
-| test suite | `155 passed` ‡ | **157 passed** | **157 passed** |
-
-Traced-vs-untraced is bit-exact everywhere, and so is the cached CFM trace across three consecutive
-solves with different conditioning — the test that would catch a stale `_packed_const`.
-
-‡ `p150b` and n300 were re-run on `2026-08-13` at branch head `23d1e63aa85`, which adds two vocoder
-trace tests to `tests/perf/test_trace.py` — hence `157` where the earlier run counted `155`. The
-`p150a` cell is the older count on the older tree; that board has been unavailable since, so it is left
-as measured rather than assumed to have gained the same two.
-
-**Every device test now passes on both architectures.** n300 stood at 154 passed / 1 failed from F42
-until the convolution defect above was found: the failure was
-`test_device_streamed_matches_non_streamed` at mel-space PCC `0.218` against a `0.85` gate, and it
-now scores `0.9024` against Blackhole's `0.9019`. **R3 (streaming) is no longer Blackhole-only.**
 
 ## Accuracy
 
@@ -855,6 +917,28 @@ self-computed excitation the honest metrics are the energy envelope and the RMS,
 (`0.9975` envelope, RMS within 6 %). Same discipline the CFM's initial noise and `SineGen`'s two
 draws already follow.
 
+### Per-architecture accuracy and test results
+
+| | `p150a` | `p150b` | n300 |
+|---|---:|---:|---:|
+| traced vs untraced | `1.0000000000` | `1.0000000000` | `1.0000000000` |
+| in-place, worst PCC over 72 steps | `0.9987379437` | — | `0.9991855486` |
+| CFM trace cache, 3 solves, new conditioning each | — | `1.0000000000` | `1.0000000000` |
+| test suite | `155 passed` ‡ | **157 passed** | **157 passed** |
+
+Traced-vs-untraced is bit-exact everywhere, and so is the cached CFM trace across three consecutive
+solves with different conditioning — the test that would catch a stale `_packed_const`.
+
+‡ `p150b` and n300 were re-run on `2026-08-13` at branch head `23d1e63aa85`, which adds two vocoder
+trace tests to `tests/perf/test_trace.py` — hence `157` where the earlier run counted `155`. The
+`p150a` cell is the older count on the older tree; that board has been unavailable since, so it is left
+as measured rather than assumed to have gained the same two.
+
+**Every device test now passes on both architectures.** n300 stood at 154 passed / 1 failed
+until the convolution defect above was found: the failure was
+`test_device_streamed_matches_non_streamed` at mel-space PCC `0.218` against a `0.85` gate, and it
+now scores `0.9024` against Blackhole's `0.9019`. **Streaming is no longer Blackhole-only.**
+
 ## Generation modes
 
 All four modes run on device across five languages — 20 cases, all synthesising:
@@ -888,6 +972,25 @@ are the ones with a reference recording to score speaker similarity against.
 Cantonese is a **model** limitation, not a port defect: the PyTorch reference scores *worse* on the
 same text through the same ASR (`83.87 %` zero-shot vs this port's `64.52 %`).
 
+## Coverage and test counts
+
+Source suites: `tests/perf/`, `tests/e2e/`, `tests/pcc/`
+- End-to-end RTF with a per-stage breakdown
+- Trace capture speedup and bit-exactness
+- Decode throughput, cold vs warm, growing vs fixed-shape KV cache
+- Streaming content equivalence and seam continuity
+- Per-module PCC against captured PyTorch goldens
+
+157 tests in all: 111 host plus 46 device. A device run executes both tiers, so the pass
+counts below are totals, not the device column.
+
+| Tier | Count | Hardware | Result |
+|---|---:|---|---|
+| host | 111 | none | — |
+| device | 46 | Blackhole `p150b` | **157 pass** |
+| device | 46 | Wormhole n300 | **157 pass**; the streaming failure was a `ttnn.conv1d` defect, now fixed |
+| device | 44 | Blackhole `p150a` | **155 pass** — the older tree, two vocoder trace tests short; see the ‡ note under *Per-architecture accuracy and test results* |
+
 ## Operational notes
 
 **`l1_small_size` scales with conv *configurations*, not tensor size.** `ttnn.conv1d` allocates
@@ -899,27 +1002,11 @@ the 32 KB a single-model test uses — failing part-way through the *second* utt
 **Persist the JIT cache across runs.** Mounting `~/.cache/tt-metal-cache` took the first
 utterance from `161.7 s` to `14.8 s` wall. Every distinct sequence length is a fresh compile.
 
-## Perf coverage
-Source suites: `tests/perf/`, `tests/e2e/`, `tests/pcc/`
-- End-to-end RTF with a per-stage breakdown
-- Trace capture speedup and bit-exactness
-- Decode throughput, cold vs warm, growing vs fixed-shape KV cache
-- Streaming content equivalence and seam continuity
-- Per-module PCC against captured PyTorch goldens
-
-## Test counts
-
-| Tier | Count | Hardware |
-|---|---:|---|
-| host | 111 | none |
-| device | 44 | Blackhole `p150a` — **155 pass** |
-| device | 44 | Wormhole n300 — **155 pass**; the F42 streaming failure was a conv defect, now fixed |
-
 ## Tensor parallelism — measured, and it does not move the needle
 
 Tried on `2026-08-18`: combining the `COSYVOICE_FF2_GRID` finding above with the tensor-parallel
-decoder prototype (2-chip Megatron sharding of the AR decoder, `probe_tp_decode.py`
-— a probe, not shipped code). TP's own value stands on its own from an earlier session (`1.18×` on
+decoder prototype (2-chip Megatron sharding of the AR decoder, run from a scratch probe that is
+not carried in this tree). TP's own value stands on its own from an earlier session (`1.18×` on
 the decode step, `PCC 0.99994`) and is unaffected by this result. The question was narrower: does the
 core-grid win from earlier in this document *also* apply once TP has already sharded the same linear.
 
@@ -952,4 +1039,4 @@ justifies. Having sharded once, there is almost nothing left for the grid to sha
 worth roughly the `1.18×` measured on the decode step in isolation — real, and, transferred to the
 shipped decoder's current Wormhole baseline (`0.559` above), not enough on its own to reach `0.5`. It
 would not additionally benefit from `COSYVOICE_FF2_GRID`, so the two should not be quoted as if their
-gains stack. Raw sweep output: `21_tp-ff2-grid-k2048.txt`.
+gains stack. The per-grid medians above are the record; the raw sweep output is not carried here.
