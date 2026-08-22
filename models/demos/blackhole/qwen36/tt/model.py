@@ -2974,11 +2974,18 @@ class Qwen36Model:
                 # only the fused GDN op — whose grid maps (row, head), not M-blocks — sees the
                 # batched group. Row i of every gathered GDN tensor is group user i, matching the
                 # group state assembly.
-                xs = []
-                for i in range(Bg):
-                    xi = ttnn.slice(x_emb, (i, 0, 0), (i + 1, bucket, d))  # [1, bucket, d] copy
-                    xs.append(ttnn.to_memory_config(ttnn.reshape(xi, (1, 1, bucket, d)), ttnn.DRAM_MEMORY_CONFIG))
-                ttnn.deallocate(x_emb)
+                if Bg == 1:
+                    # A full-range slice returns its INPUT (ttnn slice no-op shortcut), so slicing
+                    # here would alias x_emb and the deallocate below would free the live stream.
+                    # Reshape in place (no separate x_emb deallocate — xs[0] may share its
+                    # buffer); the layer loop frees it through xs[0].
+                    xs = [ttnn.to_memory_config(ttnn.reshape(x_emb, (1, 1, bucket, d)), ttnn.DRAM_MEMORY_CONFIG)]
+                else:
+                    xs = []
+                    for i in range(Bg):
+                        xi = ttnn.slice(x_emb, (i, 0, 0), (i + 1, bucket, d))  # [1, bucket, d] copy
+                        xs.append(ttnn.to_memory_config(ttnn.reshape(xi, (1, 1, bucket, d)), ttnn.DRAM_MEMORY_CONFIG))
+                    ttnn.deallocate(x_emb)
                 ttnn.deallocate(tok)
                 # Per-user device page tables (full + real-blocks-only for the KV fill).
                 full_pts, chunk_pts = [], []
@@ -3037,9 +3044,16 @@ class Qwen36Model:
                         # a full-merge reshape (volume-safe for either shape) and split users by
                         # their seq rows [i*bucket, (i+1)*bucket) — user-major row order.
                         attn_out_b = ttnn.reshape(attn_out_b, (1, 1, Bg * bucket, d_out))
-                        # Per-user slice copies; the batched output is freed once split.
-                        outs = [attn_out_b[:, :, i * bucket : (i + 1) * bucket, :] for i in range(Bg)]
-                        ttnn.deallocate(attn_out_b)
+                        if Bg == 1:
+                            # A full-range slice returns its INPUT (ttnn slice no-op shortcut), so
+                            # splitting would alias attn_out_b and the deallocate below would free
+                            # the tensor the residual add consumes. Hand it over directly instead;
+                            # the residual loop frees it.
+                            outs = [attn_out_b]
+                        else:
+                            # Per-user slice copies; the batched output is freed once split.
+                            outs = [attn_out_b[:, :, i * bucket : (i + 1) * bucket, :] for i in range(Bg)]
+                            ttnn.deallocate(attn_out_b)
                     for i in range(Bg):
                         h = ttnn.add(xs[i], outs[i])  # both [1, 1, bucket, d]
                         ttnn.deallocate(xs[i])
