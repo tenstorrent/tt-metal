@@ -9,8 +9,8 @@ perf gates (R8: >= 30 tok/s, RTF < 0.5) meaningful rather than absolute.
 
 RUN THIS IN THE CosyVoice VENV:
 
-    PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS \
-    /mnt/cosyvoice_env/bin/python run_reference.py --out <dir>
+    PYTHONPATH=$COSYVOICE_REPO:$COSYVOICE_REPO/third_party/Matcha-TTS \
+    $COSYVOICE_ENV/bin/python run_reference.py --out <dir>
 
 Mode / checkpoint mapping (CosyVoice-300M alone cannot do all four):
 
@@ -29,7 +29,7 @@ import time
 
 import torch
 
-DEFAULT_COSYVOICE = os.environ.get("COSYVOICE_ROOT", "/mnt/CosyVoice")
+DEFAULT_COSYVOICE = os.environ.get("COSYVOICE_REPO", "/mnt/CosyVoice")
 SEED = 1986
 
 # One sentence per language. Kept short so a CPU run finishes in minutes;

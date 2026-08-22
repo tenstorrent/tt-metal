@@ -84,7 +84,7 @@ class TtConditionalCFM:
         # in PERF.md is measured at.
         #
         # It exists because the flow decoder is the largest single stage after the LLM
-        # and its cost is linear in this number, and because the bounty asks for exactly
+        # and its cost is linear in this number, and because the issue asks for exactly
         # this experiment -- "optimize iterative refinement process / consider
         # approximations for faster inference". Whether the approximation is acceptable
         # is a measured question, not a matter of taste; `probe_flow_steps.py` measures

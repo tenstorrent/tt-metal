@@ -7,7 +7,7 @@ The front-end is not a neural network this bring-up ports. It is a text
 normaliser, a Whisper-family tokenizer, an **ONNX** speech tokenizer
 (`speech_tokenizer_v1.onnx`) and an **ONNX** speaker encoder (`campplus.onnx`),
 plus a mel filterbank. Three of those four are ONNX graphs shipped as blobs, and
-none is on the bounty's critical path -- the bounty is the LLM, the flow decoder
+none is on this port's critical path -- the port is the LLM, the flow decoder
 and the vocoder.
 
 So the boundary is drawn here, the same two-environment boundary as
@@ -15,8 +15,8 @@ So the boundary is drawn here, the same two-environment boundary as
 `.npz` per case that the TTNN side loads without importing cosyvoice or
 onnxruntime.
 
-    PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS \
-    /mnt/cosyvoice_env/bin/python prepare_inputs.py --out-dir /tmp/sweep
+    PYTHONPATH=$COSYVOICE_REPO:$COSYVOICE_REPO/third_party/Matcha-TTS \
+    $COSYVOICE_ENV/bin/python prepare_inputs.py --out-dir /tmp/sweep
 
 The texts, speakers and instruct descriptions are imported from
 `run_reference.py` rather than duplicated, so the TTNN sweep and the PyTorch
@@ -44,7 +44,7 @@ import sys
 import numpy as np
 import torch
 
-DEFAULT_ROOT = os.environ.get("COSYVOICE_ROOT", "/mnt/CosyVoice")
+DEFAULT_ROOT = os.environ.get("COSYVOICE_REPO", "/mnt/CosyVoice")
 MODES = ("sft", "zero_shot", "cross_lingual", "instruct")
 
 
