@@ -202,19 +202,17 @@ def test_topk_large_indices_row_major_640_rows_51200_k1536(device):
 
 TOPK_LARGE_INDICES_PERF_MARGIN = 0.01
 
-# Real-time-profiler baselines measured on a Blackhole dev board. The symmetric band catches both
-# regressions and unexpected speedups that should trigger baseline review.
+# Real-time-profiler baselines measured on the bh_p150b_civ2_viommu CI runner class (the class this
+# test gates on in nightly), median of 7 samples per cell — see #53459 for the measurement run.
+# The symmetric band catches both regressions and unexpected speedups that should trigger baseline
+# review. Runner-class pins: local silicon may fall outside the band and must not be used to re-pin.
 TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS = [
     # (case_id, num_rows, allocated_length, valid_length, k, expected_duration_ns)
-    ("prefill", 640, 51200, None, 1536, 1_652_800),
-    ("bounded_cache", 2, 102400, 56320, 1536, 310_724),
+    ("prefill", 640, 51200, None, 1536, 1_287_349),
+    ("bounded_cache", 2, 102400, 56320, 1536, 37_777),
 ]
 
 
-@pytest.mark.skip(
-    reason="expected_duration_ns pins predate the multi-core landings and must be re-baselined "
-    "on the IOMMU perf-runner class: https://github.com/tenstorrent/tt-metal/issues/53459"
-)
 @pytest.mark.parametrize(
     "case_id,num_rows,n,valid_length,k,expected_duration_ns",
     TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS,
