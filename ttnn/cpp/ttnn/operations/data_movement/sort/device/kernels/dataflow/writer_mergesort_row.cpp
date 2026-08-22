@@ -118,9 +118,19 @@ void kernel_main() {
         constexpr uint32_t tiles_per_run = K / TILE_H;  // 64
 #endif
 
-        // ---- Values: one page per run, runs are already in output order ----
-        for (uint32_t run = 0; run < num_chunks; ++run) {
-            values_out_dfb.wait_front(1);
+        // ---- Drain per 4096-block in the compute kernel's production order:
+        // the staged emit produces (2 value pages, then 2 index pages) per
+        // block, and the output DFBs are only 4 pages deep — draining all
+        // values before any indices (the old order) would deadlock at
+        // num_chunks > 4. For num_chunks <= 2 there is a single block, so the
+        // order is identical to the previous values-then-indices layout. ----
+        constexpr uint32_t runs_per_block = (num_chunks < 2) ? num_chunks : 2;
+        constexpr uint32_t num_blocks = num_chunks / runs_per_block;
+        for (uint32_t block = 0; block < num_blocks; ++block) {
+            // ---- Values: one page per run, runs are already in output order ----
+            for (uint32_t rib = 0; rib < runs_per_block; ++rib) {
+                const uint32_t run = block * runs_per_block + rib;
+                values_out_dfb.wait_front(1);
 #ifdef IS_ROW_MAJOR
             values_scratch_dfb.reserve_back(1);
             permute_run_to_scratch<value_slice_bytes>(values_out_dfb, values_scratch_dfb, noc);
@@ -155,10 +165,11 @@ void kernel_main() {
             noc.async_writes_flushed();
 #endif
             values_out_dfb.pop_front(1);
-        }
+            }
 
         // ---- Indices: same structure (u32 slices, or u16 after narrowing) ----
-        for (uint32_t run = 0; run < num_chunks; ++run) {
+        for (uint32_t rib = 0; rib < runs_per_block; ++rib) {
+            const uint32_t run = block * runs_per_block + rib;
             indices_out_dfb.wait_front(1);
 #ifdef NARROW_INDICES
             // Narrow the run's u32 index words to u16 into the index scratch page.
@@ -256,6 +267,7 @@ void kernel_main() {
 #endif  // NARROW_INDICES
             indices_out_dfb.pop_front(1);
         }
+        }  // block
     }
 
     noc.async_write_barrier();

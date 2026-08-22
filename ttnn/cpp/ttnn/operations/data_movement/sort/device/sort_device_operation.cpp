@@ -36,9 +36,15 @@ constexpr uint32_t SORT_WT_THRESHOLD_UINT16_ROW_MAJOR = 32;
 // preallocates UINT16 index tensors for a STABLE sort opts out to the previous routing in
 // select_program_factory (the stable contract at these widths is UINT32).
 static bool mergesort_row_engine_eligible(const SortDeviceOperation::tensor_args_t& tensor_args, uint32_t sort_w_dim) {
+    // W = 2048/4096 run fully in DEST; W >= 8192 run the L1-staged merge tree. The ceiling
+    // is the u16 tag identity limit: the fused word's 16 free bits address exactly 65536
+    // positions (max tag 0xFFFF at W = 65536, zero slack) — wider rows decline to the
+    // comparator engines.
+    constexpr uint32_t MERGESORT_MAX_W = 65536;
+    const bool w_is_pow2 = (sort_w_dim & (sort_w_dim - 1)) == 0;
     return tensor_args.input_tensor.dtype() == DataType::BFLOAT16 &&
-           tensor_args.input_tensor.device()->arch() == tt::ARCH::BLACKHOLE &&
-           (sort_w_dim == 2048 || sort_w_dim == 4096);
+           tensor_args.input_tensor.device()->arch() == tt::ARCH::BLACKHOLE && w_is_pow2 && sort_w_dim >= 2048 &&
+           sort_w_dim <= MERGESORT_MAX_W;
 }
 
 SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_factory(
@@ -98,7 +104,9 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
         // swapped operand order while keeping opposite halves, so on a tie both peers can
         // emit the SAME index — duplicate indices inside tie groups, indices not a
         // permutation (pre-existing CrossCore behavior wherever it serves unstable sorts;
-        // measured on silicon at W=512-4096 on plain randn, issue #54043). Unstable cells
+        // measured on silicon at W=512-4096 on plain randn, issue #54043; since the
+        // mergesort engine absorbed the bf16 cells, the residue on Blackhole is fp32
+        // unstable CrossCore widths only). Unstable cells that reach this branch (fp32)
         // therefore keep the single-core engine, which moves
         // value+index atomically per SFPSWAP and always emits a valid permutation. The
         // stable comparator (topk_cmp_swap_stable_directional) is operand-order-independent

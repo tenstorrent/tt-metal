@@ -10,6 +10,7 @@
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -2189,7 +2190,14 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryMergesortRowParallel:
 
     constexpr uint32_t MERGESORT_K = 2048;
     const uint32_t num_chunks = W / MERGESORT_K;
-    TT_FATAL(num_chunks == 1 || num_chunks == 2, "mergesort factory expects W in {{2048, 4096}}, got {}", W);
+    // W in {2048, 4096} runs entirely in DEST; W in {8192 .. 65536} runs the L1-staged merge
+    // tree (ping-pong fused run buffers). 65536 is the u16 tag identity ceiling (max tag
+    // 0xFFFF at W=65536 — zero slack); wider rows must decline in routing, loudly here.
+    TT_FATAL(
+        num_chunks >= 1 && num_chunks <= 32 && (num_chunks & (num_chunks - 1)) == 0,
+        "mergesort factory expects W a power of two in [2048, 65536], got {}",
+        W);
+    TT_FATAL(num_rows > 0, "mergesort factory requires a non-empty tensor (num_rows > 0)");
     // The engine's native index transport is UINT32; a UINT16 output tensor (the unstable
     // default at these widths) is served by narrowing each u32 index word on the writer RISC.
     const bool narrow_indices = (output_tensors.at(1).dtype() == DataType::UINT16);
@@ -2232,6 +2240,8 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryMergesortRowParallel:
     const DFBSpecName INDICES_OUT{"indices_out"};
     const DFBSpecName VALUES_SCRATCH{"values_scratch"};
     const DFBSpecName INDICES_SCRATCH{"indices_scratch"};
+    const DFBSpecName RUN_A{"run_a"};
+    const DFBSpecName RUN_B{"run_b"};
 
     const TensorParamName INPUT_PARAM{"input"};
     const TensorParamName VALUE_PARAM{"value_output"};
@@ -2254,18 +2264,42 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryMergesortRowParallel:
     // One K-element page per run. Values pack fp32 DEST words to bf16; index
     // words are raw u32 and must ride a 32-bit page format (a 16-bit pack
     // would round the index bits away — the documented no-u16-pack rule).
+    // Depth is capped at 4 pages: the writer drains per 4096-block in the
+    // compute kernel's production order (values then indices per block), so
+    // buffering a whole wide row (up to 32 runs) would waste 100s of KB.
+    const uint32_t out_pages = std::min<uint32_t>(2 * num_chunks, 4);
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = VALUES_OUT,
         .entry_size = MERGESORT_K * 2,
-        .num_entries = 2 * num_chunks,
+        .num_entries = out_pages,
         .data_format_metadata = tt::DataFormat::Float16_b,
     });
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INDICES_OUT,
         .entry_size = MERGESORT_K * 4,
-        .num_entries = 2 * num_chunks,
+        .num_entries = out_pages,
         .data_format_metadata = tt::DataFormat::Float32,
     });
+    if (num_chunks >= 4) {
+        // L1-staged merge tree (W >= 8192): two ping-pong run buffers of raw
+        // fused [bf16|u16] words in Float32-format pages (the only transport
+        // that preserves the lo16 tags), 2*num_chunks fused tiles each.
+        // Compute-produced AND compute-consumed (one producer, one consumer);
+        // whole-pass reserve/wait + push/pop credits order the packer's L1
+        // write-back against the unpacker's read-ahead across passes.
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = RUN_A,
+            .entry_size = 4096,
+            .num_entries = 2 * num_chunks,
+            .data_format_metadata = tt::DataFormat::Float32,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = RUN_B,
+            .entry_size = 4096,
+            .num_entries = 2 * num_chunks,
+            .data_format_metadata = tt::DataFormat::Float32,
+        });
+    }
     if (!is_row_major) {
         // TILE gather scratch: Blackhole DRAM reads require 64 B alignment, so
         // the reader stages the aligned 64 B window around each 32 B face row
@@ -2352,6 +2386,16 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryMergesortRowParallel:
         .dfb_spec_name = VALUES_OUT, .accessor_name = "values_out", .endpoint_type = DFBEndpointType::PRODUCER});
     compute_dfb_bindings.push_back(DFBBinding{
         .dfb_spec_name = INDICES_OUT, .accessor_name = "indices_out", .endpoint_type = DFBEndpointType::PRODUCER});
+    if (num_chunks >= 4) {
+        compute_dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = RUN_A, .accessor_name = "run_a", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = RUN_A, .accessor_name = "run_a", .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = RUN_B, .accessor_name = "run_b", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = RUN_B, .accessor_name = "run_b", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
 
     const auto layout_defines_map = layout_defines(is_row_major);
     auto writer_defines_map = layout_defines_map;
@@ -2396,10 +2440,25 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryMergesortRowParallel:
     // 32-bit DEST (fused [bf16|u16] words + u32 indices) and single-buffered
     // DEST: the W=4096 window uses all 8 fp32 tiles.
     ComputeGen1Config compute_hw_config{.enable_32_bit_dest = true, .double_buffer_dest = false};
+    if (num_chunks >= 4) {
+        // Staged run buffers hold raw fused [bf16|u16] words in Float32 pages; the
+        // reload MUST unpack to DEST bit-exactly (the default reduced-precision
+        // Float32 load mode would destroy the lo16 tags).
+        compute_hw_config.unpack_modes.insert({RUN_A, UnpackMode::UnpackToDest});
+        compute_hw_config.unpack_modes.insert({RUN_B, UnpackMode::UnpackToDest});
+    }
+    // The staged-path code references the run_a/run_b DFB handles, which only exist in the
+    // JIT-generated namespace when the DFBs are declared (num_chunks >= 4) — preprocessor-
+    // gate the staged branch so name lookup cannot trip on the fast-path builds (the same
+    // rationale as IS_UINT16_FP32_MODE above).
+    KernelSpec::CompilerOptions::Defines compute_defines_map;
+    if (num_chunks >= 4) {
+        compute_defines_map.insert({"MERGESORT_STAGED", "1"});
+    }
     spec.kernels.push_back(KernelSpec{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_mergesort_row.cpp",
-        .compiler_options = {.opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
+        .compiler_options = {.defines = compute_defines_map, .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args =
             {
