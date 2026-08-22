@@ -281,6 +281,39 @@ inline void dest_section_flip()
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
 }
 
+/**
+ * @brief Move the math thread's Dest window from the half-buffer base to one tile inside it.
+ *
+ * Hardware sums DEST_TARGET_REG_CFG_MATH_Offset into the Dest row of every math instruction that
+ * addresses Dest, so a stream that would otherwise carry `tile_index * 64 + row` as a runtime
+ * operand can carry the compile-time `row` alone and be issued as inline TTI_ instructions.
+ *
+ * @tparam tile_shape: Dest tile shape, values = <Tile32x32/Tile32x16/Tile16x16>
+ * @param tile_index: Tile index into the destination register.
+ * @note Call @ref reset_dest_tile_base once the stream is issued. Consumers that program this
+ *       register themselves (SFPU and the MOP paths, via @ref set_dst_write_addr) overwrite it and
+ *       do not depend on the restore; code that addresses Dest relative to the half-buffer base
+ *       without programming it does.
+ * @note The stall drains in-flight math consumers of the previous offset before it is overwritten.
+ */
+template <DstTileShape tile_shape>
+inline void set_dest_tile_base(const std::uint32_t tile_index)
+{
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, (tile_index << DstTileSizeLog2[tile_shape]) + get_dest_buffer_base());
+}
+
+/**
+ * @brief Return the math thread's Dest window to the half-buffer base.
+ *
+ * @note Pairs with @ref set_dest_tile_base.
+ */
+inline void reset_dest_tile_base()
+{
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
+}
+
 template <DstStart Dst>
 inline void set_dest_section_base()
 {

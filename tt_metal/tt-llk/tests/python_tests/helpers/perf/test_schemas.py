@@ -12,6 +12,29 @@ test's columns and fails on any drift from this catalog.
 
 
 PERF_TEST_SCHEMAS = {
+    "perf_bcast": {
+        "version": 1,
+        "columns": [
+            "broadcast_type",
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_math",
+            "loop_factor",
+            "marker",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "tile_cnt",
+            "unpack_to_dest",
+            "unpack_transpose_faces",
+            "unpack_transpose_within_face",
+        ],
+        "aliases": {},
+    },
     "perf_eltwise_bcast_col_custom": {
         "version": 3,
         "columns": [
