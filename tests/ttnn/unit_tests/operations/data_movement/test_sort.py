@@ -1312,9 +1312,10 @@ def test_sort_unstable_all_ones_permutation(width, device):
     assert torch.equal(
         torch.sort(dev_indices, dim=-1).values, expected_perm
     ), "unstable sort indices are not a permutation per row"
-    if is_blackhole() and width in (2048, 4096):
+    if is_blackhole():
         # Mergesort absorption: the engine is structurally stable, so the all-ones
-        # unstable permutation is exactly the identity.
+        # unstable permutation is exactly the identity. W=512/1024 reach the engine
+        # through the composite pad-to-2048 rider; W=2048/4096 natively.
         assert torch.equal(dev_indices, expected_perm), "mergesort-absorbed unstable all-ones must be identity"
 
 
@@ -1387,6 +1388,69 @@ def test_sort_unstable_mergesort_prealloc_u32(descending, device):
         assert_equal(torch_indices, dev_indices)
     else:
         assert_equal(torch_values, torch.gather(input_tensor, -1, dev_indices))
+
+
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("stable", [False, True])
+@pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
+@pytest.mark.parametrize("width", [512, 1024])
+def test_sort_mergesort_pad_to_2048_rider(width, layout, stable, descending, device):
+    """Pad-to-2048 rider (issue #33492 roadmap item 2): on Blackhole, bf16 rows whose pow2
+    width is 512 or 1024 are composite-padded to 2048 with ±inf sentinels and ride the
+    mergesort row engine (stable and unstable). The tie levels include real ±inf values that
+    COLLIDE with the pad sentinels — exactness here proves the structural-stability argument
+    (real elements carry lower linear tags than the pads, so they win every sentinel tie and
+    the post-sort slice recovers the real prefix with in-range indices). Exactness must hold
+    on every arch (elsewhere these widths keep the previous engines)."""
+    levels = [float("-inf"), -1.5, -0.5, -0.5, 0.0, 0.5, 1.5, float("inf")]
+    input_tensor = _tie_heavy_tensor([32, width], levels, seed=103 + width + int(descending) + 2 * int(stable))
+
+    if stable:
+        _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16, layout=layout)
+        return
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=layout, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=False)
+
+    assert ttnn_indices.dtype == ttnn.uint16  # unstable index dtype contract unchanged
+    dev_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+    if is_blackhole():
+        assert_equal(torch_indices, dev_indices)
+    else:
+        assert_equal(torch_values, torch.gather(input_tensor, -1, dev_indices))
+        expected_perm = torch.arange(width, dtype=torch.int64).expand(dev_indices.shape[0], -1)
+        assert torch.equal(torch.sort(dev_indices, dim=-1).values, expected_perm)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_mergesort_pad_to_2048_non_pow2(descending, device):
+    """Non-pow2 user width under the rider: W=600 pads to 1024 by the pow2 rule, which the
+    rider raises to 2048. All 1448 pad sentinels tie with the real ±inf levels; the slice
+    must still recover exactly the 600 real columns."""
+    levels = [float("-inf"), -1.0, -1.0, 0.5, float("inf")]
+    input_tensor = _tie_heavy_tensor([32, 600], levels, seed=107 + int(descending))
+    _run_stable_sort_case(device, input_tensor, -1, descending, ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_mergesort_pad_rider_stable_prealloc_u16_opt_out(descending, device):
+    """The STABLE preallocated-UINT16-index caller opts out of the mergesort engine, so the
+    rider must NOT raise their pad target (they would just sort a 4x wider row on the
+    comparator engines). The result stays torch-stable exact with u16 indices."""
+    levels = [-1.5, -0.5, -0.5, 0.5, 1.5]
+    input_tensor = _tie_heavy_tensor([32, 512], levels, seed=109)
+
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, descending=descending, stable=True)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    out_values = ttnn.zeros_like(ttnn_input)
+    out_indices = ttnn.zeros((32, 512), dtype=ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+    ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True, out=(out_values, out_indices))
+
+    assert out_indices.dtype == ttnn.uint16
+    assert_equal(torch_indices, ttnn.to_torch(out_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(out_values))
 
 
 @pytest.mark.parametrize("descending", [False, True])
