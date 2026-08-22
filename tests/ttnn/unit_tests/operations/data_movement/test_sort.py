@@ -1138,9 +1138,10 @@ def test_sort_stable_row_major(descending, device):
 def test_sort_stable_single_core_fused_dtype(descending, device):
     """Stable bf16 sorts in the single-core width band (Wt <= 64) return UINT32 indices — the
     32-bit-DEST rule the fused true-index-tag engine requires (same rule fp32/u16 inputs follow).
-    The dtype contract holds regardless of which factory the router picks: this Ht=1 cell is
-    rerouted to the CrossCore comparator for speed, the large-Ht sibling test below runs the
-    fused single-core engine, and both must produce UINT32 indices and torch-stable exactness."""
+    The dtype contract holds regardless of which factory the router picks: on Blackhole this
+    Ht=1 W=2048 cell runs the mergesort row engine (W=512/1024 siblings reroute to the
+    CrossCore comparator), elsewhere it runs the fused single-core engine like the large-Ht
+    sibling test below — every engine must produce UINT32 indices and torch-stable exactness."""
     levels = [-1.5, -0.5, -0.5, 0.5, 1.5]
     input_tensor = _tie_heavy_tensor([32, 2048], levels, seed=31)
 
@@ -1255,9 +1256,12 @@ def test_sort_stable_single_core_fused_large_ht(descending, device):
 @pytest.mark.parametrize("stable", [False, True])
 @pytest.mark.parametrize("width", [512, 1024, 2048])
 def test_sort_small_ht_cross_core_reroute(width, stable, descending, device):
-    """Small-Ht cells in the single-core width band (Wt in [16, 64], Ht <= Wt/8) reroute to the
-    CrossCore factory (measured 5-12x faster there; the single-core factory would idle the rest
-    of the grid). Exactness parity on tie-heavy input for both stability modes."""
+    """Small-Ht STABLE cells in the single-core width band (Wt in [16, 64], Ht <= Wt/8, Blackhole)
+    reroute to the CrossCore comparator (measured 5-12x faster there; the single-core factory
+    would idle the rest of the grid). Unstable cells deliberately keep the single-core engine:
+    the CrossCore unstable exchange resolves ties positionally and emits duplicate indices
+    inside tie groups. Exactness parity on tie-heavy input for both stability modes, and a
+    full permutation check on the unstable arm."""
     levels = [-1.5, -0.5, -0.5, 0.5, 1.5]
     input_tensor = _tie_heavy_tensor([32, width], levels, seed=41 + width + int(descending))
 
@@ -1271,18 +1275,41 @@ def test_sort_small_ht_cross_core_reroute(width, stable, descending, device):
 
     dev_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
     assert_equal(torch_values, ttnn.to_torch(ttnn_values))
-    # Unstable contract (same checks as test_sort_standard): exact values, and the indices
-    # gather the sorted values. The CrossCore comparator-less network may emit duplicate
-    # indices inside tie groups (pre-existing behavior at the widths it already owned:
-    # measured non-permutation index output at W=4096/8192 on tie-heavy input), so no
-    # permutation assertion here.
+    # Unstable contract: exact values, the indices gather the sorted values, AND every row's
+    # indices are a permutation of [0, W) — the single-core engine moves value+index
+    # atomically per SFPSWAP, so ties never duplicate an index.
     gathered = torch.gather(input_tensor, -1, dev_indices)
     assert_equal(torch_values, gathered)
+    expected_perm = torch.arange(width, dtype=torch.int64).expand(dev_indices.shape[0], -1)
+    assert torch.equal(
+        torch.sort(dev_indices, dim=-1).values, expected_perm
+    ), "unstable sort indices are not a permutation per row"
+
+
+@pytest.mark.parametrize("width", [512, 1024, 2048])
+def test_sort_unstable_all_ones_permutation(width, device):
+    """Regression (adversarial swarm minimal repro): [32, W] all-ones bf16 TILE stable=False
+    must return a valid permutation per row. When the small-Ht reroute predicate did not
+    exclude stable=False, these cells landed on the CrossCore factory whose unstable exchange
+    resolves ties positionally — every row came back with duplicate indices (448/512 duplicate
+    entries per row at W=512). They now run the single-core engine again and pass."""
+    input_tensor = torch.full((32, width), 1.0).bfloat16()
+
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, stable=False)
+
+    assert_equal(input_tensor, ttnn.to_torch(ttnn_values))  # all-ones: values must be unchanged
+    dev_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    expected_perm = torch.arange(width, dtype=torch.int64).expand(32, -1)
+    assert torch.equal(
+        torch.sort(dev_indices, dim=-1).values, expected_perm
+    ), "unstable sort indices are not a permutation per row"
 
 
 @pytest.mark.parametrize("descending", [False, True])
 def test_sort_small_ht_cross_core_reroute_fp32(descending, device):
-    """fp32 input in the rerouted band: CrossCore with UINT32 indices (the fp32 dtype rule)."""
+    """fp32 unstable input at the small-Ht shape: stays on the single-core engine (the reroute
+    is stable-only) with UINT32 indices (the fp32 dtype rule is routing-independent)."""
     torch.manual_seed(53)
     input_tensor = torch.randn([32, 2048], dtype=torch.float32)
 
