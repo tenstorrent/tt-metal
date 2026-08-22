@@ -346,6 +346,40 @@ def _tid_int(tid):
     return int(tid) if isinstance(tid, str) else tid
 
 
+def _build_operation_subgraph(nodes: list) -> list:
+    """Wrap an operation's trace nodes in capture_start/capture_end and renumber them."""
+    capture_start = {
+        "arguments": [],
+        "connections": [1],
+        "counter": 0,
+        "input_tensors": [],
+        "node_type": "capture_start",
+        "params": {},
+        "stacking_level": 0,
+    }
+    capture_end = {
+        "arguments": [],
+        "connections": [],
+        "counter": 0,
+        "input_tensors": [],
+        "node_type": "capture_end",
+        "params": {},
+        "stacking_level": 0,
+    }
+    raw_subgraph = [capture_start] + nodes + [capture_end]
+    old_to_new = {node.get("counter", 0): idx for idx, node in enumerate(raw_subgraph)}
+    subgraph = []
+    for idx, node in enumerate(raw_subgraph):
+        node_copy = dict(node)
+        node_copy["counter"] = idx
+        if "connections" in node_copy:
+            node_copy["connections"] = [old_to_new.get(c, c) for c in node_copy["connections"]]
+        if "input_tensors" in node_copy:
+            node_copy["input_tensors"] = [old_to_new.get(c, c) for c in node_copy["input_tensors"]]
+        subgraph.append(node_copy)
+    return subgraph
+
+
 def _is_tensor_deallocate_operation(name: str) -> bool:
     """Return True if this trace op name corresponds to freeing device storage for a tensor.
 
@@ -1056,6 +1090,9 @@ def import_graph(
 
     # Track function start nodes to pair with function end
     function_stack = []
+    # (name, reason) of the innermost C++ scope that was left by an exception, held until the
+    # enclosing reported operation closes so the diagnostic lands on the row users actually see.
+    pending_abort = None
     operation_counter = 1
     tensor_ids_seen = set()
     active_buffers = []
@@ -1162,6 +1199,7 @@ def import_graph(
             if not is_nested:
                 real_function_depth += 1
                 op_nesting_depth += 1
+                pending_abort = None
                 current_op_nodes = [node]
                 nested_input_tensor_ids = []
                 nested_output_tensor_ids = []
@@ -1177,9 +1215,14 @@ def import_graph(
 
         elif node_type == "function_end":
             name = params.get("name", "unknown")
+            # Set by GraphProcessor::track_function_abort: this scope was left by an exception.
+            is_aborted = params.get("aborted") == "true"
+            abort_reason = params.get("abort_reason", "")
 
             start_node = function_stack.pop() if function_stack else None
             if start_node and start_node.get("nested"):
+                if is_aborted and pending_abort is None:
+                    pending_abort = (name, abort_reason)
                 op_nesting_depth -= 1
 
                 # Gather this op's own input tensor IDs so we can detect in-place ops
@@ -1242,6 +1285,36 @@ def import_graph(
 
             # ----- Python I/O: if available, use directly -----
             py_io = start_node.get("python_io") if start_node else None
+
+            if py_io and py_io.get("error"):
+                error = py_io["error"]
+                errors_batch.append(
+                    (
+                        operation_id,
+                        name,
+                        error.get("type", "exception"),
+                        error.get("message", ""),
+                        "\n".join(py_io.get("python_stack_trace", [])),
+                        "",
+                        rank,
+                    )
+                )
+            elif is_aborted or pending_abort:
+                # No Python-side record, so this is a C++-initiated capture or an op with no Python
+                # wrapper. The abort marker is then the only evidence that the operation failed.
+                failing_name, reason = (name, abort_reason) if is_aborted else pending_abort
+                errors_batch.append(
+                    (
+                        operation_id,
+                        name,
+                        "aborted_operation",
+                        reason or f"Operation '{failing_name}' was aborted by an exception",
+                        "\n".join(py_io.get("python_stack_trace", [])) if py_io else "",
+                        "",
+                        rank,
+                    )
+                )
+            pending_abort = None
 
             if py_io and py_io.get("arguments"):
                 for key, val in py_io["arguments"].items():
@@ -1338,37 +1411,7 @@ def import_graph(
             if py_io and py_io.get("captured_graph"):
                 subgraph = py_io["captured_graph"]
             else:
-                capture_start = {
-                    "arguments": [],
-                    "connections": [1],
-                    "counter": 0,
-                    "input_tensors": [],
-                    "node_type": "capture_start",
-                    "params": {},
-                    "stacking_level": 0,
-                }
-                capture_end = {
-                    "arguments": [],
-                    "connections": [],
-                    "counter": 0,
-                    "input_tensors": [],
-                    "node_type": "capture_end",
-                    "params": {},
-                    "stacking_level": 0,
-                }
-                raw_subgraph = [capture_start] + current_op_nodes + output_tensor_nodes + [capture_end]
-                old_to_new = {}
-                for idx, nd in enumerate(raw_subgraph):
-                    old_to_new[nd.get("counter", 0)] = idx
-                subgraph = []
-                for idx, nd in enumerate(raw_subgraph):
-                    nd_copy = dict(nd)
-                    nd_copy["counter"] = idx
-                    if "connections" in nd_copy:
-                        nd_copy["connections"] = [old_to_new.get(c, c) for c in nd_copy["connections"]]
-                    if "input_tensors" in nd_copy:
-                        nd_copy["input_tensors"] = [old_to_new.get(c, c) for c in nd_copy["input_tensors"]]
-                    subgraph.append(nd_copy)
+                subgraph = _build_operation_subgraph(current_op_nodes + output_tensor_nodes)
 
             for snode in subgraph:
                 if "counter" in snode:
@@ -1542,23 +1585,53 @@ def import_graph(
             error_operation = params.get("error_operation", "")
             errors_batch.append((base_operation_id, error_operation, error_type, error_message, "", "", rank))
 
-    # Detect orphan function_start nodes (started but never ended = operation error).
+    # Orphan function_start (started, never ended): record the operation that died, with its error.
     already_errored = {e[1] for e in errors_batch}
     for orphan in function_stack:
-        if not orphan.get("nested"):
-            op_name = orphan.get("name", "unknown")
-            if op_name not in already_errored:
-                errors_batch.append(
-                    (
-                        base_operation_id,
-                        op_name,
-                        "incomplete_operation",
-                        f"Operation '{op_name}' started but never completed (likely crashed)",
-                        "",
-                        "",
-                        rank,
-                    )
+        if orphan.get("nested"):
+            continue
+
+        op_name = orphan.get("name", "unknown")
+        py_io = orphan.get("python_io") or {}
+        error = py_io.get("error") or {}
+        operation_id = base_operation_id + operation_counter
+        operation_counter += 1
+        graph_counter_to_op_id[orphan["counter"]] = operation_id
+        operations_batch.append((operation_id, op_name, 0, rank))
+
+        if py_io.get("arguments"):
+            for key, val in py_io["arguments"].items():
+                operation_arguments_batch.append((operation_id, str(key), str(val), rank))
+        else:
+            for idx, arg in enumerate(orphan.get("arguments", [])):
+                operation_arguments_batch.append((operation_id, f"arg_{idx}", str(arg), rank))
+
+        for idx, tid in enumerate(py_io.get("input_tensor_ids", [])):
+            input_tensors_batch.append((operation_id, idx, int(tid), rank))
+
+        subgraph = py_io.get("captured_graph") or _build_operation_subgraph(current_op_nodes)
+        if subgraph:
+            for snode in subgraph:
+                if "counter" in snode:
+                    snode["id"] = snode["counter"]
+            captured_graph_batch.append((operation_id, json.dumps(subgraph), rank))
+
+        stack_trace = "\n".join(py_io.get("python_stack_trace", []))
+        if stack_trace:
+            stack_traces_batch.append((operation_id, stack_trace, rank))
+
+        if op_name not in already_errored:
+            errors_batch.append(
+                (
+                    operation_id,
+                    op_name,
+                    error.get("type", "incomplete_operation"),
+                    error.get("message", f"Operation '{op_name}' started but never completed (likely crashed)"),
+                    stack_trace,
+                    "",
+                    rank,
                 )
+            )
 
     # Keep host tensors only when referenced in I/O; keep all device tensors as-is.
     referenced_tids = set()

@@ -648,6 +648,220 @@ class TestImportGraphUnit:
 
         conn.close()
 
+    def test_raising_operation_is_recorded_with_its_error(self, tmp_path):
+        """Issue #28836: an operation with no function_end is still imported, with its exception."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "tensor",
+                "params": {"tensor_id": "7", "shape": "[1, 1, 6400, 256]", "device_id": "0", "address": "1024"},
+                "connections": [2],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [],
+                "input_tensors": [1],
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        python_io = [
+            {
+                "name": "ttnn.conv2d",
+                "arguments": {"in_channels": "256"},
+                "input_tensor_ids": [7],
+                "error": {"type": "RuntimeError", "message": "Something went wrong"},
+            }
+        ]
+
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT operation_id, name FROM operations")
+        operations = cursor.fetchall()
+        assert len(operations) == 1, f"the raising operation must be recorded, got {operations}"
+        operation_id, name = operations[0]
+        assert name == "ttnn.conv2d"
+
+        cursor.execute("SELECT operation_id, operation_name, error_type, error_message FROM errors")
+        assert cursor.fetchall() == [(operation_id, "ttnn.conv2d", "RuntimeError", "Something went wrong")]
+
+        cursor.execute("SELECT value FROM operation_arguments WHERE operation_id = ?", (operation_id,))
+        assert cursor.fetchall() == [("256",)]
+        cursor.execute("SELECT tensor_id FROM input_tensors WHERE operation_id = ?", (operation_id,))
+        assert cursor.fetchall() == [(7,)]
+
+        conn.close()
+
+    def test_incomplete_operation_without_error_record_still_imported(self, tmp_path):
+        """Without a recorded exception the reason stays generic, but the operation is still listed."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.matmul"},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {"counter": 2, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT name FROM operations")
+        assert cursor.fetchall() == [("ttnn.matmul",)]
+
+        cursor.execute("SELECT error_type, error_message FROM errors")
+        error_type, error_message = cursor.fetchone()
+        assert error_type == "incomplete_operation"
+        assert "never completed" in error_message
+
+        conn.close()
+
+    def test_aborted_function_end_is_reported_as_an_error(self, tmp_path):
+        """A C++-only capture has no python_io, so the abort marker is the only evidence of failure."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "Conv2dDeviceOperation"},
+                "connections": [2],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {
+                    "name": "Conv2dDeviceOperation",
+                    "aborted": "true",
+                    "abort_reason": "Statically allocated circular buffers in program 73 clash with L1 buffers",
+                },
+                "connections": [3],
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT name FROM operations")
+        assert cursor.fetchall() == [("Conv2dDeviceOperation",)]
+
+        cursor.execute("SELECT operation_name, error_type, error_message FROM errors")
+        assert cursor.fetchall() == [
+            (
+                "Conv2dDeviceOperation",
+                "aborted_operation",
+                "Statically allocated circular buffers in program 73 clash with L1 buffers",
+            )
+        ]
+
+        conn.close()
+
+    def test_abort_inside_an_operation_keeps_later_operations_visible(self, tmp_path):
+        """The point of closing the scope in C++: ops after the failure stay top level.
+
+        Before the guard the aborting scope stayed open, so ``ttnn.add`` was folded into the
+        failed ``ttnn.conv2d`` and vanished from the report.
+        """
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [2],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "Conv2dDeviceOperation"},
+                "connections": [3],
+                "input_tensors": [],
+            },
+            {
+                # No abort_reason: this is what ScopedTrackedFunction's destructor emits, since the
+                # exception message is out of reach during unwinding.
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "Conv2dDeviceOperation", "aborted": "true"},
+                "connections": [4],
+            },
+            {"counter": 4, "node_type": "function_end", "params": {"name": "ttnn.conv2d"}, "connections": [5]},
+            {
+                "counter": 5,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.add"},
+                "connections": [6],
+                "input_tensors": [],
+            },
+            {"counter": 6, "node_type": "function_end", "params": {"name": "ttnn.add"}, "connections": [7]},
+            {"counter": 7, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT name FROM operations ORDER BY operation_id")
+        assert cursor.fetchall() == [("ttnn.conv2d",), ("ttnn.add",)]
+
+        # The abort is attributed to the operation the report lists, and names the frame that died.
+        cursor.execute("SELECT operation_name, error_type, error_message FROM errors")
+        assert cursor.fetchall() == [
+            ("ttnn.conv2d", "aborted_operation", "Operation 'Conv2dDeviceOperation' was aborted by an exception")
+        ]
+
+        conn.close()
+
+    def test_python_recorded_error_wins_over_the_abort_marker(self, tmp_path):
+        """When Python recorded the exception, its type and message are the better diagnostic."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [2],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "Conv2dDeviceOperation"},
+                "connections": [3],
+                "input_tensors": [],
+            },
+            {
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "Conv2dDeviceOperation", "aborted": "true", "abort_reason": "CB/L1 clash"},
+                "connections": [4],
+            },
+            {"counter": 4, "node_type": "function_end", "params": {"name": "ttnn.conv2d"}, "connections": [5]},
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        python_io = [
+            {
+                "name": "ttnn.conv2d",
+                "arguments": {},
+                "error": {"type": "RuntimeError", "message": "TT_THROW @ program.cpp:1773"},
+            }
+        ]
+
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT operation_name, error_type, error_message FROM errors")
+        assert cursor.fetchall() == [("ttnn.conv2d", "RuntimeError", "TT_THROW @ program.cpp:1773")]
+
+        conn.close()
+
     def test_operation_arguments_imported(self, tmp_path):
         """Test that operation arguments are imported from function_start."""
         mock_graph = [
@@ -4334,6 +4548,100 @@ class TestFastOperationGraphTracking:
         )
         connected = c.fetchone()[0]
         assert connected >= 1, f"Expected at least 1 connected tensor ID, got {connected}"
+        conn.close()
+
+
+class TestUnwindAbandonedScopes:
+    """Issue #28836: a top-level operation closes the scopes an earlier failure left open.
+
+    An operation that throws from a call site with no scope guard never emits its
+    ``function_end``.  Everything captured afterwards then lands inside a scope that is
+    already dead, and the importer, which only lists top-level scopes as operations, drops it.
+    """
+
+    @staticmethod
+    def _capture_with_an_abandoned_scope():
+        """Capture the exact shape a failure leaves behind, without needing one to happen.
+
+        ``ttnn.conv2d`` dies inside an unguarded C++ scope, so that scope reports no end; the
+        decorator's ``finally`` still runs and closes it instead of its own, which is what
+        leaves ``ttnn.conv2d`` open.  The raw binding is the C++ entry point those call sites
+        use, so calling it here reproduces the leak faithfully.
+        """
+        from ttnn._ttnn.graph import track_function_start as cpp_track_function_start
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            ttnn.graph.track_function_start("ttnn.conv2d")
+            cpp_track_function_start("Conv2dDeviceOperation")
+            ttnn.graph.track_function_end()
+
+            ttnn.graph.track_function_start("ttnn.add")
+            ttnn.graph.track_function_end()
+        finally:
+            graph = ttnn.graph.end_graph_capture()
+        return graph
+
+    @staticmethod
+    def _nodes(graph, node_type, name):
+        return [n for n in graph if n["node_type"] == node_type and n["params"].get("name") == name]
+
+    def test_operation_after_a_failure_stays_top_level(self):
+        graph = self._capture_with_an_abandoned_scope()
+
+        (add_start,) = self._nodes(graph, "function_start", "ttnn.add")
+        assert add_start["stacking_level"] == 1, "ttnn.add must not be recorded as a child of the failed ttnn.conv2d"
+
+    def test_abandoned_scope_is_closed_as_aborted(self):
+        graph = self._capture_with_an_abandoned_scope()
+
+        (conv_end,) = self._nodes(graph, "function_end", "ttnn.conv2d")
+        assert conv_end["params"].get("aborted") == "true"
+        assert "ttnn.add" in conv_end["params"].get("abort_reason", ""), "the reason should name what closed the scope"
+
+    def test_balanced_capture_is_left_alone(self):
+        """Nothing is open when a top-level operation starts, so the unwind is a no-op."""
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            for name in ("ttnn.conv2d", "ttnn.add"):
+                ttnn.graph.track_function_start(name)
+                ttnn.graph.track_function_end()
+        finally:
+            graph = ttnn.graph.end_graph_capture()
+
+        aborted = [n for n in graph if (n["params"] or {}).get("aborted")]
+        assert aborted == [], f"a healthy capture must not report aborts, got {aborted}"
+
+    def test_failing_operation_and_its_successor_both_reach_the_report(self, device, tmp_path, expect_error):
+        """End to end: ttnn.to_dtype fails, and the operation after it is still in the report.
+
+        ``ttnn.to_dtype`` reads the tensor's host storage inside a tracked C++ scope with no
+        guard (``ttnn/core/tensor/tensor_ops.cpp:535-540``), so passing a device tensor throws
+        with that scope open — the same situation as the circular buffer / L1 clash from the
+        issue.
+        """
+        report_path = tmp_path / "report.json"
+        tt_input = ttnn.from_torch(torch.randn(1, 32), layout=ttnn.TILE_LAYOUT, device=device)
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            with expect_error(RuntimeError, "Expected Tensor with HostStorage"):
+                ttnn.to_dtype(tt_input, ttnn.float32)
+            ttnn.add(tt_input, tt_input)
+        finally:
+            ttnn.graph.end_graph_capture_to_file(str(report_path))
+
+        db_path = graph_report.import_report(report_path, tmp_path / "output")
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT name FROM operations ORDER BY operation_id")
+        names = [row[0] for row in cursor.fetchall()]
+        assert names == ["ttnn.to_dtype", "ttnn.add"], f"expected both operations in the report, got {names}"
+
+        cursor.execute("SELECT operation_name, error_type FROM errors")
+        assert cursor.fetchall() == [("ttnn.to_dtype", "RuntimeError")]
+
         conn.close()
 
 

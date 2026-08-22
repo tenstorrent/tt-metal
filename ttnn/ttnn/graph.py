@@ -4,6 +4,7 @@
 
 import contextlib
 import json
+import threading
 import traceback
 from typing import Callable, Union
 from loguru import logger
@@ -28,8 +29,9 @@ from ttnn._ttnn.graph import (
     disable_detailed_buffer_tracing,
     is_detailed_buffer_tracing_enabled,
     is_graph_capture_active,
-    track_function_start,
-    track_function_end,
+    track_function_start as _cpp_track_function_start,
+    track_function_end as _cpp_track_function_end,
+    unwind_open_functions as _cpp_unwind_open_functions,
 )
 
 from ttnn.graph_report import (
@@ -109,6 +111,51 @@ def disable_python_io_recording():
 def is_python_io_recording_enabled() -> bool:
     """Return whether Python I/O recording is currently enabled."""
     return _python_io_recording_enabled
+
+
+# ---------------------------------------------------------------------------
+# Python-level operation scopes
+# ---------------------------------------------------------------------------
+# The operation decorators wrap every ttnn operation in a function scope so that the C++
+# sub-operations it dispatches are nested under the name the user called.  The depth of those
+# scopes is what tells the next operation whether it is a top-level one; see
+# :func:`track_function_start`.  It is kept per thread to match the graph processor stack,
+# which is thread-local in C++: a capture only ever observes the thread that began it.
+
+
+class _OperationScopeDepth(threading.local):
+    value = 0
+
+
+_operation_scope_depth = _OperationScopeDepth()
+
+
+def track_function_start(function_name):
+    """Open a function scope for a Python-level operation in the active graph capture.
+
+    A top-level operation first unwinds whatever scopes the capture still holds open.  An
+    operation that raised from a call site with no scope guard never emitted its
+    ``function_end``, and leaving its scope open would record this operation — and every one
+    after it — as a child of an operation that is already dead, hiding them from the report
+    (issue #28836).  Nothing can legitimately be open at this point: the decorators close
+    their scope in a ``finally``, so a depth of zero means no operation is in flight.
+
+    Args:
+        function_name: The operation name (e.g. ``"ttnn.conv2d"``)
+    """
+    if _operation_scope_depth.value == 0:
+        _cpp_unwind_open_functions(
+            f"Operation did not complete: its graph scope was still open when '{function_name}' started"
+        )
+    _cpp_track_function_start(function_name)
+    _operation_scope_depth.value += 1
+
+
+def track_function_end():
+    """Close the function scope opened by the matching :func:`track_function_start`."""
+    if _operation_scope_depth.value > 0:
+        _operation_scope_depth.value -= 1
+    _cpp_track_function_end()
 
 
 def _configure_python_stack_traces_for_outer_graph_capture(ttnn_mod) -> None:
@@ -384,6 +431,14 @@ def record_python_operation(name, function_args, function_kwargs):
             record["python_stack_trace"] = []
 
     _python_io_data.append(record)
+
+
+def record_python_operation_error(name, error_type, error_message):
+    """Attach the exception raised by an operation to its ``_python_io_data`` entry."""
+    for record in reversed(_python_io_data):
+        if record["name"] == name and "error" not in record:
+            record["error"] = {"type": error_type, "message": error_message}
+            return
 
 
 def store_output_tensor_ids(output_tensor_ids):
