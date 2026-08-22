@@ -58,7 +58,7 @@ class LTXOneStagePipeline(LTXPipeline):
         # Warm the on-device audio decode eagerly so the first real (traced) decode captures on
         # warm state at a deterministic free-list.
         als = AudioLatentShape.from_video_pixel_shape(
-            VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
+            VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=self.fps)
         )
         self._warmup_audio_decode(torch.zeros(1, als.frames, self.in_channels), num_frames)
 
@@ -85,10 +85,11 @@ class LTXOneStagePipeline(LTXPipeline):
         stg_block: int = 28,
         seed: int = 10,
         ge_gamma: float = 0.0,
-        fps: int = 24,
+        fps: float | None = None,
     ) -> str:
         """Run LTX-2.3 Pro AV generation and write an MP4. Guidance defaults match the
         reference ``LTX_2_3_PARAMS``; ``ge_gamma`` > 0 enables gradient-estimation sampling."""
+        fps = self._resolve_fps(fps)
         neg = negative_prompt if negative_prompt is not None else DEFAULT_NEGATIVE_PROMPT
 
         total_t0 = time.time()
