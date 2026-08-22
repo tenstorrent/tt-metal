@@ -96,7 +96,14 @@ bash "$HERE/conf_lint.sh" > "$EV/conf-lint.txt" 2>&1 \
 # Ops list: explicit --ops wins; otherwise derive headline + changed-since-
 # last-pin rows from git (derivation log kept in evidence).
 HAVE_OPS=0
-for _a in "$@"; do [ "$_a" = "--ops" ] && HAVE_OPS=1; done
+EXPLICIT_OPS=""
+_prev=""
+for _a in "$@"; do
+  [ "$_prev" = "--ops" ] && EXPLICIT_OPS=$_a
+  [ "$_a" = "--ops" ] && HAVE_OPS=1
+  case "$_a" in --ops=*) HAVE_OPS=1; EXPLICIT_OPS=${_a#--ops=};; esac
+  _prev=$_a
+done
 OPS_ARGS=()
 if [ "$HAVE_OPS" = 1 ]; then
   echo "headline: explicit --ops passed — skipping git derivation"
@@ -111,10 +118,27 @@ fi
 
 # --priority-ops: measure the flip-prone headline rows first, once the
 # harness supports it (lane DC's cross-pin reuse work); harmless until then.
+# With an explicit --ops list, only the headline rows INSIDE that list are
+# passed — sweep_2x2.py refuses any --priority-ops row outside --ops
+# ("unknown ops", rc=1) AFTER the evidence root is stamped, contaminating
+# the root (lane FI/FM launch gotcha, harness-audit FO fix).
 PRIO_ARGS=()
 if grep -q -- '"--priority-ops"' "$HERE/sweep_2x2.py"; then
-  PRIO_ARGS=(--priority-ops "$HEADLINE_ROWS")
-  echo "headline: --priority-ops supported — headline rows measured first"
+  PRIO_ROWS=$HEADLINE_ROWS
+  if [ "$HAVE_OPS" = 1 ]; then
+    PRIO_ROWS=$(python3 -c '
+import sys
+head = [o for o in sys.argv[1].split(",") if o]
+ops = set(o for o in sys.argv[2].split(",") if o)
+print(",".join(o for o in head if o in ops))
+' "$HEADLINE_ROWS" "$EXPLICIT_OPS")
+  fi
+  if [ -n "$PRIO_ROWS" ]; then
+    PRIO_ARGS=(--priority-ops "$PRIO_ROWS")
+    echo "headline: --priority-ops supported — priority rows: $PRIO_ROWS"
+  else
+    echo "headline: explicit --ops shares no rows with HEADLINE_ROWS — no --priority-ops"
+  fi
 else
   echo "headline: sweep_2x2.py has no --priority-ops yet — rows run in config order"
 fi

@@ -96,6 +96,14 @@ sed -i 's/^#   1. 999999999999… — first candidate$/#   1. 999999999999… �
 "$LINT" "$TMP/twocur.conf" "$TMP/ok.tsv" > "$TMP/out4.log" 2>&1
 check "two (CURRENT) markers refuse RED" 1 $?
 
+# 4b. (R3b) duplicated PIN HISTORY sha (in-place overwrite / global sha
+#     replace — the wave-14 audit-corruption class) -> RED
+write_conf "$TMP/dupsha.conf" "$CC1" "$DRV" "$SBH" "$SWH" 2 "${CC1:0:12}"
+sed -i "s/^#   1. 999999999999…/#   1. ${CC1:0:12}…/" "$TMP/dupsha.conf"
+"$LINT" "$TMP/dupsha.conf" "$TMP/ok.tsv" > "$TMP/out4b.log" 2>&1
+check "duplicated PIN HISTORY sha (in-place overwrite) refuses RED" 1 $?
+grep -q "R3b" "$TMP/out4b.log" || { echo "SELFTEST FAIL: dup-sha RED is not attributed to R3b"; overall=1; }
+
 # 5. baseline anchor names a stale pin -> RED with both disagreeing lines shown
 write_baseline "$TMP/stale.tsv" "ffffffffffff" "${SBH:0:12}"
 "$LINT" "$TMP/ok.conf" "$TMP/stale.tsv" > "$TMP/out5.log" 2>&1
