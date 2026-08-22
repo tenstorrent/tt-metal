@@ -70,6 +70,7 @@ from .llk_params import (
     MailboxesQuasar,
 )
 from .logger import logger
+from .param_repr_gate import assert_value_complete_reprs
 from .stimuli_config import StimuliConfig
 from .target_config import TestTargetConfig
 from .test_variant_parameters import (
@@ -899,6 +900,14 @@ class TestConfig:
         pytest.skip()
 
     def generate_variant_hash(self):
+        # Tripwire (lane FQ, FO-2): the hash below keys str() of every field,
+        # i.e. each parameter's repr. A param whose repr hides its values
+        # (non-@dataclass subclass, hand-written __init__) would make every
+        # value hash identically and let .build_complete reuse the wrong
+        # impl's ELF — refuse loudly instead.
+        assert_value_complete_reprs(self.templates, context="templates")
+        assert_value_complete_reprs(self.runtimes, context="runtimes")
+
         NON_COMPILATION_ARGUMENTS = [
             "run_configs",
             "variant_id",

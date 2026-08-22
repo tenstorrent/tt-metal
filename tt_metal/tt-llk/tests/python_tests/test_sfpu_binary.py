@@ -1914,10 +1914,12 @@ class INPUT_TILE_A(TemplateParameter):
 
 @dataclass
 class BinaryBcastImpl(TemplateParameter):
-    value: int
+    # Field name = the CSV column header this param would emit; must be
+    # globally unique across parameter classes (FM-F1 contract).
+    binary_bcast_impl: int
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t BINARY_BCAST_IMPL = {self.value}u;"
+        return f"constexpr std::uint32_t BINARY_BCAST_IMPL = {self.binary_bcast_impl}u;"
 
 
 _BCAST_BINARY_OPS = {

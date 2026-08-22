@@ -10,6 +10,8 @@ int<->int and all block-float (Bfp8_b / Bfp4_b) conversions. Same-dtype pairs
 and the ``int32<->uint32`` pair (not a kernel pair) are excluded.
 """
 
+from dataclasses import dataclass
+
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -37,10 +39,10 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     parametrize,
 )
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.perf.core import PerfConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     MATH_OP,
@@ -49,8 +51,8 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     TYPECAST_FORMATS,
     DestSync,
-    generate_input_dim,
     TemplateParameter,
+    generate_input_dim,
 )
 from helpers.utils import passed_test
 
@@ -96,14 +98,20 @@ TYPECAST_PAIRS = [
 ]
 
 
+@dataclass
 class TypecastImpl(TemplateParameter):
-    """Select production or fresh semantic C++ for the audited 16-bit pair."""
+    """Select production or fresh semantic C++ for the audited 16-bit pair.
 
-    def __init__(self, value: int):
-        self.value = value
+    MUST stay a @dataclass with an annotated field: the variant hash keys the
+    dataclass ``__repr__`` of every template, so a hand-written ``__init__``
+    (empty inherited repr) makes every impl hash identically and lets
+    ``.build_complete`` reuse the wrong impl's ELF (lane FO/FQ finding).
+    """
+
+    typecast_impl: int
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int TYPECAST_IMPL = {self.value};"
+        return f"constexpr int TYPECAST_IMPL = {self.typecast_impl};"
 
 
 def _typecast_impls(formats: InputOutputFormat) -> list[int]:

@@ -99,10 +99,12 @@ INPUT_RANGES = [(-20.0, 0.0), (-88.0, 0.0), (-4.0, 4.0), (-400.0, 0.0)]
 
 @dataclass
 class SdpaExpImplTemplate(TemplateParameter):
-    value: int
+    # Field name = the CSV column header this param would emit; must be
+    # globally unique across parameter classes (FM-F1 contract).
+    sdpa_exp_impl: int
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t SDPA_EXP_IMPL = {self.value}u;"
+        return f"constexpr std::uint32_t SDPA_EXP_IMPL = {self.sdpa_exp_impl}u;"
 
 
 @skip_for_wormhole

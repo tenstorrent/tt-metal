@@ -216,10 +216,12 @@ class SdpaImplTemplate(TemplateParameter):
     production calculate_exponential_polynomial (raw TTI over pinned LREG0..7),
     1 = fresh typed semantic body (fresh_cpp/sdpametal.h)."""
 
-    value: int
+    # Field name = the CSV column header this param would emit; must be
+    # globally unique across parameter classes (FM-F1 contract).
+    sdpa_impl: int
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t SDPA_IMPL = {self.value}u;"
+        return f"constexpr std::uint32_t SDPA_IMPL = {self.sdpa_impl}u;"
 
 
 def _templates(variant: Variant, sdpa_impl: int = 0):

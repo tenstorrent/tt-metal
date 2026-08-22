@@ -39,10 +39,12 @@ from helpers.utils import passed_test
 
 @dataclass
 class ReduceImplTemplate(TemplateParameter):
-    value: int
+    # Field name = the CSV column header this param would emit; must be
+    # globally unique across parameter classes (FM-F1 contract).
+    reduce_impl: int
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t REDUCE_IMPL = {self.value}u;"
+        return f"constexpr std::uint32_t REDUCE_IMPL = {self.reduce_impl}u;"
 
 
 # Has a compilation error on coverage, https://github.com/tenstorrent/tt-llk/issues/884
@@ -135,7 +137,9 @@ def test_sfpu_reduce_sdpa(
         assert passed_test(golden_tensor[row], res_tensor[row], formats.output_format)
 
 
-@pytest.mark.parametrize("reduce_impl,label", [(0, "handwritten_replay"), (1, "generated_sfpi")])
+@pytest.mark.parametrize(
+    "reduce_impl,label", [(0, "handwritten_replay"), (1, "generated_sfpi")]
+)
 def test_sfpu_reduce_sdpa_device_profile(perf_report, reduce_impl, label):
     """Measure the same Reduce-SDPA body with device profiler timestamps."""
     input_dimensions = [512, 64]
@@ -157,7 +161,9 @@ def test_sfpu_reduce_sdpa_device_profile(perf_report, reduce_impl, label):
         # TRISC2, so its scoped marker belongs to the PACK_ISOLATE report.
         run_types=[PerfRunType.PACK_ISOLATE],
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions, block_ct_dim=2, block_rt_dim=4),
+            generate_input_dim(
+                input_dimensions, input_dimensions, block_ct_dim=2, block_rt_dim=4
+            ),
             MATH_OP(mathop=MathOperation.ReduceColumn, pool_type=ReducePool.Max),
             ReduceImplTemplate(reduce_impl),
         ],

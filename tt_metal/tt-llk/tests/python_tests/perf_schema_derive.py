@@ -35,6 +35,11 @@ ROOT = Path(__file__).resolve().parent
 
 PARAM_BASES = {"TemplateParameter", "RuntimeParameter"}
 LIST_KWARGS = {"templates", "runtimes"}
+# Params the PIPELINE owns: PerfConfig itself appends PERF_RUN_TYPE per run
+# type and builds the sweep columns from the PASSED lists only
+# (helpers/perf/core.py _build_sweep_frame), so it never becomes a CSV column
+# even when a test's correctness path passes it explicitly.
+PIPELINE_OWNED_PARAMS = {"PERF_RUN_TYPE"}
 MARKER_COLUMN = "marker"
 QUASAR_DIR = "quasar"
 
@@ -132,43 +137,65 @@ def _has_perfconfig(tree) -> bool:
 def _param_fields_in_tree(tree, specs) -> set:
     """Emitted param fields from every templates=/runtimes= list in a file.
 
-    Covers the three shapes the tests use to pass those lists:
+    Covers the shapes the tests use to pass those lists:
       * inline in the call:      PerfConfig(templates=[...], runtimes=[...])
       * a named variable:        templates = [...]; PerfConfig(**cfg)
       * a dict entry:            cfg = {"templates": [...], "runtimes": [...]}
+      * composed expressions:    templates=extra + [X(...)], where the list is
+        built by concatenation/conditional from other locals (e.g.
+        ``extra = [] if v is None else [FRESH_CPP_IMPL(v)]`` — the
+        perf_sfpu_binop_scalar shape). The whole expression is walked for
+        param instantiations, and any Name it references is resolved (one
+        level) to that name's assigned expressions in the same file.
+
+    Collecting every ast.Call inside those expressions is safe because
+    ``emitted_fields`` returns [] for anything that is not a known parameter
+    class. The derivation is a UNION over sweep values by construction, so a
+    conditionally-passed param contributes its columns (drift between the
+    conditional arms is the runtime PerfSchemaError's job, not this gate's).
     """
     fields = set()
 
-    def add_list(list_node):
-        for elt in list_node.elts:
-            if isinstance(elt, ast.Call):
-                fields.update(emitted_fields(elt, specs))
+    # name -> [assigned value expressions] for one level of indirection.
+    assigned: dict[str, list] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    assigned.setdefault(target.id, []).append(node.value)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            assigned.setdefault(node.target.id, []).append(node.value)
+
+    def add_expr(expr, depth=0):
+        for sub in ast.walk(expr):
+            if isinstance(sub, ast.Call):
+                callee = None
+                if isinstance(sub.func, ast.Name):
+                    callee = sub.func.id
+                elif isinstance(sub.func, ast.Attribute):
+                    callee = sub.func.attr
+                if callee in PIPELINE_OWNED_PARAMS:
+                    continue
+                fields.update(emitted_fields(sub, specs))
+            elif isinstance(sub, ast.Name) and depth < 2:
+                for value in assigned.get(sub.id, []):
+                    add_expr(value, depth + 1)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
-                if (
-                    isinstance(target, ast.Name)
-                    and target.id in LIST_KWARGS
-                    and isinstance(node.value, (ast.List, ast.Tuple, ast.Set))
-                ):
-                    add_list(node.value)
+                if isinstance(target, ast.Name) and target.id in LIST_KWARGS:
+                    add_expr(node.value)
         elif isinstance(node, ast.Call) and (
             isinstance(node.func, ast.Name) and node.func.id == "PerfConfig"
         ):
             for kw in node.keywords:
-                if kw.arg in LIST_KWARGS and isinstance(
-                    kw.value, (ast.List, ast.Tuple, ast.Set)
-                ):
-                    add_list(kw.value)
+                if kw.arg in LIST_KWARGS:
+                    add_expr(kw.value)
         elif isinstance(node, ast.Dict):
             for key, value in zip(node.keys, node.values):
-                if (
-                    isinstance(key, ast.Constant)
-                    and key.value in LIST_KWARGS
-                    and isinstance(value, (ast.List, ast.Tuple, ast.Set))
-                ):
-                    add_list(value)
+                if isinstance(key, ast.Constant) and key.value in LIST_KWARGS:
+                    add_expr(value)
     return fields
 
 

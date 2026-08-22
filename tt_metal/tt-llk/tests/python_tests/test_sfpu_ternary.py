@@ -44,10 +44,12 @@ _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
 
 @dataclass
 class TTNNWhereImplTemplate(TemplateParameter):
-    value: int
+    # Field name = the CSV column header this param would emit; must be
+    # globally unique across parameter classes (FM-F1 contract).
+    ttnn_where_impl: int
 
     def convert_to_cpp(self) -> str:
-        return f"#undef TTNN_WHERE_IMPL\n#define TTNN_WHERE_IMPL {self.value}"
+        return f"#undef TTNN_WHERE_IMPL\n#define TTNN_WHERE_IMPL {self.ttnn_where_impl}"
 
 
 # Helper check function
