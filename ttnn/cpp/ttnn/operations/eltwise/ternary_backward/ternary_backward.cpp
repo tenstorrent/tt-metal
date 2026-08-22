@@ -47,7 +47,10 @@ std::vector<Tensor> addcdiv_bw(
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
     Tensor grad_a = ttnn::multiply(
-        ttnn::multiply(grad, value, std::nullopt, output_mem_config), ttnn::reciprocal(tensor2, output_mem_config));
+        ttnn::multiply(grad, value, std::nullopt, output_mem_config),
+        ttnn::reciprocal(tensor2, output_mem_config),
+        std::nullopt,
+        output_mem_config);
     grad_tensor.emplace_back(ttnn::where(
         ttnn::eqz(tensor2, output_mem_config),
         ttnn::where(ttnn::eqz(grad, output_mem_config), t_nan, t_inf, output_mem_config),
