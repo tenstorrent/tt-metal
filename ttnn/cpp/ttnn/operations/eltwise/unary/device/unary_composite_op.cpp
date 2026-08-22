@@ -36,8 +36,8 @@ Tensor _variance_impl(
     const std::optional<MemoryConfig>& output_mem_config) {
     ttsl::SmallVector<int> dims = {2, 3};
     constexpr float correction = 0.0f;
-    auto shape_wh = y.padded_shape();
-    float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
+    auto shape_wh = y.logical_shape();
+    float scale = 1.0f / ((float)(shape_wh[shape_wh.rank() - 1] * shape_wh[shape_wh.rank() - 2]) - correction);
     Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
     return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
 }
