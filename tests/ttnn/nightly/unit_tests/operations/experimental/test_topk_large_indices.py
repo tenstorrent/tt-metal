@@ -177,12 +177,15 @@ def test_topk_large_indices_row_major_640_rows_51200_k1536(device):
 
 TOPK_LARGE_INDICES_PERF_MARGIN = 0.01
 
-# Real-time-profiler baselines measured on a Blackhole dev board. The symmetric band catches both
-# regressions and unexpected speedups that should trigger baseline review.
+# Real-time-profiler baselines measured on the CI perf-runner class (bh_p150b_civ2_viommu), the
+# class this test runs on in nightly — median of 7 samples per cell, per issue #53459:
+# https://github.com/tenstorrent/tt-metal/actions/runs/32585480797
+# The symmetric band catches both regressions and unexpected speedups that should trigger
+# baseline review. These are runner-class pins: local dev boards may fall outside the band.
 TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS = [
     # (case_id, num_rows, allocated_length, valid_length, k, expected_duration_ns)
-    ("prefill", 640, 51200, None, 1536, 1_683_850),
-    ("bounded_cache", 2, 102400, 56320, 1536, 316_890),
+    ("prefill", 640, 51200, None, 1536, 1_685_339),
+    ("bounded_cache", 2, 102400, 56320, 1536, 316_843),
 ]
 
 
