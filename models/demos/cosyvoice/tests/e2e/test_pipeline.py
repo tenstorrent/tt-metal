@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""The whole model, end to end on device -- `02_plan.md` P5.
+"""The whole model, end to end on device.
 
 Every earlier test checks one stage against a golden captured at that stage's own
 boundary. This one runs **semantic tokens straight through to a waveform** and
@@ -92,7 +92,7 @@ def test_modes_differ_only_in_prompt_construction(expect_error):
     `frontend_instruct` puts the instruction in the LLM's **prompt_text slot**, so
     it is a prefix the model reads, not a control signal. CosyVoice-1 wants a
     style *description*; CosyVoice-2's directive phrasing makes this model read the
-    instruction aloud -- which took zh CER from 9.09% to 42.42% in P0's sweep.
+    instruction aloud -- which took zh CER from 9.09% to 42.42% in the WER sweep.
     """
     from models.demos.cosyvoice.tt.pipeline import MODES, CosyVoiceTTNN
 
@@ -157,7 +157,7 @@ def _build_flow_mel(device, ttnn):
 @needs_golden
 @needs_l1_small
 def test_device_tokens_to_waveform(device):
-    """**P5's integration gate.** Semantic tokens in, audio out, both stages on
+    """**The integration gate.** Semantic tokens in, audio out, both stages on
     device: the flow decoder's ten Euler steps and the whole HiFT vocoder,
     against the reference's actual output audio.
 

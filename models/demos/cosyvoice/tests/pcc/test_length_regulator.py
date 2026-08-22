@@ -57,8 +57,8 @@ def test_identity_when_lengths_match():
 def test_head_mid_tail_split_reproduces_reference_length():
     """The reference resamples the first and last 20 tokens separately so a
     streaming chunk seam lands cleanly. Collapsing that into one resample would
-    change the boundaries subtly and only in streaming -- exactly what R3 exists
-    to catch -- so the split is preserved and its output length pinned here."""
+    change the boundaries subtly and only in streaming -- exactly what the streaming
+    test exists to catch -- so the split is preserved and its output length pinned here."""
     g = load_golden("flow.length_regulator")
     x1, x2 = as_torch(g["call0.in_x1"]), as_torch(g["call0.in_x2"])
     ml1, ml2 = int(g["call0.in_mel_len1"]), int(g["call0.in_mel_len2"])

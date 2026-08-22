@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Trace capture for the AR decode step -- `02_plan.md` P6's headline lever.
+"""Trace capture for the AR decode step -- the bring-up's headline perf lever.
 
 Before any of it was traced, the LLM was **81.9 % of end-to-end runtime** at ~124 us
 per op over ~280 ops per token: dispatch bound, not compute bound. That is what made
@@ -415,7 +415,7 @@ def test_device_traced_throughput(device):
     print(f"    untraced   {untraced_ms:7.2f} ms   ({1e3/untraced_ms:6.1f} tok/s)")
     print(f"    traced     {traced_ms:7.2f} ms   ({1e3/traced_ms:6.1f} tok/s)")
     print(f"    speedup    {speedup:7.2f}x")
-    print(f"    P4 wants >= 30 tok/s; P6 wants >= 60")
+    print(f"    targets: >= 30 tok/s, then >= 60")
     print(f"    LLM RTF contribution at 50 tok/s of speech: {50 * traced_ms / 1e3:.3f}")
     assert traced_ms > 0
 

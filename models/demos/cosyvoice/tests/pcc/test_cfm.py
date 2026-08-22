@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""The flow-matching solver and the assembled flow stage -- `02_plan.md` P3.
+"""The flow-matching solver and the assembled flow stage.
 
 The solver is checked in two independent ways before any device time:
 
@@ -161,9 +161,9 @@ def test_device_solve_euler_matches_golden(device):
 def test_device_flow_tokens_to_mel(device):
     """The whole flow stage: semantic tokens in, mel out, nothing on the host.
 
-    This is P3's acceptance gate. It chains the token embedding, the 6-block
-    Conformer encoder, the projection, the length regulator and all ten solver
-    steps -- every piece built in this phase, in one graph.
+    This is the flow stage's acceptance gate. It chains the token embedding, the
+    6-block Conformer encoder, the projection, the length regulator and all ten
+    solver steps -- every piece of the stage, in one graph.
     """
     import ttnn
     from models.demos.cosyvoice.tt.flow.model import TtMaskedDiffWithXvec

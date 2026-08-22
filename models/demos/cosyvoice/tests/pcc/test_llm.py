@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""The LLM stage -- `02_plan.md` P4. Text tokens in, semantic speech tokens out.
+"""The LLM stage. Text tokens in, semantic speech tokens out.
 
 Structured like `test_estimator.py`: structure, then the graph on the host via
 `tt/llm/reference.py`, then the device. That order matters more here than anywhere

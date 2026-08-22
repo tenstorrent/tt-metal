@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """The whole model, wired: text -> semantic tokens -> mel -> waveform.
 
-    TtTransformerLM        text tokens          -> speech tokens   (P4)
-    TtMaskedDiffWithXvec   speech tokens        -> mel             (P3)
-    TtHiFTGenerator        mel                  -> waveform        (P2)
+    TtTransformerLM        text tokens          -> speech tokens
+    TtMaskedDiffWithXvec   speech tokens        -> mel
+    TtHiFTGenerator        mel                  -> waveform
 
 All three stages run on device; nothing between them returns to the host except
 the sampled token IDs, which RAS needs on the host in Stage 1.
@@ -26,7 +26,7 @@ LLM's **`prompt_text` slot**, concatenated in front of the sentence -- so the mo
 reads it the way it reads any prefix. CosyVoice-1 wants a character or style
 *description* ("A cheerful young woman"); CosyVoice-2's `instruct2` directive
 phrasing ("Speak cheerfully") makes this model **read the instruction aloud**. That
-mistake took zh CER from 9.09% to 42.42% in P0's WER sweep.
+mistake took zh CER from 9.09% to 42.42% in the WER sweep.
 
 **Randomness is injected, never drawn here.** Three places in this model sample:
 the CFM's initial noise `z`, and the vocoder's `phase_vec` and `noise` in `SineGen`

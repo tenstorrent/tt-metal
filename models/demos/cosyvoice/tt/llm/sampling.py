@@ -24,7 +24,7 @@ Two details in `nucleus_sampling` that a from-scratch reimplementation gets wron
 
 **This stays on the host, and the decision is measured rather than assumed.**
 `ttnn.sampling` does implement softmax -> top-k -> top-p -> multinomial on device,
-and `02_plan.md` P4 asks for it. Profiling the per-token tail
+and the bring-up scope asks for it. Profiling the per-token tail
 (`scripts/profile_token_tail.py`) says what it could win:
 
     output head matmul        0.043 ms

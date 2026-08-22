@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Streaming verified on **content** -- R3, and `02_plan.md` §6.
+"""Streaming verified on **content**.
 
-The plan is explicit about what this must not be:
+The bring-up scope is explicit about what this must not be:
 
-> **Streaming (R3)** must compare *content*: concatenated streamed audio vs
-> non-streamed audio for the same text and seed, gated on sample-level
-> correlation and mel-space PCC — not chunk count.
+> Streaming must compare *content*: concatenated streamed audio vs non-streamed
+> audio for the same text and seed, gated on sample-level correlation and
+> mel-space PCC — not chunk count.
 
 Counting chunks proves the loop ran. It proves nothing about whether the audio is
 the same speech, which is the thing that was actually in doubt.
@@ -141,7 +141,7 @@ def _mel_of(wav: torch.Tensor, n_fft=1024, hop=256, n_mels=80) -> torch.Tensor:
 @needs_golden
 @needs_l1_small
 def test_device_streamed_matches_non_streamed(device):
-    """**R3.** The same tokens and the same seed, chunked and whole, compared as audio.
+    """The same tokens and the same seed, chunked and whole, compared as audio.
 
     Both runs go through the identical flow decoder and vocoder on device; the only
     difference is that one is fed in 120-token chunks with the three caches carried
@@ -246,7 +246,7 @@ def test_device_streamed_matches_non_streamed(device):
     seam_max = float(d[lo:hi].max())
     global_p999 = float(d.quantile(0.999))
 
-    print(f"\n  R3: {len(generated)} tokens -> {len(pieces)} chunks")
+    print(f"\n  streaming: {len(generated)} tokens -> {len(pieces)} chunks")
     print(f"    lengths  streamed {streamed.shape[1]}  non-streamed {offline.shape[1]}")
     print(f"    mel-space PCC        {mel_corr:.6f}   (the content gate)")
     print(f"    envelope  PCC        {env_corr:.6f}")

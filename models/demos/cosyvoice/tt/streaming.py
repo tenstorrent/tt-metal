@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Chunked synthesis with cross-chunk continuity -- R3, and `02_plan.md` P5.
+"""Chunked synthesis with cross-chunk continuity.
 
-R1 names the streaming path explicitly ("*including the streaming path*"), so the
-weight-bearing stages run on device here exactly as they do offline. The
+The bring-up scope names the streaming path explicitly, so the weight-bearing
+stages run on device here exactly as they do offline. The
 bookkeeping around them -- the fades, the splices, the caches -- runs on device
 too, because it is all elementwise work on tensors that are already there and
 pulling them back to the host to crossfade would be host residue for no reason.
@@ -237,7 +237,7 @@ class TtStreamingSynthesizer:
         The LLM is upstream of this: `tts()` overlaps generation with synthesis by
         running them in separate threads, which is a latency optimisation rather
         than a different computation. Driving from a completed token list keeps
-        the *content* comparison in R3 exact.
+        the *content* comparison exact.
         """
         cfg = self.cfg
         state = StreamState()
