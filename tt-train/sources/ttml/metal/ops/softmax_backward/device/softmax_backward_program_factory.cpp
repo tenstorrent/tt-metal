@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/compute_kernel_config.hpp"
 #include "hostdevcommon/kernel_structs.h"
 
 using namespace tt;
@@ -159,7 +160,7 @@ static tt::tt_metal::ComputeConfig precise(
     tt::tt_metal::ComputeConfig config;
     config.fp32_dest_acc_en = true;
     config.math_approx_mode = false;
-    config.math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
+    config.math_fidelity = ttml::core::max_fidelity_with_fp32_acc();
     config.compile_args = std::move(compile_time_args);
     config.defines = std::move(defines);
     return config;
