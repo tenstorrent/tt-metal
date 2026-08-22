@@ -49,6 +49,19 @@ KernelSpec::CompilerOptions::Defines layout_defines(bool is_row_major) {
     return sort_kernel_defines(is_row_major, /*is_uint16_input=*/false);
 }
 
+// Compute-kernel defines: the fused-key stable engine (issue #33492, SingleRowSingleCore only)
+// is a compute-only concern — the fuse/strip happens inside DEST, so the reader/writer streams
+// and every CB transport keep their ordinary split value/index formats and the DM kernels never
+// see the flag.
+KernelSpec::CompilerOptions::Defines sort_compute_defines(
+    bool is_row_major, bool is_uint16_input, bool fused_stable_keys) {
+    auto defines = sort_kernel_defines(is_row_major, is_uint16_input);
+    if (fused_stable_keys) {
+        defines.insert({"SORT_FUSED_STABLE_KEYS", "1"});
+    }
+    return defines;
+}
+
 }  // namespace
 
 // Single row - single core
@@ -95,6 +108,18 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
     const uint32_t all_core_utilization_loop_residuum = Ht % total_number_of_cores;
 
     const bool is_32_bit_index = index_tensor_cb_data_format == tt::DataFormat::UInt32;
+    // Fused-key stable engine (issue #33492), THIS FACTORY ONLY: bf16 values tag every value
+    // word with the TRUE index and sort on the plain UNSTABLE network — indices are unique, so
+    // ties are impossible at the comparator and stability holds by construction. The device op
+    // forces UINT32 indices for these shapes (32-bit DEST rule), so the index tiles ride the
+    // proven u32 transport. The single-core factory runs the whole network in L1 and is compute-
+    // bound, where dropping the comparator wins (measured -7% at W=2048); the CrossCore and
+    // MultiCore factories are data-movement-bound — their comparator runs within ~0.3% of the
+    // unstable floor while the fused engine's u32-index transport costs +3..10% — so they keep
+    // the index-aware comparator. fp32 values (no free low bits) and u16 values also keep it.
+    const bool fused_stable_keys = attributes.stable && input_tensor_cb_data_format == tt::DataFormat::Float16_b &&
+                                   index_tensor_cb_data_format == tt::DataFormat::UInt32 &&
+                                   (Wt * tt::constants::TILE_WIDTH) <= 65536;
     // UINT16 keys must also run in fp32_dest_acc_en mode so the SFPU compares
     // them as 32-bit floats.  The hardware unpack converts the uint16 integer
     // value to an exact float32 (all 0..65535 are representable in 24-bit
@@ -613,7 +638,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         // Compute kernels build at O3; the compiler-options default is O2, so the level is stated
         // explicitly rather than inherited.
         .compiler_options =
-            {.defines = sort_kernel_defines(is_row_major, is_uint16_input),
+            {.defines = sort_compute_defines(is_row_major, is_uint16_input, fused_stable_keys),
              .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args =

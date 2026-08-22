@@ -33,7 +33,7 @@ requires; users do not need to pre-format inputs.
 | Tensor   | Supported dtypes              |
 | -------- | ----------------------------- |
 | Values   | `bfloat16`, `float32`, `uint16` |
-| Indices  | `uint16`, `uint32` (auto-promoted to `uint32` when the sort dim ≥ 65 535) |
+| Indices  | `uint16`, `uint32` (auto-promoted to `uint32` when the sort dim ≥ 65 535, the input is `float32`/`uint16`, or `stable=True` with `bfloat16` input on the single-core factory — padded sort dim ≤ 2 048) |
 
 #### Supported layouts
 
@@ -84,13 +84,26 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
 - `memory_config` (optional): output memory config when `out=` is omitted.
   Defaults to the input's memory config.
 - `stable` (bool): preserve the original (ascending-index) order of equal
-  elements, matching `torch.sort(stable=True)`. Implemented in all three
-  program factories by the index-aware comparator-stable network: on exact
-  value ties each compare-exchange also compare-exchanges the paired index
-  tiles, with the tie-break polarity programmed once from the *global* sort
-  order (never the per-block bitonic direction). Roughly doubles the SFPU
-  cost of each compare-exchange; the data-movement-heavy phases of sort are
-  unaffected.
+  elements, matching `torch.sort(stable=True)`. Two engines, selected per
+  program factory (issue #33492):
+  - **Fused-key engine** — `bfloat16` values on the SingleRowSingleCore
+    factory (padded sort dim ≤ 2 048): every network call tags each value
+    word's free low 16 bits with its TRUE index (sign-conditioned complement
+    from the global order), so all keys are distinct and the plain
+    *unstable* SFPSWAP network is stable by construction under any per-block
+    direction pattern; the tags are stripped before every value pack. Runs
+    in 32-bit DEST, so these stable `bfloat16` sorts return **`uint32`
+    indices** (the same 32-bit-DEST rule that `float32`/`uint16` inputs
+    already follow). Measured −7% device-kernel time vs the comparator.
+  - **Index-aware comparator network** — everything else: `float32` values,
+    `uint16` values, and every wider `bfloat16` sort. On exact value ties
+    each compare-exchange also compare-exchanges the paired index tiles,
+    with the tie-break polarity programmed once from the *global* sort
+    order (never the per-block bitonic direction). The CrossCore and
+    MultiCore factories keep this engine deliberately: they are data-
+    movement-bound (the comparator runs within ~0.3% of the unstable floor
+    there), while the fused engine's `uint32` index transport measures
+    +3–10% instead.
 
 ## Tensor Transformations
 

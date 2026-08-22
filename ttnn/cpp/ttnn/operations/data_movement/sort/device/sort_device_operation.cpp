@@ -187,10 +187,23 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
     // currently happens for:
     //   • FLOAT32 input (direct fp32 comparison)
     //   • UINT16 input  (uint16 int → fp32 via hardware unpack, exact 0..65535)
+    //   • stable BFLOAT16 on the SingleRowSingleCore factory (issue #33492): the fused-key
+    //     stable engine tags the value words with the true index and needs the 32-bit DEST; its
+    //     index tiles ride the proven UINT32 transport (the u16-index-in-32-bit-DEST combination
+    //     has no working pack path — the tile-size rationale above). The width guard mirrors
+    //     select_program_factory's single-core routing: wider stable sorts run the comparator on
+    //     the DM-bound factories with their ordinary index dtype.
     const bool input_is_fp32 = (tensor_args.input_tensor.dtype() == DataType::FLOAT32);
     const bool input_is_uint16 = (tensor_args.input_tensor.dtype() == DataType::UINT16);
+    const bool input_is_row_major = (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR);
+    const uint32_t sort_w_dim =
+        input_is_row_major ? tensor_args.input_tensor.logical_shape()[3] : tensor_args.input_tensor.padded_shape()[3];
+    const uint32_t sort_wt = sort_w_dim / tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const bool stable_bf16_single_core =
+        attributes.stable && (tensor_args.input_tensor.dtype() == DataType::BFLOAT16) && (sort_wt <= SORT_WT_THRESHOLD);
     DataType index_dtype = DataType::UINT16;
-    if (output_shape[-1] >= std::numeric_limits<uint16_t>::max() || input_is_fp32 || input_is_uint16) {
+    if (output_shape[-1] >= std::numeric_limits<uint16_t>::max() || input_is_fp32 || input_is_uint16 ||
+        stable_bf16_single_core) {
         index_dtype = DataType::UINT32;
     }
 

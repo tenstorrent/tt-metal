@@ -48,8 +48,18 @@ void prepare_uint16_fp32_dest_value_tiles_for_pack(uint32_t dst_tile_a, uint32_t
  * (ascending-index) order. Requires topk_set_stable_descending_mode() to have been
  * programmed once with the GLOBAL sort order (never the per-pair local direction,
  * which this helper deliberately alternates to build the bitonic sequence).
+ * @tparam fused_stable Fused-key stable mode: fuse the TRUE u16 index into each value word's
+ * free low 16 bits as a sign-conditioned tag (complement polarity from the GLOBAL order
+ * `fused_largest` = descending) and run the plain UNSTABLE network on the now-distinct tagged
+ * keys — indices are unique, so ties are impossible at the comparator and stability holds by
+ * construction under any direction pattern. The true index tiles keep riding the
+ * index-tracking swaps exactly as in the comparator path (datacopy in, raw swaps, ordinary
+ * u16 pack out), and the tags are STRIPPED from the value words before each pack, so every CB
+ * and DRAM transport keeps its ordinary split value/index formats and no SFPU-written word
+ * ever meets a 16-bit narrowing pack. Requires 32-bit DEST; mutually exclusive with
+ * stable_sort.
  */
-template <bool stable_sort = false>
+template <bool stable_sort = false, bool fused_stable = false, bool fused_largest = false>
 FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
     DataflowBuffer& input_dfb,
     DataflowBuffer& index_dfb,
@@ -59,6 +69,7 @@ FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
     const bool switch_dir,
     const bool ascending,
     const int end_phase) {
+    static_assert(!(fused_stable && stable_sort), "fused and comparator-stable modes are mutually exclusive");
     input_transposed_dfb.reserve_back(Wt);
     index_transposed_dfb.reserve_back(Wt);
 
@@ -80,8 +91,19 @@ FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
         transpose_tile(index_dfb.get_id(), 0, 2);
         transpose_tile(index_dfb.get_id(), 1, 3);
 
-        // llk_topk_sort -> inplace
-        ckernel::topk_local_sort<stable_sort>(0, (int)ascending_local, end_phase);
+        if constexpr (fused_stable) {
+            // Tag the slab's value words with the true indices (making every key distinct);
+            // the index tiles at DEST 2,3 ride the tracked swaps unchanged.
+            ckernel::topk_fuse_tile<fused_largest>(0);
+        }
+        // llk_topk_sort -> inplace (fused_stable rides the rank-stamped transport: raw INT32
+        // value words + tracked index tiles + unstable swaps)
+        ckernel::topk_local_sort<stable_sort, false, fused_stable>(0, (int)ascending_local, end_phase);
+        if constexpr (fused_stable) {
+            // Clear the tags so the Float32->bf16 value packs below are exact.
+            ckernel::topk_strip_rank_tags(0);
+            ckernel::topk_strip_rank_tags(1);
+        }
 
         // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).
         prepare_uint16_fp32_dest_value_tiles_for_pack(0, 1);
