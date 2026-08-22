@@ -1219,3 +1219,25 @@ def test_sort_stable_program_cache(shape, device):
     device.disable_and_clear_program_cache()
     # Two distinct programs total (stable and unstable), each compiled exactly once.
     assert entries[-1] == 2, f"Expected 2 program cache entries (stable + unstable), found {entries[-1]}"
+
+
+@pytest.mark.parametrize("shape", [(0, 4096), (1, 1, 0, 128)])
+@pytest.mark.parametrize("stable", [True, False])
+def test_sort_zero_size_dim(shape, stable, device):
+    """torch.sort on a zero-size tensor returns empty values/indices of the input
+    shape; ttnn.sort must do the same via a composite early-exit instead of
+    reaching the prim's non-empty-tensor TT_FATAL (issue #33492 truth-sync, hole
+    C2 — the prim guard stays as the backstop for direct prim callers). Index
+    dtype follows the early-exit contract, which matches the on-device rule for
+    bf16 at these widths: UINT16 for both stabilities."""
+    input_tensor = torch.randn(shape).to(torch.bfloat16)
+    torch_values, torch_indices = torch.sort(input_tensor, dim=-1, stable=stable)
+    assert torch_values.shape == input_tensor.shape  # torch contract: empty in, empty out
+
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, stable=stable)
+
+    assert list(ttnn_values.shape) == list(shape)
+    assert list(ttnn_indices.shape) == list(shape)
+    assert ttnn_values.dtype == ttnn.bfloat16
+    assert ttnn_indices.dtype == ttnn.uint16
