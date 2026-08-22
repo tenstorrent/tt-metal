@@ -7,7 +7,7 @@
 //
 // Every packet the sender sends travels exactly one hop, to the chip across its own cable, so a token
 // bound further is staged into that neighbour's forwarding buffer and re-sent from there by the neighbour's
-// reader on the same (plane, direction). Hence two phases:
+// reader on the same (plane, direction). Hence two kinds of work:
 //
 //   A. Its OWN assignments — its plane's share of this chip's movements. Each destination is either our
 //      immediate neighbour (=> CMD_FINAL_WRITE, the neighbour writes it straight into its output region) or
@@ -16,6 +16,12 @@
 //   B. The chunks that arrived in OUR region of the forwarding buffer, written by the upstream chip's
 //      sender on the same (plane, direction). Each is pushed one more hop: final-write if its destination
 //      is now our neighbour, re-forward otherwise.
+//
+// Both are done one LOCAL EXPERT at a time: the whole schedule runs for expert 0, then again for expert 1,
+// and so on, so a chunk is one (origin chip -> destination chip, expert) term. Every chip walks its experts
+// in the same order, so a relay at iteration e is passing on chunks its upstream produced at iteration e —
+// the ordering the dense forwarding buffer needs is unchanged, there are just more, smaller chunks. This is
+// what lets an upstream stage produce one expert's tokens at a time.
 //
 // The forwarding buffer is DENSE: a chunk occupies exactly as many pages as it has tokens, and starts where
 // the previous one ended. Nothing is exchanged to make the writer and the reader of a region agree on those
@@ -87,6 +93,8 @@ volatile tt_l1_ptr cmbf2d::FwdMetadata* slot_metadata(uint32_t slot) {
     return reinterpret_cast<volatile tt_l1_ptr cmbf2d::FwdMetadata*>(slot_addr_of(slot) + ct.token_size_bytes);
 }
 
+// The expert is not part of the descriptor: the same one serves every iteration of the outer expert loop,
+// which is what names the run.
 cmbf2d::ChunkDescriptor forwarding_chunk(uint32_t chunk) {
     return cmbf2d::ChunkDescriptor::from_words(
         &kernel_compile_time_args[ct.forwarding_chunk_base + chunk * cmbf2d::CHUNK_WORDS]);
@@ -174,9 +182,9 @@ struct Reader {
     uint32_t claimed = 0;
     // Publishing is batched so the atomic is amortised, matching the sender's batch.
     uint32_t pending_publish = 0;
-    // How far into the downstream chip's region we have written, and where the chunk in progress ends. The
-    // downstream reader walks its chunks in exactly the order we emit them, sizing each the same way we do,
-    // so this single counter is all the two chips need to agree on to place every page.
+    // How far into the downstream chip's region we have written, and where the chunk in progress ends. That
+    // reader walks its chunks in exactly the order we emit them, sizing each the same way we do, so the page
+    // counter alone is what the two chips agree on; the end marks where the sender owes it a bump.
     uint32_t out_page = 0;
     uint32_t out_chunk_end = 0;
     // Pages taken out of our own region, which for the same reason IS the page the next chunk starts at.
@@ -225,26 +233,21 @@ struct Reader {
         noc_async_read_barrier();
     }
 
-    // The token count of one forwarding chunk: the destination chip's tokens sitting under the origin
+    // The token count of one forwarding chunk: the destination chip's tokens sitting under one of the origin
     // chip's experts, narrowed to the share the two chips agreed on. Every term is readable on any chip of
     // the ring, which is what makes a chunk's length agree between the chip that writes it and the chip that
     // reads it without either telling the other.
-    uint32_t chunk_tokens(const cmbf2d::ChunkDescriptor& desc) const {
-        const uint32_t base = expert_base(desc.origin_dg_index);
-        uint32_t tokens = 0;
-        for (uint32_t le = 0; le < ct.experts_per_chip; le++) {
-            const uint32_t e = base + le;
-            const uint32_t begin = ctl.run_begin(desc.dst_dg_index, e);
-            const uint32_t n = ctl.run_end(desc.dst_dg_index, e) - begin;
-            tokens += slice_begin(begin, n, desc.split_idx + 1, desc.split_count) -
-                      slice_begin(begin, n, desc.split_idx, desc.split_count);
-        }
-        return tokens;
+    uint32_t chunk_tokens(const cmbf2d::ChunkDescriptor& desc, uint32_t local_expert) const {
+        const uint32_t e = expert_base(desc.origin_dg_index) + local_expert;
+        const uint32_t begin = ctl.run_begin(desc.dst_dg_index, e);
+        const uint32_t n = ctl.run_end(desc.dst_dg_index, e) - begin;
+        return slice_begin(begin, n, desc.split_idx + 1, desc.split_count) -
+               slice_begin(begin, n, desc.split_idx, desc.split_count);
     }
 
     // Point one slot at `page` of the downstream chip's region. The chunk's last page is marked so the
-    // sender bumps that chip's arrival counter right there, rather than leaving a partial bump batch
-    // uncounted until end of stream.
+    // sender bumps that chip's arrival counter right there: that reader consumes a whole chunk before moving
+    // on, so a tail left inside a partial bump batch would strand it.
     void aim_at_downstream(volatile tt_l1_ptr cmbf2d::FwdMetadata* metadata, uint32_t page) const {
         metadata->cmd = (page + 1 == out_chunk_end) ? cmbf2d::CMD_FORWARD_END : cmbf2d::CMD_FORWARD;
         metadata->this_addr = dram.fwd.get_noc_addr(fwd_page(page));
@@ -294,11 +297,9 @@ struct Reader {
         }
     }
 
-    // One own assignment: everything this chip owes ONE destination chip, over all the experts it hosts,
-    // narrowed to this sender's slice of each run. The experts are merged into a single stream — a chunk is
-    // one (this chip -> that chip) term, and which expert a token sat under is not something the forwarding
-    // protocol needs to know.
-    void do_own_assignment(uint32_t a) {
+    // One own assignment for one local expert: what this chip owes ONE destination chip out of that
+    // expert's region, narrowed to this sender's slice of the run.
+    void do_own_assignment(uint32_t a, uint32_t local_expert) {
         const uint32_t w = ct.assignment_base + a * cmbf2d::ASSIGNMENT_WORDS;
         const uint32_t dst_chip_id = kernel_compile_time_args[w + 0];
         const cmbf2d::ChunkDescriptor desc{
@@ -306,18 +307,15 @@ struct Reader {
             kernel_compile_time_args[w + 1],
             kernel_compile_time_args[w + 2],
             kernel_compile_time_args[w + 3]};
-        const bool direct = is_direct(dst_chip_id);
         // Sized before the first page is placed, because the last page has to be recognisable when it comes.
-        out_chunk_end = out_page + (direct ? 0 : chunk_tokens(desc));
-        for (uint32_t le = 0; le < ct.experts_per_chip; le++) {
-            const uint32_t e = ct.my_expert_base + le;
-            const uint32_t begin = ctl.run_begin(desc.dst_dg_index, e);
-            const uint32_t n = ctl.run_end(desc.dst_dg_index, e) - begin;
-            stage_run_slice(
-                dst_chip_id,
-                slice_begin(begin, n, desc.split_idx, desc.split_count),
-                slice_begin(begin, n, desc.split_idx + 1, desc.split_count));
-        }
+        out_chunk_end = out_page + (is_direct(dst_chip_id) ? 0 : chunk_tokens(desc, local_expert));
+        const uint32_t e = ct.my_expert_base + local_expert;
+        const uint32_t begin = ctl.run_begin(desc.dst_dg_index, e);
+        const uint32_t n = ctl.run_end(desc.dst_dg_index, e) - begin;
+        stage_run_slice(
+            dst_chip_id,
+            slice_begin(begin, n, desc.split_idx, desc.split_count),
+            slice_begin(begin, n, desc.split_idx + 1, desc.split_count));
     }
 
     // One arrived chunk, pushed exactly one more hop.
@@ -329,15 +327,15 @@ struct Reader {
     // The chunk's length is computed rather than discovered, so the reads are batched with nothing
     // speculative about them: `batch` pages at a time, capped by what is left of the chunk and by what
     // upstream says has arrived. An EMPTY chunk occupies no pages at all and so is simply not there.
-    void do_forward_chunk(uint32_t chunk) {
-        uint32_t remaining = chunk_tokens(forwarding_chunk(chunk));
+    void do_forward_chunk(uint32_t chunk, uint32_t local_expert) {
+        uint32_t remaining = chunk_tokens(forwarding_chunk(chunk), local_expert);
         if (remaining == 0) {
             return;
         }
         out_chunk_end = out_page + remaining;  // where the marker goes, should this chunk be re-forwarded
 
-        // Every token of a chunk shares one final destination (a chunk IS one (chip -> chip) term), so the
-        // first page decides for the whole chunk whether this hop is the last one.
+        // Every token of a chunk shares one final destination (a chunk IS one (chip -> chip, expert) term),
+        // so the first page decides for the whole chunk whether this hop is the last one.
         bool reforward = false;
         bool decided = false;
         while (remaining > 0) {
@@ -397,15 +395,19 @@ struct Reader {
         return k;
     }
 
-    // Walk the schedule. Forwarding chunks always appear in increasing order, so `consumed` stays a valid
+    // Walk the schedule once per local expert. The schedule itself is the same every time — which chip pairs
+    // this stream serves and in what order does not depend on the expert — so the expert is simply the outer
+    // loop. Forwarding chunks always appear in increasing order within it, so `consumed` stays a valid
     // watermark into our region however the own assignments are interleaved around them.
     void run_schedule() {
-        for (uint32_t si = 0; si < ct.schedule_len; si++) {
-            const uint32_t entry = kernel_compile_time_args[ct.schedule_base + si];
-            if (entry & cmbf2d::SCHED_FWD) {
-                do_forward_chunk(entry & ~cmbf2d::SCHED_FWD);
-            } else {
-                do_own_assignment(entry);
+        for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
+            for (uint32_t si = 0; si < ct.schedule_len; si++) {
+                const uint32_t entry = kernel_compile_time_args[ct.schedule_base + si];
+                if (entry & cmbf2d::SCHED_FWD) {
+                    do_forward_chunk(entry & ~cmbf2d::SCHED_FWD, local_expert);
+                } else {
+                    do_own_assignment(entry, local_expert);
+                }
             }
         }
         flush_publish();

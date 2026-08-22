@@ -53,19 +53,21 @@ static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring
 // "home-made" tokens and when will they send tokens from the forwarding buffer.
 //
 // Pages one stream's region has to hold. The kernels pack their chunks densely, computing each chunk's
-// length from expert_offsets, so this only has to bound the region's TOTAL — which is why it does not grow
-// when a chunk count grows.
+// length from expert_offsets, so this only has to bound the region's TOTAL — which is why splitting the same
+// tokens into more chunks does not grow it.
 //
-// A destination's whole return volume is seq_len_per_chip tokens x min(num_experts_per_tok,
-// experts_per_chip) copies, however the router spread those copies across origins, because that is just the
-// destination's output buffer. Chunks heading to the same destination therefore SHARE that volume rather
-// than each reaching it. A stream relays half_extent - 1 distinct destinations: the nearer ones can have
-// their whole volume on an origin that splits the run num_links ways, while the farthest is reachable only
-// from the diametrically opposite chip, whose run is split across every stream.
+// A destination chip's whole return volume is seq_len_per_chip * num_experts_per_tok copies — that is just
+// its output buffer, so it holds however the router spread the copies over chips and experts, and whether or
+// not the top-k picks are distinct. Chunks heading to the same destination therefore SHARE that volume
+// rather than each reaching it. A stream relays half_extent - 1 distinct destinations: the nearer ones can
+// have their whole volume on an origin that splits the run num_links ways, while the farthest is reachable
+// only from the diametrically opposite chip, whose run is split across every stream. One page per chunk
+// covers the integer slicing of each share.
 uint32_t fwd_pages_per_stream(const CombineFabric2dParams& args) {
-    const uint32_t per_destination = args.seq_len_per_chip * std::min(args.num_experts_per_tok, args.experts_per_chip);
+    const uint32_t per_destination = args.seq_len_per_chip * args.num_experts_per_tok;
     const uint32_t half_extent = ring_extent(args) / 2;
-    return (half_extent - 2) * (per_destination / args.num_links) + per_destination / stream_count(args.num_links);
+    return (half_extent - 2) * (per_destination / args.num_links) + per_destination / stream_count(args.num_links) +
+           relay_chunks_per_stream(ring_extent(args)) * args.experts_per_chip;
 }
 
 L1Layout compute_l1_layout(
