@@ -18,9 +18,11 @@ commit-by-select is pure data, then ride the production decode-width trace.
 Requires the gdn-decode-fused branch (the fused_decode package) in the
 workspace; TT_SPEC_FUSED=1 selects this loop in the demo.
 """
+import os
 import time
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.spec_decode import greedy_accept
@@ -357,6 +359,7 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
 
             t0 = time.perf_counter()
             accepts = [None] * self.B
+            first_committed = [None] * self.B
             for u, slot in enumerate(self.slots):
                 if slot.done or not drafts[u] or len(slot.out) >= max_new_tokens:
                     continue
@@ -365,6 +368,7 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
                 m, new_tokens = greedy_accept(drafts[u], target_ids[: K + 1])
                 slot.accepts.append(m)
                 accepts[u] = m
+                first_committed[u] = new_tokens[0]
                 for j, tok in enumerate(new_tokens):
                     slot.committed.append(tok)
                     slot.out.append(tok)
@@ -377,4 +381,10 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
                 slot.a = len(slot.committed) - 1  # fused invariant: anchor == head
             self._commit_select(accepts)
             self._timing["commit"] += time.perf_counter() - t0
+            if os.environ.get("TT_SPEC_TIMING", "0") == "1":
+                it = max(len(s2.accepts) for s2 in self.slots)
+                logger.info(
+                    f"spec-fused iter {it}: m={accepts} first_committed={first_committed} "
+                    f"drafts={[list(d) for d in drafts]}"
+                )
         return [list(s.out) for s in self.slots], self._stats()
