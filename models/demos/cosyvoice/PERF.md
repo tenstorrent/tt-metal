@@ -578,10 +578,14 @@ The same statistic without changing shape: each group's channel sum is a **matmu
 `[C, G]` indicator**, what remains is a reduction over `T` (an axis that needs no re-tiling), and
 normalise-plus-affine folds into one multiply and one add.
 
-| | `p150b` | n300 | PCC vs torch |
+| | `p150b`† | n300 | PCC vs torch |
 |---|---:|---:|---:|
-| `[2, 141, 256]` permute → matmul | `0.2190` → `0.0940` (**2.33×**) | `0.3805` → `0.1839` (**2.07×**) | `0.99998885` |
-| `[2, 282, 256]` permute → matmul | `0.3975` → `0.0978` (**4.06×**) | `0.6656` → `0.2000` (**3.33×**) | `0.99999225` |
+| `[2, 141, 256]` permute → matmul | `0.2190` → `0.0940` (**2.33×**) | `0.3820` → `0.1874` (**2.04×**) | `0.999988854` |
+| `[2, 282, 256]` permute → matmul | `0.3975` → `0.0978` (**4.06×**) | `0.6691` → `0.2045` (**3.27×**) | `0.999992251` |
+
+† `p150b` still predates the `relu` and has not been re-measured (no Blackhole access when
+these n300 numbers were taken) -- treat it as the same kind of stale figure the note below
+already calls out for the old n300 column, not as validated post-fix.
 
 The matmul form is nearly **independent of T** where the permute form doubles with it, which is the
 re-tiling cost showing itself directly. On the stage, A/B-ed: flow `1.41×` on `p150b` and `1.34×` on
@@ -598,8 +602,17 @@ where the true variance is small against the mean's square, bfloat16 rounding dr
 variance before `eps` closes it, the guard every framework uses for this formula. **The two PCCs in
 the table are measured on one fixed golden geometry, which never lands in the cancellation regime**,
 so they are evidence for the transform's arithmetic and not for its robustness across shapes — the
-distinction that let this ship. The timings above predate the added `relu` by one op per GroupNorm,
-33 per Euler step; they have not been re-measured since.
+distinction that let this ship. The `p150b` timings above still predate the added `relu` and have
+not been re-measured (no Blackhole access when this note was written). **n300 has been
+re-measured** (`scripts/probe_groupnorm.py`, same two shapes, `relu` added to the probe's own
+`matmul_form` to match `estimator.py` exactly -- the probe carries its own copy of the formula
+rather than importing it, so it needed the same fix applied separately): `0.1839 -> 0.1874 ms`
+and `0.2000 -> 0.2045 ms`, a ~2 % cost from the one extra elementwise op, speedup `2.07x -> 2.04x`
+and `3.33x -> 3.27x`. The matmul form is still comfortably faster than permute. PCC is unchanged
+to 9 decimal places at both shapes (`0.999988854`, `0.999992251`) -- exactly what the argument
+above predicts: `torch.randn`-generated test data essentially never lands in the cancellation
+regime, so the accuracy check was never going to move even with the guard in place, which is the
+whole reason it did not catch the bug in the first place.
 
 ## The vocoder
 
