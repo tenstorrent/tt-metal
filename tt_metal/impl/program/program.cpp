@@ -2505,6 +2505,11 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     const auto& build_env = BuildEnvManager::get_instance(device_context_id).get_device_build_env(device->build_id());
 
+    // Record that this cache entry is still in use. Rate limited to one write an hour, so the
+    // common case is a single stat; without it the recency stamp would only ever record device
+    // init and a long-running process's tree would sort as the cache's least recently used.
+    build_env.build_env.mark_cache_entry_used();
+
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
         return;

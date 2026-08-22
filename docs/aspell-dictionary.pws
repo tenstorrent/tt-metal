@@ -1,4 +1,4 @@
-personal_ws-1.1 en 545
+personal_ws-1.1 en 547
 ABI
 ADDI
 API
@@ -159,6 +159,7 @@ Theano
 TileSize
 TileSlice
 Tilizing
+uid
 UnaryOpType
 UpdateCircularBufferPageSize
 UpdateCircularBufferTotalSize
@@ -541,3 +542,5 @@ xAA
 xFF
 xlogy
 xyz
+GiB
+NFS

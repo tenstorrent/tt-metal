@@ -1,6 +1,7 @@
 set(COMMON_SOURCES
     core_assignment.cpp
     core_coord.cpp
+    disk_cache.cpp
     filesystem_utils.cpp
     mesh_coord.cpp
     shape.cpp
