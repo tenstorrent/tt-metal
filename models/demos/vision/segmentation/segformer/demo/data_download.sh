@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 if ! python -c "import evaluate" &> /dev/null; then
     echo "'evaluate' library not found, installing..."

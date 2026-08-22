@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Parse command line arguments
 TOTAL_LENGTH=1024  # Default value

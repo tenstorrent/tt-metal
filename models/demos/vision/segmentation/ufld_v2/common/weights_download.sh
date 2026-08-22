@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Check if gdown is installed, install it if not
 if ! python -c "import gdown" &> /dev/null; then

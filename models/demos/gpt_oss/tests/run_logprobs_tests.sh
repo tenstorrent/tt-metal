@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Run all logprobs-related tests for tt-metal and gpt-oss-120b
 # Usage: bash run_logprobs_tests.sh [--all | --sampling-module | --gpt-oss | --demo | --demo-logprobs | --demo-compare]
 #

@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+#!/usr/bin/env bash
 
 # Just a quick script to run bunch of latest passing paged write tests targeting DRAM and L1
 if [[ -z "$ARCH_NAME" ]]; then
