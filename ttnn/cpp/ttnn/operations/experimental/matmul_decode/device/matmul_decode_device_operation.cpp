@@ -45,6 +45,112 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "Input tensor A must be in width sharded memory layout, but got {}",
         input_tensor_a.memory_config().memory_layout());
+    if (operation_attributes.packed_weight.has_value()) {
+        // Fused-weight path: B is one big height-sharded L1 tensor carrying many weights, so
+        // nothing about this weight can be read off B's shape or shard spec. Everything the
+        // legacy checks below would derive from B is instead validated against the spec here,
+        // and the rest of this function is skipped -- its B checks would reject the fused
+        // tensor. A's own checks are shared with the factories (they re-verify M_tiles/shard
+        // geometry on the packed path too).
+        const auto& pw = *operation_attributes.packed_weight;
+        const auto& tile = input_tensor_b.tensor_spec().tile();
+        const uint32_t tile_h = tile.get_height();
+        const uint32_t tile_w = tile.get_width();
+
+        TT_FATAL(
+            input_tensor_b.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
+            "matmul_decode with packed_weight requires the fused weight tensor to be L1-resident");
+        TT_FATAL(
+            input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "matmul_decode with packed_weight requires the fused weight tensor to be HEIGHT_SHARDED "
+            "(one equal shard per core), but got {}",
+            input_tensor_b.memory_config().memory_layout());
+        const auto& b_shard = input_tensor_b.memory_config().shard_spec().value();
+        TT_FATAL(
+            b_shard.shape[1] == tile_w && b_shard.shape[0] % tile_h == 0,
+            "matmul_decode with packed_weight requires one-tile-wide, tile-aligned shards (a shard is a "
+            "stack of tiles), but the fused tensor's shard is [{}, {}] with tile {}x{}",
+            b_shard.shape[0],
+            b_shard.shape[1],
+            tile_h,
+            tile_w);
+        TT_FATAL(
+            b_shard.grid.contains(pw.cores),
+            "matmul_decode with packed_weight requires the weight's cores {} to be covered by the fused "
+            "tensor's shard grid {}",
+            pw.cores.str(),
+            b_shard.grid.str());
+
+        TT_FATAL(
+            static_cast<int>(pw.K) == operation_attributes.K && static_cast<int>(pw.N) == operation_attributes.N,
+            "packed_weight [K, N] = [{}, {}] does not match the operation's [{}, {}]",
+            pw.K,
+            pw.N,
+            operation_attributes.K,
+            operation_attributes.N);
+        TT_FATAL(
+            pw.K % tt::constants::TILE_HEIGHT == 0 && pw.N % tt::constants::TILE_WIDTH == 0,
+            "packed_weight [K, N] = [{}, {}] must be tile-aligned",
+            pw.K,
+            pw.N);
+
+        // The slab shape the factory will consume, by mode; also pins down the core count.
+        const uint32_t n_blocks = pw.n_blocks();
+        TT_FATAL(
+            n_blocks > 0 && pw.N % n_blocks == 0 && (pw.N / n_blocks) % tt::constants::TILE_WIDTH == 0,
+            "packed_weight: N ({}) does not cut into {} tile-aligned N-blocks on {} cores",
+            pw.N,
+            n_blocks,
+            pw.num_cores());
+        uint32_t slab_rows = 0;
+        if (batched) {
+            TT_FATAL(
+                static_cast<int>(pw.batch) == operation_attributes.batch &&
+                    static_cast<int>(pw.b_blocks) == operation_attributes.b_blocks,
+                "packed_weight batch/b_blocks ({}/{}) do not match the operation's ({}/{})",
+                pw.batch,
+                pw.b_blocks,
+                operation_attributes.batch,
+                operation_attributes.b_blocks);
+            TT_FATAL(
+                pw.b_blocks > 0 && pw.batch % pw.b_blocks == 0 && pw.num_cores() == pw.b_blocks * n_blocks,
+                "packed_weight: batch {} on {} cores does not cut into b_blocks {} x n_blocks {}",
+                pw.batch,
+                pw.num_cores(),
+                pw.b_blocks,
+                n_blocks);
+            slab_rows = (pw.batch / pw.b_blocks) * pw.K;
+        } else if (partial) {
+            TT_FATAL(
+                pw.k_blocks > 1 && pw.K % pw.k_blocks == 0 && (pw.K / pw.k_blocks) % tt::constants::TILE_HEIGHT == 0 &&
+                    pw.num_cores() == pw.k_blocks * n_blocks,
+                "packed_weight: K {} on {} cores does not cut into k_blocks {} x n_blocks {} tile-aligned blocks",
+                pw.K,
+                pw.num_cores(),
+                pw.k_blocks,
+                n_blocks);
+            slab_rows = pw.K / pw.k_blocks;
+        } else {
+            slab_rows = pw.K;
+        }
+        const uint32_t slab_tiles =
+            (slab_rows / tt::constants::TILE_HEIGHT) * (pw.N / n_blocks / tt::constants::TILE_WIDTH);
+        const uint32_t shard_tiles = b_shard.shape[0] / tile_h;
+        TT_FATAL(
+            pw.tile_offset + slab_tiles <= shard_tiles,
+            "packed_weight region [{}, {}) does not fit in the fused tensor's {}-tile shard",
+            pw.tile_offset,
+            pw.tile_offset + slab_tiles,
+            shard_tiles);
+
+        TT_FATAL(
+            input_tensor_a.logical_shape()[-1] == operation_attributes.K,
+            "Input tensor A must have the same K dimension as the packed weight");
+        TT_FATAL(
+            input_tensor_a.logical_shape()[-2] == operation_attributes.M,
+            "Input tensor A must have the same M dimension as the operation attributes");
+        return;
+    }
     if (operation_attributes.global_cb.has_value()) {
         // Prefetcher-fed weights live in DRAM as an ND-sharded (receiver-contiguous) tensor:
         // one contiguous slab per receiver core, whose shape depends on the factory that will
@@ -405,24 +511,29 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
                 memory_config));
     }
 
-    // A prefetcher-fed weight is ND-sharded in DRAM and has no legacy shard spec, so the
-    // receiver (= output) grid comes from the GCB instead.
+    // Neither a prefetcher-fed weight (ND-sharded in DRAM) nor a packed weight (a region of the
+    // fused L1 tensor) carries a usable legacy shard spec, so the weight-holding (= output) grid
+    // comes from the GCB's receivers or the packed spec's cores instead.
+    const bool is_packed = operation_attributes.packed_weight.has_value();
     CoreRangeSet output_core_range_set = operation_attributes.global_cb.has_value()
                                              ? operation_attributes.global_cb->receiver_cores()
-                                             : input_tensor_b.memory_config().shard_spec().value().grid;
+                                         : is_packed ? operation_attributes.packed_weight->cores
+                                                     : input_tensor_b.memory_config().shard_spec().value().grid;
     int output_num_cores = output_core_range_set.num_cores();
     if (operation_attributes.partial_width_sharded) {
         const int Nc = operation_attributes.global_cb.has_value()
                            ? static_cast<int>(input_tensor_b.nd_shard_spec().value().shard_shape[-1])
+                       : is_packed
+                           ? static_cast<int>(operation_attributes.N / operation_attributes.packed_weight->n_blocks())
                            : static_cast<int>(input_tensor_b.memory_config().shard_spec().value().shape[1]);
         const int N_tiles = tt::div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
         const int Nc_tiles = Nc / tt::constants::TILE_WIDTH;
         const int N_blocks = N_tiles / Nc_tiles;
         output_num_cores = N_blocks;
-        if (operation_attributes.global_cb.has_value()) {
-            // The factory reduces the K-partials onto the k_idx == 0 row of the receiver grid --
+        if (operation_attributes.global_cb.has_value() || is_packed) {
+            // The factory reduces the K-partials onto the k_idx == 0 row of the weight grid --
             // its first N_blocks cores in row-major order -- and requires every one of them to be
-            // in the output grid. A grid anchored at (0, 0) only satisfies that when the receiver
+            // in the output grid. A grid anchored at (0, 0) only satisfies that when the weight
             // grid happens to be anchored there too.
             const auto base_cores =
                 tt::tt_metal::corerange_to_cores(output_core_range_set, output_num_cores, /*row_wise=*/true);
@@ -465,7 +576,8 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
-    uint32_t global_cb_k_blocks) {
+    uint32_t global_cb_k_blocks,
+    const std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec>& packed_weight) {
     using OperationType = ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation;
     using ttnn::operations::experimental::matmul_decode::gcb_num_receivers;
 
@@ -488,6 +600,63 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
             "matmul_decode with global_cb requires input tensor B to be ND_SHARDED (receiver-contiguous, one shard "
             "per receiver), but its memory layout is {} and it carries no NdShardSpec",
             input_tensor_b.memory_config().memory_layout());
+    }
+
+    if (packed_weight.has_value()) {
+        // Fused-weight path: B is one big height-sharded tensor and its shape says nothing about
+        // this weight, so every piece of geometry the code below would infer from the operand
+        // shapes comes from the spec instead. The mode is also the spec's to pick: batch > 1 is
+        // batched, k_blocks > 1 is partial, otherwise full width-sharded; the
+        // `partial_width_sharded` argument is ignored.
+        const auto& pw = *packed_weight;
+        TT_FATAL(
+            !global_cb.has_value(),
+            "matmul_decode packed_weight and global_cb are mutually exclusive: a packed weight is already "
+            "L1-resident inside the fused tensor, there is nothing for the prefetcher to stream");
+        TT_FATAL(
+            pw.K > 0 && pw.N > 0 && pw.num_cores() > 0,
+            "matmul_decode packed_weight must carry the weight's [K, N] and its cores, but got [{}, {}] on {} cores",
+            pw.K,
+            pw.N,
+            pw.num_cores());
+
+        const int M = input_tensor_a.logical_shape()[-2];
+        const bool batched = pw.batch > 1;
+        if (batched) {
+            TT_FATAL(
+                input_tensor_a.logical_shape().rank() == 4 &&
+                    input_tensor_a.logical_shape()[0] * input_tensor_a.logical_shape()[1] == static_cast<int>(pw.batch),
+                "matmul_decode packed_weight with batch {} requires a rank-4 A whose leading dims multiply to it",
+                pw.batch);
+        }
+        const bool partial = !batched && pw.k_blocks > 1;
+        log_debug(
+            tt::LogOp,
+            "matmul_decode (packed) M={}, N={}, K={}, tile_offset={}, cores={}, k_blocks={}, batch={}, b_blocks={}",
+            M,
+            pw.N,
+            pw.K,
+            pw.tile_offset,
+            pw.num_cores(),
+            pw.k_blocks,
+            pw.batch,
+            pw.b_blocks);
+        auto operation_attributes = OperationType::operation_attributes_t{
+            M,
+            static_cast<int>(pw.N),
+            static_cast<int>(pw.K),
+            output_mem_config,
+            dtype.has_value() ? std::optional<DataType>(*dtype) : std::nullopt,
+            partial,
+            static_cast<int>(pw.batch),
+            static_cast<int>(pw.b_blocks),
+            static_cast<int>(pw.n_blocks()),
+            /*global_cb=*/std::nullopt,
+            /*global_cb_k_blocks=*/1,
+            packed_weight,
+        };
+        auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
+        return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
     }
 
     if (input_tensor_a.logical_shape().rank() == 4) {

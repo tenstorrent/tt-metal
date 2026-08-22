@@ -16,9 +16,42 @@
 namespace ttnn::operations::experimental::matmul_decode::detail {
 
 void bind_matmul_decode_operation(nb::module_& mod) {
+    // The details of one weight packed inside a larger fused weight tensor, for the
+    // packed_weight argument below and for MatmulDecodeParams.packed_weight.
+    nb::class_<ttnn::experimental::PackedWeightSpec>(mod, "MatmulDecodePackedWeightSpec")
+        .def(nb::init<>())
+        .def(
+            "__init__",
+            [](ttnn::experimental::PackedWeightSpec* t,
+               uint32_t tile_offset,
+               uint32_t K,
+               uint32_t N,
+               const tt::tt_metal::CoreRangeSet& cores,
+               uint32_t k_blocks,
+               uint32_t batch,
+               uint32_t b_blocks) {
+                new (t) ttnn::experimental::PackedWeightSpec{tile_offset, K, N, cores, k_blocks, batch, b_blocks};
+            },
+            nb::arg("tile_offset"),
+            nb::arg("K"),
+            nb::arg("N"),
+            nb::arg("cores"),
+            nb::arg("k_blocks") = 1,
+            nb::arg("batch") = 1,
+            nb::arg("b_blocks") = 1)
+        .def_rw("tile_offset", &ttnn::experimental::PackedWeightSpec::tile_offset)
+        .def_rw("K", &ttnn::experimental::PackedWeightSpec::K)
+        .def_rw("N", &ttnn::experimental::PackedWeightSpec::N)
+        .def_rw("cores", &ttnn::experimental::PackedWeightSpec::cores)
+        .def_rw("k_blocks", &ttnn::experimental::PackedWeightSpec::k_blocks)
+        .def_rw("batch", &ttnn::experimental::PackedWeightSpec::batch)
+        .def_rw("b_blocks", &ttnn::experimental::PackedWeightSpec::b_blocks)
+        .def_prop_ro("num_cores", &ttnn::experimental::PackedWeightSpec::num_cores)
+        .def_prop_ro("n_blocks", &ttnn::experimental::PackedWeightSpec::n_blocks);
+
     ttnn::bind_function<"matmul_decode", "ttnn.experimental.">(
         mod,
-        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1) -> ttnn.Tensor
+        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None) -> ttnn.Tensor
 
         Returns the matrix product of two tensors.
 
@@ -69,6 +102,19 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 mismatch is a device hang, not an error, so derive both from
                 `ttnn._experimental.tensor_prefetcher_matmul_decode.matmul_decode_k_blocks`
                 rather than by hand.
+            packed_weight (ttnn.experimental.MatmulDecodePackedWeightSpec, optional): where this
+                op's weight lives inside `input_tensor_b` when B is a larger fused weight tensor:
+                one HEIGHT_SHARDED L1 tensor packing many weights, one equal one-tile-wide shard
+                per core, this weight's slab occupying tiles
+                [tile_offset, tile_offset + slab_tiles) of the shard on each of `cores` (slab
+                tiles in row-major order, exactly like a dedicated width-sharded weight).
+
+                The fused tensor's shape says nothing about the weight, so the spec carries the
+                logical geometry: [K, N], the holding cores (row-major shard order), and the cut
+                -- `k_blocks > 1` selects the partial width-sharded factory, `batch > 1` the
+                batched factory (with `b_blocks`), otherwise full width-sharded with N split
+                across the cores. `partial_width_sharded` is ignored when this is set. Mutually
+                exclusive with `global_cb`. Defaults to None.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -81,7 +127,8 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("dtype") = nb::none(),
         nb::arg("output_mem_config") = nb::none(),
         nb::arg("global_cb") = nb::none(),
-        nb::arg("global_cb_k_blocks") = 1);
+        nb::arg("global_cb_k_blocks") = 1,
+        nb::arg("packed_weight") = nb::none());
 }
 
 // Descriptor-level bindings for models/experimental/ops/descriptors/matmul_decode.py, mirroring
@@ -101,7 +148,8 @@ void bind_matmul_decode_descriptor(nb::module_& mod) {
         .def_rw("b_blocks", &ttnn::prim::MatmulDecodeParams::b_blocks)
         .def_rw("n_blocks", &ttnn::prim::MatmulDecodeParams::n_blocks)
         .def_rw("global_cb", &ttnn::prim::MatmulDecodeParams::global_cb)
-        .def_rw("global_cb_k_blocks", &ttnn::prim::MatmulDecodeParams::global_cb_k_blocks);
+        .def_rw("global_cb_k_blocks", &ttnn::prim::MatmulDecodeParams::global_cb_k_blocks)
+        .def_rw("packed_weight", &ttnn::prim::MatmulDecodeParams::packed_weight);
 
     nb::class_<ttnn::prim::MatmulDecodeInputs>(mod, "MatmulDecodeInputs")
         .def(

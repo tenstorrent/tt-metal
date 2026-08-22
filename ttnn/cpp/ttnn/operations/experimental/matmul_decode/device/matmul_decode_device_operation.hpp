@@ -11,6 +11,7 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/experimental/matmul_decode/packed_weight_spec.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 
@@ -42,6 +43,12 @@ struct MatmulDecodeDeviceOperation {
         // a slab); > 1 cuts the slab into that many K-blocks and streams them, so the GCB only has
         // to hold a couple of pages. Must equal the prefetch request's block_count.
         uint32_t global_cb_k_blocks = 1;
+        // Fused-weight path (see packed_weight_spec.hpp): input tensor B is one large
+        // HEIGHT_SHARDED L1 tensor packing many weights, and this describes where this op's
+        // weight lives inside it. When set, all weight geometry (grid, slab shape, N, the
+        // K/batch cut) comes from here rather than from B's shard spec, and the in1 CB is bound
+        // to B's buffer at the region's byte offset. Mutually exclusive with global_cb.
+        std::optional<PackedWeightSpec> packed_weight = std::nullopt;
     };
 
     struct tensor_args_t {
@@ -101,5 +108,6 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     std::optional<const DataType> dtype = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt,
-    uint32_t global_cb_k_blocks = 1);
+    uint32_t global_cb_k_blocks = 1,
+    const std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec>& packed_weight = std::nullopt);
 }  // namespace ttnn::prim

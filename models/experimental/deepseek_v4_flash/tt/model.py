@@ -29,6 +29,7 @@ from .decoder_layer import DeepSeekV4DecoderLayer
 from .embedding import DeepSeekV4Embedding
 from .hyperconnection import DeepSeekV4HyperHead
 from .layers import DeepSeekV4RMSNorm
+from .l1_weights import build_l1_weight_tensor, placement_weights_from_decoder_layer
 from .moe import DeepSeekV4HashRouter, DeepSeekV4PreloadedExperts
 from .quant import dequantize_weight
 from .system_config import SystemConfig, load_system_config, set_active_system_config
@@ -261,6 +262,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         if use_prefetcher is None:
             use_prefetcher = system_config.prefetcher.resolve_enabled(full_device)
         self.use_prefetcher = use_prefetcher
+        self.use_packed_l1_weights = system_config.decode.resolve_packed_l1_weights(use_prefetcher)
+        if self.use_packed_l1_weights and weight_dtype != ttnn.bfloat4_b:
+            raise ValueError("packed L1 decoder weights require weight_dtype=ttnn.bfloat4_b")
         if num_prefetch_pages is None:
             num_prefetch_pages = system_config.prefetcher.num_prefetch_pages
         self._prefetch_buffers_by_device: dict[int, dict] = {}
@@ -359,6 +363,42 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         self.layers: list[DeepSeekV4DecoderLayer] = []
         self.layer_devices: list[ttnn.MeshDevice] = []
+        layer_weights = {
+            li: self._build_layer_weights(li, config.layer_types[li], config.mlp_layer_types[li] == "hash_moe")
+            for li in range(n)
+        }
+        packed_by_layer = {}
+        if self.use_packed_l1_weights:
+            groups: dict[int, list[int]] = {}
+            for li in range(n):
+                device_id = self._submesh_id_for_layer(li) if self.use_submeshes else 0
+                groups.setdefault(device_id, []).append(li)
+            for device_id, indices in groups.items():
+                if len(indices) > 2:
+                    raise ValueError(
+                        f"packed Galaxy32 placement supports at most two decoder layers per chip; "
+                        f"device {device_id} owns layers {indices}"
+                    )
+                current_device = self.submeshes[device_id] if self.use_submeshes else full_device
+                layer_types = tuple(config.layer_types[li] for li in indices)
+                cache_name = "packed_decoder_layers_" + "_".join(f"{li}_{config.layer_types[li]}" for li in indices)
+                cache_file = cache.file(cache_name)
+                if cache.hit(cache_name, ttnn.bfloat4_b):
+                    bundle = build_l1_weight_tensor(
+                        None, current_device, layer_types=layer_types, cache_file_name=cache_file
+                    )
+                else:
+                    if cache.require_cache:
+                        raise RuntimeError(f"weight cache miss for packed decoder tensor {cache_file!r}")
+                    host_weights = [
+                        placement_weights_from_decoder_layer(layer_weights[li], config.layer_types[li])
+                        for li in indices
+                    ]
+                    bundle = build_l1_weight_tensor(
+                        host_weights, current_device, layer_types=layer_types, cache_file_name=cache_file
+                    )
+                for slot, li in enumerate(indices):
+                    packed_by_layer[li] = (bundle, slot)
         for li in range(n):
             if self.use_submeshes:
                 layer_device_id = self._submesh_id_for_layer(li)
@@ -370,8 +410,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
             layer_type = config.layer_types[li]
             is_hash = config.mlp_layer_types[li] == "hash_moe"
             layer_cache = cache.sub(f"layers.{li}")
-            weights = self._build_layer_weights(li, layer_type, is_hash)
-            gate = self._hash_gate(li) if is_hash else None
+            weights = layer_weights[li]
+            packed_entry = packed_by_layer.get(li)
+            packed_bundle = None
+            if packed_entry is not None:
+                (packed_tensor, packed_layout), packed_slot = packed_entry
+                packed_bundle = (packed_tensor, packed_layout, packed_slot)
+            gate = self._hash_gate(li, packed_bundle) if is_hash else None
             experts = DeepSeekV4PreloadedExperts(
                 config,
                 self._expert_provider(li),
@@ -391,6 +436,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     weight_dtype=weight_dtype,
                     use_prefetcher=self.use_prefetcher,
                     prefetch_buffers=self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_pages),
+                    packed_weights=packed_entry,
                 )
             )
             _profile(current_device)
@@ -583,7 +629,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         return provider
 
-    def _hash_gate(self, layer_idx: int) -> DeepSeekV4HashRouter:
+    def _hash_gate(self, layer_idx: int, packed_weights=None) -> DeepSeekV4HashRouter:
         weights = {
             "gate.weight": self._thunk(f"layers.{layer_idx}.mlp.gate.weight"),
             "gate.tid2eid": self.loader.get_tensor(f"layers.{layer_idx}.mlp.gate.tid2eid").long(),
@@ -592,7 +638,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             this_device = self.submeshes[self._submesh_id_for_layer(layer_idx)]
         else:
             this_device = self.first_device
-        return DeepSeekV4HashRouter(self.config, weights, this_device)
+        return DeepSeekV4HashRouter(self.config, weights, this_device, packed_weights=packed_weights)
 
     # -- compressor pooling schedule -------------------------------------------- #
     #
