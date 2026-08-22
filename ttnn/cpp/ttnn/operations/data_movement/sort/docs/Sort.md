@@ -37,6 +37,8 @@ requires; users do not need to pre-format inputs.
 
 **NaN input is unsupported (undefined ordering) for `bfloat16`.** The `bfloat16` datapath canonicalizes NaN to same-sign infinity before any comparison (measured on silicon: NaN merges into the `+inf`/`-inf` tie class), so NaN placement deviates from `torch.sort`'s NaN-last ordering in both values and indices. Callers who need torch NaN semantics must mask or replace NaNs before sorting.
 
+**Unstable index contract (`stable=False`).** The returned indices always gather the sorted values from the input, but need not form a permutation within tie groups on the CrossCore path — that engine resolves ties positionally and can emit duplicate indices inside a tie group (see issue #54043). Use `stable=True` when a true permutation is required.
+
 #### Supported layouts
 
 | Layout       | Supported | Notes                                                                                |

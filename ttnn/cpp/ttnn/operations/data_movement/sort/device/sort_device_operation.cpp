@@ -91,8 +91,9 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
         // SFPSWAP index tracking) and the two peers of a spanning tile pair merge with
         // swapped operand order while keeping opposite halves, so on a tie both peers can
         // emit the SAME index — duplicate indices inside tie groups, indices not a
-        // permutation (pre-existing CrossCore behavior at the widths it natively owns,
-        // W=4096/8192). Unstable cells therefore keep the single-core engine, which moves
+        // permutation (pre-existing CrossCore behavior wherever it serves unstable sorts;
+        // measured on silicon at W=512-4096 on plain randn, issue #54043). Unstable cells
+        // therefore keep the single-core engine, which moves
         // value+index atomically per SFPSWAP and always emits a valid permutation. The
         // stable comparator (topk_cmp_swap_stable_directional) is operand-order-independent
         // and silicon-verified exact on the rerouted band. BLACKHOLE ONLY: the reroute was

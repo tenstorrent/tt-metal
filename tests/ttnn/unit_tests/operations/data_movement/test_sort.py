@@ -1205,9 +1205,11 @@ def test_sort_small_ht_cross_core_reroute(width, stable, descending, device):
     """Small-Ht STABLE cells in the single-core width band (Wt in [16, 64], Ht <= Wt/8, Blackhole)
     reroute to the CrossCore comparator (measured 5-12x faster there; the single-core factory
     would idle the rest of the grid). Unstable cells deliberately keep the single-core engine:
-    the CrossCore unstable exchange resolves ties positionally and emits duplicate indices
-    inside tie groups. Exactness parity on tie-heavy input for both stability modes, and a
-    full permutation check on the unstable arm."""
+    whenever CrossCore serves an unstable sort it resolves ties positionally and emits
+    duplicate indices inside tie groups (issue #54043) — measured on silicon at every width
+    it serves, W=512-4096, on plain randn (bf16 quantization makes ties common), not just
+    tie-heavy input at its native W=4096/8192 band. Exactness parity on tie-heavy input for
+    both stability modes, and a full permutation check on the unstable arm."""
     levels = [-1.5, -0.5, -0.5, 0.5, 1.5]
     input_tensor = _tie_heavy_tensor([32, width], levels, seed=41 + width + int(descending))
 
