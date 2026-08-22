@@ -484,12 +484,12 @@ TT_ALWAYS_INLINE void set_packer_config(
 
     // Save to GPR for quick data format reconfig. Issued as the TTSETDMAREG intrinsic so
     // pass_rvtt_config sees the REGFILE write (it does not coalesce REGFILE with CONFIG space).
-    // Exp_section_size sits at bit 16, so the whole value is in the GPR's
-    // upper halfword and the lower one is zero.  A TTSETDMAREG payload is 14
-    // bits and reaches one halfword, so the pair is needed to write both.
-    static_assert(THCON_SEC0_REG8_Exp_section_size_SHAMT == 16, "Exp_section_size no longer starts a halfword");
-    TT_SETDMAREG(0, 0, 0, LO_16(p_gpr_pack::EXP0_SEC_SIZE_BFP));
-    TT_SETDMAREG(0, (partial_face ? 1 : num_faces), 0, HI_16(p_gpr_pack::EXP0_SEC_SIZE_BFP));
+    //
+    // Exp_section_size starts at bit 16 and the payload lands in the halfword
+    // LO_16 names, so this stores zero rather than num_faces.  Wormhole programs
+    // the register for real (regfile[EXP0_SEC_SIZE_BFP] in its cpack_common.h);
+    // nothing on Blackhole reads it, so the write is dead either way.
+    TT_SETDMAREG(0, (((partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT) & 0x3fff), 0, LO_16(p_gpr_pack::EXP0_SEC_SIZE_BFP));
     sync_regfile_write(p_gpr_pack::EXP0_SEC_SIZE_BFP);
 }
 
