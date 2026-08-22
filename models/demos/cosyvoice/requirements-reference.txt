@@ -63,14 +63,37 @@
 #
 # What is deliberately still outstanding, and why:
 #
-#   torch         3 open, all MEDIUM local-DoS. CVE-2025-2998 has no fixed version at
-#                 all. 2.8.0/2.9.1 would clear the other two but break this venv twice
-#                 over: torch>=2.8's inductor imports triton.backends, which the triton
-#                 that openai-whisper pins does not have, and torchaudio 2.9 removed its
-#                 native decoder so torchaudio.load needs torchcodec + FFmpeg. Paying
-#                 that to close two local-DoS findings in a host-only venv is a bad
-#                 trade; 2.6.0 is what clears the CRITICAL (CVE-2025-32434, torch.load
-#                 RCE), which is the one that matches how this venv is actually used.
+#   torch         3 open, all MODERATE local-DoS: CVE-2025-3730 (fixed 2.8.0),
+#                 CVE-2025-2999 (fixed 2.9.1), CVE-2025-2998 (range <= 2.6.0, no fixed
+#                 version recorded -- so 2.6.0 is its last affected release and any
+#                 bump leaves the range). 2.6.0 is what clears the CRITICAL
+#                 (CVE-2025-32434, torch.load RCE), which is the one that matches how
+#                 this venv is actually used.
+#
+#                 Measured 2026-08-22, superseding an earlier reading of this trade.
+#                 Three things previously recorded as blocking a bump are not:
+#                 openai-whisper 20250625 relaxes its triton pin to >=2, so triton
+#                 3.7.1 resolves with torch 2.8/2.9; torchaudio 2.8 still has its
+#                 native decoder; and Qwen2ForCausalLM imports fine on torch 2.9.1
+#                 with transformers 5.5.0. What does block it is narrower and worse:
+#
+#                   torch.multinomial(probs, num_samples=1) consumes the RNG stream
+#                   differently in 2.8 than in 2.6. The batched form, topk and sort are
+#                   byte-identical, and so is the generator itself -- only the
+#                   single-sample path RAS uses in the AR decode loop moved. Model
+#                   arithmetic is bit-exact across the bump (text encoder, both AR
+#                   chunks and decoder_head calls 0-2 all at max|diff| 0.0), but the
+#                   token drawn at step 2 differs, the utterance ends at 147 semantic
+#                   tokens instead of 164, and all 29 goldens shift with it.
+#
+#                 So a torch bump is not a numerical risk, it is a re-baseline: the
+#                 whole golden set has to be regenerated and every figure in PERF.md
+#                 derived from it re-measured. Same trade as onnxruntime below, same
+#                 verdict -- three MODERATE local-DoS findings in a venv that ships
+#                 nothing do not justify moving the reference the port is measured
+#                 against. 2.9.1 is additionally blocked upstream: CosyVoice's own
+#                 cosyvoice/utils/file_utils.py calls torchaudio.load(..., backend=
+#                 'soundfile'), and 2.9 ignores that argument and requires TorchCodec.
 #
 # onnxruntime is held at 1.18.0 on purpose, and not because of an advisory — it has
 # none. It runs speech_tokenizer_v1.onnx, and 1.23.2 emits a different token sequence
