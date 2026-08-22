@@ -334,7 +334,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.mac">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">mac</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor_a</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_b</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_c</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.mac" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">mac</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor_a</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_b</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">float</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_c</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">float</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.mac" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <blockquote>
@@ -342,20 +342,36 @@
 <p>Computes Mac on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_c</span></code> and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code></p>
 </div>
 </blockquote>
+<p>Supported call signatures (all return <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">*</span> <span class="pre">b</span> <span class="pre">+</span> <span class="pre">c</span></code>):</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># TTT — all tensors</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">mac</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">output_tensor</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">sub_core_grids</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<span class="c1"># TTS — a * b + scalar</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">mac</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<span class="c1"># TST — a * scalar + c</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">mac</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<span class="c1"># TSS — a * scalar1 + scalar2</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">mac</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">value1</span><span class="p">,</span> <span class="n">value2</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+</pre></div>
+</div>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
-<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em><em> or </em><em>Number</em>) – the input tensor.</p></li>
-<li><p><strong>input_tensor_c</strong> (<em>ttnn.Tensor</em><em> or </em><em>Number</em>) – the input tensor.</p></li>
+<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the first input tensor (always a tensor).</p></li>
+<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em><em> or </em><em>float</em>) – the second input — tensor (TTT/TTS) or scalar (TST/TSS).</p></li>
+<li><p><strong>input_tensor_c</strong> (<em>ttnn.Tensor</em><em> or </em><em>float</em>) – the third input — tensor (TTT/TST) or scalar (TTS/TSS).</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p>
+<ul class="simple">
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor to write into. TTT only. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – restrict execution to this set of cores. TTT only. Defaults to <cite>None</cite>.</p></li>
+</ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
@@ -380,7 +396,8 @@
 </tr>
 </tbody>
 </table>
-<p>bfloat8_b/bfloat4_b supports only on TILE_LAYOUT</p>
+<p>bfloat8_b/bfloat4_b supports only on TILE_LAYOUT.</p>
+<p><code class="docutils literal notranslate"><span class="pre">output_tensor</span></code> and <code class="docutils literal notranslate"><span class="pre">sub_core_grids</span></code> are only supported on the TTT native LLK path.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
