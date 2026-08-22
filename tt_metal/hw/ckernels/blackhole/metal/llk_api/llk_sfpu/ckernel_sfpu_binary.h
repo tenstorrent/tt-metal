@@ -85,8 +85,8 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
 template <
     bool APPROXIMATION_MODE,
     BinaryOp BINOP,
-    int ITERATIONS = 8,
-    bool is_fp32_dest_acc_en = false,
+    int ITERATIONS,
+    bool is_fp32_dest_acc_en,
     DstRoundingMode dst_rounding_mode = DstRoundingMode::Default>
 inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();

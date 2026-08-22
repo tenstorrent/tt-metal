@@ -6,6 +6,7 @@
 #include "internal/circular_buffer_interface.h"
 #include "ckernel.h"
 #include "ckernel_globals.h"
+#include "llk_assert.h"
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
