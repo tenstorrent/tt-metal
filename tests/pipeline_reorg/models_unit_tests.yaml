@@ -1491,3 +1491,21 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+
+# XTTS-v2 (zero-shot voice-cloning TTS). Blackhole P150 only — no Wormhole / multi-chip numbers
+# exist for this model. The PCC suite is 24 tests in ~6 min warm; the timeout allows for the
+# first-run download of the ~1.9 GB coqui/XTTS-v2 checkpoint into the HF cache.
+# NOTE: the test_tt_eval* tests (eager, traced, traced-long) additionally pull whisper-large-v3
+# (~3 GB), UTMOS and ECAPA2 for objective metrics. They are best-effort and ungated, so the
+# "not eval" filter deselects them here, keeping the job to the deterministic PCC gates and off the
+# extra downloads.
+- name: xtts-v2 unit tests
+  cmd: pytest models/experimental/xtts/tests/pcc/ -k "not eval" --timeout=900
+  model: xtts-v2
+  model_family: XTTS
+  skus:
+    bh_p150b_civ2:
+      timeout: 25
+      tier: 3
+  owner_id: U087HGJ455E # Sudhanshu Singhal
+  team: shield
