@@ -113,7 +113,12 @@ def detect_pass_rate_regressions(conn, current_run_id: int, prev_run_id: int) ->
                     COUNT(*) FILTER (WHERE status = 'pass') AS passed,
                     COUNT(*) FILTER (WHERE status LIKE 'fail%%') AS failed,
                     -- executed = the vectors that actually ran an op; see the note on pass_pct
-                    COUNT(*) FILTER (WHERE status = 'pass' OR status LIKE 'fail%%') AS executed
+                    -- xpass included to match push_sweep_results._is_failure(), which counts it in
+                    -- the run-level fail_count. Excluding it here would drop xpass rows from the
+                    -- denominator and inflate a module's rate. No xpass rows exist today, so this
+                    -- keeps the two levels consistent rather than fixing an observed miscount.
+                    COUNT(*) FILTER (WHERE status = 'pass' OR status LIKE 'fail%%' OR status = 'xpass')
+                        AS executed
                 FROM sweep_test
                 WHERE run_id = %s
                 GROUP BY module_name
@@ -123,7 +128,12 @@ def detect_pass_rate_regressions(conn, current_run_id: int, prev_run_id: int) ->
                     SPLIT_PART(full_test_name, '.', 1) || '.' || SPLIT_PART(full_test_name, '.', 2) AS module_name,
                     COUNT(*) AS total,
                     COUNT(*) FILTER (WHERE status = 'pass') AS passed,
-                    COUNT(*) FILTER (WHERE status = 'pass' OR status LIKE 'fail%%') AS executed
+                    -- xpass included to match push_sweep_results._is_failure(), which counts it in
+                    -- the run-level fail_count. Excluding it here would drop xpass rows from the
+                    -- denominator and inflate a module's rate. No xpass rows exist today, so this
+                    -- keeps the two levels consistent rather than fixing an observed miscount.
+                    COUNT(*) FILTER (WHERE status = 'pass' OR status LIKE 'fail%%' OR status = 'xpass')
+                        AS executed
                 FROM sweep_test
                 WHERE run_id = %s
                 GROUP BY module_name
