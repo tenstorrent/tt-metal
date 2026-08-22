@@ -1710,3 +1710,21 @@ def test_sort_stable_program_cache(shape, device):
     device.disable_and_clear_program_cache()
     # Two distinct programs total (stable and unstable), each compiled exactly once.
     assert entries[-1] == 2, f"Expected 2 program cache entries (stable + unstable), found {entries[-1]}"
+
+
+@pytest.mark.parametrize("stable", [True, False])
+def test_sort_dim_size_1_early_exit_index_dtype(stable, device):
+    """The composite's dim-size-1 early exit must match the on-device index-dtype
+    contract: every on-device stable bf16 path at these tiny widths returns UINT32
+    indices (the 32-bit-DEST rule of the fused-key stable engine, arch-independent
+    at Wt <= 64), so the early exit must return UINT32 too. Unstable bf16 keeps
+    UINT16 (issue #33492 truth-sync, hole C3)."""
+    input_tensor = torch.randn(32, 1).to(torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, stable=stable)
+
+    expected_index_dtype = ttnn.uint32 if stable else ttnn.uint16
+    assert ttnn_indices.dtype == expected_index_dtype
+    assert_equal(input_tensor, ttnn.to_torch(ttnn_values))
+    assert torch.count_nonzero(ttnn.to_torch(ttnn_indices).to(torch.int64)) == 0

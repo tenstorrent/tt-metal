@@ -263,7 +263,15 @@ std::vector<Tensor> sort(
     // FLOAT32 and UINT16 inputs require UINT32 indices: both run with
     // fp32_dest_acc_en=true in the sort kernel (device-side validation enforces
     // this for the non-early-exit path; keep early exits consistent).
-    const bool idx_is_uint32 = (input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::UINT16);
+    // Stable BFLOAT16 also returns UINT32: every on-device stable bf16 path at
+    // the tiny widths these early exits map to (padded Wt <= 64) runs a fused-key
+    // engine in 32-bit DEST whose index transport is UINT32 (see the
+    // stable_bf16_single_core gate in SortDeviceOperation::compute_output_specs,
+    // arch-independent), so the early-exit dtype must match or the index dtype a
+    // caller sees would depend on whether the early exit fired.
+    const bool idx_is_uint32 =
+        (input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::UINT16 ||
+         (stable && input_tensor.dtype() == DataType::BFLOAT16));
     const DataType index_dtype = idx_is_uint32 ? DataType::UINT32 : DataType::UINT16;
 
     // Check for early exit for scalar or empty tensors tensors
