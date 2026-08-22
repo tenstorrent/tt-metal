@@ -257,7 +257,6 @@ class SamplingGenerator:
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
-        old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
         num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
@@ -267,8 +266,12 @@ class SamplingGenerator:
             num_logprobs=num_logprobs,
             empty_slots=empty_slots,
         )
-        if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
-            self.reset_trace()
+        # No trace reset when force_argmax flips: _TraceKey already includes force_argmax,
+        # so the greedy and non-greedy pipelines live in separate slots and each is replayed
+        # from its own capture. Resetting here would release *every* slot on each flip and
+        # force a re-capture, which thrashes on workloads that mix greedy and sampled
+        # requests. penalties_on / log_probs_on are handled by keying alone for the same
+        # reason -- force_argmax was the odd one out.
 
         old_penalties_active = self._penalties_active
         self._penalties_active = not (
