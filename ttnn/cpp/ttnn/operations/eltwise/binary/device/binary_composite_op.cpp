@@ -31,6 +31,9 @@ namespace ttnn {
 using namespace operations;
 
 // nextafter
+// Steps input_a TOWARDS input_b: a > b moves down, a < b moves up, a == b is unchanged. The step is
+// hal::get_eps() (2^-23), which equals one FLOAT32 ULP only on [1, 2) -- elsewhere it overshoots
+// (below 1.0) or is absorbed by rounding (from 2.0 up, and at every BFLOAT16 magnitude).
 Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const float eps = tt::tt_metal::hal::get_eps();
     Tensor result(input_a);
@@ -39,12 +42,12 @@ Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::option
         {
             eps_gt = ttnn::where(
                 ttnn::gt(input_a, input_b, std::nullopt, output_mem_config),
-                ttnn::add(input_a, eps, std::nullopt, output_mem_config),
+                ttnn::subtract(input_a, eps, std::nullopt, output_mem_config),
                 input_a);
         }
         result = ttnn::where(
             ttnn::lt(input_a, input_b, std::nullopt, output_mem_config),
-            ttnn::subtract(input_a, eps, std::nullopt, output_mem_config),
+            ttnn::add(input_a, eps, std::nullopt, output_mem_config),
             eps_gt);
     }
     return result;
