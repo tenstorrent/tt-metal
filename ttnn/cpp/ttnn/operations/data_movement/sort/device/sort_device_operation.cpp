@@ -180,6 +180,13 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     // For ROW_MAJOR layout: pre_sort_transform_tensor in sort.cpp pads the H
     //   dimension automatically, so combined_h is always a multiple of 32 here.
     const uint32_t combined_h = input_pshape[0] * input_pshape[1] * input_pshape[2];
+    // Empty tensors must not reach a program factory: the mergesort factory
+    // derives its active-core count from the row count and would divide by
+    // zero; the other factories would build zero-work programs.
+    TT_FATAL(
+        combined_h > 0,
+        "Sort device op requires a non-empty input tensor (shape[0]*shape[1]*shape[2] must be > 0), got shape {}.",
+        input_pshape);
     TT_FATAL(
         combined_h % tt::constants::TILE_HEIGHT == 0,
         "Input combined height (shape[0]*shape[1]*shape[2] = {}) must be a multiple of 32.",
