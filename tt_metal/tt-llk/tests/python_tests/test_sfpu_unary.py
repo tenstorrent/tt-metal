@@ -1719,7 +1719,9 @@ def test_unary_shift_fresh_cpp(fresh_cpp_impl):
     )
 
 
-@pytest.mark.parametrize("reciprocal_impl", [0, 1], ids=["production", "semantic"])
+@pytest.mark.parametrize(
+    "reciprocal_impl", [0, 1, 2], ids=["production", "semantic", "semantic-ilv2"]
+)
 @pytest.mark.parametrize(
     "formats,dest_acc",
     [
@@ -1775,7 +1777,10 @@ def test_reciprocal_semantic_edges(reciprocal_impl: int):
     )
 
 
-@pytest.mark.parametrize("reciprocal_impl,label", [(0, "production"), (1, "semantic")])
+@pytest.mark.parametrize(
+    "reciprocal_impl,label",
+    [(0, "production"), (1, "semantic"), (2, "semantic-ilv2")],
+)
 def test_reciprocal_device_profile(perf_report, reciprocal_impl: int, label: str):
     """Profile one accurate BF16 reciprocal body, excluding datacopy."""
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
