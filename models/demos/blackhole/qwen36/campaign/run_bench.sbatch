@@ -28,6 +28,10 @@ source "${QWEN38_ENV:-/data/ayerofieiev/qwen38/env.sh}"
 export PYTHONUNBUFFERED=1
 export TT_METAL_HOME="${TT_METAL_HOME:-$QWEN38_WORKSPACE}"
 export TT_METAL_RUNTIME_ROOT="${TT_METAL_RUNTIME_ROOT:-$QWEN38_WORKSPACE}"
+# Loudbox system cmake is 3.22 (< the repo's required 3.24); a ninja-triggered
+# reconfigure of a tree configured elsewhere then kills the job. The venv carries
+# pip cmake/ninja — put its bin dir first so the incremental build always uses them.
+export PATH="$(dirname "$QWEN38_PYTHON"):$PATH"
 cd "$QWEN38_WORKSPACE"
 
 # Cluster policy: nothing persists on node-local disks. Home is node-local here.
