@@ -154,36 +154,46 @@ class Qwen36MTPHead:
         self._k_cache = None
         self._v_cache = None
         self._page_table_tt = None
+        self._page_tables = []
         self._win = None  # traced window-step machinery (ensure_window/stage_window)
         self._last_normed = None
 
-    def allocate_kv_cache(self, num_blocks, block_size=64, dtype=ttnn.bfloat16):
-        """Own paged KV (one layer) + identity page table over its own blocks."""
+    def allocate_kv_cache(self, num_blocks, block_size=64, dtype=ttnn.bfloat16, users=1):
+        """Own paged KV (one layer) + per-user identity page tables.
+
+        `num_blocks` is PER USER; the shared cache holds users*num_blocks blocks
+        and user u's page table routes to blocks [u*num_blocks, (u+1)*num_blocks).
+        """
         assert self._k_cache is None, "MTP KV cache already allocated"
-        shape = [num_blocks, self.args.n_kv_heads, block_size, self.args.head_dim]
+        shape = [users * num_blocks, self.args.n_kv_heads, block_size, self.args.head_dim]
         self._k_cache = ttnn.zeros(shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
         self._v_cache = ttnn.zeros(shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
         self.attention.set_paged_kv_cache(self._k_cache, self._v_cache)
-        self._page_table_tt = ttnn.from_torch(
-            torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            **self._mesh_kwargs,
-        )
+        self._page_tables = [
+            ttnn.from_torch(
+                torch.arange(u * num_blocks, (u + 1) * num_blocks, dtype=torch.int32).unsqueeze(0),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                **self._mesh_kwargs,
+            )
+            for u in range(users)
+        ]
+        self._page_table_tt = self._page_tables[0]
 
     def free_kv_cache(self):
         if self._k_cache is None:
             return
         self.release_window_traces()
-        for t in (self._k_cache, self._v_cache, self._page_table_tt):
+        for t in (self._k_cache, self._v_cache, *self._page_tables):
             ttnn.deallocate(t)
         self._k_cache = self._v_cache = self._page_table_tt = None
+        self._page_tables = []
         self.attention.paged_kv_cache_key = None
         self.attention.paged_kv_cache_value = None
         self.attention.use_paged_attention = False
 
-    def step(self, token_id, hidden_row, position):
+    def step(self, token_id, hidden_row, position, user=0):
         """One drafter step: (hidden at pos, token at pos+1) -> logits for pos+2.
 
         Args:
@@ -191,6 +201,7 @@ class Qwen36MTPHead:
             hidden_row: torch [dim] — target post-final-norm hidden at `position`
                 (or the drafter's own hidden from the previous chained step).
             position: int — drafter RoPE position and KV slot.
+            user: which user's drafter KV blocks to read/write (batched spec).
 
         Returns:
             (logits torch [vocab_out], hidden torch [dim]) — hidden is the
@@ -219,7 +230,7 @@ class Qwen36MTPHead:
             device=self.device,
             **self._mesh_kwargs,
         )
-        logits, normed = self._step_graph(tok, h_in, cur_pos, cos, sin)
+        logits, normed = self._step_graph(tok, h_in, cur_pos, cos, sin, page_table=self._page_tables[user])
         for t in (tok, h_in, cur_pos):
             ttnn.deallocate(t)
 
@@ -232,12 +243,14 @@ class Qwen36MTPHead:
         ttnn.deallocate(logits)
         return logits_host, hidden_host
 
-    def _step_graph(self, tok, h_in, cur_pos, cos, sin):
+    def _step_graph(self, tok, h_in, cur_pos, cos, sin, page_table=None):
         """The drafter-step op graph over device inputs. Returns (logits, normed).
 
         Shared by the eager step() and the trace capture/replay path — everything
         here is device ops only (trace-capture safe).
         """
+        if page_table is None:
+            page_table = self._page_table_tt
         emb = self.embedding(tok)  # [1,1,dim]
         e_n = rms_norm_ttnn(emb, self.pre_fc_norm_embedding, eps=self.norm_eps, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(emb)
@@ -253,7 +266,7 @@ class Qwen36MTPHead:
 
         # Decoder block (decode-mode residual pattern, as in Qwen36DecoderLayer).
         attn_in = self.attention_norm(x, mode=Mode.DECODE, norm_config={"output_mem_config": ttnn.L1_MEMORY_CONFIG})
-        attn_out = self.attention.forward(attn_in, cos, sin, position_tensor=cur_pos, page_table=self._page_table_tt)
+        attn_out = self.attention.forward(attn_in, cos, sin, position_tensor=cur_pos, page_table=page_table)
         ttnn.deallocate(attn_in)
         h1 = ttnn.add(x, attn_out)
         ttnn.deallocate(x)
@@ -296,31 +309,24 @@ class Qwen36MTPHead:
 
         Multicore ttnn.argmax needs ROW_MAJOR input and exactly one 32-row tile
         (fewer/more rows silently degrade), so the single logit row is padded to
-        32 rows first. The max value uses a two-stage grid reduce — a direct
-        dim=-1 max over one tile-row runs on a single core. Two separate small
+        32 rows first. The max value reduces the SAME padded tensor along dim=-1
+        (only row 0 is read, so the pad value is irrelevant) — data-layout
+        reshapes like the old RxC max grid are host-fallback candidates (a read,
+        illegal under trace capture), so everything here is pad/untilize/reduce
+        only, matching the verify-score graph's programs. Two separate small
         outputs: no cross-dtype concat, no uint32 typecast.
         """
         vs = logits.shape[-1]
         l4 = ttnn.reshape(logits, (1, 1, 1, vs))
         padded = ttnn.pad(l4, [(0, 0), (0, 0), (0, 31), (0, 0)], value=0.0)
+        ttnn.deallocate(l4)
         rm = ttnn.untilize(padded, use_multicore=True)
-        ttnn.deallocate(padded)
         idx32 = ttnn.argmax(rm, dim=-1, keepdim=False)  # [1,1,32] uint32
         ttnn.deallocate(rm)
         idx = ttnn.slice(idx32, [0, 0, 0], [1, 1, 1])
         ttnn.deallocate(idx32)
-        # Two-stage max: pad the row to an R x 32 grid so the dim=-1 reduce
-        # parallelizes over tile-rows (text_demo _maxval_dev recipe).
-        cols = 32
-        rows = (((vs + cols - 1) // cols) + 31) // 32 * 32
-        mpad = ttnn.pad(l4, [(0, 0), (0, 0), (0, 0), (0, rows * cols - vs)], value=-1e30)
-        ttnn.deallocate(l4)
-        grid = ttnn.reshape(mpad, (1, 1, rows, cols))
-        part = ttnn.max(grid, dim=-1)  # [1,1,rows] (keepdim defaults False)
-        part_row = ttnn.reshape(part, (1, 1, 1, rows))
-        val = ttnn.max(part_row, dim=-1)  # [1,1,1] bf16
-        for t in (mpad, grid, part, part_row):
-            ttnn.deallocate(t)
+        val = ttnn.max(padded, dim=-1)  # [1,1,32] bf16 (row 0 is the real row; host reads [.., 0])
+        ttnn.deallocate(padded)
         return idx, val
 
     def token_from_scores(self, idxs, vals):
@@ -444,10 +450,11 @@ class Qwen36MTPHead:
         if self.num_devices > 1:
             comp = ttnn.ConcatMeshToTensor(self.device, dim=0)
             idxs = ttnn.to_torch(tr["idx"], mesh_composer=comp).reshape(-1)
-            vals = ttnn.to_torch(tr["val"], mesh_composer=comp).float().reshape(-1)
+            # val rows beyond 0 are argmax padding; element 0 per device is real.
+            vals = ttnn.to_torch(tr["val"], mesh_composer=comp).float().reshape(self.num_devices, -1)[:, 0]
         else:
             idxs = ttnn.to_torch(tr["idx"]).reshape(-1)
-            vals = ttnn.to_torch(tr["val"]).float().reshape(-1)
+            vals = ttnn.to_torch(tr["val"]).float().reshape(1, -1)[:, 0]
         return self.token_from_scores(idxs, vals)
 
     def ensure_window(self, w_max):
