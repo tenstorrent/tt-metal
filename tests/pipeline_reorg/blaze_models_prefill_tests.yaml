@@ -436,6 +436,53 @@
   team: models
   sp_config: sc1
 
+# Mistral-Small-4-119B: dense MLA (DeepSeek-family weight names) + GPT-OSS-family softmax top-4 MoE
+# routing. This is the model's FIRST leg in this pipeline, and it is deliberately the MoE module
+# rather than MLA, because it is the only Mistral module test that is fully self-contained today:
+#
+#   * no /mnt staging -- the reference is the upstream Mistral4MoE loaded from the SAME seeded draw
+#     as the device weights, so no checkpoint is read;
+#   * no HF download -- Mistral's config is hand-built from MistralSmall4Config (mistral4_hf_config),
+#     not fetched by AutoConfig;
+#   * no golden trace -- the realistic-input path in test_ttnn_moe is gated on DeepSeek's 7168 hidden
+#     dim, so Mistral falls through to the synthetic input;
+#   * MoE weight cache is rebuilt in-run under the default /tmp path, as the Kimi MoE rows do.
+#
+# The MLA module leg is NOT added here yet and that is not an oversight: test_mla asserts
+# "We should not execute CPU computation in the CI for max sl, output cache is missing", so an
+# accuracy row needs a reference cache staged at MISTRAL4_MLA_REF_CACHE the way the Kimi row points
+# at /mnt/models/kimi-prefill-cache/test_mla_output. Same for the prefill-block leg on real weights:
+# it needs the checkpoint plus a TTNN weight cache on /mnt, and no Mistral cache exists there yet.
+# Both are staging asks, not code gaps -- adding rows that can only fail (or worse, SKIP with rc=0)
+# would be a regression in signal, not an improvement in coverage.
+#
+# Mistral's op-level gate coverage needs no entry at all: the "DeepSeek-V3-671B MoE gate accuracy"
+# leg above runs test_moe_gate_prefill2d.py with -k "torus-xy-8x4" and NO model filter, so the
+# mistral4 gate cases are picked up by it automatically.
+- name: "Mistral-Small-4-119B MoE accuracy 5k + perf 25k"
+  fabric_profile: torus_xy
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_mistral4_moe -k "torus-xy-8x4 and (mistral4-5k-pcc or mistral4-25k-perf)" -vvv --tb=short
+    '
+  test_type: mistral4_moe
+  test_group: module
+  skus:
+    bh_sc1:
+      # Measured 2026-08-21 on a 32-chip BH Galaxy, torus-xy-8x4, with this exact -k: 3 min 41 s
+      # for both rows warm (25k-perf 115.6 s + 5k-pcc 87.2 s), and 2 min 54 s for 5k-pcc alone
+      # COLD, i.e. including the one-time MoE weight-cache build the two rows then share. Cold total
+      # is therefore ~6 min; 14 gives ~2.3x, the same order of headroom the Kimi rows carry. The
+      # local measurement kept its cache on NFS, so a CI run on local /tmp should beat it.
+      timeout: 14
+  # TODO(before filing): replace with the owning engineer's Slack member ID -- this is what the
+  # pipeline notifies when the leg goes red, so a placeholder means failures notify nobody.
+  owner_id: TODO_MISTRAL4_OWNER_SLACK_ID
+  team: models
+  sp_config: sc1
+
 - name: "Kimi-K2.6-1T prefill block accuracy 5k, 25k"
   fabric_profile: torus_xy
   cmd: |
