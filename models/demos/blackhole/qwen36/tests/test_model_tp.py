@@ -19,6 +19,7 @@ Run:
   MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
     pytest -svq models/demos/blackhole/qwen36/tests/test_model_tp.py
 """
+
 import math
 
 import pytest
@@ -839,4 +840,127 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     logger.info(
         f"PASSED: batched chunked prefill (B={B}, {seqlen}) matches B=1 chunk-outer reference; "
         f"worst PCC = {worst[0]:.5f} @ user{worst[1]} {worst[2]}"
+    )
+
+
+# Per-case (bucket, per-user valid_lens, reference path). "chunky" lens are gdn_chunk (128)
+# multiples so the peruser reference's exact-length forward is legal (its fused GDN op needs
+# T % 32 == 0); "ragged" lens are arbitrary, so the reference is the grouped path itself at
+# group_size=1 (bucket-padded + masked per user — the only per-user path legal at any length),
+# isolating the GROUPING (batched GDN rows + shared residual stream) as the sole delta.
+_GROUPED_LONG_CASES = {
+    "bucket1k-chunky": (1024, [768, 1024, 512, 640, 896, 384, 1024, 128], "peruser"),
+    "bucket2k-chunky": (2048, [1536, 2048, 1152, 1920, 1280, 768, 2048, 1024], "peruser"),
+    "bucket1k-ragged": (1024, [700, 1000, 1024, 513, 897, 601, 350, 1024], "group1"),
+    "bucket2k-ragged": (2048, [1700, 2048, 1111, 513, 1999, 897, 1024, 2048], "group1"),
+}
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("case", list(_GROUPED_LONG_CASES), ids=list(_GROUPED_LONG_CASES))
+def test_model_tp_prefill_grouped_long(mesh_device, case, monkeypatch, reset_seeds, ensure_gc, request):
+    """Grouped single-pass prefill at LONG buckets (1k/2k): the validation the defensive
+    gdn_max_bg cap in prefill_paged_grouped was waiting for.
+
+    One B=8 group runs the whole batch through ONE hybrid forward (batched GDN with per-row
+    valid_len masking + per-user attention), opted in past the defensive >256-bucket cap via
+    QWEN36_GDN_MAX_BG. Per-user prefill logits, post-prefill GDN recurrent + conv state, and
+    teacher-forced decode probes (which read the paged KV each user's prefill wrote) must all
+    match B independent per-user prefills of the same tokens. The grouped run goes FIRST, on
+    freshly allocated caches, so a grouped path that failed to write KV/state cannot pass by
+    aliasing the reference's data.
+    """
+    nd = mesh_device.get_num_devices()
+    assert nd > 1, "this test exercises the TP (num_devices>1) grouped prefill path"
+    bucket, prompt_lens, ref_mode = _GROUPED_LONG_CASES[case]
+    B = len(prompt_lens)
+    N_DEC = 2
+    block_size = 64
+    torch.manual_seed(0)
+
+    bpu = max(8, -(-(bucket + N_DEC + 4) // block_size))
+    bpu = ((bpu + 7) // 8) * 8
+    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=B, max_seq_len=bpu * block_size, n_layers=8)
+    args = model.args
+    grid = mesh_device.compute_with_storage_grid_size()
+    grid_cap = (grid.x * grid.y) // args.gdn_nv_tp
+    assert grid_cap >= B, f"fused GDN grid ceiling {grid_cap} < B={B}; grouped run would silently degrade"
+    num_blocks = B * bpu
+    page_table = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])
+    kv_shape = (num_blocks, args.n_local_kv_heads, block_size, args.head_dim)
+    model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=B)
+
+    vocab = args.vocab_size
+    comp0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    prompts = [torch.randint(0, vocab, (prompt_lens[u],)).tolist() for u in range(B)]
+    token_list = [torch.tensor([prompts[u]], dtype=torch.long) for u in range(B)]
+    # Fixed probe tokens (not argmax chains) so both runs are teacher-forced identically.
+    probe_toks = torch.randint(0, vocab, (N_DEC, B), dtype=torch.int32)
+
+    def _capture_state():
+        """Per-GDN-layer (rec_state [nd*B,Nv,Dk,Dv] device-major, conv_states list of [nd,B,D])."""
+        rec, conv = [], []
+        for la in model.layers:
+            if la.is_full_attention:
+                continue
+            dn = la.attention
+            rec.append(ttnn.to_torch(dn.rec_state, mesh_composer=comp0).float().reshape(nd, B, -1))
+            conv.append([ttnn.to_torch(c, mesh_composer=comp0).float().reshape(nd, B, -1) for c in dn.conv_states])
+        return rec, conv
+
+    def _probe_decode():
+        dec = [[] for _ in range(B)]
+        pos = list(prompt_lens)
+        for s in range(N_DEC):
+            tokens_step = probe_toks[s].reshape(B, 1)
+            dev = model.prepare_inputs_decode(tokens_step, torch.tensor(pos, dtype=torch.int32), page_table)
+            out, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+            ls = model.process_output_decode(out, B)
+            for u in range(B):
+                dec[u].append(ls[u, 0, :vocab].float())
+            pos = [p + 1 for p in pos]
+        return dec
+
+    # ---- grouped single pass (under test): one group of B users, one hybrid forward ----
+    monkeypatch.setenv("QWEN36_GDN_MAX_BG", str(B))
+    g_pf_dev = model.prefill_paged_grouped(token_list, page_table, valid_lens=prompt_lens, group_size=B)
+    ttnn.synchronize_device(mesh_device)
+    g_pf = [ttnn.to_torch(g_pf_dev[u], mesh_composer=comp0).reshape(-1, vocab)[0].float() for u in range(B)]
+    g_rec, g_conv = _capture_state()
+    g_dec = _probe_decode()
+    monkeypatch.delenv("QWEN36_GDN_MAX_BG")
+
+    # ---- per-user reference on the SAME model (overwrites the grouped KV + state) ----
+    if ref_mode == "peruser":
+        r_pf_dev = model.prefill_paged_peruser(token_list, page_table, valid_lens=prompt_lens)
+    else:
+        r_pf_dev = model.prefill_paged_grouped(token_list, page_table, valid_lens=prompt_lens, group_size=1)
+    ttnn.synchronize_device(mesh_device)
+    r_pf = [ttnn.to_torch(r_pf_dev[u], mesh_composer=comp0).reshape(-1, vocab)[0].float() for u in range(B)]
+    r_rec, r_conv = _capture_state()
+    r_dec = _probe_decode()
+
+    # ---- per-user logits + GDN state + decode-probe PCC (grouped vs per-user reference) ----
+    thr = get_pcc_threshold(request, default=0.97)
+    worst = (1.0, -1, "")
+
+    def _check(ref_t, got_t, u, what):
+        nonlocal worst
+        _, pcc = comp_pcc(ref_t.reshape(-1), got_t.reshape(-1), thr)
+        if float(pcc) < worst[0]:
+            worst = (float(pcc), u, what)
+        assert float(pcc) >= thr, f"user {u} (len {prompt_lens[u]}) {what} PCC {pcc} < {thr}"
+
+    for u in range(B):
+        _check(r_pf[u], g_pf[u], u, "prefill-logits")
+        for s in range(N_DEC):
+            _check(r_dec[u][s], g_dec[u][s], u, f"decode{s}")
+        for li in range(len(g_rec)):
+            _check(r_rec[li][:, u], g_rec[li][:, u], u, f"gdn{li}-rec")
+            for m in range(len(g_conv[li])):
+                _check(r_conv[li][m][:, u], g_conv[li][m][:, u], u, f"gdn{li}-conv{m}")
+    logger.info(
+        f"PASSED: grouped prefill (B={B}, bucket={bucket}, lens={prompt_lens}, ref={ref_mode}) matches "
+        f"per-user; worst PCC = {worst[0]:.5f} @ user{worst[1]} {worst[2]}"
     )
