@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - all
-          - grok
           - dits
           - deepseek
           - tttv2 modules

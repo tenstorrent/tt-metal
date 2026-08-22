@@ -159,6 +159,14 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 }
 
 
+# Precision levers, env-only, matching cpu_vs_device.py's CVD_SPLIT_MODE/CVD_TAP_MATMUL/CVD_PREFER_MAC.
+# Unset means "leave the constructor default alone" (full/True/True, accurate mode) -- an env var set
+# to "0"/"false" is not the same as omitting it.
+def _audio_lever_flag(name):
+    raw = os.environ.get(name)
+    return None if raw is None else raw not in ("0", "false", "False", "")
+
+
 def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -> dict:
     """The measured defaults for this mesh shape, or `{}` when unlisted and `required` is False.
 
@@ -1194,6 +1202,15 @@ class MiniMaxH3Pipeline:
         if self._audio_decoder is None:
             config = self.audio_config
             logger.info("building the audio decoder")
+            audio_levers = {
+                k: v
+                for k, v in (
+                    ("split_mode", os.environ.get("MINIMAX_H3_PIPELINE_SPLIT_MODE")),
+                    ("tap_matmul", _audio_lever_flag("MINIMAX_H3_PIPELINE_TAP_MATMUL")),
+                    ("prefer_mac", _audio_lever_flag("MINIMAX_H3_PIPELINE_PREFER_MAC")),
+                )
+                if v is not None
+            }
             decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
@@ -1204,6 +1221,7 @@ class MiniMaxH3Pipeline:
                 resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
                 mesh_device=self.mesh_device,
                 ccl_manager=self.ccl_manager,
+                **audio_levers,
             )
 
             def read_state() -> dict[str, torch.Tensor]:

@@ -516,6 +516,20 @@ def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tenso
     return x
 
 
+# `32 * factor` (not `factor`) exists only because TILE-layout mesh_partition needs a tile-aligned
+# split offset; ROW_MAJOR partitions fine at unaligned offsets, and every call site untilizes right
+# after anyway. `tight_t_align` switches to the tighter `factor` alignment. Off by default pending
+# wider coverage (channel-TP, other shard factors).
+#
+# These are per-call parameters, not module globals: this file is shared with LTX's Vocoder, so a
+# global env read would silently change LTX's partitioning too. Only `MiniMaxH3AudioDecoder` defaults
+# them from env (`MINIMAX_H3_AUDIO_TIGHT_T_ALIGN` / `_LOCAL_TPAD_TAIL`); LTX's `Vocoder` always gets
+# `False` regardless of that env var.
+#
+# `local_tpad_tail` only does anything once `tight_t_align` has shrunk the pad image below one shard
+# (see `_set_tpad_tail_local`); alone it's a no-op.
+
+
 def _partition_t(x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
     """Partition T across the mesh (inverse of _all_gather_t)."""
     if isinstance(parallel_config, AudioTParallelConfig):
@@ -576,7 +590,7 @@ def _replicate_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_dev
     return ttnn.concat(pieces, dim=1)
 
 
-def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache):
+def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache, *, tight_t_align=False):
     """Cached T-sharded validity mask ``M`` (1.0 real, 0.0 on trailing ``tpad_image`` rows) and its complement ``inv``."""
     key = (global_T, tpad_image, dtype)
     cached = cache.get(key)
@@ -585,15 +599,48 @@ def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache)
         m[:, global_T - tpad_image :, :] = 0.0
         pair = []
         for t in (m, 1.0 - m):
-            mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
-            mt = _partition_t(mt, parallel_config)
-            pair.append(ttnn.to_layout(mt, ttnn.ROW_MAJOR_LAYOUT))
+            if tight_t_align:
+                # The mask ends up ROW_MAJOR anyway, so build it that way and skip the tile-aligned
+                # partition constraint entirely.
+                mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+                pair.append(_partition_t(mt, parallel_config))
+            else:
+                mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+                mt = _partition_t(mt, parallel_config)
+                pair.append(ttnn.to_layout(mt, ttnn.ROW_MAJOR_LAYOUT))
         cached = tuple(pair)
         cache[key] = cached
     return cached
 
 
-def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache):
+def _tpad_mask_suffix(mesh_device, parallel_config, dtype, global_T, tpad_image, local_T, cache):
+    """The last ``tpad_image`` local rows of the validity mask and its complement.
+
+    Only the final shard(s) carry pad rows, so away from them the suffix mask is all ones and
+    multiplying by it is a no-op -- which is what lets one mesh-uniform local range stand in for a
+    pad region that sits at a different global offset on every shard.
+    """
+    key = ("suffix", global_T, tpad_image, local_T, dtype)
+    cached = cache.get(key)
+    if cached is None:
+        m = torch.ones(1, global_T, 1, dtype=torch.float32)
+        m[:, global_T - tpad_image :, :] = 0.0
+        # Reshape to per-shard rows, keep each shard's trailing `tpad_image` rows, and restack so the
+        # mesh partition below hands every device its own suffix.
+        per_shard = m.reshape(1, global_T // local_T, local_T, 1)[:, :, local_T - tpad_image :, :]
+        suffix = per_shard.reshape(1, -1, 1)
+        pair = []
+        for t in (suffix, 1.0 - suffix):
+            mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+            pair.append(_partition_t(mt, parallel_config))
+        cached = tuple(pair)
+        cache[key] = cached
+    return cached
+
+
+def _set_tpad_tail(
+    x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache, tight_t_align=False, local_tpad_tail=False
+):
     """Set the trailing ``tpad_image`` tail rows: ``mode="zeros"`` zeros them, ``mode="replicate"`` fills the last real row.
 
     CCL-free via a cached validity mask (body rows multiply by 1.0, staying bit-identical).
@@ -601,8 +648,18 @@ def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cac
     if tpad_image <= 0 or parallel_config is None or getattr(parallel_config, "factor", 0) <= 1:
         return x_BTC
     local_T = x_BTC.shape[1]
+    if local_tpad_tail and tpad_image < local_T:
+        return _set_tpad_tail_local(
+            x_BTC, tpad_image, mode=mode, mesh_device=mesh_device, parallel_config=parallel_config, cache=cache
+        )
     M, inv = _tpad_mask(
-        mesh_device, parallel_config, x_BTC.get_dtype(), local_T * parallel_config.factor, tpad_image, cache
+        mesh_device,
+        parallel_config,
+        x_BTC.get_dtype(),
+        local_T * parallel_config.factor,
+        tpad_image,
+        cache,
+        tight_t_align=tight_t_align,
     )
     xm = ttnn.multiply(x_BTC, M)
     if mode == "zeros":
@@ -620,6 +677,47 @@ def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cac
     ttnn.deallocate(xm)
     ttnn.deallocate(fill)
     return out
+
+
+def _set_tpad_tail_local(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache):
+    """``_set_tpad_tail`` restricted to the rows it can actually change, written back in place.
+
+    Slices just the pad suffix, fixes it, and writes back with `ttnn.experimental.slice_write`
+    (bit-identical to the full-tensor multiply above, and cheaper in ROW_MAJOR) instead of rewriting
+    every row so body rows can multiply by 1.0.
+
+    Writing in place is safe because every op with a receptive field is preceded by its own tail-set,
+    so no consumer reads a stale tail, and the pad rows are cropped from the final waveform. It does
+    mean the caller's tensor is mutated and returned, so `xs is x` and the caller's
+    `if xs is not x: deallocate(xs)` correctly skips the free.
+    """
+    B, local_T, C = x_BTC.shape
+    global_T = local_T * parallel_config.factor
+    assert tpad_image < global_T, f"pad image ({tpad_image}) leaves no real rows (global T {global_T})"
+    if mode not in ("zeros", "replicate"):
+        raise ValueError(f"unknown mode {mode!r}")
+    begin = local_T - tpad_image
+    M_suf, inv_suf = _tpad_mask_suffix(
+        mesh_device, parallel_config, x_BTC.get_dtype(), global_T, tpad_image, local_T, cache
+    )
+
+    suffix = ttnn.slice(x_BTC, [0, begin, 0], [B, local_T, C])
+    fixed = ttnn.multiply(suffix, M_suf)
+    ttnn.deallocate(suffix)
+    if mode == "replicate":
+        # The real-last row sits just before the pad on the shard that holds it; on every other shard
+        # inv_suf is zero, so whichever row this picks up there contributes nothing.
+        idx = (global_T - tpad_image - 1) % local_T
+        last = ttnn.slice(x_BTC, [0, idx, 0], [B, idx + 1, C])
+        fill = ttnn.multiply(last, inv_suf)
+        ttnn.deallocate(last)
+        combined = ttnn.add(fixed, fill)
+        ttnn.deallocate(fixed)
+        ttnn.deallocate(fill)
+        fixed = combined
+    ttnn.experimental.slice_write(fixed, x_BTC, [0, begin, 0], [B, local_T, C], [1, 1, 1])
+    ttnn.deallocate(fixed)
+    return x_BTC
 
 
 def _persistent_zeros(shape, *, dtype, layout, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
@@ -1280,6 +1378,7 @@ class ConvTranspose1dViaConv3d(Module):
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
         tap_matmul: bool = False,
+        tight_t_align: bool = False,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -1291,6 +1390,7 @@ class ConvTranspose1dViaConv3d(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self.tight_t_align = tight_t_align
 
         # Inner conv stays UNSHARDED; forward gathers T, runs unsharded, then re-partitions.
         self.conv = _AlignedOutConv1d(
@@ -1347,9 +1447,12 @@ class ConvTranspose1dViaConv3d(Module):
         y = self.conv(x_padded)
 
         if sharded:
-            y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
-            y = _partition_t(y, self.parallel_config)
-            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
+            if self.tight_t_align:
+                y = _partition_t(y, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
+            else:
+                y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
+                y = _partition_t(y, self.parallel_config)
+                y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
 
         if ch_axis is not None:
             # Re-pad C_out to unit so the per-chip C-shard is TILE-legal.
