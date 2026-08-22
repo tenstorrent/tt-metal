@@ -232,3 +232,40 @@ def test_the_marks_agree_with_how_tt_perf_report_finds_them():
     import inspect
 
     assert 'df["OP TYPE"] == "signpost"' in inspect.getsource(pr)
+
+
+# --- a missing mark is coarser footing, and must be visible ---------------------------------------
+
+
+def test_the_report_says_when_the_capture_had_no_marks():
+    """SILENCE IS THE FAILURE MODE THAT HID EVERY DEFECT HERE: a byte reader that always returned 0,
+    an anchor filed under a key nothing looked up, and a signpost filter asking for a window nobody
+    marked. Each fell back quietly and each looked like it was working.
+
+    A reader comparing two stacks needs to know whether each was priced against its own peak or one
+    shared figure -- they differ by up to 4x, and nothing else on the page says which."""
+    src = (_PA / "cc_optimize" / "summary.py").read_text()
+    assert 'out.append("Roofline")' in src
+    i = src.index('out.append("Roofline")')
+    assert "no stage signposts in this capture" in src[i : i + 700]
+
+
+def test_the_profiler_says_so_too():
+    """On stderr as well, where whoever is watching the run will see it -- the report is read after."""
+    src = (_PA / "agent" / "tracy_tool.py").read_text()
+    i = src.index("if not stage_buckets:")
+    blk = src[i : i + 700]
+    assert "no stage signposts in the capture" in blk
+    assert "stage:<name>" in blk, "the warning must name the marks it expected"
+    assert "tracy` imports" in blk or "tracy" in blk, "and where to look when they are absent"
+
+
+def test_a_missing_mark_does_not_stop_the_run():
+    """termination_check picks its target from per-OP gaps and never reads the per-stage split, so a
+    coarser report must not cost the optimization. Asserted on the source because the alternative is
+    a full run."""
+    src = (_PA / "cc_optimize" / "perf_mcp.py").read_text()
+    i = src.index("def termination_check(")
+    body = src[i : src.index("\ndef ", i + 1)]
+    for per_stage in ("_stage_roofs", "stage_buckets", "_peak_for_stage"):
+        assert per_stage not in body, "the stop gate now depends on the per-stage split: %s" % per_stage

@@ -1732,6 +1732,15 @@ def _roofline_tables(
         return "\u2500" * W
 
     out.append("Roofline")
+
+    # NAME THE COARSER FOOTING IN THE REPORT, not only on stderr. A reader comparing two stacks
+
+    # needs to know whether each was priced against its own math-fidelity peak or against one
+
+    # shared figure -- the two differ by up to 4x, and nothing else on the page says which.
+
+    if not ((profile or {}).get("stage_buckets") or {}):
+        out.append("  (no stage signposts in this capture -- compute rows share one peak)")
     # SAY WHAT THE NUMBERS BELOW ARE PER. Every figure in this table is per unit -- per request, per
     # token, per pass -- and the batch decides how many of those a single step retires, so the same
     # measurement reads eight ways on an eight-user run. Voxtral serves 8 and the table said nothing,

@@ -756,6 +756,27 @@ def tracy_tool(
     # what it was before. Each slice is the same refine() over the same raw rows, bounded by that
     # stage's own two signposts, so a stage's ops are identified rather than apportioned.
     stage_buckets = _per_stage_buckets(raw_dest, profiles_dir, available_cores, arch)
+    # SAY SO WHEN THE MARKS ARE MISSING. trace_replay emits a signpost around every stage, so a
+    # PROFILED capture with none means something upstream failed -- tracy not importable in the
+    # workload process, or the marks not reaching the log -- and the report silently drops to
+    # whole-profile figures: one shared math-fidelity peak for every stack instead of each stack's
+    # own. The run is unaffected (termination_check picks its target from per-OP gaps and never reads
+    # the per-stage split), so this is not a reason to stop; it is a reason not to let the reader
+    # believe they are looking at per-stage numbers when they are not.
+    #
+    # Silence is how three separate defects survived in this file's neighbourhood: a byte reader that
+    # always returned 0, an anchor filed under a key nothing looked up, and this very signpost filter
+    # asking for a window that was never marked. Each fell back quietly and each looked like it was
+    # working.
+    if not stage_buckets:
+        print(
+            "  [tracy] no stage signposts in the capture -- the roofline falls back to whole-profile "
+            "figures (one math-fidelity peak shared by every stack). Expected marks: stage:<name> / "
+            "stage:<name>:end, emitted by trace_replay. Check that `tracy` imports in the workload "
+            "process.",
+            file=sys.stderr,
+            flush=True,
+        )
     wall_ms = warm_wall_ms(walls)
     device_ms = round(sum(b["device_ms"] for b in buckets), 4)
     host = host_overhead_bucket(buckets, device_ms)
