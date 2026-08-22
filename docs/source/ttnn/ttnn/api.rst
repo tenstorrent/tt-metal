@@ -406,6 +406,20 @@ Reduction
    ttnn.topk
    ttnn.var
 
+Wavelets
+========
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: function.rst
+
+   ttnn.dwt_coeff_len
+   ttnn.dwt
+   ttnn.idwt
+   ttnn.dwt_2d
+   ttnn.idwt_2d
+
 Data Movement
 =============
 
