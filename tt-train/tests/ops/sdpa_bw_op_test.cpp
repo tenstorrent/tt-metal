@@ -575,8 +575,11 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const auto grad_output = core::from_xtensor(grad_output_tensor, device);
 
     // ========== Pure Float Reference (Ground Truth) ==========
+    // For AttentionMaskType::None, skip masking here too, or this compares against the wrong ground truth.
+    const std::optional<xt::xarray<float>> float_ref_mask =
+        mask_type == ttml::metal::AttentionMaskType::None ? std::nullopt : std::make_optional(attn_mask_tensor);
     auto float_gradients =
-        float_sdpa_backward(query_tensor, key_tensor, value_tensor, grad_output_tensor, attn_mask_tensor);
+        float_sdpa_backward(query_tensor, key_tensor, value_tensor, grad_output_tensor, float_ref_mask);
     const auto& float_dQ = float_gradients[0];
     const auto& float_dK = float_gradients[1];
     const auto& float_dV = float_gradients[2];
@@ -584,7 +587,11 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const auto& float_attn_output = float_gradients[4];
 
     // ========== Composite Implementation (uses ttnn ops) ==========
-    auto composite_output = composite_sdpa(query, key, value, grad_output, attn_mask, /*return_intermediate=*/true);
+    // Same reasoning as float_ref_mask above.
+    const std::optional<ttnn::Tensor> composite_ref_mask =
+        mask_type == ttml::metal::AttentionMaskType::None ? std::nullopt : std::make_optional(attn_mask);
+    auto composite_output =
+        composite_sdpa(query, key, value, grad_output, composite_ref_mask, /*return_intermediate=*/true);
     const auto composite_attn_output = /* attn_output */ composite_output[0];
     [[maybe_unused]] auto composite_lse = /* logsumexp */ composite_output[1];
     const auto dL_dQ = /* dL_dQ */ composite_output[2];
@@ -851,6 +858,58 @@ TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_LargerSequence) {
         .dropout_prob = 0.0F,
         .test_name = "CausalMask_LargerSeq (B=4, S=1024, D=128, H=8)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
+    run_sdpa_backward_test(config);
+}
+
+// ========== No-Mask (AttentionMaskType::None) Tests ==========
+//
+// Every test above exercises Causal or Arbitrary masking (and, per
+// `generate_attn_mask`, "Arbitrary" here always happens to be a causal-shaped
+// mask too -- see the float-reference conditional added above this section).
+// None of them cover `AttentionMaskType::None` (genuinely unmasked,
+// bidirectional attention), which is what this port's MAE encoder/decoder
+// actually use in production (`ops_tt/attention.py`'s
+// `bidirectional_scaled_dot_product_attention`, `no_mask=True`) -- see
+// `tenstorrent/docs/m6-optimization-results.md`'s "Redundant Q/dO/O re-read
+// theory" section for why this gap matters specifically: it is the exact
+// scale/mask-type combination any KV-kernel redundant-reread fix would
+// touch, and this test-coverage gap is why that fix was not attempted
+// without first adding this test.
+//
+// Shape chosen to match `main_pretrain_tt.full_vitl_real_contract()`'s real
+// encoder config exactly (B=24, H=16, D=64, S=544) rather than a shrunk
+// unit-test shape: `NC = batch*heads = 384` is the same total-row count the
+// real model uses (both encoder and decoder use B=24,H=16), and on this
+// host's real device grid (11x10 = 110 cores, confirmed via
+// `compute_with_storage_grid_size()`), `sdpa_bw_kv_program_factory.cpp`'s
+// `split_work_to_cores(grid, NC*St)` gives ~3072/110 ~= 27.9 rows/core with
+// `St=17` rows/group -- ~3.5 (batch,head) groups per core, matching the
+// ratio the M6 doc measured for both encoder (`~60/17`) and decoder
+// (`~307/88`) at real production scale. That ratio, not the absolute
+// sequence length, is what determines whether a core's assigned row range
+// crosses a group boundary -- the exact code path a redundant-reread fix
+// restructures -- so this shape is sufficient to catch that bug class even
+// though it uses the encoder's (not decoder's) sequence length; decoder
+// scale (S=2816) was not used here because `float_sdpa_backward`'s CPU
+// reference materializes a full `(B,H,S,S)` array (~14.6 TB in float32 at
+// decoder scale, ~433 MB at this encoder scale) -- infeasible at decoder
+// scale for a CPU-side unit test, not a limitation of the fix or this test's
+// coverage of the group-boundary bug class.
+TEST_F(SDPABackwardTest, NIGHTLY_NoMask_ProductionEncoderShape) {
+    SDPABackwardTestConfig config{
+        .batch_size = 24U,
+        .sequence_length = 544U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 16U,
+        .num_kv_heads = 16U,
+        .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .fw_atol = 3e-2F,
+        .fw_rtol = 3e-2F,
+        .test_name = "NoMask_ProductionEncoderShape (B=24, S=544, D=64, H=16, mask=None)",
+        .mask_type = ttml::metal::AttentionMaskType::None};
     run_sdpa_backward_test(config);
 }
 
