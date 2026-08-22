@@ -1239,6 +1239,7 @@
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/tt_dit_cache
     export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     pytest --timeout 1000 models/tt_dit/tests/models/wan2_2/test_rope.py
     pytest --timeout 1000 models/tt_dit/tests/models/wan2_2/test_attention_wan.py
