@@ -1194,7 +1194,7 @@ void bind_div(
 Tensor multiply_fast_approx_tensor_scalar(
     const Tensor& input_tensor_a,
     unary::ScalarVariant value,
-    bool fast_and_approximate_mode,
+    const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& output_tensor,
@@ -1222,7 +1222,7 @@ Tensor multiply_fast_approx_tensor_scalar(
 Tensor multiply_fast_approx_tensor_tensor(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    bool fast_and_approximate_mode,
+    const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& output_tensor,
@@ -1250,7 +1250,7 @@ Tensor multiply_fast_approx_tensor_tensor(
 Tensor divide_fast_approx_tensor_scalar(
     const Tensor& input_tensor_a,
     unary::ScalarVariant value,
-    bool fast_and_approximate_mode,
+    const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& output_tensor,
@@ -1278,7 +1278,7 @@ Tensor divide_fast_approx_tensor_scalar(
 Tensor divide_fast_approx_tensor_tensor(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    bool fast_and_approximate_mode,
+    const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& output_tensor,
@@ -1368,7 +1368,7 @@ void bind_binary_operation_with_fast_approx(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("fast_and_approximate_mode") = nb::none(),
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
@@ -1382,7 +1382,7 @@ void bind_binary_operation_with_fast_approx(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("fast_and_approximate_mode") = nb::none(),
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
@@ -1672,7 +1672,7 @@ void bind_inplace_operation_with_fast_approx(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("fast_and_approximate_mode") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("sub_device_id") = nb::none()),
         ttnn::overload_t(
@@ -1683,7 +1683,7 @@ void bind_inplace_operation_with_fast_approx(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("fast_and_approximate_mode") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 }
