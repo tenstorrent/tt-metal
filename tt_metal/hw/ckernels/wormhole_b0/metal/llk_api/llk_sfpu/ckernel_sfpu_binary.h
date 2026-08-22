@@ -79,6 +79,16 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
     }
     v_endif;
 
+    // IEEE 754: pow(x, 0) == 1 for every x, including 0, +/-inf and NaN. Without this the
+    // composition above forms 0 * ln(0) = 0 * -inf = NaN at base == 0 (SFPMAD), exp(NaN)
+    // collapses to +0, and the v_if(val < 0) is then evaluated on a NaN, which the ISA
+    // leaves undefined (VectorUnit, SFPSETCC) -- measured as 0**0 = 0 but 0**-0.0 = inf.
+    // Last, so the negative-base sign flip above cannot turn (-2)**0 into -1. Compared on
+    // setsgn(pow, 0) because SFPSETCC's contract excludes negative zero: measured, a bare
+    // pow == 0.0f does not fire for pow == -0.0 and leaves 0**-0.0 at inf.
+    v_if(sfpi::setsgn(pow, 0) == 0.0f) { result = 1.0f; }
+    v_endif;
+
     return result;
 }
 

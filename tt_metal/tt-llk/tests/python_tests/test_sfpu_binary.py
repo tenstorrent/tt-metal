@@ -1474,13 +1474,15 @@ assert _BINARY_EDGE_OPS, (
 #
 #   The finite poles agreed all along (div(-2, ±1/64) = ∓128, every ±inf lines up).
 #
-# STILL OPEN — not explained by the ISA:
-#
-#   0**0 returns 0 where C, torch and the golden give 1. pow evaluates exp(b·ln a), so a
-#   composition artifact rather than anything the ISA prescribes.
+# CLOSED — 0**0 returned 0 where C, torch and the golden give 1, and 0**-0.0 returned inf.
+#   Both were the same composition artifact: pow evaluates exp(b·ln a), so base == 0 formed
+#   0 * -inf = NaN, exp(NaN) collapsed to +0, and the kernel's v_if(val < 0) then ran on a
+#   NaN -- undefined per VectorUnit's SFPSETCC contract, which is why the two inputs
+#   disagreed. calculate_sfpu_binary_power now ends in an IEEE pow(x, 0) == 1 guard, so
+#   SfpuElwpow no longer appears in the tables below.
 #
 # Those groups are the classes the probe partitions into: documented is
-# _EDGE_CLASS_NEGATIVE_ZERO; open are _EDGE_CLASS_BOTH_ZERO (indeterminate forms, and 0**0)
+# _EDGE_CLASS_NEGATIVE_ZERO; open are _EDGE_CLASS_BOTH_ZERO (indeterminate forms)
 # and _EDGE_CLASS_NAN (x % 0). _EDGE_CLASS_ORDINARY holds everything that agreed -- ±inf
 # poles, finite quotients, exact remainders -- asserted rather than tolerated, which is only
 # possible now it does not share a tensor with the others.
@@ -1501,14 +1503,6 @@ _BINARY_EDGE_COMBINATIONS = {
         (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
         (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
         (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-    MathOperation.SfpuElwpow: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
     ),
     MathOperation.SfpuBinaryFmod: (
         (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
@@ -1540,13 +1534,6 @@ _BINARY_EDGE_REASON = {
     MathOperation.SfpuXlogy: {
         _EDGE_CLASS_NEGATIVE_ZERO: f"xlogy(0, tiny) returns +0.0, not -0.0 "
         f"({_ZERO_SIGN_ISA_NOTE}).",
-    },
-    MathOperation.SfpuElwpow: {
-        # Survives the retraction above: 0**0 returns 0 against a golden 1, both finite, no NaN
-        # in it, so the per-lane generated-NaN mask is empty here and the sign gate excuses
-        # nothing -- this stays a plain 0-vs-1 divergence on both arches.
-        _EDGE_CLASS_BOTH_ZERO: "0**0 returns 0; C, torch and the golden all give 1. Not "
-        "explained by the ISA — pow evaluates exp(b·ln a), so this is composition.",
     },
     MathOperation.SfpuBinaryFmod: {
         _EDGE_CLASS_NEGATIVE_ZERO: f"fmod loses the sign of a zero result "
