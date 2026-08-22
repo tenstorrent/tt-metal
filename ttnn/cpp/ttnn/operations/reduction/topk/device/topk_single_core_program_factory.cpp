@@ -95,12 +95,13 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     // 32-bit indices) sort as [bf16 value | local-rank tag] keys on the plain UNSTABLE network while
     // the true u32 indices ride the index-tracking swaps — replacing the 7-instruction-per-compare
     // index-aware comparator. fp32 values keep the comparator (their words have no free low bits for
-    // a tag). Ktiles must be 1: with more than one output tile the insertion CASCADE feeds a level's
-    // loser tile into the next level, where a displaced OLD element can meet a NEWER accumulator
-    // element — the position-derived rank ranges would break that tie backwards. The value-side
-    // intermediates switch to raw Float32 transport so the tag bits (and exact bf16 bits) survive
-    // the pack/unpack round trips, exactly like the fused-key engine's packed CBs.
-    const bool rank_stamped_stable = args.stable && !is_fp32_input && !uint16_output && (Ktiles == 1);
+    // a tag). Ktiles > 1 (the insertion CASCADE) is covered by chain-rank stamps: each level
+    // re-stamps its accumulator tile with that tile's round-start chain-position range while the
+    // loser tile's tags ride, so a displaced OLD element still outranks NEWER accumulator entries
+    // (see the stamp block in kernels/compute/topk.cpp). The value-side intermediates switch to raw
+    // Float32 transport so the tag bits (and exact bf16 bits) survive the pack/unpack round trips,
+    // exactly like the fused-key engine's packed CBs.
+    const bool rank_stamped_stable = args.stable && !is_fp32_input && !uint16_output;
     const tt::DataFormat sort_val_cb_data_format =
         rank_stamped_stable ? tt::DataFormat::Float32 : compute_cb_data_format;
     const uint32_t sort_val_tile_size = tile_size(sort_val_cb_data_format);

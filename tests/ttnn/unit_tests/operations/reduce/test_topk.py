@@ -1120,7 +1120,8 @@ def test_topk_stable_index_parity_wide_u32(W, k, largest, device):
     """stable=True at W >= 65536: indices no longer fit 16 bits, so the auto-selected
     index dtype is UINT32 and the single-core path runs the RANK-STAMPED fast engine
     (sign-conditioned local-rank tags on the unstable network, true u32 indices riding
-    index tracking) — k <= 32 / bf16 only; larger k and fp32 keep the comparator."""
+    index tracking) — bf16-family only; fp32 keeps the comparator. k > 32 runs the
+    chain-rank stamped insertion cascade."""
     torch.manual_seed(3)
     shape = [1, 1, 32, W]
     input = torch.randint(-4, 4, shape).to(torch.bfloat16)
@@ -1196,13 +1197,14 @@ def test_topk_stable_wide_signed_zero(largest, device):
 
 
 @pytest.mark.parametrize("largest", (True, False))
-def test_topk_stable_wide_k64_keeps_comparator_parity(largest, device):
-    """Gate boundary: k=64 at W=65536 needs two output tiles, where the insertion
-    CASCADE breaks the rank-stamp precondition (a displaced old element can meet a
-    newer accumulator entry), so the factory keeps the comparator-stable engine.
-    Parity must hold there too."""
+@pytest.mark.parametrize("k", (64, 128))
+def test_topk_stable_wide_cascade_parity(k, largest, device):
+    """k > 32 at W=65536 runs the multi-tile insertion CASCADE (output_tiles = k/32)
+    on the rank-stamped engine with CHAIN-RANK stamps: each level re-stamps its
+    accumulator tile with that tile's round-start chain-position range while the
+    loser tile's tags ride to the next level. Plain data-random parity."""
     torch.manual_seed(7)
-    W, k = 65536, 64
+    W = 65536
     shape = [1, 1, 32, W]
     input = torch.randint(-4, 4, shape).to(torch.bfloat16)
     golden_values, order = _stable_topk_golden(input, k, largest)
@@ -1214,13 +1216,48 @@ def test_topk_stable_wide_k64_keeps_comparator_parity(largest, device):
     assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
 
 
+@pytest.mark.parametrize("largest", (True, False))
+@pytest.mark.parametrize("k", (64, 128))
+def test_topk_stable_wide_cascade_displacement_ties(k, largest, device):
+    """The cascade's adversarial tie pattern: rows dominated by the two middle tie
+    levels (+-0.5) with the k cut landing INSIDE the dominant tie group, plus rare
+    extreme spikes (+-2.0 / +-1.0) concentrated at HIGH columns. The late spikes
+    displace long-accumulated low-index ties out of upper accumulator tiles mid-round,
+    so displaced OLD elements (lower original index) meet NEWER accumulator entries at
+    every lower cascade level — exactly the case naive per-level position stamps break
+    (the displaced element would be ranked after the accumulator ties it must precede).
+    Chain-rank stamps keep those ties in true index order; strict torch-stable parity."""
+    torch.manual_seed(9)
+    W = 65536
+    shape = [1, 1, 32, W]
+    levels = torch.tensor([-0.5, 0.5], dtype=torch.bfloat16)
+    input = levels[torch.randint(0, 2, shape)]
+    # 48 spike columns clustered in the top eighth of the row (all >= 7*W/8), strided to
+    # stay distinct, interleaved across the four extreme levels. They arrive in the last
+    # rounds of the insertion pipeline, after the accumulator chain is full of ties.
+    spike_cols = W - 1 - torch.arange(48) * 157
+    input[..., spike_cols[0::4]] = 2.0
+    input[..., spike_cols[1::4]] = 1.0
+    input[..., spike_cols[2::4]] = -2.0
+    input[..., spike_cols[3::4]] = -1.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+    assert ttnn_indices.dtype == ttnn.uint32
+
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
+
+
 def test_topk_stable_wide_program_cache(device):
-    """Program-cache behavior at the rank-stamp gate boundary: W=65536 stable
-    (rank-stamped), W=65536 unstable (plain network) and W=65536 stable k=64
-    (comparator) must be three DISTINCT cache entries — the gate inputs (stable
-    flag, k) are covered by the program hash — and a cache-hit rerun of the
-    rank-stamped program on fresh data must stay torch-stable-correct (guards
-    the classic works-first-time / wrong-on-second-run failure mode)."""
+    """Program-cache behavior across the rank-stamp variants: W=65536 stable k=32
+    (rank-stamped, single tile), W=65536 unstable (plain network) and W=65536
+    stable k=64 (rank-stamped CASCADE, two output tiles) must be three DISTINCT
+    cache entries — the gate inputs (stable flag, k) are covered by the program
+    hash — and a cache-hit rerun of the rank-stamped program on fresh data must
+    stay torch-stable-correct (guards the classic works-first-time /
+    wrong-on-second-run failure mode)."""
     torch.manual_seed(8)
     W = 65536
     # 64 rows: a shape no other test in this module uses at this width, so the three
@@ -1248,9 +1285,9 @@ def test_topk_stable_wide_program_cache(device):
     after_unstable = device.num_program_cache_entries()
     assert after_unstable > after_first, "stable and unstable topk must not share a cache entry"
 
-    run(stable=True, k=64, seed=102)  # comparator (Ktiles=2): different program
+    run(stable=True, k=64, seed=102)  # rank-stamped cascade (Ktiles=2): different program
     after_k64 = device.num_program_cache_entries()
-    assert after_k64 > after_unstable, "rank-stamped (k<=32) and comparator (k=64) must not share a cache entry"
+    assert after_k64 > after_unstable, "k=32 and k=64 rank-stamped programs must not share a cache entry"
 
     # Cache-hit rerun of the rank-stamped program on fresh data.
     inp2, v2, i2 = run(stable=True, k=32, seed=103)
