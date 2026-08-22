@@ -11,7 +11,7 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import DISPATCH_METADATA_FIELDS, ExpertMapping
 
 
 def score_activation(logits: torch.Tensor, score_func: str) -> torch.Tensor:
@@ -1131,8 +1131,8 @@ def validate_dispatch_metadata(
                 start = int(expert_region_offsets[r, dst_chip_id, global_expert_idx].item())
 
                 # Compare fields 1-2 (global token idx, top-k slot) directly
-                out = ttnn_metadata[r, dst_chip_id, start : start + count, 1:3]
-                ref = torch_metadata[r, dst_chip_id, start : start + count, 1:3]
+                out = ttnn_metadata[r, dst_chip_id, start : start + count, 1:DISPATCH_METADATA_FIELDS]
+                ref = torch_metadata[r, dst_chip_id, start : start + count, 1:DISPATCH_METADATA_FIELDS]
 
                 # Both Torch and TTNN embed linearized mesh coord in field 0
                 out_linearized_mesh_coord = ttnn_metadata[r, dst_chip_id, start : start + count, 0]
@@ -1153,8 +1153,8 @@ def validate_dispatch_metadata(
 
                     if verbose:
                         for slot in range(count):
-                            torch_data = torch_metadata[r, dst_chip_id, start + slot, :3]
-                            kernel_data = ttnn_metadata[r, dst_chip_id, start + slot, :3]
+                            torch_data = torch_metadata[r, dst_chip_id, start + slot, :DISPATCH_METADATA_FIELDS]
+                            kernel_data = ttnn_metadata[r, dst_chip_id, start + slot, :DISPATCH_METADATA_FIELDS]
                             slot_data_match = torch.allclose(torch_data, kernel_data, atol=1e-6)
                             if not slot_data_match:
                                 logger.error(

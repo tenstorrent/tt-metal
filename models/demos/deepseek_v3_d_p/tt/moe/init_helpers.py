@@ -21,6 +21,8 @@ from tqdm import tqdm
 import ttnn
 from models.common.utility_functions import is_blackhole
 
+DISPATCH_METADATA_FIELDS = 3
+
 # Fabric packet payload limits (conservative round values below hardware maximums).
 MAX_PAYLOAD_SIZE_BH = 14 * 1024  # Blackhole hardware max ~15232 B
 MAX_PAYLOAD_SIZE_WH = 7 * 1024  # Wormhole hardware max ~7616 B
@@ -484,7 +486,7 @@ def compute_constants(
         experts_per_chip = experts_per_chip_override
     else:
         experts_per_chip = num_routed_experts // num_devices
-    metadata_len = 3  # chip, token, topk_idx
+    metadata_len = DISPATCH_METADATA_FIELDS  # chip, token, topk_idx
     if fp8_scaled_input:
         # Each token appends its emb_dim/128 fp32 scales (bit-cast int32) after the 3 routing fields.
         assert emb_dim is not None, "emb_dim is required when fp8_scaled_input is True"

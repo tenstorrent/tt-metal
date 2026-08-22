@@ -8,6 +8,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "dispatch_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
@@ -117,11 +118,12 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         const uint32_t num_scales = scales.logical_shape()[-1];
         // metadata_len reserves 3 routing fields + one word per scale
         TT_FATAL(
-            operation_attributes.metadata_len == 3 + num_scales,
-            "metadata_len ({}) must equal 3 routing fields + scales last dim ({}) = {}",
+            operation_attributes.metadata_len == DISPATCH_METADATA_FIELDS + num_scales,
+            "metadata_len ({}) must equal {} routing fields + scales last dim ({}) = {}",
             operation_attributes.metadata_len,
+            DISPATCH_METADATA_FIELDS,
             num_scales,
-            3 + num_scales);
+            DISPATCH_METADATA_FIELDS + num_scales);
         // total scale rows match total input tokens (flattened over all leading dims, as the reader does)
         const uint32_t input_hidden = tensor_args.input_tensor.logical_shape()[-1];
         const uint32_t input_tokens = tensor_args.input_tensor.logical_shape().volume() / input_hidden;
@@ -144,6 +146,11 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             !tensor_args.scales_tensor.has_value(),
             "scales_tensor was provided but fp8_scaled_input is false; pass fp8_scaled_input=True to use scales");
+        TT_FATAL(
+            operation_attributes.metadata_len == DISPATCH_METADATA_FIELDS,
+            "metadata_len ({}) must equal the {} routing fields the dispatch kernel writes",
+            operation_attributes.metadata_len,
+            DISPATCH_METADATA_FIELDS);
     }
 }
 
