@@ -71,12 +71,12 @@ void kernel_main() {
 
     constexpr uint32_t use_welford = get_named_compile_time_arg_val("groupnorm_mode") > 0;
 
-    // Non-tile-aligned H*W: host-precomputed corrected reduce scaler, plus a second, row-masked set
-    // of mask tiles streamed behind the normal one. See compute/groupnorm.cpp.
+    // Non-tile-aligned H*W: a second, row-masked set of mask tiles streamed behind the normal
+    // one. The element-count correction itself lives in the compute kernel's post-reduce
+    // multiply (mean_recip_bits). See compute/groupnorm.cpp.
     constexpr uint32_t logical_hw = get_named_compile_time_arg_val("logical_hw");
     constexpr uint32_t padded_hw = get_named_compile_time_arg_val("padded_hw");
     constexpr bool has_pad_correction = padded_hw != logical_hw;
-    constexpr uint32_t pad_scaler_bits = get_named_compile_time_arg_val("pad_scaler_bits");
     constexpr bool has_row_mask = get_named_compile_time_arg_val("has_row_mask") == 1;
     constexpr uint32_t mask_tiles_per_group = has_row_mask ? 2 * block_w : block_w;
 
@@ -250,33 +250,24 @@ void kernel_main() {
 
             if (i == 0 and b == 0) {
                 if constexpr (!use_welford) {
+                    // Exact 1.0 scaler: REDUCE_SCALAR applies the scaler twice (row then col), so
+                    // encoding the divisor here as bf16(1/sqrt(N)) makes the effective divisor
+                    // bf16(1/sqrt(N))^2 -- inexact unless sqrt(N) is a power of two (#53846). The
+                    // reduce therefore runs as an exact SUM and the compute kernel divides once,
+                    // in fp32, via its post-reduce multiply (mean_recip_bits / global_recip_bits).
                     constexpr uint32_t dfb_in_2 = tt::CBIndex::c_2;
-                    if constexpr (has_pad_correction) {
-                        // 1 / sqrt(reduce_factor_w * logical_hw / padded_hw), precomputed on host.
-                        // The row mask fixes the numerator; this fixes the denominator.
-                        const float pad_corrected_scaler = __builtin_bit_cast(float, pad_scaler_bits);
-                        dataflow_kernel_lib::prepare_reduce_scaler<
-                            dfb_in_2,
-                            ckernel::PoolType::AVG,
-                            ckernel::ReduceDim::REDUCE_SCALAR>(pad_corrected_scaler);
-                    } else {
-                        constexpr uint32_t reduce_factor_w = get_named_compile_time_arg_val("reduce_factor_w");
-                        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                            dfb_in_2,
-                            ckernel::PoolType::AVG,
-                            ckernel::ReduceDim::REDUCE_SCALAR,
-                            reduce_factor_w>();
-                    }
+                    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                        dfb_in_2,
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_SCALAR>();
                 }
 
                 if constexpr (!use_welford && is_mcast_sender) {
                     constexpr uint32_t dfb_in_4 = tt::CBIndex::c_4;
-                    constexpr uint32_t reduce_factor_c = get_named_compile_time_arg_val("reduce_factor_c");
                     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                         dfb_in_4,
-                        ckernel::PoolType::AVG,
-                        ckernel::ReduceDim::REDUCE_SCALAR,
-                        reduce_factor_c>();
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_SCALAR>();
                 }
 
                 constexpr uint32_t eps_dfb_id = tt::CBIndex::c_3;

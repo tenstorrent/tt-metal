@@ -589,11 +589,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"groupnorm_mode", groupnorm_mode},
         {"TILE_WIDTH", tile_width},
         {"TILE_HW", tile_hw},
-        {"reduce_factor_w", num_rows_per_batch_per_core_group_1 * num_channels_per_group},
-        {"reduce_factor_c", num_cores_per_batch * num_cores_per_group},
         {"logical_hw", pad.kernel_logical_hw},
         {"padded_hw", pad.padded_hw},
-        {"pad_scaler_bits", pad.scaler_bits(num_rows_per_batch_per_core_group_1 * num_channels_per_group)},
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
     };
 
@@ -784,6 +781,16 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     mcast_receiver_compute_named_compile_time_args["cb_in0_welford"] = cb_in0_welford_index;
     mcast_receiver_compute_named_compile_time_args["enable_fp32_reconfig"] =
         static_cast<uint32_t>(enable_fp32_reconfig);
+
+    // Statistics divisors for the two-pass path's post-reduce multiply (unused by Welford).
+    // The reduce runs as an exact SUM; the division happens once, in fp32, on DST (#53846).
+    const uint32_t mean_recip_bits = pad.recip_bits(num_rows_per_batch_per_core_group_1 * num_channels_per_group);
+    const uint32_t global_recip_bits =
+        std::bit_cast<uint32_t>(1.0f / static_cast<float>(num_cores_per_batch * num_cores_per_group));
+    mcast_sender_compute_named_compile_time_args["mean_recip_bits"] = mean_recip_bits;
+    mcast_sender_compute_named_compile_time_args["global_recip_bits"] = global_recip_bits;
+    mcast_receiver_compute_named_compile_time_args["mean_recip_bits"] = mean_recip_bits;
+    mcast_receiver_compute_named_compile_time_args["global_recip_bits"] = global_recip_bits;
 
     KernelDescriptor compute_sender_desc;
     compute_sender_desc.kernel_source = compute_kernel_path;
