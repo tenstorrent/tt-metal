@@ -293,6 +293,25 @@ std::vector<Tensor> sort(
         rank);
 
     const int32_t normalized_dim = dim < 0 ? static_cast<int32_t>(rank) + dim : dim;
+
+    // Zero-size tensors: torch.sort returns empty values/indices of the input
+    // shape, so early-exit with empty tensors here. The prim's validate rejects
+    // empty tensors (its program factories cannot build zero-work programs; the
+    // mergesort factory derives its core count from the row count and would
+    // divide by zero) — that TT_FATAL stays as the backstop for direct prim
+    // callers. Checked after the dim-range validation above so an out-of-range
+    // dim still raises, matching torch.
+    if (original_lshape.volume() == 0) {
+        auto indices = ttnn::zeros_like(input_tensor, index_dtype);
+        if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
+                optional_output_tensors, original_lshape)) {
+            std::get<0>(*optional_output_tensors) = input_tensor;
+            std::get<1>(*optional_output_tensors) = indices;
+            return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
+        }
+        return {input_tensor, indices};
+    }
+
     if (original_lshape[normalized_dim] == 1) {
         auto indices = ttnn::zeros_like(input_tensor, index_dtype);
         if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
