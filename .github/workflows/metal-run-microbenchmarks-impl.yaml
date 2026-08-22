@@ -46,23 +46,11 @@ jobs:
             cmd: "TT_METAL_DEVICE_PROFILER=0 pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_v2_throughput.py",
           }, # Abhishek Agarwal
           {
-            arch: wormhole_b0,
-            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
-            name: "WH Data Movement Regressions",
-            cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter Directed --verbose-log",
-          }, # Ata Tuzuner
-          {
             arch: blackhole,
             runs-on: ["BH", "pipeline-perf", "P150", "in-service"],
             name: "BH P150 DRAM ubench",
             cmd: "./tests/scripts/run_moreh_microbenchmark.sh",
           }, # Yu Gao
-          {
-            arch: blackhole,
-            runs-on: ["BH", "pipeline-perf", "in-service"],
-            name: "BH Data Movement Regressions",
-            cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter Directed --verbose-log",
-          }, # Ata Tuzuner
           {
             arch: blackhole,
             # No perf check for now, so let's run on something that won't block everybody

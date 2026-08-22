@@ -250,7 +250,7 @@ runtime:
     sim_bh_galaxy: 10
   unit:
     wh_n150_civ2: 232
-    wh_n300_civ2: 99
+    wh_n300_civ2: 139
     wh_llmbox: 20
     bh_p150b_civ2: 214
     bh_p300: 69
@@ -276,7 +276,8 @@ runtime:
     bh_p150_perf: 50
   perf_profiler:
     wh_n300_civ2: 5
-    bh_p150_perf: 5
+    wh_n300_perf: 20
+    bh_p150_perf: 25
 
 triage:
   merge_gate:
