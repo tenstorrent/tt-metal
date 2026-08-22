@@ -268,6 +268,7 @@ class AllGatherConfig:
         # Per-device schedule
         mesh_rows, mesh_cols = mesh_shape
         self._per_device = {}
+        self._transport_rt_args_pair = {}
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
@@ -565,13 +566,7 @@ class AllGatherConfig:
     # Per-core runtime args (single fabric connection per direction)
     # ======================================================================
 
-    def _build_transport_per_core_rt_args(self, coord, program, core, dst_fabric_node_id):
-        """Build per-core RT args for one transport RISC direction.
-
-        Layout: [dst_mesh_id, dst_chip_id, <single-link fabric args>]
-        The kernel reads dst_mesh_id / dst_chip_id once, then builds the
-        single transport connection from the remaining args.
-        """
+    def _build_transport_per_core_rt_args_base(self, coord, program, core, dst_fabric_node_id):
         info = self._per_device[coord]
         out = [
             int(dst_fabric_node_id.mesh_id),
@@ -588,15 +583,45 @@ class AllGatherConfig:
         )
         return out
 
-    def get_transport_brisc_per_core_rt_args(self, coord, program, core):
+    def _build_transport_rt_args_pair(self, coord, program, core):
+        """Build paired BRISC/NCRISC transport RT args.
+
+        Layout per RISC:
+          [dst_mesh_id, dst_chip_id, <single-link fabric args>,
+           folded, folded_peer_dst_mesh_id, folded_peer_dst_chip_id]
+
+        On mesh-edge folds, both logical directions can resolve to the same
+        Ethernet EDM sender channel. The kernel uses the folded flag to serialize
+        both directions through BRISC's one connection instead of opening two
+        independent senders that alias the same EDM slot.
+        """
         info = self._per_device[coord]
-        dst = info["fabric_node_by_direction"][self._brisc_fabric_direction]
-        return self._build_transport_per_core_rt_args(coord, program, core, dst)
+        brisc_dst = info["fabric_node_by_direction"][self._brisc_fabric_direction]
+        ncrisc_dst = info["fabric_node_by_direction"][self._ncrisc_fabric_direction]
+
+        brisc_args = self._build_transport_per_core_rt_args_base(coord, program, core, brisc_dst)
+        ncrisc_args = self._build_transport_per_core_rt_args_base(coord, program, core, ncrisc_dst)
+        brisc_eth_channel = brisc_args[2]
+        ncrisc_eth_channel = ncrisc_args[2]
+        folded = int(brisc_eth_channel == ncrisc_eth_channel)
+
+        brisc_args.extend([folded, int(ncrisc_dst.mesh_id), int(ncrisc_dst.chip_id)])
+        ncrisc_args.extend([folded, int(ncrisc_dst.mesh_id), int(ncrisc_dst.chip_id)])
+        return brisc_args, ncrisc_args
+
+    def _get_transport_rt_args_pair(self, coord, program, core):
+        key = (int(coord[0]), int(coord[1]))
+        if key not in self._transport_rt_args_pair:
+            self._transport_rt_args_pair[key] = self._build_transport_rt_args_pair(coord, program, core)
+        return self._transport_rt_args_pair[key]
+
+    def get_transport_brisc_per_core_rt_args(self, coord, program, core):
+        brisc_args, _ = self._get_transport_rt_args_pair(coord, program, core)
+        return brisc_args
 
     def get_transport_ncrisc_per_core_rt_args(self, coord, program, core):
-        info = self._per_device[coord]
-        dst = info["fabric_node_by_direction"][self._ncrisc_fabric_direction]
-        return self._build_transport_per_core_rt_args(coord, program, core, dst)
+        _, ncrisc_args = self._get_transport_rt_args_pair(coord, program, core)
+        return ncrisc_args
 
 
 # ---------------------------------------------------------------------------
