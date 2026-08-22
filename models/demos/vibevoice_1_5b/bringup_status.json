@@ -1,0 +1,338 @@
+{
+  "new_model_id": "microsoft/VibeVoice-1.5B",
+  "new_model_type": "vibevoice",
+  "sibling_hf_id": "/local/ttuser/apande/models/XTTS-v2-hf",
+  "sibling_model_type": null,
+  "backend": {
+    "name": "XTTS-v2 (multilingual TTS)",
+    "demo_path": "models/demos/xtts_v2"
+  },
+  "counts": {
+    "REUSE": 6,
+    "ADAPT": 0,
+    "NEW": 19
+  },
+  "common_reuse": [
+    {
+      "purpose": "LayerNorm / RMSNorm",
+      "path": "models/common/rmsnorm.py"
+    },
+    {
+      "purpose": "LightweightModule base",
+      "path": "models/common/lightweightmodule.py"
+    },
+    {
+      "purpose": "Tensor helpers",
+      "path": "models/common/tensor_utils.py"
+    },
+    {
+      "purpose": "Generic utility funcs",
+      "path": "models/common/utility_functions.py"
+    }
+  ],
+  "components": [
+    {
+      "name": "block1_d",
+      "kind": "Block1D",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=78 leaves=624 sample_paths=['acoustic_tokenizer.encoder.stages.0.0', 'acoustic_tokenizer.encoder.stages.0.1']",
+      "submodule_path": "acoustic_tokenizer.encoder.stages.0.0",
+      "class_name": "Block1D"
+    },
+    {
+      "name": "tokenizer_encoder",
+      "kind": "TokenizerEncoder",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=2 leaves=450 sample_paths=['acoustic_tokenizer.encoder', 'semantic_tokenizer.encoder']",
+      "submodule_path": "acoustic_tokenizer.encoder",
+      "class_name": "TokenizerEncoder"
+    },
+    {
+      "name": "vibe_voice_acoustic_tokenizer_model",
+      "kind": "VibeVoiceAcousticTokenizerModel",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=1 leaves=450 sample_paths=['acoustic_tokenizer']",
+      "submodule_path": "acoustic_tokenizer",
+      "class_name": "VibeVoiceAcousticTokenizerModel"
+    },
+    {
+      "name": "qwen2_model",
+      "kind": "Qwen2Model",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=1 leaves=283 sample_paths=['language_model']",
+      "submodule_path": "language_model",
+      "class_name": "Qwen2Model"
+    },
+    {
+      "name": "qwen2_decoder_layer",
+      "kind": "Qwen2DecoderLayer",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=28 leaves=280 sample_paths=['language_model.layers.0', 'language_model.layers.1']",
+      "submodule_path": "language_model.layers.0",
+      "class_name": "Qwen2DecoderLayer"
+    },
+    {
+      "name": "f_f_n",
+      "kind": "FFN",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=78 leaves=234 sample_paths=['acoustic_tokenizer.encoder.stages.0.0.ffn', 'acoustic_tokenizer.encoder.stages.0.1.ffn']",
+      "submodule_path": "acoustic_tokenizer.encoder.stages.0.0.ffn",
+      "class_name": "FFN"
+    },
+    {
+      "name": "tokenizer_decoder",
+      "kind": "TokenizerDecoder",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=1 leaves=225 sample_paths=['acoustic_tokenizer.decoder']",
+      "submodule_path": "acoustic_tokenizer.decoder",
+      "class_name": "TokenizerDecoder"
+    },
+    {
+      "name": "vibe_voice_semantic_tokenizer_model",
+      "kind": "VibeVoiceSemanticTokenizerModel",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=1 leaves=225 sample_paths=['semantic_tokenizer']",
+      "submodule_path": "semantic_tokenizer",
+      "class_name": "VibeVoiceSemanticTokenizerModel"
+    },
+    {
+      "name": "norm_conv1d",
+      "kind": "NormConv1d",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=96 leaves=192 sample_paths=['acoustic_tokenizer.encoder.downsample_layers.0.0.conv', 'acoustic_tokenizer.encoder.downsample_layers.1.0.conv']",
+      "submodule_path": "acoustic_tokenizer.encoder.downsample_layers.0.0.conv",
+      "class_name": "NormConv1d"
+    },
+    {
+      "name": "s_conv1d",
+      "kind": "SConv1d",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=96 leaves=192 sample_paths=['acoustic_tokenizer.encoder.downsample_layers.0.0', 'acoustic_tokenizer.encoder.downsample_layers.1.0']",
+      "submodule_path": "acoustic_tokenizer.encoder.downsample_layers.0.0",
+      "class_name": "SConv1d"
+    },
+    {
+      "name": "conv_r_m_s_norm",
+      "kind": "ConvRMSNorm",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/common/rmsnorm.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: rmsnorm_text -> models/common/rmsnorm.py::RMSNorm (REUSE). derived from compatibility.py BUILDING_BLOCKS 'RMSNorm (text)'. ttnn.rms_norm requires TILE layout; distributed RMSNorm handles multi-chip. | module-tree: occ=156 leaves=156 sample_paths=['acoustic_tokenizer.encoder.stages.0.0.norm', 'acoustic_tokenizer.encoder.stages.0.0.ffn_norm']",
+      "submodule_path": "acoustic_tokenizer.encoder.stages.0.0.norm",
+      "class_name": "ConvRMSNorm"
+    },
+    {
+      "name": "convlayer",
+      "kind": "Convlayer",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=78 leaves=156 sample_paths=['acoustic_tokenizer.encoder.stages.0.0.mixer', 'acoustic_tokenizer.encoder.stages.0.1.mixer']",
+      "submodule_path": "acoustic_tokenizer.encoder.stages.0.0.mixer",
+      "class_name": "Convlayer"
+    },
+    {
+      "name": "qwen2_attention",
+      "kind": "Qwen2Attention",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/attention.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: gqa_attention -> models/tt_transformers/tt/attention.py::Attention (REUSE). derived from compatibility.py BUILDING_BLOCKS 'GQA attention'. Requires num_attention_heads % num_key_value_heads == 0. | module-tree: occ=28 leaves=112 sample_paths=['language_model.layers.0.self_attn', 'language_model.layers.1.self_attn']",
+      "submodule_path": "language_model.layers.0.self_attn",
+      "class_name": "Qwen2Attention"
+    },
+    {
+      "name": "qwen2_m_l_p",
+      "kind": "Qwen2MLP",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/mlp.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: swiglu_mlp -> models/tt_transformers/tt/mlp.py::MLP (REUSE). derived from compatibility.py BUILDING_BLOCKS 'SwiGLU MLP'. hidden_act dispatched via activation_map; supports silu/gelu/relu/quick_gelu/gelu_pytorch_tanh. | module-tree: occ=28 leaves=112 sample_paths=['language_model.layers.0.mlp', 'language_model.layers.1.mlp']",
+      "submodule_path": "language_model.layers.0.mlp",
+      "class_name": "Qwen2MLP"
+    },
+    {
+      "name": "qwen2_r_m_s_norm",
+      "kind": "Qwen2RMSNorm",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/common/rmsnorm.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: rmsnorm_text -> models/common/rmsnorm.py::RMSNorm (REUSE). derived from compatibility.py BUILDING_BLOCKS 'RMSNorm (text)'. ttnn.rms_norm requires TILE layout; distributed RMSNorm handles multi-chip. | module-tree: occ=57 leaves=57 sample_paths=['language_model.layers.0.input_layernorm', 'language_model.layers.0.post_attention_layernorm']",
+      "submodule_path": "language_model.layers.0.input_layernorm",
+      "class_name": "Qwen2RMSNorm"
+    },
+    {
+      "name": "vibe_voice_diffusion_head",
+      "kind": "VibeVoiceDiffusionHead",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=1 leaves=37 sample_paths=['prediction_head']",
+      "submodule_path": "prediction_head",
+      "class_name": "VibeVoiceDiffusionHead"
+    },
+    {
+      "name": "head_layer",
+      "kind": "HeadLayer",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=4 leaves=28 sample_paths=['prediction_head.layers.0', 'prediction_head.layers.1']",
+      "submodule_path": "prediction_head.layers.0",
+      "class_name": "HeadLayer"
+    },
+    {
+      "name": "feed_forward_network",
+      "kind": "FeedForwardNetwork",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=4 leaves=16 sample_paths=['prediction_head.layers.0.ffn', 'prediction_head.layers.1.ffn']",
+      "submodule_path": "prediction_head.layers.0.ffn",
+      "class_name": "FeedForwardNetwork"
+    },
+    {
+      "name": "norm_conv_transpose1d",
+      "kind": "NormConvTranspose1d",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=6 leaves=12 sample_paths=['acoustic_tokenizer.decoder.upsample_layers.1.0.convtr', 'acoustic_tokenizer.decoder.upsample_layers.2.0.convtr']",
+      "submodule_path": "acoustic_tokenizer.decoder.upsample_layers.1.0.convtr",
+      "class_name": "NormConvTranspose1d"
+    },
+    {
+      "name": "s_conv_transpose1d",
+      "kind": "SConvTranspose1d",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=6 leaves=12 sample_paths=['acoustic_tokenizer.decoder.upsample_layers.1.0', 'acoustic_tokenizer.decoder.upsample_layers.2.0']",
+      "submodule_path": "acoustic_tokenizer.decoder.upsample_layers.1.0",
+      "class_name": "SConvTranspose1d"
+    },
+    {
+      "name": "speech_connector",
+      "kind": "SpeechConnector",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=2 leaves=6 sample_paths=['acoustic_connector', 'semantic_connector']",
+      "submodule_path": "acoustic_connector",
+      "class_name": "SpeechConnector"
+    },
+    {
+      "name": "final_layer",
+      "kind": "FinalLayer",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=1 leaves=4 sample_paths=['prediction_head.final_layer']",
+      "submodule_path": "prediction_head.final_layer",
+      "class_name": "FinalLayer"
+    },
+    {
+      "name": "timestep_embedder",
+      "kind": "TimestepEmbedder",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/vibevoice/modeling_vibevoice.py",
+      "notes": "module-tree: occ=1 leaves=3 sample_paths=['prediction_head.t_embedder']",
+      "submodule_path": "prediction_head.t_embedder",
+      "class_name": "TimestepEmbedder"
+    },
+    {
+      "name": "llama_r_m_s_norm",
+      "kind": "LlamaRMSNorm",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/common/rmsnorm.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: rmsnorm_text -> models/common/rmsnorm.py::RMSNorm (REUSE). derived from compatibility.py BUILDING_BLOCKS 'RMSNorm (text)'. ttnn.rms_norm requires TILE layout; distributed RMSNorm handles multi-chip. | module-tree: occ=2 leaves=2 sample_paths=['acoustic_connector.norm', 'semantic_connector.norm']",
+      "submodule_path": "acoustic_connector.norm",
+      "class_name": "LlamaRMSNorm"
+    },
+    {
+      "name": "qwen2_rotary_embedding",
+      "kind": "Qwen2RotaryEmbedding",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/rope.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: standard_rope -> models/tt_transformers/tt/rope.py::RotaryEmbedding (REUSE). derived from compatibility.py BUILDING_BLOCKS 'Standard RoPE'. | module-tree: occ=1 leaves=1 sample_paths=['language_model.rotary_emb']",
+      "submodule_path": "language_model.rotary_emb",
+      "class_name": "Qwen2RotaryEmbedding"
+    }
+  ],
+  "notes": [
+    "Sibling config could not be fetched; classification falls back to NEW for components without a clear file match. Set HF_TOKEN or pre-download `/local/ttuser/apande/models/XTTS-v2-hf` and re-run for a sharper diff."
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "model_id": "microsoft/VibeVoice-1.5B",
+  "model_type": "vibevoice",
+  "architecture": "VibeVoiceForConditionalGeneration (Qwen2 LM backbone + acoustic/semantic VAE tokenizers + 2 speech connectors + DDPM diffusion prediction head)",
+  "task": "text-to-speech (script text + reference voice sample -> 24 kHz speech waveform)",
+  "reference_class": "vibevoice.modular.modeling_vibevoice_inference.VibeVoiceForConditionalGenerationInference",
+  "sources": {
+    "A_hf": "config.json + VibeVoiceProcessor + VibeVoiceForConditionalGenerationInference.generate() (golden). Voice sample + script -> processor -> input_ids/speech_tensors/speech_masks/speech_input_mask.",
+    "B_bringup": "models/demos/vibevoice_1_5b/{_stubs,_captured,tests/pcc,bringup_status.json}. 19 NEW components graduated (each has _stubs/<name>.py.last_good_native and passes tests/pcc/test_<name>.py at PCC>=0.99)."
+  },
+
+  "graduated_modules_verification": {
+    "count_expected_NEW": 19,
+    "count_listed": 19,
+    "all_used": true,
+    "note": "Every NEW component in bringup_status.json has a .last_good_native snapshot in _stubs/ and is routed below. REUSE components (conv_r_m_s_norm, qwen2_attention, qwen2_m_l_p, qwen2_r_m_s_norm, llama_r_m_s_norm, qwen2_rotary_embedding) are NOT graduated work products and are consumed inside the native stubs (rms_norm/matmul/rope are inlined there); they are not separately routed.",
+    "modules": [
+      "vibe_voice_acoustic_tokenizer_model",
+      "vibe_voice_semantic_tokenizer_model",
+      "tokenizer_encoder",
+      "tokenizer_decoder",
+      "block1_d",
+      "convlayer",
+      "f_f_n",
+      "s_conv1d",
+      "norm_conv1d",
+      "s_conv_transpose1d",
+      "norm_conv_transpose1d",
+      "qwen2_model",
+      "qwen2_decoder_layer",
+      "speech_connector",
+      "vibe_voice_diffusion_head",
+      "timestep_embedder",
+      "head_layer",
+      "feed_forward_network",
+      "final_layer"
+    ]
+  },
+
+  "stub_composition_dag": {
+    "note": "Top-level stubs compose their graduated children via `from ..._stubs.<child> import build`. Four parent stubs inline their child's math (block1_d, s_conv1d, head_layer, qwen2_model); they are refactored to COMPOSE the graduated child stub so every one of the 19 is genuinely executed in the real forward path (Gate 2), while preserving each per-component PCC test.",
+    "vibe_voice_acoustic_tokenizer_model": ["tokenizer_encoder", "tokenizer_decoder"],
+    "vibe_voice_semantic_tokenizer_model": ["tokenizer_encoder"],
+    "tokenizer_encoder": ["block1_d", "s_conv1d"],
+    "tokenizer_decoder": ["block1_d", "s_conv1d", "s_conv_transpose1d"],
+    "s_conv_transpose1d": ["norm_conv_transpose1d"],
+    "s_conv1d": ["norm_conv1d"],
+    "block1_d": ["convlayer", "f_f_n"],
+    "vibe_voice_diffusion_head": ["timestep_embedder", "head_layer", "final_layer"],
+    "head_layer": ["feed_forward_network"],
+    "qwen2_model": ["qwen2_decoder_layer"]
+  },
+
+  "task_heads": [
+    {
+      "call": 1,
+      "name": "tts",
+      "input_construction": "VibeVoiceProcessor(text=script, voice_samples=[ref_wav_24k]) -> {input_ids, attention_mask, speech_tensors, speech_masks, speech_input_mask}. Deterministic synthetic reference voice (voiced harmonic signal) so no external audio file/codec is required; a --voice path can override.",
+      "output": "24 kHz speech waveform: concatenation of the per-diffusion-frame acoustic-decoder chunks.",
+      "reference_golden": "_hf_reference_tts(): a faithful reimplementation of VibeVoiceForConditionalGenerationInference.generate() run on the reference submodules (do_sample=False greedy, token-constraint to the speech control tokens, cfg_scale=1.0 so the CFG negative branch is a mathematical no-op (half_eps=cond_eps) and is dropped, ddpm_inference_steps=S small, LM run in full-recompute causal mode with no KV cache). The GenerationMixin plumbing is NOT used (it is broken against the installed transformers 5.x); the loop is reimplemented explicitly, which is the ALLOWED _hf_reference helper form.",
+      "horizon": "Both HF golden and TT decode capped to the SAME N diffusion frames (default N=8) and SAME ddpm steps S (default 6). Full-length generation is NOT run (would time out).",
+      "chain": [
+        "SETUP (host/torch, allowed): processor builds inputs; reference weights extracted at build().",
+        "PREFILL: voice sample -> vibe_voice_acoustic_tokenizer_model(encode path) -> acoustic latents [1,T,64]; (latents+bias)*scaling -> speech_connector(acoustic) -> speech embeds; embed_tokens(input_ids) with speech embeds injected at speech_input_mask -> inputs_embeds.",
+        "DECODE LOOP (per step, up to N diffusion frames):",
+        "  a) qwen2_model(inputs_embeds) -> hidden [1,L,1536]; lm_head(hidden[:,-1]) -> logits; constrained argmax -> next token (on device).",
+        "  b) if next token == speech_diffusion_id: condition = hidden[:,-1,:]; DDPM sample loop over S steps calling vibe_voice_diffusion_head(noisy,t,condition) -> acoustic latent [1,64] (shared, uploaded initial noise so TT==HF; scheduler step is elementwise).",
+        "  c) scaled = latent/scaling - bias; tokenizer_decoder(scaled[1,64,1]) -> audio chunk [1,1,~3200]; append to waveform.",
+        "  d) vibe_voice_semantic_tokenizer_model(audio chunk) -> semantic [1,1,128]; speech_connector(acoustic latent) + speech_connector(semantic) -> feedback embed [1,1,1536].",
+        "  e) inputs_embeds <- cat(inputs_embeds, feedback_embed). Self-fed: the next step reads the previous step's real TT tensors; no reference tensor injected at any joint.",
+        "FINALIZE: waveform = concat(audio chunks)."
+      ],
+      "modules_invoked": [
+        "vibe_voice_acoustic_tokenizer_model", "tokenizer_encoder", "tokenizer_decoder",
+        "block1_d", "convlayer", "f_f_n", "s_conv1d", "norm_conv1d",
+        "s_conv_transpose1d", "norm_conv_transpose1d",
+        "qwen2_model", "qwen2_decoder_layer",
+        "vibe_voice_diffusion_head", "timestep_embedder", "head_layer", "feed_forward_network", "final_layer",
+        "speech_connector", "vibe_voice_semantic_tokenizer_model"
+      ],
+      "no_dependency_split": "Single task head -> single build agent. All graduated modules share the one chained forward, so there is exactly ONE pipeline and ONE builder (no independent parallel calls to split).",
+      "pass_criteria": {
+        "gate1_native": "Every routed stub is native ttnn (composes ttnn ops / native children); no torch compute op in the hot path.",
+        "gate2_invoked": "instrument the 19 stub build()/forwards; assert INVOKED covers all 19 during the e2e run (real path, not a coverage sweep).",
+        "gate3_pcc": "final waveform PCC(TT, HF golden) >= 0.95, both capped to N frames / S ddpm steps.",
+        "shared_noise": "the DDPM initial noise + scheduler are identical on both sides (seeded torch.randn uploaded to device), so the diffusion is deterministic and TT vs HF differences are pure numeric error."
+      }
+    }
+  ],
+
+  "validation_metric": "comp_pcc (models.common.utility_functions) on the final waveform, plus per-stage PCC (prefill acoustic latents, LM hidden/logits, diffusion latent, decoded audio chunk, semantic features, feedback embed).",
+  "behavioral_proof": "demo/demo_tts.py writes the TT waveform to a .wav and prints token schedule + duration; tests/e2e/test_e2e_tts.py prints `e2e PCC=<val>` on every run (before the assert) and the per-stage PCC table.",
+  "self_validation_plan": [
+    "1. Load reference (inference class) via tests/pcc/_reference_loader-style loader + qwen2 tokenizer shim; build processor inputs.",
+    "2. Confirm the reimplemented golden loop reproduces greedy/constrained token schedule and produces audio chunks on CPU (short N,S).",
+    "3. Build all 19 native stubs on the TT device; assert each per-component PCC test still passes after the compose-children refactors.",
+    "4. Run the TT chained forward; per-stage PCC vs golden must be >=0.95, culminating in final waveform PCC>=0.95.",
+    "5. Gate 2: assert INVOKED == the 19 graduated names.",
+    "6. Host-free: host_op_selftest() runs the model math under observe_host_ops with input-encoding + weight build OUTSIDE the observed region; expect zero host aten ops.",
+    "7. trace_capture_selftest: capture one host-free step per PIPELINE_STAGE and verify trace PCC."
+  ],
+  "pipeline_stages": ["prefill", "decode", "diffusion", "vocode"],
+  "notes": "cfg_scale=1.0 chosen deliberately: sample_speech_tokens computes half_eps = uncond + cfg*(cond-uncond); at cfg=1.0 this is exactly cond, so the entire negative/CFG branch (and its KV-cache-shifting bookkeeping) has zero effect on the output and is omitted from both the TT chain and the golden. LM runs full-recompute (no KV cache) to match the graduated qwen2_model stub, which does a full causal forward each step."
+}

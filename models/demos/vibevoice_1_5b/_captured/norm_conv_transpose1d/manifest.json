@@ -1,0 +1,31 @@
+{
+  "component": "norm_conv_transpose1d",
+  "submodule_path": "model.acoustic_tokenizer.decoder.upsample_layers.1.0.convtr",
+  "args": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "tensor",
+        "shape": [
+          1,
+          2048,
+          768
+        ],
+        "dtype": "torch.bfloat16"
+      }
+    ]
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {}
+  },
+  "output": {
+    "kind": "tensor",
+    "shape": [
+      1,
+      1024,
+      6152
+    ],
+    "dtype": "torch.bfloat16"
+  }
+}
