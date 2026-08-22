@@ -26,6 +26,9 @@ public:
     void init(const std::vector<Device*>& devices, const std::unordered_set<InitializerKey>& init_done) override;
     void configure() override;
     void teardown(std::unordered_set<InitializerKey>& init_done) override;
+    // Mark as torn down without running teardown logic. Used by DispatchContext when
+    // it has already terminated command queues and just needs to clear the initialized flag.
+    void mark_as_torn_down(std::unordered_set<InitializerKey>& init_done);
     // Returns true if fast dispatch is enabled and has been configured
     bool is_initialized() const override;
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
