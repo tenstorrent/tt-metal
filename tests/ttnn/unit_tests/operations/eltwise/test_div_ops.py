@@ -458,3 +458,41 @@ def test_optional_output_tensor_remainder(device):
     optional_output_tensor = ttnn.to_torch(optional_output_tensor)
 
     assert_with_ulp(optional_output_tensor, torch_golden, ulp_threshold=0)
+
+
+# The unary-scalar fmod kernel truncates |x| * (1/s) to get the quotient. When 1/s rounds up,
+# that product can land on (or just past) an integer, so the truncated quotient comes out one
+# too high and |x| - quotient * s goes negative; the sign is then overwritten by copysgn and a
+# remainder that should be just under s is reported as ~0 instead. The guard that was meant to
+# catch this compared the truncated value against the same rounded product it was derived from,
+# which cannot be greater, so it never fired.
+#
+# The trigger is inputs one ULP below an exact multiple of the divisor. They are sparse, so a
+# PCC or allclose comparison over a whole tile of random values does not see them; the existing
+# scalar sweeps also draw from [-100, 100], where the quotient is too small to hit the rounding.
+#
+# Partially addresses #51441.
+@pytest.mark.parametrize("scalar", [3.0, 7.0, 1.5, -3.0])
+def test_fmod_scalar_just_below_exact_multiple_fp32(scalar, device):
+    n = torch.arange(1, 4097, dtype=torch.float64)
+    exact_multiples = (n * scalar).to(torch.float32)
+    torch_input_tensor = torch.nextafter(exact_multiples, torch.zeros_like(exact_multiples))
+
+    golden_function = ttnn.get_golden_function(ttnn.fmod)
+    torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.to_torch(ttnn.fmod(input_tensor, scalar))
+
+    # fmod is exact in binary floating point: every result is representable in the input format,
+    # so the correct output is the golden value itself, not an approximation of it.
+    assert torch.allclose(output_tensor, torch_output_tensor, atol=1e-3, rtol=0)
+    # The defining contract, stated separately: the magnitude of the result is below the modulus.
+    assert torch.all(output_tensor.abs() < abs(scalar))
