@@ -1,0 +1,138 @@
+# CosyVoice REFERENCE-ONLY requirements, host CPU
+# derived from FunAudioLLM/CosyVoice@074ca6d requirements.txt
+#
+# NOTHING IN THIS FILE IS INSTALLED TO RUN THE MODEL. It builds `cosyvoice_env`, a
+# host-only venv with exactly three jobs: capturing the PyTorch goldens, exporting
+# weights, and WER/SIM scoring. The on-device model, the demo and every test under
+# tests/ run in tt-metal's own python_env and import only torch, numpy, ttnn and
+# loguru — all of which tt-metal already ships. Merging this demo installs nothing
+# from here. docs/security.md documents that boundary and the advisory disposition.
+#
+# Deltas from upstream, forced by "no NVIDIA GPU on this host":
+#   1. torch/torchaudio pulled from the CPU wheel index with an explicit +cpu local
+#      tag, instead of --extra-index-url .../cu121. The +cpu tag exists only on the
+#      PyTorch CPU index, so resolution is unambiguous even with PyPI in the mix.
+#   2. deepspeed          — dropped. Builds CUDA kernels at install time; training-only.
+#   3. onnxruntime-gpu    — replaced by onnxruntime. Used by the speech tokenizer
+#                           (speech_tokenizer_v1.onnx) and campplus.onnx.
+#   4. tensorrt-cu12*     — dropped (3 pins). TRT export path, CUDA-only by definition.
+#   5. The onnxruntime-cuda-12 --extra-index-url — dropped with onnxruntime-gpu.
+#
+# Deltas forced by dependency advisories. Upstream's pins carry four CRITICALs and a
+# long tail of HIGHs. This venv is host-only, but it does torch.load three checkpoints
+# fetched from ModelScope, so the supply-chain surface is not hypothetical.
+#
+#   6. Dropped, because nothing on the reference path imports them. Established by
+#      tracing every import performed while resolving CosyVoice-300M/cosyvoice.yaml —
+#      the widest closure the reference reaches, since hyperpyyaml eagerly resolves the
+#      training-only data_pipeline keys as well as the model ones:
+#
+#        gradio                        webui.py / matcha app.py only
+#        onnx                          zero direct imports; torch's own is try-guarded
+#        fastapi, fastapi-cli, uvicorn runtime/python/fastapi/server.py only
+#        grpcio, grpcio-tools          runtime/python/grpc/ only
+#        tensorboard, networkx,        never imported by anything, at any depth
+#        pydantic, x-transformers      (x-transformers is the CosyVoice-3 DiT flow)
+#
+#      Dropping gradio and onnx is where most of the reduction comes from, and it moves
+#      no version the goldens depend on. docs/security.md carries the tally.
+#
+#   7. Bumped, because these ARE imported, to a version clearing their advisories:
+#      diffusers (matcha's decoder needs get_activation), lightning (matcha.utils.pylogger
+#      drags it in), modelscope, gdown, pyarrow (a module-level pyarrow.parquet in
+#      cosyvoice/dataset/processor.py), protobuf, transformers, torch/torchaudio,
+#      hydra-core.
+#
+#      hydra-core 1.3.2 -> 1.3.4 clears CVE-2026-68508 (GHSA-2cp2-2r3c-7p7r, HIGH:
+#      hydra.utils.instantiate executes code from an untrusted config). It is imported,
+#      though only as a side effect: matcha/utils/__init__.py imports instantiators,
+#      which imports hydra, and cosyvoice/flow/flow_matching.py reaches that package
+#      through matcha.utils.pylogger. instantiate itself is called only from
+#      matcha/train.py, which the reference never runs, so the exposure was already
+#      nil -- but 1.3.4 is a patch bump holding omegaconf<2.4,>=2.2, the same range
+#      1.3.2 held, so there is no reason to carry the finding.
+#
+#      transformers goes to 5.5.0, clearing all eight of its advisories. The reference
+#      touches two corners of it -- Qwen2ForCausalLM in cosyvoice/llm/llm.py, and
+#      AutoFeatureExtractor/WavLMForXVector in scripts/eval_wer_sim.py -- and both import
+#      and run unchanged on 5.x. An earlier pass here concluded 5.x had dropped top-level
+#      Qwen2ForCausalLM; that was a confounded test. It was measured in an environment
+#      that also carried torch 2.9.1, and torch 2.9.1 breaks that same import on its own
+#      (see below) -- transformers 4.53.0 fails identically there. On torch 2.6.0, 5.5.0
+#      is clean and reproduces the goldens bit-for-bit against 4.53.0.
+#
+# What is deliberately still outstanding, and why:
+#
+#   torch         3 open, all MODERATE local-DoS: CVE-2025-3730 (fixed 2.8.0),
+#                 CVE-2025-2999 (fixed 2.9.1), CVE-2025-2998 (range <= 2.6.0, no fixed
+#                 version recorded -- so 2.6.0 is its last affected release and any
+#                 bump leaves the range). 2.6.0 is what clears the CRITICAL
+#                 (CVE-2025-32434, torch.load RCE), which is the one that matches how
+#                 this venv is actually used.
+#
+#                 Measured 2026-08-22, superseding an earlier reading of this trade.
+#                 Three things previously recorded as blocking a bump are not:
+#                 openai-whisper 20250625 relaxes its triton pin to >=2, so triton
+#                 3.7.1 resolves with torch 2.8/2.9; torchaudio 2.8 still has its
+#                 native decoder; and Qwen2ForCausalLM imports fine on torch 2.9.1
+#                 with transformers 5.5.0. What does block it is narrower and worse:
+#
+#                   torch.multinomial(probs, num_samples=1) consumes the RNG stream
+#                   differently in 2.8 than in 2.6. The batched form, topk and sort are
+#                   byte-identical, and so is the generator itself -- only the
+#                   single-sample path RAS uses in the AR decode loop moved. Model
+#                   arithmetic is bit-exact across the bump (text encoder, both AR
+#                   chunks and decoder_head calls 0-2 all at max|diff| 0.0), but the
+#                   token drawn at step 2 differs, the utterance ends at 147 semantic
+#                   tokens instead of 164, and all 29 goldens shift with it.
+#
+#                 So a torch bump is not a numerical risk, it is a re-baseline: the
+#                 whole golden set has to be regenerated and every figure in PERF.md
+#                 derived from it re-measured. Same trade as onnxruntime below, same
+#                 verdict -- three MODERATE local-DoS findings in a venv that ships
+#                 nothing do not justify moving the reference the port is measured
+#                 against. 2.9.1 is additionally blocked upstream: CosyVoice's own
+#                 cosyvoice/utils/file_utils.py calls torchaudio.load(..., backend=
+#                 'soundfile'), and 2.9 ignores that argument and requires TorchCodec.
+#
+# onnxruntime is held at 1.18.0 on purpose, and not because of an advisory — it has
+# none. It runs speech_tokenizer_v1.onnx, and 1.23.2 emits a different token sequence
+# for the same audio. That reroutes the LLM and desynchronises every downstream RNG
+# draw: regenerating on 1.23.2 gives an e2e waveform at PCC 0.01 against the committed
+# goldens, with the noise tensors at ~0. Moving it means regenerating the whole set.
+#
+# requests/urllib3 are deliberately NOT pinned. The PyTorch CPU index carries requests,
+# and uv resolves a package from the first index that has it — a dependency-confusion
+# defence. Pinning a PyPI-only version here forces --index-strategy unsafe-best-match,
+# which would disable that check for every package in this file.
+#
+# Every golden in tests/golden/ was regenerated on these pins and compared against the
+# committed set before they were taken; nothing here moves the reference the TTNN port is
+# measured against. docs/security.md has the figures and the command to repeat it.
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+conformer==0.3.2
+diffusers==0.38.0
+gdown==5.2.2
+hydra-core==1.3.4
+HyperPyYAML==1.2.3
+inflect==7.3.1
+librosa==0.10.2
+lightning==2.3.3
+matplotlib==3.7.5
+modelscope==1.27.0
+numpy==1.26.4
+omegaconf==2.3.0
+onnxruntime==1.18.0
+openai-whisper==20231117
+protobuf==5.29.6
+pyarrow==23.0.1
+pyworld==0.3.4
+rich==13.7.1
+soundfile==0.12.1
+torch==2.6.0+cpu
+torchaudio==2.6.0+cpu
+transformers==5.5.0
+wetext==0.0.4
+wget==3.2
