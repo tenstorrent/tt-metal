@@ -86,16 +86,28 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
         //   Wt=16: T_sc  314 (stable)                      vs T_cc  66          (5x)
         // Route to CrossCore only where it wins with margin: Ht <= Wt/8 keeps every routed
         // cell >= 2x under the single-core wall at the measured ratios, and leaves large-Ht
-        // workloads (where per-core tile-row fanning is already optimal) untouched. UINT16
-        // stays single-core (the CrossCore factory has no u16<->fp32 conversion path);
-        // ROW_MAJOR keeps the existing routing (the CrossCore RM path is unmeasured at
-        // these widths). The index-dtype contract in compute_output_specs is deliberately
-        // NOT routing-dependent: stable bf16 cells at Wt <= 64 keep UINT32 indices on both
+        // workloads (where per-core tile-row fanning is already optimal) untouched.
+        // STABLE ONLY: the CrossCore unstable exchange resolves ties positionally (raw
+        // SFPSWAP index tracking) and the two peers of a spanning tile pair merge with
+        // swapped operand order while keeping opposite halves, so on a tie both peers can
+        // emit the SAME index — duplicate indices inside tie groups, indices not a
+        // permutation (pre-existing CrossCore behavior at the widths it natively owns,
+        // W=4096/8192). Unstable cells therefore keep the single-core engine, which moves
+        // value+index atomically per SFPSWAP and always emits a valid permutation. The
+        // stable comparator (topk_cmp_swap_stable_directional) is operand-order-independent
+        // and silicon-verified exact on the rerouted band. BLACKHOLE ONLY: the reroute was
+        // silicon-validated on p150a only (same posture as the mergesort row engine above);
+        // Wormhole keeps the previous routing untouched. UINT16 stays single-core (the
+        // CrossCore factory has no u16<->fp32 conversion path); ROW_MAJOR keeps the
+        // existing routing (the CrossCore RM path is unmeasured at these widths). The
+        // index-dtype contract in compute_output_specs is deliberately NOT
+        // routing-dependent: stable bf16 cells at Wt <= 64 keep UINT32 indices on both
         // factories so the dtype a user sees never depends on Ht.
         const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
         const auto& pshape = tensor_args.input_tensor.padded_shape();
         const uint32_t Ht = (pshape[0] * pshape[1] * pshape[2]) / tile_height;
-        const bool cross_core_wins_small_ht = !is_uint16 && !is_row_major && Wt >= 16 && Ht <= Wt / 8;
+        const bool cross_core_wins_small_ht = attributes.stable && !is_uint16 && !is_row_major && Wt >= 16 &&
+                                              Ht <= Wt / 8 && device->arch() == tt::ARCH::BLACKHOLE;
         if (!cross_core_wins_small_ht) {
             // Single-core implementation
             return SortProgramFactorySingleRowSingleCore{};
