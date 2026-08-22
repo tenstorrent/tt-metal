@@ -406,7 +406,7 @@ class TtBasicTransformerBlock:
 
     def __call__(self, x):
         # `x` belongs to the caller and is NOT freed here. Three ResBlocks sharing
-        # one input is what broke the vocoder in P2; the rule that came out of it
+        # one input is what broke the vocoder during bring-up; the rule that came out of it
         # is that a module frees only what it allocated.
         n = ttnn.layer_norm(x, weight=self.g1, bias=self.b1, epsilon=self.eps)
         a = self.attn(n)

@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """ESPnet relative-position attention, and whether it fits into flash attention.
 
-`02_plan.md` sec.3.3 flags this as one of the two hardest risks: both the LLM and
-the flow encoder use `rel_selfattn`, not RoPE and not vanilla attention, so the
+This was flagged up front as one of the two hardest risks: both the LLM and the
+flow encoder use `rel_selfattn`, not RoPE and not vanilla attention, so the
 tt-metal LLM demos under `models/demos/wormhole/` are a structural reference
 rather than a drop-in.
 
@@ -64,8 +64,8 @@ def rel_shift(x: torch.Tensor) -> torch.Tensor:
 
     A skew of the score matrix: pad a zero column, reinterpret the last two axes
     transposed, drop the first row, then keep the left half. In tile layout this
-    is a strided gather, not an elementwise op -- which is why 03_plan.md P5 rates
-    a native rel-pos SDPA as high-risk.
+    is a strided gather, not an elementwise op -- which is why a native rel-pos SDPA
+    was scoped as high-risk.
     """
     b, h, t1, n = x.shape
     zero_pad = torch.zeros((b, h, t1, 1), dtype=x.dtype)
@@ -261,7 +261,7 @@ needs_flow_weights = pytest.mark.skipif(
 def test_device_rel_pos_attention_matches_golden(device):
     """The attention layer on device, against the captured reference output.
 
-    This is the piece `02_plan.md` §3.3 called a structural risk, and the one both
+    This is the piece called a structural risk up front, and the one both
     the flow encoder and the LLM depend on -- so it gets checked against real
     weights and real activations rather than random ones.
     """

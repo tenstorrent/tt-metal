@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Can the AR decode step use flash attention after all?
 
-`03_plan.md` P5 says relative-position attention needs a new SDPA variant --
+Relative-position attention was scoped as needing a new SDPA variant --
 "~1500+ LOC, high risk, propose last" -- and PERF.md says the flow's estimator takes
 `ttnn.transformer.scaled_dot_product_attention` as a drop-in *"unlike the AR decoder"*.
 Both readings assume the rel-pos term puts the decoder outside what a fused kernel can
@@ -16,8 +16,8 @@ shape: the positional half is a per-head row vector over the key axis. So the te
 model was said to need a new kernel for is **already an additive bias**, and the padding
 mask folds into the same tensor.
 
-It lands on 61 % of runtime. Every other item in `03_plan.md` targets the vocoder, which
-is 3 %.
+It lands on 61 % of runtime. Every other candidate contribution targets the vocoder,
+which is 3 %.
 
 Whether it *pays* is the open question, and the QKV-fusion result is the reason to ask
 rather than assume: fusing QKV took the flow 1.075 -> 0.719 s and the decode step

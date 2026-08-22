@@ -9,8 +9,8 @@ CosyVoice-300M runs at 22050 Hz, which selects `SineGen` (type 1) rather than
 
 Precision, measured on silicon
 ------------------------------
-`02_plan.md` sec.3.4 flags this cumsum as a precision risk. It is a larger one
-than the plan expected, and in two independent ways -- both invisible to this
+This cumsum was flagged up front as a precision risk. It is a larger one than
+expected, and in two independent ways -- both invisible to this
 module's own short PCC tests and both found only end to end.
 
 **1. `ttnn.cumsum` is far less accurate than torch's.** Against an fp64 reference

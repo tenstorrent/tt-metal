@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """MaskedDiffWithXvec: semantic tokens -> mel spectrogram, end to end on device.
 
-The whole of `02_plan.md` P3 assembled:
+The whole flow stage assembled:
 
     tokens ---------------> input_embedding (4096 x 512)
                         --> ConformerEncoder, 6 blocks, rel-pos attention

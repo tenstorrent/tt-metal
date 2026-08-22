@@ -15,8 +15,8 @@ HiFT upsamples twice, `upsample_rates [8, 8]` with `upsample_kernel_sizes
 The remaining factor of 4 comes from the iSTFT hop, for a total of 256 -- which
 matches the mel `hop_size`.
 
-Whether the `H=1` path carries large constant overhead is the measurement
-`03_plan.md` P3 needs to justify proposing a native `ttnn.conv_transpose1d`.
+Whether the `H=1` path carries large constant overhead is the measurement that
+would justify proposing a native `ttnn.conv_transpose1d`.
 """
 from __future__ import annotations
 

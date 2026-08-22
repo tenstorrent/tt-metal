@@ -3,19 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 """`ttnn.snake_beta` already exists. What is it worth here?
 
-`03_plan.md` P1 proposes `ttnn.snake` as the portfolio's opener -- "the strongest
+`ttnn.snake` was proposed as the contribution portfolio's opener -- "the strongest
 opener", "no tt-llk change", propose it first. `tt/hifigan/snake.py` says the same
 thing in its docstring: *"TTNN has no native `snake`, so it is composed from primitives
 here."*
 
 Both are out of date. `ttnn.snake_beta` landed in **PR #43614 on 2026-05-26**, ten weeks
-before `03_plan.md` was written, as a ternary SFPU op at
+before that proposal was written, as a ternary SFPU op at
 `eltwise/ternary/ternary_nanobind.cpp:337`. It computes `x + sin^2(alpha*x)/beta`, so
 `snake_beta(x, alpha, alpha)` is exactly the Snake this vocoder wants, and its
 broadcasting contract -- alpha and beta non-1 only on the **last** dimension -- is
 exactly the channels-last `[B, T, C]` layout `conv.py` already uses.
 
-So P1 is not a contribution to propose. The question that replaces it is whether swapping the
+So it is not a contribution to propose. The question that replaces it is whether swapping the
 composed five-op form for the native one is worth anything, at the two shapes HiFT
 actually runs: after the first upsample (256 channels, 2256 frames) and after the second
 (128 channels, 18048 frames). 48 activations per vocoder call.

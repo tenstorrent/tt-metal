@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""End-to-end RTF -- `02_plan.md`'s headline perf gate (RTF < 0.5 at P5, < 0.2 at P6).
+"""End-to-end RTF -- the bring-up's headline perf gate: RTF < 0.5, then < 0.2.
 
 Real-time factor is compute seconds per second of audio produced. The three
 stages contribute very differently, and the split is the whole story:
@@ -176,12 +176,11 @@ def test_device_end_to_end_rtf(device):
     print(f"  flow     10 Euler steps               = {flow_s:6.3f} s   RTF {flow_s/audio_seconds:5.3f}")
     print(f"  vocoder  mel -> {want.shape[1]} samples        = {hift_s:6.3f} s   RTF {hift_s/audio_seconds:5.3f}")
     print(f"  TOTAL                                 = {total_s:6.3f} s   RTF {rtf:5.3f}")
-    print(f"  targets: RTF < 0.5 (P5), < 0.2 (P6)")
+    print(f"  targets: RTF < 0.5, then < 0.2")
     print(f"  LLM share of total: {100*llm_total_s/total_s:.1f}%")
 
     assert total_s > 0
-    # Reported honestly rather than xfailed. `02_plan.md` sec.6 is explicit that a
-    # missed target gets a number and an explanation, because an xfail was read as
-    # concealment on the previous attempt.
+    # Reported honestly rather than xfailed: a missed target gets a number and an
+    # explanation, because an xfail was read as concealment on the previous attempt.
     if rtf >= 0.5:
-        print(f"  ABOVE the P5 target of 0.5 -- measured {rtf:.3f}.")
+        print(f"  ABOVE the 0.5 target -- measured {rtf:.3f}.")

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Decode throughput for the LLM stage -- `02_plan.md` P4's second exit criterion.
+"""Decode throughput for the LLM stage -- the LLM's second exit criterion.
 
 The LLM is the only sequential stage in CosyVoice: the flow decoder and the
 vocoder each run once over the whole utterance, but the AR decoder runs once per
@@ -94,13 +94,13 @@ def test_device_decode_throughput(device):
     print(f"  warm pass, same shapes      {m2:8.2f} ms   ({1e3/m2:6.1f} tok/s)")
     print(f"    first / last step        {pass2[0]:8.2f} / {pass2[-1]:8.2f} ms")
     print(f"  compile share of the cold pass: {100 * (m1 - m2) / m1:.1f}%")
-    print("  50 tok/s is real time at this token rate; P4 asks for >= 30")
+    print("  50 tok/s is real time at this token rate; the target is >= 30")
 
     tok_s = 1e3 / m2
     assert tok_s > 0
     # Reported, never xfailed: an unmet target gets a number and an explanation.
     if tok_s < 30:
-        print(f"  BELOW the P4 target of 30 tok/s -- {tok_s:.1f} warm. P6 has the plan.")
+        print(f"  BELOW the 30 tok/s target -- {tok_s:.1f} warm. Trace capture is the lever.")
 
 
 @needs_weights
@@ -178,7 +178,7 @@ def test_device_decode_throughput_fixed_cache(device):
     print(f"  prefill {prefix_len} tokens         {prefill_ms:8.2f} ms")
     print(f"  decode step, mean of {n_steps}     {mean_ms:8.2f} ms   ({tok_s:6.1f} tok/s)")
     print(f"    first / last step        {per_step[0]:8.2f} / {per_step[-1]:8.2f} ms")
-    print(f"  P4 target is >= 30 tok/s; 50 tok/s is real time at this token rate")
+    print(f"  target is >= 30 tok/s; 50 tok/s is real time at this token rate")
     assert tok_s > 0
 
 
