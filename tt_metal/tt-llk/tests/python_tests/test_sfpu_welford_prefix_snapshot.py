@@ -4,28 +4,22 @@
 """Single-point, non-perturbing-before-capture BH Welford differential."""
 
 from dataclasses import dataclass
+
 import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation
-from helpers.llk_params import PerfRunType
+from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import TemplateParameter
 from helpers.tilize_untilize import tilize_block, untilize_block
 
-@dataclass
-class UIntTemplate(TemplateParameter):
-    name: str
-    value: int
-    def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t {self.name} = {self.value}u;"
-
 
 @dataclass
 class TraceImplTemplate(TemplateParameter):
     trace_impl: int
+
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t TRACE_IMPL = {self.trace_impl}u;"
 
@@ -33,25 +27,50 @@ class TraceImplTemplate(TemplateParameter):
 @dataclass
 class TraceNTemplate(TemplateParameter):
     trace_n: int
+
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t TRACE_N = {self.trace_n}u;"
 
+
 def _decode(tiles, tile):
-    rows = tiles[tile * 32: tile * 32 + 4, :16:2]
+    rows = tiles[tile * 32 : tile * 32 + 4, :16:2]
     return rows.reshape(2, 2, 8).transpose(1, 2).flatten().float()
+
 
 def _run(impl, n):
     torch.manual_seed(20260814)
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     input_2d = torch.empty((32, 32), dtype=torch.bfloat16).uniform_(-4.0, 4.0)
-    source = tilize_block(input_2d.flatten(), [32, 32], stimuli_format=formats.input_format).flatten()
-    config = TestConfig("sources/sfpu_welford_prefix_snapshot.cpp", formats,
-        templates=[UIntTemplate("TRACE_IMPL", impl), UIntTemplate("TRACE_N", n)], runtimes=[],
-        variant_stimuli=StimuliConfig(source, formats.input_format, torch.zeros_like(source), formats.input_format,
-            formats.output_format, tile_count_A=1, tile_count_B=1, tile_count_res=9),
-        dest_acc=DestAccumulation.No, unpack_to_dest=False, disable_format_inference=True, compile_time_formats=True)
-    tiles = untilize_block(torch.tensor(config.run().result, dtype=torch.bfloat16), formats.output_format, [288, 32])
+    source = tilize_block(
+        input_2d.flatten(), [32, 32], stimuli_format=formats.input_format
+    ).flatten()
+    config = TestConfig(
+        "sources/sfpu_welford_prefix_snapshot.cpp",
+        formats,
+        templates=[TraceImplTemplate(impl), TraceNTemplate(n)],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            source,
+            formats.input_format,
+            torch.zeros_like(source),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=9,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+        disable_format_inference=True,
+        compile_time_formats=True,
+    )
+    tiles = untilize_block(
+        torch.tensor(config.run().result, dtype=torch.bfloat16),
+        formats.output_format,
+        [288, 32],
+    )
     return input_2d, torch.stack([_decode(tiles, index) for index in range(9)])
+
 
 IMPLEMENTATIONS = [
     (0, "handwritten_direct"),
@@ -68,12 +87,26 @@ def test_sfpu_welford_prefix_snapshot(impl, label, n):
     input_2d, observed = _run(impl, n)
     expected_mean = input_2d[:n].float().mean(dim=0)
     expected_m2 = ((input_2d[:n].float() - expected_mean) ** 2).sum(dim=0)
-    names = ["LREG0", "LREG1", "LREG2", "LREG3", "LREG4", "LREG5", "LREG6", "LREG7", "LREG11"]
+    names = [
+        "LREG0",
+        "LREG1",
+        "LREG2",
+        "LREG3",
+        "LREG4",
+        "LREG5",
+        "LREG6",
+        "LREG7",
+        "LREG11",
+    ]
     for index, name in enumerate(names):
-        print(f"PREFIX_ABI impl={label} n={n} reg={name} value0={observed[index,0].item():.7g}")
+        print(
+            f"PREFIX_ABI impl={label} n={n} reg={name} value0={observed[index,0].item():.7g}"
+        )
     mean_error = (observed[4] - expected_mean).abs().max().item()
     m2_error = (observed[5] - expected_m2).abs().max().item()
-    print(f"PREFIX_CORRECTNESS impl={label} n={n} mean_max_abs={mean_error:.7g} m2_max_abs={m2_error:.7g}")
+    print(
+        f"PREFIX_CORRECTNESS impl={label} n={n} mean_max_abs={mean_error:.7g} m2_max_abs={m2_error:.7g}"
+    )
     assert torch.allclose(observed[4], expected_mean, rtol=2e-2, atol=2e-2)
     assert torch.allclose(observed[5], expected_m2, rtol=3e-2, atol=3e-2)
 
@@ -91,7 +124,9 @@ def test_sfpu_welford_device_profile(perf_report, impl, label):
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     torch.manual_seed(20260814)
     input_2d = torch.empty((32, 32), dtype=torch.bfloat16).uniform_(-4.0, 4.0)
-    source = tilize_block(input_2d.flatten(), [32, 32], stimuli_format=formats.input_format).flatten()
+    source = tilize_block(
+        input_2d.flatten(), [32, 32], stimuli_format=formats.input_format
+    ).flatten()
     config = PerfConfig(
         "sources/sfpu_welford_prefix_snapshot.cpp",
         formats,
@@ -99,8 +134,16 @@ def test_sfpu_welford_device_profile(perf_report, impl, label):
         # Do not fold diagnostic SFPSTORE captures into the timed math zone.
         templates=[TraceImplTemplate(impl), TraceNTemplate(0)],
         runtimes=[],
-        variant_stimuli=StimuliConfig(source, formats.input_format, torch.zeros_like(source), formats.input_format,
-            formats.output_format, tile_count_A=1, tile_count_B=1, tile_count_res=9),
+        variant_stimuli=StimuliConfig(
+            source,
+            formats.input_format,
+            torch.zeros_like(source),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=9,
+        ),
         dest_acc=DestAccumulation.No,
         unpack_to_dest=False,
         disable_format_inference=True,

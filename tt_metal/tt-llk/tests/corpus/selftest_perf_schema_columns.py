@@ -24,6 +24,20 @@ runtime check sees until a device session already burned:
      ONE literal list with no conditional appends, so every (op, impl) node
      emits identical columns by construction.
 
+Lane FQ (FO-1/FO-2) extended the scan from test_variant_parameters.py to ALL
+python_tests files and ALL field-definition forms, and added the commit-time
+twin of the runtime variant-hash tripwire:
+
+  3. VALUE-COMPLETE REPRS.  A parameter class that subclasses the @dataclass
+     base WITHOUT @dataclass and stores values in a hand-written __init__
+     inherits the base's EMPTY repr — the variant hash (which keys str() of
+     the templates list) cannot see its values, and .build_complete reuses
+     the WRONG impl's ELF within one ARTEFACTS_DIR (ReciprocalImpl /
+     TypecastImpl, lane FO finding).  Every param class must be @dataclass
+     with annotated fields and no hand-written __init__.  The runtime
+     tripwire (helpers/param_repr_gate.py, called by generate_variant_hash)
+     is proven here to FAIL LOUDLY on an injected empty-repr param.
+
 Pure AST/static checks — no torch, no pandas, no device.  Run standalone or
 from the sweep wrappers; exits nonzero on any failure.
 """
@@ -37,6 +51,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 PYTESTS = HERE.parent / "python_tests"
 PARAMS_PY = PYTESTS / "helpers" / "test_variant_parameters.py"
 SCHEMA_PY = PYTESTS / "helpers" / "perf" / "schema.py"
+REPR_GATE_PY = PYTESTS / "helpers" / "param_repr_gate.py"
 COVERAGE_PERF_PY = PYTESTS / "perf_sfpu_coverage.py"
 
 FAILS = []
@@ -67,6 +82,115 @@ def param_class_fields(tree):
         ]
         out[node.name] = fields
     return out
+
+
+def iter_test_sources():
+    """Every python_tests .py file (tests, perf modules, helpers), venv excluded."""
+    for path in sorted(PYTESTS.rglob("*.py")):
+        if ".venv" in path.parts:
+            continue
+        yield path
+
+
+def param_class_decls(tree):
+    """All param ClassDef declarations in a tree, with every field-def form.
+
+    Yields (class_name, node, ann_fields, init_self_attrs, has_dataclass,
+    has_own_init):
+      ann_fields      annotated class-level fields (the dataclass form)
+      init_self_attrs ``self.X = ...`` targets in a hand-written __init__ /
+                      __post_init__ (the form the dataclass repr cannot see)
+    """
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        bases = {b.id for b in node.bases if isinstance(b, ast.Name)}
+        bases |= {b.attr for b in node.bases if isinstance(b, ast.Attribute)}
+        if not bases & {"TemplateParameter", "RuntimeParameter"}:
+            continue
+        has_dataclass = any(
+            (isinstance(d, ast.Name) and d.id == "dataclass")
+            or (
+                isinstance(d, ast.Call)
+                and isinstance(d.func, ast.Name)
+                and d.func.id == "dataclass"
+            )
+            for d in node.decorator_list
+        )
+        ann_fields = [
+            stmt.target.id
+            for stmt in node.body
+            if isinstance(stmt, ast.AnnAssign)
+            and isinstance(stmt.target, ast.Name)
+            and not stmt.target.id.startswith("_")
+        ]
+        init_self_attrs = []
+        has_own_init = False
+        for stmt in node.body:
+            if isinstance(stmt, ast.FunctionDef) and stmt.name in (
+                "__init__",
+                "__post_init__",
+            ):
+                if stmt.name == "__init__":
+                    has_own_init = True
+                for sub in ast.walk(stmt):
+                    if isinstance(sub, ast.Assign):
+                        for target in sub.targets:
+                            if (
+                                isinstance(target, ast.Attribute)
+                                and isinstance(target.value, ast.Name)
+                                and target.value.id == "self"
+                                and not target.attr.startswith("_")
+                            ):
+                                init_self_attrs.append(target.attr)
+        yield node.name, node, ann_fields, init_self_attrs, has_dataclass, has_own_init
+
+
+def scan_all_param_classes(trees):
+    """Scan (rel_path -> ast tree) pairs; return (field_owners, offenders).
+
+    field_owners: field -> [(class, rel_path)] over BOTH field-def forms
+                  (annotated fields and __init__ self-assignments), so a
+                  test-local class whose only 'fields' live in __init__ still
+                  participates in the uniqueness check.
+    offenders:    [(class, rel_path, reason)] for the empty-repr pattern —
+                  a param class that is not @dataclass, hand-writes __init__,
+                  or stores repr-invisible state without any annotated field.
+    """
+    field_owners = defaultdict(list)
+    offenders = []
+    for rel, tree in trees:
+        for name, _node, ann, init_attrs, has_dc, has_init in param_class_decls(tree):
+            for f in dict.fromkeys(ann + init_attrs):
+                field_owners[f].append((name, rel))
+            if not has_dc:
+                offenders.append(
+                    (
+                        name,
+                        rel,
+                        "subclasses the @dataclass base WITHOUT @dataclass "
+                        "(inherits the EMPTY repr -> value-blind variant hash)",
+                    )
+                )
+            elif has_init:
+                offenders.append(
+                    (
+                        name,
+                        rel,
+                        "hand-writes __init__ (values invisible to the "
+                        "dataclass repr the variant hash keys)",
+                    )
+                )
+            elif init_attrs and not ann:
+                offenders.append(
+                    (
+                        name,
+                        rel,
+                        f"stores state {sorted(set(init_attrs))} with no "
+                        "annotated field (repr-invisible)",
+                    )
+                )
+    return field_owners, offenders
 
 
 def load_schema_constants():
@@ -110,6 +234,51 @@ def main():
         not clashes,
         "no parameter field shadows a fixed sweep/key header "
         f"from helpers/perf/schema.py: {clashes or 'clean'}",
+    )
+
+    # --- invariant 1b (lane FQ): the same, across ALL python_tests files ----
+    trees = []
+    for path in iter_test_sources():
+        try:
+            trees.append(
+                (path.relative_to(PYTESTS).as_posix(), ast.parse(path.read_text()))
+            )
+        except SyntaxError as exc:
+            check(False, f"{path} parses ({exc})")
+    all_fields, offenders = scan_all_param_classes(trees)
+    check(
+        len(all_fields) > 40,
+        f"scanned a real global field catalog ({len(all_fields)} fields, "
+        f"{len(trees)} files)",
+    )
+    # Identical re-declarations of one class name (a param copied across test
+    # files) are one owner; different class names sharing a field are the
+    # duplicate-column hazard (mirrors test_perf_header_gate.py).
+    global_dupes = {
+        f: sorted(set(owners))
+        for f, owners in all_fields.items()
+        if len({cls for cls, _ in owners}) > 1
+    }
+    check(
+        not global_dupes,
+        "no two parameter classes ANYWHERE (test-local included, both "
+        f"field-def forms) share a field name: {global_dupes or 'clean'}",
+    )
+    global_reserved = {
+        f: sorted(set(owners)) for f, owners in all_fields.items() if f in reserved
+    }
+    check(
+        not global_reserved,
+        "no test-local parameter field shadows a pipeline-owned header: "
+        f"{global_reserved or 'clean'}",
+    )
+
+    # --- invariant 3 (lane FQ, FO-2): value-complete reprs ------------------
+    check(
+        not offenders,
+        "every parameter class is a @dataclass with annotated fields and no "
+        "hand-written __init__ (empty-repr params hash value-blind and reuse "
+        f"the wrong impl's ELF): {offenders or 'clean'}",
     )
 
     # FM-F1 regression pins: the trio that used to collide on 'value'.
@@ -180,6 +349,92 @@ def main():
             "the coverage module's combined parameter columns are "
             f"duplicate-free: {cols_dupes or 'clean'}",
         )
+
+    # --- injection negatives: the guards must FAIL LOUDLY when seeded -------
+    # (a) AST scan flags the exact ReciprocalImpl pattern (non-@dataclass
+    #     subclass, hand-written __init__, self.value state).
+    injected = (
+        "class EvilImpl(TemplateParameter):\n"
+        "    def __init__(self, value: int):\n"
+        "        self.value = value\n"
+        "    def convert_to_cpp(self):\n"
+        "        return ''\n"
+    )
+    inj_fields, inj_off = scan_all_param_classes(
+        [("injected_evil.py", ast.parse(injected))]
+    )
+    check(
+        any(cls == "EvilImpl" for cls, _, _ in inj_off),
+        "AST scan FLAGS an injected empty-repr param class (EvilImpl pattern)",
+    )
+    check(
+        ("EvilImpl", "injected_evil.py") in inj_fields.get("value", []),
+        "AST scan still counts the injected __init__-only field for the "
+        "uniqueness check (all field-def forms)",
+    )
+    # (b) dup field across two DIFFERENT classes is flagged by the same scan.
+    dup_src = (
+        "class A(TemplateParameter):\n    value: int\n"
+        "class B(RuntimeParameter):\n    value: int\n"
+    )
+    dup_fields, _ = scan_all_param_classes([("injected_dup.py", ast.parse(dup_src))])
+    check(
+        len({cls for cls, _ in dup_fields.get("value", [])}) == 2,
+        "AST scan sees an injected cross-class duplicate field",
+    )
+
+    # (c) The RUNTIME tripwire (generate_variant_hash calls it) raises loudly
+    #     on an empty-repr instance and stays quiet on healthy params.
+    import importlib.util
+    from dataclasses import dataclass
+
+    spec = importlib.util.spec_from_file_location("param_repr_gate", REPR_GATE_PY)
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+
+    @dataclass
+    class _Base:
+        pass
+
+    class _EvilImpl(_Base):  # the ReciprocalImpl defect, reconstructed
+        def __init__(self, value):
+            self.value = value
+
+    @dataclass
+    class _GoodImpl(_Base):
+        good_impl: int = 1
+
+    @dataclass
+    class _Parameterless(_Base):  # EN_DEST_REUSE shape: no state to hide
+        pass
+
+    raised = None
+    try:
+        gate.assert_value_complete_reprs([_GoodImpl(2), _EvilImpl(3)], "selftest")
+    except gate.ParamReprError as exc:
+        raised = str(exc)
+    check(
+        raised is not None and "_EvilImpl" in (raised or ""),
+        "runtime tripwire RAISES ParamReprError naming the injected "
+        "empty-repr param (loud, not a warning)",
+    )
+    ok = True
+    try:
+        gate.assert_value_complete_reprs([_GoodImpl(2), _Parameterless()], "selftest")
+    except gate.ParamReprError:
+        ok = False
+    check(
+        ok,
+        "runtime tripwire passes healthy dataclass params AND legitimately "
+        "parameterless ones (EN_DEST_REUSE shape)",
+    )
+    check(
+        REPR_GATE_PY.read_text().find("assert_value_complete_reprs") != -1
+        and "assert_value_complete_reprs(self.templates"
+        in (PYTESTS / "helpers" / "test_config.py").read_text(),
+        "generate_variant_hash actually wires the tripwire "
+        "(assert_value_complete_reprs on self.templates)",
+    )
 
     print()
     if FAILS:

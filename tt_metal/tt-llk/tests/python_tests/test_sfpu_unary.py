@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from dataclasses import dataclass
 from itertools import chain, product
 
 import pytest
@@ -63,14 +64,20 @@ SUPPORTED_FAST_MODE_OPS = [
 ]
 
 
+@dataclass
 class ReciprocalImpl(TemplateParameter):
-    """Select the production or fresh semantic-C++ reciprocal body."""
+    """Select the production or fresh semantic-C++ reciprocal body.
 
-    def __init__(self, value: int):
-        self.value = value
+    MUST stay a @dataclass with an annotated field: the variant hash keys the
+    dataclass ``__repr__`` of every template, so a hand-written ``__init__``
+    (empty inherited repr) makes every impl hash identically and lets
+    ``.build_complete`` reuse the wrong impl's ELF (lane FO/FQ finding).
+    """
+
+    reciprocal_impl: int
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int RECIPROCAL_IMPL = {self.value};"
+        return f"constexpr int RECIPROCAL_IMPL = {self.reciprocal_impl};"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

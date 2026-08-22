@@ -29,13 +29,12 @@ from dataclasses import dataclass
 
 import pytest
 import torch
+from helpers import crosslane_oracle as co
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import TemplateParameter
-
-from helpers import crosslane_oracle as co
 
 M32 = 0xFFFFFFFF
 ELEMS = 1024
@@ -44,12 +43,13 @@ LANES = 32
 
 
 @dataclass
-class UIntTemplate(TemplateParameter):
-    name: str
-    value: int
+class PROBE_MODE(TemplateParameter):
+    # One dedicated param class per constexpr (field name = unique CSV column
+    # header, FM-F1 contract) instead of a generic name/value template.
+    probe_mode: int
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t {self.name} = {self.value}u;"
+        return f"constexpr std::uint32_t PROBE_MODE = {self.probe_mode}u;"
 
 
 def run_probe(mode, input_vec):
@@ -58,7 +58,7 @@ def run_probe(mode, input_vec):
     config = TestConfig(
         "sources/sfpu_crosslane_probe.cpp",
         formats,
-        templates=[UIntTemplate("PROBE_MODE", mode)],
+        templates=[PROBE_MODE(mode)],
         runtimes=[],
         variant_stimuli=StimuliConfig(
             src,
@@ -104,8 +104,9 @@ def cal():
     for pos, v in enumerate(rowtag):
         if 0x00A00000 <= v < 0x00A00000 + ROWS:
             row_positions.setdefault(v - 0x00A00000, []).append(pos)
-    assert sorted(row_positions.keys()) == list(range(ROWS)), (
-        f"rowtag rows found: {sorted(row_positions.keys())}")
+    assert sorted(row_positions.keys()) == list(
+        range(ROWS)
+    ), f"rowtag rows found: {sorted(row_positions.keys())}"
     for i, positions in row_positions.items():
         assert len(positions) == LANES, f"row {i}: {len(positions)} tagged"
 
@@ -115,7 +116,8 @@ def cal():
         # vConstTileId == 2 * lane (lane-EX claim) -- re-proven here on-sim:
         assert sorted(tags) == [2 * l for l in range(LANES)], (
             f"row {i}: vConstTileId tags {sorted(tags)} != 2*lane -- "
-            "the tile-id claim FAILED on the pinned sim (finding!)")
+            "the tile-id claim FAILED on the pinned sim (finding!)"
+        )
         for k, p in enumerate(positions):
             T[(i, tags[k] // 2)] = p
 
@@ -160,16 +162,18 @@ def check_rows(mode, got, want, note=""):
             print(f"  row={i} lane={l} got={g:08x} want={w:08x}")
         for i in sorted(want.keys()):
             print(f"  got  row{i}: " + " ".join(f"{v:08x}" for v in got[i]))
-            print(f"  want row{i}: " + " ".join(
-                "????????" if v is None else f"{v & M32:08x}"
-                for v in want[i]))
+            print(
+                f"  want row{i}: "
+                + " ".join(
+                    "????????" if v is None else f"{v & M32:08x}" for v in want[i]
+                )
+            )
     assert not bad, f"mode {mode} {note}: sim disagrees with oracle"
 
 
 def stimuli(nrows, tag):
     """(name, rows) pairs: sentinel + varied genericity twin."""
-    sent = {i: [s ^ (i << 16) for s in co.lane_id_sentinels(tag)]
-            for i in range(nrows)}
+    sent = {i: [s ^ (i << 16) for s in co.lane_id_sentinels(tag)] for i in range(nrows)}
     varied = {i: co.varied_stimulus(i, seed=tag + 100) for i in range(nrows)}
     return [("sentinel", sent), ("varied", varied)]
 
@@ -191,9 +195,11 @@ def swap_expected(a_vals, b_vals, mod, state=None):
 
 
 def adjudicate_swap(mode, got_a, got_b, cands, note):
-    matches = [k for k, (ea, eb) in cands.items()
-               if got_a == [x & M32 for x in ea]
-               and got_b == [x & M32 for x in eb]]
+    matches = [
+        k
+        for k, (ea, eb) in cands.items()
+        if got_a == [x & M32 for x in ea] and got_b == [x & M32 for x in eb]
+    ]
     if not matches:
         print(f"SWAP ROLE: mode={mode} {note}: NEITHER candidate matches")
         print("  got_a: " + " ".join(f"{v:08x}" for v in got_a))
@@ -204,12 +210,15 @@ def adjudicate_swap(mode, got_a, got_b, cands, note):
         w = matches[0]
         if SWAP_ROLE["winner"] is None:
             SWAP_ROLE["winner"] = w
-            print(f"SWAP-ROLE-FACT: builtin arg0 plays "
-                  f"{'VC' if w == 'A' else 'VD'} (candidate {w})")
+            print(
+                f"SWAP-ROLE-FACT: builtin arg0 plays "
+                f"{'VC' if w == 'A' else 'VD'} (candidate {w})"
+            )
         else:
             assert SWAP_ROLE["winner"] == w, (
                 f"swap role fact flipped: {SWAP_ROLE['winner']} vs {w} "
-                f"at mode {mode} {note} (finding)")
+                f"at mode {mode} {note} (finding)"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -241,8 +250,8 @@ def test_rot_family(cal):
 
 @pytest.mark.parametrize("mode,mod", [(5, 0), (6, 1), (7, 2)])
 def test_copy4_family(cal, mode, mod):
-    nin = 5 if mod == 2 else 4
-    for name, rows in stimuli(nin, 5 + mode):
+    n_in = 5 if mod == 2 else 4
+    for name, rows in stimuli(n_in, 5 + mode):
         out = run_probe(mode, build_input(cal, rows))
         got = read_rows(cal, out, range(4))
         # kernel feeds (r1, r2, r3, r0_or_vc); pre-state L0..L3 = r0..r3
@@ -251,8 +260,7 @@ def test_copy4_family(cal, mode, mod):
         elif mod == 1:
             e = co.shft2_chained_copy4(rows[0], rows[1], rows[2], rows[3])
         else:
-            e = co.shft2_ror1_and_copy4(rows[0], rows[1], rows[2], rows[3],
-                                        rows[4])
+            e = co.shft2_ror1_and_copy4(rows[0], rows[1], rows[2], rows[3], rows[4])
         check_rows(mode, got, {i: e[i] for i in range(4)}, f"[{name}]")
 
 
@@ -264,8 +272,9 @@ def test_swap_rowgroup_mods(cal, mode, mods):
         for k, mod in enumerate(mods):
             a, b = rows[2 * k], rows[2 * k + 1]
             cands = swap_expected(a, b, mod)
-            adjudicate_swap(mode, got[2 * k], got[2 * k + 1], cands,
-                            f"[{name}] mod{mod}")
+            adjudicate_swap(
+                mode, got[2 * k], got[2 * k + 1], cands, f"[{name}] mod{mod}"
+            )
 
 
 def test_swap_unconditional_and_minmax(cal):
@@ -295,8 +304,7 @@ def test_exchange_flip_global(cal):
 def test_lane_masked_flip(cal):
     # SFPCONFIG Mod1=8, Imm16=0x4444 -> EXCHANGE bit set in columns 1,3,5,7
     st = co.LaneState()
-    co.sfpconfig_write(st, 15, [co.LC_EXCHANGE_SRCB_SRCC] * LANES,
-                       imm16=0x4444, mod1=8)
+    co.sfpconfig_write(st, 15, [co.LC_EXCHANGE_SRCB_SRCC] * LANES, imm16=0x4444, mod1=8)
     for name, rows in stimuli(4, 32):
         out = run_probe(12, build_input(cal, rows))
         got = read_rows(cal, out, range(4))
@@ -336,13 +344,14 @@ def test_indexed_swap(cal):
         # candidate A kept as the falsification arm.
         exp = {}
         for tie in ("sim", "doc"):
-            b = co.sfpswap_indexed(rows[1], rows[0], rows[3], rows[2], 1,
-                                   tie=tie)
+            b = co.sfpswap_indexed(rows[1], rows[0], rows[3], rows[2], 1, tie=tie)
             exp[tie] = (b[1], b[0], b[3], b[2])
         if exp["sim"] != exp["doc"]:
-            diff = [i for i in range(4) if exp['sim'][i] != exp['doc'][i]]
-            print(f"TIE-DIVERGENCE [{name}]: doc and sim tie models differ "
-                  f"on rows {diff} (companion movement on equal keys)")
+            diff = [i for i in range(4) if exp["sim"][i] != exp["doc"][i]]
+            print(
+                f"TIE-DIVERGENCE [{name}]: doc and sim tie models differ "
+                f"on rows {diff} (companion movement on equal keys)"
+            )
         bad = []
         for i in range(4):
             for l in range(LANES):
@@ -351,21 +360,22 @@ def test_indexed_swap(cal):
                     bad.append((i, l, got[i][l], w))
         if bad:
             for i in range(4):
-                print(f"  got row{i}:  " + " ".join(f"{x:08x}"
-                                                    for x in got[i]))
-                print(f"  sim row{i}:  " + " ".join(f"{x & M32:08x}"
-                                                    for x in exp['sim'][i]))
+                print(f"  got row{i}:  " + " ".join(f"{x:08x}" for x in got[i]))
+                print(
+                    f"  sim row{i}:  "
+                    + " ".join(f"{x & M32:08x}" for x in exp["sim"][i])
+                )
         assert not bad, (
             f"indexed swap [{name}]: sim run disagrees with the sim-tie "
-            f"oracle model in {len(bad)} lanes (finding)")
+            f"oracle model in {len(bad)} lanes (finding)"
+        )
 
 
 def test_config_broadcast(cal):
     for name, rows in stimuli(2, 34):
         out = run_probe(14, build_input(cal, rows))
         got = read_rows(cal, out, range(2))
-        want = {0: co.sfpconfig_broadcast(rows[0]),
-                1: co.sfpconfig_broadcast(rows[1])}
+        want = {0: co.sfpconfig_broadcast(rows[0]), 1: co.sfpconfig_broadcast(rows[1])}
         check_rows(14, got, want, f"[{name}]")
 
 
@@ -373,8 +383,10 @@ def test_reduce_int_composition(cal):
     for name, rows in stimuli(1, 35):
         out = run_probe(15, build_input(cal, rows))
         got = read_rows(cal, out, range(2))
-        want = {0: co.subvec_reduce_tree(rows[0], "add"),
-                1: co.reduce32_tree(rows[0], "add")}
+        want = {
+            0: co.subvec_reduce_tree(rows[0], "add"),
+            1: co.reduce32_tree(rows[0], "add"),
+        }
         check_rows(15, got, want, f"[{name}]")
 
 
@@ -384,7 +396,7 @@ def _sort4_networks(regs):
     outs = {}
     for role, min_first in (("A", False), ("B", True)):
         vs = [list(r) for r in regs]
-        for (i, j) in ((0, 1), (2, 3), (0, 2), (1, 3), (1, 2)):
+        for i, j in ((0, 1), (2, 3), (0, 2), (1, 3), (1, 2)):
             for l in range(LANES):
                 a, b = vs[i][l], vs[j][l]
                 lo, hi = co._ce_pair(a, b, min_first=True)
@@ -398,13 +410,16 @@ def test_sort4_register_axis(cal):
         out = run_probe(16, build_input(cal, rows))
         got = read_rows(cal, out, range(4))
         cands = _sort4_networks([rows[i] for i in range(4)])
-        matches = [k for k, vs in cands.items()
-                   if all(got[i] == [x & M32 for x in vs[i]]
-                          for i in range(4))]
+        matches = [
+            k
+            for k, vs in cands.items()
+            if all(got[i] == [x & M32 for x in vs[i]] for i in range(4))
+        ]
         assert matches, f"sort4 [{name}]: no candidate matches"
         if len(matches) == 1 and SWAP_ROLE["winner"] is not None:
-            assert matches[0] == SWAP_ROLE["winner"], (
-                f"sort4 role {matches[0]} contradicts {SWAP_ROLE['winner']}")
+            assert (
+                matches[0] == SWAP_ROLE["winner"]
+            ), f"sort4 role {matches[0]} contradicts {SWAP_ROLE['winner']}"
 
 
 def test_sort4_transp_sandwich(cal):
@@ -417,9 +432,11 @@ def test_sort4_transp_sandwich(cal):
         for k in cands:
             full = cands[k] + [[0] * LANES] * 4
             cands[k] = co.sfptransp(full)[:4]
-        matches = [k for k, vs in cands.items()
-                   if all(got[i] == [x & M32 for x in vs[i]]
-                          for i in range(4))]
+        matches = [
+            k
+            for k, vs in cands.items()
+            if all(got[i] == [x & M32 for x in vs[i]] for i in range(4))
+        ]
         assert matches, f"sort4-sandwich [{name}]: no candidate matches"
 
 
@@ -452,8 +469,10 @@ def test_companion_roundtrip_and_aliasing(cal):
         # packed word: lo16 <- sim16_load(in0), hi16 <- sim16_load(in1).
         # For rows < 8 the Dst.md Adj algebra makes the 16b view coincide
         # with the raw (BF16-swizzled) HIGH half of the same-address datum.
-        c = [((co.sim16_load(in1[l]) << 16) | co.sim16_load(in0[l])) & M32
-             for l in range(LANES)]
+        c = [
+            ((co.sim16_load(in1[l]) << 16) | co.sim16_load(in0[l])) & M32
+            for l in range(LANES)
+        ]
         # ADJUDICATED MODEL (pinned sim, this fp32-acc config): the raw
         # 16-bit store modes (UINT16/LO16_ONLY/HI16_ONLY) write their OWN
         # physical bank cell (Dst.md Adj16 aliasing, dst_32bit_addr_en=0
@@ -463,18 +482,21 @@ def test_companion_roundtrip_and_aliasing(cal):
         # roundtrip (row 9) sees the stored halves.
         want = {
             0: c,
-            4: base,             # LO16_ONLY store landed in its own cell
-            5: base,             # HI16_ONLY store likewise
-            6: [0] * LANES,      # UINT16 store likewise
-            9: c,                # 16b-view store->load roundtrip exact
+            4: base,  # LO16_ONLY store landed in its own cell
+            5: base,  # HI16_ONLY store likewise
+            6: [0] * LANES,  # UINT16 store likewise
+            9: c,  # 16b-view store->load roundtrip exact
         }
-        check_rows(18, {k: got[k] for k in want}, want,
-                   f"[{name}] adjudicated 16b-view model")
-        print(f"ALIAS-FACT [{name}]: pinned sim 16b raw view rides the "
-              "Dst.md Adj16 bank cells (reads at rows<8 = swizzled HI "
-              "halves; stores never clobber the same-address 32b datum); "
-              "BF16-format stores instead take the 32b write path -- see "
-              "the RMW probe")
+        check_rows(
+            18, {k: got[k] for k in want}, want, f"[{name}] adjudicated 16b-view model"
+        )
+        print(
+            f"ALIAS-FACT [{name}]: pinned sim 16b raw view rides the "
+            "Dst.md Adj16 bank cells (reads at rows<8 = swizzled HI "
+            "halves; stores never clobber the same-address 32b datum); "
+            "BF16-format stores instead take the 32b write path -- see "
+            "the RMW probe"
+        )
 
 
 def test_bf16_store_rmw_probe(cal):
@@ -496,30 +518,39 @@ def test_bf16_store_rmw_probe(cal):
     for l in range(LANES):
         low = 0x0001 + (l << 4) if l % 2 == 0 else 0x3F80 + l  # denorm/normal
         base0.append(((0x4210 + l) << 16) | low)
-    base1 = [((0x4310 + l) << 16) | (0x0002 + (l << 4) if l % 2 else 0x3E80 + l)
-             for l in range(LANES)]
+    base1 = [
+        ((0x4310 + l) << 16) | (0x0002 + (l << 4) if l % 2 else 0x3E80 + l)
+        for l in range(LANES)
+    ]
     val = [co.f32_to_bits(1.0 + l) for l in range(LANES)]  # bf16-exact
     rows = {0: base0, 1: base1, 3: val}
     out = run_probe(30, build_input(cal, rows))
     got = read_rows(cal, out, range(4))
     want_plain = [(val[l] & 0xFFFF0000) for l in range(LANES)]  # low ZEROED
-    want_window = [(val[l] & 0xFFFF0000) | (base1[l] & 0xFFFF)
-                   for l in range(LANES)]                        # low PRESERVED
+    want_window = [
+        (val[l] & 0xFFFF0000) | (base1[l] & 0xFFFF) for l in range(LANES)
+    ]  # low PRESERVED
     for l in range(LANES):
         doc_model = (val[l] & 0xFFFF0000) | (base0[l] & 0xFFFF)
         canon = val[l] & 0xFFFF0000 if (base0[l] & 0x7F80) == 0 else doc_model
         if got[0][l] not in (want_plain[l],):
-            print(f"BF16-RMW lane{l}: got={got[0][l]:08x} "
-                  f"sim={want_plain[l]:08x} doc={doc_model:08x} "
-                  f"canon={canon:08x}")
+            print(
+                f"BF16-RMW lane{l}: got={got[0][l]:08x} "
+                f"sim={want_plain[l]:08x} doc={doc_model:08x} "
+                f"canon={canon:08x}"
+            )
     assert got[0] == want_plain, (
         "plain BF16 store: sim no longer zeroes the paired low half "
-        "(model changed -- finding)")
+        "(model changed -- finding)"
+    )
     assert got[1] == [w & M32 for w in want_window], (
         "ENABLE_DEST_INDEX BF16 store: the sim low-half-preserve special "
         "case (TopK-motivated, hardcoding-audit open question) changed "
-        "(finding)")
-    print("BF16-RMW-FACT: pinned sim zeroes the paired low half on plain "
-          "BF16 stores and PRESERVES it under ENABLE_DEST_INDEX; doc says "
-          "always-preserve, #2475 says silicon canonicalizes -- three-way "
-          "divergence recorded, silicon adjudication pending")
+        "(finding)"
+    )
+    print(
+        "BF16-RMW-FACT: pinned sim zeroes the paired low half on plain "
+        "BF16 stores and PRESERVES it under ENABLE_DEST_INDEX; doc says "
+        "always-preserve, #2475 says silicon canonicalizes -- three-way "
+        "divergence recorded, silicon adjudication pending"
+    )

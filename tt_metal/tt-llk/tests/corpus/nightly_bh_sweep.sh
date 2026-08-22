@@ -112,6 +112,15 @@ python3 "$HERE/selftest_e2e_metric.py" > "$EV/selftest-e2e-metric.txt" 2>&1 \
   || { echo "FATAL: e2e-metric (dual-zone verdict) self-test failed (see $EV/selftest-e2e-metric.txt)"; exit 2; }
 python3 "$HERE/selftest_perf_schema_columns.py" > "$EV/selftest-perf-schema-columns.txt" 2>&1 \
   || { echo "FATAL: perf-schema-columns self-test failed (see $EV/selftest-perf-schema-columns.txt)"; exit 2; }
+# Upstream perf header gate (FO-1): schema catalog + global field uniqueness +
+# duplicate-param-type checks. FATAL so it can never drift silently again; a
+# missing tests venv is FATAL too (fail-closed).
+HDRGATE_PY="$HERE/../python_tests/.venv/bin/python"
+[ -x "$HDRGATE_PY" ] \
+  || { echo "FATAL: perf header gate needs the tests venv ($HDRGATE_PY missing)"; exit 2; }
+( cd "$HERE/../python_tests" && "$HDRGATE_PY" -m pytest -q test_perf_header_gate.py ) \
+  > "$EV/selftest-perf-header-gate.txt" 2>&1 \
+  || { echo "FATAL: perf header gate RED (see $EV/selftest-perf-header-gate.txt)"; exit 2; }
 # Record the conf-lint verdict (already enforced above, pre-source) in-evidence.
 { mv /tmp/nightly-selftest-conf-lint.$$ "$EV/selftest-conf-lint.txt" 2>/dev/null || true; }
 { mv /tmp/nightly-selftest-wrapper-lib.$$ "$EV/selftest-wrapper-lib.txt" 2>/dev/null || true; }

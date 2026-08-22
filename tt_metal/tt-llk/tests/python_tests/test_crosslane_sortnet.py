@@ -37,30 +37,48 @@ from dataclasses import dataclass
 
 import pytest
 import torch
+from helpers import crosslane_oracle as co
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import TemplateParameter
 
-from helpers import crosslane_oracle as co
-
 M32 = 0xFFFFFFFF
 ELEMS = 1024
 ROWS = 16
 LANES = 32
 
-FIXDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                      "crosslane_fixtures")
+FIXDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crosslane_fixtures")
+
+
+# One dedicated param class per constexpr (field name = unique CSV column
+# header, FM-F1 contract) instead of a generic name/value template passed
+# three times in one config (duplicate-column class, FO-1).
 
 
 @dataclass
-class UIntTemplate(TemplateParameter):
-    name: str
-    value: int
+class SORT_NET(TemplateParameter):
+    sort_net: int
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t {self.name} = {self.value}u;"
+        return f"constexpr std::uint32_t SORT_NET = {self.sort_net}u;"
+
+
+@dataclass
+class SORT_ORDER(TemplateParameter):
+    sort_order: int
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SORT_ORDER = {self.sort_order}u;"
+
+
+@dataclass
+class SORT_STAGES(TemplateParameter):
+    sort_stages: int
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SORT_STAGES = {self.sort_stages}u;"
 
 
 def run_probe(net, order, stages, input_vec):
@@ -70,9 +88,9 @@ def run_probe(net, order, stages, input_vec):
         "sources/sfpu_sortnet_probe.cpp",
         formats,
         templates=[
-            UIntTemplate("SORT_NET", net),
-            UIntTemplate("SORT_ORDER", order),
-            UIntTemplate("SORT_STAGES", stages),
+            SORT_NET(net),
+            SORT_ORDER(order),
+            SORT_STAGES(stages),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -175,8 +193,11 @@ def tie_free_keys(seed, n):
 
 def machines_sort8(order):
     """32 machines of 8; fixture seeds 51/52 on machines 0/1."""
-    fixt = [c for c in fixture_cases()
-            if not c["kv"] and c["n"] == 8 and c["order"] == order]
+    fixt = [
+        c
+        for c in fixture_cases()
+        if not c["kv"] and c["n"] == 8 and c["order"] == order
+    ]
     ms = []
     for m in range(LANES):
         if m < len(fixt):
@@ -187,8 +208,11 @@ def machines_sort8(order):
 
 
 def machines_sort32(order):
-    fixt = [c for c in fixture_cases()
-            if not c["kv"] and c["n"] == 32 and c["order"] == order]
+    fixt = [
+        c
+        for c in fixture_cases()
+        if not c["kv"] and c["n"] == 32 and c["order"] == order
+    ]
     ms = []
     for m in range(8):
         if m < len(fixt):
@@ -217,8 +241,7 @@ def machines_kv16():
 def test_sortnet8_stage(cal, order, stages):
     ms = machines_sort8(order)
     rows = {e: [ms[m][0][e] for m in range(LANES)] for e in range(8)}
-    out = run_probe(0, 0 if order == "asc" else 1, stages,
-                    build_input(cal, rows))
+    out = run_probe(0, 0 if order == "asc" else 1, stages, build_input(cal, rows))
     got = read_rows(cal, out, range(8))
     bad = []
     for m in range(LANES):
@@ -231,8 +254,9 @@ def test_sortnet8_stage(cal, order, stages):
             if got[e][m] != want[e] & M32:
                 bad.append((m, e, got[e][m], want[e] & M32))
     if bad:
-        print(f"SORTNET8 MISMATCH order={order} stages={stages}: "
-              f"{len(bad)} elements")
+        print(
+            f"SORTNET8 MISMATCH order={order} stages={stages}: " f"{len(bad)} elements"
+        )
         for m, e, g, w in bad[:16]:
             print(f"  machine={m} elem={e} got={g:08x} want={w:08x}")
     assert not bad
@@ -248,8 +272,7 @@ def test_sortnet32_stage(cal, order, stages):
         for l in range(LANES):
             r, c = l // 8, l % 8
             rows[g][l] = ms[c][0][r * 8 + g]
-    out = run_probe(1, 0 if order == "asc" else 1, stages,
-                    build_input(cal, rows))
+    out = run_probe(1, 0 if order == "asc" else 1, stages, build_input(cal, rows))
     got = read_rows(cal, out, range(8))
     # mid-sandwich truncations (7 and 11..12 boundaries) already close
     # the sandwich in the header, so the readout is always in element
@@ -267,8 +290,9 @@ def test_sortnet32_stage(cal, order, stages):
             if v != want[e] & M32:
                 bad.append((c, e, v, want[e] & M32))
     if bad:
-        print(f"SORTNET32 MISMATCH order={order} stages={stages}: "
-              f"{len(bad)} elements")
+        print(
+            f"SORTNET32 MISMATCH order={order} stages={stages}: " f"{len(bad)} elements"
+        )
         for c, e, g, w in bad[:16]:
             print(f"  machine={c} elem={e} got={g:08x} want={w:08x}")
     assert not bad
@@ -286,8 +310,7 @@ def test_sortnet16_kv_stage(cal, order, stages):
             r, c = l // 8, l % 8
             rows[g][l] = ms[c][0][r * 4 + g]
             rows[4 + g][l] = ms[c][1][r * 4 + g]
-    out = run_probe(2, 0 if order == "asc" else 1, stages,
-                    build_input(cal, rows))
+    out = run_probe(2, 0 if order == "asc" else 1, stages, build_input(cal, rows))
     got = read_rows(cal, out, range(8))
     bad = []
     for c in range(8):
@@ -302,8 +325,10 @@ def test_sortnet16_kv_stage(cal, order, stages):
             if vp != wp[e] & M32:
                 bad.append(("p", c, e, vp, wp[e] & M32))
     if bad:
-        print(f"SORTNET16KV MISMATCH order={order} stages={stages}: "
-              f"{len(bad)} elements")
+        print(
+            f"SORTNET16KV MISMATCH order={order} stages={stages}: "
+            f"{len(bad)} elements"
+        )
         for kind, c, e, g, w in bad[:16]:
             print(f"  {kind} machine={c} elem={e} got={g:08x} want={w:08x}")
     assert not bad
@@ -326,8 +351,7 @@ def test_sortnet_fixture_sorted(cal, order):
                     r, c = l // 8, l % 8
                     rows[g][l] = ms[c][0][r * 8 + g]
         stages = 6 if n == 8 else 15
-        out = run_probe(net, 0 if order == "asc" else 1, stages,
-                        build_input(cal, rows))
+        out = run_probe(net, 0 if order == "asc" else 1, stages, build_input(cal, rows))
         got = read_rows(cal, out, range(8))
         for m in range(nm):
             srt, _ = co.bitonic_sort_trace(ms[m][0], order)
@@ -341,4 +365,5 @@ def test_sortnet_fixture_sorted(cal, order):
                     v = got[e & 7][(e >> 3) * 8 + m]
                 assert v == srt[e] & M32, (
                     f"n={n} {order} machine {m} elem {e}: "
-                    f"{v:08x} != {srt[e] & M32:08x}")
+                    f"{v:08x} != {srt[e] & M32:08x}"
+                )
