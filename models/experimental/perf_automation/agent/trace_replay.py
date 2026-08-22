@@ -64,6 +64,24 @@ def _replay_1cq(device, tid, iters):
 _TRACED_OP_DISPATCH_MAX = int(os.environ.get("TT_TRACE_DISPATCH_MAX", "32"))
 
 
+def _signpost(name: str) -> None:
+    """Emit a tracy signpost, or do nothing when the profiler is not present.
+
+    Best-effort by design: the marker is only useful under a profiled run, and a normal trace_replay
+    has no tracy module at all. A missing signpost costs the per-stage split, never the measurement,
+    and tt-perf-report treats an unmarked capture as a whole-file one -- the behaviour every profile
+    has had until now.
+    """
+    try:
+        from tracy import signpost as _sp
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        _sp(name)
+    except Exception:  # noqa: BLE001
+        return
+
+
 def _count_op_dispatches(fn):
     """Run `fn` once; return (dispatches, working_set_bytes) or (None, 0) if the hook did not install.
 
@@ -374,7 +392,24 @@ def measure_adapter(adapter, device) -> float:
 
     results = []
     for st in stages:
+        # MARK THE STAGE BOUNDARY IN THE PROFILE. tt-perf-report can already slice a capture between
+        # two signposts -- refine() passes --start-signpost/--end-signpost on every profile -- and
+        # resolve_signposts already scans for them. Nothing ever emitted any: run 18's raw capture
+        # holds 17,786 rows, every one OP TYPE `tt_dnn_device`, and zero signposts. So the slice has
+        # always been the documented no-op ("No signposts found in the file. Using the entire file
+        # for analysis."), every bucket carries regime "na", and no consumer can tell which stage an
+        # op ran in. That is the single missing link behind two separate gaps: the per-stage read set
+        # and the per-stage math fidelity.
+        #
+        # HERE, NOT IN THE GENERATED TEST. The perf test delegates to measure_adapter, so this loop is
+        # where a stage runs alone -- one tool file, every model, no per-model generation.
+        #
+        # OUTSIDE THE TRACE. _measure_stage captures and replays within itself; a marker emitted
+        # around it never enters the captured region, so it cannot raise the "Writes/Reads are not
+        # supported during trace capture" that host work inside a capture does.
+        _signpost("stage:%s" % st.name)
         ms, path = _measure_stage(device, st)
+        _signpost("stage:%s:end" % st.name)
         results.append((st.name, ms, path))
         print("TRACE_STAGE_MS[%s]=%.4f path=%s" % (st.name, ms, path), flush=True)
         # BESIDE THE TIME THAT MEASURED IT. The compute ceiling is 2 x params x items-in-the-unit,
