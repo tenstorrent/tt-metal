@@ -145,9 +145,9 @@ class TtFfn(TtSharedExpert):
 
         # Step 3: GLU activation and element-wise multiplication
         if self.activation == ACTIVATION_SITU:
-            # No sub-device here, so the helper reduces to a plain ttnn.situ_glu call. That op's
-            # L1 fast path is bounded on the per-chip width: K3's 33792 is 8448 at TP=4, past the
-            # 3072 bound, so its intermediates land in DRAM. Correctness first; #53625 tracks perf.
+            # No sub-device here, so ttnn.situ_glu's L1 fast path is in play -- but it is bounded on
+            # the per-chip width, and K3's 33792 is 8448 at TP=4, past the 3072 bound. So the
+            # intermediates land in DRAM anyway. Correctness first; #53625 tracks perf.
             activated = situ_glu(gate_out, up_out, self.situ_beta, self.situ_linear_beta)
         else:
             activated = ttnn.mul(

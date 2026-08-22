@@ -965,6 +965,59 @@ def test_situ_glu_l1_intermediates_fall_back(device):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize(
+    "sub_core_grid",
+    [
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))]),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 4)),
+                ttnn.CoreRange(ttnn.CoreCoord(3, 2), ttnn.CoreCoord(4, 3)),
+            ]
+        ),
+    ],
+    ids=["contiguous", "disjoint"],
+)
+def test_situ_glu_sub_core_grids(device, sub_core_grid):
+    torch.manual_seed(0)
+    # A width under the 3072 L1 cutoff, so this also pins the core restriction's other effect: it
+    # holds the intermediates in the output's memory space instead of taking interleaved L1 on
+    # every core, the restricted-away ones included.
+    shape = torch.Size([1, 1, 512, 3072])
+    gate = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    up = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2, sub_core_grids=sub_core_grid)
+
+    assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
+    tt_res = ttnn.to_torch(out)
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
+    assert_with_ulp(golden, tt_res, ulp_threshold=SITU_GLU_ULP)
+    assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+def test_situ_glu_sub_core_grids_conflict(device, expect_error):
+    shape = torch.Size([1, 1, 32, 32])
+    gate = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # The composed unaries take only sub_core_grids, so situ_glu resolves sub_device_id into it and
+    # cannot honour both.
+    with expect_error(RuntimeError, "Cannot specify both sub_core_grids and sub_device_id"):
+        ttnn.situ_glu(
+            gate,
+            gate,
+            SITU_GLU_BETA1,
+            SITU_GLU_BETA2,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+            sub_device_id=ttnn.SubDeviceId(0),
+        )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
 def test_situ_glu_zero_beta_guard(device, expect_error):
     shape = torch.Size([1, 1, 32, 32])
     gate = ttnn.from_torch(

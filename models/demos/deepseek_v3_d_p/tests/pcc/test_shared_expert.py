@@ -39,8 +39,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         # the shared intermediate coincided and 6144 was never exercised here.
         (3200, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SILU),
         # ...and the same shape on the activation the K3 checkpoint actually uses. This builds
-        # TtSharedExpert without a sub-device, so it covers the ttnn.situ_glu delegate; the
-        # hand-composed sub_core_grids branch is only reachable through the MoE (test_ttnn_moe).
+        # TtSharedExpert without a sub-device, so ttnn.situ_glu runs here on the full grid; its
+        # sub_core_grids form is only reachable through the MoE (test_ttnn_moe).
         (3200, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SITU),
     ],
     # Ids label seq_len_per_chip first, so the K3 cases keep the "3.2K" prefix they share with the
