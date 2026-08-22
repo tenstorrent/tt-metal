@@ -37,9 +37,11 @@ template <
     bool idir = false,
     bool STABLE_SORT = false,
     bool FUSED = false,
-    bool RANK_STAMPED = false>
+    bool RANK_STAMPED = false,
+    bool PRE_TAGGED = false>
 inline void calculate_bitonic_topk_merge(std::uint32_t m_iter, std::uint32_t k) {
-    _bitonic_topk_merge<APPROXIMATION_MODE, is_fp32_dest_acc_en, idir, STABLE_SORT, FUSED, RANK_STAMPED>(m_iter, k);
+    _bitonic_topk_merge<APPROXIMATION_MODE, is_fp32_dest_acc_en, idir, STABLE_SORT, FUSED, RANK_STAMPED, PRE_TAGGED>(
+        m_iter, k);
 }
 
 template <
@@ -77,6 +79,14 @@ inline void calculate_topk_defuse(std::uint32_t num_tiles) {
 template <bool APPROXIMATION_MODE, bool largest>
 inline void calculate_topk_stamp_local_positions() {
     _topk_stamp_local_positions_<largest>();
+}
+
+// Single-tile stamp with a runtime rank base: the k>32 insertion cascade's chain-position stamp
+// (accumulator tile at level p gets [32p, 32p+32); the fresh chunk gets the top range once, at
+// level 0; loser-tile tags ride). See _topk_stamp_tile_rank_range_ in the LLK header.
+template <bool APPROXIMATION_MODE, bool largest>
+inline void calculate_topk_stamp_tile_rank_range(std::uint32_t dst_tile_index, std::uint32_t rank_base) {
+    _topk_stamp_tile_rank_range_<largest>(dst_tile_index, rank_base);
 }
 
 template <bool APPROXIMATION_MODE, bool FUSED = false, bool RANK_STAMPED = false>

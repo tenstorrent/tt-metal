@@ -761,15 +761,22 @@ ALWI void topk_local_sort(
  * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool     | true, false                                           | False    |
  * | rank_stamped    | Re-stamp both runs' rank tags and merge with the unstable network          | bool     | true, false                                           | False    |
+ * | pre_tagged      | With rank_stamped: tags already ride in the keys (ttnn.sort's per-call     | bool     | true, false                                           | False    |
+ * |                 | true-index fuse) — run the rank-stamped transport without re-stamping      |          |                                                       |          |
  */
 // clang-format on
-template <bool idir = false, bool stable_sort = false, bool fused = false, bool rank_stamped = false>
+template <
+    bool idir = false,
+    bool stable_sort = false,
+    bool fused = false,
+    bool rank_stamped = false,
+    bool pre_tagged = false>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_bitonic_topk_merge,
-        (true /* APPROXIMATE */, DST_ACCUM_MODE, idir, stable_sort, fused, rank_stamped),
+        (true /* APPROXIMATE */, DST_ACCUM_MODE, idir, stable_sort, fused, rank_stamped, pre_tagged),
         idst,
         VectorMode::RC_custom,
         m_iter,
@@ -924,6 +931,40 @@ ALWI void topk_stamp_local_positions(std::uint32_t idst) {
         (true /* APPROXIMATE */, largest),
         idst,
         VectorMode::RC_custom));
+}
+
+// clang-format off
+/**
+ * Stamps ONE value tile of a rank-stamped TopK slab with sign-conditioned rank tags covering
+ * rank_base + [0, 32), in place in DST (see topk_stamp_local_positions for the tag encoding and
+ * preconditions — this is its single-tile form with a caller-chosen base). It exists for the
+ * k>32 insertion cascade: each level re-stamps its ACCUMULATOR tile with that tile's round-start
+ * chain-position range (32 * level), the fresh incoming chunk is stamped once per round (level 0)
+ * with the top range (32 * output_tiles), and the loser tile's tags ride the cascade untouched,
+ * so every tag in the round stays globally consistent with the true (value, index) order.
+ * rank_base must be a multiple of 32 with rank_base + 31 < 2^16. DST must be in acquired state.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | largest         | The requested global sort order (true = largest-first)                     | bool     | true, false                                           | True     |
+ * | idst            | The index of the first value tile of the slab in the DST register buffer   | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | dst_tile_index  | Which slab value tile to stamp (0 or 1)                                    | uint32_t | 0 to 1                                                | True     |
+ * | rank_base       | First rank of this tile's range (multiple of 32)                           | uint32_t | 0 to 65504                                            | True     |
+ */
+// clang-format on
+template <bool largest>
+ALWI void topk_stamp_tile_rank_range(uint32_t idst, uint32_t dst_tile_index, uint32_t rank_base) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_topk_stamp_tile_rank_range,
+        (true /* APPROXIMATE */, largest),
+        idst,
+        VectorMode::RC_custom,
+        dst_tile_index,
+        rank_base));
 }
 
 /**
