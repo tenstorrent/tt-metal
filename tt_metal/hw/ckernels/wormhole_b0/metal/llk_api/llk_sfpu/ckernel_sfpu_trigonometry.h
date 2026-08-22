@@ -277,6 +277,16 @@ inline void calculate_sine() {
             r = r * c + a;
             r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         }
+
+        // Bound result to valid trigonometric range [-1.0, 1.0]
+        v_if(r > 1.0f) {
+            r = 1.0f;
+        }
+        v_elseif(r < -1.0f) {
+            r = -1.0f;
+        }
+        v_endif;
+
         sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
     }
@@ -363,6 +373,15 @@ inline void calculate_cosine() {
             r = r * c + a;
             r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         }
+
+        // Bound result to valid trigonometric range [-1.0, 1.0]
+        v_if(r > 1.0f) {
+            r = 1.0f;
+        }
+        v_elseif(r < -1.0f) {
+            r = -1.0f;
+        }
+        v_endif;
 
         sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;

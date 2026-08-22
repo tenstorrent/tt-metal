@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
@@ -21,15 +22,28 @@ using namespace sfpi;
 
 namespace ckernel::sfpu {
 
-template <bool is_fp32_dest_acc_en>
+// Magic seed locally tuned for this refinement sequence.
+// The fp32 path has maximum ULP error < 0.94 for normal inputs in [2^-126, 2^103].
+static constexpr std::uint32_t RECIPROCAL_GT0_MAGIC_SEED = 0xfef392e0;
+
+template <bool is_fp32_dest_acc_en, bool preloaded_constants = false>
 sfpi_inline sfpi::vFloat _sfpu_reciprocal_gt0_(sfpi::vFloat x) {
-    sfpi::vFloat y = sfpi::approx_recip(x);
-    sfpi::vFloat e = -x * y + 1.0f;
-    y = y * e + y;
-    if constexpr (is_fp32_dest_acc_en) {
-        e = -x * y + 1.0f;
-        y = y * e + y;
+    // Initial estimate of -1/x.
+    sfpi::vFloat y;
+    if constexpr (preloaded_constants) {
+        y = sfpi::as<sfpi::vFloat>(sfpi::vConstIntPrgm0 - sfpi::as<sfpi::vInt>(x));
+    } else {
+        y = sfpi::as<sfpi::vFloat>(RECIPROCAL_GT0_MAGIC_SEED - sfpi::as<sfpi::vInt>(x));
     }
+    sfpi::vFloat e = x * y + 1.0f;
+
+    if constexpr (is_fp32_dest_acc_en) {
+        y = y * e + y;
+        e = x * y + 1.0f;
+    }
+    sfpi::vFloat p = e * e + e;
+    y = -y;
+    y = y * p + y;
 
     return y;
 }
@@ -57,7 +71,7 @@ void asin_acos_init() {
     }
 }
 
-static const float PI = 3.1415927410125732f;
+static const float PI = 3.14159274101257324f;
 static const float PI_2 = 1.5707963705062866f;
 static const float PI_4 = 0.7853981852531433f;
 static const float FRAC_1_PI = 0.31830987334251404f;
@@ -86,15 +100,24 @@ sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
         // Compensated residual for the reciprocal-correction branch.
         // This preserves precision when tan(x) is near its poles.
         s = -1.0f * r + a;
+        sfpi::vFloat negative_x = sfpi::copyman(-1.0f, r);
         s = t * a + s;
 
-        t = sfpi::approx_recip(r);
+        // Approximate reciprocal of -r using quadratic initial estimate.
+        const float k0 = 0.3232325017452239990234375f;
+        const float k1 = 1.4545459747314453125f;
+        const float k2 = 2.121212482452392578125f;
+
+        sfpi::vInt scale_bits = ~sfpi::as<sfpi::vInt>(r);
+        t = k1 + k0 * negative_x;
+        sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(scale_bits), 0);
+        t = k2 + t * negative_x;
+        scale *= 0.5f;
 
         // Newton-Raphson refinement.
-        // e = 1 - r*t, then t <- t*(1 + e) = t*(2 - r*t)
-        sfpi::vFloat e = -r * t + 1.0f;
-        // Negate to get t = -1/r.
-        t = -t * e - t;
+        sfpi::vFloat e = 1.0f + negative_x * t;
+        t = t * e + t;
+        t = t * scale;
 
         // Reconstruct tan from corrected reciprocal terms.
         r = r * t + 1.0f;
@@ -119,11 +142,22 @@ sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
     sfpi::vFloat r = t * a + a;
 
     v_if(i < 0) {
-        t = sfpi::approx_recip(r);
-        // Newton-Raphson refinement resulting in r = -1/r.
-        sfpi::vFloat e = -r * t + 1.0f;
-        // Negate to get t = -1/r.
-        r = -t * e - t;
+        // Approximate reciprocal of -r using quadratic initial estimate.
+        const float k0 = 0.3232325017452239990234375f;
+        const float k1 = 1.4545459747314453125f;
+        const float k2 = 2.121212482452392578125f;
+
+        sfpi::vFloat negative_x = sfpi::copyman(-1.0f, r);
+        t = k1 + k0 * negative_x;
+        sfpi::vInt scale_bits = ~sfpi::as<sfpi::vInt>(r);
+        t = k2 + t * negative_x;
+        sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(scale_bits), 0);
+
+        // Newton-Raphson refinement.
+        sfpi::vFloat e = 1.0f + negative_x * t;
+        scale *= 0.5f;
+        t = t * e + t;
+        r = t * scale;
     }
     v_endif;
 
@@ -188,7 +222,7 @@ inline void calculate_sine() {
     sfpi::vFloat C3, C2, C1, C0;
 
     // Coefficients are chosen per destination precision target for sin(a) on [0, PI/2].
-    if (is_fp32_dest_acc_en) {
+    if constexpr (is_fp32_dest_acc_en) {
         C3 = 0x1.5dc908p-19f;
         C2 = -0x1.9f70fp-13f;
         C1 = 0x1.110edap-7f;
@@ -199,6 +233,7 @@ inline void calculate_sine() {
         C0 = -0x1.5554a4p-3f;
     }
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
@@ -208,8 +243,7 @@ inline void calculate_sine() {
 
         // Compute j = round(v / PI).
         // First, j = v * (1 / PI) + 1.5*2^23 shifts the mantissa bits to give round-to-nearest.
-        sfpi::vFloat j =
-            __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         // At this point, the mantissa bits of j contain the integer.
         // Store for later; the LSB determines the sign of the result.
@@ -230,7 +264,7 @@ inline void calculate_sine() {
         a = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) ^ q);
 
         sfpi::vFloat r;
-        if (is_fp32_dest_acc_en) {
+        if constexpr (is_fp32_dest_acc_en) {
             r = C3 * s + C2;
             r = r * s + C1;
             sfpi::vFloat c = a * s;
@@ -243,6 +277,16 @@ inline void calculate_sine() {
             r = r * c + a;
             r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         }
+
+        // Bound result to valid trigonometric range [-1.0, 1.0]
+        v_if(r > 1.0f) {
+            r = 1.0f;
+        }
+        v_elseif(r < -1.0f) {
+            r = -1.0f;
+        }
+        v_endif;
+
         sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
     }
@@ -275,21 +319,22 @@ inline void calculate_cosine() {
     const float ROUNDING_BIAS = 12582912.0f;
     const float NEG_ROUNDING_BIAS = -12582912.0f;
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
         // Force v * (1/PI) + 0.5 to compile as a single SFPMAD sequence for consistent instruction scheduling.
-        sfpi::vFloat half = sfpi::sFloat16b(0.5f);
+        sfpi::vFloat half = sfpi::sFloat16b(0.5f);  // 0.5
         sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
         sfpi::vFloat neg_one = -1.0f;
 
         // Start from j = v * (1 / PI) + 0.5; after bias-round and 2*j - 1, j is an odd quadrant index.
         // ROUNDING_BIAS shifts mantissa bits to perform round-to-nearest.
-        sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), half.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         // sfpi::vFloat rounding_bias;
         // rounding_bias = sfpi::sFloat16b(0x1.8p23f);
-        // j = __builtin_rvtt_sfpmad(v.get(), one, rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        // j = __builtin_rvtt_sfpmad(v.get(), one, rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         j = j + ROUNDING_BIAS;
 
@@ -300,7 +345,7 @@ inline void calculate_cosine() {
         j = j + NEG_ROUNDING_BIAS;
 
         sfpi::vFloat two = sfpi::sFloat16b(2.0f);
-        j = __builtin_rvtt_sfpmad(j.get(), two.get(), neg_one.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        j = __builtin_rvtt_sfpmad(j.get(), two.get(), neg_one.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         // Four-stage Cody-Waite reduction; a = v + j * -PI / 2.
         // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
@@ -328,6 +373,16 @@ inline void calculate_cosine() {
             r = r * c + a;
             r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         }
+
+        // Bound result to valid trigonometric range [-1.0, 1.0]
+        v_if(r > 1.0f) {
+            r = 1.0f;
+        }
+        v_elseif(r < -1.0f) {
+            r = -1.0f;
+        }
+        v_endif;
+
         sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
     }
@@ -387,10 +442,10 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
         // Use a = 0 for the pi/2 asymptote; NaNs remain NaN.
         a = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - 1) * 0.0f;
 
-        // atan(|x|) rounds to pi/2 for |x| >= 2^26, so skip the reciprocal there.
-        // This also avoids the inf * 0 residual produced when approx_recip
-        // underflows to zero for very large finite values or infinity.
-        v_if(e < 26) { a = _sfpu_reciprocal_gt0_<true>(ax); }
+        // atan(|x|) rounds to pi/2 for |x| >= 2^26, so skip the reciprocal there. This
+        // also prevents its integer seed from passing through a NaN bit pattern
+        // for finite values near the top of the fp32 range and for infinity.
+        v_if(e < 26) { a = _sfpu_reciprocal_gt0_<true, true>(ax); }
         v_endif;
     }
     v_endif;
@@ -664,7 +719,6 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
         i += 125;
         r = r * f + sfpi::vConstFloatPrgm2;
         r = r * f + 0.999963462f;
-
     } else {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
         f = j * -1.42860677e-6f + f;         // f = f - j * ln(2)_lo
@@ -864,6 +918,7 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void atan_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (is_fp32_dest_acc_en) {
+        sfpi::vConstIntPrgm0 = RECIPROCAL_GT0_MAGIC_SEED;
         sfpi::vConstFloatPrgm1 = 0x1.999384p-3f;
         sfpi::vConstFloatPrgm2 = -0x1.555552p-2f;
     } else {
@@ -929,7 +984,7 @@ sfpi_inline sfpi::vFloat _sfpu_cosine_maclaurin_series_(sfpi::vFloat val) {
     return output;
 }
 
-// Legacy implementation
+// Legacy implementation.
 // Candidate for removal in future versions. See https://github.com/tenstorrent/tt-llk/issues/225 for more details.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_sine_(const int iterations) {
@@ -952,7 +1007,7 @@ inline void _calculate_sine_(const int iterations) {
     }
 }
 
-// Legacy implementation, replaced by newer void _calculate_sine_() which produces more accurate results
+// Legacy implementation.
 // Candidate for removal in future versions. See https://github.com/tenstorrent/tt-llk/issues/225 for more details.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_cosine_(const int iterations) {
