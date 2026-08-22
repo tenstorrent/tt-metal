@@ -15,7 +15,11 @@ from models.common.utility_functions import (
     is_llk_assert_enabled,
     skip_for_slow_dispatch,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    assert_numeric_metrics,
+    check_with_pcc_without_tensor_printout,
+)
 from tests.ttnn.unit_tests.operations.matmul.test_matmul import is_tiny_tile_combo_supported
 
 
@@ -350,6 +354,60 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
         pcc_threshold=0.997,
         check_ulp=False,
     )
+
+
+@pytest.mark.parametrize("m_size, k_size, n_size", [(512, 1024, 1024)])
+def test_linear_fused_silu_math_approx_mode(device, m_size, k_size, n_size):
+    """The fused silu activation honours math_approx_mode, and only where it can.
+
+    math_approx_mode selects the cheaper sigmoid lowering inside silu (exp_21f plus a single
+    reciprocal iteration, instead of the accurate exp plus two). That choice only exists when DST
+    accumulates in fp32: without fp32_dest_acc_en the accurate path is unreachable anyway, so
+    math_approx_mode must be a no-op there. Both halves are asserted below, which is the whole
+    numerical blast radius of the flag.
+    """
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.randn((1, m_size, k_size), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.silu(torch_input_tensor_a.float() @ torch_input_tensor_b.float())
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    outputs = {}
+    for fp32_dest_acc_en in [False, True]:
+        for math_approx_mode in [False, True]:
+            output_tensor = ttnn.linear(
+                input_tensor_a,
+                input_tensor_b,
+                activation="silu",
+                core_grid=device.core_grid,
+                compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                    device.arch(),
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    math_approx_mode=math_approx_mode,
+                    fp32_dest_acc_en=fp32_dest_acc_en,
+                    packer_l1_acc=True,
+                ),
+            )
+            outputs[(fp32_dest_acc_en, math_approx_mode)] = ttnn.to_torch(output_tensor)
+
+    for (fp32_dest_acc_en, math_approx_mode), output_tensor in outputs.items():
+        _, pcc = check_with_pcc_without_tensor_printout(torch_output_tensor, output_tensor, pcc=0.99)
+        logger.info(
+            f"fp32_dest_acc_en={fp32_dest_acc_en} math_approx_mode={math_approx_mode}: "
+            f"PCC against torch fp32 = {pcc}"
+        )
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+
+    assert torch.equal(
+        outputs[(False, False)], outputs[(False, True)]
+    ), "without fp32_dest_acc_en the accurate sigmoid is unreachable, so math_approx_mode must be a no-op"
+
+    assert not torch.equal(
+        outputs[(True, False)], outputs[(True, True)]
+    ), "with fp32_dest_acc_en, math_approx_mode must actually select the approximate sigmoid"
 
 
 def test_bloom_ff2_linear(device):

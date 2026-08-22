@@ -165,7 +165,12 @@ ALWI void silu_tile(uint32_t idst) {
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (8 /*ITERATIONS*/), idst, ::ckernel::VectorMode::RC));
 #else
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (DST_ACCUM_MODE, 8 /* ITERATIONS */), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_silu,
+        (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC));
 #endif
 }
 
@@ -664,7 +669,12 @@ ALWI void expm1_tile_init() {
 
 ALWI void silu_tile_pack(uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (DST_ACCUM_MODE, 8 /* ITERATIONS */), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_silu,
+        (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC));
 }
 ALWI void silu_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX))); }
 

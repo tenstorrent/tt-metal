@@ -571,6 +571,75 @@ def test_linear_swiglu(device, gate_is_first, use_bias):
     assert result["pcc"] > 0.9999, f"PCC {result['pcc']:.7f}"
 
 
+def test_linear_swiglu_math_approx_mode(device):
+    """fuse_swiglu runs silu on the MATH thread, and it honours math_approx_mode.
+
+    The fused matmul activation reaches silu from the PACK thread (silu_tile_pack, covered by
+    test_linear_fused_silu_math_approx_mode in tests/ttnn/unit_tests/operations/matmul/test_linear.py).
+    fuse_swiglu reaches silu_tile from MATH instead, which is a second forwarding site and can
+    regress on its own. Both halves of the blast radius are asserted here: math_approx_mode picks
+    the cheaper sigmoid lowering only when DST accumulates in fp32, so without fp32_dest_acc_en it
+    has to be a no-op.
+    """
+    M, K, out_N = 256, 256, 256  # weight is [K, 2*out_N]; output is [M, out_N]
+    two_N = 2 * out_N
+    torch.manual_seed(0)
+
+    torch_input = torch.randn((M, K), dtype=torch.float32)
+    weight_input = torch.randn((K, two_N), dtype=torch.float32)
+
+    with torch.no_grad():
+        up, gate = torch.chunk(torch_input @ weight_input, 2, dim=-1)
+        golden = torch.nn.functional.silu(gate) * up
+
+    weight_il = prepare_for_fused_swiglu(weight_input, ndev=1, gate_is_first=False)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_il, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+    )
+
+    outputs = {}
+    for fp32_dest_acc_en in [False, True]:
+        for math_approx_mode in [False, True]:
+            tt_output = ttnn.experimental.minimal_matmul(
+                tt_input,
+                tt_weight,
+                compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                    device.arch(),
+                    math_fidelity=ttnn.MathFidelity.HiFi2,
+                    math_approx_mode=math_approx_mode,
+                    fp32_dest_acc_en=fp32_dest_acc_en,
+                    packer_l1_acc=True,
+                ),
+                config=matmul_config,
+                fuse_swiglu=True,
+            )
+            outputs[(fp32_dest_acc_en, math_approx_mode)] = ttnn.to_torch(tt_output)
+
+    for (fp32_dest_acc_en, math_approx_mode), tt_output in outputs.items():
+        _, pcc = comp_pcc(golden, tt_output)
+        logger.info(
+            f"fp32_dest_acc_en={fp32_dest_acc_en} math_approx_mode={math_approx_mode}: "
+            f"PCC against torch fp32 = {pcc}"
+        )
+        assert pcc > 0.9995, f"PCC {pcc:.7f}"
+
+    assert torch.equal(
+        outputs[(False, False)], outputs[(False, True)]
+    ), "without fp32_dest_acc_en the accurate sigmoid is unreachable, so math_approx_mode must be a no-op"
+
+    assert not torch.equal(
+        outputs[(True, False)], outputs[(True, True)]
+    ), "with fp32_dest_acc_en, math_approx_mode must actually select the approximate sigmoid on MATH"
+
+
 def test_run_performance(device):
     core_grid = ttnn.CoreCoord(8, 8)
     M, K, N = 4096, 4096, 4096
