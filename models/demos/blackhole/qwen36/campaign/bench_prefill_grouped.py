@@ -120,7 +120,7 @@ def test_bench_prefill_grouped(mesh_device, B, isl, monkeypatch, reset_seeds, en
     ]
 
     monkeypatch.setenv("QWEN36_GDN_MAX_BG", str(B))
-    base = {"bench": "prefill_grouped", "mesh_devices": nd, "n_layers": len(model.layers), "B": B, "isl": isl}
+    base = {"bench": "prefill_grouped", "mesh_devices": nd, "n_layers": len(model.layers), "B": B, "isl": ("ragged-1k2k" if ragged else isl)}
 
     # ---- serial phase first (silicon-proven path): warmup, timed, EMIT — so the baseline
     # numbers land even if the grouped pass hangs. Compile warmups are a one-time server
