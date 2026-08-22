@@ -6,6 +6,7 @@ Recurrence is per value-head (no cross-device comms inside); all-reduce after ro
 Reuses `recurrent_gated_delta_rule_decode_ttnn`; weights interleaved. GDN norm uses raw weight
 (no +1) + SiLU(z) gate — distinct from QK/layer norms.
 """
+
 import os
 
 import torch
@@ -874,10 +875,11 @@ class TPGatedDeltaNet:
                     sequence start, so the first chunk reads zeros (== from scratch). Requires
                     _stable_state (the batched decode buffers).
 
-        KERNEL CAP: gated_delta_attn_seq maps one BH = B*Nv_tp row per core and is L1-bound, so BH
-        must stay <= ~32 (at TP=4, Nv_tp=8 => B <= 4). Larger B trips an L1 clash (B=8) or the
-        kernel's `BH <= compute_grid` assert (B=32); B>4 would need grouped launches (groups <=4).
-        The model currently prefills per-user instead (see prefill_paged_peruser).
+        KERNEL CAP: the fused chunk_gated_delta_rule scan maps one BH = B*Nv_tp (head, v-block) row
+        per core, so BH must stay <= the compute grid (`BH <= compute cores` TT_FATAL in
+        distribute_scan). The cap is bucket-independent: scan CBs are state-sized and the chunk
+        count is only a runtime loop bound. prefill_paged_grouped enforces this via its
+        grid-derived group ceiling.
         """
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         if len(x.shape) == 4:

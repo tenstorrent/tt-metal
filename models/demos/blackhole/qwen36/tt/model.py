@@ -2896,10 +2896,11 @@ class Qwen36Model:
         process users in groups of <= group_size through ONE hybrid forward per group instead of B
         sequential B=1 forwards. Within a group the GDN layers run BATCHED (forward_prefill_batched,
         per-row valid_len masking — bit-exact per user, see test_gdn_tp_batched_prefill) and the
-        full-attention layers run PER-USER (attention prefill is B=1 only). Groups of <=4 respect the
-        GDN kernel cap BH=B*Nv_tp<=32. Numerically the batched GDN + per-user attention is the same
-        math as prefill_paged_peruser, so per-user output (incl. DIFFERENT prompts/lengths) is
-        unchanged; it just amortizes the underutilized GDN over the group.
+        full-attention layers run PER-USER (attention prefill is B=1 only). The group size respects
+        the fused GDN op's grid cap BH=B*Nv_tp<=compute cores (see below). Numerically the batched
+        GDN + per-user attention is the same math as prefill_paged_peruser, so per-user output
+        (incl. DIFFERENT prompts/lengths) is unchanged; it just amortizes the underutilized GDN
+        over the group.
 
         token_ids_list: list of B torch.Tensor [1, T_u] (lengths may differ).
         page_table:      torch.Tensor [B, blocks_per_user] int32 (row u = user u's blocks).
@@ -2922,12 +2923,20 @@ class Qwen36Model:
         assert all(v <= bucket for v in vlens), "every valid_len must fit the single-pass bucket"
 
         # The fused chunk_gated_delta_rule op caps the group by its SCAN, which maps one (head,
-        # v-block) row per core: BH = B*Nv_tp must stay <= the compute grid (~96-104 cores on P150).
-        # With Nv_tp=12 that's B <= 8, and — unlike the old gated_delta_attn_seq kernel — it is
-        # bucket-independent (SCAN L1 is state-sized, not chunk-count-sized). Validated bit-exact vs
-        # per-user at B=8 for bucket 128 and 256 (test_gdn_fused_batch: ceiling + large-group). Buckets
-        # >256 aren't produced here (callers route T>256 to per-user), so cap them at 1 defensively.
-        gdn_max_bg = 8 if bucket <= 2 * gdn_chunk else 1
+        # v-block) row per core: BH = B*Nv_tp must stay <= the compute grid. The cap is
+        # bucket-independent — the scan CBs are state-sized and the chunk count is only a runtime
+        # loop bound (distribute_scan / ChunkGdnScan in chunk_gdn_phased_program_factory.cpp) — so
+        # the hard ceiling is floor(grid_cores / Nv_tp). Grouping is device-validated at B=8 for
+        # buckets 128/256 (test_gdn_tp_batched_prefill + the demo batched_128/256 cases); larger
+        # buckets default to groups of 1 until test_model_tp_prefill_grouped_long passes on
+        # silicon. QWEN36_GDN_MAX_BG opts in to larger groups (clamped to the grid ceiling).
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        grid_cap = max(1, (grid.x * grid.y) // self.args.gdn_nv_tp)
+        env_bg = os.environ.get("QWEN36_GDN_MAX_BG")
+        if env_bg is not None:
+            gdn_max_bg = max(1, min(int(env_bg), grid_cap))
+        else:
+            gdn_max_bg = min(8, grid_cap) if bucket <= 2 * gdn_chunk else 1
         group_size = max(1, min(group_size, gdn_max_bg))
 
         dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
