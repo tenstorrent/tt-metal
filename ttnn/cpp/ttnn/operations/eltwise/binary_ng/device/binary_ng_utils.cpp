@@ -387,12 +387,12 @@ OpConfig::OpConfig(
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
-        // sqrt(a^2 + b^2)
         case BinaryOpType::HYPOT:
-            process_lhs = unary::UnaryOpType::SQUARE;
-            process_rhs = unary::UnaryOpType::SQUARE;
-            binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::SQRT;
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::HYPOT;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
             break;
         case BinaryOpType::ISCLOSE: binary_op = SfpuBinaryOp::ISCLOSE; break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
@@ -501,6 +501,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
         case ATAN2: return {"atan2_binary_tile_init();", "atan2_binary_tile"};
+        case HYPOT: return {"hypot_binary_tile_init();", "hypot_binary_tile"};
         case LT:
             if (int_data_format) {
                 return {

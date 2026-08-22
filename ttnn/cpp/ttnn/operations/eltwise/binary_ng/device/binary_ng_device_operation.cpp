@@ -33,8 +33,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case LOGADDEXP:
         case LOGADDEXP2:
         case LDEXP:
-        case BIAS_GELU:
-        case HYPOT: return (a == FLOAT32 && b == FLOAT32);
+        case BIAS_GELU: return (a == FLOAT32 && b == FLOAT32);
+        case HYPOT: return (a == b) && (a == FLOAT32 || a == BFLOAT16);
         case EQ:
         case NE:
         case GT:
