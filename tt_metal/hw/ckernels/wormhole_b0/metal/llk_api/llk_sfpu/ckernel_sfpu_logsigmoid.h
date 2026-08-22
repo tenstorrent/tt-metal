@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,10 +17,9 @@ namespace sfpu {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_logsigmoid(
     const std::uint32_t dst_index_in0,  // Index for input (x)
-    const std::uint32_t dst_index_in1,  // Index for exp(-x)
+    const std::uint32_t dst_index_in1,  // Index for exp(-|x|) / exp(-x)
     const std::uint32_t dst_index_out)  // Index for output
 {
-    // logsigmoid(x) = -softplus(-x)
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -28,18 +27,18 @@ inline void calculate_logsigmoid(
         sfpi::vFloat x = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat exp_neg_x = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        // Save original x as result; negate x since we compute softplus(-x)
-        sfpi::vFloat result = x;
-        x = -x;
+        sfpi::vFloat result;
+        // Negate x to evaluate softplus(-x)
+        sfpi::vFloat neg_x = -x;
 
-        v_if(x < -4.0f) {
-            // For very negative: use exp
+        v_if(neg_x < -4.0f) {
+            // For x > 4.0f: log_sigmoid(x) = log(1 / (1 + exp(-x))) ≈ -exp(-x)
             result = -exp_neg_x;
         }
-        v_elseif(x >= -4.0f && x < 4.0f) {
-            // Polynomial approximation for softplus(-x) in the mid-range
+        v_elseif(neg_x <= 4.0f) {
+            // For x in [-4.0f, 4.0f]: polynomial approximation of -softplus(-x)
             result = PolynomialEvaluator::eval(
-                x,
+                neg_x,
                 0.6924354434013367f,
                 0.49275708198547363f,
                 0.12142381817102432f,
@@ -51,7 +50,12 @@ inline void calculate_logsigmoid(
                 7.4961114648886e-08f);
             result = -result;
         }
+        v_else {
+            // For x < -4.0f (neg_x > 4.0f): log_sigmoid(x) = x - log1p(exp(x)) ≈ x - exp(x)
+            result = x - exp_neg_x;
+        }
         v_endif;
+
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
     }
