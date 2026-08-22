@@ -960,7 +960,14 @@
 # galaxy). Bring-up branch: ssalice/mistral4-119b-prefill.
 #
 # STAGING: exactly ONE thing has to be staged, and only for "Blaze - Mistral4 MLA":
-#   MISTRAL4_MLA_REF_CACHE -> the host-reference cache for test_mistral4_mla. Without it that
+#   MISTRAL4_MLA_REF_CACHE -> STAGED. random_seq5120.pt (45 MB) + random_seq25600.pt (226 MB)
+#     live at /mnt/models/deepseek-prefill-cache/mistral_small_4_119b_mla_ref_cache/ .
+#     Naming follows the house convention: the FILENAMES are fixed by the code
+#     (test_mla.py, f"{weight_type.lower()}_seq{seq_len}.pt" -- no model prefix), so models are
+#     isolated by DIRECTORY, not by filename. kimi has byte-identically-named files in
+#     kimi-prefill-cache/test_mla_output. The model-named subdir under deepseek-prefill-cache
+#     follows the glm_5_2_mla_ref_cache precedent for a model with no top-level dir of its own.
+#     Only the two random_* files are staged; pretrained is not run on CI. Without this that
 #                             test hard-asserts on CI. File names + source path: see that entry.
 # The other six entries need NOTHING staged: their config comes from the adapter's hand-built
 # config_builder (mistral_small_4_119b.py:56-60 -- conftest._resolve_config_only returns the
@@ -995,7 +1002,7 @@
 # pipeline -- every pre-existing entry included, not just these seven. The pre-existing entries
 # already sum to 479 of the 488; the seven below add 76.
 #
-# owner_id below is the models-team default -- reassign to the Mistral-4 owner before enabling.
+# owner_id on these seven entries is U08GEEEEC75 (ssalice), the Mistral-4 owner.
 # ---------------------------------------------------------------------------------------------
 
 - name: "Blaze - Mistral4 MLA"
@@ -1007,9 +1014,7 @@
     # below is consequently unreached here -- use_pretrained is False-only after the narrowing, and
     # the config comes from the adapter's config_builder, not from this path -- and is kept only to
     # record where the checkpoint would live. Do NOT widen the -k without staging it first.
-    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603/
     # Never written by any of these tests; see the CORRECTION in the header block above.
-    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/Mistral-Small-4-119B-Cache/prefill_ttnn
 
     # MUST BE STAGED -- this one is a genuine prerequisite. test_mla.py:293-295 hard-asserts
     #   assert not ((is_ci_env or is_ci_v2_env) and not scale_down_sl)
@@ -1024,7 +1029,7 @@
     # name is simply not found and the assert fires anyway. This is the same reason the
     # "Blaze - MLA" entry above exports
     # DEEPSEEK_V3_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/test_mla_output.
-    export MISTRAL4_MLA_REF_CACHE=/mnt/models/mistral4-prefill-cache/test_mla_output
+    export MISTRAL4_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/mistral_small_4_119b_mla_ref_cache
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
@@ -1037,7 +1042,7 @@
       # 2 cases (random x seq5k/seq25k) now that the pretrained pair is dropped; ~30 s locally
       # with the reference cache in place -- ~20x headroom for a cold CI container over NFS.
       timeout: 10
-  owner_id: U08RL15T4N8
+  owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
 
@@ -1054,7 +1059,7 @@
       # Single case; 42 s locally. Nothing staged (config_builder + random_weights). The kvpe
       # latent is 320 wide (256 + 64), not DeepSeek's 576.
       timeout: 8
-  owner_id: U08RL15T4N8
+  owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
 
@@ -1071,7 +1076,6 @@
     # block, which raises rather than skips. Pretrained-weight coverage is deliberately excluded
     # from CI (no staged checkpoint) and is validated locally instead. Do not re-add the export.
     # The line below is never written by any of these tests; see the CORRECTION in the header.
-    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/Mistral-Small-4-119B-Cache/prefill_ttnn
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
@@ -1083,7 +1087,7 @@
     bh_sc1:
       # 3 cases, random weights now that the pretrained flip is disarmed; 61 s locally.
       timeout: 10
-  owner_id: U08RL15T4N8
+  owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
 
@@ -1118,7 +1122,7 @@
       # surviving row on this branch is fabric2d-torus-xy-8x4-2link, i.e. TORUS-XY: after the
       # upstream mesh_configs rewrite there is no plain-FABRIC_2D 8x4 coverage in this test at all.
       timeout: 12
-  owner_id: U08RL15T4N8
+  owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
 
@@ -1134,7 +1138,7 @@
     bh_sc1:
       # 4 cases (device_fp32/gpt_device x dense/moe), random weights, seq 5120; ~4 min locally.
       timeout: 12
-  owner_id: U08RL15T4N8
+  owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
 
@@ -1155,7 +1159,7 @@
     bh_sc1:
       # 134 s locally; ~13 GB host RAM for the fp32 expert weights.
       timeout: 12
-  owner_id: U08RL15T4N8
+  owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
 
@@ -1185,6 +1189,6 @@
       # 2 cases -- both the 2-layer and the 5-layer smoke are selected by this -k -- 92 s each
       # locally.
       timeout: 12
-  owner_id: U08RL15T4N8
+  owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
