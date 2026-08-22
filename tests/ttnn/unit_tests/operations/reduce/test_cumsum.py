@@ -88,6 +88,7 @@ def test_cumsum(size, dim, dtypes, device):
     [
         ([], 0),
         ([1], 0),
+        ([64], 0),
         ([2, 3], 0),
         ([2, 3], -1),
         ([1, 1024, 32], 0),
@@ -133,6 +134,49 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
     assert preallocated_output_tensor == output_tensor
 
     assert_cumsum_quality(expected_output, torch_output)
+
+    assert device.num_program_cache_entries() >= 1
+
+
+# Exercises the general path (input_rank - dim < 4) with a preallocated output whose dtype
+# differs from the input dtype (input FLOAT32, out BFLOAT16). This covers the typecast-on-write
+# into the caller's buffer, which the matching-dtype cases above do not reach.
+@pytest.mark.parametrize(
+    "size, dim",
+    [
+        ([2, 3], 0),
+        ([2, 3], -1),
+        ([33, 35, 37], -1),
+        ([1, 1024, 32], 0),
+    ],
+)
+def test_cumsum_preallocated_output_dtype_mismatch(size, dim, device):
+    torch.manual_seed(29112024)
+
+    torch_input_tensor = torch.randint(-2, 3, size, dtype=torch.float32)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.float32, layout=ttnn.Layout.TILE)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    # out dtype (bfloat16) deliberately differs from input dtype (float32)
+    preallocated_output_tensor = ttnn.zeros_like(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE)
+
+    output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn.bfloat16, out=preallocated_output_tensor)
+
+    assert output_tensor.dtype == ttnn.bfloat16
+    assert preallocated_output_tensor.dtype == ttnn.bfloat16
+
+    assert output_tensor.shape == (size)
+    assert preallocated_output_tensor.shape == (size)
+
+    # the returned handle must alias/equal the caller's preallocated buffer
+    assert preallocated_output_tensor == output_tensor
+
+    expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch.float32)
+
+    # the CALLER's buffer must hold the result (not just the returned handle)
+    prealloc_torch = ttnn.to_torch(preallocated_output_tensor, dtype=torch.float32)
+    assert_cumsum_quality(expected_output, prealloc_torch)
 
     assert device.num_program_cache_entries() >= 1
 
