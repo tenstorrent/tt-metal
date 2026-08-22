@@ -626,6 +626,82 @@ def test_topk_stable_index_parity_32bit_preallocated(W, k, index_dtype, largest,
     assert_equal(order, ttnn_torch_indices)
 
 
+@pytest.mark.parametrize("k", (32, 64))
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_multicore_prealloc_ties(k, largest, device):
+    """Tie-heavy MULTICORE stable coverage (W=8192, preallocated UINT32 indices force 32-bit
+    index CBs through the multicore band, i.e. the index-aware comparator engine): rows
+    dominated by the two middle tie levels (+-0.5) with the k cut inside the dominant group,
+    plus scattered +-2.0/+-1.0 spikes. The width chunk is split across local cores whose sort
+    directions ALTERNATE, so ties must keep ascending-original-index order through every
+    direction-flipped core's merges/rebuilds and the final core's gather merge — the tie class
+    a rank-stamped engine would need mirrored range stamps for (implemented and silicon-
+    validated, then dropped: measured +10..16% vs the comparator at every multicore width —
+    the band is DM-bound and the Float32 tag transport costs more than the comparator saves).
+    k=64 exercises the two-tile split merge calls. Strict torch-stable parity."""
+    torch.manual_seed(11)
+    W = 8192
+    shape = [1, 1, 32, W]
+    levels = torch.tensor([-0.5, 0.5], dtype=torch.bfloat16)
+    input = levels[torch.randint(0, 2, shape)]
+    # 48 spike columns strided across the whole row (multiple per local-core chunk),
+    # interleaved across the four extreme levels.
+    spike_cols = torch.arange(48) * 167
+    input[..., spike_cols[0::4]] = 2.0
+    input[..., spike_cols[1::4]] = 1.0
+    input[..., spike_cols[2::4]] = -2.0
+    input[..., spike_cols[3::4]] = -1.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    out_shape = shape.copy()
+    out_shape[-1] = k
+    value_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    index_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.int32), ttnn.uint32, layout=ttnn.Layout.TILE, device=device
+    )
+    ttnn_values, ttnn_indices = ttnn.topk(
+        ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True, output_tensor=(value_tensor, index_tensor)
+    )
+    assert ttnn_indices.dtype == ttnn.uint32
+
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
+
+
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_multicore_prealloc_signed_zero(largest, device):
+    """bf16 +-0.0 tie class on the multicore comparator engine (W=8192, preallocated UINT32
+    indices): torch treats +-0 as ONE tie class broken by index, across the per-core chunks
+    and the final core's gather merges."""
+    torch.manual_seed(12)
+    W, k = 8192, 32
+    shape = [1, 1, 32, W]
+    input = torch.randn(shape, dtype=torch.bfloat16).abs() + 0.5  # positive normals
+    zero_cols = torch.arange(48) * 167
+    input[..., zero_cols[0::2]] = 0.0
+    input[..., zero_cols[1::2]] = -0.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    out_shape = shape.copy()
+    out_shape[-1] = k
+    value_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    index_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.int32), ttnn.uint32, layout=ttnn.Layout.TILE, device=device
+    )
+    ttnn_values, ttnn_indices = ttnn.topk(
+        ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True, output_tensor=(value_tensor, index_tensor)
+    )
+
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
+
+
 @pytest.mark.parametrize("W, k", ((64, 32), (8192, 32)))
 @pytest.mark.parametrize("largest", (True, False))
 def test_topk_stable_index_parity_float32(W, k, largest, device):
