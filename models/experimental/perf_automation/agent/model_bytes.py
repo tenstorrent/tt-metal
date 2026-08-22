@@ -355,26 +355,50 @@ def untowered_sections(snapshot_dir, stage_roots: dict) -> list:
     least-bad guess is the one whose failure mode is known.
     """
     try:
-        _roots = {str(k).strip().lower(): str(v) for k, v in (stage_roots or {}).items() if v}
-        if not _roots:
-            return []
-        _recurring = {v for k, v in _roots.items() if k in ("decode", "prefill")}
-        _others = {v for k, v in _roots.items() if k not in ("decode", "prefill")} - _recurring
-        if not _others:
-            return []
+        _roots = {str(v) for v in (stage_roots or {}).values() if v}
+        if len(_roots) < 2:
+            return []  # one subtree, or none: nothing can be a separate tower
         d = Path(snapshot_dir or "")
         files = sorted(d.glob("*.safetensors")) if d.is_dir() else []
-        _present = set()
+        _size: dict = {}
         for f in files:
             try:
                 with open(f, "rb") as fh:
                     n = struct.unpack("<Q", fh.read(8))[0]
-                    if 0 < n <= 200_000_000:
-                        for k in json.loads(fh.read(n)):
-                            if k != "__metadata__" and "." in str(k):
-                                _present.add(str(k).split(".", 1)[0])
+                    if not (0 < n <= 200_000_000):
+                        continue
+                    for k, meta in json.loads(fh.read(n)).items():
+                        if k == "__metadata__" or not isinstance(meta, dict) or "." not in str(k):
+                            continue
+                        _ne = 1
+                        for _d in meta.get("shape") or []:
+                            _ne *= int(_d)
+                        if _ne > 0:
+                            _sec = str(k).split(".", 1)[0]
+                            _size[_sec] = _size.get(_sec, 0) + _ne
             except Exception:  # noqa: BLE001
                 continue
+        _present = set(_size)
+        # WHICH SUBTREE IS THE BACKBONE, BY SIZE RATHER THAN BY NAME. The first version of this asked
+        # `k in ("decode", "prefill")` -- classifying declared stages by matching their labels, which
+        # is the thing this codebase does not do (a stage is priced by what it does, not by its name;
+        # summary only ever spells those names in its documented no-stages-declared fallback).
+        #
+        # Size answers it without a label: on every multi-tower model the per-unit backbone is the
+        # large one and the per-clip encoder is the small one -- voxtral, 4.014 B against 0.637 B. A
+        # model whose encoder outweighs its backbone would be reported spuriously, and that costs a
+        # warning line, never a number: this function changes no byte count.
+        _ranked = sorted((s for s in _roots if s in _present), key=lambda s: -_size.get(s, 0))
+        if len(_ranked) < 2:
+            return []
+        # A TIE IS "CANNOT TELL", AND A DETECTOR MUST NOT GUESS. Size separates a backbone from an
+        # encoder only when they differ by a lot -- voxtral is 4.014 B against 0.637 B, 6.3x. Two
+        # subtrees of similar size carry no signal about which one a unit streams, and picking the
+        # larger by a hair would report the BACKBONE as an unexcluded tower: the most misleading
+        # output this could produce. Silence is the honest answer, and costs only the warning.
+        if _size.get(_ranked[0], 0) < 2 * _size.get(_ranked[1], 0):
+            return []
+        _others = set(_ranked[1:])
         # A section only counts as missed if it is REALLY in this checkpoint and the list lets it
         # through: `_TOWER_ONLY` is anchored to a name component, so testing "<section>." is the same
         # question the byte walk asks of every tensor in it.

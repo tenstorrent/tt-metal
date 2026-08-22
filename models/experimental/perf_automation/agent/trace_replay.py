@@ -65,12 +65,35 @@ _TRACED_OP_DISPATCH_MAX = int(os.environ.get("TT_TRACE_DISPATCH_MAX", "32"))
 
 
 def _count_op_dispatches(fn):
-    """Run `fn` once and return how many ttnn ops it dispatched from PYTHON, or None if the counter
-    could not be installed.
+    """Run `fn` once; return (dispatches, working_set_bytes) or (None, 0) if the hook did not install.
 
-    Counting is wrapped around a call the caller was going to make anyway (the last warmup), so this
-    adds no execution: no second pass, no eager run beside the traced one. The point is only to learn
-    which path the step took."""
+    WHAT A STAGE ACTUALLY READS, MEASURED. The roofline needs the bytes one unit of work streams, and
+    until now nothing measured it. Every route was a guess about the checkpoint: the tower name list
+    (`audio_tower|vision_tower|...`), or the stage_roots section map -- which was tried and dropped
+    lm_head on every untied model. _stage_roofs already said why the profile could not settle it:
+    "_top_ops keys on (op_code, shape, memory) and records nothing about which phase an op ran in",
+    and summary._stage_measured_bytes consequently returns 0 on every real profile, so the
+    "observed-first" line in _bytes_for has always taken its fallback branch.
+
+    But the hook that counts dispatches sees EVERY op the stage runs, with its arguments -- and
+    trace_replay already runs each stage in isolation. So the read set is right here: the distinct
+    DEVICE tensors this stage's ops touched. That is an observation of this stage on this build, not
+    an inference from names, and it needs no new pass -- it rides the warmup call that was happening
+    anyway.
+
+    DISTINCT, BY IDENTITY. A weight used by two ops is one resident tensor, and the quantity this
+    feeds -- params x width -- counts each weight once, so the working set is the comparable figure.
+    Counting every use instead would be a different (larger) number and would not be comparable to
+    the ceiling it is meant to replace.
+
+    Host tensors are excluded by asking the tensor, via the census's own _on_device: voxtral keeps an
+    fp32 host copy of its weights alive while the device holds bf16, and counting those reported
+    29.96 GB for an 11.3 GB device footprint.
+
+    Best-effort throughout. A tensor that raises when inspected is skipped rather than ending the
+    step, because this is instrumentation riding a measurement: it may return less than the truth,
+    never an exception.
+    """
     try:
         from ttnn import decorators as _dec
 
@@ -78,11 +101,41 @@ def _count_op_dispatches(fn):
         orig = target.__call__
     except Exception:  # noqa: BLE001
         fn()
-        return None
+        return None, 0
+    try:
+        from .weight_census import _on_device as _dev, bytes_per_elem as _bpe, dtype_name as _dtn
+    except Exception:  # noqa: BLE001
+        _dev = None
     n = [0]
+    seen: dict = {}
+
+    def _note(x):
+        if _dev is None:
+            return
+        try:
+            if not _dev(x):
+                return
+            key = id(x)
+            if key in seen:
+                return
+            shape = getattr(x, "shape", None) or getattr(x, "padded_shape", None)
+            dt = getattr(x, "dtype", None)
+            if shape is None or dt is None:
+                return
+            ne = 1
+            for d in tuple(shape):
+                ne *= int(d)
+            if ne > 0:
+                seen[key] = ne * _bpe(_dtn(dt))
+        except Exception:  # noqa: BLE001
+            return
 
     def counting(self, *a, **kw):
         n[0] += 1
+        for _x in a:
+            _note(_x)
+        for _x in kw.values():
+            _note(_x)
         return orig(self, *a, **kw)
 
     target.__call__ = counting
@@ -90,7 +143,7 @@ def _count_op_dispatches(fn):
         fn()
     finally:
         target.__call__ = orig
-    return n[0]
+    return n[0], int(sum(seen.values()))
 
 
 def _measure_native(device, stage):
@@ -112,7 +165,7 @@ def _measure_native(device, stage):
     pipeline reports its own path; the count is what decides when nothing does."""
     for _ in range(max(0, _WARMUP_ITERS - 1)):
         stage.step()
-    dispatched = _count_op_dispatches(stage.step)
+    dispatched, _ws_bytes = _count_op_dispatches(stage.step)
     ttnn.synchronize_device(device)
     t0 = time.perf_counter()
     for _ in range(_REPLAY_ITERS):
@@ -133,6 +186,12 @@ def _measure_native(device, stage):
         path = "trace+1cq" if dispatched <= _TRACED_OP_DISPATCH_MAX else "eager"
     if dispatched is not None:
         print("TRACE_STAGE_OPS[%s]=%d path=%s" % (stage.name, dispatched, path), flush=True)
+    # THE BYTES THIS STAGE READ, beside the time that read them. The one quantity the roofline could
+    # never measure -- every other route infers it from the checkpoint and a naming convention.
+    # Silent when zero: nothing observed is not "this stage reads nothing", and a stage with no
+    # reported bytes keeps the existing estimate rather than being given a ceiling of infinity.
+    if _ws_bytes > 0:
+        print("TRACE_STAGE_BYTES[%s]=%d" % (stage.name, _ws_bytes), flush=True)
     return per_s * 1000.0, path
 
 

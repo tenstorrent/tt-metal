@@ -2472,6 +2472,7 @@ def _persist_stage_ms(
     stage_batch: int = 0,
     prompt_tokens: int = 0,
     stage_isl_per_request: dict | None = None,
+    stage_bytes: dict | None = None,
 ) -> None:
     """Record trace_replay's per-stage timings so the report can show a MEASURED phase split.
 
@@ -2508,6 +2509,12 @@ def _persist_stage_ms(
                     # PER-REQUEST counts, from the legacy marker. "isl" above holds TOTALS a stage
                     # stated for one call; these must be multiplied by the batch and those must not.
                     "isl_per_request": stage_isl_per_request or {},
+                    # THE READ SET, MEASURED. Distinct device tensors each stage's ops touched, from
+                    # trace_replay's dispatch hook. The roofline's memory floor divides by this;
+                    # every other source for it is an inference from the checkpoint plus a naming
+                    # convention, and the one that matters most -- what a TOKEN reads -- had no
+                    # measurement at all until this.
+                    "bytes": stage_bytes or {},
                     # THE BATCH THE RUN ACTUALLY SERVED. Parsed off TRACE_REPLAY_PATH for the
                     # scorecard and then dropped, so the report had to fall back to TT_PERF_BATCH --
                     # which carries 0, the "ask the pipeline" sentinel, and reads as 1. Every ceiling
@@ -2533,6 +2540,25 @@ def read_stage_ms(state_dir_path=None, model="", task="") -> dict:
             k: float(v)
             for k, v in (_read_stage_doc(state_dir_path, model, task).get("stages") or {}).items()
             if float(v) > 0
+        }
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def read_stage_bytes(state_dir_path=None, model="", task="") -> dict:
+    """The measured per-stage read set in BYTES, or {}. Read by the report renderer.
+
+    The distinct device tensors each stage's ops touched, observed by trace_replay's dispatch hook
+    while the stage ran in isolation. This is the roofline's memory-floor divisor, MEASURED -- the
+    alternative sources are the checkpoint's total (which counts towers a token never reads), a name
+    list (`audio_tower|vision_tower|...`, which a model can spell differently), and a stage_roots
+    section map (which drops lm_head on any untied model).
+    """
+    try:
+        return {
+            k: int(v)
+            for k, v in (_read_stage_doc(state_dir_path, model, task).get("bytes") or {}).items()
+            if int(v) > 0
         }
     except Exception:  # noqa: BLE001
         return {}
@@ -2732,6 +2758,7 @@ def _run_full_pipeline_ms():
         cmd += ["-k", case]
     per_tokens = []
     stage_ms = {}
+    stage_bytes: dict = {}
     stage_paths = {}
     stage_isl = {}
     # {stage: items PER REQUEST}, the legacy marker's unit. Kept apart from stage_isl, which holds
@@ -2814,6 +2841,18 @@ def _run_full_pipeline_ms():
             # Decode ms and prefill ms are not the same currency (decode recurs per token, prefill
             # once per request), so a phase split guessed from free text can put time in the wrong
             # pool and be acted on. Measured, it cannot.
+            # THE BYTES A STAGE ACTUALLY READ. Parsed here beside its time because they are one
+            # measurement of one stage: trace_replay observes the distinct device tensors the stage's
+            # ops touched, which is the quantity the roofline has always had to infer from the
+            # checkpoint and a tower name list.
+            if "TRACE_STAGE_BYTES[" in line:
+                try:
+                    _bn = line.split("TRACE_STAGE_BYTES[", 1)[1].split("]", 1)[0].strip()
+                    _bv = int(float(line.split("]=", 1)[1].split()[0]))
+                    if _bn and _bv > 0:
+                        stage_bytes[_bn] = _bv
+                except (ValueError, IndexError):
+                    pass
             if "TRACE_STAGE_MS[" in line:
                 try:
                     _nm = line.split("TRACE_STAGE_MS[", 1)[1].split("]", 1)[0].strip()
@@ -3004,6 +3043,7 @@ def _run_full_pipeline_ms():
             batch,
             int(stage_isl_per_request.get("prefill") or 0),
             stage_isl_per_request,
+            stage_bytes,
         )
         return statistics.median(per_tokens), "trace", None, decode_path
     if walls:

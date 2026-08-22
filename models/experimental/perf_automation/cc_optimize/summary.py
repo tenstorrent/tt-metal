@@ -449,6 +449,21 @@ def _measured_stage_ms(model: str = "", task: str = "") -> dict:
         return {}
 
 
+def _measured_stage_bytes(model: str = "", task: str = "") -> dict:
+    """trace_replay's per-stage READ SET in bytes, or {}.
+
+    The only measurement of what a stage streams. _stage_measured_bytes(profile, stage) was meant to
+    be this and cannot be: it filters profile buckets by a `stage` tag the profiler never writes, so
+    it returns 0 for every stage on every real profile -- which means the "measured first" line in
+    _bytes_for has always silently taken its estimate branch.
+    """
+    m = _perf_mcp()
+    try:
+        return (m.read_stage_bytes(model=model, task=task) or {}) if m else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _stage_rows(rows: list, indent: str = "    ", share: bool = True) -> list:
     """name / ms / proportional bar, and a share of the block total when the rows share a currency.
 
@@ -1229,6 +1244,7 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
     per_dev_bytes = float(active_bytes) / tp
 
     _share_bases: dict = {}
+    _meas_bytes = _measured_stage_bytes(model, task)
 
     def _root_of(stage) -> str:
         """The subtree this stage runs, as stage_roots resolved it. "" when unmapped."""
@@ -1475,7 +1491,13 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # the language model, so the whole-model divisor is wrong for it rather than approximate. When
         # neither a measurement nor a subtree share is available the roof is WITHHELD -- and the stage
         # still gets its row, because the measurement is real and the gap is worth seeing.
-        _b = _stage_measured_bytes(profile, name) or _bytes_for(name, toks)
+        # MEASURED, THEN THE PROFILE, THEN THE ESTIMATE. _measured_stage_bytes is trace_replay's
+        # observation of the distinct device tensors this stage's ops touched, taken while the stage
+        # ran in isolation -- the first actual measurement of a stage's read set. Ahead of
+        # _stage_measured_bytes, which reads a profile-bucket `stage` tag the profiler does not write
+        # and so returns 0 on every real profile, and ahead of _bytes_for, which apportions the
+        # checkpoint using a tower NAME LIST.
+        _b = int((_meas_bytes or {}).get(name) or 0) or _stage_measured_bytes(profile, name) or _bytes_for(name, toks)
         mem_ms = (_b / (float(peak_bw_gbps) * 1e9)) * 1000.0 if _b else None
         out[name] = {
             "share_basis": _share_bases.get(name, ""),
