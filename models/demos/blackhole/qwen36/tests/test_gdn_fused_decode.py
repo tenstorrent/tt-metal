@@ -363,3 +363,49 @@ def test_recurrence_seq_rows(device, nk, nv):
         for u in range(users):
             ok, pcc = comp_pcc(out_t[0, u], out_got[0, u * w + t], 0.9999)
             assert ok, f"step {t} user {u}: seq output vs sequential op PCC {pcc}"
+
+
+def test_seq_rows_uniform_users(device):
+    """52712 forensics probe: identical per-user inputs/states must produce
+    BITWISE-identical stash rows and output rows across users. A 0.999-PCC gate
+    cannot see a small row-position sensitivity; uniform-prompt e2e divergence
+    ("semantically parallel, different wordings") would."""
+    nk, nv, users, w = 2, 6, 8, 4
+    _, qkv_dim, _, qkvzab_dim = _dims(nk, nv)
+    torch.manual_seed(20)
+    conv1 = torch.randn(1, w, qkv_dim, dtype=torch.float32) * 0.5
+    zab1 = torch.randn(1, w, qkvzab_dim, dtype=torch.float32) * 0.5
+    h1 = torch.randn(1, nv, DK, DV, dtype=torch.float32) * 0.1
+    dt_bias = torch.randn(1, 1, nv, dtype=torch.float32) * 0.5
+    neg_exp_a = -torch.exp(torch.randn(1, 1, nv, dtype=torch.float32) * 0.3)
+    norm_w = torch.randn(1, 1, DV, dtype=torch.float32) * 0.5 + 1.0
+    conv = conv1.repeat(1, users, 1)  # row u*w+t == row t for every user
+    zab = zab1.repeat(1, users, 1)
+    h0 = h1.repeat(users, 1, 1, 1)
+
+    state_d, stash_d, out_d = _run_seq_rows(device, conv, zab, h0, dt_bias, neg_exp_a, norm_w, nk, nv, users, w)
+    assert torch.equal(ttnn.to_torch(state_d).float(), h0), "anchor state was written"
+    stash = ttnn.to_torch(stash_d).float().reshape(users, w, nv, DK, DV)
+    out = ttnn.to_torch(out_d).float().reshape(users, w, nv * DV)
+    for u in range(1, users):
+        d_s = (stash[u] - stash[0]).abs().max()
+        assert torch.equal(stash[u], stash[0]), f"user {u} stash differs bitwise from user 0 (max abs diff {d_s})"
+        d_o = (out[u] - out[0]).abs().max()
+        assert torch.equal(out[u], out[0]), f"user {u} output differs bitwise from user 0 (max abs diff {d_o})"
+
+
+def test_tile_row_slice_unaligned(device):
+    """52712 forensics probe: the fused loop's commit-by-select reads the conv
+    window via a dim-1 TILE slice at rows 9..12 of a [8,12,1280] tensor —
+    non-tile-aligned. Verify ttnn.slice returns the exact rows."""
+    torch.manual_seed(21)
+    x = (torch.randn(8, 12, 1280, dtype=torch.float32) * 0.5).to(torch.bfloat16).float()
+    x_d = _dev(device, x)
+    for u in range(8):
+        for w0 in (0, 3, 6, 9):
+            got = ttnn.to_torch(ttnn.slice(x_d, (u, w0, 0), (u + 1, w0 + 3, 1280))).float()
+            ref = x[u : u + 1, w0 : w0 + 3, :]
+            d = (got - ref).abs().max()
+            assert torch.equal(
+                got, ref
+            ), f"unaligned TILE slice wrong at (u={u}, rows {w0}..{w0 + 3}): max abs diff {d}"
