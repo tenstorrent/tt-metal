@@ -11,22 +11,6 @@
 
 namespace ttnn::operations::wavelet {
 
-struct L1Accounting {
-    uint64_t slots_bytes{0};
-    uint64_t workspace_mirror_bytes{0};
-    uint64_t circular_buffers_bytes{0};
-    uint64_t cache_bytes{0};
-    uint64_t output_bytes{0};
-    uint64_t synchronization_bytes{0};
-    uint64_t metadata_bytes{0};
-    uint64_t alignment_bytes{0};
-    uint64_t padding_bytes{0};
-    uint64_t architecture_scratch_bytes{0};
-    uint64_t total_bytes{0};
-    uint64_t capacity_bytes{0};
-    uint64_t headroom_bytes{0};
-};
-
 namespace l1_detail {
 
 constexpr uint64_t kSourceTileCircularBuffersBytes = uint64_t{8} * device_protocol::kLwtNarrowTileBytes;
@@ -42,7 +26,7 @@ static_assert(kOutputTileCircularBufferBytes == 12288);
 
 }  // namespace l1_detail
 
-[[nodiscard]] inline L1Accounting make_l1_accounting(
+[[nodiscard]] inline uint64_t checked_l1_allocation_bytes(
     const uint32_t workspace_elements,
     const uint32_t max_workspace_elements,
     const uint32_t workspace_mirror_elements,
@@ -63,11 +47,9 @@ static_assert(kOutputTileCircularBufferBytes == 12288);
         l1_detail::kSourceTileCircularBuffersBytes + l1_detail::kBaseTileCircularBufferBytes;
     const uint64_t output_bytes =
         l1_detail::kOutputTileCircularBufferBytes + uint64_t{interleave_batch_sticks} * device_protocol::kStickBytes;
-    constexpr uint64_t alignment_bytes = 0;
     const uint64_t total_bytes = slots_bytes + workspace_mirror_bytes + circular_buffers_bytes +
                                  l1_detail::kCacheBytes + output_bytes + l1_detail::kSynchronizationBytes +
-                                 l1_detail::kMetadataBytes + alignment_bytes + padding_bytes +
-                                 architecture_scratch_bytes;
+                                 l1_detail::kMetadataBytes + padding_bytes + architecture_scratch_bytes;
     TT_FATAL(
         total_bytes <= capacity_bytes,
         "tt-wavelet L1 allocation requires {} bytes/core, exceeding capacity {} by {} bytes",
@@ -75,21 +57,7 @@ static_assert(kOutputTileCircularBufferBytes == 12288);
         capacity_bytes,
         total_bytes - capacity_bytes);
 
-    return L1Accounting{
-        .slots_bytes = slots_bytes,
-        .workspace_mirror_bytes = workspace_mirror_bytes,
-        .circular_buffers_bytes = circular_buffers_bytes,
-        .cache_bytes = l1_detail::kCacheBytes,
-        .output_bytes = output_bytes,
-        .synchronization_bytes = l1_detail::kSynchronizationBytes,
-        .metadata_bytes = l1_detail::kMetadataBytes,
-        .alignment_bytes = alignment_bytes,
-        .padding_bytes = padding_bytes,
-        .architecture_scratch_bytes = architecture_scratch_bytes,
-        .total_bytes = total_bytes,
-        .capacity_bytes = capacity_bytes,
-        .headroom_bytes = capacity_bytes - total_bytes,
-    };
+    return total_bytes;
 }
 
 }  // namespace ttnn::operations::wavelet

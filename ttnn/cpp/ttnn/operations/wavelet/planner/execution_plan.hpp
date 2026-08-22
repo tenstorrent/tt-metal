@@ -48,15 +48,6 @@ struct AxisConePlan {
     IndexInterval initial_even{};
     IndexInterval initial_odd{};
     std::vector<AxisRouteRequirement> routes;
-    size_t max_workspace_elements{0};
-    bool base_transitions_aligned_32{false};
-};
-
-struct DependencyExtent {
-    int32_t even_left{0};
-    int32_t even_right{0};
-    int32_t odd_left{0};
-    int32_t odd_right{0};
 };
 
 struct LwtStepRoute {
@@ -74,11 +65,8 @@ struct LwtStepRoute {
 };
 
 struct LwtChunkPlan {
-    IndexInterval final_even{};
-    IndexInterval final_odd{};
     IndexInterval initial_even{};
     IndexInterval initial_odd{};
-    DependencyExtent descriptor{};
     std::vector<LwtStepRoute> routes;
     size_t max_workspace_elements{0};
     double dependency_overhead{0.0};
@@ -95,7 +83,6 @@ struct LwtExecutionPlan {
     uint32_t groups_per_chunk{0};
     uint32_t workspace_elements{0};
     uint32_t max_workspace_elements{0};
-    uint32_t active_core_count{0};
     double max_dependency_overhead{0.0};
     WorkspaceLayout workspace_layout{WorkspaceLayout::kRowMajor};
 };
@@ -302,15 +289,6 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
     return required.empty() ? 0 : required.begin - storage.begin;
 }
 
-[[nodiscard]] inline int32_t checked_descriptor_extent(const int64_t value, const char* label) {
-    TT_FATAL(
-        value >= std::numeric_limits<int32_t>::min() && value <= std::numeric_limits<int32_t>::max(),
-        "{} dependency extent {} overflows int32_t",
-        label,
-        value);
-    return static_cast<int32_t>(value);
-}
-
 [[nodiscard]] inline LwtChunkPlan build_chunk(
     const LiftingForwardPlan& plan,
     const IndexInterval final_even,
@@ -414,8 +392,6 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
 
     const IndexInterval initial_even = required.front().even;
     const IndexInterval initial_odd = required.front().odd;
-    const size_t final_begin = std::min(final_even.begin, final_odd.begin);
-    const size_t final_end = std::max(final_even.end, final_odd.end);
     const size_t final_elements = final_even.length() + final_odd.length();
     const size_t dependency_elements = initial_even.length() + initial_odd.length();
     const double dependency_overhead =
@@ -424,21 +400,8 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
                                   static_cast<double>(final_elements);
 
     return LwtChunkPlan{
-        .final_even = final_even,
-        .final_odd = final_odd,
         .initial_even = initial_even,
         .initial_odd = initial_odd,
-        .descriptor =
-            DependencyExtent{
-                .even_left = checked_descriptor_extent(
-                    static_cast<int64_t>(final_begin) - static_cast<int64_t>(initial_even.begin), "even-left"),
-                .even_right = checked_descriptor_extent(
-                    static_cast<int64_t>(initial_even.end) - static_cast<int64_t>(final_end), "even-right"),
-                .odd_left = checked_descriptor_extent(
-                    static_cast<int64_t>(final_begin) - static_cast<int64_t>(initial_odd.begin), "odd-left"),
-                .odd_right = checked_descriptor_extent(
-                    static_cast<int64_t>(initial_odd.end) - static_cast<int64_t>(final_end), "odd-right"),
-            },
         .routes = std::move(routes),
         .max_workspace_elements = max_workspace_elements,
         .dependency_overhead = dependency_overhead,
@@ -542,23 +505,12 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
         routes.push_back(requirement);
     }
 
-    size_t max_workspace_elements = 0;
-    for (const AxisRequiredStreams& streams : required) {
-        max_workspace_elements =
-            std::max(max_workspace_elements, std::max(streams.even.length(), streams.odd.length()));
-    }
-    const bool base_transitions_aligned_32 =
-        std::all_of(plan.routes.begin(), plan.routes.end(), [](const LiftingStepRoute& route) {
-            return !is_predict_update_step(route.type) || route.base_offset % 32 == 0;
-        });
     return AxisConePlan{
         .final_even = required.back().even,
         .final_odd = required.back().odd,
         .initial_even = required.front().even,
         .initial_odd = required.front().odd,
         .routes = std::move(routes),
-        .max_workspace_elements = max_workspace_elements,
-        .base_transitions_aligned_32 = base_transitions_aligned_32,
     };
 }
 
@@ -616,7 +568,6 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
             static_cast<uint32_t>(std::min(static_cast<uint64_t>(final_group_count), uint64_t{2} * chunk_count));
     }
 
-    const uint32_t active_core_count = static_cast<uint32_t>(std::min(chunks.size(), static_cast<size_t>(core_limit)));
     const uint32_t groups_per_chunk =
         static_cast<uint32_t>(ceil_div(static_cast<size_t>(final_group_count), chunks.size()));
     double max_dependency_overhead = 0.0;
@@ -630,7 +581,6 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
         .groups_per_chunk = groups_per_chunk,
         .workspace_elements = workspace_elements,
         .max_workspace_elements = max_workspace_elements,
-        .active_core_count = active_core_count,
         .max_dependency_overhead = max_dependency_overhead,
         .workspace_layout = workspace_layout,
     };
