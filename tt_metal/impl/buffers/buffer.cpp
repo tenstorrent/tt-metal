@@ -658,6 +658,10 @@ void Buffer::deallocate_impl() {
                 }
             }
             allocator_->deallocate_buffer(this);
+        } else if (!hooked_allocation_) {
+            // The hook suppresses bank deallocation, but this real allocation must still be
+            // untracked before the Buffer is destroyed.
+            allocator_->untrack_buffer(this);
         }
 
         // Capture deallocates here instead of higher levels.
