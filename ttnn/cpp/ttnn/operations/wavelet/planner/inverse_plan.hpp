@@ -388,12 +388,11 @@ template <typename Scheme>
     static_assert(Scheme::tap_size > 0, "Static lifting schemes must have a positive tap size");
     TT_FATAL(original_length > 0, "Inverse lifting requires a non-empty output signal");
     const SignalBuffer original{
-        .dram_address = 0,
         .length = original_length,
         .stick_width = kStickWidth,
         .element_size_bytes = sizeof(float),
     };
-    LiftingForwardPlan trace = make_forward_lifting_plan<Scheme>(original, 0, 0, boundary_mode);
+    LiftingForwardPlan trace = make_forward_lifting_plan<Scheme>(original, boundary_mode);
     const bool length_valid = coefficient_length == trace.output_length ||
                               (coefficient_length >= trace.output_length && coefficient_length % kStickWidth == 0 &&
                                (coefficient_length - trace.output_length) < kStickWidth);
