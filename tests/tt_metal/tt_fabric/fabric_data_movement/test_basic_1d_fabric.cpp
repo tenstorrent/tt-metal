@@ -1882,15 +1882,6 @@ TEST_F(Galaxy1x32Fabric1DFixture, TestUnicastRaw_AllHops) {
 }
 
 TEST_F(Fabric1DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
-TEST_F(Fabric1DFixture, TestUnicastNonDefaultHandshakeNoc) {
-    FabricUnicastCommon(
-        this,
-        NocPacketType::NOC_UNICAST_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1)},
-        FabricApiType::Linear,
-        false,
-        true);
-}
 TEST_F(Fabric1DFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
 TEST_F(Fabric1DFixture, TestUnicastTGGateways) { RunTestUnicastTGGateways(this); }
 TEST_F(Fabric1DFixture, TestMCastConnAPI) { RunTestMCastConnAPI(this); }
@@ -2105,8 +2096,7 @@ void FabricUnicastCommon(
     NocPacketType noc_packet_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t>>& pair_ordered_dirs,
     FabricApiType api_type,
-    bool with_state,
-    bool use_non_default_handshake_noc) {
+    bool with_state) {
     tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
     tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
     uint32_t num_packets = 10;
@@ -2186,11 +2176,6 @@ void FabricUnicastCommon(
         worker_mem_map.packet_payload_size_bytes = 4;
     }
 
-    std::map<std::string, std::string> sender_defines;
-    if (use_non_default_handshake_noc) {
-        sender_defines["TEST_NON_DEFAULT_HANDSHAKE_NOC"] = "1";
-    }
-
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
@@ -2202,8 +2187,7 @@ void FabricUnicastCommon(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args,
-            .defines = sender_defines});
+            .compile_args = compile_time_args});
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.source_l1_buffer_address,
