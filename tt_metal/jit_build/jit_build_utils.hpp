@@ -76,6 +76,51 @@ std::string format_named_ct_arg_map(const std::unordered_map<std::string, std::u
 // Full contents of NAMED_CT_ARG_MAP_HEADER for |named_args|.
 std::string format_named_ct_arg_map_header(const std::unordered_map<std::string, std::uint32_t>& named_args);
 
+// The #include lines that kernel_bindings_generated.h must always carry, regardless of what the
+// kernel binds, so that format_optional_binding_lookups()'s output below compiles.
+//
+// api/optional_binding.h supplies binding::Name, binding::NullTensorBindingToken and <optional>.
+//
+// The other two are the homes of DFBBindingToken and ScratchpadBindingToken. A lookup names its
+// token type in its return type even for a kernel with no bindings of that kind -- which is
+// precisely the case the lookups exist to serve -- so both headers are needed unconditionally,
+// where previously each was included only when the kernel had a binding of that kind. That does
+// mean every Metal 2.0 kernel now sees the full DataflowBuffer and Scratchpad definitions; both are
+// already guarded for TRISC (see the COMPILE_FOR_TRISC branches in dataflow_buffer.h and the
+// trisc.cc symbols that exist so TRISC kernels including DFB headers link cleanly), so this is a
+// configuration the headers already support.
+inline constexpr std::string_view OPTIONAL_BINDING_LOOKUP_INCLUDES =
+    "#include \"api/optional_binding.h\"\n"
+    "#include \"api/dataflow/dataflow_buffer.h\"\n"
+    "#include \"api/scratchpad.h\"\n";
+
+// Render the three optional-binding lookups that every Metal 2.0 kernel's
+// kernel_bindings_generated.h carries:
+//
+//   try_get_tensor_binding<"name">()      -> std::optional<::tensor::name_t>
+//                                            or std::optional<::binding::NullTensorBindingToken>
+//   try_get_dfb_binding<"name">()         -> std::optional<::DFBBindingToken>
+//   try_get_scratchpad_binding<"name">()  -> std::optional<::ScratchpadBindingToken>
+//
+// These let a kernel ask whether the host bound a given resource instead of naming its token
+// directly, which is what makes a genuinely optional kernel parameter expressible: a token exists
+// only if the host bound it, so naming an unbound one is a compile error, whereas asking for an
+// unbound name here just yields an empty optional. Emptiness is a compile-time constant, so the
+// absent branch is provably dead and the compiler removes it. See hw/inc/api/optional_binding.h
+// for the full rationale and the typo trade-off it accepts.
+//
+// The lookups are emitted for EVERY Metal 2.0 kernel, including one that binds nothing at all --
+// a kernel with no DFB bindings still needs try_get_dfb_binding to exist in order to ask.
+//
+// Each name list must be the accessor names already emitted into the corresponding namespace
+// (`tensor`, `dfb`, `scratch`) of the same header, in the same order: the tensor lookup refers to
+// the per-binding `<name>_t` aliases emitted alongside those tokens. Names are host-validated C++
+// identifiers (ProgramSpec::IsValidCppIdentifier), so they need no escaping here.
+std::string format_optional_binding_lookups(
+    const std::vector<std::string>& tensor_binding_names,
+    const std::vector<std::string>& dfb_binding_names,
+    const std::vector<std::string>& scratchpad_binding_names);
+
 void create_file(const std::string& file_path_str);
 
 // Read the entire contents of a binary file into a byte vector.

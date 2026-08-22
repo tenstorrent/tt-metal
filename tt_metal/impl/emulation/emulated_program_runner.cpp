@@ -828,8 +828,8 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     return s;
 }
 
-// Emits args::/dfb::/sem::/tensor:: namespaces into the JIT wrapper, replacing
-// kernel_args_generated.h + kernel_bindings_generated.h that upstream's JIT
+// Emits args::/dfb::/sem::/tensor::/scratch:: namespaces and the optional-binding lookups into the
+// JIT wrapper, replacing kernel_args_generated.h + kernel_bindings_generated.h that upstream's JIT
 // build produces. Must stay text-equivalent to genfiles.cpp's
 // write_kernel_{args,bindings}_generated_header.
 static void emit_metal2_namespaces(
@@ -841,17 +841,29 @@ static void emit_metal2_namespaces(
     if (has_args) {
         f << "#include \"experimental/kernel_args.h\"\n";
     }
-    if (!s.dfb_accessors.empty()) {
-        f << "#include \"api/dataflow/dataflow_buffer.h\"\n";
+    if (s.is_metal2) {
+        // Headers needed by the optional-binding lookups emitted below. Gated on is_metal2 to match
+        // genfiles.cpp, which only writes kernel_bindings_generated.h for Metal 2.0 kernels, and
+        // emitted in this position for the same reason: that is where
+        // write_kernel_bindings_generated_header puts it. It also subsumes the dataflow_buffer.h and
+        // scratchpad.h includes a Metal 2.0 kernel would otherwise get conditionally below, since a
+        // lookup names DFBBindingToken and ScratchpadBindingToken whether or not the kernel binds
+        // one. See OPTIONAL_BINDING_LOOKUP_INCLUDES.
+        f << tt::jit_build::utils::OPTIONAL_BINDING_LOOKUP_INCLUDES;
+    } else {
+        // A legacy kernel gets no lookups, so it needs only the headers its own bindings use.
+        if (!s.dfb_accessors.empty()) {
+            f << "#include \"api/dataflow/dataflow_buffer.h\"\n";
+        }
+        if (!s.scratch_accessors.empty()) {
+            f << "#include \"api/scratchpad.h\"\n";
+        }
     }
     if (!s.sem_accessors.empty()) {
         f << "#include <cstdint>\n";
     }
     if (!s.ta_accessors.empty()) {
         f << "#include \"api/tensor/tensor_binding_token.h\"\n";
-    }
-    if (!s.scratch_accessors.empty()) {
-        f << "#include \"api/scratchpad.h\"\n";
     }
 
     if (has_args) {
@@ -917,6 +929,29 @@ static void emit_metal2_namespaces(
               << "u};\n";
         }
         f << "}  // namespace scratch\n";
+    }
+
+    // Optional-binding lookups — always emitted for Metal 2.0 kernels, including ones that bind
+    // nothing, since "nothing was bound" is an answer the kernel is entitled to ask for. Rendered
+    // by the same shared formatter genfiles.cpp uses, so the two cannot drift.
+    if (s.is_metal2) {
+        std::vector<std::string> ta_names;
+        ta_names.reserve(s.ta_accessors.size());
+        for (const auto& ta : s.ta_accessors) {
+            ta_names.push_back(ta.name);
+        }
+        std::vector<std::string> dfb_names;
+        dfb_names.reserve(s.dfb_accessors.size());
+        for (const auto& dfb : s.dfb_accessors) {
+            dfb_names.push_back(dfb.first);
+        }
+        std::vector<std::string> scratch_names;
+        scratch_names.reserve(s.scratch_accessors.size());
+        for (const auto& sp : s.scratch_accessors) {
+            scratch_names.push_back(sp.name);
+        }
+        f << "\n";
+        f << tt::jit_build::utils::format_optional_binding_lookups(ta_names, dfb_names, scratch_names);
     }
 
     // Vararg helpers — always emitted for Metal 2.0 kernels (mirrors

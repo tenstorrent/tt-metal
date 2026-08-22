@@ -32,6 +32,7 @@
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
+#include "tt_metal/hw/inc/api/optional_binding.h"  // binding::MAX_BINDING_NAME_LEN
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <variant>
@@ -248,6 +249,28 @@ bool IsValidCppIdentifier(std::string_view s) {
     return !kCppKeywords.contains(s);
 }
 
+// A resource binding's accessor_name is also baked into the device-side optional-binding lookups
+// (try_get_tensor_binding<"name">() and friends), whose template parameter carries a fixed-capacity
+// buffer of binding::MAX_BINDING_NAME_LEN characters. A longer name is silently truncated there, so
+// two names agreeing on their first MAX_BINDING_NAME_LEN characters would become indistinguishable
+// and a lookup would quietly hand back the wrong binding. Reject it here instead, where the failure
+// is loud and names the kernel.
+//
+// Only the three kinds the lookups cover are capped. Semaphores and named CT/RT args are not
+// reachable through a lookup, so their names are not subject to this limit.
+template <typename KernelId>
+void ValidateBindingNameLength(std::string_view name, std::string_view kind, const KernelId& kernel_id) {
+    TT_FATAL(
+        name.size() <= ::binding::MAX_BINDING_NAME_LEN,
+        "Kernel '{}' {} accessor_name '{}' is {} characters long, which exceeds the {}-character "
+        "limit that the device-side binding lookups can distinguish",
+        kernel_id,
+        kind,
+        name,
+        name.size(),
+        ::binding::MAX_BINDING_NAME_LEN);
+}
+
 // ============================================================================
 // Step 1: Spec Collection & Validation
 // ============================================================================
@@ -327,6 +350,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                     "Kernel '{}' DFB accessor_name '{}' must be a valid C++ identifier",
                     kernel.unique_id,
                     dfb_binding.accessor_name);
+                ValidateBindingNameLength(dfb_binding.accessor_name, "DFB", kernel.unique_id);
             } else {
                 TT_FATAL(
                     info.dfb_spec_name == dfb_binding.dfb_spec_name,
@@ -470,6 +494,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' scratchpad accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            ValidateBindingNameLength(binding.accessor_name, "scratchpad", kernel.unique_id);
             TT_FATAL(
                 collected.scratchpad_by_name.contains(binding.scratchpad_spec_name),
                 "Kernel '{}' references unknown scratchpad '{}'",
@@ -525,6 +550,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' tensor accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            ValidateBindingNameLength(binding.accessor_name, "tensor", kernel.unique_id);
             TT_FATAL(
                 collected.tensor_parameter_by_name.contains(binding.tensor_parameter_name),
                 "Kernel '{}' references unknown TensorParameter '{}'",

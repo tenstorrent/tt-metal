@@ -8,6 +8,7 @@
 
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
+#include "api/optional_binding.h"
 #include "api/tensor/tensor_accessor_args.h"
 #include "api/tensor/tensor_binding_token.h"
 
@@ -64,6 +65,22 @@ public:
         static_assert(
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
     }
+
+    // Construct from the stand-in token that try_get_tensor_binding<"name">() yields when the host
+    // bound no such tensor. This overload exists so that the absent branch of such a lookup is
+    // still *well-formed*: a discarded `if constexpr` branch is only left uninstantiated inside a
+    // template, and kernel_main is not a template, so the absent branch is fully type-checked.
+    // Without this overload a kernel could not compile the very branch the lookup exists to let it
+    // write. See api/optional_binding.h.
+    //
+    // The resulting accessor is inert and unreachable: the only way to obtain a
+    // NullTensorBindingToken is by dereferencing the empty optional an absent lookup returns, and
+    // that optional's emptiness is a compile-time constant, so the branch is dead code the compiler
+    // deletes outright. Base address 0 is used rather than an indeterminate value so that a
+    // hypothetical reachable path is caught by the L1 address sanitizer on first access in debug
+    // builds, rather than quietly reading an arbitrary L1 location.
+    [[nodiscard]] explicit LocalTensorAccessor(binding::NullTensorBindingToken) noexcept :
+        LocalTensorAccessor(uint32_t{0}) {}
 
     // Legacy constructor: from a raw node-local L1 base address (a byte address).
     // (Typically a legacy Buffer's address passed into the kernel as a CRTA.)

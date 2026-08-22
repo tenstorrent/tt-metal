@@ -253,6 +253,82 @@ std::string format_named_ct_arg_map_header(const std::unordered_map<std::string,
            format_named_ct_arg_map(named_args) + "\n";
 }
 
+namespace {
+
+// The `if constexpr (NAME == ...) {` line opening one arm of a lookup's chain. The first arm opens
+// the chain, each later one closes the previous arm first.
+std::string lookup_arm_opener(bool is_first, const std::string& name) {
+    std::string arm = is_first ? "    if" : "    } else if";
+    arm += " constexpr (NAME == ::binding::Name(\"" + name + "\")) {\n";
+    return arm;
+}
+
+// Emit one lookup whose present-case value type is the same for every binding of its kind, which
+// is the case for DFB and scratchpad bindings. `token_type` is the fully-qualified token type and
+// `ns` the namespace holding the emitted tokens.
+void append_concrete_token_lookup(
+    std::string& out,
+    std::string_view fn_name,
+    std::string_view token_type,
+    std::string_view ns,
+    const std::vector<std::string>& names) {
+    const std::string optional_of = "std::optional<" + std::string(token_type) + ">";
+
+    out += "template <::binding::Name NAME>\n";
+    out += "[[nodiscard]] constexpr " + optional_of + " " + std::string(fn_name) + "() {\n";
+    if (names.empty()) {
+        out += "    // This kernel has no bindings of this kind, so every name is absent.\n";
+        out += "    return " + optional_of + "();\n";
+    } else {
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            out += lookup_arm_opener(/*is_first=*/i == 0, names[i]);
+            out += "        return " + optional_of + "(::" + std::string(ns) + "::" + names[i] + ");\n";
+        }
+        out += "    } else {\n";
+        out += "        return " + optional_of + "();\n";
+        out += "    }\n";
+    }
+    out += "}\n";
+}
+
+// Emit the tensor lookup. Unlike the other two, its present-case return type differs per binding:
+// a tensor binding token is TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>, a distinct type for
+// each binding. Hence the deduced `auto` return type, and hence binding::NullTensorBindingToken --
+// there is no single tensor token type for the absent case to be an empty optional of.
+void append_tensor_lookup(std::string& out, const std::vector<std::string>& names) {
+    out += "template <::binding::Name NAME>\n";
+    out += "[[nodiscard]] constexpr auto try_get_tensor_binding() {\n";
+    if (names.empty()) {
+        out += "    // This kernel has no tensor bindings, so every name is absent.\n";
+        out += "    return std::optional<::binding::NullTensorBindingToken>();\n";
+    } else {
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            out += lookup_arm_opener(/*is_first=*/i == 0, names[i]);
+            out += "        return std::optional<::tensor::" + names[i] + "_t>(::tensor::" + names[i] + ");\n";
+        }
+        out += "    } else {\n";
+        out += "        return std::optional<::binding::NullTensorBindingToken>();\n";
+        out += "    }\n";
+    }
+    out += "}\n";
+}
+
+}  // namespace
+
+std::string format_optional_binding_lookups(
+    const std::vector<std::string>& tensor_binding_names,
+    const std::vector<std::string>& dfb_binding_names,
+    const std::vector<std::string>& scratchpad_binding_names) {
+    std::string out;
+    append_tensor_lookup(out, tensor_binding_names);
+    out += "\n";
+    append_concrete_token_lookup(out, "try_get_dfb_binding", "::DFBBindingToken", "dfb", dfb_binding_names);
+    out += "\n";
+    append_concrete_token_lookup(
+        out, "try_get_scratchpad_binding", "::ScratchpadBindingToken", "scratch", scratchpad_binding_names);
+    return out;
+}
+
 void create_file(const std::string& file_path_str) {
     namespace fs = std::filesystem;
 
