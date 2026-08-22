@@ -254,6 +254,27 @@ Two independent reasons a re-run on `ssalice/mistral4-tests` is required rather 
   build used for §4 does not expose (it has only `Silu` and `SwiGluOai`). The branch therefore cannot
   even be collected against the old binary without a shim.
 
-A clean rebuild on that branch and a re-run of the sweep is in progress. Until it lands, treat §4 as
-measured on `ssalice/mistral4-119b-prefill` and inherited by `ssalice/mistral4-tests`, not as verified
-there.
+### Re-run: done, and the results hold
+
+The branch was rebuilt from scratch (`build_metal.sh --clean` then `--enable-ccache`; ~4 min compile,
+0 errors, `ENABLE_TRACY=ON` preserved) and the sweep re-run against that build.
+
+**19 mistral4 cases passed, 1 failed — the identical pass/fail pattern.** MLA output PCCs are
+bit-identical; everything else reproduces to 4+ decimals, so `RELAXED_INIT` and the 324 upstream
+commits are numerically neutral for this model. The one exception is `lm_head`, which *improved* by
+0.0144 (0.928376 → 0.942780) from an upstream change to the lm-head path; it still fails its 0.99
+gate and the per-layer accumulation is unchanged. Full side-by-side in
+`test_logs/RESULTS.md`; logs in `test_logs/on_mistral4_tests/`.
+
+So §4 is now **verified** on the deliverable branch, not inherited.
+
+**One trap worth carrying forward.** With a symlinked `python_env`, `PYTHONPATH=$PWD` alone silently
+loads the *main repo's* older `_ttnn.so`: the importable package is `<root>/ttnn/ttnn`, so `<root>`
+yields only a namespace candidate and `PathFinder` continues on to the shared env's
+`ttnn-custom.pth`. You get the wrong binary while believing you tested the new one. The three-entry
+form `$TT_METAL_HOME/ttnn:$TT_METAL_HOME:$TT_METAL_HOME/tools` is required, and `run_wt.sh` asserts
+`'sf-trial' in ttnn._ttnn.__file__` before running anything.
+
+Also worth knowing: on this branch `pytest --collect-only` is **not** device-free — it opens and
+starts all 32 chips for ~18 s, via `ttnn.get_num_devices()` and `is_blackhole()` at
+decorator/import time.

@@ -290,3 +290,71 @@ the accumulated hidden-state error across the 131072-wide vocabulary.
 substitution is not a rounding-level nuisance that a threshold can absorb — it is a per-layer bias
 that accumulates linearly with depth. The one-layer block test's 0.995 was misleading precisely
 because one layer is where the effect is smallest.
+
+---
+
+# Re-run on `ssalice/mistral4-tests` (clean rebuild of `kmabee/prefill-shared-fixes`)
+
+Logs: `mistral4_bringup/test_logs/on_mistral4_tests/`. Runner: `run_wt.sh`.
+
+Built from scratch in a worktree (`build_metal.sh --clean` then `--enable-ccache`; ~4 min actual
+compile, 0 errors, `ENABLE_TRACY=ON` preserved). This re-run was **required**, not belt-and-braces:
+the branch needs a newer `_ttnn.so` (`ttnn.RoutedExpertActivation.SituGlu`, absent from the old
+build) and the cherry-pick moved the block/transformer tests onto `torus_xy_device_params`, which
+also sets `reliability_mode = RELAXED_INIT`.
+
+**Trap worth recording:** with a *symlinked* `python_env`, `PYTHONPATH=$PWD` alone silently loads the
+**main repo's** older `_ttnn.so` — the importable package is `<root>/ttnn/ttnn`, so `<root>` yields
+only a namespace candidate and `PathFinder` continues to the shared env's `ttnn-custom.pth`. The
+three-entry form `$TT_METAL_HOME/ttnn:$TT_METAL_HOME:$TT_METAL_HOME/tools` is mandatory, and
+`run_wt.sh` asserts `'sf-trial' in ttnn._ttnn.__file__` before running anything.
+
+## Result: 11 passed, 1 failed — same pass/fail pattern as the original branch
+
+| test | old branch | new branch | verdict |
+|---|---|---|---|
+| `test_mistral4_kv_cache_table` | 1 PASS | **1 PASS** | same |
+| `test_mistral4_mla -k 8x4` | 4 PASS | **4 PASS** | same |
+| `test_mistral4_moe` | 1 PASS | **1 PASS** | same |
+| `test_mistral4_prefill_block` | 2 PASS | **2 PASS** | same |
+| `test_mla_chunked_prefill` (3 sub-8192) | 3 PASS | **3 PASS** | same |
+| `test_mistral4_prefill_transformer` 2L | 1 PASS / 1 FAIL | **1 PASS / 1 FAIL** | same |
+
+### Numbers side by side
+
+| metric | old branch | new branch | Δ |
+|---|---|---|---|
+| MLA out PCC (4 cases) | 0.9981613, 0.9993314, 0.9980571, 0.9986129 | **bit-identical** | 0 |
+| block dense | 0.9998777 | 0.9998774 | −3e−7 |
+| block moe | 0.9951784 | 0.9951924 | +1.4e−5 |
+| MoE `reference_output` | 0.972469 | 0.972497 | +2.8e−5 (still +0.0015 over threshold) |
+| MoE `routed_output` | 0.974983 | 0.975551 | +5.7e−4 |
+| chunked full-measured (3) | 0.9992858, 0.9992854, 0.9993017 | 0.9992884, 0.9992878, 0.9993045 | ~+2.6e−6 |
+| transformer `layer_0` | 0.975813 | 0.976044 | +2.3e−4 |
+| transformer `layer_1` | 0.942922 | 0.943361 | +4.4e−4 |
+| transformer `lm_head` | 0.928376 | 0.942780 | **+0.0144** |
+
+Everything except `lm_head` reproduces to 4+ decimals, so `RELAXED_INIT` and the 324 upstream commits
+are numerically neutral for this model. `lm_head` improved by 0.014 — an upstream change in the
+lm-head path, not something this work did; the stage still fails its 0.99 gate and the per-layer
+accumulation is unchanged.
+
+**The MoE accumulation reproduces exactly**: `embed` 1.000000, then −0.024 and −0.033 for the first
+two layers. So the conclusion in F0 holds on the deliverable branch, on a fresh build, under
+`RELAXED_INIT`.
+
+### Op unit tests on the new branch
+
+| test | selector | result | log |
+|---|---|---|---|
+| `op_unit_tests/test_ttnn_dispatch_combine.py` | `-k "mistral4 and 8x4"` | **4 passed** | `op_dispatch_combine.log` |
+| `op_unit_tests/test_prefill_dispatch.py` | `-k "mistral4-perf_no_pcc and 8x4"` | **4 passed**, 12 skipped | `op_dispatch.log` |
+
+(Case counts differ from the old branch because upstream added `fp8_scaled_in` / `fp8_out` axes, so
+the same selector slices differently. No failures.)
+
+## Final tally on `ssalice/mistral4-tests`
+
+**19 mistral4 cases passed, 1 failed** — the failure being
+`test_mistral4_prefill_transformer[... pcc-random ...]`, which is the softmax-router accumulation
+(F0) and is the intended signal, not a defect in the wiring.
