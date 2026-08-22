@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cmath>
 #include <numbers>
 #include <utility>
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
@@ -793,19 +794,34 @@ std::vector<Tensor> celu_bw(
     return grad_tensor;
 }
 
+// rpow: y = exponent ** input, i.e. the float parameter is the base, not the exponent
+// of input. See _golden_function_rpow in ttnn/ttnn/operations/unary.py and the kernel
+// comment in ckernel_sfpu_rpow.h.
+// bw (rpow) = grad * ln(exponent) * exponent ** input
+// This mirrors exp2_bw below, which is the same derivative with the base fixed at 2.
 std::vector<Tensor> rpow_bw(
     const Tensor& grad, const Tensor& input, float exponent, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    float t_nan = std::nanf("");
-    Tensor grad_result = ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_mem_config);
-    if (exponent != 0.0) {
-        grad_result = ttnn::multiply(
-            grad,
-            ttnn::multiply(pow(input, exponent - 1, output_mem_config), exponent, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config);
-        grad_result = ttnn::where(ltz(input, output_mem_config), t_nan, grad_result, output_mem_config);
+    if (exponent < 0.0f) {
+        // A negative base is only defined on integer inputs, so exponent ** input has no
+        // derivative with respect to input: torch.pow(-2.0, x).backward() is NaN for every x.
+        Tensor grad_result =
+            ttnn::full_like(input, std::nanf(""), input.dtype(), input.layout(), std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(grad_result);
+        return grad_tensor;
     }
+    if (exponent == 0.0f) {
+        // 0 ** input is 0 above zero and +inf below it, so the derivative is 0 above zero
+        // and -inf below it.
+        Tensor deriv = ttnn::where(
+            ttnn::ltz(input, output_mem_config), -std::numeric_limits<float>::infinity(), 0.0f, output_mem_config);
+        Tensor grad_result = ttnn::multiply(grad, deriv, std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(grad_result);
+        return grad_tensor;
+    }
+    Tensor rpow_result = ttnn::rpow(input, exponent, output_mem_config);
+    rpow_result = ttnn::multiply(rpow_result, std::log(exponent), std::nullopt, output_mem_config);
+    Tensor grad_result = ttnn::multiply(grad, rpow_result, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
