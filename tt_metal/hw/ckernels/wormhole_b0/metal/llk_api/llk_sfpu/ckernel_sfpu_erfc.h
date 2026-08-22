@@ -19,11 +19,42 @@ namespace ckernel::sfpu {
 // LUT-based erfc via piecewise rational P(x)/Q(x)
 //
 // Uses abs(x) symmetry: erfc(-x) = 2 - erfc(x)
-// Fit on [0, 5.0] only, 2 segments with n4/d5 rational per segment.
-// BF16 MaxULP=118 (was 128 with 3-seg n4/d4 on [-5,5])
-// FP32 MaxULP≈9M  (was 1.47B)
-// 18 FMAs          (was 24)
+// BF16: Fit on [0, 5.0] only, 2 segments with n4/d5 rational per segment.
+//       BF16 MaxULP=118 (was 128 with 3-seg n4/d4 on [-5,5])
+// FP32: Uses n16/d16 rational on [-10.0, 10.0] computing 1 - erf(x)
+//       to achieve single-digit FP32 MaxULP precision across [-10, 10].
 // ======================================================================
+
+#ifdef INP_FLOAT32
+
+constexpr uint32_t ERFC_NUM_DEGREE = 16;
+constexpr uint32_t ERFC_DEN_DEGREE = 16;
+constexpr uint32_t ERFC_NUM_SEGMENTS = 1;
+constexpr uint32_t ERFC_LUT_SIZE = 36;
+constexpr std::array<float, ERFC_LUT_SIZE> ERFC_LUT = {
+    {-1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f,  1.1283791065e+00f,  0.0000000000e+00f,
+     2.1477432549e-01f,  0.0000000000e+00f, 6.2133435160e-02f,  0.0000000000e+00f,  5.6230435148e-03f,
+     0.0000000000e+00f,  6.1307044234e-04f, 0.0000000000e+00f,  1.7678321456e-05f,  0.0000000000e+00f,
+     2.7384647439e-08f,  0.0000000000e+00f, -2.8632063387e-10f, 0.0000000000e+00f,  1.0000000000e+00f,
+     0.0000000000e+00f,  5.2367275953e-01f, 0.0000000000e+00f,  1.2961706519e-01f,  0.0000000000e+00f,
+     1.9642570987e-02f,  0.0000000000e+00f, 1.9545555115e-03f,  0.0000000000e+00f,  1.3179056987e-04f,
+     0.0000000000e+00f,  1.3156344494e-06f, 0.0000000000e+00f,  -3.5153888689e-09f, 0.0000000000e+00f,
+     -6.7350725691e-12f}};
+
+template <int ITERATIONS = 8>
+inline void calculate_erfc() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat erf_val =
+            piecewise_rational_eval<ERFC_NUM_DEGREE, ERFC_DEN_DEGREE, ERFC_NUM_SEGMENTS, ERFC_LUT_SIZE, true, true>(
+                ERFC_LUT, x);
+        sfpi::vFloat r = 1.0f - erf_val;
+        sfpi::dst_reg[0] = r;
+        sfpi::dst_reg++;
+    }
+}
+
+#else
 
 constexpr uint32_t ERFC_NUM_DEGREE = 4;
 constexpr uint32_t ERFC_DEN_DEGREE = 5;
@@ -76,6 +107,8 @@ inline void calculate_erfc() {
         sfpi::dst_reg++;
     }
 }
+
+#endif
 
 template <bool APPROXIMATION_MODE>
 void erfc_init() {
