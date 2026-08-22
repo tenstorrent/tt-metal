@@ -3,10 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "permute.hpp"
+#include "permute_force.hpp"
 
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/codegen/permute_codegen_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/codegen/permute_codegen_supported.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -203,28 +206,34 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttsl::SmallVector<uint32_t>& di
     return true;
 }
 
-}  // namespace ttnn::operations::data_movement::detail
-
-namespace ttnn {
-
-ttnn::Tensor permute(
-    const ttnn::Tensor& input_tensor,
-    const ttsl::SmallVector<int64_t>& dims,
-    const std::optional<MemoryConfig>& memory_config,
-    float pad_value) {
-    const auto input_rank = input_tensor.logical_shape().rank();
+// Asserts the preconditions every leg shares and resolves negative axes, so the routed entry and
+// both forced entries reach the gate and the prims on identical arguments.
+ttsl::SmallVector<uint32_t> normalize_permute_dims(
+    const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int64_t>& dims) {
     TT_FATAL(
-        input_rank == dims.size(),
+        input_tensor.logical_shape().rank() == dims.size(),
         "The number of dimensions in the tensor input does not match the length of the desired ordering");
     TT_FATAL(is_device_tensor(input_tensor), "Tensor must already be on device");
 
     ttsl::SmallVector<uint32_t> normalized_dims(dims.size());
-    std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {
+    std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [&input_tensor](std::int64_t idx) {
         return input_tensor.logical_shape().get_normalized_index(idx);
     });
-    if (operations::data_movement::detail::is_permute_nop(input_tensor, normalized_dims)) {
+    return normalized_dims;
+}
+
+ttnn::Tensor permute_native(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<uint32_t>& normalized_dims,
+    const std::optional<MemoryConfig>& memory_config,
+    float pad_value) {
+    // A permutation that moves no bytes is answered from host state rather than dispatched. This
+    // belongs to the native path: a forced-codegen call has to reach a program.
+    if (is_permute_nop(input_tensor, normalized_dims)) {
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     }
+
+    const auto input_rank = input_tensor.logical_shape().rank();
 
     auto adjust_order = [](const ttsl::SmallVector<uint32_t>& dims) {
         ttsl::SmallVector<uint32_t> new_order;
@@ -238,7 +247,7 @@ ttnn::Tensor permute(
         }
         return new_order;
     };
-    auto itensor = (input_tensor.logical_shape().rank() < 4) ? ttnn::unsqueeze_to_4D(input_tensor) : input_tensor;
+    auto itensor = (input_rank < 4) ? ttnn::unsqueeze_to_4D(input_tensor) : input_tensor;
     auto iorder = normalized_dims.size() < 4 ? adjust_order(normalized_dims) : normalized_dims;
 
     const auto input_layout = input_tensor.layout();
@@ -251,7 +260,7 @@ ttnn::Tensor permute(
             "Shard page size must be aligned to {}B for L1 Tensor",
             l1_alignment);
     }
-    auto output_tensor = operations::data_movement::detail::permute_launch(itensor, iorder, memory_config, pad_value);
+    auto output_tensor = permute_launch(itensor, iorder, memory_config, pad_value);
     output_tensor = ttnn::to_layout(output_tensor, input_layout);
 
     if (input_rank < 4) {
@@ -259,6 +268,61 @@ ttnn::Tensor permute(
     }
 
     return output_tensor;
+}
+
+ttnn::Tensor permute_force_native(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<int64_t>& dims,
+    const std::optional<MemoryConfig>& memory_config,
+    float pad_value) {
+    return permute_native(input_tensor, normalize_permute_dims(input_tensor, dims), memory_config, pad_value);
+}
+
+ttnn::Tensor permute_force_codegen(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<int64_t>& dims,
+    const std::optional<MemoryConfig>& memory_config,
+    float /*pad_value*/) {
+    // pad_value is inert here: the supported scope is row-major, where a permutation introduces no
+    // padding. The routed entry likewise passes it to the native leg only.
+    const auto normalized_dims = normalize_permute_dims(input_tensor, dims);
+    TT_FATAL(
+        permute_codegen::supported_by_codegen(input_tensor, normalized_dims, memory_config),
+        "permute_force_codegen invoked for a case the codegen path does not support (requires a "
+        "device-resident, unsharded rank-2..{} bfloat16/float32/int32 ROW_MAJOR input, an "
+        "interleaved output, a non-degenerate shape, a permutation that is not the transpose op's "
+        "fused width-height case, and -- when the last axis stays put -- a stick narrow enough for "
+        "{} circular-buffer slots in one core's L1). This entry never falls back to native, because "
+        "a forced leg that quietly served native would make any comparison against native vacuous. "
+        "Use ttnn::permute if you want the case routed.",
+        PermuteCodegenDeviceOperation::kMaxDims,
+        permute_codegen::kRmCbSlots);
+    return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
+}
+
+}  // namespace ttnn::operations::data_movement::detail
+
+namespace ttnn {
+
+ttnn::Tensor permute(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<int64_t>& dims,
+    const std::optional<MemoryConfig>& memory_config,
+    float pad_value) {
+    namespace detail = operations::data_movement::detail;
+    namespace permute_codegen = operations::data_movement::permute_codegen;
+
+    const auto normalized_dims = detail::normalize_permute_dims(input_tensor, dims);
+
+    // The no-op shortcut is native's own answer, so a call it covers is left to native rather than
+    // dispatched -- but it is not consulted as part of the support scope, so a forced-codegen call
+    // still reaches a program.
+    if (!detail::is_permute_nop(input_tensor, normalized_dims) &&
+        permute_codegen::supported_by_codegen(input_tensor, normalized_dims, memory_config) &&
+        !permute_codegen::is_demoted(input_tensor, normalized_dims)) {
+        return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
+    }
+    return detail::permute_native(input_tensor, normalized_dims, memory_config, pad_value);
 }
 
 ttnn::Tensor permute(const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int64_t>& dims, float pad_value) {

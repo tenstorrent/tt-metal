@@ -36,6 +36,7 @@ file(
     pad/device/kernels/*.cpp
     pad/device/kernels/*.hpp
     permute/device/kernels/*.cpp
+    permute/codegen/kernels/*.cpp
     reshape_on_device/device/kernels/*.cpp
     repeat/device/kernels/*.cpp
     repeat/codegen/kernels/*.cpp
