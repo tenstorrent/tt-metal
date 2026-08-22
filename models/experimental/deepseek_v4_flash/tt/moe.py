@@ -6,6 +6,7 @@ import torch
 from .common import DeepSeekV4Module, _profile, _region
 from .decode_prefetch import check_decode_layout, decode_prefetch_page_bytes, make_decode_prefetch_buffers
 from .layers import Linear, LinearDecode
+from .l1_weights import packed_weight_spec
 from .system_config import active_system_config
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
 
@@ -82,10 +83,35 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         config=None,
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
+        packed_weights=None,
     ):
         cache = _as_cache(cache)
         self.device = device
         self.use_prefetcher = use_prefetcher
+        if packed_weights is not None:
+            tensor, layout, slot = packed_weights
+
+            def packed_projection(name, weight_key, K, N):
+                spec = packed_weight_spec(layout, slot, name)
+                return LinearDecode(
+                    weights[weight_key],
+                    device,
+                    cache.file(weight_key.removesuffix(".weight")),
+                    dtype=ttnn.bfloat4_b,
+                    K=K,
+                    N=N,
+                    partial_width_sharded=spec.k_blocks > 1,
+                    k_blocks=spec.k_blocks,
+                    n_blocks=spec.n_blocks,
+                    packed_weight_tensor=tensor,
+                    packed_weight_spec=spec,
+                )
+
+            hidden, inter = config.hidden_size, config.moe_intermediate_size
+            self.gate_proj = packed_projection("shared_gate_proj", f"{prefix}.gate_proj.weight", hidden, inter)
+            self.up_proj = packed_projection("shared_up_proj", f"{prefix}.up_proj.weight", hidden, inter)
+            self.down_proj = packed_projection("shared_down_proj", f"{prefix}.down_proj.weight", inter, hidden)
+            return
         if not use_prefetcher:
             self.gate_proj = Linear(
                 weights[f"{prefix}.gate_proj.weight"], device, cache.file(f"{prefix}.gate_proj"), dtype=weight_dtype
@@ -171,13 +197,30 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
     than here across a dense E-wide row.
     """
 
-    def __init__(self, config, weights: dict, device: ttnn.MeshDevice, cache: Optional[WeightCache] = None):
+    def __init__(
+        self, config, weights: dict, device: ttnn.MeshDevice, cache: Optional[WeightCache] = None, packed_weights=None
+    ):
         self.device = device
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
         self.routed_scaling_factor = config.routed_scaling_factor
         cache = _as_cache(cache)
-        self.gate = Linear(weights["gate.weight"], device, cache.file("gate"))
+        if packed_weights is None:
+            self.gate = Linear(weights["gate.weight"], device, cache.file("gate"))
+        else:
+            tensor, layout, slot = packed_weights
+            spec = packed_weight_spec(layout, slot, "router_gate")
+            self.gate = LinearDecode(
+                weights["gate.weight"],
+                device,
+                cache.file("gate"),
+                dtype=ttnn.bfloat4_b,
+                K=spec.K,
+                N=spec.N,
+                n_blocks=spec.n_blocks,
+                packed_weight_tensor=tensor,
+                packed_weight_spec=spec,
+            )
         bias = _materialize(
             weights["gate.e_score_correction_bias"], cache.file("gate.e_score_correction_bias"), ttnn.bfloat16
         )
@@ -227,13 +270,30 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
     it used to expand to — for a 128k vocab, 1.5 MB instead of 64 MB.
     """
 
-    def __init__(self, config, weights: dict, device: ttnn.MeshDevice, cache: Optional[WeightCache] = None):
+    def __init__(
+        self, config, weights: dict, device: ttnn.MeshDevice, cache: Optional[WeightCache] = None, packed_weights=None
+    ):
         self.device = device
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
         self.routed_scaling_factor = config.routed_scaling_factor
         cache = _as_cache(cache)
-        self.gate = Linear(weights["gate.weight"], device, cache.file("gate"))
+        if packed_weights is None:
+            self.gate = Linear(weights["gate.weight"], device, cache.file("gate"))
+        else:
+            tensor, layout, slot = packed_weights
+            spec = packed_weight_spec(layout, slot, "router_gate")
+            self.gate = LinearDecode(
+                weights["gate.weight"],
+                device,
+                cache.file("gate"),
+                dtype=ttnn.bfloat4_b,
+                K=spec.K,
+                N=spec.N,
+                n_blocks=spec.n_blocks,
+                packed_weight_tensor=tensor,
+                packed_weight_spec=spec,
+            )
         # tid2eid [vocab, top_k]: frozen token-id -> expert-id table (host-side,
         # no tile cache) -- always materialise.
         tid = weights["gate.tid2eid"]
@@ -558,13 +618,19 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
+        packed_weights=None,
     ):
         self.device = device
         self.hidden = config.hidden_size
+        self.packed_weights = packed_weights
         cache = _as_cache(cache)
         # ``gate`` may be injected (e.g. a :class:`DeepSeekV4HashRouter` for the
         # first ``num_hash_layers`` layers); otherwise the learned top-k router.
-        self.gate = gate if gate is not None else DeepSeekV4TopKRouter(config, weights, device, cache=cache)
+        self.gate = (
+            gate
+            if gate is not None
+            else DeepSeekV4TopKRouter(config, weights, device, cache=cache, packed_weights=packed_weights)
+        )
         self.is_hash = isinstance(self.gate, DeepSeekV4HashRouter)
         # The routed-expert compute (a :class:`DeepSeekV4PreloadedExperts` keeping
         # all 256 experts resident on device in BFloat4_b) is always injected.
@@ -579,6 +645,7 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             config=config,
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
+            packed_weights=packed_weights,
         )
 
     def prefetch_weights(self):
@@ -604,6 +671,8 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
 
         with _region("MOE_SHARED"):
             shared = self.shared_experts(x_flat)  # [1, 1, T, H]
+            if self.packed_weights is not None:
+                shared = ttnn.to_memory_config(shared, routed.memory_config())
 
         _profile(self.device)
 
@@ -634,4 +703,6 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             routing = self.gate(x_flat)
         routed = self.experts.decode_static(x_flat, routing)  # [1, 1, B, H]
         shared = self.shared_experts(x_flat)  # [1, 1, B, H]
+        if self.packed_weights is not None:
+            shared = ttnn.to_memory_config(shared, routed.memory_config())
         return ttnn.reshape(ttnn.add(routed, shared), [b, 1, 1, h])

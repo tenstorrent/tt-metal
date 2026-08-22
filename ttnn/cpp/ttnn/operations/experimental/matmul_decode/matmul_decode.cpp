@@ -15,9 +15,17 @@ Tensor matmul_decode(
     std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
-    uint32_t global_cb_k_blocks) {
+    uint32_t global_cb_k_blocks,
+    const std::optional<PackedWeightSpec>& packed_weight) {
     return ttnn::prim::matmul_decode(
-        input_tensor_a, input_tensor_b, partial_width_sharded, dtype, output_mem_config, global_cb, global_cb_k_blocks);
+        input_tensor_a,
+        input_tensor_b,
+        partial_width_sharded,
+        dtype,
+        output_mem_config,
+        global_cb,
+        global_cb_k_blocks,
+        packed_weight);
 }
 
 }  // namespace ttnn::experimental

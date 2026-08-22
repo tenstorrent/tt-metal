@@ -11,6 +11,7 @@ from .decode_prefetch import (
     make_decode_prefetch_buffers,
 )
 from .layers import BatchedLinearDecode, DeepSeekV4RMSNorm, LinearDecode, _rms_norm_unweighted
+from .l1_weights import packed_weight_spec
 from .paged_cache import PagedLayerView
 from .system_config import active_system_config
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
@@ -517,6 +518,7 @@ class DeepSeekV4HCACompressor:
         use_prefetcher: bool = False,
         num_prefetch_pages: Optional[int] = None,
         prefetch_buffers: Optional[dict] = None,
+        packed_weights=None,
     ):
         self.device = device
         self.rope_dim = rope_dim
@@ -537,6 +539,7 @@ class DeepSeekV4HCACompressor:
             use_prefetcher,
             num_prefetch_pages,
             prefetch_buffers,
+            packed_weights,
         )
         self.kv_norm = DeepSeekV4RMSNorm(
             weights["compressor.kv_norm.weight"], self.eps, device, cache.file("compressor.kv_norm"), sharded=True
@@ -656,6 +659,7 @@ class DeepSeekV4CSACompressor:
         use_prefetcher: bool = False,
         num_prefetch_pages: Optional[int] = None,
         prefetch_buffers: Optional[dict] = None,
+        packed_weights=None,
     ):
         self.device = device
         self.rope_dim = rope_dim
@@ -676,6 +680,7 @@ class DeepSeekV4CSACompressor:
             use_prefetcher,
             num_prefetch_pages,
             prefetch_buffers,
+            packed_weights,
         )
         self.kv_norm = DeepSeekV4RMSNorm(
             weights["compressor.kv_norm.weight"], self.eps, device, cache.file("compressor.kv_norm"), sharded=True
@@ -806,6 +811,7 @@ def _compressor_projections(
     use_prefetcher: bool,
     num_prefetch_pages: int,
     prefetch_buffers: Optional[dict],
+    packed_weights=None,
 ):
     """The compressor's ``(kv_proj, gate_proj)``, both projecting the block's ``hidden``.
 
@@ -825,6 +831,13 @@ def _compressor_projections(
         prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
 
     def projection(name):
+        packed = {}
+        if packed_weights is not None:
+            tensor, packed_layout, packed_slot = packed_weights
+            packed = {
+                "packed_weight_tensor": tensor,
+                "packed_weight_spec": packed_weight_spec(packed_layout, packed_slot, f"compressor.{name}"),
+            }
         return LinearDecode(
             weights[f"compressor.{name}.weight"],
             device,
@@ -832,6 +845,7 @@ def _compressor_projections(
             dtype=weight_dtype,
             **layout,
             **prefetch,
+            **packed,
         )
 
     return projection("kv_proj"), projection("gate_proj")
@@ -890,6 +904,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         num_prefetch_pages: Optional[int] = None,
         prefetch_buffers: Optional[dict] = None,
         system_config=None,
+        packed_weights=None,
     ):
         # SDPA program config, the resident-weight choice and the prefetch ring depth all
         # come from the system profile unless the caller pinned them.
@@ -898,6 +913,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         if num_prefetch_pages is None:
             num_prefetch_pages = sys_cfg.prefetcher.num_prefetch_pages
         self.use_prefetcher = use_prefetcher
+        self.use_packed_l1_weights = packed_weights is not None
+        if self.use_packed_l1_weights and use_prefetcher:
+            raise ValueError("packed L1 attention weights are incompatible with the weight prefetcher")
+        if self.use_packed_l1_weights and weight_dtype != ttnn.bfloat4_b:
+            raise ValueError("packed L1 attention weights require weight_dtype=ttnn.bfloat4_b")
         self.config = config
         self.layer_idx = layer_idx
         self.device = device
@@ -911,6 +931,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         self.scaling = self.head_dim**-0.5
         cache = _as_cache(cache)
         print(f"weight_dtype: {weight_dtype}")
+        self.packed_weights = packed_weights
 
         if use_prefetcher and prefetch_buffers is None:
             prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype, num_prefetch_pages)
@@ -920,6 +941,13 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             if use_prefetcher:
                 prefetch["global_cb"] = prefetch_buffers[name]
                 prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
+            packed = {}
+            if self.packed_weights is not None:
+                tensor, packed_layout, packed_slot = self.packed_weights
+                packed = {
+                    "packed_weight_tensor": tensor,
+                    "packed_weight_spec": packed_weight_spec(packed_layout, packed_slot, name),
+                }
             return LinearDecode(
                 weights[f"{name}.weight"],
                 device,
@@ -927,6 +955,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 dtype=weight_dtype,
                 **DECODE_LAYOUTS[name],
                 **prefetch,
+                **packed,
             )
 
         # q_a and kv both read the block's hidden, so one matmul over their concatenated
@@ -941,6 +970,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # ``q_lora_rank``.
         self.q_lora_rank = DECODE_LAYOUTS["q_a_proj"]["N"]
         self.fused_qa_kv = sys_cfg.attention.resolve_fuse_qa_kv(use_prefetcher)
+        if self.use_packed_l1_weights and self.fused_qa_kv:
+            raise ValueError("packed L1 attention weights require attention.fuse_qa_kv_proj=false")
         if self.fused_qa_kv:
             check_decode_layout("qa_kv_proj", config.hidden_size, self.q_lora_rank + self.head_dim)
             self.qa_kv_proj = LinearDecode(
@@ -991,6 +1022,16 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             n_blocks=o_a_layout["n_blocks"],
             preprocess=lambda w: w.reshape(self.o_groups, self.o_lora_rank, in_per_group).transpose(1, 2).contiguous(),
             **o_a_prefetch,
+            **(
+                {
+                    "packed_weight_tensor": self.packed_weights[0],
+                    "packed_weight_spec": packed_weight_spec(
+                        self.packed_weights[1], self.packed_weights[2], "o_a_proj"
+                    ),
+                }
+                if self.packed_weights is not None
+                else {}
+            ),
         )
 
         # sinks live on host (folded into the softmax denominator), so there is
@@ -1044,6 +1085,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 use_prefetcher=use_prefetcher,
                 num_prefetch_pages=num_prefetch_pages,
                 prefetch_buffers=prefetch_buffers,
+                packed_weights=self.packed_weights,
             )
             if compressor_cls is not None
             else None
