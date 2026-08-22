@@ -24,6 +24,16 @@ the way out:
   TILE:      each output slice IS one face row of an output tile, so the
              permutation folds into the scatter — one 32 B (values) / 64 B
              (indices) write per slice, no scratch pass.
+
+NARROW_INDICES (unstable-contract cells, issue #33492 roadmap item 3): the
+engine's index words are natively u32 (fused tags live in 32-bit DEST and the
+u16-in-32-bit-DEST combination has no working pack path), but the public
+unstable index dtype at these widths is UINT16 — so this RISC narrows each
+u32 word to u16 into the index scratch page before the output write:
+  TILE:      straight narrowing (slice order preserved), then the same
+             face-row scatter with 32 B slices at u16-tile offsets.
+  ROW_MAJOR: the slice permute is fused into the narrowing loop (the NoC
+             permute pass is skipped), then one contiguous row write.
 */
 
 namespace {
@@ -84,6 +94,8 @@ void kernel_main() {
     DataflowBuffer indices_out_dfb(dfb::indices_out);
 #ifdef IS_ROW_MAJOR
     DataflowBuffer values_scratch_dfb(dfb::values_scratch);
+#endif
+#if defined(IS_ROW_MAJOR) || defined(NARROW_INDICES)
     DataflowBuffer indices_scratch_dfb(dfb::indices_scratch);
 #endif
     Noc noc;
@@ -95,7 +107,14 @@ void kernel_main() {
         const uint32_t r = row % TILE_H;
         // Byte offsets of in-tile row r's two face rows in a bf16 / u32 tile.
         const uint32_t value_fo = ((r >= 16) ? 1024u : 0u) + (r % 16) * 32u;
+#ifdef NARROW_INDICES
+        // u16 index tiles share the bf16 tile geometry (2 B elements).
+        const uint32_t index_fo = value_fo;
+        constexpr uint32_t index_face_pitch = 512u;
+#else
         const uint32_t index_fo = ((r >= 16) ? 2048u : 0u) + (r % 16) * 64u;
+        constexpr uint32_t index_face_pitch = 1024u;
+#endif
         constexpr uint32_t tiles_per_run = K / TILE_H;  // 64
 #endif
 
@@ -138,9 +157,71 @@ void kernel_main() {
             values_out_dfb.pop_front(1);
         }
 
-        // ---- Indices: same structure with u32 slices ----
+        // ---- Indices: same structure (u32 slices, or u16 after narrowing) ----
         for (uint32_t run = 0; run < num_chunks; ++run) {
             indices_out_dfb.wait_front(1);
+#ifdef NARROW_INDICES
+            // Narrow the run's u32 index words to u16 into the index scratch page.
+            // Non-volatile pointers on purpose: the source page is stable (pushed by the
+            // packer and wait_front'ed above), the destination is private until the
+            // __sync_synchronize below, and these RISC-V cores have no data cache — so
+            // letting the compiler batch/unroll the L1 accesses is safe and saves
+            // several cycles per element on this hot loop.
+            indices_scratch_dfb.reserve_back(1);
+            {
+                const uint32_t* __restrict src = reinterpret_cast<const uint32_t*>(indices_out_dfb.get_read_ptr());
+                uint32_t* __restrict dst = reinterpret_cast<uint32_t*>(indices_scratch_dfb.get_write_ptr());
+#ifdef IS_ROW_MAJOR
+                // Fuse the face-pair -> linear slice permute into the narrowing.
+                for (uint32_t dst_slice = 0; dst_slice < SLICES_PER_RUN; ++dst_slice) {
+                    const uint32_t* __restrict s = src + source_slice(dst_slice) * SLICE_ELEMENTS;
+                    uint32_t* __restrict d = dst + dst_slice * (SLICE_ELEMENTS / 2);
+#pragma GCC unroll 8
+                    for (uint32_t j = 0; j < SLICE_ELEMENTS / 2; ++j) {
+                        d[j] = (s[2 * j] & 0xFFFFu) | (s[2 * j + 1] << 16);
+                    }
+                }
+#else
+                // Straight narrowing; the slice order is preserved for the scatter below.
+#pragma GCC unroll 8
+                for (uint32_t i = 0; i < K / 2; ++i) {
+                    dst[i] = (src[2 * i] & 0xFFFFu) | (src[2 * i + 1] << 16);
+                }
+#endif
+            }
+            // Drain the RISC-V store queue before the NoC reads the scratch page
+            // (RISC-V stores and the NoC are independent L1 clients).
+            __sync_synchronize();
+            indices_scratch_dfb.push_back(1);
+            indices_scratch_dfb.wait_front(1);
+#ifdef IS_ROW_MAJOR
+            noc.async_write(
+                indices_scratch_dfb,
+                index_accessor,
+                K * 2,
+                {.offset_bytes = 0},
+                {.page_id = row, .offset_bytes = run * K * 2});
+#else
+            constexpr uint32_t out_slice_bytes = SLICE_ELEMENTS * 2;  // u16
+            const uint32_t tile_base = tile_row * Wt + run * tiles_per_run;
+            for (uint32_t t = 0; t < tiles_per_run; ++t) {
+                noc.async_write(
+                    indices_scratch_dfb,
+                    index_accessor,
+                    out_slice_bytes,
+                    {.offset_bytes = source_slice(2 * t) * out_slice_bytes},
+                    {.page_id = tile_base + t, .offset_bytes = index_fo});
+                noc.async_write(
+                    indices_scratch_dfb,
+                    index_accessor,
+                    out_slice_bytes,
+                    {.offset_bytes = source_slice(2 * t + 1) * out_slice_bytes},
+                    {.page_id = tile_base + t, .offset_bytes = index_fo + index_face_pitch});
+            }
+#endif
+            noc.async_writes_flushed();
+            indices_scratch_dfb.pop_front(1);
+#else  // !NARROW_INDICES
 #ifdef IS_ROW_MAJOR
             indices_scratch_dfb.reserve_back(1);
             permute_run_to_scratch<index_slice_bytes>(indices_out_dfb, indices_scratch_dfb, noc);
@@ -168,10 +249,11 @@ void kernel_main() {
                     index_accessor,
                     index_slice_bytes,
                     {.offset_bytes = source_slice(2 * t + 1) * index_slice_bytes},
-                    {.page_id = tile_base + t, .offset_bytes = index_fo + 1024});
+                    {.page_id = tile_base + t, .offset_bytes = index_fo + index_face_pitch});
             }
             noc.async_writes_flushed();
 #endif
+#endif  // NARROW_INDICES
             indices_out_dfb.pop_front(1);
         }
     }
