@@ -53,7 +53,7 @@ settle_after_reset() {
     if [[ "$t" == 0 ]]; then sleep 35; elif (( d < 30 )); then sleep $((30 - d)); fi
 }
 PAYLOAD_RC=1  # pessimistic until the payload proves itself
-trap 'sweep_local_caches; [[ "$PAYLOAD_RC" != 0 ]] && reset_board' EXIT
+trap 'sweep_local_caches; [[ "$PAYLOAD_RC" != 0 ]] && reset_board' EXIT TERM INT
 fuser -k /dev/tenstorrent/* 2>/dev/null || true
 sleep 2
 tt-smi -ls >/dev/null 2>&1 || { echo "prologue: SMI unhealthy -> board reset"; reset_board; }
