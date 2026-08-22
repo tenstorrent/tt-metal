@@ -137,3 +137,59 @@ def test_a_flat_checkpoint_is_not_emptied_by_the_map(tmp_path):
 def test_a_mixed_checkpoint_keeps_the_flat_tensor_and_drops_the_foreign_section(tmp_path):
     d = _ckpt(tmp_path, {"w": 500_000, "perception_stack.l.weight": 1_000_000, "lm.l.weight": 2_000_000})
     assert MB.weight_bytes(d, unit="token", streamed_sections={"lm"})["params"] == 2_500_000
+
+
+# --- a bug in this block used to be indistinguishable from an unreadable checkpoint ---------------
+
+
+def _snap_with(tmp_path, tensors):
+    """Built ONCE and reused. _hf_snapshots is called twice on this path, so a factory that mkdir()s
+    raises FileExistsError on the second call -- an OSError, which the generic handler swallows, so
+    the test silently exercised the wrong branch."""
+    d = tmp_path / "snap"
+    d.mkdir(exist_ok=True)
+    return _ckpt(d, tensors)
+
+
+def test_a_programming_error_in_the_byte_walk_is_reported(tmp_path, monkeypatch, capsys):
+    """WHAT THIS COST, live. Wiring the section map in referenced `model_root` inside
+    _perf_target_inputs(demo_dir, ...) -- no such name. The NameError hit `except Exception: pass`,
+    total_params vanished for the whole run, and the ceiling silently fell back to the checkpoint's
+    FILE SIZE: the stored dtype, 2.4x the served divisor on Llama-3.1-8B. No warning, no traceback,
+    and the number is plausible enough to read past.
+
+    `except Exception: pass` is correct for what it was written for -- a truncated shard, a dtype
+    with no width. It is wrong for a defect in the tool, because the fall-through hides it perfectly.
+    """
+    import cc_optimize.run as R
+
+    monkeypatch.setattr(R, "_model_weight_bytes", lambda d, h=None, *_a, **_k: 4_000_000)
+    monkeypatch.setattr(R, "_resolve_model_id", lambda d, h=None, *_a, **_k: "org/m")
+    monkeypatch.setattr(R, "_hf_cache_dims", lambda mid: {"hidden_size": 1000})
+    _snap = _snap_with(tmp_path, {"lm.w": 1_000_000})
+    monkeypatch.setattr(R, "_hf_snapshots", lambda mid: [_snap])
+    # the exact shape of the mistake: a name that does not exist in this scope
+    monkeypatch.setattr(
+        R, "_streamed_sections_for_unit", lambda *a, **k: (_ for _ in ()).throw(NameError("model_root"))
+    )
+
+    R._perf_target_inputs(tmp_path, None, {})
+    err = capsys.readouterr().err
+    assert "BUG in the analytic byte walk" in err, err
+    assert "NameError" in err and "model_root" in err, err
+
+
+def test_an_unreadable_checkpoint_stays_quiet(tmp_path, monkeypatch, capsys):
+    """The environmental case keeps the documented silent fall-through -- this adds a signal for
+    defects, it does not make every unreadable shard shout."""
+    import cc_optimize.run as R
+
+    monkeypatch.setattr(R, "_model_weight_bytes", lambda d, h=None, *_a, **_k: 4_000_000)
+    monkeypatch.setattr(R, "_resolve_model_id", lambda d, h=None, *_a, **_k: "org/m")
+    monkeypatch.setattr(R, "_hf_cache_dims", lambda mid: {"hidden_size": 1000})
+    _snap = _snap_with(tmp_path, {"lm.w": 1_000_000})
+    monkeypatch.setattr(R, "_hf_snapshots", lambda mid: [_snap])
+    monkeypatch.setattr(R, "_streamed_sections_for_unit", lambda *a, **k: (_ for _ in ()).throw(OSError("truncated")))
+
+    R._perf_target_inputs(tmp_path, None, {})
+    assert "BUG in the analytic byte walk" not in capsys.readouterr().err

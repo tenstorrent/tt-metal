@@ -5354,7 +5354,29 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
             # ceiling's input, and it does not depend on the width the device serves.
             if _an.get("params"):
                 analytic_params = int(_an["params"])
-    except Exception:  # noqa: BLE001
+    except (NameError, AttributeError, TypeError) as _bug:
+        # A BUG IS NOT AN UNREADABLE CHECKPOINT, and this block swallowed both identically.
+        #
+        # `except Exception: pass` here is right for what it was written for: a truncated shard, a
+        # dtype with no width, an unreadable header -- environmental failures where falling through
+        # to the file size is the documented weaker-but-not-wrong answer. It is wrong for a
+        # programming error, because the fall-through then hides it perfectly: a NameError on one
+        # line deleted total_params for the WHOLE run and the only symptom was a ceiling computed
+        # from the checkpoint's file size instead of its param count. That is a 2.4x error on
+        # Llama-3.1-8B, printed with no warning and no traceback. One pre-existing test caught it;
+        # nothing in a real run would have.
+        #
+        # Still not raised -- a ceiling must never cost a run -- but it is now SAID, with the
+        # exception named, so the next one is visible in the first second instead of inferred from a
+        # number being oddly large.
+        print(
+            "  [optimize/cc] BUG in the analytic byte walk (%s: %s) -- falling back to the "
+            "checkpoint's file size, which counts the STORED dtype and overstates the divisor. "
+            "This is a defect in the tool, not in the model." % (type(_bug).__name__, str(_bug)[:200]),
+            file=sys.stderr,
+            flush=True,
+        )
+    except Exception:  # noqa: BLE001 -- an unreadable checkpoint falls through to the file size
         pass
     override = (os.environ.get("TT_PERF_WEIGHT_BYTES") or "").strip()
     if override:
