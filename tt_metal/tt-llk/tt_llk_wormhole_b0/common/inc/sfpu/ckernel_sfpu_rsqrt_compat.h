@@ -63,10 +63,12 @@ sfpi_inline sfpi::vFloat _reciprocal_compat_(const sfpi::vFloat in)
     sfpi::vFloat val = sfpi::setsgn(in, 1);
 
     val = setexp(val, 126); // Set exponent to 126 to make the number in 0.5-1
-    // Use 1.44 as first guess at x, ideal value would be 1.33.
-    // Grayskull has hardwired 1.44 and uses it to avoid a load.
-    // We use it here for consistency.
-    sfpi::vFloat vConstLn2Recip = 1.442695f;
+    // Newton seed for 1/m on the reduced domain m in [0.5, 1): the minimax-optimal constant
+    // seed is 4/3 (error at m=0.5 and m=1 balance at +/-1/3, vs +/-0.44 for 1.442695).
+    // 0x1.554p0f is the nearest fp16a-representable value to 4/3, so it loads in a single
+    // SFPLOADI (fp16a immediate) instead of the two SFPLOADI needed for 1.442695, while
+    // keeping fp32 accuracy after 3 iterations at ~1.53e-04 max relative error vs 1.475e-03.
+    sfpi::vFloat vConstLn2Recip = 0x1.554p0f;
     sfpi::vFloat two            = 2.0f;
     sfpi::vFloat result         = vConstLn2Recip * (val * vConstLn2Recip + two);
 
