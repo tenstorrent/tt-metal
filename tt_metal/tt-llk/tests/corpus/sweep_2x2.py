@@ -613,6 +613,18 @@ KNOBS = {
     # tolerance.
     "reassoc": "-fassociative-math -fno-signed-zeros -fno-trapping-math "
     "-mtt-tensix-optimize-reassoc",
+    # FT (window-pairing): inter-row drain tuning in the macro planner's
+    # emission — the exact pending-event model replaces the lane-EV
+    # shape rule's full inter-row drain where every obligation
+    # discharges (Dst row/parity disjointedness, LREG/CC/config
+    # intersection, sub-unit occupancy).  Shape only materializes on the
+    # reviewed-ON pipeline's planner regions (the interrow drain is an
+    # ON-set emission artifact), so the booking A/B is (ON + flag) vs
+    # plain ON.  Target rows: mulint32-fresh (the FM adjudication's
+    # named recovery of the +12.77% drain payment), plus the
+    # blaze-sdpareducerow rows as the record-hoist-class negative
+    # control (expected honest no-fire).
+    "window-pairing": "-mtt-tensix-optimize-window-pairing",
 }
 # Per-knob leg MODE (see the KNOBS comment).  Every key must be a KNOBS
 # key; absent = "solo".  The three seeded drop-one knobs are the known
@@ -659,6 +671,10 @@ KNOB_MODES = {
     # post-ON pipeline's chains, and the delta must read as the
     # license's own effect.
     "reassoc": "on-plus",
+    # FT window-pairing: the tuned inter-row drain exists only where the
+    # ON-set planner emission places one — on-plus is the only leg shape
+    # that can see it.
+    "window-pairing": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
