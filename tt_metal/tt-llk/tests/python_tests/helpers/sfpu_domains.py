@@ -495,9 +495,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Selu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
-    # i0: modified Bessel I0; kernel poly approx is only valid on |x| <= 3.75
+    # i0: modified Bessel I0; two-region kernel (poly + asymptotic) accurate over |x| ≤ 88.5
     MathOperation.I0: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.75, high=3.75)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-30.0, high=30.0)
     ),
     # i1: modified Bessel I1; poly path valid on |x| <= ~3.75 (asymptotic beyond)
     MathOperation.I1: OperandSpecs(

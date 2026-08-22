@@ -115,6 +115,7 @@ BROAD_SWEEP_OPS = [
     MathOperation.Threshold,
     MathOperation.ReluMax,
     MathOperation.ReluMin,
+    MathOperation.I0,
 ]
 
 # Every registered unary SFPU op that the broad profile does not already cover, minus the
