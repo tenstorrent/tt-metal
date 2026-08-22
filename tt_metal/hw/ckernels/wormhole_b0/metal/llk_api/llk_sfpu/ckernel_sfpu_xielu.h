@@ -79,8 +79,12 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     // Add k_int to get the new exponent
     sfpi::vInt new_exp = p_exp + k_int;
 
-    // Set the new exponent
-    result = sfpi::setexp(p, new_exp);
+    // Set the new exponent with underflow/flush-to-zero guard
+    result = 0.0f;
+    v_if(new_exp > 0) {
+        result = sfpi::setexp(p, new_exp);
+    }
+    v_endif;
 
     return result;
 }

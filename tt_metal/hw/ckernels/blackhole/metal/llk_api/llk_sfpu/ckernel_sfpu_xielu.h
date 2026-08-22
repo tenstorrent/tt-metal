@@ -39,12 +39,9 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     // We want to do:
     // 1) r_hi = val - k * LN2_HI
     // 2) r = r_hi - k * LN2_LO
-    // On Wormhole, we can only do VD = VA * VB + VC, so we need to transform the expressions to
-    // ensure optimization to a single SFPMAD instruction.
-    // On Blackhole, SFFPMAD has SFPMAD_MOD1_NEGATE_VA and SFPMAD_MOD1_NEGATE_VC for this purpose.
-    // However, negating constants maintains consistency with Wormhole, and ensures higher chance
-    // of optimization to a single SFPMAD instruction.
-    // The transformation is as follows:
+    // Since SFPMAD on Wormhole can only do VD = VA * VB + VC,
+    // this expression would require additional instructions,
+    // To avoid this, we transform the expressions to:
     // 1) r_hi = val + k * (-LN2_HI)
     // 2) r = r_hi + k * (-LN2_LO)
     // Where LN2_HI and LN2_LO are negated.
@@ -82,8 +79,12 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     // Add k_int to get the new exponent
     sfpi::vInt new_exp = p_exp + k_int;
 
-    // Set the new exponent
-    result = sfpi::setexp(p, new_exp);
+    // Set the new exponent with underflow/flush-to-zero guard
+    result = 0.0f;
+    v_if(new_exp > 0) {
+        result = sfpi::setexp(p, new_exp);
+    }
+    v_endif;
 
     return result;
 }
