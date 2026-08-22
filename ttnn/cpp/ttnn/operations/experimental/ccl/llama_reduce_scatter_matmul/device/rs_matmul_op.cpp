@@ -85,6 +85,10 @@ Matmul_RS::tensor_return_value_t Matmul_RS::create_output_tensors(
 
 ttsl::hash::hash_t Matmul_RS::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Both halves are tile-aware: the shared reduce-scatter factory derives
+    // input_tiles_per_core_width from the input's real tile, and the matmul helper reads in0/in1
+    // tiles off its operands to size every block and circular buffer. Keying on each page config
+    // keeps tensors that differ only in tile geometry on separate programs.
     return tt::tt_metal::operation::hash_operation<Matmul_RS>(
         operation_attributes.rs_op.dim,
         operation_attributes.rs_op.cluster_axis,
@@ -94,7 +98,11 @@ ttsl::hash::hash_t Matmul_RS::compute_program_hash(
         operation_attributes.rs_op.use_noc1_only,
         tensor_args.rs.input_tensor.dtype(),
         tensor_args.rs.input_tensor.memory_config(),
-        tensor_args.rs.input_tensor.device()->id());
+        tensor_args.rs.input_tensor.device()->id(),
+        tensor_args.rs.input_tensor.tensor_spec().page_config(),
+        tensor_args.rs.intermediate_packet_buffer.tensor_spec().page_config(),
+        tensor_args.matmul.input_tensor.tensor_spec().page_config(),
+        tensor_args.matmul.weight_tensor.tensor_spec().page_config());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

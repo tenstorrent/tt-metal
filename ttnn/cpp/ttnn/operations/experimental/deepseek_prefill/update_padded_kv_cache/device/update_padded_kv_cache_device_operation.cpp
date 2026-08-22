@@ -68,6 +68,25 @@ void validate_runtime_args(
     const auto& mesh_view = cache.device()->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "update_padded_kv_cache requires a 2D mesh");
 
+    // create_descriptor's TILE branch derives its page size, Wt/input_Ht/cache_HtWt and the
+    // writer_tile_height compile arg from the architectural 32x32 constants, and the tile is absent
+    // from compute_program_hash. Checked here rather than in the miss validator so it also runs on the
+    // cache-hit path, where a non-standard tile would otherwise alias onto a cached 32x32 program.
+    const auto require_standard_tile = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+            "update_padded_kv_cache requires standard 32x32 tiles, but {} has a {}x{} tile",
+            name,
+            tile.get_height(),
+            tile.get_width());
+    };
+    require_standard_tile(cache, "cache");
+    require_standard_tile(tensor_args.input, "input");
+
     // Metadata-path invariant: the two per-request tensors are supplied together or not at all.
     // The path is selected on `slot_idx.has_value()`, but create_descriptor / override_runtime_arguments
     // dereference `kv_actual_global` unconditionally whenever slot_idx is set — a mismatched optional
@@ -98,6 +117,15 @@ void validate_runtime_args(
         };
         validate_meta(tensor_args.slot_idx.value(), "slot_idx");
         validate_meta(tensor_args.kv_actual_global.value(), "kv_actual_global");
+        // create_descriptor emits a single TensorAccessorArgs built from slot_idx and the writer uses it
+        // for both metadata reads, so a differing memory config on kv_actual_global would resolve its
+        // address through the wrong bank table.
+        TT_FATAL(
+            tensor_args.slot_idx->memory_config() == tensor_args.kv_actual_global->memory_config(),
+            "metadata tensors slot_idx and kv_actual_global must share a memory config because one "
+            "TensorAccessor serves both reads (got buffer types {} and {})",
+            tensor_args.slot_idx->memory_config().buffer_type(),
+            tensor_args.kv_actual_global->memory_config().buffer_type());
     }
 
     if (!tensor_args.slot_idx.has_value()) {
@@ -230,7 +258,11 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         input.memory_config(),
         input.padded_shape(),
         cache.memory_config(),
-        cache.padded_shape());
+        cache.padded_shape(),
+        // On the metadata path the writer bakes a TensorAccessorArgs built from slot_idx into its
+        // compile-time args, so the bank table it selects cannot be refreshed on a cache hit. Only the
+        // config is keyed, never the value; kv_actual_global is pinned to match by validate_runtime_args.
+        tensor_args.slot_idx.has_value() ? tensor_args.slot_idx->memory_config() : MemoryConfig{});
 }
 
 tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(

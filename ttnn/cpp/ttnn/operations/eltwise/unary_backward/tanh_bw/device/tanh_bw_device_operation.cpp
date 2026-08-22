@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tanh_bw_device_operation.hpp"
+
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "tanh_bw_program_factory.hpp"
 
@@ -61,7 +64,26 @@ void TanhBwDeviceOperation::validate_on_program_cache_miss(
         "memory layout: `{}`",
         static_cast<int>(input_tensor.memory_config().memory_layout()));
 
+    // The factory sizes its circular buffers with tt::tile_size and splits work by
+    // physical_volume() / TILE_HW, and the tile is absent from compute_program_hash, so a
+    // non-standard tile would both compile a mis-sized program and alias onto a cached 32x32 one.
+    const auto require_standard_tile = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "TANH_BW operation requires standard 32x32 tiles, but {} has a {}x{} tile.",
+            name,
+            tile.get_height(),
+            tile.get_width());
+    };
+    require_standard_tile(input_tensor, "the input tensor");
+    require_standard_tile(tensor_args.grad_output, "the grad_output tensor");
+
     if (preallocated_input_grad.has_value()) {
+        require_standard_tile(preallocated_input_grad.value(), "the preallocated output tensor");
         const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
         const auto preallocated_output_shape = preallocated_input_grad.value().logical_shape();
         TT_FATAL(
@@ -113,6 +135,16 @@ ttsl::hash::hash_t TanhBwDeviceOperation::compute_program_hash(
         grad_output.dtype(),
         grad_output.memory_config(),
         input_shape.volume());
+
+    // args only carries the requested output_dtype/output_memory_config; when the caller supplies its
+    // own output tensor that is what the factory actually binds, sizing the destination CB from its
+    // dtype and baking a TensorAccessorArgs for its buffer into the writer's compile-time args. Neither
+    // can be refreshed on a cache hit, so key on the tensor that is really used.
+    if (tensor_args.preallocated_input_grad.has_value()) {
+        const auto& preallocated = tensor_args.preallocated_input_grad.value();
+        hash =
+            ttsl::hash::hash_objects(hash, preallocated.dtype(), preallocated.layout(), preallocated.memory_config());
+    }
 
     return hash;
 }
