@@ -53,11 +53,12 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
         args = model.args
         self._nv, self._dk, self._dv = args.gdn_nv_tp, args.linear_key_head_dim, args.linear_value_head_dim
         rep = ttnn.ReplicateTensorToMesh(model.mesh_device)
-        # Per-GDN-layer persistent state stashes [B, W, Nv, Dk, Dv] fp32 + this
-        # iteration's conv-window stash handles (composite conv leg).
+        # Per-GDN-layer persistent state stashes [B*W, Nv, Dk, Dv] fp32 (rank-4:
+        # ttnn caps at 4 dims; row u*W+t = user u's state after candidate t) +
+        # this iteration's conv-window stash handles (composite conv leg).
         self._stash = [
             ttnn.from_torch(
-                torch.zeros(self.B, self.W, self._nv, self._dk, self._dv, dtype=torch.float32),
+                torch.zeros(self.B * self.W, self._nv, self._dk, self._dv, dtype=torch.float32),
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 device=model.mesh_device,
@@ -290,8 +291,8 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
             for u, m in enumerate(accepts):
                 if m is None:
                     continue
-                row = ttnn.slice(self._stash[li], (u, m, 0, 0, 0), (u + 1, m + 1, self._nv, self._dk, self._dv))
-                row = ttnn.reshape(row, (1, self._nv, self._dk, self._dv))
+                r = u * self.W + m
+                row = ttnn.slice(self._stash[li], (r, 0, 0, 0), (r + 1, self._nv, self._dk, self._dv))
                 dn._write_index(dn.rec_state, row, u, dim=0)
                 w0 = m * (conv_k - 1)
                 cw = ttnn.slice(self._conv_win[li], (u, w0, 0), (u + 1, w0 + conv_k - 1, dn.qkv_dim_tp))
