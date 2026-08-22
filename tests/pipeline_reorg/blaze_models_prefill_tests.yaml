@@ -448,13 +448,32 @@
 #     dim, so Mistral falls through to the synthetic input;
 #   * MoE weight cache is rebuilt in-run under the default /tmp path, as the Kimi MoE rows do.
 #
-# The MLA module leg is NOT added here yet and that is not an oversight: test_mla asserts
-# "We should not execute CPU computation in the CI for max sl, output cache is missing", so an
-# accuracy row needs a reference cache staged at MISTRAL4_MLA_REF_CACHE the way the Kimi row points
-# at /mnt/models/kimi-prefill-cache/test_mla_output. Same for the prefill-block leg on real weights:
-# it needs the checkpoint plus a TTNN weight cache on /mnt, and no Mistral cache exists there yet.
-# Both are staging asks, not code gaps -- adding rows that can only fail (or worse, SKIP with rc=0)
-# would be a regression in signal, not an improvement in coverage.
+# The MLA module leg is NOT added here yet, and that is a STAGING blocker, not a code gap: test_mla
+# asserts "We should not execute CPU computation in the CI for max sl, output cache is missing", and
+# scale_down_sl is a no-op on the production 8x4 mesh, so an accuracy row needs a reference cache at
+# MISTRAL4_MLA_REF_CACHE the way the Kimi row points at /mnt/models/kimi-prefill-cache/test_mla_output.
+#
+# That reference cache now EXISTS and the leg is measured, so adding it is a two-file copy:
+#
+#   copy   /data/kmabee/mistral4_mla_ref_cache/{random_seq5120.pt,random_seq25600.pt}   (45 MB + 226 MB)
+#   to     /mnt/models/<mistral4-prefill-cache>/test_mla_output/
+#   then   export MISTRAL4_MLA_REF_CACHE=<that dir>
+#          pytest .../test_mla.py::test_mistral4_mla -k "torus-xy-8x4 and check_pcc and max_sl"
+#
+# Verified 2026-08-21 on a 32-chip BH Galaxy with exactly that -k: 2 passed in 1 min 38 s, both rows
+# loading the cached reference (0 CPU recomputes), so a 6 min timeout carries ~3.6x. Output PCC
+# 0.998164 @ seq5k / 0.997789 @ seq25k, KVPE KV/PE 0.999901/0.999901 @ seq5k and
+# 0.999867/0.999865 @ seq25k. Note the cache was GENERATED on fabric2d-8x4 and consumed on
+# torus-xy-8x4: its filename key is {weight_type}_seq{seq_len}.pt with no mesh or fabric in it, and
+# these numbers confirm one copy serves every shape. Budget: at the 495 min ceiling this row needs
+# models/demo/bh_sc1 to reach 500.
+#
+# The prefill-block leg on real weights is blocked the same way and not yet resolved: it needs the
+# checkpoint plus a TTNN weight cache on /mnt, and no Mistral cache exists there. The test rows now
+# exist (the `pretrained` cohort); the staging does not.
+#
+# Adding either row before its artifacts are staged would give a leg that can only fail -- or worse,
+# SKIP with rc=0, which reads as a pass -- so it would cost signal rather than add coverage.
 #
 # Mistral's op-level gate coverage needs no entry at all: the "DeepSeek-V3-671B MoE gate accuracy"
 # leg above runs test_moe_gate_prefill2d.py with -k "torus-xy-8x4" and NO model filter, so the
