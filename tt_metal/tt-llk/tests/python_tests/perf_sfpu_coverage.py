@@ -48,6 +48,12 @@ _INT32 = input_output_formats([DataFormat.Int32], same=True)[0]
 # op name -> (COVERAGE_OP id, COVERAGE_SUBOP, formats, dest_acc, scalar_bits)
 # Sub-op vehicles follow the row convention: unarybitwise races XOR, intsum
 # races COL (the corr suite covers every sub-op).
+#
+# scalar_bits is a REAL operand only for unarybitwise/addrsqrt; every other
+# kernel ignores the SFPU_UNARY_SCALAR constant.  It is still passed for
+# EVERY op (0 for the ignoring ones) so all ops emit the identical perf-CSV
+# column set — one homogeneous schema per file, the PerfSchemaError
+# contract (FM-F1 repair; validated by selftest_perf_schema_columns.py).
 _COVERAGE_PERF_OPS = {
     "rotate90": (1, 0, _BF16, DestAccumulation.No, None),
     "unarybitwise": (2, 2, _INT32, DestAccumulation.Yes, 0x5A5A0FF0),
@@ -75,6 +81,8 @@ def test_perf_sfpu_coverage(perf_report, op, fresh_cpp_impl):
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
 
+    # One literal list, no conditional appends: every (op, impl) node emits
+    # the same columns, so the module CSV always carries a single schema.
     templates = [
         COVERAGE_OP(cov_op),
         COVERAGE_SUBOP(subop),
@@ -86,9 +94,8 @@ def test_perf_sfpu_coverage(perf_report, op, fresh_cpp_impl):
         NUM_FACES(num_faces=faces_to_generate),
         UNPACK_TRANS_FACES(Transpose.No),
         UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+        SFPU_UNARY_SCALAR(scalar_bits if scalar_bits is not None else 0),
     ]
-    if scalar_bits is not None:
-        templates.append(SFPU_UNARY_SCALAR(scalar_bits))
 
     configuration = PerfConfig(
         "sources/sfpu_coverage_perf.cpp",

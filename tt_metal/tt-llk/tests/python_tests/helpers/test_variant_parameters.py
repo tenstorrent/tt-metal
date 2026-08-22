@@ -256,12 +256,18 @@ class FRESH_CPP_IMPL(TemplateParameter):
     Most ops define only impl 1 (the fresh semantic body).  SigmoidAppx also
     defines impl 2: the 3-range magnitude dispatch tree, a second semantic
     form kept as its own measurable selector.
+
+    The dataclass field name is the perf-CSV column header (PerfConfig
+    _build_sweep_frame), so it must be globally unique across every
+    Template/RuntimeParameter — three params named ``value`` co-passed by
+    one test raise PerfSchemaError (duplicate columns) on every node of
+    the module (FM-F1).  selftest_perf_schema_columns.py pins this.
     """
 
-    value: int = 0
+    fresh_cpp_impl: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"#define FRESH_CPP_IMPL {self.value}"
+        return f"#define FRESH_CPP_IMPL {self.fresh_cpp_impl}"
 
 
 @dataclass
@@ -376,12 +382,16 @@ class COVERAGE_OP(TemplateParameter):
     the top of ``sources/sfpu_coverage_test.cpp`` (1 rotate90, 2 unarybitwise,
     3 addrsqrt, 4 smoothstep, 5 tiledprod, 6 zeropad, 7 sparsekfilter,
     8 customadd, 9 copydest, 10 intsum).
+
+    Field name = perf-CSV column header; must be globally unique (FM-F1,
+    see FRESH_CPP_IMPL).  It doubles as the coverage module's row-level
+    CSV discriminator between ops.
     """
 
-    value: int = 1
+    coverage_op: int = 1
 
     def convert_to_cpp(self) -> str:
-        return f"#define COVERAGE_OP {self.value}"
+        return f"#define COVERAGE_OP {self.coverage_op}"
 
 
 @dataclass
@@ -389,12 +399,15 @@ class COVERAGE_SUBOP(TemplateParameter):
     """Sub-op axis for coverage ops that carry one (see COVERAGE_OP).
 
     unarybitwise: 0 AND / 1 OR / 2 XOR;  intsum: 0 COL / 1 ROW.
+
+    Field name = perf-CSV column header; must be globally unique (FM-F1,
+    see FRESH_CPP_IMPL).
     """
 
-    value: int = 0
+    coverage_subop: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"#define COVERAGE_SUBOP {self.value}"
+        return f"#define COVERAGE_SUBOP {self.coverage_subop}"
 
 
 @dataclass
