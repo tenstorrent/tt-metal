@@ -1,5 +1,51 @@
 include(sources.cmake)
 
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+set(WAVELET_SCHEME_CATALOG ${CMAKE_CURRENT_SOURCE_DIR}/schemes/wavelet_schemes.json)
+set(WAVELET_SCHEME_GENERATOR ${CMAKE_CURRENT_SOURCE_DIR}/schemes/generate_wavelet_scheme_headers.py)
+set(WAVELET_GENERATED_SCHEME_DIR ${CMAKE_CURRENT_SOURCE_DIR}/generated/wavelet_schemes)
+
+file(READ ${WAVELET_SCHEME_CATALOG} WAVELET_SCHEME_CATALOG_JSON)
+string(JSON WAVELET_SCHEME_COUNT LENGTH "${WAVELET_SCHEME_CATALOG_JSON}")
+if(NOT WAVELET_SCHEME_COUNT EQUAL 106)
+    message(FATAL_ERROR "Expected 106 Wavelet schemes, found ${WAVELET_SCHEME_COUNT}")
+endif()
+
+set(WAVELET_GENERATED_SCHEME_HEADERS)
+math(EXPR WAVELET_SCHEME_LAST_INDEX "${WAVELET_SCHEME_COUNT} - 1")
+foreach(SCHEME_INDEX RANGE 0 ${WAVELET_SCHEME_LAST_INDEX})
+    string(JSON SCHEME_NAME MEMBER "${WAVELET_SCHEME_CATALOG_JSON}" ${SCHEME_INDEX})
+    string(REPLACE "." "_" SCHEME_IDENTIFIER ${SCHEME_NAME})
+    list(APPEND WAVELET_GENERATED_SCHEME_HEADERS ${WAVELET_GENERATED_SCHEME_DIR}/${SCHEME_IDENTIFIER}.hpp)
+endforeach()
+list(
+    APPEND
+    WAVELET_GENERATED_SCHEME_HEADERS
+    ${WAVELET_GENERATED_SCHEME_DIR}/scheme_catalog.hpp
+    ${WAVELET_GENERATED_SCHEME_DIR}/scheme_dispatch.hpp
+)
+unset(WAVELET_SCHEME_CATALOG_JSON)
+
+add_custom_command(
+    OUTPUT
+        ${WAVELET_GENERATED_SCHEME_HEADERS}
+    COMMAND
+        ${Python3_EXECUTABLE} ${WAVELET_SCHEME_GENERATOR}
+    DEPENDS
+        ${WAVELET_SCHEME_GENERATOR}
+        ${WAVELET_SCHEME_CATALOG}
+    COMMENT "Generating TTNN Wavelet scheme headers"
+    VERBATIM
+)
+
+set_source_files_properties(
+    ${WAVELET_GENERATED_SCHEME_HEADERS}
+    PROPERTIES
+        GENERATED
+            TRUE
+)
+
 add_library(ttnn_op_wavelet ${LIB_TYPE})
 add_library(TTNN::Ops::Wavelet ALIAS ttnn_op_wavelet)
 
@@ -20,7 +66,6 @@ file(
     device/kernels/*.h
     device/kernels/*.hpp
     device/protocol/*.hpp
-    generated/schemes/*.hpp
     planner/static_scheme.hpp
     planner/step.hpp
 )
@@ -35,7 +80,7 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
+        FILES ${kernels} ${WAVELET_GENERATED_SCHEME_HEADERS}
     PRIVATE
         ${TTNN_OP_WAVELET_SRCS}
 )

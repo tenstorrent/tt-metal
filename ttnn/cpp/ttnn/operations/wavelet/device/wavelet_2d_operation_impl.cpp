@@ -28,6 +28,7 @@
 #include "ttnn/operations/wavelet/common/wavelet_host.hpp"
 #include "ttnn/operations/wavelet/device/wavelet_program_utils.hpp"
 #include "ttnn/operations/wavelet/device/wavelet_tensor_validation.hpp"
+#include "ttnn/operations/wavelet/generated/wavelet_schemes/scheme_dispatch.hpp"
 #include "ttnn/operations/wavelet/planner/inverse_plan_2d.hpp"
 #include "ttnn/operations/wavelet/planner/plan_2d.hpp"
 #include "ttnn/operations/wavelet/planner/policy.hpp"
