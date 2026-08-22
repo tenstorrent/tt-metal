@@ -234,7 +234,7 @@ ttnn.attach_golden_function(ttnn.reshape, golden_function=_golden_function)
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
 
-def _golden_function(input_tensor, dtype=None, *, spec=None, **_):
+def _golden_function(input_tensor, dtype=None, *, spec=None, layout=None, **_):
     if input_tensor is None:
         return None
 
@@ -251,6 +251,12 @@ def _golden_function(input_tensor, dtype=None, *, spec=None, **_):
     if target_dtype == ttnn.fp8_e4m3:
         # Match FP8 storage quantization while keeping the golden exportable as torch.float32.
         return input_tensor.to(torch.float8_e4m3fn).to(torch.float32)
+
+    if target_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        # Round-trip block floats through host packing so the golden includes BFP quantization.
+        target_layout = spec.layout if spec is not None else layout
+        target_layout = target_layout or ttnn.TILE_LAYOUT
+        return ttnn.Tensor(tensor=input_tensor, data_type=target_dtype, layout=target_layout).to_torch()
 
     # Mirror explicit TT dtype conversion so the golden matches values stored by from_torch.
     return input_tensor.to(ttnn.ttnn_dtype_to_torch_dtype(target_dtype))
@@ -541,9 +547,94 @@ def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-# TODO: Merge to_dtype and typecast
 ttnn.attach_golden_function(ttnn.to_dtype, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn.typecast, golden_function=_golden_function)
+
+
+def _preprocess_typecast_golden_function_inputs(function_args, function_kwargs):
+    # Default preprocessing erases TT storage, dtype, and device details when it creates a Torch tensor.
+    # Retain them so the golden can select the same host or architecture-specific integer conversion.
+    input_tensor = function_args[0] if function_args else function_kwargs["input_tensor"]
+    golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
+        function_args, function_kwargs
+    )
+    golden_kwargs["_ttnn_input_dtype"] = input_tensor.dtype
+    golden_kwargs["_ttnn_is_host"] = not ttnn.is_tensor_storage_on_device(input_tensor)
+    arch_name = ttnn.get_arch_name().lower()
+    if any("quasar" in os.environ.get(variable, "").lower() for variable in ("ARCH_NAME", "CHIP_ARCH")):
+        arch_name = "quasar"
+    golden_kwargs["_ttnn_arch_name"] = arch_name
+    return golden_args, golden_kwargs
+
+
+def _typecast_golden_function(
+    input_tensor,
+    *dtype_args,
+    dtype=None,
+    input_dtype=None,
+    output_dtype=None,
+    _ttnn_input_dtype=None,
+    _ttnn_is_host=False,
+    _ttnn_arch_name=None,
+    **_,
+):
+    import torch
+
+    if output_dtype is None:
+        if dtype is not None:
+            output_dtype = dtype
+        elif len(dtype_args) == 1:
+            output_dtype = dtype_args[0]
+        elif len(dtype_args) >= 2:
+            input_dtype = input_dtype or dtype_args[0]
+            output_dtype = dtype_args[1]
+    if output_dtype is None:
+        raise TypeError("ttnn.typecast golden requires an output dtype")
+
+    input_dtype = _ttnn_input_dtype or input_dtype
+    arch_name = (_ttnn_arch_name or ttnn.get_arch_name()).lower()
+    if any("quasar" in os.environ.get(variable, "").lower() for variable in ("ARCH_NAME", "CHIP_ARCH")):
+        arch_name = "quasar"
+
+    # Comparison preprocessing supplies source values rather than the cast result.
+    # Integer conversion differs across host, Wormhole/Blackhole, and Quasar paths,
+    # so apply the matching target conversion here before PCC is evaluated.
+    if output_dtype == ttnn.uint8:
+        if _ttnn_is_host:
+            return torch.clamp(input_tensor.to(torch.int64), min=0, max=255).to(torch.uint8)
+        if "quasar" in arch_name and input_tensor.is_floating_point():
+            return torch.round(torch.clamp(input_tensor.float(), min=0)).to(torch.uint8)
+        return input_tensor.to(torch.uint8)
+
+    if output_dtype == ttnn.uint16:
+        if input_tensor.is_floating_point():
+            if _ttnn_is_host or input_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+                converted = torch.trunc(input_tensor.float())
+            elif "quasar" in arch_name:
+                converted = torch.round(input_tensor.float())
+            else:
+                converted = torch.floor(input_tensor.float() + 0.5)
+        else:
+            converted = input_tensor
+        return torch.clamp(converted.to(torch.int64), min=0, max=65535).to(torch.uint16)
+
+    if output_dtype == ttnn.uint32:
+        converted = torch.trunc(input_tensor.float()) if input_tensor.is_floating_point() else input_tensor
+        return torch.clamp(converted.to(torch.int64), min=0, max=2**32 - 1).to(torch.uint32)
+
+    if output_dtype == ttnn.fp8_e4m3:
+        return input_tensor.to(torch.float8_e4m3fn).to(torch.float32)
+
+    if output_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        return ttnn.Tensor(tensor=input_tensor, data_type=output_dtype, layout=ttnn.TILE_LAYOUT).to_torch()
+
+    return input_tensor.to(ttnn.ttnn_dtype_to_torch_dtype(output_dtype))
+
+
+ttnn.attach_golden_function(
+    ttnn.typecast,
+    golden_function=_typecast_golden_function,
+    preprocess_golden_function_inputs=_preprocess_typecast_golden_function_inputs,
+)
 
 
 def _golden_function(tensor, *args, **kwargs):

@@ -11,9 +11,44 @@ THIS_MODULE = sys.modules[__name__]
 __all__ = []
 
 
+def _prepare_input_for_backward(input_tensor):
+    if not input_tensor.requires_grad:
+        # Backward operations call backward() and return input_tensor.grad.
+        # Comparison-mode inputs are detached Torch tensors, so enable gradients locally.
+        input_tensor.requires_grad_(True)
+    return input_tensor
+
+
+def _to_float32_with_bfloat16_daz(tensor):
+    import torch
+
+    result = tensor.to(torch.float32)
+    if tensor.dtype == torch.bfloat16:
+        result = torch.where(
+            torch.abs(result) < torch.finfo(torch.bfloat16).tiny,
+            torch.zeros_like(result),
+            result,
+        )
+    return result
+
+
+def _round_with_bfloat16_ftz(tensor, output_dtype):
+    import torch
+
+    if output_dtype != torch.bfloat16:
+        return tensor.to(output_dtype)
+    result = tensor.to(torch.bfloat16)
+    return torch.where(
+        torch.abs(result.to(torch.float32)) < torch.finfo(torch.bfloat16).tiny,
+        torch.zeros_like(result),
+        result,
+    )
+
+
 def _golden_function_unary_backward(torch_op, grad_tensor, input_tensor, *args, **kwargs):
     import torch
 
+    _prepare_input_for_backward(input_tensor)
     if torch_op == "softsign":
         pyt_y = torch.nn.functional.softsign(input_tensor)
     else:
@@ -28,6 +63,7 @@ def _golden_function_unary_backward(torch_op, grad_tensor, input_tensor, *args, 
 def _golden_function_div_no_nan(torch_op, grad_tensor, input_tensor, alpha, *args, **kwargs):
     import torch
 
+    _prepare_input_for_backward(input_tensor)
     pyt_y = torch.where(torch.tensor(alpha) == 0, torch.zeros_like(input_tensor), torch.div(input_tensor, alpha))
     input_tensor.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
@@ -39,6 +75,7 @@ def _golden_function_div_no_nan(torch_op, grad_tensor, input_tensor, alpha, *arg
 def _golden_function_unary_backward_with_float(torch_op, grad_tensor, input_tensor, *args, **kwargs):
     import torch
 
+    _prepare_input_for_backward(input_tensor)
     if torch_op in ["hardshrink", "softshrink", "leaky_relu", "elu", "celu"]:
         pyt_fn = getattr(torch.nn.functional, torch_op)
     else:
@@ -55,6 +92,7 @@ def _golden_function_unary_backward_with_two_float(
 ):
     import torch
 
+    _prepare_input_for_backward(input_tensor)
     pyt_fn = getattr(torch, torch_op)
     if pyt_fn == torch.clamp:
         pyt_y = torch.clamp(input_tensor, min=a, max=b)
@@ -71,6 +109,7 @@ def _golden_function_backward_with_reverse_string(
 ):
     import torch
 
+    _prepare_input_for_backward(input_tensor_a)
     pyt_fn = getattr(torch, torch_op)
     if pyt_fn == torch.div:
         pyt_y = pyt_fn(input_tensor_b, input_tensor_a, rounding_mode=value)
@@ -474,13 +513,52 @@ def _golden_function_frac(grad_tensor, input_tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.frac_bw, golden_function=_golden_function_frac)
 
 
-def _golden_function_gelu(grad_tensor, input_tensor, *args, **kwargs):
+def _golden_function_gelu(grad_tensor, input_tensor, *args, approximate="none", **kwargs):
     import torch
 
-    input_tensor.retain_grad()
-    pyt_y = torch.nn.functional.gelu(input_tensor)
-    pyt_y.backward(gradient=grad_tensor)
-    return [input_tensor.grad]
+    x = _to_float32_with_bfloat16_daz(input_tensor)
+    grad = _to_float32_with_bfloat16_daz(grad_tensor)
+    if approximate == "tanh":
+        # The sigmoid form avoids cancellation in 1+tanh(u) on GELU's negative tail.
+        # Clamp only the evaluation point so finite BF16 extremes cannot create inf*0 NaNs.
+        kappa = 0.7978845608028654
+        evaluation_x = torch.clamp(x, min=-10.0, max=10.0)
+        u = kappa * (evaluation_x + 0.044715 * evaluation_x * evaluation_x * evaluation_x)
+        sigmoid_2u = torch.sigmoid(2.0 * u)
+        derivative = sigmoid_2u + 2.0 * evaluation_x * sigmoid_2u * (1.0 - sigmoid_2u) * kappa * (
+            1.0 + 3.0 * 0.044715 * evaluation_x * evaluation_x
+        )
+        derivative = torch.where(x >= 10.0, torch.ones_like(derivative), derivative)
+        derivative = torch.where(x <= -10.0, torch.zeros_like(derivative), derivative)
+    else:
+        # erfc keeps the normal CDF stable for large negative inputs where 1+erf cancels.
+        # Evaluate the exact derivative in float32 before applying the BF16 DAZ/FTZ model.
+        sqrt_two = 1.4142135623730951
+        inverse_sqrt_two_pi = 0.3989422804014327
+        cdf = torch.where(
+            x < 0,
+            0.5 * torch.erfc(-x / sqrt_two),
+            0.5 * (1.0 + torch.erf(x / sqrt_two)),
+        )
+        derivative = cdf + x * torch.exp(-0.5 * x * x) * inverse_sqrt_two_pi
+
+    derivative = torch.where(torch.isposinf(x), torch.ones_like(derivative), derivative)
+    derivative = torch.where(torch.isneginf(x), torch.zeros_like(derivative), derivative)
+    if input_tensor.dtype == torch.bfloat16:
+        derivative = _round_with_bfloat16_ftz(derivative, torch.bfloat16).to(torch.float32)
+    output_tensor = _round_with_bfloat16_ftz(grad * derivative, grad_tensor.dtype).detach()
+    if output_tensor.dtype == torch.bfloat16:
+        if approximate == "tanh":
+            # The exhaustive approximate-GELU sweep specifies a two-percent allclose contract.
+            # Tight pointwise ULP tests remain responsible for validating representative inputs.
+            ttnn.decorators.set_golden_comparison_config(
+                output_tensor, method="allclose", scope="all", rtol=2e-2, atol=2e-2
+            )
+        else:
+            # Exact GELU backward retains its full-output three-ULP comparison contract.
+            # Preserve the marker through global clones so to_torch uses the same policy.
+            ttnn.decorators.set_golden_comparison_config(output_tensor, method="ulp", scope="all", ulp_threshold=3)
+    return [output_tensor]
 
 
 ttnn.attach_golden_function(ttnn.gelu_bw, golden_function=_golden_function_gelu)
@@ -658,10 +736,16 @@ ttnn.attach_golden_function(ttnn.tan_bw, golden_function=_golden_function_tan)
 def _golden_function_tanh(grad_tensor, input_tensor, *args, **kwargs):
     import torch
 
-    input_tensor.retain_grad()
-    pyt_y = torch.tanh(input_tensor)
-    pyt_y.backward(gradient=grad_tensor)
-    return [input_tensor.grad]
+    x = _to_float32_with_bfloat16_daz(input_tensor)
+    grad = _to_float32_with_bfloat16_daz(grad_tensor)
+    # sech^2(x)=4*exp(-2|x|)/(1+exp(-2|x|))^2 avoids cancellation in 1-tanh^2(x).
+    # Round and flush once after gradient scaling to model the BF16 SFPU output.
+    exp_tail = torch.exp(-2.0 * torch.abs(x))
+    derivative = 4.0 * exp_tail / torch.square(1.0 + exp_tail)
+    output_tensor = _round_with_bfloat16_ftz(grad * derivative, grad_tensor.dtype).detach()
+    if output_tensor.dtype == torch.bfloat16:
+        ttnn.decorators.set_golden_comparison_config(output_tensor, method="ulp", scope="degenerate", ulp_threshold=2)
+    return [output_tensor]
 
 
 ttnn.attach_golden_function(ttnn.tanh_bw, golden_function=_golden_function_tanh)
