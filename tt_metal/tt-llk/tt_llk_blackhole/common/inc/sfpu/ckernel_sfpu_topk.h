@@ -327,22 +327,25 @@ inline void _topk_defuse_tile_(const int num_tiles)
 // write to LREG0..3 or a programmable-constant read. The standalone sweeps
 // below run while LREG4..7 are dead, so their load captures are harmless.
 
-// Stamp the 2-tile slab's value words with their sign-conditioned sequence
-// position (rank 0..63 per 64-datum column), clearing any stale low bits, and
-// fold -0.0 into the +0.0 tie class on the way (torch treats +-0 as ONE tie
-// class broken by index; the raw sign-magnitude compare would otherwise order
-// all -0.0 strictly below all +0.0). Every datum enters the sort through
-// exactly one local-sort call, so this single sweep canonicalizes the whole
-// sort. Clobbers LREG0..2 and the lane enables (left fully enabled).
+// Stamp ONE value tile (dst_tile_index 0 or 1 within the slab) with sign-conditioned rank tags
+// rank_base + [0, 32): the tile's 32 sequence positions offset by a caller-chosen base. rank_base
+// must be a multiple of 32 and rank_base + 31 must fit 16 bits, so the base ORs into the iota.
+// The k>32 insertion cascade stamps each accumulator tile with its round-start CHAIN position
+// range (32 * level) and the fresh chunk with the top range (32 * output_tiles) exactly once per
+// round; the loser tile's tags then RIDE the cascade unchanged, keeping every tag in the round
+// globally consistent with the true (value, index) order. Same per-vector body and -0.0 fold as
+// the 2-tile local-position stamp below, which is expressed as two calls of this sweep.
+// Clobbers LREG0..2 and the lane enables (left fully enabled).
 template <bool largest>
-inline void _topk_stamp_local_positions_()
+inline void _topk_stamp_tile_rank_range_(std::uint32_t dst_tile_index, std::uint32_t rank_base)
 {
     // Lanes-on FIRST -- the constant programming below goes through the
     // lane-PREDICATED SFPCONFIG path (see _topk_fuse_tile_).
     TTI_SFPENCC(3, 0, 0, 10);
     sfpi::vConstIntPrgm0 = 0x0000FFFF; // LREG12: tag complement operand
 
-    set_dst_write_addr(0);
+    LLK_ASSERT(dst_tile_index <= 1, "stamp_tile_rank_range expects dst tile 0 or 1");
+    set_dst_write_addr(dst_tile_index * 64); // one 32-bit tile = 64 SFPLOAD address units
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     // Per-lane rank base: an SFPLOAD vector covers 4 consecutive Dst rows
@@ -350,8 +353,14 @@ inline void _topk_stamp_local_positions_()
     // are consecutive sequence positions. LTILEID = 2*j, so j>>3 = LTILEID>>4.
     TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG2, 0);
     TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG2, 1);
+    if (rank_base != 0)
+    {
+        // Fold the runtime base into the iota register (disjoint bits: iota < 32).
+        TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, rank_base);
+        TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
+    }
 
-    for (int g = 0; g < 32; g++) // 4-row groups across the 2-tile slab
+    for (int g = 0; g < 16; g++) // 4-row groups across the tile
     {
         for (int parity = 0; parity < 2; parity++) // even / odd Dst columns
         {
@@ -387,6 +396,20 @@ inline void _topk_stamp_local_positions_()
 
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+}
+
+// Stamp the 2-tile slab's value words with their sign-conditioned sequence
+// position (rank 0..63 per 64-datum column), clearing any stale low bits, and
+// fold -0.0 into the +0.0 tie class on the way (torch treats +-0 as ONE tie
+// class broken by index; the raw sign-magnitude compare would otherwise order
+// all -0.0 strictly below all +0.0). Every datum enters the sort through
+// exactly one local-sort call, so this single sweep canonicalizes the whole
+// sort. Clobbers LREG0..2 and the lane enables (left fully enabled).
+template <bool largest>
+inline void _topk_stamp_local_positions_()
+{
+    _topk_stamp_tile_rank_range_<largest>(0, 0);
+    _topk_stamp_tile_rank_range_<largest>(1, 32);
 }
 
 // Clear the low 16 bits (stale rank tags) of one value tile, leaving exact
@@ -1132,7 +1155,18 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
     topk_replay_init = -1;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT = false, bool FUSED = false, bool RANK_STAMPED = false>
+// PRE_TAGGED (with RANK_STAMPED): the value words' low-16 tags are already globally consistent
+// (ttnn.sort fuses the TRUE u16 index in at every network call), so the merge runs the
+// RANK_STAMPED transport (raw INT32 value words, tracked index tiles, unstable swaps) but must
+// NOT overwrite the riding tags with position-derived ranks.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool top_min,
+    bool STABLE_SORT  = false,
+    bool FUSED        = false,
+    bool RANK_STAMPED = false,
+    bool PRE_TAGGED   = false>
 inline void _bitonic_topk_merge(const int m_iter, const int k)
 {
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
@@ -1155,7 +1189,8 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
         TTI_SFPENCC(3, 0, 0, 10);
     }
 
-    if constexpr (RANK_STAMPED)
+    static_assert(!(PRE_TAGGED && !RANK_STAMPED), "pre-tagged keys ride the rank-stamped transport");
+    if constexpr (RANK_STAMPED && !PRE_TAGGED)
     {
         // Lanes-on FIRST -- the constant programming below goes through the lane-PREDICATED
         // SFPCONFIG path and transiently clobbers LREG0 (see _topk_fuse_tile_), so it must
@@ -1189,7 +1224,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
                 for (std::uint32_t ii = 0; ii < inner_d; ii++)
                 {
                     bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dst_offset, ld_dist);
-                    if constexpr (RANK_STAMPED)
+                    if constexpr (RANK_STAMPED && !PRE_TAGGED)
                     {
                         // Re-key both runs' value lo16 with fresh sign-conditioned local
                         // ranks so this merge AND the rebuild that follows it compare

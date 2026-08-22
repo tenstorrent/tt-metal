@@ -525,11 +525,13 @@ template <
     bool top_min,
     bool STABLE_SORT = false,
     bool FUSED = false,
-    bool RANK_STAMPED = false>
+    bool RANK_STAMPED = false,
+    bool PRE_TAGGED = false>
 inline void calculate_bitonic_topk_merge(const int m_iter, const int k) {
     static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
     static_assert(!FUSED, "Fused-key TopK is not supported by the Quasar bitonic TopK path");
     static_assert(!RANK_STAMPED, "Rank-stamped stable TopK is not ported to the Quasar bitonic TopK path");
+    static_assert(!PRE_TAGGED, "Pre-tagged stable TopK is not ported to the Quasar bitonic TopK path");
 
     std::uint32_t dst_addr_offset = 0;
     for (int face = 0; face < 2; face++) {
