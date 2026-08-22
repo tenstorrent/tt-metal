@@ -90,6 +90,21 @@ KIND_PEAK_FLOPS = "peak_flops"
 # has its own read set and decode's is the one that binds.
 KIND_STAGE_BYTES = "stage_bytes"
 
+# The COMPUTE roof's numerator: the parameters a matmul actually multiplies, per checkpoint section.
+#
+# THE CEILING IS PINNED OR IT IS NOT, and which roof binds is irrelevant to that. The other three
+# inputs were anchored one at a time, each after it moved something: the floor, the bytes, the peak.
+# This was the last one left loose, and it is loose for the same reason the others were -- blocks[]
+# lives in the arch mirror, written `{**prev, **keep}`, last-write-wins. The mirror calls itself safe
+# to cache without expiry because "a dtype or grid knob ... cannot change how many towers the model
+# has", which is true of the towers and NOT true of matmul_params: that figure subtracts the gathers
+# the profile OBSERVED, so a run that observes a different gather set recomputes it, and the compute
+# roof moves under a measurement that did not.
+#
+# Pinned per SECTION rather than per stage: prefill and decode share a subtree and must not be able
+# to disagree about how many parameters it multiplies.
+KIND_MATMUL_PARAMS = "matmul_params"
+
 PHASE_BEFORE = "before"
 PHASE_AFTER = "after"
 

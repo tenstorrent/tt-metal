@@ -2020,12 +2020,59 @@ def _model_block_facts(model_root, model_id: str = "", cfg: dict | None = None, 
                     _geo["params"] = int(_pp[_root])
                     if _lk.get(_root):
                         _geo["lookup_params"] = int(_lk[_root])
-                        _geo["matmul_params"] = max(0, int(_pp[_root]) - int(_lk[_root]))
+                        _mm = max(0, int(_pp[_root]) - int(_lk[_root]))
+                        # PIN IT, for the reason the bytes and the peak are pinned: this is the
+                        # compute roof's numerator, and the arch mirror it otherwise lives in is a
+                        # last-write-wins cache. matmul_params subtracts the gathers the profile
+                        # OBSERVED, so a later run that observes a different set recomputes it and
+                        # the compute ceiling moves under a measurement that did not. The ceiling is
+                        # pinned or it is not; whether this stage happens to be compute-bound is not
+                        # the question. Write-once, keyed by section so prefill and decode cannot
+                        # disagree about the subtree they share.
+                        try:
+                            _pinned_mm = _ledger_anchor_matmul_params(model_root, str(_root), _mm)
+                            if _pinned_mm:
+                                _mm = int(_pinned_mm)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        _geo["matmul_params"] = _mm
         except Exception:  # noqa: BLE001 -- geometry without params still prices the memory term
             pass
         return out
     except Exception:  # noqa: BLE001 -- no blocks is the refused-ceiling path, not a failure
         return {}
+
+
+def _ledger_anchor_matmul_params(model_root, section: str, value: int):
+    """Pin one section's multiplied-parameter count, returning whatever is pinned. 0 when unavailable.
+
+    Best-effort in both directions: a ledger that cannot be reached leaves the freshly computed value
+    in place (the behaviour before this pin existed), and a pin that already holds outranks the new
+    computation, which is the whole point.
+    """
+    try:
+        from . import measurements as _led
+    except Exception:  # noqa: BLE001
+        try:
+            import importlib.util as _ilu
+
+            _spec = _ilu.spec_from_file_location("tt_meas_mm", str(Path(__file__).with_name("measurements.py")))
+            _led = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_led)
+        except Exception:  # noqa: BLE001
+            return 0
+    try:
+        held = _led.anchor(
+            _led.KIND_MATMUL_PARAMS,
+            float(value),
+            depth=str(section).strip().lower(),
+            mode="params",
+            source="checkpoint sections minus observed gathers",
+            model=Path(model_root).name if model_root else "",
+        )
+        return int(held) if held else 0
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def _publish_stage_roots(seq, model_root, node) -> dict:

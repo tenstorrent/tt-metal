@@ -27,10 +27,29 @@ def test_the_generator_carries_the_tensor_name():
     assert 'yield numel, str(name).split(".", 1)[0], str(name)' in src
 
 
+def _enclosing_source(path: Path, needle: str) -> str:
+    """The full source of the function containing `needle`.
+
+    Character windows (`src[i:i+400]`) and delimiter scans (`up to the next except`) both test how
+    the code is COMMENTED and PUNCTUATED rather than what it does -- the first broke when a comment
+    was added between two lines, the second when a try/except was nested inside the stanza. The
+    function body is the unit the assertion actually means.
+    """
+    import ast
+
+    src = path.read_text()
+    line = src[: src.index(needle)].count("\n") + 1
+    best = None
+    for n in ast.walk(ast.parse(src)):
+        if isinstance(n, ast.FunctionDef) and n.lineno <= line <= (n.end_lineno or 0):
+            if best is None or n.lineno > best.lineno:
+                best = n
+    assert best is not None, needle
+    return "\n".join(src.splitlines()[best.lineno - 1 : best.end_lineno])
+
+
 def test_the_producer_records_both_counts():
-    src = (_PA / "cc_optimize" / "run.py").read_text()
-    i = src.index('_geo["params"] = int(_pp[_root])')
-    stanza = src[i : i + 400]
+    stanza = _enclosing_source(_PA / "cc_optimize" / "run.py", '_geo["params"] = int(_pp[_root])')
     assert '_geo["matmul_params"]' in stanza, "the tower still records only its size"
     assert '_geo["lookup_params"]' in stanza
 
@@ -50,9 +69,9 @@ def test_the_compute_floor_prefers_matmul_params():
 
 def test_a_tower_with_no_table_is_untouched():
     """An audio encoder has no token embedding, so nothing is subtracted and encode does not move."""
-    src = (_PA / "cc_optimize" / "run.py").read_text()
-    i = src.index("if _lk.get(_root):")
-    assert '_geo["matmul_params"]' in src[i : i + 300], "matmul_params is set even with no lookup tensors"
+    stanza = _enclosing_source(_PA / "cc_optimize" / "run.py", "if _lk.get(_root):")
+    i = stanza.index("if _lk.get(_root):")
+    assert '_geo["matmul_params"]' in stanza[i:], "matmul_params is set even with no lookup tensors"
 
 
 def test_a_producer_that_predates_this_still_works():
