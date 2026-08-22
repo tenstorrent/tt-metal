@@ -215,16 +215,18 @@ void extract_scalar(uint32_t full, uint32_t o, uint32_t b, uint32_t col) {
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t NV = get_named_compile_time_arg_val("nv");
-    constexpr uint32_t DKT = get_named_compile_time_arg_val("dkt");
-    constexpr uint32_t DVT = get_named_compile_time_arg_val("dvt");
-    constexpr uint32_t EPS = get_named_compile_time_arg_val("eps_bits");
-    constexpr uint32_t SCALE = get_named_compile_time_arg_val("scale_bits");
-    constexpr uint32_t SP_BETA = get_named_compile_time_arg_val("sp_beta_bits");
-    constexpr uint32_t SP_BETA_RECIP = get_named_compile_time_arg_val("sp_beta_recip_bits");
-    constexpr uint32_t SP_THR = get_named_compile_time_arg_val("sp_thr_bits");
-    constexpr uint32_t INV_DV = get_named_compile_time_arg_val("inv_dv_bits");
-    constexpr uint32_t NORM_EPS = get_named_compile_time_arg_val("norm_eps_bits");
+    // k-prefixed (not ALL-CAPS): the LLK headers define macros like EPS that would
+    // otherwise clobber these identifiers.
+    constexpr uint32_t kNv = get_named_compile_time_arg_val("nv");
+    constexpr uint32_t kDkt = get_named_compile_time_arg_val("dkt");
+    constexpr uint32_t kDvt = get_named_compile_time_arg_val("dvt");
+    constexpr uint32_t kEpsBits = get_named_compile_time_arg_val("eps_bits");
+    constexpr uint32_t kScaleBits = get_named_compile_time_arg_val("scale_bits");
+    constexpr uint32_t kSpBetaBits = get_named_compile_time_arg_val("sp_beta_bits");
+    constexpr uint32_t kSpBetaRecipBits = get_named_compile_time_arg_val("sp_beta_recip_bits");
+    constexpr uint32_t kSpThrBits = get_named_compile_time_arg_val("sp_thr_bits");
+    constexpr uint32_t kInvDvBits = get_named_compile_time_arg_val("inv_dv_bits");
+    constexpr uint32_t kNormEpsBits = get_named_compile_time_arg_val("norm_eps_bits");
 
     const uint32_t b = get_arg_val<uint32_t>(0);
     const uint32_t vh = get_arg_val<uint32_t>(1);
@@ -235,7 +237,7 @@ void kernel_main() {
     WAIT(cb_ab, 1);
     WAIT(cb_ones, 1);
 
-    // beta_full = sigmoid(ab); beta lives at column NV + vh of row b.
+    // beta_full = sigmoid(ab); beta lives at column kNv + vh of row b.
     cb_reserve_back(cb_beta_full, 1);
     pack_reconfig_data_format(cb_beta_full);
     reconfig_data_format_srca(cb_ab);
@@ -259,7 +261,7 @@ void kernel_main() {
     softplus_tile_init();
     tile_regs_acquire();
     add_tiles_bcast_rows(cb_ab, cb_dtb, 0, 0, 0, 0);
-    softplus_tile(0, SP_BETA, SP_BETA_RECIP, SP_THR);
+    softplus_tile(0, kSpBetaBits, kSpBetaRecipBits, kSpThrBits);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, cb_scr, 0);
@@ -290,69 +292,69 @@ void kernel_main() {
     extract_scalar(cb_decay_full, cb_decay_s, b, vh);
     POP(cb_decay_full, 1);
     WAIT(cb_beta_full, 1);
-    extract_scalar(cb_beta_full, cb_beta_s, b, NV + vh);
+    extract_scalar(cb_beta_full, cb_beta_s, b, kNv + vh);
     POP(cb_beta_full, 1);
 
     // ---- L2 norms: qn = q * rsqrt(sum(q^2)+eps) * scale ; kn without scale ------
-    WAIT(cb_qin, DKT);
-    square(cb_qin, cb_sq, DKT);
-    WAIT(cb_sq, DKT);
-    rowsum_rsqrt(cb_sq, cb_colscale, DKT, 0, EPS, SCALE);
-    POP(cb_sq, DKT);
+    WAIT(cb_qin, kDkt);
+    square(cb_qin, cb_sq, kDkt);
+    WAIT(cb_sq, kDkt);
+    rowsum_rsqrt(cb_sq, cb_colscale, kDkt, 0, kEpsBits, kScaleBits);
+    POP(cb_sq, kDkt);
     WAIT(cb_colscale, 1);
-    bcols_mul(cb_qin, cb_colscale, cb_qn, DKT);
+    bcols_mul(cb_qin, cb_colscale, cb_qn, kDkt);
     POP(cb_colscale, 1);
-    POP(cb_qin, DKT);
+    POP(cb_qin, kDkt);
 
-    WAIT(cb_kin, DKT);
-    square(cb_kin, cb_sq, DKT);
-    WAIT(cb_sq, DKT);
-    rowsum_rsqrt(cb_sq, cb_colscale, DKT, 0, EPS, 0);
-    POP(cb_sq, DKT);
+    WAIT(cb_kin, kDkt);
+    square(cb_kin, cb_sq, kDkt);
+    WAIT(cb_sq, kDkt);
+    rowsum_rsqrt(cb_sq, cb_colscale, kDkt, 0, kEpsBits, 0);
+    POP(cb_sq, kDkt);
     WAIT(cb_colscale, 1);
-    bcols_mul(cb_kin, cb_colscale, cb_kn, DKT);
+    bcols_mul(cb_kin, cb_colscale, cb_kn, kDkt);
     POP(cb_colscale, 1);
-    POP(cb_kin, DKT);
+    POP(cb_kin, kDkt);
 
     // ---- decayed state ----------------------------------------------------------
-    constexpr uint32_t KV = DKT * DVT;
-    WAIT(cb_h, KV);
+    constexpr uint32_t kKv = kDkt * kDvt;
+    WAIT(cb_h, kKv);
     WAIT(cb_decay_s, 1);
-    bscalar_mul(cb_h, cb_decay_s, cb_hd, KV);
-    POP(cb_h, KV);
+    bscalar_mul(cb_h, cb_decay_s, cb_hd, kKv);
+    POP(cb_h, kKv);
     POP(cb_decay_s, 1);
 
     // ---- delta = (v - kn @ hd) * beta -------------------------------------------
-    WAIT(cb_kn, DKT);
-    WAIT(cb_hd, KV);
-    mm_row_state(cb_kn, cb_hd, cb_hd, cb_vread, DKT, DVT);
-    WAIT(cb_vin, DVT);
-    WAIT(cb_vread, DVT);
-    ew(cb_vin, cb_vread, cb_delta, DVT, 1);
-    POP(cb_vin, DVT);
-    POP(cb_vread, DVT);
-    WAIT(cb_delta, DVT);
+    WAIT(cb_kn, kDkt);
+    WAIT(cb_hd, kKv);
+    mm_row_state(cb_kn, cb_hd, cb_hd, cb_vread, kDkt, kDvt);
+    WAIT(cb_vin, kDvt);
+    WAIT(cb_vread, kDvt);
+    ew(cb_vin, cb_vread, cb_delta, kDvt, 1);
+    POP(cb_vin, kDvt);
+    POP(cb_vread, kDvt);
+    WAIT(cb_delta, kDvt);
     WAIT(cb_beta_s, 1);
-    bscalar_mul(cb_delta, cb_beta_s, cb_dm, DVT);
-    POP(cb_delta, DVT);
+    bscalar_mul(cb_delta, cb_beta_s, cb_dm, kDvt);
+    POP(cb_delta, kDvt);
     POP(cb_beta_s, 1);
 
     // ---- outer = kn_b^T (x) delta_b ---------------------------------------------
     // Column-broadcast form of k row b: rows of scr = kn[b, :] per block, transposed so
     // every column holds kn_b down the rows.
-    cb_reserve_back(cb_scr, DKT);
-    for (uint32_t m = 0; m < DKT; m++) {
+    cb_reserve_back(cb_scr, kDkt);
+    for (uint32_t m = 0; m < kDkt; m++) {
         brow_mul_one(cb_ones, cb_kn, 0, m, cb_scr, m, b);
     }
-    cb_push_back(cb_scr, DKT);
-    POP(cb_kn, DKT);
+    cb_push_back(cb_scr, kDkt);
+    POP(cb_kn, kDkt);
 
-    WAIT(cb_scr, DKT);
-    cb_reserve_back(cb_kcb, DKT);
+    WAIT(cb_scr, kDkt);
+    cb_reserve_back(cb_kcb, kDkt);
     pack_reconfig_data_format(cb_kcb);
     reconfig_data_format_srca(cb_scr);
     transpose_init(cb_scr);
-    for (uint32_t m = 0; m < DKT; m++) {
+    for (uint32_t m = 0; m < kDkt; m++) {
         tile_regs_acquire();
         transpose_tile(cb_scr, m, 0);
         tile_regs_commit();
@@ -360,50 +362,50 @@ void kernel_main() {
         pack_tile(0, cb_kcb, m);
         tile_regs_release();
     }
-    cb_push_back(cb_kcb, DKT);
-    POP(cb_scr, DKT);
+    cb_push_back(cb_kcb, kDkt);
+    POP(cb_scr, kDkt);
 
-    WAIT(cb_kcb, DKT);
-    WAIT(cb_dm, DVT);
-    cb_reserve_back(cb_outer, KV);
-    for (uint32_t m = 0; m < DKT; m++) {
-        for (uint32_t n = 0; n < DVT; n++) {
-            brow_mul_one(cb_kcb, cb_dm, m, n, cb_outer, m * DVT + n, b);
+    WAIT(cb_kcb, kDkt);
+    WAIT(cb_dm, kDvt);
+    cb_reserve_back(cb_outer, kKv);
+    for (uint32_t m = 0; m < kDkt; m++) {
+        for (uint32_t n = 0; n < kDvt; n++) {
+            brow_mul_one(cb_kcb, cb_dm, m, n, cb_outer, m * kDvt + n, b);
         }
     }
-    cb_push_back(cb_outer, KV);
-    POP(cb_kcb, DKT);
-    POP(cb_dm, DVT);
+    cb_push_back(cb_outer, kKv);
+    POP(cb_kcb, kDkt);
+    POP(cb_dm, kDvt);
 
     // ---- h_new = hd + outer (state writeback via cb_hnew) ------------------------
-    WAIT(cb_outer, KV);
-    ew(cb_hd, cb_outer, cb_hnew, KV, 0);
+    WAIT(cb_outer, kKv);
+    ew(cb_hd, cb_outer, cb_hnew, kKv, 0);
 
     // ---- o = qn @ hd + qn @ outer (== qn @ h_new, accumulated in dest) -----------
-    WAIT(cb_qn, DKT);
-    mm_row_state(cb_qn, cb_hd, cb_outer, cb_o, DKT, DVT);
-    POP(cb_qn, DKT);
-    POP(cb_hd, KV);
-    POP(cb_outer, KV);
+    WAIT(cb_qn, kDkt);
+    mm_row_state(cb_qn, cb_hd, cb_outer, cb_o, kDkt, kDvt);
+    POP(cb_qn, kDkt);
+    POP(cb_hd, kKv);
+    POP(cb_outer, kKv);
 
     // ---- gated rmsnorm: out = rmsnorm(o) * norm_w * silu(z) -----------------------
-    WAIT(cb_o, DVT);
-    square(cb_o, cb_sq, DVT);
-    WAIT(cb_sq, DVT);
-    rowsum_rsqrt(cb_sq, cb_colscale, DVT, INV_DV, NORM_EPS, 0);
-    POP(cb_sq, DVT);
+    WAIT(cb_o, kDvt);
+    square(cb_o, cb_sq, kDvt);
+    WAIT(cb_sq, kDvt);
+    rowsum_rsqrt(cb_sq, cb_colscale, kDvt, kInvDvBits, kNormEpsBits, 0);
+    POP(cb_sq, kDvt);
     WAIT(cb_colscale, 1);
-    bcols_mul(cb_o, cb_colscale, cb_delta, DVT);  // cb_delta reused: normed o
+    bcols_mul(cb_o, cb_colscale, cb_delta, kDvt);  // cb_delta reused: normed o
     POP(cb_colscale, 1);
-    POP(cb_o, DVT);
+    POP(cb_o, kDvt);
 
-    WAIT(cb_delta, DVT);
-    WAIT(cb_w, DVT);
-    cb_reserve_back(cb_dm, DVT);  // cb_dm reused: normed o * norm_w
+    WAIT(cb_delta, kDvt);
+    WAIT(cb_w, kDvt);
+    cb_reserve_back(cb_dm, kDvt);  // cb_dm reused: normed o * norm_w
     pack_reconfig_data_format(cb_dm);
     reconfig_data_format(cb_delta, cb_w);
     mul_bcast_rows_init(cb_delta, cb_w);
-    for (uint32_t n = 0; n < DVT; n++) {
+    for (uint32_t n = 0; n < kDvt; n++) {
         tile_regs_acquire();
         mul_tiles_bcast_rows(cb_delta, cb_w, n, n, 0, 0);
         tile_regs_commit();
@@ -411,17 +413,17 @@ void kernel_main() {
         pack_tile(0, cb_dm, n);
         tile_regs_release();
     }
-    cb_push_back(cb_dm, DVT);
-    POP(cb_delta, DVT);
-    POP(cb_w, DVT);
+    cb_push_back(cb_dm, kDvt);
+    POP(cb_delta, kDvt);
+    POP(cb_w, kDvt);
 
-    WAIT(cb_zin, DVT);
-    cb_reserve_back(cb_vread, DVT);  // cb_vread reused: silu(z)
+    WAIT(cb_zin, kDvt);
+    cb_reserve_back(cb_vread, kDvt);  // cb_vread reused: silu(z)
     pack_reconfig_data_format(cb_vread);
     reconfig_data_format_srca(cb_zin);
     copy_tile_init(cb_zin);
     silu_tile_init();
-    for (uint32_t n = 0; n < DVT; n++) {
+    for (uint32_t n = 0; n < kDvt; n++) {
         tile_regs_acquire();
         copy_tile(cb_zin, n, 0);
         silu_tile(0);
@@ -430,13 +432,13 @@ void kernel_main() {
         pack_tile(0, cb_vread, n);
         tile_regs_release();
     }
-    cb_push_back(cb_vread, DVT);
-    POP(cb_zin, DVT);
+    cb_push_back(cb_vread, kDvt);
+    POP(cb_zin, kDvt);
 
-    WAIT(cb_dm, DVT);
-    WAIT(cb_vread, DVT);
-    ew(cb_dm, cb_vread, cb_out, DVT, 2);
-    POP(cb_dm, DVT);
-    POP(cb_vread, DVT);
+    WAIT(cb_dm, kDvt);
+    WAIT(cb_vread, kDvt);
+    ew(cb_dm, cb_vread, cb_out, kDvt, 2);
+    POP(cb_dm, kDvt);
+    POP(cb_vread, kDvt);
     POP(cb_ones, 1);
 }
