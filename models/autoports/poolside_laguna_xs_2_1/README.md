@@ -499,12 +499,14 @@ Refresh just this package in an existing env:
 
 ## Coding agent (`pool`)
 
-`pool` (Poolside's terminal agent, github.com/poolsideai/pool) talks to this server in **standalone mode**.
+`pool` is Poolside's separate terminal agent; it is not bundled with this repository. Follow the
+[official `pool` installation instructions](https://github.com/poolsideai/pool), verify the install with
+`pool --version`, and then use it with this server in **standalone mode**.
 
 ```bash
 # 1. Serve Laguna (above), confirm /v1/models returns poolside/Laguna-XS-2.1.
-# 2. Install pool:
-curl -fsSL https://downloads.poolside.ai/pool/install.sh | sh   # accept EULA; adds ~/.local/bin
+# 2. Install pool using its official instructions, then confirm it is available:
+pool --version
 # 3. Point pool at the local endpoint — POOLSIDE_STANDALONE_BASE_URL is the mode switch:
 export POOLSIDE_STANDALONE_BASE_URL=http://localhost:8000/v1    # note the /v1 (without it: 404 default-agent)
 export POOLSIDE_API_KEY=EMPTY                                   # any value; local server ignores it
