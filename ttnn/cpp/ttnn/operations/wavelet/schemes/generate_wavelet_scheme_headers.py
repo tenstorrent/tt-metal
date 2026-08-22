@@ -200,9 +200,7 @@ def render_scheme_header(scheme: Scheme) -> str:
     return "\n".join(lines)
 
 
-def render_registry(schemes: list[Scheme]) -> str:
-    first_identifier = schemes[0].identifier
-    includes = [f'#include "{scheme.identifier}.hpp"' for scheme in schemes]
+def render_catalog(schemes: list[Scheme]) -> str:
     enum_entries = [f"    k{scheme.identifier}," for scheme in schemes]
     information_entries = [
         (
@@ -220,13 +218,6 @@ def render_registry(schemes: list[Scheme]) -> str:
                 "    }",
             ]
         )
-    dispatch_cases = [
-        (
-            f"        case SchemeId::k{scheme.identifier}: "
-            f"return fn.template operator()<schemes::{scheme.identifier}>();"
-        )
-        for scheme in schemes
-    ]
     lines = [
         LICENSE_HEADER.rstrip(),
         "",
@@ -235,13 +226,7 @@ def render_registry(schemes: list[Scheme]) -> str:
         "#include <array>",
         "#include <cstdint>",
         "#include <span>",
-        "#include <string>",
         "#include <string_view>",
-        "#include <utility>",
-        "",
-        *includes,
-        "",
-        "#include <tt_stl/assert.hpp>",
         "",
         "namespace ttnn::operations::wavelet {",
         "",
@@ -270,6 +255,38 @@ def render_registry(schemes: list[Scheme]) -> str:
         *identifier_checks,
         "    return SchemeId::kUnknown;",
         "}",
+        "",
+        "}  // namespace ttnn::operations::wavelet",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def render_dispatch(schemes: list[Scheme]) -> str:
+    first_identifier = schemes[0].identifier
+    includes = [f'#include "{scheme.identifier}.hpp"' for scheme in schemes]
+    dispatch_cases = [
+        (
+            f"        case SchemeId::k{scheme.identifier}: "
+            f"return fn.template operator()<schemes::{scheme.identifier}>();"
+        )
+        for scheme in schemes
+    ]
+    lines = [
+        LICENSE_HEADER.rstrip(),
+        "",
+        "#pragma once",
+        "",
+        "#include <cstdint>",
+        "#include <string_view>",
+        "#include <utility>",
+        "",
+        '#include "scheme_catalog.hpp"',
+        *includes,
+        "",
+        "#include <tt_stl/assert.hpp>",
+        "",
+        "namespace ttnn::operations::wavelet {",
         "",
         "template <typename Fn>",
         "decltype(auto) dispatch_scheme(const SchemeId id, Fn&& fn) {",
@@ -332,9 +349,13 @@ def main() -> None:
         generated_headers.add(path)
         write_file(path, render_scheme_header(scheme))
 
-    registry = GENERATED_DIRECTORY / "registry.hpp"
-    generated_headers.add(registry)
-    write_file(registry, render_registry(schemes))
+    catalog_header = GENERATED_DIRECTORY / "scheme_catalog.hpp"
+    generated_headers.add(catalog_header)
+    write_file(catalog_header, render_catalog(schemes))
+
+    dispatch_header = GENERATED_DIRECTORY / "scheme_dispatch.hpp"
+    generated_headers.add(dispatch_header)
+    write_file(dispatch_header, render_dispatch(schemes))
     remove_stale_headers(generated_headers)
 
 

@@ -8,7 +8,7 @@
 #include <string_view>
 
 #include "ttnn/operations/wavelet/common/boundary.hpp"
-#include "ttnn/operations/wavelet/generated/wavelet_schemes/registry.hpp"
+#include "ttnn/operations/wavelet/generated/wavelet_schemes/scheme_catalog.hpp"
 
 namespace ttnn::operations::wavelet {
 

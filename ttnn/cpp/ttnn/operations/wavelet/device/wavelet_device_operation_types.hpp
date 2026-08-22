@@ -10,7 +10,7 @@
 #include <tuple>
 
 #include "ttnn/operations/wavelet/common/boundary.hpp"
-#include "ttnn/operations/wavelet/generated/wavelet_schemes/registry.hpp"
+#include "ttnn/operations/wavelet/generated/wavelet_schemes/scheme_catalog.hpp"
 #include "ttnn/operations/wavelet/wavelet_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
