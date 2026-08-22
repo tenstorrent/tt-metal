@@ -184,7 +184,7 @@ executes fully REPLICATED — weights, KV, and inputs on every device, no CCL; a
 its own replicated embed_tokens copy (the target's table is hidden-sharded)
 and reuses the target's vocab-sharded LM head with host shard-concat.
 
-## Batch > 1 (goal: concurrency 8) — BUILT (eager v1, TT_SPEC_BATCHED=1)
+## Batch > 1 (goal: concurrency 8) — BUILT, eager + traced (TT_SPEC_BATCHED=1)
 
 `tt/spec_decode_batched.py::Qwen36BatchedSpeculativeDecoder` — per-user
 drafting, ONE grouped chunk verify per iteration (the c8 fixed-cost
@@ -212,9 +212,35 @@ amortization), fully desynced per-user accept/commit:
   differ -> anchors/accepts/commits desync while every user emits exactly its
   own target sequence), uniform-prompt identity, first-verify pending arming.
 
-Next: batch the drafter legs across users (the MTP step is a standard B-wide
-paged decode) and trace the batched verify once the u=1 capture-chain isolation
-lands.
+**Traced batched loop** (default; TT_SPEC_TRACE=0 for eager, which is also the
+adaptive-K mode — the traced drafter is static-K):
+
+- **Batched drafter**: one B-row T=1 trace per window index over an END-ALIGNED
+  per-user schedule (every user's last pending lands at leg width-K; shorter
+  catch-ups left-pad by replaying their first pending — an idempotent KV
+  rewrite). Per iteration: one pos/rope window upload, one tiny token upload
+  per leg, per-user greedy picks as rows of ONE 32-row on-device argmax (the
+  [B,1,Vs] -> [1,1,B,Vs] row merge goes through ROW_MAJOR — a padded-TILE
+  reshape is a host-fallback read, illegal under capture), two tiny readbacks
+  per DRAFT leg for all 8 users. Kills the measured 510 ms eager draft phase.
+- **Traced grouped verify**: the full B x bucket-128 graph (batched GDN with
+  valid_masks as stacked [B,...] device tensors + carry_inplace — the handle
+  swap would deallocate a buffer the captured graph reads — plus per-user
+  attention over in-graph slices of stacked cos/sin/csi/chunk-page-table
+  buffers), self-restoring from the batched anchor snapshot, per-user
+  hidden-row + score outputs. ~10 host uploads per iteration total.
+- **Capture ordering** (all compiles strictly before any capture): eager first
+  verify -> drafter window compile passes -> verify-graph compile pass ->
+  drafter captures -> verify capture. Iteration 1's oversized prompt-tail
+  window falls back to eager legs (programs warm from seeding).
+
+Banked clue for the u=1 traced lane (job 49490): after the capture-read fix,
+an IDENTICAL deterministic CB/L1 clash remains (program 360 vs L1 buffer
+1517312) — one deterministic allocation still lands under a parked trace;
+suspects are the eager commit-chunk L1 activations between replays and the
+iteration-1 eager fallback legs. Diff the allocation set between capture-warm
+and replay paths when rotating back; the batched loop shares the commit
+pattern, so a batched repro would confirm it.
 
 ## v1 limitations (explicit)
 

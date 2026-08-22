@@ -864,8 +864,19 @@ class TPGatedDeltaNet:
         for r in rows:
             ttnn.deallocate(r)
 
-    def forward_prefill_batched(self, x, chunk_size=128, valid_lens=None, carry=False):
+    def forward_prefill_batched(
+        self, x, chunk_size=128, valid_lens=None, carry=False, valid_masks=None, carry_inplace=False
+    ):
         """Batched prefill: all B users in one pass (no per-user Python loop).
+
+        valid_masks: trace-safe per-row valid_lens — caller-owned persistent device
+        tensors {"conv_sel": [B,K-1,(K-1)+T], "f32": [B,T,1], "bf16": [B,T,1]}
+        whose VALUES encode each row's valid_len (fused chunk op only).
+        carry_inplace: write the conv left-context back INTO the existing
+        _batched_conv_carry buffer (ttnn.copy) instead of swapping the handle —
+        required when a captured trace reads that buffer (the swap deallocates a
+        buffer the trace would replay against), and keeps eager callers that
+        snapshot/restore the carry pointed at a stable tensor.
 
         The chunk-seq GDN kernel scans a leading BH = B*H batch dim, each (user, head) row an
         independent causal scan, so B is a true batch dim (not a time concat). Runs projection /
@@ -930,7 +941,8 @@ class TPGatedDeltaNet:
             conv_state=conv_carry_in,
             weight_taps=tw["conv_taps"],
             bias_dev=None,
-            valid_len=valid_lens,
+            valid_len=None if valid_masks is not None else valid_lens,
+            valid_sel=valid_masks["conv_sel"] if valid_masks is not None else None,
         )
         ttnn.deallocate(qkv)
 
@@ -955,8 +967,9 @@ class TPGatedDeltaNet:
         )
 
         _use_fused = fused_chunk_enabled()
+        assert valid_masks is None or _use_fused, "valid_masks (traced masked chunk) requires the fused chunk op"
         _delta_fn = chunk_gated_delta_rule_fused_adapter if _use_fused else chunk_gated_delta_rule_seq_adapter
-        _extra = {"const_tiles": self._fused_const_tiles} if _use_fused else {}
+        _extra = {"const_tiles": self._fused_const_tiles, "valid_masks": valid_masks} if _use_fused else {}
         o, final_state = _delta_fn(
             q,
             k,
@@ -968,7 +981,7 @@ class TPGatedDeltaNet:
             initial_state=self.rec_state if carry else None,
             device=self.mesh,
             cached_masks=self.chunk_seq_masks,
-            valid_len=valid_lens,
+            valid_len=None if valid_masks is not None else valid_lens,
             qkv_head_dims=(Nk, Dk, Nv, Dv),
             **_extra,
         )
@@ -998,7 +1011,17 @@ class TPGatedDeltaNet:
         for m in range(1, self.K):
             cs = ttnn.reshape(ttnn.slice(conv_new_state, (0, m - 1, 0), (B, m, D)), (1, B, D))  # [1,B,D]
             new_conv.append(cs)
-        if carry:
+        if carry and carry_inplace:
+            # Stable-handle carry writeback (trace-safe: a captured graph reads
+            # the existing buffer, so it must never be swapped or deallocated).
+            cn = conv_new_state
+            if cn.layout != ttnn.TILE_LAYOUT:
+                cn = ttnn.to_layout(cn, ttnn.TILE_LAYOUT)
+            ttnn.copy(cn, self._batched_conv_carry)
+            if cn is not conv_new_state:
+                ttnn.deallocate(cn)
+            ttnn.deallocate(conv_new_state)
+        elif carry:
             # Preserve this chunk's last K-1 inputs as the next chunk's left-context (replace the
             # buffer just consumed by the FIR above).
             if conv_carry_in is not None:

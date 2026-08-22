@@ -330,6 +330,7 @@ def _make_fake_batched_spec(draft_len, prompt_lens, monkeypatch):
     import models.demos.blackhole.qwen36.tt.spec_decode_batched as sb_mod
 
     monkeypatch.setattr(sb_mod, "ttnn", SimpleNamespace(deallocate=lambda *_a, **_k: None))
+    monkeypatch.setenv("TT_SPEC_TRACE", "0")  # the emulation drives the eager loop
     B = len(prompt_lens)
 
     class _FakeBatched(sb_mod.Qwen36BatchedSpeculativeDecoder):
@@ -444,3 +445,26 @@ def test_batched_first_verify_arms_pendings(monkeypatch):
         positions = [p for (_t, _h, p) in slot.pending]
         assert positions == list(range(positions[0], positions[0] + len(positions)))
         assert positions[-1] == len(slot.committed) - 2  # pair for the sampled token at pos c-1
+
+
+def test_batched_schedule_positions(monkeypatch):
+    """End-aligned drafter schedule: every user's last pending lands at leg
+    width-K, chains are consecutive, and padding replays the first pending."""
+    import models.demos.blackhole.qwen36.tt.spec_decode_batched as sb_mod
+
+    fake_cls = _make_fake_batched_spec(3, [100, 70], monkeypatch)
+    spec = fake_cls(_BatchedOracleDrafter(2))
+    spec.seed()
+    spec.slots[0].pending = [(1, None, 99), (2, None, 100), (3, None, 101)]
+    spec.slots[1].pending = [(4, None, 69)]
+    width = 3 + spec.draft_len - 1
+    pos, pads = spec._schedule_positions(width)
+    K = spec.draft_len
+    assert pads == [0, 2]
+    # Last pending at leg width-K for both users.
+    assert int(pos[0, width - K]) == 101 and int(pos[1, width - K]) == 69
+    # Padding legs replay the first pending position.
+    assert int(pos[1, 0]) == 69 and int(pos[1, 1]) == 69
+    # Chain legs are consecutive after the last pending.
+    assert [int(p) for p in pos[0, width - K :]] == [101, 102, 103]
+    assert [int(p) for p in pos[1, width - K :]] == [69, 70, 71]

@@ -155,7 +155,9 @@ class Qwen36MTPHead:
         self._v_cache = None
         self._page_table_tt = None
         self._page_tables = []
+        self._page_tables_host = None
         self._win = None  # traced window-step machinery (ensure_window/stage_window)
+        self._bwin = None  # traced BATCHED window machinery (ensure_batched_window)
         self._last_normed = None
 
     def allocate_kv_cache(self, num_blocks, block_size=64, dtype=ttnn.bfloat16, users=1):
@@ -169,9 +171,12 @@ class Qwen36MTPHead:
         self._k_cache = ttnn.zeros(shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
         self._v_cache = ttnn.zeros(shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
         self.attention.set_paged_kv_cache(self._k_cache, self._v_cache)
+        self._page_tables_host = torch.stack(
+            [torch.arange(u * num_blocks, (u + 1) * num_blocks, dtype=torch.int32) for u in range(users)]
+        )
         self._page_tables = [
             ttnn.from_torch(
-                torch.arange(u * num_blocks, (u + 1) * num_blocks, dtype=torch.int32).unsqueeze(0),
+                self._page_tables_host[u : u + 1].contiguous(),
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
@@ -462,9 +467,156 @@ class Qwen36MTPHead:
             self._init_window(w_max)
 
     def release_window_traces(self):
-        if self._win is None:
-            return
-        for tr in self._win["traces"].values():
-            ttnn.release_trace(self.device, tr["id"])
-        self._win["traces"] = {}
+        if self._win is not None:
+            for tr in self._win["traces"].values():
+                ttnn.release_trace(self.device, tr["id"])
+            self._win["traces"] = {}
+        if self._bwin is not None:
+            for tr in self._bwin["traces"].values():
+                ttnn.release_trace(self.device, tr["id"])
+            self._bwin["traces"] = {}
         self._last_normed = None
+
+    # ── traced batched (c8) window stepping ──────────────────────────────────
+    # All B users advance one drafter leg per replay: a [B]-row T=1 step with
+    # per-user positions/rope/KV-blocks as data, the greedy pick per user on
+    # device (rows of ONE 32-row argmax), and 2 tiny readbacks per DRAFT leg for
+    # all users at once. The caller end-aligns per-user schedules (static K:
+    # every user's chained legs are the LAST K-1 indices; shorter catch-ups
+    # left-pad by replaying their first pending — an idempotent KV rewrite).
+
+    def ensure_batched_window(self, w_max, users):
+        if self._bwin is not None:
+            return
+        mk = self._mesh_kwargs
+        rd = self.rope.head_dim
+        rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
+
+        def dev(t, dtype, layout):
+            return ttnn.from_torch(t, dtype=dtype, layout=layout, device=self.device, **mk)
+
+        stacked_pt = self._page_tables_host[:users].contiguous()
+        self._bwin = {
+            "w_max": w_max,
+            "B": users,
+            "pos": dev(torch.zeros(users, w_max, dtype=torch.int32), ttnn.int32, rm),
+            "cos": dev(torch.zeros(users, w_max, rd, dtype=torch.bfloat16), ttnn.bfloat16, rm),
+            "sin": dev(torch.zeros(users, w_max, rd, dtype=torch.bfloat16), ttnn.bfloat16, rm),
+            "tok": dev(torch.zeros(users, 1, dtype=torch.int64), ttnn.uint32, rm),
+            "h": dev(torch.zeros(users, 1, self.args.dim, dtype=torch.bfloat16), ttnn.bfloat16, tile),
+            "pt": dev(stacked_pt.to(torch.int32), ttnn.int32, rm),  # [B, blocks_per_user] constant
+            "traces": {},
+        }
+
+    def stage_batched_window(self, pos_table):
+        """Upload the per-(user, leg) position table + matching rope rows.
+
+        pos_table: torch [B, width] int32 — the caller owns the end-aligned
+        schedule (padding legs replay a real position). One upload per table
+        per ITERATION.
+        """
+        bw = self._bwin
+        B, w_max = bw["B"], bw["w_max"]
+        width = pos_table.shape[1]
+        assert pos_table.shape[0] == B and width <= w_max
+        pos = torch.zeros(B, w_max, dtype=torch.int32)
+        pos[:, :width] = pos_table.to(torch.int32)
+        cos = torch.zeros(B, w_max, self.rope.head_dim, dtype=torch.bfloat16)
+        sin = torch.zeros(B, w_max, self.rope.head_dim, dtype=torch.bfloat16)
+        flat = pos_table.reshape(-1).to(torch.long)
+        cos[:, :width] = self.rope.cos_cpu[flat].reshape(B, width, -1).to(torch.bfloat16)
+        sin[:, :width] = self.rope.sin_cpu[flat].reshape(B, width, -1).to(torch.bfloat16)
+        for host_t, dtype, dst in ((pos, ttnn.int32, "pos"), (cos, ttnn.bfloat16, "cos"), (sin, ttnn.bfloat16, "sin")):
+            src = ttnn.from_torch(host_t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, **self._mesh_kwargs)
+            ttnn.copy_host_to_device_tensor(src, bw[dst])
+
+    def _batched_step_body(self, j):
+        """B-row drafter leg at window index j (static window slices; batched scores)."""
+        bw = self._bwin
+        B = bw["B"]
+        rd = self.rope.head_dim
+        cur_pos = ttnn.reshape(ttnn.slice(bw["pos"], [0, j], [B, j + 1]), (B,))
+        cos = ttnn.to_layout(ttnn.slice(bw["cos"], [0, j, 0], [B, j + 1, rd]), ttnn.TILE_LAYOUT)
+        sin = ttnn.to_layout(ttnn.slice(bw["sin"], [0, j, 0], [B, j + 1, rd]), ttnn.TILE_LAYOUT)
+        logits, normed = self._step_graph(bw["tok"], bw["h"], cur_pos, cos, sin, page_table=bw["pt"])
+        # Per-user greedy scores: rows of ONE 32-row argmax. [B,1,Vs] TILE has
+        # per-batch row padding, so the row-merge reshape must go through
+        # ROW_MAJOR (a padded-TILE reshape is a host-fallback read — illegal
+        # under capture).
+        vs = logits.shape[-1]
+        l_rm = ttnn.untilize(logits, use_multicore=True)  # [B,1,Vs] RM (no padding)
+        ttnn.deallocate(logits)
+        l4 = ttnn.reshape(l_rm, (1, 1, B, vs))
+        lp = ttnn.pad(l4, [(0, 0), (0, 0), (0, 32 - B), (0, 0)], value=0.0)
+        ttnn.deallocate(l_rm)
+        idx = ttnn.argmax(lp, dim=-1, keepdim=False)  # [1,1,32] uint32; rows 0..B-1 = users
+        lt = ttnn.to_layout(lp, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(lp)
+        val = ttnn.max(lt, dim=-1)  # [1,1,32] (rows 0..B-1 real)
+        ttnn.deallocate(lt)
+        return idx, val, normed
+
+    def compile_batched_window(self):
+        """Eager compile pass for every window index — run BEFORE any trace is
+        parked anywhere (per-index slice offsets may compile distinct programs)."""
+        if self._bwin["traces"]:
+            return
+        for j in range(self._bwin["w_max"]):
+            idx, val, normed = self._batched_step_body(j)
+            for t in (idx, val, normed):
+                ttnn.deallocate(t)
+        ttnn.synchronize_device(self.device)
+
+    def capture_batched_window(self):
+        """Capture every window-index trace (compile_batched_window ran earlier)."""
+        if self._bwin["traces"]:
+            return
+        for j in range(self._bwin["w_max"]):
+            tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+            idx, val, normed = self._batched_step_body(j)
+            ttnn.end_trace_capture(self.device, tid, cq_id=0)
+            self._bwin["traces"][j] = {"id": tid, "idx": idx, "val": val, "normed": normed}
+
+    def step_batched(self, j, tokens, hiddens=None, chain_hidden=False, want_tokens=False):
+        """One drafter leg for ALL users at window index j.
+
+        tokens: list[B] input token ids. hiddens: torch [B, dim] target hiddens
+        (catch-up legs) — or chain_hidden=True to feed every user's previous
+        on-device hidden. want_tokens reads the batched scores back and returns
+        the per-user global greedy picks.
+        """
+        bw = self._bwin
+        B = bw["B"]
+        tr = bw["traces"][j]
+        tok_h = ttnn.from_torch(
+            torch.tensor(tokens, dtype=torch.int64).reshape(B, 1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            **self._mesh_kwargs,
+        )
+        ttnn.copy_host_to_device_tensor(tok_h, bw["tok"])
+        if chain_hidden:
+            ttnn.copy(self._last_normed, bw["h"])
+        else:
+            h_h = ttnn.from_torch(
+                hiddens.reshape(B, 1, -1).to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                **self._mesh_kwargs,
+            )
+            ttnn.copy_host_to_device_tensor(h_h, bw["h"])
+        ttnn.execute_trace(self.device, tr["id"], cq_id=0, blocking=False)
+        self._last_normed = tr["normed"]
+        if not want_tokens:
+            return None
+        if self.num_devices > 1:
+            comp = ttnn.ConcatMeshToTensor(self.device, dim=0)
+            idxs = ttnn.to_torch(tr["idx"], mesh_composer=comp).reshape(self.num_devices, -1)
+            vals = ttnn.to_torch(tr["val"], mesh_composer=comp).float().reshape(self.num_devices, -1)
+        else:
+            idxs = ttnn.to_torch(tr["idx"]).reshape(1, -1)
+            vals = ttnn.to_torch(tr["val"]).float().reshape(1, -1)
+        out = []
+        for u in range(B):
+            out.append(self.token_from_scores(idxs[:, u], vals[:, u]))
+        return out

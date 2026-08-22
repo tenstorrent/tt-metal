@@ -32,6 +32,7 @@ blocks via its page-table row). The drafter keeps per-user KV block ranges
 drafter legs across users and tracing the batched verify follow the u=1
 traced-loop isolation (see docs/mtp_design.md).
 """
+import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -96,6 +97,11 @@ class Qwen36BatchedSpeculativeDecoder:
             assert getattr(dn, "_stable_state", False), "batched spec needs in-place GDN state"
         self.slots = []
         self._snap = None  # per-GDN-layer (rec [B,...], conv_carry [B,K-1,D]) anchor clones
+        # Traced loop (TT_SPEC_TRACE=0 for eager). Same trace-safety rules as the
+        # B=1 loop: all compiles strictly before the first capture, variation as
+        # data in persistent buffers, self-restoring verify graph.
+        self._use_trace = os.environ.get("TT_SPEC_TRACE", "1") == "1"
+        self._vt = None  # traced-verify persistent I/O
         self._timing = defaultdict(float)
 
     # ── batched GDN anchor snapshot ──────────────────────────────────────────
@@ -379,7 +385,7 @@ class Qwen36BatchedSpeculativeDecoder:
             else:
                 gdn_in = ttnn.reshape(attn_in, (B, bucket, full))
                 attn_out = layer.attention.forward_prefill_batched(
-                    gdn_in, chunk_size=model.args.gdn_chunk_size, valid_lens=vlens, carry=True
+                    gdn_in, chunk_size=model.args.gdn_chunk_size, valid_lens=vlens, carry=True, carry_inplace=True
                 )
                 attn_out = ttnn.reshape(attn_out, (1, 1, B * bucket, attn_out.shape[-1]))
             ttnn.deallocate(attn_in)
@@ -448,6 +454,292 @@ class Qwen36BatchedSpeculativeDecoder:
             ttnn.deallocate(t)
         return results
 
+    # ── traced batched verify ────────────────────────────────────────────────
+    def _init_verify_trace(self):
+        """Persistent device I/O for the traced grouped verify (alloc once, pre-capture).
+
+        Per-user variation (positions, rope windows, chunk page tables, device
+        chunk starts, GDN per-row valid masks, row-select one-hots) is DATA in
+        stacked [B, ...] buffers the graph slices per user statically.
+        """
+        model = self.model
+        mesh = model.mesh_device
+        B, bucket = self.B, _VERIFY_BUCKET
+        rd = model.args.rope_head_dim
+        conv_k = self._dns[0].K
+        rep = dict(mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+        rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
+
+        def dev(t, dtype, layout):
+            return ttnn.from_torch(t, dtype=dtype, layout=layout, device=mesh, **rep)
+
+        self._vt = {
+            "tok": dev(torch.zeros(B, bucket, dtype=torch.int64), ttnn.uint32, rm),
+            "cos": dev(torch.zeros(B, bucket, rd, dtype=torch.bfloat16), ttnn.bfloat16, rm),
+            "sin": dev(torch.zeros(B, bucket, rd, dtype=torch.bfloat16), ttnn.bfloat16, rm),
+            "csi": dev(torch.zeros(B, dtype=torch.int32), ttnn.int32, rm),
+            "chunk_pt": dev(torch.zeros(B, 2, dtype=torch.int32), ttnn.int32, rm),
+            "full_pts": [
+                dev(self.page_table[u : u + 1].contiguous().to(torch.int32), ttnn.int32, rm) for u in range(B)
+            ],
+            "conv_sel": dev(
+                torch.zeros(B, conv_k - 1, (conv_k - 1) + bucket, dtype=torch.float32), ttnn.bfloat16, tile
+            ),
+            "mask_f32": dev(torch.zeros(B, bucket, 1, dtype=torch.float32), ttnn.float32, tile),
+            "mask_bf16": dev(torch.zeros(B, bucket, 1, dtype=torch.float32), ttnn.bfloat16, tile),
+            "sel_h": dev(torch.zeros(B, 2 * _VERIFY_ROWS, bucket, dtype=torch.float32), ttnn.bfloat16, tile),
+            "sel_s": dev(torch.zeros(B, _VERIFY_ROWS, bucket, dtype=torch.float32), ttnn.bfloat16, tile),
+        }
+
+    def _stage_verify_trace(self, chunks):
+        """Refresh the persistent traced-verify inputs from this iteration's chunks."""
+        model, vt = self.model, self._vt
+        B, bucket = self.B, _VERIFY_BUCKET
+        rd = model.args.rope_head_dim
+        conv_k = self._dns[0].K
+        rep = dict(mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device))
+        rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
+
+        tok = torch.zeros(B, bucket, dtype=torch.int64)
+        cos = torch.zeros(B, bucket, rd, dtype=torch.bfloat16)
+        sin = torch.zeros(B, bucket, rd, dtype=torch.bfloat16)
+        csi = torch.zeros(B, dtype=torch.int32)
+        cpt = torch.zeros(B, 2, dtype=torch.int32)
+        conv_sel = torch.zeros(B, conv_k - 1, (conv_k - 1) + bucket, dtype=torch.float32)
+        mask = torch.zeros(B, bucket, 1, dtype=torch.float32)
+        sel_h = torch.zeros(B, 2 * _VERIFY_ROWS, bucket, dtype=torch.float32)
+        sel_s = torch.zeros(B, _VERIFY_ROWS, bucket, dtype=torch.float32)
+        for u, (tokens, a_u, n_u, hid_start, score_start) in enumerate(chunks):
+            assert a_u % BLOCK == 0 and n_u <= bucket
+            blk0 = a_u // BLOCK
+            assert blk0 + 2 <= self.page_table.shape[1], "verify window exceeds the page-table block budget"
+            tok[u, :n_u] = torch.tensor(tokens, dtype=torch.int64)
+            cos_t, sin_t = model._rope_tp_cos_sin_torch(a_u, bucket)
+            cos[u], sin[u] = cos_t.reshape(bucket, rd), sin_t.reshape(bucket, rd)
+            csi[u] = a_u
+            cpt[u] = self.page_table[u, blk0 : blk0 + 2].to(torch.int32)
+            for j in range(conv_k - 1):
+                conv_sel[u, j, n_u + j] = 1.0
+            mask[u, :n_u, 0] = 1.0
+            for j in range(min(2 * _VERIFY_ROWS, n_u - hid_start)):
+                sel_h[u, j, hid_start + j] = 1.0
+            for j in range(min(_VERIFY_ROWS, n_u - score_start)):
+                sel_s[u, j, score_start + j] = 1.0
+        for host_t, dtype, layout, dst in (
+            (tok, ttnn.uint32, rm, "tok"),
+            (cos, ttnn.bfloat16, rm, "cos"),
+            (sin, ttnn.bfloat16, rm, "sin"),
+            (csi, ttnn.int32, rm, "csi"),
+            (cpt, ttnn.int32, rm, "chunk_pt"),
+            (conv_sel, ttnn.bfloat16, tile, "conv_sel"),
+            (mask, ttnn.float32, tile, "mask_f32"),
+            (mask, ttnn.bfloat16, tile, "mask_bf16"),
+            (sel_h, ttnn.bfloat16, tile, "sel_h"),
+            (sel_s, ttnn.bfloat16, tile, "sel_s"),
+        ):
+            src = ttnn.from_torch(host_t, dtype=dtype, layout=layout, **rep)
+            ttnn.copy_host_to_device_tensor(src, vt[dst])
+
+    def _verify_trace_body(self):
+        """The grouped verify graph over the persistent buffers.
+
+        SELF-RESTORING (anchor snapshot copied back in-graph) and score-on-device
+        per user. Per-batch-row TILE padding never crosses a reshape: batch-row
+        merges/splits go through ROW_MAJOR or stay per-user slices.
+        Returns per-user (hid_rows, idx, val) persistent output handles.
+        """
+        model, vt = self.model, self._vt
+        B, bucket = self.B, _VERIFY_BUCKET
+        rd = model.args.rope_head_dim
+        for dn, (rec, carry) in zip(self._dns, self._snap):
+            ttnn.copy(rec, dn.rec_state)
+            ttnn.copy(carry, dn._batched_conv_carry)
+        vm = {"conv_sel": vt["conv_sel"], "f32": vt["mask_f32"], "bf16": vt["mask_bf16"]}
+        x = model.embd(vt["tok"])  # [B, bucket, d]
+        d = x.shape[-1]
+        x = ttnn.reshape(x, (1, 1, B * bucket, d))
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
+        for layer in model.layers:
+            attn_in = layer.attention_norm(x, mode=Mode.PREFILL)
+            full = attn_in.shape[-1]
+            if layer.is_full_attention:
+                attn_in_b = ttnn.reshape(attn_in, (1, B, bucket, full))
+                outs = []
+                for u in range(B):
+                    xi = ttnn.reshape(attn_in_b[:, u : u + 1, :, :], (1, 1, bucket, full))
+                    cos_u = ttnn.to_layout(
+                        ttnn.reshape(ttnn.slice(vt["cos"], [u, 0, 0], [u + 1, bucket, rd]), (1, 1, bucket, rd)),
+                        ttnn.TILE_LAYOUT,
+                    )
+                    sin_u = ttnn.to_layout(
+                        ttnn.reshape(ttnn.slice(vt["sin"], [u, 0, 0], [u + 1, bucket, rd]), (1, 1, bucket, rd)),
+                        ttnn.TILE_LAYOUT,
+                    )
+                    csi_u = ttnn.slice(vt["csi"], [u], [u + 1])
+                    cpt_u = ttnn.slice(vt["chunk_pt"], [u, 0], [u + 1, 2])
+                    oi = layer.attention.forward_prefill_paged(
+                        xi,
+                        cos_u,
+                        sin_u,
+                        vt["full_pts"][u],
+                        chunk_page_table=cpt_u,
+                        chunk_start_idx=0,
+                        chunk_start_idx_tensor=csi_u,
+                        user_id=0,
+                    )
+                    for t in (xi, cos_u, sin_u, csi_u, cpt_u):
+                        ttnn.deallocate(t)
+                    outs.append(ttnn.reshape(oi, (1, 1, bucket, oi.shape[-1])))
+                attn_out = ttnn.concat(outs, dim=2) if B > 1 else outs[0]
+                for o in outs:
+                    if o is not attn_out:
+                        ttnn.deallocate(o)
+            else:
+                gdn_in = ttnn.reshape(attn_in, (B, bucket, full))
+                attn_out = layer.attention.forward_prefill_batched(
+                    gdn_in,
+                    chunk_size=model.args.gdn_chunk_size,
+                    valid_lens=None,
+                    carry=True,
+                    valid_masks=vm,
+                    carry_inplace=True,
+                )
+                attn_out = ttnn.reshape(attn_out, (1, 1, B * bucket, attn_out.shape[-1]))
+            ttnn.deallocate(attn_in)
+            h = ttnn.add(x, attn_out)
+            ttnn.deallocate(x)
+            ttnn.deallocate(attn_out)
+            ff_in = layer.ffn_norm(h, mode=Mode.PREFILL)
+            ff_out = layer.feed_forward.forward(ff_in)
+            ttnn.deallocate(ff_in)
+            x = ttnn.add(h, ff_out)
+            ttnn.deallocate(h)
+            ttnn.deallocate(ff_out)
+
+        xn = model.norm(x, mode=Mode.PREFILL)
+        ttnn.deallocate(x)
+        xn_b = ttnn.reshape(xn, (1, B, bucket, xn.shape[-1]))
+        outputs = []
+        for u in range(B):
+            xu = ttnn.reshape(xn_b[:, u : u + 1, :, :], (1, 1, bucket, xn.shape[-1]))
+            hsel = ttnn.reshape(
+                ttnn.slice(vt["sel_h"], [u, 0, 0], [u + 1, 2 * _VERIFY_ROWS, bucket]),
+                (1, 1, 2 * _VERIFY_ROWS, bucket),
+            )
+            hrows = ttnn.matmul(hsel, xu)  # [1,1,64, full] replicated
+            ttnn.deallocate(hsel)
+            ssel = ttnn.reshape(
+                ttnn.slice(vt["sel_s"], [u, 0, 0], [u + 1, _VERIFY_ROWS, bucket]), (1, 1, _VERIFY_ROWS, bucket)
+            )
+            rows = ttnn.matmul(ssel, xu)
+            ttnn.deallocate(ssel)
+            ttnn.deallocate(xu)
+            shard = ttnn.linear(rows, model.lm_head_weight)  # [1,1,32,Vs] per device
+            ttnn.deallocate(rows)
+            rm_l = ttnn.untilize(shard, use_multicore=True)
+            idx = ttnn.argmax(rm_l, dim=-1, keepdim=False)  # [1,1,32] uint32
+            ttnn.deallocate(rm_l)
+            val = ttnn.max(shard, dim=-1)  # [1,1,32]
+            ttnn.deallocate(shard)
+            outputs.append((hrows, idx, val))
+        ttnn.deallocate(xn)
+        return outputs
+
+    def _verify_trace_compile(self, chunks):
+        """Eager compile pass of the traced-verify graph (BEFORE any capture)."""
+        self._init_verify_trace()
+        self._stage_verify_trace(chunks)
+        outputs = self._verify_trace_body()
+        ttnn.synchronize_device(self.model.mesh_device)
+        for hrows, idx, val in outputs:
+            for t in (hrows, idx, val):
+                ttnn.deallocate(t)
+
+    def _verify_trace_capture(self):
+        """Capture the traced verify (the compile pass ran; inputs still staged)."""
+        mesh = self.model.mesh_device
+        tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+        outputs = self._verify_trace_body()
+        ttnn.end_trace_capture(mesh, tid, cq_id=0)
+        self._vt["id"] = tid
+        self._vt["outputs"] = outputs
+        logger.info(f"spec[c{self.B}] verify trace captured (grouped bucket 128, self-restoring)")
+
+    def _batched_verify_traced(self, chunks):
+        """Replay the grouped verify; read per-user accept ids + hidden rows."""
+        self._stage_verify_trace(chunks)
+        ttnn.execute_trace(self.model.mesh_device, self._vt["id"], cq_id=0, blocking=False)
+        model = self.model
+        comp = ttnn.ConcatMeshToTensor(model.mesh_device, dim=0)
+        per_shard = model.args.vocab_size // model.num_devices
+        results = []
+        for u, (_tokens, _a_u, n_u, hid_start, score_start) in enumerate(chunks):
+            hrows, idx, val = self._vt["outputs"][u]
+            n_hid = min(2 * _VERIFY_ROWS, n_u - hid_start)
+            hid = ttnn.to_torch(ttnn.get_device_tensors(hrows)[0]).float().reshape(2 * _VERIFY_ROWS, -1)[:n_hid]
+            n_score = min(_VERIFY_ROWS, n_u - score_start)
+            idxs = ttnn.to_torch(idx, mesh_composer=comp).reshape(-1, _VERIFY_ROWS)
+            vals = ttnn.to_torch(val, mesh_composer=comp).float().reshape(-1, _VERIFY_ROWS)
+            if getattr(model, "_lmhead_vocab_sharded", False):
+                dwin = vals.argmax(dim=0)
+                target_ids = [int(idxs[int(dwin[r]), r]) + int(dwin[r]) * per_shard for r in range(n_score)]
+            else:
+                target_ids = [int(idxs[0, r]) for r in range(n_score)]
+            results.append((target_ids, hid))
+        return results
+
+    def _setup_traces(self):
+        """One-time trace setup, honoring the compile-before-any-capture rule:
+        (1) drafter window compile passes, (2) verify-trace compile pass, then
+        (3) drafter captures, (4) verify capture. Runs after the eager first
+        verify (which warmed the shared eager programs)."""
+        K = self.draft_len
+        w_max = (K + 2) + K - 1  # steady-state legs: pendings (<= K+1, +1 slack) + chain
+        self.mtp.ensure_batched_window(w_max, self.B)
+        # Capture-time staging: any REAL positions work (iteration 1's oversized
+        # prompt-tail window runs eager legs, so no real schedule exists yet);
+        # the compile/capture KV writes land at these slots and are rewritten in
+        # order by later legs before anything attends to them.
+        setup_pos = torch.stack(
+            [torch.full((w_max,), int(slot.pending[-1][2]), dtype=torch.int32) for slot in self.slots]
+        )
+        self.mtp.stage_batched_window(setup_pos)
+        self.mtp.compile_batched_window()
+        chunks = []
+        for slot in self.slots:
+            tail = slot.committed[slot.a :]
+            chunks.append((tail, slot.a, len(tail), 0, max(0, len(tail) - 1)))
+        self._verify_trace_compile(chunks)
+        self.mtp.capture_batched_window()
+        self._verify_trace_capture()
+
+    def _schedule_positions(self, width):
+        """End-aligned per-user drafter schedule for `width` legs.
+
+        Returns (pos_table [B, width], pads [B]): user u's real legs occupy the
+        LAST n_legs_u slots; earlier slots replay its first pending (an
+        idempotent KV rewrite whose output is ignored).
+        """
+        K = self.draft_len
+        pos = torch.zeros(self.B, width, dtype=torch.int32)
+        pads = []
+        for u, slot in enumerate(self.slots):
+            pending = slot.pending if slot.pending else [(slot.committed[-1], None, max(0, len(slot.committed) - 2))]
+            n_legs = len(pending) + K - 1
+            pad = width - n_legs
+            assert pad >= 0, f"user {u}: {n_legs} legs exceed window {width}"
+            first_pos = pending[0][2]
+            for j in range(width):
+                if j < pad:
+                    pos[u, j] = first_pos
+                elif j < pad + len(pending):
+                    pos[u, j] = pending[j - pad][2]
+                else:
+                    pos[u, j] = pending[-1][2] + (j - pad - len(pending) + 1)
+            pads.append(pad)
+        return pos, pads
+
     # ── per-user commit ──────────────────────────────────────────────────────
     def _commit_user(self, u):
         """Advance user u's anchor by whole blocks when due (B=1 scratch chunk)."""
@@ -457,6 +749,8 @@ class Qwen36BatchedSpeculativeDecoder:
             return
         t0 = time.perf_counter()
         model = self.model
+        if self._use_trace and self._snap is not None:
+            self._restore_from_snapshot()
         prev = model._bind_gdn_prefill_scratch()
         try:
             # Stash the live batched handles so the row write-back can target them
@@ -505,26 +799,67 @@ class Qwen36BatchedSpeculativeDecoder:
         Returns (per-user generated lists, stats dict).
         """
         K = self.draft_len
+        use_trace = self._use_trace
+        assert not (use_trace and adaptive_k), "the traced batched drafter is static-K (TT_SPEC_TRACE=0 for adaptive)"
         self._first_verify()
+        if use_trace:
+            self._setup_traces()
+        w_max = self.mtp._bwin["w_max"] if use_trace else 0
 
         while any(not s.done and len(s.out) < max_new_tokens for s in self.slots):
-            # 1. Per-user drafting (eager legs; per-user KV ranges).
+            # 1. Per-user drafting. Traced: one end-aligned window of B-row legs
+            # (per-iteration pos/rope upload; catch-up legs read nothing back;
+            # each draft leg reads two tiny score tensors for ALL users). Eager
+            # (or an oversized iteration-1 window): per-user B=1 legs.
             t0 = time.perf_counter()
             drafts = [[] for _ in range(self.B)]
-            for u, slot in enumerate(self.slots):
-                if slot.done or len(slot.out) >= max_new_tokens:
-                    continue
-                k_t = adaptive_draft_len(slot.k_ema, K) if adaptive_k else K
-                slot.k_used.append(k_t)
-                last_pos = slot.pending[-1][2]
-                for tok, hid_row, pos in slot.pending[:-1]:
-                    self.mtp.step(tok, hid_row, pos, user=u)
-                d_logits, g = self.mtp.step(*slot.pending[-1], user=u)
-                slot.pending = []
-                drafts[u] = [int(d_logits.argmax())]
-                for j in range(1, k_t):
-                    d_logits, g = self.mtp.step(drafts[u][-1], g, last_pos + j, user=u)
-                    drafts[u].append(int(d_logits.argmax()))
+            width = max((len(s2.pending) if s2.pending else 1) for s2 in self.slots) + K - 1
+            if use_trace and width <= w_max:
+                pos_table, pads = self._schedule_positions(width)
+                self.mtp.stage_batched_window(pos_table)
+                active = [not (s2.done or len(s2.out) >= max_new_tokens) for s2 in self.slots]
+                for u, slot in enumerate(self.slots):
+                    if active[u]:
+                        slot.k_used.append(K)
+                # Catch-up legs 0..width-K (leg width-K is every user's LAST pending).
+                for j in range(width - K + 1):
+                    toks, hids = [], []
+                    for u, slot in enumerate(self.slots):
+                        pending = slot.pending if slot.pending else [(slot.committed[-1], None, 0)]
+                        i = min(max(0, j - pads[u]), len(pending) - 1)
+                        tok_u, hid_u, _pos = pending[i]
+                        toks.append(tok_u)
+                        hids.append(hid_u if hid_u is not None else torch.zeros(self.model.args.dim))
+                    picks = self.mtp.step_batched(
+                        j, toks, torch.stack([h.float() for h in hids]), want_tokens=(j == width - K)
+                    )
+                for u in range(self.B):
+                    drafts[u] = [picks[u]]
+                # Chained draft legs (uniform across users at static K).
+                for j in range(width - K + 1, width):
+                    toks = [drafts[u][-1] for u in range(self.B)]
+                    picks = self.mtp.step_batched(j, toks, chain_hidden=True, want_tokens=True)
+                    for u in range(self.B):
+                        drafts[u].append(picks[u])
+                for u, slot in enumerate(self.slots):
+                    slot.pending = []
+                    if not active[u]:
+                        drafts[u] = []
+            else:
+                for u, slot in enumerate(self.slots):
+                    if slot.done or len(slot.out) >= max_new_tokens:
+                        continue
+                    k_t = adaptive_draft_len(slot.k_ema, K) if adaptive_k else K
+                    slot.k_used.append(k_t)
+                    last_pos = slot.pending[-1][2]
+                    for tok, hid_row, pos in slot.pending[:-1]:
+                        self.mtp.step(tok, hid_row, pos, user=u)
+                    d_logits, g = self.mtp.step(*slot.pending[-1], user=u)
+                    slot.pending = []
+                    drafts[u] = [int(d_logits.argmax())]
+                    for j in range(1, k_t):
+                        d_logits, g = self.mtp.step(drafts[u][-1], g, last_pos + j, user=u)
+                        drafts[u].append(int(d_logits.argmax()))
             self._timing["draft"] += time.perf_counter() - t0
 
             # 2. ONE batched verify over every user's [tail + drafts] chunk.
@@ -535,8 +870,12 @@ class Qwen36BatchedSpeculativeDecoder:
                 c = len(slot.committed) - 1
                 tokens = slot.committed[slot.a :] + drafts[u]
                 chunks.append((tokens, slot.a, len(tokens), c - slot.a, c - slot.a))
-            results = self._batched_verify(chunks)
-            self._restore_from_snapshot()
+            if use_trace:
+                # The trace self-restores to the anchor snapshot in-graph.
+                results = self._batched_verify_traced(chunks)
+            else:
+                results = self._batched_verify(chunks)
+                self._restore_from_snapshot()
             self._timing["verify"] += time.perf_counter() - t0
 
             # 3. Per-user accept/commit (fully desynced).
