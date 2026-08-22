@@ -2354,7 +2354,6 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryMergesortRowParallel:
             {
                 {"Wt", Wt},
                 {"num_chunks", num_chunks},
-                {"W_value_bytes", W * 2},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_row", "num_rows"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),

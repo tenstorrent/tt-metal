@@ -844,7 +844,9 @@ inline void store8_rows_x2_unfused()
 // 2^(N-1)". Steps are run from largest to smallest.
 //
 // All swap directions are encoded by the choice of operand order to
-// `SFPSWAP` — `(a, b, MAX)` puts max(a, b) into `b` and min(a, b) into `a`.
+// `SFPSWAP` — `(a, b, MAX)` puts max(a, b) into `a` (VC, the first register
+// operand) and min(a, b) into `b` (VD, the second) — mod1=1 is the ISA's
+// SFPSWAP_MOD1_VEC_MIN_MAX: MAX lands in VC, min in VD (silicon-verified).
 // Flipping the operand order flips the sort direction.
 //
 // Special variants:
