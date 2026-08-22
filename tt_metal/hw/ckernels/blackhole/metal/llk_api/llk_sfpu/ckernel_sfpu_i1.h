@@ -89,17 +89,18 @@ inline void calculate_i1() {
 
 #pragma GCC unroll 1
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat in_x = sfpi::dst_reg[0];
+        sfpi::vFloat abs_in = sfpi::abs(in_x);
 
         // Clamp to [-88.5, 88.5] — exp() saturates near ±88.7 in FP32.
-        x = sfpi::symmetric_clamp(x, I1_MAX_INPUT);
+        sfpi::vFloat x = sfpi::symmetric_clamp(in_x, I1_MAX_INPUT);
 
         const sfpi::vFloat abs_x = sfpi::abs(x);
 
+        sfpi::vFloat val;
         // ─── Polynomial path (always; valid for |x| ≤ 10) ────────────────
         // Computed unconditionally and stored — its LRegs are then free
         // for the asymptotic block to use.
-        sfpi::vFloat val;
         {
             const sfpi::vFloat t = x * x;
 #ifdef INP_FLOAT32
@@ -134,11 +135,17 @@ inline void calculate_i1() {
         // ─── Asymptotic overwrite for OOD lanes (|x| > 10) ───────────────
         v_if(abs_x > I1_THRESHOLD) { val = calculate_i1_asymptotic_(abs_x, x); }
         v_endif;
+
+        // Overflow guard: inputs exceeding FP32 exp domain overflow to ±inf rather than flat plateau
+        v_if(abs_in > 88.7228f) {
+            val = sfpi::copysgn(std::numeric_limits<float>::infinity(), in_x);
+        }
+        v_endif;
+
 #ifndef INP_FLOAT32
         val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);
 #endif
         sfpi::dst_reg[0] = val;
-
         sfpi::dst_reg++;
     }
 }
