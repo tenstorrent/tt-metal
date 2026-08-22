@@ -39,12 +39,12 @@ Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::option
         {
             eps_gt = ttnn::where(
                 ttnn::gt(input_a, input_b, std::nullopt, output_mem_config),
-                ttnn::add(input_a, eps, std::nullopt, output_mem_config),
+                ttnn::subtract(input_a, eps, std::nullopt, output_mem_config),
                 input_a);
         }
         result = ttnn::where(
             ttnn::lt(input_a, input_b, std::nullopt, output_mem_config),
-            ttnn::subtract(input_a, eps, std::nullopt, output_mem_config),
+            ttnn::add(input_a, eps, std::nullopt, output_mem_config),
             eps_gt);
     }
     return result;
