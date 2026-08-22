@@ -354,6 +354,8 @@ inline void _llk_unpack_AB_matmul_(
 
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
+    // Number of MOP iterations that must select context 1's replay segment (see zmask use below).
+    const std::uint32_t mop_loop_count = reuse_a ? ct_dim : rt_dim;
 
     if (!reuse_a)
     {
@@ -422,7 +424,11 @@ inline void _llk_unpack_AB_matmul_(
             }
         }
 
-        TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : 0xff); // Run the MOP
+        // zmask selects, per MOP iteration, context 0's replay segment (bit clear) or context 1's
+        // (bit set). A fixed-width mask like 0xff only covers 8 iterations; once mop_loop_count
+        // exceeds that, later iterations silently fall back to context 0's segment while
+        // unp_cfg_context is 1. Build the mask from the actual iteration count instead.
+        TT_MOP(0, mop_loop_count - 1, unp_cfg_context == 0 ? 0 : ((1u << mop_loop_count) - 1)); // Run the MOP
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);
