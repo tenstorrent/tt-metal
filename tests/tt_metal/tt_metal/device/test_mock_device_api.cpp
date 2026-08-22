@@ -97,7 +97,9 @@ TEST_F(MockDeviceAPIFixture, CPU_UnsupportedConfigurationThrows) {
     }
 }
 
-TEST_F(MockDeviceAPIFixture, CPU_ConfigureMockModeFromHwDetectsArchitecture) {
+// NOT CPU_-prefixed: this test probes real silicon (get_physical_architecture())
+// and skips when none is present, so it only provides coverage on device runners.
+TEST_F(MockDeviceAPIFixture, ConfigureMockModeFromHwDetectsArchitecture) {
     tt::ARCH detected_arch = get_physical_architecture();
     if (detected_arch == tt::ARCH::Invalid) {
         GTEST_SKIP() << "No TT hardware detected - skipping configure_mock_mode_from_hw test";

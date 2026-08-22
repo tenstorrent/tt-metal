@@ -20,6 +20,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "llrt/get_platform_architecture.hpp"
 #include "llrt/rtoptions.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -75,17 +76,23 @@ namespace {
 // gtest evaluates INSTANTIATE_TEST_SUITE_P generators at test-registration time
 // (inside InitGoogleTest), BEFORE --gtest_filter is applied. Calling
 // GetNumAvailableDevices() directly here forces full MetalContext/Cluster creation
-// at process startup, which throws on hosts without silicon (arch detection yields
-// ARCH::Invalid) and would abort the whole binary — including the host-only CPU_*
-// tests that run on the device-less github_hosted_cpu CI runner. Fall back to a
-// single-device parameterization on such hosts; the DeviceParamFixture tests
-// themselves are excluded there by the CPU_-filter split anyway.
+// at process startup, which throws on hosts without silicon and would abort the
+// whole binary — including the host-only CPU_* tests that run on the device-less
+// github_hosted_cpu CI runner.
+//
+// Probe for silicon first via PCI enumeration only (get_physical_architecture()
+// does not create a MetalContext and returns ARCH::Invalid when no devices are
+// present). Fall back to a single-device parameterization only in that genuinely
+// hardware-less case; on a device runner any discovery failure from
+// GetNumAvailableDevices() (malformed cluster descriptor, UMD errors, ...) must
+// propagate and fail loudly rather than silently shrink the parameterization.
+// The DeviceParamFixture tests themselves are device tests and are excluded on
+// the CPU-only leg by the CPU_-filter split anyway.
 unsigned int num_available_devices_or_one() {
-    try {
-        return tt::tt_metal::GetNumAvailableDevices();
-    } catch (...) {
+    if (get_physical_architecture() == tt::ARCH::Invalid) {
         return 1;
     }
+    return tt::tt_metal::GetNumAvailableDevices();
 }
 }  // namespace
 
