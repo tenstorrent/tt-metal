@@ -33,7 +33,7 @@ output.
 the front of the next chunk's excitation. This is the important one. The source
 is a phase-continuous oscillator, and a fresh chunk restarts its phase
 accumulator at zero, so without the splice **every boundary is a phase
-discontinuity** -- an audible click, and the thing F25's analysis predicts will
+discontinuity** -- an audible click, and the thing the f0-into-phase analysis predicts will
 be worst. The corresponding speech tail is separately crossfaded with a Hamming
 window over the same 5120 samples.
 

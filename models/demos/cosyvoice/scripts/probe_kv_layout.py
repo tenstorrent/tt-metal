@@ -13,7 +13,7 @@ be a cheap strided copy, at the price of one `permute` per layer to get back to
 
     slice + concat + permute   <<   78 + 207
 
-and if it is, it captures most of what `update_cache` offers (F41) **without** the
+and if it is, it captures most of what `update_cache` offers **without** the
 32-trace rework that design needs: no baked write index, no per-sub-step positional
 offset, no change to the attention geometry at all.
 

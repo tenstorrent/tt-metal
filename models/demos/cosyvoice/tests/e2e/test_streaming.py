@@ -18,7 +18,8 @@ non-streamed audio for the same text and seed:
 
     sample corr  -0.0260      mel-space  0.6689      envelope  0.6562
 
-The cause is F25 again. Chunked decoding produces a slightly different mel; f0
+The cause is f0-into-phase integration again. Chunked decoding produces a slightly
+different mel; f0
 derives from that mel; and f0 error *integrates* into excitation phase over tens
 of thousands of samples. Holding the phase vector fixed across both runs -- which
 this test does -- does not rescue it, because the divergence is in f0, not in the
@@ -175,7 +176,7 @@ def test_device_streamed_matches_non_streamed(device):
         return ttnn.from_torch(v, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     # ONE phase vector, shared by both runs and by every chunk. Seeding per chunk
-    # would give the two runs different phases, and per F25 a different phase gives
+    # would give the two runs different phases, and a different phase gives
     # ~0 sample correlation by construction -- the gate would then measure the RNG
     # rather than the streaming. Holding it fixed makes the sample gate a real test
     # of the excitation splice: with the splice the phase runs continuously across
@@ -267,7 +268,7 @@ def test_device_streamed_matches_non_streamed(device):
     # achievable by any implementation of this architecture -- the PyTorch reference
     # scores -0.026 on the same comparison. Chunked decoding yields a slightly
     # different mel, f0 derives from that mel, and f0 error integrates into
-    # excitation phase over tens of thousands of samples (F25). Holding the phase
+    # excitation phase over tens of thousands of samples. Holding the phase
     # vector fixed across both runs, as this test does, does not rescue it. Reported
     # rather than dropped, and reported next to the reference's own number so the
     # comparison is legible.
