@@ -301,6 +301,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         // use a single device-side accessor name instead of two aliasing wrappers.
         struct AccessorBindingInfo {
             DFBSpecName dfb_spec_name;
+            bool primary = false;
             bool has_producer = false;
             bool has_consumer = false;
         };
@@ -318,24 +319,33 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         };
         std::unordered_map<DFBSpecName, DFBBoundRoles> dfb_bound_roles;
         for (const auto& dfb_binding : kernel.dfb_bindings) {
-            auto [it, inserted] = accessor_bindings.try_emplace(
-                dfb_binding.accessor_name, AccessorBindingInfo{dfb_binding.dfb_spec_name});
-            AccessorBindingInfo& info = it->second;
-            if (inserted) {
-                TT_FATAL(
-                    IsValidCppIdentifier(dfb_binding.accessor_name),
-                    "Kernel '{}' DFB accessor_name '{}' must be a valid C++ identifier",
-                    kernel.unique_id,
-                    dfb_binding.accessor_name);
-            } else {
-                TT_FATAL(
-                    info.dfb_spec_name == dfb_binding.dfb_spec_name,
-                    "Kernel '{}' uses accessor_name '{}' for two different DFBs ('{}' and '{}'). "
-                    "Reusing a name is only permitted when both bindings target the same DFB (self-loop pair).",
-                    kernel.unique_id,
-                    dfb_binding.accessor_name,
-                    info.dfb_spec_name,
-                    dfb_binding.dfb_spec_name);
+            auto register_accessor = [&](const std::string& accessor_name, bool primary) {
+                auto [it, inserted] = accessor_bindings.try_emplace(
+                    accessor_name, AccessorBindingInfo{.dfb_spec_name = dfb_binding.dfb_spec_name, .primary = primary});
+                AccessorBindingInfo& info = it->second;
+                if (inserted) {
+                    TT_FATAL(
+                        IsValidCppIdentifier(accessor_name),
+                        "DFB accessor_name '{}' must be a valid C++ identifier",
+                        accessor_name);
+                } else {
+                    TT_FATAL(
+                        info.dfb_spec_name == dfb_binding.dfb_spec_name,
+                        "Kernel '{}' uses accessor_name '{}' for two different DFBs",
+                        kernel.unique_id,
+                        accessor_name);
+                    TT_FATAL(
+                        primary && info.primary,
+                        "Kernel '{}' reuses DFB accessor name '{}' across bindings. Accessor aliases must be "
+                        "unique within a kernel; only a primary accessor may be reused by a self-loop pair.",
+                        kernel.unique_id,
+                        accessor_name);
+                }
+                return std::ref(info);
+            };
+            AccessorBindingInfo& info = register_accessor(dfb_binding.accessor_name, true).get();
+            for (const auto& alias : dfb_binding.accessor_aliases) {
+                register_accessor(alias, false);
             }
             const bool is_producer = (dfb_binding.endpoint_type == DFBEndpointType::PRODUCER);
             bool& seen_this_type = is_producer ? info.has_producer : info.has_consumer;
@@ -1268,7 +1278,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         // flag: the role-uniformity checks are skipped and the per-node census relaxes its "exactly
         // one" counts to "at least one".
         const bool allow_multi = dfb.advanced_options.allow_instance_multi_binding;
-
+        const bool allow_incomplete = dfb.advanced_options.allow_incomplete_endpoint_coverage;
+        TT_FATAL(
+            !(allow_multi && allow_incomplete),
+            "DFB '{}' cannot combine allow_instance_multi_binding with allow_incomplete_endpoint_coverage.",
+            dfb.unique_id);
         // (3) and (4): per-role uniformity of binding-site parameters, plus kernel kind.
         // Kind (compute vs DM) must agree because the DFB's hardware config carries a single
         // processor mask per role, and compute / DM masks live in disjoint bit ranges (bits
@@ -1363,16 +1377,17 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             return names;
         };
 
-        // Per-node census. Under allow_multi (see top of loop) the "exactly one" upper bound relaxes
-        // to "at least one": a node may host multiple instances of a role, but must still host at
-        // least one producer AND one consumer, or the FIFO is half-wired.
+        // Per-node census. Under allow_multi, the "exactly one" upper bound relaxes to "at least one"
+        // on both sides. Under allow_incomplete, a node may omit one side for a runtime no-op kernel,
+        // but it may not host multiple instances of either role.
         for (const NodeCoord& node : footprint) {
             auto p_it = producers_on_node.find(node);
             auto c_it = consumers_on_node.find(node);
             const size_t num_producers = p_it == producers_on_node.end() ? 0 : p_it->second.size();
             const size_t num_consumers = c_it == consumers_on_node.end() ? 0 : c_it->second.size();
-            const bool node_ok =
-                allow_multi ? (num_producers >= 1 && num_consumers >= 1) : (num_producers == 1 && num_consumers == 1);
+            const bool node_ok = allow_multi ? (num_producers >= 1 && num_consumers >= 1)
+                                             : (allow_incomplete ? (num_producers <= 1 && num_consumers <= 1)
+                                                                 : (num_producers == 1 && num_consumers == 1));
             if (node_ok) {
                 continue;
             }
@@ -1529,8 +1544,19 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // That's on the user; this is an advanced feature.
     for (const auto& dfb : spec.dataflow_buffers) {
         if (!dfb.borrowed_from.has_value()) {
+            TT_FATAL(
+                dfb.borrowed_memory_offset == 0,
+                "DFB '{}' specifies borrowed_memory_offset={} without borrowed_from.",
+                dfb.unique_id,
+                dfb.borrowed_memory_offset);
             continue;
         }
+        TT_FATAL(
+            dfb.borrowed_memory_offset % dfb.entry_size == 0,
+            "DFB '{}' borrowed_memory_offset={} must be aligned to entry_size={}.",
+            dfb.unique_id,
+            dfb.borrowed_memory_offset,
+            dfb.entry_size);
         const TensorParamName& tp_name = *dfb.borrowed_from;
         auto it = collected.tensor_parameter_by_name.find(tp_name);
         TT_FATAL(
@@ -1554,13 +1580,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         const size_t dfb_bytes = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
         const size_t tensor_bytes = tensor_spec.compute_packed_buffer_size_bytes();
         TT_FATAL(
-            dfb_bytes <= tensor_bytes,
-            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) is larger than its borrowed TensorParameter '{}' "
-            "({} bytes).",
+            static_cast<size_t>(dfb.borrowed_memory_offset) + dfb_bytes <= tensor_bytes,
+            "DFB '{}' borrowed subrange (offset {} + entry_size {} * num_entries {} = {} bytes) is larger than "
+            "its borrowed TensorParameter '{}' ({} bytes).",
             dfb.unique_id,
+            dfb.borrowed_memory_offset,
             dfb.entry_size,
             dfb.num_entries,
-            dfb_bytes,
+            static_cast<size_t>(dfb.borrowed_memory_offset) + dfb_bytes,
             tp_name,
             tensor_bytes);
     }
@@ -1648,6 +1675,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     "of an alias group borrows, or all members borrow from the same TensorParameter.",
                     dfb.unique_id,
                     alias_name);
+                TT_FATAL(
+                    dfb.borrowed_memory_offset == alias_spec->borrowed_memory_offset,
+                    "Aliased DFBs '{}' and '{}' have inconsistent borrowed_memory_offset values ({} vs {}).",
+                    dfb.unique_id,
+                    alias_name,
+                    dfb.borrowed_memory_offset,
+                    alias_spec->borrowed_memory_offset);
             }
         }
     }
@@ -2496,6 +2530,9 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
             dfb_binding.dfb_spec_name,
             slot);
         out.emplace(dfb_binding.accessor_name, static_cast<uint16_t>(slot));
+        for (const auto& alias : dfb_binding.accessor_aliases) {
+            out.emplace(alias, static_cast<uint16_t>(slot));
+        }
     }
     return out;
 }
@@ -2978,7 +3015,8 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // SetProgramRunArgs / UpdateTensorArgs can resolve and attach the actual L1 Buffer
         // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
         if (dfb_spec.borrowed_from.has_value()) {
-            program_impl->register_dfb_borrowed_binding(dfb_id, dfb_spec.borrowed_from->get());
+            program_impl->register_dfb_borrowed_binding(
+                dfb_id, dfb_spec.borrowed_from->get(), dfb_spec.borrowed_memory_offset);
         }
     }
 

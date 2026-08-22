@@ -299,6 +299,49 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
+TEST_F(ProgramSpecTestQuasar, DFBAccessorAliasesSucceed) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec;
+    spec.name = "dfb_accessor_aliases";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    auto producer_binding = ProducerOf(DFBSpecName{"dfb"}, "out");
+    producer_binding.accessor_aliases = {"legacy_out", "row_major_out"};
+    producer.dfb_bindings.push_back(std::move(producer_binding));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, DuplicateDFBAccessorAliasFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec;
+    spec.name = "duplicate_dfb_accessor_alias";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+    auto producer_binding = ProducerOf(DFBSpecName{"dfb"}, "out");
+    producer_binding.accessor_aliases = {"out"};
+    producer.dfb_bindings.push_back(std::move(producer_binding));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Accessor aliases must be unique")));
+}
+
 TEST_F(ProgramSpecTestQuasar, DMKernelSelfLoopOnGen2Fails) {
     NodeCoord node{0, 0};
 
@@ -1175,6 +1218,41 @@ TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBSucceeds) {
     // Positive baseline: borrowed-memory DFB whose TensorParameter is L1-resident and large enough.
     ProgramSpec spec = MakeBorrowedDFBProgramSpec();
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOffsetSubrangeSucceeds) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/16, /*dfb_num_entries=*/2);
+    spec.dataflow_buffers[0].borrowed_memory_offset = 32;
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOffsetSubrangeOversizedFails) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/16, /*dfb_num_entries=*/2);
+    spec.dataflow_buffers[0].borrowed_memory_offset = 48;
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("borrowed subrange")));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOffsetMisalignedFails) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec();
+    spec.dataflow_buffers[0].borrowed_memory_offset = 8;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be aligned to entry_size")));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOffsetWithoutBackingFails) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec();
+    spec.dataflow_buffers[0].borrowed_from.reset();
+    spec.dataflow_buffers[0].borrowed_memory_offset = 16;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("without borrowed_from")));
 }
 
 TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBBackingParameterNeedNotBeKernelBoundSucceeds) {
@@ -3322,6 +3400,45 @@ TEST_F(ProgramSpecTestGen1, DFBMultipleProducersOnSameNodeFailsWithoutFlag) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("2 producer instance(s)")));
 }
 
+TEST_F(ProgramSpecTestGen1, DFBIncompleteEndpointCoverageSucceedsWithCompatibilityFlag) {
+    // Legacy descriptors may place a consumer kernel on padding nodes where runtime args make it
+    // return before touching the CB. The explicit compatibility flag preserves that topology
+    // without inventing a producer, buffer, or data movement on the padding node.
+    NodeCoord active_node{0, 0};
+    NodeCoord padding_node{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "incomplete_endpoint_coverage";
+
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    auto consumer = MakeMinimalGen1ComputeKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.advanced_options.allow_incomplete_endpoint_coverage = true;
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("active", active_node, {"producer", "consumer"}),
+        MakeMinimalWorkUnit("padding", padding_node, {"consumer"}),
+    };
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, DFBIncompleteAndMultiBindingCompatibilityFlagsFailTogether) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.dataflow_buffers[0].advanced_options.allow_instance_multi_binding = true;
+    spec.dataflow_buffers[0].advanced_options.allow_incomplete_endpoint_coverage = true;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("cannot combine")));
+}
+
 TEST_F(ProgramSpecTestGen1, DFBMultipleProducersOnSameNodeSucceedsWithFlag) {
     // The allow_instance_multi_binding escape hatch: on Gen1 a DFB lowers to a plain circular buffer,
     // so one node may host more than one producer instance — here a RISCV_0 and a RISCV_1 DM kernel
@@ -5008,6 +5125,39 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnInconsistentBorrowedFrom) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("inconsistent borrowed_from")));
+}
+
+TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnInconsistentBorrowedMemoryOffset) {
+    const NodeCoord node{0, 0};
+
+    auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/16, /*num_entries=*/2);
+    auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/16, /*num_entries=*/2);
+    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_b"}}};
+    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_a"}}};
+    dfb_a.borrowed_from = TensorParamName{"borrowed_tensor"};
+    dfb_b.borrowed_from = TensorParamName{"borrowed_tensor"};
+    dfb_a.borrowed_memory_offset = 0;
+    dfb_b.borrowed_memory_offset = 16;
+
+    KernelSpec producer = MakeMinimalGen2DMKernel("producer_kernel");
+    KernelSpec consumer = MakeMinimalGen2DMKernel("consumer_kernel");
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_a"}, "out_a"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_a"}, "in_a"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_b"}, "out_b"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_b"}, "in_b"));
+
+    auto tensor_param = MakeMinimalTensorParameter("borrowed_tensor", tt::tt_metal::BufferType::L1);
+    BindTensorParameterToKernel(producer, "borrowed_tensor", "borrowed_t");
+
+    ProgramSpec spec;
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb_a, dfb_b};
+    spec.tensor_parameters = {tensor_param};
+    spec.work_units = {MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("inconsistent borrowed_memory_offset")));
 }
 
 //---------------------------------------------------------------------------------

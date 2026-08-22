@@ -1106,12 +1106,9 @@ bit-exact and kept the cache count at one: RM interleaved addresses changed
 from input/output `(2968640, 2979648)` to `(3001536, 3012544)`, RM sharded from
 `(1466368, 2968640)` to `(1433600, 2990528)`, and tiled sharded from
 `(1466368, 2968640)` to `(1433600, 2991168)`; each cache-count sequence was
-`[(0, 1), (1, 1)]`. The probe passed 3/3 and was immediately removed. The
-Quasar suite registered at
-`models/demos/vision/classification/resnet50/quasar/tests/ops/test_slice_write.py`
-cannot run on this user-requested local T3K Wormhole target, so it is explicitly
-unvalidated here; related follow-up `tt-metal-rf8.14` owns Quasar hardware and
-the Gen2-only DFB implicit-sync validation rather than silently claiming it.
+`[(0, 1), (1, 1)]`. The probe passed 3/3 and was immediately removed.
+Quasar validation is outside the user-requested scope; no Quasar follow-up is
+required for this migration.
 The next incremental Opus pass verified both evidence dispositions, found no
 remaining blocker to the Slice Write code, and ended with explicit `APPROVED`.
 Slice Write nevertheless remains open because `tt-metal-rf8.13` is a linked
@@ -1835,3 +1832,44 @@ unification, dead-specialization removal, and stronger framework tests. The
 final pass found no actionable correctness, API, cache, topology, performance,
 UB, specialization, or maintainability issue and ended with explicit
 `APPROVED` (`/tmp/conv3d-metal2-opus-review-3.txt`).
+
+### Conv2D migration implementation and validation (2026-08-22)
+
+Both Conv2D factories now use one semantic
+`ProgramArtifacts`/`ProgramSpec`/`ProgramRunArgs` boundary, and all eleven
+canonical kernels use `TT_KERNEL` with named constexpr arguments. No copied
+`*_metal2.cpp` kernels, feature macros, additional CB/DFB storage, staging
+buffers, or data copies were introduced. Compute kernels explicitly request O3.
+The Gen1 plain-CB compatibility escape hatch preserves the existing zero-copy
+FIFO cursor behavior and multi-binding topology; Quasar activation reuse is
+rejected because its DFB interface does not provide equivalent cursor control.
+
+The migration also hardened the shared Metalium 2.0 compatibility surface for
+borrowed DFB offsets, accessor aliases, incomplete endpoint descriptions, and
+explicit Gen1 multi-binding. Focused framework tests cover these contracts.
+Both factories verify that emitted non-borrowed DFB storage matches the
+precomputed Conv2D L1 budget, and full tensor specifications participate in
+cache identity while each invocation rebinds fresh tensor addresses.
+
+The exact release build/install passed. Final framework and C++ checks passed
+193/193 ProgramSpec cases and 3/3 Conv2D fixture cases. The exhaustive Python
+validation passed 475 regular cases (58 existing skips), 88 wrapper cases (56
+existing skips), 1,689 nightly cases (717 existing skips), and 2,043 sweep
+cases. A disposable fresh-cache lifecycle probe recorded zero JIT hits while
+verifying fresh allocation rebinding, stable cache identity, determinism, and
+trace capture/replay. The exact Conv2D device-performance gate passed, including
+FP32 width-sharded Forge representatives. Authoritative logs are under
+`/tmp/conv2d-final-review-*.log`, with lifecycle evidence in
+`/tmp/conv2d-post-fp32-cold-cache-trace-v2.log` and review history in
+`/tmp/conv2d-metal2-opus-review-*.txt`.
+
+The final review additionally exposed a unity-build-only helper declaration and
+a width-sharded non-rectangular-grid regression. The helper is now declared in
+the common header and compiles independently. The activation reader retains its
+legacy bounding-box placement through disjoint no-op padding work units, so
+multicast destinations keep the existing ACT storage and semaphore footprint
+without a new DFB or copy. The focused width-sharded feature matrix passed 48
+cases with 16 existing BF8/row-major skips
+(`/tmp/conv2d-final-fix4-width-features.log`). The eighth Opus pass verified the
+non-unity compilation and padding topology and ended with explicit `APPROVED`
+(`/tmp/conv2d-metal2-opus-review-8.txt`).

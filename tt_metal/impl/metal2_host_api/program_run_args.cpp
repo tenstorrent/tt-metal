@@ -440,7 +440,7 @@ void AttachBorrowedDFBBuffers(
 
     // tensor_by_param is the param_name -> MeshTensor lookup the caller already built to fill the
     // binding CRTA sections; reuse it here rather than rebuilding an identical map per enqueue.
-    for (const auto& [dfb_id, tp_name] : borrowed_bindings) {
+    for (const auto& [dfb_id, tp_name, memory_offset] : borrowed_bindings) {
         auto it = tensor_by_param.find(tp_name);
         if (it == tensor_by_param.end()) {
             // Partial update (require_all=false): the borrowed TensorParameter was omitted; the DFB
@@ -471,18 +471,19 @@ void AttachBorrowedDFBBuffers(
         auto dfb_impl = program_impl.get_dataflow_buffer(dfb_id);
         const uint32_t dfb_total_bytes = dfb_impl->config.entry_size * dfb_impl->config.num_entries;
         TT_FATAL(
-            dfb_total_bytes <= buffer->aligned_size_per_bank(),
-            "Borrowed-memory DFB id {} (from TensorParameter '{}') has total size {} B, which exceeds the borrowed "
-            "Buffer's per-bank size of {} B.",
+            static_cast<uint64_t>(memory_offset) + dfb_total_bytes <= buffer->aligned_size_per_bank(),
+            "Borrowed-memory DFB id {} (from TensorParameter '{}') has subrange offset {} + size {} B, which "
+            "exceeds the borrowed Buffer's per-bank size of {} B.",
             dfb_id,
             tp_name,
+            memory_offset,
             dfb_total_bytes,
             buffer->aligned_size_per_bank());
 
         // Attach the address to the device-side DFB. Per-enqueue update_program_dispatch_commands
         // reads from the cache this populates, so no further dispatch-command invalidation is
         // needed for either first-call or re-entry.
-        const auto address = buffer->address();
+        const auto address = buffer->address() + memory_offset;
         TT_FATAL(
             address <= std::numeric_limits<uint32_t>::max(),
             "Borrowed Buffer base address {} for DFB id {} (TensorParameter '{}') exceeds uint32_t max.",
@@ -698,8 +699,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                     }
                 }
                 if (has_varargs) {
-                    std::copy(
-                        vararg_it->second->begin(), vararg_it->second->end(), combined.begin() + num_named_rtas);
+                    std::copy(vararg_it->second->begin(), vararg_it->second->end(), combined.begin() + num_named_rtas);
                 }
                 kernel->set_runtime_args(node, combined);
             }
@@ -1043,7 +1043,8 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
     // (require_all=true); on this partial path the backing tensor may be omitted, which would
     // otherwise let a grown DFB overflow its borrowed buffer's per-bank region unchecked at execution.
     std::unordered_map<uint32_t, std::string> borrowed_backing;  // dfb_id -> backing TensorParameter name
-    for (const auto& [dfb_id, tp_name] : program_impl.get_dfb_borrowed_bindings()) {
+    for (const auto& [dfb_id, tp_name, memory_offset] : program_impl.get_dfb_borrowed_bindings()) {
+        (void)memory_offset;
         borrowed_backing.emplace(dfb_id, tp_name);
     }
     std::unordered_set<DFBSpecName> dfbs_with_params;

@@ -122,8 +122,8 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     bool slow_dispatch = !(MetalContext::instance().rtoptions().get_fast_dispatch());
 
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    tt::CoreType dispatch_core_type =
-        resolve_dispatch_core_type(MetalEnvAccessor(MetalContext::instance().get_env()).impl(), physical_chip_id, dispatch_core_config);
+    tt::CoreType dispatch_core_type = resolve_dispatch_core_type(
+        MetalEnvAccessor(MetalContext::instance().get_env()).impl(), physical_chip_id, dispatch_core_config);
 
     // Kernels used to implement fast dispatch can be placed on dispatch cores
     if (not slow_dispatch and not force_slow_dispatch) {
@@ -777,15 +777,16 @@ std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() co
     return names;
 }
 
-void ProgramImpl::register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name) {
+void ProgramImpl::register_dfb_borrowed_binding(
+    uint32_t dfb_id, const std::string& tensor_parameter_name, uint32_t memory_offset) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    metal2_registry_->dfb_borrowed_bindings.emplace_back(dfb_id, tensor_parameter_name);
+    metal2_registry_->dfb_borrowed_bindings.emplace_back(dfb_id, tensor_parameter_name, memory_offset);
 }
 
-const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrowed_bindings() const {
-    static const std::vector<std::pair<uint32_t, std::string>> empty;
+const std::vector<std::tuple<uint32_t, std::string, uint32_t>>& ProgramImpl::get_dfb_borrowed_bindings() const {
+    static const std::vector<std::tuple<uint32_t, std::string, uint32_t>> empty;
     if (!metal2_registry_) {
         return empty;
     }
@@ -2402,10 +2403,9 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(mesh_device))
-            .get_device_build_env(mesh_device->build_id())
-            .build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+                               .get_device_build_env(mesh_device->build_id())
+                               .build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         ttsl::hash::hash_combine(device_hash, mesh_device->id());
     }
@@ -2443,10 +2443,9 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
 void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(mesh_device))
-            .get_device_build_env(mesh_device->build_id())
-            .build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+                               .get_device_build_env(mesh_device->build_id())
+                               .build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         device_hash = (device_hash << 32) | (mesh_device->id());
     }

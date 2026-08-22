@@ -43,16 +43,13 @@ using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalWorkUnit;
 
 // Kernel paths shared with the standard DFB tests.
-constexpr const char* DFB_PRODUCER_KERNEL =
-    "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp";
-constexpr const char* DFB_DM_CONSUMER_KERNEL =
-    "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp";
-constexpr const char* DFB_TENSIX_CONSUMER_KERNEL =
-    "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp";
+constexpr const char* DFB_PRODUCER_KERNEL = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp";
+constexpr const char* DFB_DM_CONSUMER_KERNEL = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp";
+constexpr const char* DFB_TENSIX_CONSUMER_KERNEL = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp";
 
 inline TensorSpec make_flat_dram_tensor_spec(uint32_t entry_size, uint32_t total_entries) {
     const uint32_t entry_size_words = entry_size / sizeof(uint32_t);
-    auto page_config   = PageConfig(Layout::ROW_MAJOR);
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto tensor_layout = TensorLayout(DataType::UINT32, page_config, memory_config);
     return TensorSpec(Shape{total_entries, entry_size_words}, tensor_layout);
@@ -64,20 +61,21 @@ inline TensorSpec make_flat_l1_tensor_spec(uint32_t entry_size, uint32_t total_e
     // distinct L1 banks (cores), leaving only one page's worth of bytes per bank and
     // failing the borrowed-DFB size check in AttachBorrowedDFBBuffers.
     const uint32_t total_words = total_entries * entry_size / sizeof(uint32_t);
-    auto page_config   = PageConfig(Layout::ROW_MAJOR);
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
     auto tensor_layout = TensorLayout(DataType::UINT32, page_config, memory_config);
     return TensorSpec(Shape{1, total_words}, tensor_layout);
 }
 
 struct BorrowedDFBTestConfig {
-    uint32_t num_entries      = 16;
-    uint32_t entry_size       = 256;   // bytes
-    uint32_t num_producers    = 1;
-    uint32_t num_consumers    = 1;
-    DFBAccessPattern cap      = DFBAccessPattern::STRIDED;  // producer is always STRIDED
-    bool tensix_consumer      = false;
-    bool verify_data          = false;
+    uint32_t num_entries = 16;
+    uint32_t entry_size = 256;  // bytes
+    uint32_t num_producers = 1;
+    uint32_t num_consumers = 1;
+    DFBAccessPattern cap = DFBAccessPattern::STRIDED;  // producer is always STRIDED
+    bool tensix_consumer = false;
+    bool verify_data = false;
+    uint32_t borrowed_memory_offset = 0;
     std::optional<uint32_t> num_entries_override = std::nullopt;
     bool expect_attach_fatal = false;
 };
@@ -92,11 +90,9 @@ void run_borrowed_memory_dfb_program(
 
     constexpr uint32_t implicit_sync = 0;
 
-    const uint32_t entries_per_producer =
-        (cfg.num_entries + cfg.num_producers - 1) / cfg.num_producers;
+    const uint32_t entries_per_producer = (cfg.num_entries + cfg.num_producers - 1) / cfg.num_producers;
     const uint32_t entries_per_consumer =
-        is_all ? cfg.num_entries
-               : (cfg.num_entries + cfg.num_consumers - 1) / cfg.num_consumers;
+        is_all ? cfg.num_entries : (cfg.num_entries + cfg.num_consumers - 1) / cfg.num_consumers;
 
     // For a single-core run: chunk_offset=0, entries_per_core=num_entries.
     const uint32_t entries_per_core = cfg.num_entries;
@@ -114,8 +110,8 @@ void run_borrowed_memory_dfb_program(
     producer_spec.source = DFB_PRODUCER_KERNEL;
     producer_spec.compile_time_args = {
         {"num_entries_per_producer", entries_per_producer},
-        {"implicit_sync",            implicit_sync},
-        {"num_producers",            cfg.num_producers},
+        {"implicit_sync", implicit_sync},
+        {"num_producers", cfg.num_producers},
     };
     producer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
     producer_spec.tensor_bindings = {
@@ -143,9 +139,9 @@ void run_borrowed_memory_dfb_program(
         consumer_spec.source = DFB_DM_CONSUMER_KERNEL;
         consumer_spec.compile_time_args = {
             {"num_entries_per_consumer", entries_per_consumer},
-            {"blocked_consumer",         static_cast<uint32_t>(is_all ? 1u : 0u)},
-            {"implicit_sync",            implicit_sync},
-            {"num_consumers",            cfg.num_consumers},
+            {"blocked_consumer", static_cast<uint32_t>(is_all ? 1u : 0u)},
+            {"implicit_sync", implicit_sync},
+            {"num_consumers", cfg.num_consumers},
         };
         consumer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
         consumer_spec.tensor_bindings = {{
@@ -180,12 +176,16 @@ void run_borrowed_memory_dfb_program(
         .num_entries = cfg.num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .borrowed_from = experimental::TensorParamName{"dfb_ring_tensor"},
+        .borrowed_memory_offset = cfg.borrowed_memory_offset,
     };
 
     // --- TensorParameters ---
-    const TensorSpec src_spec  = make_flat_dram_tensor_spec(cfg.entry_size, cfg.num_entries);
-    const TensorSpec dst_spec  = make_flat_dram_tensor_spec(cfg.entry_size, cfg.num_entries);
-    const TensorSpec ring_spec = make_flat_l1_tensor_spec(cfg.entry_size, cfg.num_entries);
+    const TensorSpec src_spec = make_flat_dram_tensor_spec(cfg.entry_size, cfg.num_entries);
+    const TensorSpec dst_spec = make_flat_dram_tensor_spec(cfg.entry_size, cfg.num_entries);
+    ASSERT_EQ(cfg.borrowed_memory_offset % cfg.entry_size, 0u)
+        << "The runtime test keeps the borrowed subrange aligned to a DFB entry";
+    const uint32_t borrowed_prefix_entries = cfg.borrowed_memory_offset / cfg.entry_size;
+    const TensorSpec ring_spec = make_flat_l1_tensor_spec(cfg.entry_size, cfg.num_entries + borrowed_prefix_entries);
 
     spec.tensor_parameters.push_back({.unique_id = experimental::TensorParamName{"src_tensor"}, .spec = src_spec});
     if (!cfg.tensix_consumer) {
@@ -194,9 +194,9 @@ void run_borrowed_memory_dfb_program(
     spec.tensor_parameters.push_back(
         {.unique_id = experimental::TensorParamName{"dfb_ring_tensor"}, .spec = ring_spec});
 
-    spec.kernels          = {producer_spec, consumer_spec};
+    spec.kernels = {producer_spec, consumer_spec};
     spec.dataflow_buffers = {dfb_spec};
-    spec.work_units       = {MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+    spec.work_units = {MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     // -----------------------------------------------------------------------
     // Create program and allocate tensors
@@ -266,7 +266,7 @@ void run_borrowed_memory_dfb_program(
     // stays PINNED across a size override (no reallocation).
     EXPECT_EQ(
         program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
-        static_cast<uint32_t>(ring_tensor.address()));
+        static_cast<uint32_t>(ring_tensor.address()) + cfg.borrowed_memory_offset);
 
     if (cfg.num_entries_override.has_value()) {
         EXPECT_EQ(program.impl().dataflow_buffers()[0]->config.num_entries, *cfg.num_entries_override)
@@ -288,9 +288,9 @@ void run_update_address_test(
     std::optional<uint32_t> reentry_num_entries_override = std::nullopt) {
     const ARCH arch = mesh_device.arch();
 
-    constexpr uint32_t num_entries  = 16;
-    constexpr uint32_t entry_size   = 256;
-    constexpr uint32_t total_words  = num_entries * entry_size / sizeof(uint32_t);
+    constexpr uint32_t num_entries = 16;
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t total_words = num_entries * entry_size / sizeof(uint32_t);
     constexpr uint32_t implicit_sync = 0;
 
     // -----------------------------------------------------------------------
@@ -306,8 +306,8 @@ void run_update_address_test(
     producer_spec.source = DFB_PRODUCER_KERNEL;
     producer_spec.compile_time_args = {
         {"num_entries_per_producer", num_entries},
-        {"implicit_sync",            implicit_sync},
-        {"num_producers",            1u},
+        {"implicit_sync", implicit_sync},
+        {"num_producers", 1u},
     };
     producer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
     producer_spec.tensor_bindings = {
@@ -322,9 +322,9 @@ void run_update_address_test(
     consumer_spec.source = DFB_DM_CONSUMER_KERNEL;
     consumer_spec.compile_time_args = {
         {"num_entries_per_consumer", num_entries},
-        {"blocked_consumer",         0u},
-        {"implicit_sync",            implicit_sync},
-        {"num_consumers",            1u},
+        {"blocked_consumer", 0u},
+        {"implicit_sync", implicit_sync},
+        {"num_consumers", 1u},
     };
     consumer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
     consumer_spec.tensor_bindings = {{
@@ -352,8 +352,8 @@ void run_update_address_test(
         .borrowed_from = experimental::TensorParamName{"dfb_ring_tensor"},
     };
 
-    const TensorSpec src_spec  = make_flat_dram_tensor_spec(entry_size, num_entries);
-    const TensorSpec dst_spec  = make_flat_dram_tensor_spec(entry_size, num_entries);
+    const TensorSpec src_spec = make_flat_dram_tensor_spec(entry_size, num_entries);
+    const TensorSpec dst_spec = make_flat_dram_tensor_spec(entry_size, num_entries);
     const TensorSpec ring_spec = make_flat_l1_tensor_spec(entry_size, num_entries);
 
     spec.tensor_parameters = {
@@ -361,9 +361,9 @@ void run_update_address_test(
         {.unique_id = experimental::TensorParamName{"dst_tensor"}, .spec = dst_spec},
         {.unique_id = experimental::TensorParamName{"dfb_ring_tensor"}, .spec = ring_spec},
     };
-    spec.kernels          = {producer_spec, consumer_spec};
+    spec.kernels = {producer_spec, consumer_spec};
     spec.dataflow_buffers = {dfb_spec};
-    spec.work_units       = {MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+    spec.work_units = {MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     Program program = MakeProgramFromSpec(mesh_device, spec);
 
@@ -404,8 +404,7 @@ void run_update_address_test(
     slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
 
     EXPECT_EQ(
-        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
-        static_cast<uint32_t>(ring_tensor_a.address()));
+        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(), static_cast<uint32_t>(ring_tensor_a.address()));
     {
         std::vector<uint32_t> output;
         slow_dispatch::ReadFromBuffer(dst_tensor.mesh_buffer(), output);
@@ -451,8 +450,7 @@ void run_update_address_test(
     slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
 
     EXPECT_EQ(
-        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
-        static_cast<uint32_t>(ring_tensor_b.address()));
+        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(), static_cast<uint32_t>(ring_tensor_b.address()));
     if (reentry_num_entries_override.has_value()) {
         EXPECT_EQ(program.impl().dataflow_buffers()[0]->config.num_entries, *reentry_num_entries_override)
             << "combined re-bind + resize: num_entries override was not applied";
@@ -482,6 +480,22 @@ TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S) {
             .cap = DFBAccessPattern::STRIDED,
             .tensix_consumer = false,
             .verify_data = true,
+        });
+}
+
+TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S_OffsetSubrange) {
+    run_borrowed_memory_dfb_program(
+        this->device(),
+        NodeCoord{0, 0},
+        {
+            .num_entries = 16,
+            .entry_size = 256,
+            .num_producers = 1,
+            .num_consumers = 1,
+            .cap = DFBAccessPattern::STRIDED,
+            .tensix_consumer = false,
+            .verify_data = true,
+            .borrowed_memory_offset = 4 * 256,
         });
 }
 

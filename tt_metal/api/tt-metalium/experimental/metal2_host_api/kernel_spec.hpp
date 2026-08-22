@@ -138,9 +138,13 @@ struct KernelSpec {
         enum class AccessPattern { STRIDED, ALL, BLOCKED };
 
         DFBSpecName dfb_spec_name;   // identify the DFB within the ProgramSpec
-        std::string accessor_name;   // DFB accessor name (used in the kernel source code)
+        std::string accessor_name;   // Primary DFB accessor name (used in the kernel source code)
         EndpointType endpoint_type;  // producer or consumer
         AccessPattern access_pattern = AccessPattern::STRIDED;
+        // Additional constexpr accessor names for the same DFB device slot. This is an escape hatch
+        // for migrating legacy kernels in which multiple semantic CB names intentionally shared one
+        // physical CB index. Aliases do not add endpoints, storage, or data movement.
+        std::vector<std::string> accessor_aliases = {};
     };
     Group<DFBBinding> dfb_bindings;
 

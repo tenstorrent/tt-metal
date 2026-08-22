@@ -37,7 +37,6 @@ Overall assessment:
 | Easy | 2 | `fold`, `convert_to_chw` |
 | Medium | 5 | `rotate`, `grid_sample`, `convert_to_hwc`, `padded_slice`, `slice_write` |
 | Hard | 5 | `conv2d`, `max_pool2d`/`avg_pool2d`, `upsample`, `halo`, `conv3d` |
-| Impossible without infrastructure | 1 conditional specialization family | Conv2D activation-reuse/split-reader paths on Quasar if no equal-or-better operation-local rewrite is found |
 
 “No independent work” means the wrapper has no host/kernel boundary of its own.
 It is not a claim that the end-to-end public operation is already compliant: its
@@ -278,12 +277,10 @@ Why hard:
   arrays, numeric CB identities, semaphores, multicast endpoints, and specialized
   compute initializers. Converting only the factory or only the kernels would
   leave two sources of truth.
-- Raw DFB payload access itself is available through `get_read_ptr()` and
-  `get_write_ptr()`, but activation-reuse and split-reader paths also directly
-  rewrite legacy `fifo_rd_ptr`/`fifo_wr_ptr` state. DFB cursor setters are
-  WH/BH-only today and are not exposed on Quasar. These specializations therefore
-  need either a measured equal-or-faster scheduling/layout rewrite or Quasar
-  cursor/subview infrastructure.
+- Activation-reuse and split-reader paths directly rewrite FIFO cursor state.
+  The completed Wormhole/Blackhole migration retains that zero-copy behavior
+  through the explicit Gen1 plain-CB compatibility surface; activation reuse is
+  rejected on Quasar, whose DFB interface does not expose cursor repositioning.
 - Conv1D and ConvTranspose2D depend on this unit, so its validation surface is
   broader than the `conv2d` API alone.
 - Performance sensitivity is high: wrapper boundaries, DFB identity
@@ -387,38 +384,9 @@ Why hard:
 Cold-JIT must cover gather/normal reader paths, chain/multicast/no-share weight
 modes, bias/no-bias, output/layout variants, edge depths, and production shapes.
 
-## Infrastructure-blocked / impossible category
+## Metalium 2.0 capability summary
 
-No complete public operation is conclusively impossible with the current APIs,
-but part of Conv2D is conditionally infrastructure-blocked when zero performance
-regression is a hard requirement.
-
-### Conditional blocker: Conv2D FIFO cursor surgery on Quasar
-
-The public DFB API supports raw payload access through `get_read_ptr()` and
-`get_write_ptr()`. This can preserve optimized local-memory loops without an
-extra copy. On Quasar data-movement processors these methods return an uncached
-local alias; NoC transfers should take the DFB object directly so its NoC traits
-resolve the correct cached address.
-
-That does not cover arbitrary FIFO-state mutation. Conv2D activation-reuse and
-split-reader code directly assigns legacy `fifo_rd_ptr` and `fifo_wr_ptr` in
-`conv_bmm_tilize.cpp`, `conv_reader_common.hpp`, and related reader kernels.
-`DataflowBuffer::evil_set_read_ptr()` and `evil_set_write_ptr()` exist only for
-WH/BH; the current header explicitly leaves Quasar Classes 2–5 for redesign.
-
-Therefore those Conv2D specializations cannot yet be declared migratable under
-the no-performance-compromise constraint. The blocker is cleared only by one of:
-
-1. an operation-local DFB scheduling/layout rewrite that benchmarks equal to or
-   faster than the current implementation on every production shape; or
-2. supported Quasar infrastructure for the equivalent cursor repositioning,
-   subview, or indexed-producer/consumer behavior.
-
-This is a conditional specialization-level blocker, not proof that all of
-Conv2D or its simpler modes are blocked.
-
-Outside that case, the current `ProgramSpec` surface supports local DFBs,
+The current `ProgramSpec` surface supports local DFBs,
 borrowed tensor-backed DFBs, DFB aliasing, semaphores, scratchpads, multiple work
 units, tensor parameters, and per-node named runtime arguments. Existing Fold
 and Upsample migrations also demonstrate op-owned configuration-tensor lifetime
@@ -480,3 +448,14 @@ descriptor. Completion still requires all of the following:
   including zero unexplained migration-owned warnings;
 - real-hardware correctness and device-profiler measurements, followed by
   formatting/hooks and `git diff --check`.
+
+## Implementation status (2026-08-22)
+
+This document's ratings and ordering record the original static assessment.
+The branch has since completed the convolution migration sequence, including
+Halo, Pool2D, Conv3D, and Conv2D as separate per-operation commits. Conv2D
+evolved its eleven canonical kernels in place, uses named constexpr arguments
+without feature macros, and preserves Gen1 FIFO compatibility without adding
+CB/DFB storage or copies. Quasar validation is intentionally outside scope.
+Detailed implementation and validation evidence is recorded in
+`metalium-2.0-convolution-ops-migration-learnings.md`.

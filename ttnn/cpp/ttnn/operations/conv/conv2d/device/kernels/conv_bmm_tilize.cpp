@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "experimental/kernel_args.h"
 
 #include "internal/mod_div_lib.h"
 #include "api/compute/bcast.h"
@@ -19,26 +20,13 @@
 
 // #include "api/debug/dprint.h"
 
-#define DEBUG_PRINT 0
-
-#ifdef SPLIT_READER
 template <
     uint32_t in_block_w,
     uint32_t in_cb_id,
     uint32_t out_cb_id,
     bool init_tilize = true,
     bool uninit_tilize = true>
-__attribute__((noinline)) void tilize_in(
-#else
-template <
-    uint32_t in_block_w,
-    uint32_t in_cb_id,
-    uint32_t out_cb_id,
-    bool init_tilize = true,
-    bool uninit_tilize = true>
-void tilize_in(
-#endif
-    uint32_t in_num_subblocks) {
+inline void tilize_in_impl(uint32_t in_num_subblocks) {
     constexpr compute_kernel_lib::tilize_config::InitUninitMode init_uninit_mode =
         init_tilize ? (uninit_tilize ? compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit
                                      : compute_kernel_lib::tilize_config::InitUninitMode::InitOnly)
@@ -60,6 +48,31 @@ void tilize_in(
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         reconfig_mode>(in_num_subblocks);
 }  // tilize_in()
+
+template <
+    uint32_t in_block_w,
+    uint32_t in_cb_id,
+    uint32_t out_cb_id,
+    bool init_tilize = true,
+    bool uninit_tilize = true>
+__attribute__((noinline)) void tilize_in_split_reader(uint32_t in_num_subblocks) {
+    tilize_in_impl<in_block_w, in_cb_id, out_cb_id, init_tilize, uninit_tilize>(in_num_subblocks);
+}
+
+template <
+    bool split_reader,
+    uint32_t in_block_w,
+    uint32_t in_cb_id,
+    uint32_t out_cb_id,
+    bool init_tilize = true,
+    bool uninit_tilize = true>
+inline void tilize_in(uint32_t in_num_subblocks) {
+    if constexpr (split_reader) {
+        tilize_in_split_reader<in_block_w, in_cb_id, out_cb_id, init_tilize, uninit_tilize>(in_num_subblocks);
+    } else {
+        tilize_in_impl<in_block_w, in_cb_id, out_cb_id, init_tilize, uninit_tilize>(in_num_subblocks);
+    }
+}
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
 inline void tilize_single_block(DataflowBuffer in_dfb) {
@@ -200,57 +213,53 @@ inline void reblock_and_untilize(
     interm_dfb.pop_front(num_tiles_in_row_of_subblocks);
 }
 
-void kernel_main() {
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
-    constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
-    constexpr uint32_t in0_block_num_tiles =
-        get_compile_time_arg_val(2);  // out_subblock_h*in0_block_w*in0_num_subblocks;
-    constexpr uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);  // out_subblock_h*in0_block_w
-    constexpr uint32_t reader_num_h_subblocks = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_num_subblocks =
-        get_compile_time_arg_val(5);  // outer column block size (in inner column blocks)
-    constexpr uint32_t in1_block_num_tiles =
-        get_compile_time_arg_val(6);                               // out_subblock_w*in0_block_w* in1_num_subblocks;
-    constexpr uint32_t in1_block_w = get_compile_time_arg_val(7);  // out_subblock_w*in1_num_subblocks
-    // if these are not defined as volatile, it causes code size for TRISC2 to be too large if num_blocks > 1
-    constexpr uint32_t in0_num_blocks_h = get_compile_time_arg_val(8);
-    constexpr uint32_t in0_num_blocks_w = get_compile_time_arg_val(9);
-    constexpr uint32_t in1_num_blocks_w = get_compile_time_arg_val(10);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(11);          // inner row block size in tiles
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(12);          // inner column block size in tiles
-    constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(13);  // out_subblock_h * out_subblock_w;
-    constexpr bool height_sharded = get_compile_time_arg_val(14);
-    constexpr bool untilize_out = get_compile_time_arg_val(15);
-    constexpr uint32_t in0_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in1_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t in0_pretilize_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t in0_cb_second_reader_id = get_compile_time_arg_val(21);
-    constexpr uint32_t matmul_partials_cb = get_compile_time_arg_val(22);
-    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(23);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(25);
-    constexpr bool check_skip_compute = get_compile_time_arg_val(26);
-    constexpr bool pack_relu = get_compile_time_arg_val(27);
-    constexpr bool packer_untilize = get_compile_time_arg_val(28);
-    constexpr bool packer_l1_acc = get_compile_time_arg_val(29);
-    constexpr bool fuse_bias = get_compile_time_arg_val(30);
-    constexpr bool split_reader = get_compile_time_arg_val(31);
-    constexpr bool activation_reuse = get_compile_time_arg_val(32);
-
-    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(33);
-    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(34);
-    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(35);
-    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(36);
-    constexpr bool split_reader_cb_shared = get_compile_time_arg_val(37) == 1;
-
+// Conv2D block-matmul and tilize compute kernel using typed Metalium 2.0 arguments.
+template <
+    uint32_t in0_block_w,
+    uint32_t in0_num_subblocks,
+    uint32_t in0_block_num_tiles,
+    uint32_t in0_subblock_num_tiles,
+    uint32_t reader_num_h_subblocks,
+    uint32_t in1_num_subblocks,
+    uint32_t in1_block_num_tiles,
+    uint32_t in1_block_w,
+    uint32_t in0_num_blocks_h,
+    uint32_t in0_num_blocks_w,
+    uint32_t in1_num_blocks_w,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t out_subblock_num_tiles,
+    uint32_t height_sharded,
+    uint32_t untilize_out,
+    uint32_t bias_ntiles_w,
+    uint32_t in0_nblocks_w_tilize,
+    uint32_t check_skip_compute,
+    uint32_t pack_relu,
+    uint32_t packer_untilize,
+    uint32_t packer_l1_acc,
+    uint32_t fuse_bias,
+    uint32_t split_reader,
+    uint32_t activation_reuse,
+    uint32_t image_width_in_tiles,
+    uint32_t window_reuse_offset,
+    uint32_t tilized_cb_row_offset,
+    uint32_t tilized_cb_second_reader_offset,
+    uint32_t split_reader_cb_shared>
+TT_KERNEL void kernel_main(uint32_t skip_compute) {
+    constexpr uint32_t in0_cb_id = dfb::act;
+    constexpr uint32_t in1_cb_id = dfb::weights;
+    constexpr uint32_t in0_pretilize_cb_id = dfb::act_row_major;
+    constexpr uint32_t in0_cb_second_reader_id = dfb::act_second_reader;
+    constexpr uint32_t matmul_partials_cb = dfb::matmul_partials;
+    constexpr uint32_t tilized_in0_cb_id = dfb::act_tilized;
+    constexpr uint32_t out_cb_id = dfb::out;
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 
     uint32_t bias_block_offset = 0;
-    constexpr uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
-    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(17);
+    constexpr uint32_t bias_cb_id = dfb::bias;
     constexpr uint32_t mm_out_cb_id = fuse_bias ? matmul_partials_cb : untilize_mode_out_cb_id;
 
     constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
@@ -273,11 +282,6 @@ void kernel_main() {
     // operations (input grid) while actual matmul occurs on different cores (output grid).
     // Skip dummy compute operations when possible to reduce di/dt issues, but allow dummy
     // tilize operations on cores without input data for code simplicity.
-    bool skip_compute = false;
-    if constexpr (check_skip_compute) {
-        skip_compute = (bool)get_arg_val<uint32_t>(0);
-    }
-
     DataflowBuffer dfb_in0(in0_cb_id);
     DataflowBuffer dfb_in0_second_reader(in0_cb_second_reader_id);
     DataflowBuffer dfb_tilized_in0(tilized_in0_cb_id);
@@ -326,6 +330,7 @@ void kernel_main() {
                             pack_reconfig_l1_acc(0);
                         }
                         tilize_in<
+                            split_reader,
                             in0_block_w,
                             in0_pretilize_cb_id,
                             tilized_in0_cb_id,
@@ -333,8 +338,13 @@ void kernel_main() {
                             !split_reader || split_reader_cb_shared>(in0_num_subblocks_read);
 
                         if constexpr (split_reader && !split_reader_cb_shared) {
-                            tilize_in<in0_block_w, in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
-                                in0_num_subblocks_read_last);
+                            tilize_in<
+                                split_reader,
+                                in0_block_w,
+                                in0_cb_second_reader_id,
+                                tilized_in0_cb_id,
+                                false,
+                                true>(in0_num_subblocks_read_last);
                         }
                         reconfig_data_format(in0_pretilize_cb_id, in1_cb_id, in0_pretilize_cb_id, in0_cb_id);
                         matmul_block_init(in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
@@ -358,14 +368,19 @@ void kernel_main() {
                     }
 
                     if constexpr (!activation_reuse) {
-                        tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id, true, !split_reader>(
+                        tilize_in<split_reader, in0_block_w, in0_cb_id, tilized_in0_cb_id, true, !split_reader>(
                             in0_num_subblocks_read);
                     }
 
                     if constexpr (split_reader) {
                         if constexpr (!activation_reuse) {
-                            tilize_in<in0_block_w, in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
-                                in0_num_subblocks_read_last);
+                            tilize_in<
+                                split_reader,
+                                in0_block_w,
+                                in0_cb_second_reader_id,
+                                tilized_in0_cb_id,
+                                false,
+                                true>(in0_num_subblocks_read_last);
                         } else {
                             PACK((get_local_cb_interface(tilized_in0_cb_id).fifo_wr_ptr = tilized_cb_start_address));
                             tilize_in_reuse_split_reader<
@@ -427,8 +442,7 @@ void kernel_main() {
 
                             uint32_t start_dst_index = 0;
                             uint32_t start_tile_index = 0;
-                            copy_block(
-                                matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
+                            copy_block(matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
                             dfb_matmul_partials.pop_front(out_subblock_num_tiles);
                             // Reconfigure srcA back

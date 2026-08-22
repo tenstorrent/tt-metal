@@ -162,6 +162,13 @@ struct DFBAdvancedOptions {
     // It is NOT supported on Gen2 architectures: setting this flag on a Gen2
     // target is a hard error, whether or not any instance is actually multi-bound.
     bool allow_instance_multi_binding = false;
+
+    // Legacy no-op placement compatibility. Allows a per-node DFB instance to have only one side
+    // of its endpoint pair when the kernel on that node is guaranteed not to access the DFB.
+    // This does not create an endpoint, storage copy, or synchronization; misuse is unsafe. It is
+    // mutually exclusive with allow_instance_multi_binding: incomplete coverage still permits at
+    // most one producer and at most one consumer on each node.
+    bool allow_incomplete_endpoint_coverage = false;
 };
 
 struct AdvancedKernelRunArgs {
