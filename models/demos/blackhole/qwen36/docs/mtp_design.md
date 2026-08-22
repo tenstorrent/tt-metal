@@ -86,9 +86,12 @@ Each iteration:
 4. Greedy accept: longest matching prefix `m`, commit `d_1..d_m` plus the
    target's correction/bonus token.
 5. **Always restore** the snapshot (deallocate the polluted handles). When
-   `c+1-a >= 64`, run one *commit chunk* over committed tokens only
-   (`valid_len = 64*floor((c+1-a)/64)`) and advance `a`. Amortized target cost:
-   ~`1 + (m+1)/64` chunk forwards per `m+1` committed tokens.
+   `c+1-a > 64`, run one *commit chunk* over committed tokens only
+   (`valid_len = 64*floor((c-a)/64)`) and advance `a`. The commit always
+   leaves at least one committed token uncommitted: the accept row for draft 1
+   is the verify row after processing `t_c`, so the anchor must never catch up
+   to `c+1`. Amortized target cost: ~`1 + (m+1)/64` chunk forwards per `m+1`
+   committed tokens.
 
 KV rollback is implicit (batch=1): rejected-draft K/V rows and the re-processed
 prefix are overwritten by the next chunk, which always starts at `a <= c'` and

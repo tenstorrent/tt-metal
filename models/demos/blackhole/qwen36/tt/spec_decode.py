@@ -39,6 +39,19 @@ def block_aligned_prefill_len(prompt_len):
     return BLOCK * ((prompt_len - 1) // BLOCK)
 
 
+def commit_advance(pending_len):
+    """Block-multiple of GDN state to commit, leaving >=1 committed token uncommitted.
+
+    The target logits that accept draft 1 are the verify row AFTER processing
+    the last committed token t_c, so t_c itself must be in every verify chunk:
+    the anchor must never catch up to c+1 (row_start = c - a stays >= 0, and a
+    fully-committed anchor would leave no row to accept from).
+    """
+    if pending_len <= BLOCK:
+        return 0
+    return BLOCK * ((pending_len - 1) // BLOCK)
+
+
 def greedy_accept(drafts, target_ids):
     """Longest matching draft prefix + the target's correction/bonus token.
 
@@ -148,6 +161,11 @@ class Qwen36SpeculativeDecoder:
         (logits [n, vocab] or None, hidden [n, dim]).
         """
         model = self.model
+        # A negative row_start would silently wrap the one-hot to the bucket's
+        # padded tail and hand the accept path garbage logits.
+        assert (
+            0 <= row_start and row_start + n <= bucket
+        ), f"row range [{row_start}, {row_start + n}) not in bucket {bucket}"
         rows_padded = ((n + 31) // 32) * 32
         sel = torch.zeros(1, rows_padded, bucket, dtype=torch.float32)
         for j in range(n):
@@ -169,10 +187,9 @@ class Qwen36SpeculativeDecoder:
 
     def _maybe_commit(self):
         """Advance the GDN anchor by whole blocks once enough tokens committed."""
-        pending_len = len(self.committed) - self.a
-        if pending_len < BLOCK:
+        k = commit_advance(len(self.committed) - self.a)
+        if k == 0:
             return
-        k = BLOCK * (pending_len // BLOCK)
         old = self._gdn_handles()
         hidden, _ = self._chunk_forward(self.committed[self.a : self.a + k], self.a, k)
         ttnn.deallocate(hidden)
@@ -277,6 +294,7 @@ class Qwen36SpeculativeDecoder:
             target_ids = [int(logits[j].argmax()) for j in range(K + 1)]
             m, new_tokens = greedy_accept(drafts, target_ids)
             self.accepts.append(m)
+            logger.debug(f"spec iter {len(self.accepts)}: c={c} a={self.a} drafts={drafts} targets={target_ids} m={m}")
             self._gdn_restore(snap)
 
             # 4. Commit tokens + arm the next catch-up pairs (true target hiddens).
