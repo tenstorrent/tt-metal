@@ -93,7 +93,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     std::uint32_t block_wt = 0;
     bool legacy_reduction = false;
     bool legacy_rsqrt = false;
-    bool use_welford = false;
+    bool requested_use_welford = false;
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -104,7 +104,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 block_wt = program_config.block_w;
                 legacy_reduction = program_config.legacy_reduction;
                 legacy_rsqrt = program_config.legacy_rsqrt;
-                use_welford = program_config.use_welford;
+                requested_use_welford = program_config.use_welford;
             }
         },
         operation_attributes.program_config);
@@ -121,6 +121,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
     IDevice* device = a.device();
+
+    // Blackhole's centred tile-reduction kernel is substantially faster and showed no numerical
+    // disadvantage versus the transpose/SFPU two-pass kernel for non-distributed sharded LayerNorm.
+    // Keep the latter on other architectures until they have equivalent numerical and performance validation.
+    const bool use_welford =
+        requested_use_welford && !(device->arch() == tt::ARCH::BLACKHOLE && !is_pre_all_gather && !is_post_all_gather);
 
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -192,6 +198,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     uint32_t reciprocal_dfb_size_bytes = 0;
     if (use_welford) {
         TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
+    }
+    if (use_welford) {
         recip_tensor = tensor_args.recip_tensor;
         reciprocal_dfb_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
     }

@@ -185,14 +185,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // Extract program config
     bool legacy_reduction = false;
     bool legacy_rsqrt = false;
-    bool use_welford = false;
+    bool requested_use_welford = false;
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
                 legacy_reduction = program_config.legacy_reduction;
                 legacy_rsqrt = program_config.legacy_rsqrt;
-                use_welford = program_config.use_welford;
+                requested_use_welford = program_config.use_welford;
             }
         },
         operation_attributes.program_config);
@@ -240,6 +240,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    const bool blackhole_use_sfpu_stats =
+        device->arch() == tt::ARCH::BLACKHOLE && !rms_norm && !input_is_row_major && fp32_dest_acc_en &&
+        use_blackhole_sfpu_stats(in_data_format, Wp, b.has_value(), gamma.has_value(), beta.has_value());
+    const bool use_welford = requested_use_welford && (device->arch() != tt::ARCH::BLACKHOLE || rms_norm ||
+                                                       input_is_row_major || blackhole_use_sfpu_stats);
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat interm_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat gamma_data_format = gamma.has_value()
@@ -295,6 +300,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     uint32_t reciprocal_buffer_size_bytes = 0;
     if (use_welford) {
         TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
+    }
+    if (use_welford) {
         recip_tensor = tensor_args.recip_tensor;
         reciprocal_buffer_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
     }
