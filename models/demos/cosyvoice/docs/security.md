@@ -46,12 +46,23 @@ help. So the pins moved.
 | **outstanding** | **3 MEDIUM** | `torch` ×3 |
 
 **36 of 39 closed, including every CRITICAL and every HIGH.** The three that remain are all
-`torch` MEDIUM local-DoS: CVE-2025-2998 has no fixed version at any release, and CVE-2025-3730
-and CVE-2025-2999 need torch ≥ 2.8, which breaks this venv twice over — torch ≥ 2.8's inductor
-imports `triton.backends`, which the `triton` that `openai-whisper` pins does not have, and
-`torchaudio` 2.9 removed its native decoder so `torchaudio.load` needs `torchcodec` + FFmpeg.
-`requirements-reference.txt` records the reasoning per package; it is the file that has to be
-right, so it is the file that carries it.
+`torch` MODERATE local-DoS: CVE-2025-3730 (fixed 2.8.0), CVE-2025-2999 (fixed 2.9.1), and
+CVE-2025-2998, whose range ends at `<= 2.6.0` with no fixed version recorded — 2.6.0 is its
+last affected release.
+
+Re-measured 2026-08-22, because the reason recorded here was wrong. Neither the `triton` pin
+nor the `torchaudio` decoder blocks a bump any more: `openai-whisper` 20250625 relaxes triton
+to `>=2` and 3.7.1 resolves against torch 2.8/2.9, `torchaudio` 2.8 keeps its native decoder,
+and `Qwen2ForCausalLM` imports cleanly on torch 2.9.1. The real blocker is narrower.
+`torch.multinomial(probs, num_samples=1)` consumes the RNG stream differently in 2.8 than in
+2.6 — the batched form, `topk` and `sort` are byte-identical, and so is the generator. Model
+arithmetic survives the bump bit-exact, but the token drawn at decode step 2 changes, the
+utterance ends at 147 semantic tokens instead of 164, and all 29 goldens shift.
+
+That makes a torch bump a re-baseline rather than a numerical risk: the golden set would have
+to be regenerated and every figure in PERF.md derived from it re-measured. Three MODERATE
+local-DoS findings in a venv that ships nothing do not justify moving the reference the port
+is measured against. `requirements-reference.txt` carries the per-package detail.
 
 One correction worth recording, because it changed the outcome. An earlier pass here reported
 `transformers` 5.x as incompatible — that `Qwen2ForCausalLM` was no longer importable from the
@@ -62,14 +73,16 @@ goldens bit-for-bit, which closed three advisories that had been written up as u
 
 What made the bumps safe to take is that they are checked, not asserted: regenerating the full
 golden set on the new pins reproduces all 29 files at **PCC ≥ 0.9999993**, e2e waveform
-`max|diff|` 3.5e-04. The reference the TTNN port is measured against did not move.
+`max|diff|` 3.5e-04. Re-verified 2026-08-22 from a venv built clean from this file: worst PCC
+`0.9999993220`, e2e `max|diff|` `3.457e-04`. The reference the TTNN port is measured against did not move.
 
 The 39th, CVE-2026-68508 against `hydra-core` (HIGH, `hydra.utils.instantiate` running code
 from an untrusted config), is closed by 1.3.2 -> 1.3.4. `hydra` is imported on the reference
 path, but only as a side effect of `matcha/utils/__init__.py`; `instantiate` is called only
 from `matcha/train.py`, which the reference never runs. The bump is a patch release holding
 the same `omegaconf` range, so it costs nothing to take. Checked the same way as the others:
-regenerating the golden set on 1.3.4 reproduces all 29 files **bit-exact**, 139/139 arrays.
+holding every other pin fixed and moving only `hydra-core`, the regenerated set is bit-exact
+against the committed goldens, 139/139 arrays — the bump is numerically inert.
 
 One pin is held *back* for the same reason. `onnxruntime` has no advisory, but 1.23.2 emits a
 different token sequence from `speech_tokenizer_v1.onnx` than 1.18.0 does; that reroutes the LLM
