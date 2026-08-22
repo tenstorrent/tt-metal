@@ -5328,6 +5328,37 @@ class TopKXLGolden:
 
 
 @register_golden
+class Top32RmGolden:
+    """Golden generator for the DeepSeek top32_rm LLKs (row-major top-32, K=32).
+
+    Mirrors the on-silicon gtest reference verify_top32_outputs(): rank the
+    (score, original_index) pairs of a single row by score DESCENDING, ties broken
+    by the smaller original index, and take the first K. The index paired with each
+    surviving score is that score's original row-major position, because the kernel's
+    index stream is index[i] = i and index tracking carries it through the sort.
+
+    Every stimulus is exactly representable in bf16, so the fp32 score order equals
+    the bf16 compare order the SFPU SFPSWAP uses.
+
+    Args:
+        row: 1-D float tensor [row_elements] of the row's scores.
+        K:   number of top elements (32 for top32_rm).
+    Returns:
+        (values, indices): float tensor [K] of the top-K scores and int64 tensor [K]
+        of their original row-major positions, in descending-score order.
+    """
+
+    def __call__(self, row, K=32):
+        row = row.flatten().float()
+        n = row.numel()
+        # Stable descending sort with an index tiebreak: torch.sort is stable, so
+        # sorting by -score keeps the smaller original index first among equal
+        # scores, matching the gtest comparator (score desc, orig_idx asc).
+        order = torch.argsort(-row, stable=True)[:K]
+        return row[order], order.to(torch.int64)
+
+
+@register_golden
 class WhereGolden:
     def __call__(self, operand1, true_value, false_value):
         # Element-wise select matching the C++ sfpu_ternary_function:
