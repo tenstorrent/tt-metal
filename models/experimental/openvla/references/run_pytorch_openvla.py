@@ -9,7 +9,7 @@ Run this in a separate environment with compatible versions:
     # Create venv
     python3 -m venv /tmp/openvla_pt_env
     source /tmp/openvla_pt_env/bin/activate
-    pip install torch transformers==4.40.0 timm==0.9.16 accelerate safetensors pillow numpy
+    pip install torch transformers==4.57.6 timm==0.9.16 accelerate safetensors pillow numpy
 
     # Run this script
     python run_pytorch_openvla.py --output /tmp/pytorch_openvla_outputs.pt
@@ -23,11 +23,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-# NOTE(transformers-5.x): `AutoModelForVision2Seq` was removed in transformers 5.x.
-# When this path is bumped off the pinned 4.40.x, rename it to `AutoModelForImageTextToText`
-# (the merged replacement, available since 4.46). Left as-is for now: OpenVLA is not run on
-# CI and pins an older transformers, so it hasn't been validated under 5.x.
-from transformers import AutoModelForVision2Seq, AutoProcessor
+from transformers import AutoModelForImageTextToText, AutoProcessor
 
 
 def main():
@@ -62,7 +58,7 @@ def main():
     processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
 
     print("Loading PyTorch OpenVLA model...")
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         "openvla/openvla-7b",
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
@@ -184,7 +180,7 @@ def capture_layer_outputs(output_path="/tmp/pytorch_llm_layers.pt"):
     # Load model
     print("\nLoading model...")
     processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         "openvla/openvla-7b",
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
@@ -286,7 +282,7 @@ def benchmark_fps(iterations=10, warmup=2, device="cpu"):
     # Load model
     print("\nLoading model...")
     processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         "openvla/openvla-7b",
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,

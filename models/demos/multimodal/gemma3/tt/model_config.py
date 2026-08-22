@@ -546,8 +546,6 @@ class ModelArgs(TTModelArgs):
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
-        # AutoModelForVision2Seq was removed in transformers 5.x; its model mapping
-        # was folded into AutoModelForImageTextToText (available since 4.46).
         for model_cls in (AutoModelForImageTextToText,):
             if type(self.hf_config) == dict:
                 return model_cls
