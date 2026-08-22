@@ -52,16 +52,17 @@ static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring
 // receiver eRisc. Everything else goes to forwardign buffer. Op manages when will sender cores send
 // "home-made" tokens and when will they send tokens from the forwarding buffer.
 //
-// Worst case for one chunk, not an estimate: a chunk carries the destination chip's tokens that were routed
-// to experts hosted on the source chip. If every one of the destination's seq_len_per_chip tokens sent all
-// num_experts_per_tok of its copies to experts on that one source chip, the chunk holds all of them. Plus one
-// page for the sentinel that terminates it.
+// Pages one stream's region has to hold. The kernels pack their chunks densely, computing each chunk's
+// length from expert_offsets, so this only has to bound the region's TOTAL — which is why it does not grow
+// when a chunk count grows.
 //
-// Unreachable for every chunk at once — a destination's tokens cannot all be on one source chip and also on
-// another — so provisioning every chunk for it is deliberately wasteful. A later change makes the buffer
-// dense and this bound stops costing anything.
-uint32_t fwd_pages_per_chunk(uint32_t seq_len_per_chip, uint32_t num_experts_per_tok) {
-    return seq_len_per_chip * num_experts_per_tok + 1;
+// A chunk carries the destination chip's tokens routed to experts on the origin chip. Each of the
+// destination's seq_len_per_chip tokens picks num_experts_per_tok DISTINCT experts, so at most
+// min(num_experts_per_tok, experts_per_chip) of its copies can land on any one chip. The two chips split
+// each run num_links ways, or stream_count ways for the diametrically opposite chip.
+uint32_t fwd_pages_per_quarter(const CombineFabric2dParams& args, uint32_t experts_per_chip) {
+    const uint32_t per_chunk = args.seq_len_per_chip * std::min(args.num_experts_per_tok, experts_per_chip);
+    return relay_chunks_per_stream(ring_extent(args)) * (per_chunk / args.num_links + 1);
 }
 
 L1Layout compute_l1_layout(
@@ -170,7 +171,7 @@ RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh) {
 struct ForwardingBuffer {
     std::shared_ptr<ttnn::Tensor> owner;
     tt::tt_metal::Buffer* buffer = nullptr;
-    uint32_t pages_per_chunk = 0;
+    uint32_t pages_per_quarter = 0;
 };
 
 // Never initialised and never read back: pure staging for tokens passing through a chip. One page per token,
@@ -182,11 +183,11 @@ struct ForwardingBuffer {
 ForwardingBuffer allocate_forwarding_buffer(
     ttnn::MeshDevice* mesh, const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
     ForwardingBuffer fwd;
-    fwd.pages_per_chunk = fwd_pages_per_chunk(args.seq_len_per_chip, args.num_experts_per_tok);
+    fwd.pages_per_quarter = fwd_pages_per_quarter(args, args.experts_per_chip);
     const uint32_t page_bytes = token_size_bytes(tensor_args) + cmbf2d::FORWARDING_METADATA_SIZE;
     TT_FATAL(
         page_bytes % 64 == 0, "combine_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
-    const uint32_t pages = relay_chunks_per_mesh(ring_extent(args), args.num_links) * fwd.pages_per_chunk;
+    const uint32_t pages = stream_count(args.num_links) * fwd.pages_per_quarter;
     const tt::tt_metal::TensorSpec spec(
         ttnn::Shape({pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
         tt::tt_metal::TensorLayout(
@@ -212,9 +213,9 @@ KernelPlan make_kernel_plan(
     const CombineFabric2dInputs& tensor_args,
     const ttnn::MeshCoordinate& coord,
     const RingSemaphores& sems,
-    uint32_t pages_per_chunk) {
+    uint32_t pages_per_quarter) {
     KernelPlan plan;
-    plan.pages_per_chunk = pages_per_chunk;
+    plan.pages_per_quarter = pages_per_quarter;
     plan.ring_filled_addr = static_cast<uint32_t>(sems.filled.address());
     plan.ring_freed_addr = static_cast<uint32_t>(sems.freed.address());
     plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
@@ -352,7 +353,7 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
                  coord,
                  placement,
                  l1,
-                 make_kernel_plan(operation_attributes, tensor_args, coord, sems, fwd.pages_per_chunk),
+                 make_kernel_plan(operation_attributes, tensor_args, coord, sems, fwd.pages_per_quarter),
                  dram)});
     }
     return workload_descriptor;

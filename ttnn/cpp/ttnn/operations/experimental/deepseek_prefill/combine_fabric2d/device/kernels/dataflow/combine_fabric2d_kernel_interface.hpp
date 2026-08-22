@@ -74,7 +74,7 @@ struct DramBuffers {
 struct KernelPlan {
     StreamId stream = 0;
     uint32_t my_expert_base = 0;
-    uint32_t pages_per_chunk = 0;
+    uint32_t pages_per_quarter = 0;
     uint32_t ring_filled_addr = 0;
     uint32_t ring_freed_addr = 0;
     uint32_t fwd_arrived_addr = 0;
@@ -102,6 +102,8 @@ constexpr uint32_t META_PAD_STRIDE = 64;
 
 // Words per assignment in the reader's assignment block: [dst_chip_id, dst_row, split_idx, split_count].
 constexpr uint32_t ASSIGNMENT_WORDS = 4;
+// Words per chunk descriptor: [origin_row, dst_row, split_idx, split_count].
+constexpr uint32_t CHUNK_WORDS = 4;
 // Marks a schedule entry as "relay forwarding chunk k" rather than "own assignment k".
 constexpr uint32_t SCHED_FWD = 0x80000000u;
 
@@ -114,7 +116,7 @@ constexpr uint32_t FORWARDING_METADATA_SIZE = 64;
 // fills it, the sender consumes it. All uint64_t so the sender needs no sub-word loads.
 struct FwdMetadata {
     uint64_t final_addr;  // destination DRAM address on the FINAL destination chip
-    uint64_t dst_chip;    // final destination chip id; SENTINEL_DST_CHIP marks a sentinel
+    uint64_t dst_chip;    // final destination chip id
     uint64_t cmd;
     uint64_t this_addr;  // the address THIS hop writes to
 };
@@ -134,9 +136,9 @@ static_assert(offsetof(FwdMetadata, this_addr) == 3 * sizeof(uint64_t));
 constexpr uint64_t CMD_END = 0;  // end of stream; the slot carries no token
 constexpr uint64_t CMD_FINAL_WRITE = 1;
 constexpr uint64_t CMD_FORWARD = 2;
-
-// A sentinel carries no usable token; it marks the end of a forwarding chunk. UINT64_MAX can never collide
-// with a real chip id.
-constexpr uint64_t SENTINEL_DST_CHIP = UINT64_MAX;
+// A forward that also ends a chunk. The sender bumps the downstream reader's arrival counter right after
+// sending it, because that reader is waiting on exactly this chunk's pages and the residual of a partial
+// bump batch would otherwise sit uncounted until end of stream — which, on a ring, is a deadlock.
+constexpr uint64_t CMD_FORWARD_END = 3;
 
 }  // namespace cmbf2d
