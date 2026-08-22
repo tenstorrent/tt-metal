@@ -20,7 +20,7 @@ learned to distrust. Two questions have to be answered together:
      solve**, not a numerical shortcut — the error is in the trajectory, not the
      arithmetic, so PCC against the 10-step result is the honest metric.
 
-The bounty asks for this experiment directly: *"optimize iterative refinement process /
+The issue asks for this experiment directly: *"optimize iterative refinement process /
 consider approximations for faster inference"*. It does not say the approximation is
 acceptable, which is what this measures.
 

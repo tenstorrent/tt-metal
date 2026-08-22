@@ -452,7 +452,7 @@ stage.
 ## Three parts side by side
 
 Same commit, same tests, same utterance — 164 tokens producing 3.27 s of audio, on all three parts.
-Wormhole is the architecture the bounty names (*"N150 or N300"*), so it gets a column rather than a
+Wormhole is the architecture the issue names (*"N150 or N300"*), so it gets a column rather than a
 footnote; the second Blackhole board is there because `p150a` became unreachable partway through and
 the substitution is worth being explicit about rather than quietly making.
 
@@ -896,7 +896,7 @@ the 32 KB a single-model test uses — failing part-way through the *second* utt
 `Not enough space to allocate 480 B L1_SMALL buffer`. Zero-shot needs 128 KB; cross-lingual needs
 256 KB, because its prompt is 1289 mel frames against 326.
 
-**Persist the JIT cache across runs.** Mounting `/root/.cache/tt-metal-cache` took the first
+**Persist the JIT cache across runs.** Mounting `~/.cache/tt-metal-cache` took the first
 utterance from `161.7 s` to `14.8 s` wall. Every distinct sequence length is a fresh compile.
 
 ## Perf coverage
@@ -918,7 +918,7 @@ Source suites: `tests/perf/`, `tests/e2e/`, `tests/pcc/`
 ## Tensor parallelism — measured, and it does not move the needle
 
 Tried on `2026-08-18`: combining the `COSYVOICE_FF2_GRID` finding above with the tensor-parallel
-decoder prototype (2-chip Megatron sharding of the AR decoder, `tt-bounty/tt-metal/05/probe_tp_decode.py`
+decoder prototype (2-chip Megatron sharding of the AR decoder, `probe_tp_decode.py`
 — a probe, not shipped code). TP's own value stands on its own from an earlier session (`1.18×` on
 the decode step, `PCC 0.99994`) and is unaffected by this result. The question was narrower: does the
 core-grid win from earlier in this document *also* apply once TP has already sharded the same linear.
@@ -952,4 +952,4 @@ justifies. Having sharded once, there is almost nothing left for the grid to sha
 worth roughly the `1.18×` measured on the decode step in isolation — real, and, transferred to the
 shipped decoder's current Wormhole baseline (`0.559` above), not enough on its own to reach `0.5`. It
 would not additionally benefit from `COSYVOICE_FF2_GRID`, so the two should not be quoted as if their
-gains stack. Raw sweep output: `tt-bounty/tt-metal/05/21_tp-ff2-grid-k2048.txt`.
+gains stack. Raw sweep output: `21_tp-ff2-grid-k2048.txt`.

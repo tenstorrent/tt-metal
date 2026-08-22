@@ -86,7 +86,7 @@ no bare `yaml.load` anywhere in the tree.
 * **No `subprocess`, by rule.** `gen_golden.py` records the CosyVoice commit by reading
   `.git/HEAD` (and `packed-refs`, when the ref has been packed) rather than by calling `git`.
   The argv-list form is *not* sufficient grounds to reintroduce one: it rules out shell
-  metacharacters, but the path arrives from `--cosyvoice-root`/`$COSYVOICE_ROOT`, and `git`
+  metacharacters, but the path arrives from `--cosyvoice-root`/`$COSYVOICE_REPO`, and `git`
   parses a value beginning with `-` as an option rather than a directory. No child process
   means no argument vector to inject into.
 * `module.eval()` in `export_weights.py` and `eval_wer_sim.py` is `torch.nn.Module.eval()`, the
@@ -100,16 +100,16 @@ no bare `yaml.load` anywhere in the tree.
 Audit the pins:
 
 ```bash
-VIRTUAL_ENV=/mnt/cosyvoice_env uv pip install pip-audit
-/mnt/cosyvoice_env/bin/python -m pip_audit
+VIRTUAL_ENV=$COSYVOICE_ENV uv pip install pip-audit
+$COSYVOICE_ENV/bin/python -m pip_audit
 ```
 
 Check that a pin change has not moved the reference — the step that makes a bump safe to take,
 and the one worth repeating before any future bump:
 
 ```bash
-export PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS
-/mnt/cosyvoice_env/bin/python scripts/gen_golden.py --mode zero_shot --out /tmp/golden-check
+export PYTHONPATH=$COSYVOICE_REPO:$COSYVOICE_REPO/third_party/Matcha-TTS
+$COSYVOICE_ENV/bin/python scripts/gen_golden.py --mode zero_shot --out /tmp/golden-check
 ```
 
 Then PCC every array in `/tmp/golden-check/*.npz` against `tests/golden/`. A bump that reproduces
