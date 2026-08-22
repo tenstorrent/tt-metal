@@ -76,17 +76,19 @@ def run_rms_trace_deepseek(
 
     ccl_semaphore_handles = ttnn.create_global_semaphore(mesh_device, input_shard_grid, 0)
 
+    # Stats buffer: one E(x^2) tile per device on the cluster axis, replicated so every device holds
+    # the full width. Passing stats=None instead lets the op allocate this scratch itself.
     ag_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
-            32,
+            num_devices * 32,
         ),
         core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    ag_shape = [1, 1, 32, num_devices]
+    ag_shape = [1, 1, 32, num_devices * 32]
     stats_tensor = torch.zeros(ag_shape, dtype=torch.bfloat16)
     tt_stats = ttnn.from_torch(
         stats_tensor,
@@ -94,9 +96,7 @@ def run_rms_trace_deepseek(
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         memory_config=ag_memory_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(3, None), mesh_shape=list(ttnn.MeshShape(num_devices, 1))
-        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     if output_shard_grid is None:
@@ -310,17 +310,19 @@ def run_rms_trace(
 
     ccl_semaphore_handles = ttnn.create_global_semaphore(mesh_device, input_shard_grid, 0)
 
+    # Stats buffer: one E(x^2) tile per device on the cluster axis, replicated so every device holds
+    # the full width. Passing stats=None instead lets the op allocate this scratch itself.
     ag_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
-            128,
+            num_devices * 32,
         ),
         core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    ag_shape = [1, 1, 32, 256]
+    ag_shape = [1, 1, 32, num_devices * 32]
     stats_tensor = torch.zeros(ag_shape, dtype=torch.bfloat16)
     tt_stats = ttnn.from_torch(
         stats_tensor,
@@ -328,9 +330,7 @@ def run_rms_trace(
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         memory_config=ag_memory_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3), mesh_shape=list(ttnn.MeshShape(1, num_devices))
-        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     output_pad_width = math.ceil(padded_dim_per_core / num_devices / 32) * 32
@@ -591,17 +591,19 @@ def run_rms_trace_qwen(
 
     ccl_semaphore_handles = ttnn.create_global_semaphore(mesh_device, input_shard_grid, 0)
 
+    # Stats buffer: one E(x^2) tile per device on the cluster axis, replicated so every device holds
+    # the full width. Passing stats=None instead lets the op allocate this scratch itself.
     ag_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
-            128,
+            num_devices * 32,
         ),
         core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))}),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    ag_shape = [1, 1, 32, 160]
+    ag_shape = [1, 1, 32, num_devices * 32]
     stats_tensor = torch.zeros(ag_shape, dtype=torch.bfloat16)
     tt_stats = ttnn.from_torch(
         stats_tensor,
@@ -609,9 +611,7 @@ def run_rms_trace_qwen(
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         memory_config=ag_memory_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3), mesh_shape=list(ttnn.MeshShape(1, num_devices))
-        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     output_pad_width = math.ceil(padded_dim_per_core / num_devices / 32) * 32
@@ -883,13 +883,14 @@ def run_rms_fuse_impl_deepseek(
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, input_shard_grid, 0) for _ in range(num_iters)]
 
     # Stats buffer must use single-core sharding so stats.padded_shape[-1] = num_devices * TILE_WIDTH.
-    # fused_rmsnorm_post_all_gather infers num_distributed_devices = stats.padded_shape[-1] / TILE_WIDTH;
-    # if we shard over input_shard_grid, padded_shape[-1] scales with num_cores and the kernel gets wrong
-    # num_devices, skewing RMS scaling and failing PCC on multi-device. Match run_rms_trace_deepseek.
+    # Stats buffer: one E(x^2) tile per device on the cluster axis, replicated so every device holds
+    # the full width, on a single core. Sharding it over input_shard_grid instead would give each core
+    # a fraction of a tile and undersize the cb_stats bank. Passing stats=None instead lets the op
+    # allocate this scratch itself.
     ag_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
-            32,
+            num_devices * 32,
         ),
         core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
         strategy=ttnn.ShardStrategy.WIDTH,
@@ -903,7 +904,7 @@ def run_rms_fuse_impl_deepseek(
         else ttnn.bfloat16
     )
     stats_torch_dtype = torch.float32 if stats_dtype == ttnn.float32 else torch.bfloat16
-    ag_shape = [1, 1, 32, num_devices]
+    ag_shape = [1, 1, 32, num_devices * 32]
     stats_tensor = torch.ones(ag_shape, dtype=stats_torch_dtype)
     tt_stats = ttnn.from_torch(
         stats_tensor,
@@ -911,9 +912,7 @@ def run_rms_fuse_impl_deepseek(
         layout=ttnn.TILE_LAYOUT,
         dtype=stats_dtype,
         memory_config=ag_memory_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(3, None), mesh_shape=list(ttnn.MeshShape(num_devices, 1))
-        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     if output_shard_grid is None:
@@ -1102,17 +1101,19 @@ def run_rms_fuse_impl(
         inplace=False,
     )
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, input_shard_grid, 0) for _ in range(num_iters)]
+    # Stats buffer: one E(x^2) tile per device on the cluster axis, replicated so every device holds
+    # the full width. Passing stats=None instead lets the op allocate this scratch itself.
     ag_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
-            128,
+            num_devices * 32,
         ),
         core_grid=input_shard_grid,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    ag_shape = [1, 1, 32, 128]
+    ag_shape = [1, 1, 32, num_devices * 32]
     stats_tensor = torch.ones(ag_shape, dtype=torch.bfloat16)
     tt_stats = ttnn.from_torch(
         stats_tensor,
@@ -1120,9 +1121,7 @@ def run_rms_fuse_impl(
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         memory_config=ag_memory_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3), mesh_shape=list(ttnn.MeshShape(1, num_devices))
-        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     output_pad_width = math.ceil(padded_dim_per_core / num_devices / 32) * 32
     if output_shard_grid is None:
@@ -1296,17 +1295,19 @@ def run_rms_fuse_impl_qwen(
         inplace=False,
     )
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, input_shard_grid, 0) for _ in range(num_iters)]
+    # Stats buffer: one E(x^2) tile per device on the cluster axis, replicated so every device holds
+    # the full width. Passing stats=None instead lets the op allocate this scratch itself.
     ag_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
-            128,
+            num_devices * 32,
         ),
         core_grid=input_shard_grid,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    ag_shape = [1, 1, 32, 128]
+    ag_shape = [1, 1, 32, num_devices * 32]
     stats_tensor = torch.ones(ag_shape, dtype=torch.bfloat16)
     tt_stats = ttnn.from_torch(
         stats_tensor,
@@ -1314,9 +1315,7 @@ def run_rms_fuse_impl_qwen(
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         memory_config=ag_memory_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3), mesh_shape=list(ttnn.MeshShape(1, num_devices))
-        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     output_pad_width = math.ceil(padded_dim_per_core / num_devices / 32) * 32
     if output_shard_grid is None:
