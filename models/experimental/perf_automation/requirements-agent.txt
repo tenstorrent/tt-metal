@@ -1,0 +1,22 @@
+# Python dependencies for the agentic perf-optimization workflow (perf_automation).
+# Install into the tt-metal python_env venv:
+#   source /localdev/gtobar/local_env.sh
+#   uv pip install -r models/experimental/perf_automation/requirements-agent.txt
+
+# --- Claude Agent SDK (lead agent + sub-agents, in-process MCP tools) ---
+claude-agent-sdk==0.2.95
+
+# --- The in-process MCP servers (perf_mcp, perf_test_mcp) import mcp.server.fastmcp ---
+# PIN, NOT A FLOOR. mcp 2.0.0 relocated FastMCP out of `mcp.server.fastmcp`, so a fresh install
+# picks up 2.x and every MCP server here dies at import. That failure is invisible from the outside:
+# the perf-test agent simply loses its run_perf_test tool, writes a test it cannot execute, and gives
+# up with "agentic builder did not converge" -- which reads as a model problem and costs an hour to
+# trace back to a dependency. Measured 2026-08-15 on a fresh venv.
+mcp>=1.0,<2
+
+# --- Credentials: load .env.agent as the sole credential source (PLAN section 3.1) ---
+python-dotenv>=1.0.0
+
+# --- Profiling refine stage: CSV->CSV per-op report (PLAN section 7.4 stage 2) ---
+# Upstream: https://github.com/tenstorrent/tt-perf-report (published to PyPI)
+tt-perf-report==1.2.2
