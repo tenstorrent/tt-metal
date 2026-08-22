@@ -253,7 +253,6 @@ def weight_bytes(
     unit: str = "token",
     overrides=(),
     default_device_dtype: str = "",
-    streamed_sections=None,
 ) -> dict:
     """Bytes streamed per unit of work, per tensor, from the checkpoint's own headers.
 
@@ -262,22 +261,8 @@ def weight_bytes(
     tensor no pattern matches keeps its stored width (or ``default_device_dtype`` when given), so the
     result is never better than what is actually known.
 
-    ``streamed_sections`` is the set of top-level checkpoint sections a unit of work actually reads,
-    as the caller derived it from stage_roots. When given, it REPLACES the _TOWER_ONLY name list: a
-    section outside it is not streamed per unit, whatever it is called. When absent the name list
-    still runs, so a caller that cannot supply the set is exactly as well off as before.
-
-    Why prefer it: _TOWER_ONLY matches names (`audio_tower`, `vision_tower`, `multi_modal_projector`,
-    ...) and a model naming its encoder something else has that encoder charged to every token, which
-    inflates the divisor and so the ceiling -- the direction that ends a run early believing it is at
-    the wall. stage_roots is derived from the stack depths this tool measured and the indices its own
-    generated test binds, so it is evidence rather than a guess about someone's naming. It is the
-    same quantity summary already uses per stage: "the model-level figure divides by the WHOLE
-    resident model, including towers the recurring stage never reads".
-
     Returns {bytes, tensors, skipped_lookup_bytes, by_pattern, shards} or {} when nothing was read.
     """
-    _streamed = {str(x) for x in (streamed_sections or ()) if str(x).strip()}
     d = Path(snapshot_dir or "")
     files = sorted(d.glob("*.safetensors")) if d.is_dir() else []
     if not files:
@@ -319,21 +304,7 @@ def weight_bytes(
                 width = dflt if dflt is not None else _STORED_WIDTHS.get(str(meta.get("dtype")), 2.0)
             b = n * width
             count += 1
-            if unit == "token" and _streamed:
-                # DERIVED, NOT NAMED. The section is the first dotted component -- the same one
-                # stage_roots and declared_sections key on, so there is one definition of "which
-                # tower" rather than a second that can drift.
-                #
-                # A NAME WITH NO SECTION IS KEPT. Flat checkpoints exist ("w", "weight"), and
-                # _checkpoint_tensor_sections -- where stage_roots' sections come from -- skips those
-                # names entirely, so no section set can ever contain them. Excluding them would drop
-                # real streamed weights from the divisor, which RAISES the ceiling: the direction
-                # that ends a run early believing it is at the wall. Erring the other way merely
-                # fails to bind.
-                _sec = str(name).split(".", 1)[0] if "." in str(name) else ""
-                if _sec and _sec not in _streamed:
-                    continue
-            elif unit == "token" and _TOWER_ONLY.search(name):
+            if unit == "token" and _TOWER_ONLY.search(name):
                 # Not streamed per token at all: an encoder pass is per image/clip. Not "skipped
                 # lookup" either -- that counter means "read one row of", which this is not.
                 continue
@@ -356,6 +327,60 @@ def weight_bytes(
         "shards": len(files),
         "unit": unit,
     }
+
+
+def untowered_sections(snapshot_dir, stage_roots: dict) -> list:
+    """Sections a NON-recurring stage runs that _TOWER_ONLY did not exclude. Empty when consistent.
+
+    DETECTION, NOT CORRECTION. _TOWER_ONLY keeps an encoder's parameters out of a per-token read set
+    by matching names (`audio_tower`, `vision_tower`, ...). It is a good list and it is still a list:
+    a model naming its encoder off-list has that encoder charged to every token, inflating the
+    divisor, lowering the ceiling, and so making the run look closer to the wall than it is -- the
+    direction that stops a run early.
+
+    What this does NOT do is fix it by substituting stage_roots for the name list. That was tried and
+    is worse: stage_roots names the section holding a stage's BLOCK STACK, and on any untied model
+    `lm_head` is a sibling of that stack, streamed every token and named by no stage_roots entry --
+    so excluding everything outside the map silently drops it (1.0 B params on gemma-3-12b-it). One
+    silent error traded for a larger one in the opposite direction.
+
+    So this only reports the disagreement, which needs no guess: stage_roots says a stage OTHER than
+    the recurring one runs out of section X -- that is derived from the checkpoint's own key
+    structure, not from anyone's naming -- while _TOWER_ONLY did not exclude X. Both statements are
+    evidence, and when they conflict a human can see it instead of the divisor quietly moving.
+
+    The honest fix is a measurement that does not exist yet: the profile records nothing about which
+    phase an op ran in ("_top_ops keys on (op_code, shape, memory)"), so there is no observation of
+    what a token actually read. Until buckets carry a stage, every route here is a guess, and the
+    least-bad guess is the one whose failure mode is known.
+    """
+    try:
+        _roots = {str(k).strip().lower(): str(v) for k, v in (stage_roots or {}).items() if v}
+        if not _roots:
+            return []
+        _recurring = {v for k, v in _roots.items() if k in ("decode", "prefill")}
+        _others = {v for k, v in _roots.items() if k not in ("decode", "prefill")} - _recurring
+        if not _others:
+            return []
+        d = Path(snapshot_dir or "")
+        files = sorted(d.glob("*.safetensors")) if d.is_dir() else []
+        _present = set()
+        for f in files:
+            try:
+                with open(f, "rb") as fh:
+                    n = struct.unpack("<Q", fh.read(8))[0]
+                    if 0 < n <= 200_000_000:
+                        for k in json.loads(fh.read(n)):
+                            if k != "__metadata__" and "." in str(k):
+                                _present.add(str(k).split(".", 1)[0])
+            except Exception:  # noqa: BLE001
+                continue
+        # A section only counts as missed if it is REALLY in this checkpoint and the list lets it
+        # through: `_TOWER_ONLY` is anchored to a name component, so testing "<section>." is the same
+        # question the byte walk asks of every tensor in it.
+        return sorted(x for x in _others if x in _present and not _TOWER_ONLY.search(x + "."))
+    except Exception:  # noqa: BLE001 -- a detector that raises must not cost a ceiling
+        return []
 
 
 def parse_overrides(spec: str):
