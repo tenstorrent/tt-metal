@@ -115,3 +115,69 @@
     # wh_galaxy_perf / bh_galaxy. The (4,8) cases stay in the suite and auto-skip here.
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+
+- name: TT-Transformers MLP module sweep
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/mlp
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_llmbox:
+      timeout: 24
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers RoPE module sweep
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rope
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_llmbox:
+      timeout: 4
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers RMSNorm module sweep
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rmsnorm
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_llmbox:
+      timeout: 10
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers attention module sweep
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d pytest --tb=short models/common/tests/modules/attention
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_llmbox:
+      timeout: 65
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers embedding module sweep
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d pytest --tb=short models/common/tests/modules/embedding
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_llmbox:
+      timeout: 18
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers LM head module sweep
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d pytest --tb=short models/common/tests/modules/lm_head
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_llmbox:
+      timeout: 10
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
