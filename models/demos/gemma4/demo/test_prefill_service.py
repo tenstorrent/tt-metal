@@ -322,3 +322,30 @@ def test_preset_submit_shrinks_to_server_token_count(monkeypatch):
     assert result["prompt_tokens"] <= 100
     assert result["fit_attempts"] == 2
     assert result["prefix_fraction"] == len(calls[-1]) / 400
+
+
+def test_preset_submit_keeps_successful_token_overshoot(monkeypatch):
+    calls = []
+
+    def fake_submit(_service_url, prompt, request_id, _timeout):
+        calls.append(prompt)
+        return {"request_id": request_id, "status": "prefilled", "prompt_tokens": 104}
+
+    monkeypatch.setattr(prefill_harness, "submit_prefill", fake_submit)
+    preset = prefill_harness.PromptPreset("test", 200, "https://example.com/book.txt")
+
+    result = prefill_harness.submit_preset_prefill(
+        "http://service",
+        "x" * 100,
+        "req-1",
+        preset=preset,
+        context_len=100,
+        source_characters=400,
+        timeout=2,
+    )
+
+    assert result["status"] == "prefilled"
+    assert result["prompt_tokens"] == 104
+    assert result["context_overflow_tokens"] == 4
+    assert result["fit_attempts"] == 1
+    assert len(calls) == 1
