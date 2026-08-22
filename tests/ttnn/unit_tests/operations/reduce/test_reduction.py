@@ -107,7 +107,7 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
 # variance of N consecutive integers is (N^2 - 1) / 12 (population); with N=32 and Bessel's
 # correction, sample variance = 32 * (32^2 - 1) / (12 * 31) = 88.0 exactly. Variance is
 # translation-invariant *and* sign-invariant, so neither adding a large offset to every
-# element nor flipping its sign should change the answer.the scalar is applied after the
+# element nor flipping its sign should change the answer. The scalar is applied after the
 # reduction as var(s*x) = s^2 * var(x).
 # The test covers all three reduction kernels (H, W, HW).
 @pytest.mark.parametrize("scalar", [1.0, 0, -1.0])
