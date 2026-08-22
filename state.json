@@ -1,6 +1,6 @@
 {
   "last_run": "2026-08-22",
-  "run_id": "32572948806",
+  "run_id": "32590634465",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -253,7 +253,11 @@
       "label": "bug",
       "date": "2026-08-22",
       "note": "KV-cache remount final-chunk write exceeds max_seq_len"
-    }
+    },
+    "54045": "bug",
+    "54048": "bug",
+    "54047": "ci-bug",
+    "54044": "bug"
   },
   "issues_commented": {
     "53922": {
@@ -262,9 +266,15 @@
         "bug"
       ],
       "note": "confirmed root cause vs current main; fix has open perf tradeoff, left for maintainer"
-    }
+    },
+    "54045": "2026-08-22: confirmed div_sfpu double-rounding claim against current ckernel_sfpu_binop_with_unary.h:41-43"
   },
   "run_history": [
+    {
+      "run_id": "32590634465",
+      "date": "2026-08-22",
+      "summary": "Labeled 54044/54045/54047/54048 (bug/ci-bug); commented on 54045 confirming div_sfpu root cause against current source; re-verified tracked PRs 53478/53113/51868/52106 unchanged; updated Monthly Activity issue 51865."
+    },
     {
       "run_id": "32572948806",
       "date": "2026-08-22",
