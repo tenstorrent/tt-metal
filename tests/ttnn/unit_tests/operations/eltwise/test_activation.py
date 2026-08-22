@@ -231,6 +231,56 @@ def test_softplus(device, h, w, beta, threshold):
     run_activation_softplus_test(device, h, w, beta, threshold, ttnn.softplus)
 
 
+def _bfloat16_neighbour(value, steps):
+    """Return ``value`` moved ``steps`` bfloat16 ULP away from zero (``steps`` may be negative)."""
+    bits = torch.tensor(value, dtype=torch.bfloat16).view(torch.int16)
+    return (bits + steps).view(torch.bfloat16).item()
+
+
+def run_softplus_boundary_test(device, beta, threshold, pcc=0.99):
+    """``beta * x == threshold`` must evaluate softplus, not the linear fallback.
+
+    torch reverts to the linear function only when ``beta * x > threshold`` holds strictly, so the
+    boundary point itself still takes the softplus path. The reference is computed from torch
+    directly rather than through ``ttnn.get_golden_function(ttnn.softplus)``, which drops ``beta``
+    and ``threshold`` and would otherwise compare against the defaults.
+
+    ``beta`` and ``threshold`` are powers of two so that ``threshold / beta`` is exact in bfloat16
+    and ``beta * x`` reproduces ``threshold`` exactly, which is what puts an element on the
+    boundary at all.
+    """
+    boundary = threshold / beta
+    assert boundary == torch.tensor(boundary, dtype=torch.bfloat16).item(), "boundary must be exact in bf16"
+
+    # One bf16 step either side pins the split: below and on the boundary are softplus, above is linear.
+    values = [_bfloat16_neighbour(boundary, -1), boundary, _bfloat16_neighbour(boundary, 1)]
+    torch_input_tensor = torch.tensor(values, dtype=torch.bfloat16).repeat(64, 32)
+
+    torch_output_tensor = torch.nn.functional.softplus(torch_input_tensor, beta=beta, threshold=threshold)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.softplus(input_tensor, beta=beta, threshold=threshold)
+    output_tensor = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)))
+
+    # The regression assertion is tolerance-free. softplus(x) is strictly greater than x, so on the
+    # boundary a result equal to the input can only mean the linear branch was taken. Selecting the
+    # boundary column rather than checking the whole tile keeps a localised error from being averaged
+    # away, which is also why the accuracy check below cannot be the one carrying the regression.
+    on_boundary = output_tensor[:, 1::3]
+    assert not torch.equal(
+        on_boundary, torch_input_tensor[:, 1::3]
+    ), f"softplus took the linear branch at beta*x == threshold (beta={beta}, threshold={threshold})"
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+@pytest.mark.parametrize("beta, threshold", [(2, 1), (1, 2), (0.5, 1), (4, 1), (1, 0.5)])
+def test_softplus_threshold_boundary(device, beta, threshold):
+    run_softplus_boundary_test(device, beta, threshold)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_tanhshrink(device, h, w):
