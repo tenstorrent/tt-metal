@@ -1065,3 +1065,147 @@ def test_conv1d_depthwise_default_route_long_seq(device):
         packer_l1_acc=True,
         pcc=0.999,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_conv1d_depthwise_dram_channel_chunk(device):
+    """Depthwise (groups == C == 10240) GDN prefill shape (K=4, T=12, pad=3): the channel
+    dimension alone exceeds per-core L1. The weight block is width-independent, so DRAM
+    width slicing cannot relieve it and the auto-slicer fatals ("could not find valid slice
+    configuration"). The conv2d DRAM path now chunks the channel dimension into per-chunk
+    convs that fit L1 and stitches the outputs, so this stock conv1d call - DRAM ROW_MAJOR
+    input, host weight and bias, no slice_config - completes and matches golden."""
+    C, K, T, PAD = 10240, 4, 12, 3
+    torch.manual_seed(0)
+    torch_input_ncl = torch.randn(1, C, T, dtype=torch.bfloat16).float()
+    torch_weight = torch.randn(C, 1, K, dtype=torch.bfloat16).float()
+    torch_bias = torch.randn(1, 1, 1, C, dtype=torch.bfloat16).float()
+    golden = torch.nn.functional.conv1d(
+        torch_input_ncl,
+        torch_weight,
+        bias=torch_bias.reshape(-1),
+        stride=1,
+        padding=PAD,
+        dilation=1,
+        groups=C,
+    )
+
+    input_tt = ttnn.from_torch(
+        torch_input_ncl.permute(0, 2, 1),  # NLC for conv1d
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    weight_tt = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    bias_tt = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    conv_config = ttnn.Conv1dConfig(
+        weights_dtype=ttnn.bfloat16,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        deallocate_activation=True,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    tt_out, out_length = ttnn.conv1d(
+        input_tensor=input_tt,
+        weight_tensor=weight_tt,
+        device=device,
+        in_channels=C,
+        out_channels=C,
+        bias_tensor=bias_tt,
+        kernel_size=K,
+        stride=1,
+        padding=PAD,
+        dilation=1,
+        batch_size=1,
+        input_length=T,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        groups=C,
+        dtype=ttnn.bfloat16,
+        return_output_dim=True,
+    )
+
+    out = ttnn.to_torch(tt_out).reshape(1, out_length, C).permute(0, 2, 1)
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(out, golden, pcc=0.999)
+    print(pcc_msg)
+    assert passing, pcc_msg
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_conv1d_depthwise_l1full_channel_chunk(device):
+    """Same depthwise GDN shape as test_conv1d_depthwise_dram_channel_chunk, but with a
+    forced L1_FULL slice config (the form the qwen36 GDN prefill uses to stay trace-safe):
+    the single full call still does not fit L1, so conv2d reroutes L1_FULL to the DRAM
+    channel-chunk path instead of fataling ("Conv2D L1_FULL: single call does not fit L1;
+    routing to the DRAM path"). Receipt for these exact kwargs (same
+    C/K/T/dtype/groups/shard/slice): standalone mesh-handoff run i-unchunk-probe1.log,
+    "CANDIDATE L1FULL_forced: PASS pcc=1.000003 ... chunked 32x320"."""
+    C, K, T, PAD = 10240, 4, 12, 3
+    torch.manual_seed(0)
+    torch_input_ncl = torch.randn(1, C, T, dtype=torch.bfloat16).float()
+    torch_weight = torch.randn(C, 1, K, dtype=torch.bfloat16).float()
+    torch_bias = torch.randn(1, 1, 1, C, dtype=torch.bfloat16).float()
+    golden = torch.nn.functional.conv1d(
+        torch_input_ncl,
+        torch_weight,
+        bias=torch_bias.reshape(-1),
+        stride=1,
+        padding=PAD,
+        dilation=1,
+        groups=C,
+    )
+
+    input_tt = ttnn.from_torch(
+        torch_input_ncl.permute(0, 2, 1),  # NLC for conv1d
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    weight_tt = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    bias_tt = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    conv_config = ttnn.Conv1dConfig(
+        weights_dtype=ttnn.bfloat16,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        deallocate_activation=True,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    tt_out, out_length = ttnn.conv1d(
+        input_tensor=input_tt,
+        weight_tensor=weight_tt,
+        device=device,
+        in_channels=C,
+        out_channels=C,
+        bias_tensor=bias_tt,
+        kernel_size=K,
+        stride=1,
+        padding=PAD,
+        dilation=1,
+        batch_size=1,
+        input_length=T,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        groups=C,
+        dtype=ttnn.bfloat16,
+        slice_config=ttnn.Conv2dL1FullSliceConfig,
+        return_output_dim=True,
+    )
+
+    out = ttnn.to_torch(tt_out).reshape(1, out_length, C).permute(0, 2, 1)
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(out, golden, pcc=0.999)
+    print(pcc_msg)
+    assert passing, pcc_msg
