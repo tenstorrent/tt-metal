@@ -4,13 +4,10 @@
 
 #pragma once
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <span>
 #include <tt_stl/assert.hpp>
-#include <vector>
 
 namespace ttnn::operations::wavelet {
 
@@ -107,43 +104,6 @@ inline void validate_lwt_2d_tiling_contract(const Lwt2DTilingContract& contract)
     TT_FATAL(contract.padding_precedes_split, "2D input padding must be applied before split2d");
     validate_tiled_shape_2d(contract.input, "2D LWT input");
     validate_tiled_shape_2d(contract.band, "2D LWT output band");
-}
-
-[[nodiscard]] inline std::vector<float> zero_pad_row_major_to_tiles_2d(
-    const std::span<const float> input, const Shape2D logical_shape) {
-    const TiledShape2D tiled_shape = TiledShape2D::from_logical(logical_shape);
-    const size_t logical_elements = checked_shape_area_2d(logical_shape, "2D input");
-    TT_FATAL(
-        input.size() == logical_elements,
-        "2D input has {} elements but logical shape {}x{} requires {}",
-        input.size(),
-        logical_shape.height,
-        logical_shape.width,
-        logical_elements);
-    std::vector<float> padded(checked_shape_area_2d(tiled_shape.storage, "2D padded input"), 0.0F);
-    for (size_t row = 0; row < logical_shape.height; ++row) {
-        std::copy_n(
-            input.begin() + static_cast<std::ptrdiff_t>(row * logical_shape.width),
-            logical_shape.width,
-            padded.begin() + static_cast<std::ptrdiff_t>(row * tiled_shape.storage.width));
-    }
-    return padded;
-}
-
-[[nodiscard]] inline bool has_zero_tile_padding_2d(const std::span<const float> padded, const TiledShape2D& shape) {
-    validate_tiled_shape_2d(shape, "2D padded input");
-    if (padded.size() != checked_shape_area_2d(shape.storage, "2D padded input")) {
-        return false;
-    }
-    for (size_t row = 0; row < shape.storage.height; ++row) {
-        for (size_t column = 0; column < shape.storage.width; ++column) {
-            if ((row >= shape.logical.height || column >= shape.logical.width) &&
-                padded[row * shape.storage.width + column] != 0.0F) {
-                return false;
-            }
-        }
-    }
-    return true;
 }
 
 }  // namespace ttnn::operations::wavelet

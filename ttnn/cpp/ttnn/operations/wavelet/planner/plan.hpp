@@ -247,10 +247,7 @@ inline void route_terminal_scales_to_final_dram(std::vector<LiftingStepRoute>& r
 
 template <typename Scheme>
 [[nodiscard]] LiftingForwardPlan make_forward_lifting_plan(
-    const SignalBuffer& input,
-    uint64_t initial_even_addr,
-    uint64_t initial_odd_addr,
-    const BoundaryMode boundary_mode = BoundaryMode::kSymmetric) {
+    const SignalBuffer& input, const BoundaryMode boundary_mode = BoundaryMode::kSymmetric) {
     static_assert(Scheme::tap_size > 0, "Static lifting schemes must have a positive tap size");
     static_assert(Scheme::num_steps > 0, "Static lifting schemes must have at least one step");
     TT_FATAL(input.element_size_bytes == sizeof(float), "Forward lifting plan currently supports fp32 only");
@@ -260,11 +257,8 @@ template <typename Scheme>
         input.length);
 
     const uint32_t wavelet_pad = static_cast<uint32_t>(Scheme::tap_size - 1);
-    const PadSplit1DLayout preprocess_layout = make_pad_split_1d_layout(
-        input,
-        initial_even_addr,
-        initial_odd_addr,
-        Pad1DConfig{.mode = boundary_mode, .left = wavelet_pad, .right = wavelet_pad});
+    const PadSplit1DLayout preprocess_layout =
+        make_pad_split_1d_layout(input, Pad1DConfig{.mode = boundary_mode, .left = wavelet_pad, .right = wavelet_pad});
 
     const SignalBuffer initial_even = preprocess_layout.output.even;
     const SignalBuffer initial_odd = preprocess_layout.output.odd;

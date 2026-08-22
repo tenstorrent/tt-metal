@@ -19,27 +19,6 @@ enum class ExtensionOperation : uint8_t {
     kAntireflect = 4,
 };
 
-// A compact, allocation-free description of one extended 1D access.
-//
-// kSample/kNegatedSample use source_index. kSmooth uses source_index as the
-// edge, auxiliary_index as its interior neighbour, and distance as the
-// positive distance beyond the edge. kAntireflect uses source_index as the
-// whole-sample-reflected source, period_quotient for repeated periods, and
-// reflected to select the right-edge reflection formula.
-struct ExtendedIndex {
-    uint32_t source_index{0};
-    uint32_t auxiliary_index{0};
-    int64_t period_quotient{0};
-    uint64_t distance{0};
-    ExtensionOperation operation{ExtensionOperation::kZero};
-    bool reflected{false};
-};
-
-struct SignedExtensionPeriod {
-    int64_t quotient{0};
-    uint64_t remainder{0};
-};
-
 struct ExtendedIndexI32 {
     uint32_t source_index{0};
     uint32_t auxiliary_index{0};
@@ -86,29 +65,6 @@ make_symmetric_index_i32(const int32_t index, const uint32_t length) noexcept {
     const uint32_t period = 2U * length;
     const uint32_t phase = extension_positive_mod_i32(index, period);
     return phase < length ? phase : period - 1U - phase;
-}
-
-[[nodiscard]] constexpr WAVELET_EXTENSION_ALWI SignedExtensionPeriod
-decompose_extension_period(const int64_t index, const uint64_t period) noexcept {
-    if (period == 0) {
-        return {};
-    }
-    const int64_t signed_period = static_cast<int64_t>(period);
-    int64_t quotient = index / signed_period;
-    int64_t remainder = index % signed_period;
-    if (remainder < 0) {
-        remainder += signed_period;
-        --quotient;
-    }
-    return SignedExtensionPeriod{
-        .quotient = quotient,
-        .remainder = static_cast<uint64_t>(remainder),
-    };
-}
-
-[[nodiscard]] WAVELET_EXTENSION_ALWI uint32_t
-extension_positive_mod(const int64_t index, const uint32_t length) noexcept {
-    return static_cast<uint32_t>(decompose_extension_period(index, length).remainder);
 }
 
 [[nodiscard]] inline __attribute__((noinline)) AntireflectIndexI32
@@ -184,10 +140,6 @@ struct BoundaryExtensionPolicy;
 
 template <>
 struct BoundaryExtensionPolicy<BoundaryMode::kZero> {
-    [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndex make(const int64_t, const uint32_t) noexcept {
-        return {};
-    }
-
     [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndexI32 make_i32(const int32_t, const uint32_t) noexcept {
         return {};
     }
@@ -195,14 +147,6 @@ struct BoundaryExtensionPolicy<BoundaryMode::kZero> {
 
 template <>
 struct BoundaryExtensionPolicy<BoundaryMode::kConstant> {
-    [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndex
-    make(const int64_t index, const uint32_t length) noexcept {
-        return ExtendedIndex{
-            .source_index = index < 0 ? 0U : length - 1U,
-            .operation = ExtensionOperation::kSample,
-        };
-    }
-
     [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndexI32
     make_i32(const int32_t index, const uint32_t length) noexcept {
         return ExtendedIndexI32{
@@ -214,14 +158,6 @@ struct BoundaryExtensionPolicy<BoundaryMode::kConstant> {
 
 template <>
 struct BoundaryExtensionPolicy<BoundaryMode::kPeriodic> {
-    [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndex
-    make(const int64_t index, const uint32_t length) noexcept {
-        return ExtendedIndex{
-            .source_index = extension_positive_mod(index, length),
-            .operation = ExtensionOperation::kSample,
-        };
-    }
-
     [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndexI32
     make_i32(const int32_t index, const uint32_t length) noexcept {
         return ExtendedIndexI32{
@@ -233,16 +169,6 @@ struct BoundaryExtensionPolicy<BoundaryMode::kPeriodic> {
 
 template <>
 struct BoundaryExtensionPolicy<BoundaryMode::kSymmetric> {
-    [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndex
-    make(const int64_t index, const uint32_t length) noexcept {
-        const uint64_t period = 2U * static_cast<uint64_t>(length);
-        const uint64_t phase = decompose_extension_period(index, period).remainder;
-        return ExtendedIndex{
-            .source_index = phase < length ? static_cast<uint32_t>(phase) : static_cast<uint32_t>(period - 1U - phase),
-            .operation = ExtensionOperation::kSample,
-        };
-    }
-
     [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndexI32
     make_i32(const int32_t index, const uint32_t length) noexcept {
         return ExtendedIndexI32{
@@ -254,35 +180,6 @@ struct BoundaryExtensionPolicy<BoundaryMode::kSymmetric> {
 
 template <>
 struct BoundaryExtensionPolicy<BoundaryMode::kAntisymmetric> {
-    [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndex
-    make(const int64_t index, const uint32_t length) noexcept {
-        const uint64_t segment = length;
-        const uint64_t period = 4U * segment;
-        const uint64_t phase = decompose_extension_period(index, period).remainder;
-        if (phase < segment) {
-            return ExtendedIndex{
-                .source_index = static_cast<uint32_t>(phase),
-                .operation = ExtensionOperation::kSample,
-            };
-        }
-        if (phase < 2U * segment) {
-            return ExtendedIndex{
-                .source_index = static_cast<uint32_t>(2U * segment - 1U - phase),
-                .operation = ExtensionOperation::kNegatedSample,
-            };
-        }
-        if (phase < 3U * segment) {
-            return ExtendedIndex{
-                .source_index = static_cast<uint32_t>(phase - 2U * segment),
-                .operation = ExtensionOperation::kSample,
-            };
-        }
-        return ExtendedIndex{
-            .source_index = static_cast<uint32_t>(4U * segment - 1U - phase),
-            .operation = ExtensionOperation::kNegatedSample,
-        };
-    }
-
     [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndexI32
     make_i32(const int32_t index, const uint32_t length) noexcept {
         // The sign/reversal pattern repeats every two segments. Since length is
@@ -299,26 +196,6 @@ struct BoundaryExtensionPolicy<BoundaryMode::kAntisymmetric> {
 
 template <>
 struct BoundaryExtensionPolicy<BoundaryMode::kSmooth> {
-    [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndex
-    make(const int64_t index, const uint32_t length) noexcept {
-        // Defines the missing one sample edge slope as zero.
-        if (length == 1) {
-            return ExtendedIndex{
-                .source_index = 0,
-                .operation = ExtensionOperation::kSample,
-            };
-        }
-        const bool left = index < 0;
-        const uint64_t distance = left ? static_cast<uint64_t>(-(index + 1)) + 1U
-                                       : static_cast<uint64_t>(index) - static_cast<uint64_t>(length - 1U);
-        return ExtendedIndex{
-            .source_index = left ? 0U : length - 1U,
-            .auxiliary_index = left ? 1U : length - 2U,
-            .distance = distance,
-            .operation = ExtensionOperation::kSmooth,
-        };
-    }
-
     [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndexI32
     make_i32(const int32_t index, const uint32_t length) noexcept {
         const SmoothIndexI32 smooth = make_smooth_index_i32(index, length);
@@ -333,23 +210,6 @@ struct BoundaryExtensionPolicy<BoundaryMode::kSmooth> {
 
 template <>
 struct BoundaryExtensionPolicy<BoundaryMode::kReflect> {
-    [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndex
-    make(const int64_t index, const uint32_t length) noexcept {
-        if (length == 1) {
-            return ExtendedIndex{
-                .source_index = 0,
-                .operation = ExtensionOperation::kSample,
-            };
-        }
-        const uint64_t last = static_cast<uint64_t>(length - 1U);
-        const uint64_t period = 2U * last;
-        const uint64_t phase = decompose_extension_period(index, period).remainder;
-        return ExtendedIndex{
-            .source_index = phase <= last ? static_cast<uint32_t>(phase) : static_cast<uint32_t>(period - phase),
-            .operation = ExtensionOperation::kSample,
-        };
-    }
-
     [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndexI32
     make_i32(const int32_t index, const uint32_t length) noexcept {
         if (length == 1) {
@@ -370,27 +230,6 @@ struct BoundaryExtensionPolicy<BoundaryMode::kReflect> {
 
 template <>
 struct BoundaryExtensionPolicy<BoundaryMode::kAntireflect> {
-    [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndex
-    make(const int64_t index, const uint32_t length) noexcept {
-        if (length == 1) {
-            return ExtendedIndex{
-                .source_index = 0,
-                .operation = ExtensionOperation::kSample,
-            };
-        }
-        const uint64_t last = static_cast<uint64_t>(length - 1U);
-        const uint64_t period = 2U * last;
-        const SignedExtensionPeriod mapped = decompose_extension_period(index, period);
-        const bool reflected = mapped.remainder > last;
-        return ExtendedIndex{
-            .source_index =
-                reflected ? static_cast<uint32_t>(period - mapped.remainder) : static_cast<uint32_t>(mapped.remainder),
-            .period_quotient = mapped.quotient,
-            .operation = ExtensionOperation::kAntireflect,
-            .reflected = reflected,
-        };
-    }
-
     [[nodiscard]] static WAVELET_EXTENSION_ALWI ExtendedIndexI32
     make_i32(const int32_t index, const uint32_t length) noexcept {
         const AntireflectIndexI32 antireflect = make_antireflect_index_i32(index, length);
@@ -404,23 +243,6 @@ struct BoundaryExtensionPolicy<BoundaryMode::kAntireflect> {
 };
 
 }  // namespace detail
-
-template <BoundaryMode Mode>
-[[nodiscard]] WAVELET_EXTENSION_ALWI ExtendedIndex
-make_extended_index(const int64_t index, const uint32_t length) noexcept {
-    static_assert(is_supported_lwt_boundary_mode(Mode), "Unsupported padding mode");
-
-    if (length == 0) {
-        return {};
-    }
-    if (index >= 0 && static_cast<uint64_t>(index) < length) {
-        return ExtendedIndex{
-            .source_index = static_cast<uint32_t>(index),
-            .operation = ExtensionOperation::kSample,
-        };
-    }
-    return detail::BoundaryExtensionPolicy<Mode>::make(index, length);
-}
 
 template <BoundaryMode Mode>
 [[nodiscard]] WAVELET_EXTENSION_ALWI ExtendedIndexI32
@@ -437,77 +259,6 @@ make_extended_index_i32(const int32_t index, const uint32_t length) noexcept {
         };
     }
     return detail::BoundaryExtensionPolicy<Mode>::make_i32(index, length);
-}
-
-[[nodiscard]] WAVELET_EXTENSION_ALWI ExtendedIndex
-make_extended_index(const BoundaryMode mode, const int64_t index, const uint32_t length) noexcept {
-    switch (mode) {
-        case BoundaryMode::kZero: return make_extended_index<BoundaryMode::kZero>(index, length);
-        case BoundaryMode::kConstant: return make_extended_index<BoundaryMode::kConstant>(index, length);
-        case BoundaryMode::kSymmetric: return make_extended_index<BoundaryMode::kSymmetric>(index, length);
-        case BoundaryMode::kPeriodic: return make_extended_index<BoundaryMode::kPeriodic>(index, length);
-        case BoundaryMode::kAntisymmetric: return make_extended_index<BoundaryMode::kAntisymmetric>(index, length);
-        case BoundaryMode::kSmooth: return make_extended_index<BoundaryMode::kSmooth>(index, length);
-        case BoundaryMode::kAntireflect: return make_extended_index<BoundaryMode::kAntireflect>(index, length);
-        case BoundaryMode::kReflect: return make_extended_index<BoundaryMode::kReflect>(index, length);
-    }
-    return {};
-}
-
-template <typename SourceReader>
-[[nodiscard]] WAVELET_EXTENSION_ALWI float evaluate_extended_index(
-    const ExtendedIndex& extended, const uint32_t length, const SourceReader& read_source) noexcept {
-    switch (extended.operation) {
-        case ExtensionOperation::kZero: return 0.0F;
-        case ExtensionOperation::kSample: return read_source(extended.source_index);
-        case ExtensionOperation::kNegatedSample: return -read_source(extended.source_index);
-        case ExtensionOperation::kSmooth: {
-            const float edge = read_source(extended.source_index);
-            const float neighbor = read_source(extended.auxiliary_index);
-            return edge + static_cast<float>(extended.distance) * (edge - neighbor);
-        }
-        case ExtensionOperation::kAntireflect: {
-            const float source = read_source(extended.source_index);
-            const float first = read_source(0);
-            const float last = read_source(length - 1U);
-            const float base = extended.reflected ? 2.0F * last - source : source;
-            return base + (static_cast<float>(extended.period_quotient) * 2.0F) * (last - first);
-        }
-    }
-    return 0.0F;
-}
-
-template <BoundaryMode Mode, typename SourceReader>
-[[nodiscard]] WAVELET_EXTENSION_ALWI float evaluate_extended_index(
-    const ExtendedIndex& extended, const uint32_t length, const SourceReader& read_source) noexcept {
-    static_assert(is_supported_lwt_boundary_mode(Mode), "Unsupported signal-extension mode");
-    if constexpr (Mode == BoundaryMode::kZero) {
-        return extended.operation == ExtensionOperation::kZero ? 0.0F : read_source(extended.source_index);
-    } else if constexpr (
-        Mode == BoundaryMode::kConstant || Mode == BoundaryMode::kSymmetric || Mode == BoundaryMode::kReflect ||
-        Mode == BoundaryMode::kPeriodic) {
-        return read_source(extended.source_index);
-    } else if constexpr (Mode == BoundaryMode::kAntisymmetric) {
-        const float source = read_source(extended.source_index);
-        return extended.operation == ExtensionOperation::kNegatedSample ? -source : source;
-    } else if constexpr (Mode == BoundaryMode::kSmooth) {
-        if (extended.operation == ExtensionOperation::kSample) {
-            return read_source(extended.source_index);
-        }
-        const float edge = read_source(extended.source_index);
-        const float neighbor = read_source(extended.auxiliary_index);
-        return edge + static_cast<float>(extended.distance) * (edge - neighbor);
-    } else {
-        static_assert(Mode == BoundaryMode::kAntireflect);
-        if (extended.operation == ExtensionOperation::kSample) {
-            return read_source(extended.source_index);
-        }
-        const float source = read_source(extended.source_index);
-        const float first = read_source(0);
-        const float last = read_source(length - 1U);
-        const float base = extended.reflected ? 2.0F * last - source : source;
-        return base + (static_cast<float>(extended.period_quotient) * 2.0F) * (last - first);
-    }
 }
 
 template <typename SourceReader>
@@ -564,49 +315,6 @@ template <BoundaryMode Mode, typename SourceReader>
         const float last = read_source(length - 1U);
         const float base = extended.reflected ? 2.0F * last - source : source;
         return base + (static_cast<float>(extended.period_quotient) * 2.0F) * (last - first);
-    }
-}
-
-template <typename SourceIndexConsumer>
-WAVELET_EXTENSION_ALWI void visit_extended_source_indices(
-    const ExtendedIndex& extended, const uint32_t length, const SourceIndexConsumer& consume) noexcept {
-    switch (extended.operation) {
-        case ExtensionOperation::kZero: return;
-        case ExtensionOperation::kSample:
-        case ExtensionOperation::kNegatedSample: consume(extended.source_index); return;
-        case ExtensionOperation::kSmooth:
-            consume(extended.source_index);
-            consume(extended.auxiliary_index);
-            return;
-        case ExtensionOperation::kAntireflect:
-            consume(extended.source_index);
-            consume(0);
-            consume(length - 1U);
-            return;
-    }
-}
-
-template <BoundaryMode Mode, typename SourceIndexConsumer>
-WAVELET_EXTENSION_ALWI void visit_extended_source_indices(
-    const ExtendedIndex& extended, const uint32_t length, const SourceIndexConsumer& consume) noexcept {
-    static_assert(is_supported_lwt_boundary_mode(Mode), "Unsupported signal-extension mode");
-    if constexpr (Mode == BoundaryMode::kZero) {
-        if (extended.operation != ExtensionOperation::kZero) {
-            consume(extended.source_index);
-        }
-    } else if constexpr (Mode == BoundaryMode::kSmooth) {
-        consume(extended.source_index);
-        if (extended.operation != ExtensionOperation::kSample) {
-            consume(extended.auxiliary_index);
-        }
-    } else if constexpr (Mode == BoundaryMode::kAntireflect) {
-        consume(extended.source_index);
-        if (extended.operation != ExtensionOperation::kSample) {
-            consume(0);
-            consume(length - 1U);
-        }
-    } else {
-        consume(extended.source_index);
     }
 }
 

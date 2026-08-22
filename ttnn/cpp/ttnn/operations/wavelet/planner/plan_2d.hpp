@@ -1056,8 +1056,8 @@ template <typename Scheme>
         .element_size_bytes = sizeof(float),
     };
     return make_lwt_2d_execution_plan(
-        make_forward_lifting_plan<Scheme>(y_input, 0, 0, boundary_mode),
-        make_forward_lifting_plan<Scheme>(x_input, 0, 0, boundary_mode),
+        make_forward_lifting_plan<Scheme>(y_input, boundary_mode),
+        make_forward_lifting_plan<Scheme>(x_input, boundary_mode),
         core_limit,
         l1_budget_bytes,
         fuse_terminal_scale,

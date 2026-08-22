@@ -449,8 +449,8 @@ template <typename Scheme>
         .length = output_height, .stick_width = kStickWidth, .element_size_bytes = sizeof(float)};
     const SignalBuffer x_signal{
         .length = output_width, .stick_width = kStickWidth, .element_size_bytes = sizeof(float)};
-    LiftingForwardPlan y_forward = make_forward_lifting_plan<Scheme>(y_signal, 0, 0, boundary_mode);
-    LiftingForwardPlan x_forward = make_forward_lifting_plan<Scheme>(x_signal, 0, 0, boundary_mode);
+    LiftingForwardPlan y_forward = make_forward_lifting_plan<Scheme>(y_signal, boundary_mode);
+    LiftingForwardPlan x_forward = make_forward_lifting_plan<Scheme>(x_signal, boundary_mode);
     const size_t y_coefficients = y_forward.output_length;
     const size_t x_coefficients = x_forward.output_length;
     return make_ilwt_2d_execution_plan(

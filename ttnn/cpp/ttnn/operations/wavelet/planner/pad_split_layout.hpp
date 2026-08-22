@@ -29,11 +29,10 @@ struct PadSplit1DLayout {
 };
 
 [[nodiscard]] constexpr PadSplit1DLayout make_pad_split_1d_layout(
-    const SignalBuffer& input, const uint64_t even_addr, const uint64_t odd_addr, const Pad1DConfig config) noexcept {
+    const SignalBuffer& input, const Pad1DConfig config) noexcept {
     const size_t length = input.length + static_cast<size_t>(config.left) + static_cast<size_t>(config.right);
 
-    return PadSplit1DLayout{
-        .input = input, .pad_config = config, .output = make_split_signal(input, length, even_addr, odd_addr)};
+    return PadSplit1DLayout{.input = input, .pad_config = config, .output = make_split_signal(input, length)};
 }
 
 }  // namespace ttnn::operations::wavelet
