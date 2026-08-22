@@ -4,7 +4,7 @@
 """TransformerLM in plain torch, driven only by the flat weight export.
 
 The same device-free proof `tt/flow/reference.py` provides for the CFM estimator,
-for the reason F18 records: this stage has four places where the config *implies*
+and for a sharper reason: this stage has four places where the config *implies*
 one thing and the code does another, and each of them produces a network that runs
 and is silently wrong.
 

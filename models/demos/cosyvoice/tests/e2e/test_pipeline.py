@@ -72,7 +72,8 @@ def waveform_metrics(got: torch.Tensor, want: torch.Tensor) -> dict:
 def test_reference_waveform_is_the_length_the_length_graph_predicts():
     """A pure-Python check that the mel the flow produces becomes exactly the
     number of samples the reference emitted. Catches an off-by-one in the vocoder's
-    length chain without a device -- the F15 bet, applied to the whole pipeline."""
+    length chain without a device -- the same bet the host tier rests on, applied to the
+    whole pipeline."""
     from models.demos.cosyvoice.tt.pipeline import CosyVoiceTTNN
 
     want = as_torch(load_golden("e2e")["waveform"])

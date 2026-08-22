@@ -74,11 +74,11 @@ def kv_inplace_default(device) -> bool:
 
     `COSYVOICE_KV_INPLACE` overrides either direction; this is only the fallback when
     it is unset. The trade is architecture-dependent -- in-place is worth 1.12-1.15x on
-    Blackhole and 1.42x on Wormhole n300 (PERF.md, F45) -- so the default follows the
-    architecture rather than picking one trade for both. `model.py` and
-    `test_pipeline_perf.py` both call this rather than each hand-coding the check, so
-    the test that is supposed to measure "whatever the model would actually run"
-    cannot silently drift from what the model runs.
+    Blackhole and 1.42x on Wormhole n300 (PERF.md, *Decode step, and what each change is
+    worth*) -- so the default follows the architecture rather than picking one trade for
+    both. `model.py` and `test_pipeline_perf.py` both call this rather than each
+    hand-coding the check, so the test that is supposed to measure "whatever the model
+    would actually run" cannot silently drift from what the model runs.
     """
     return "WORMHOLE" in str(device.arch())
 
@@ -346,7 +346,7 @@ class TtARDecoder:
 class TracedDecodeStep:
     """One decode step captured as a trace and replayed with a single host command.
 
-    F23 measured the AR decoder at ~124 us per op over ~280 ops -- **dispatch
+    Profiling measured the AR decoder at ~124 us per op over ~280 ops -- **dispatch
     bound, not compute bound**. Trace capture is the direct answer: it records the
     op graph once and replays it without re-issuing every op from the host.
 
@@ -385,8 +385,9 @@ class TracedDecodeStep:
         self.x_buf = ttnn.from_torch(torch.zeros(1, 1, d_in), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
         # Heads on dim 2 when the fused path is on, built on the **host**. Doing the
         # expansion with a device `ttnn.repeat` inside the traced body is what took
-        # traced-vs-untraced from 1.0 to 0.918: the op is correct on its own (F48's
-        # controls) but not as the per-step input to a replayed trace. The mask is
+        # traced-vs-untraced from 1.0 to 0.918: the op is correct on its own
+        # (`scripts/probe_sdpa_decode.py` controls for it) but not as the per-step input to
+        # a replayed trace. The mask is
         # rebuilt on the host every step anyway, so emitting it already expanded costs
         # nothing and removes the op from the trace entirely.
         self.mask_heads = self.h if decoder.sdpa_decode else 1

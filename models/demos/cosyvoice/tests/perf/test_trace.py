@@ -144,8 +144,8 @@ def test_device_fused_attention_matches_explicit(device):
 
     0.998 rather than bit-exactness: flash attention reassociates the softmax across
     k-chunks, so the sums are formed in a different order. That is a real difference
-    and the gate should not pretend otherwise. Per layer it is tiny — F48 measures both
-    paths at 0.99998 against a torch golden — but it compounds twice over, through 14
+    and the gate should not pretend otherwise. Per layer it is tiny — both paths measure
+    0.99998 against a torch golden — but it compounds twice over, through 14
     layers and then through the KV cache, which is why the measured spread is
     0.9988-0.9999 and drifts down with step index rather than staying flat.
 
