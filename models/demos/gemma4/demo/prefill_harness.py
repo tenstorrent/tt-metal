@@ -79,19 +79,14 @@ def load_preset_text(
 
 
 def preset_prompt_prefix(text: str, preset: PromptPreset, context_len: int) -> str:
-    """Estimate a source prefix that fits after the service adds chat tokens.
-
-    The supplied whole-document token count gives the initial characters/token
-    ratio. A small reserve covers the chat template. The submit path corrects
-    this estimate using the service's authoritative tokenizer when necessary.
-    """
+    """Estimate a fitting prefix from the supplied whole-document token count."""
     if context_len <= PROMPT_TOKEN_RESERVE:
         raise ValueError(f"context_len must be greater than the {PROMPT_TOKEN_RESERVE}-token prompt reserve")
     target_tokens = min(preset.tokens, context_len - PROMPT_TOKEN_RESERVE)
     if target_tokens == preset.tokens:
         return text
-    prefix_chars = max(1, int(len(text) * target_tokens / preset.tokens))
-    return text[:prefix_chars]
+    prefix_characters = max(1, int(len(text) * target_tokens / preset.tokens))
+    return text[:prefix_characters]
 
 
 def _reported_prompt_tokens(result: dict) -> int | None:
@@ -113,12 +108,12 @@ def submit_preset_prefill(
     timeout: float = 600.0,
     max_attempts: int = 4,
 ) -> dict:
-    """Submit a preset prefix, shrinking it if server tokenization is larger."""
+    """Submit an estimated preset prefix, shrinking only after server rejection."""
     source_characters = source_characters or len(prompt)
     for attempt in range(1, max_attempts + 1):
         result = submit_prefill(service_url, prompt, request_id, timeout)
         prompt_tokens = _reported_prompt_tokens(result)
-        fits = result.get("status") == "prefilled" and prompt_tokens is not None and prompt_tokens <= context_len
+        fits = result.get("status") == "prefilled" and prompt_tokens is not None
         if fits:
             result.update(
                 {
@@ -126,6 +121,7 @@ def submit_preset_prefill(
                     "preset_url": preset.url,
                     "preset_total_tokens": preset.tokens,
                     "requested_context_len": context_len,
+                    "context_overflow_tokens": max(0, prompt_tokens - context_len),
                     "prefix_characters": len(prompt),
                     "prefix_fraction": round(len(prompt) / source_characters, 6),
                     "fit_attempts": attempt,
@@ -133,7 +129,12 @@ def submit_preset_prefill(
             )
             return result
 
-        can_shrink = prompt_tokens is not None and prompt_tokens > context_len and len(prompt) > 1
+        can_shrink = (
+            result.get("status") != "prefilled"
+            and prompt_tokens is not None
+            and prompt_tokens > context_len
+            and len(prompt) > 1
+        )
         if not can_shrink:
             return result
         # Keep a one-percent buffer so tokenizer density fluctuations do not
@@ -248,7 +249,8 @@ def main(argv: list[str] | None = None) -> int:
     for preset_name in args.preset:
         preset = PROMPT_PRESETS[preset_name]
         text = load_preset_text(preset, cache_dir=args.preset_cache_dir, refresh=args.refresh_presets)
-        prompt_specs.append((preset_prompt_prefix(text, preset, preset_context_len), preset, len(text)))
+        prompt = preset_prompt_prefix(text, preset, preset_context_len)
+        prompt_specs.append((prompt, preset, len(text)))
     if not prompt_specs:
         prompt_specs = [("Explain sliding-window attention in one paragraph.", None, None)]
 
