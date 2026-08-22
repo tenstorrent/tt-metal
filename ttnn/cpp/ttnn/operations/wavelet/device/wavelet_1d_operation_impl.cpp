@@ -1078,12 +1078,11 @@ template <typename Scheme>
     const BoundaryMode boundary_mode,
     const uint32_t available_l1_bytes) {
     const SignalBuffer input{
-        .dram_address = 0,
         .length = input_length,
         .stick_width = kStickWidth,
         .element_size_bytes = sizeof(float),
     };
-    LiftingForwardPlan full_plan = make_forward_lifting_plan<Scheme>(input, 0, 0, boundary_mode);
+    LiftingForwardPlan full_plan = make_forward_lifting_plan<Scheme>(input, boundary_mode);
     TT_FATAL(
         full_plan.preprocess_layout.padded_length() <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
         "LWT padded input length exceeds the device signed-index range");
